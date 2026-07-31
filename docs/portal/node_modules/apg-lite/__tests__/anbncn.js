@@ -1,0 +1,14 @@
+import { default as Grammar } from './anbncn-lite.js';
+import { Parser, Trace, identifiers as id } from '../lib/parser.js';
+import * as fs from 'node:fs';
+import util from 'node:util';
+const log_file = fs.createWriteStream('output' + '/test.log', { flags: 'w', flush: true });
+const save_log = console.log;
+console.log = (d) => log_file.write(util.format(d) + '\n');
+const obj = new Grammar();
+const parser = new Parser();
+parser.trace = new Trace();
+const result = parser.parse(obj, 'S', 'aaabbbccc');
+console.dir(result);
+log_file.end();
+console.log = save_log;

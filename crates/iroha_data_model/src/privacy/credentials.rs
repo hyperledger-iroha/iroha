@@ -1233,7 +1233,7 @@ impl PrivacyZkAmsPersonhoodCredentialV1 {
 /// Exact fixed typed-Norito preimage of a ZK-AMS Personhood Credential.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[repr(transparent)]
-#[norito(transparent, decode_from_slice)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

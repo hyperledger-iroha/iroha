@@ -2343,20 +2343,41 @@ def total_gate_claim(module, constant: str):
     )
 
 
-def leader_wire_auxiliary(module):
-    """Return the ingress claim and its durable leader-wire auxiliary view."""
+def ingress_auxiliary(module, kernel: str):
+    """Return the ingress claim and one exact auxiliary kernel view."""
 
     claim = total_gate_claim(
         module,
         "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
     )
     views = module._cross_tool_kernel_views(claim)
-    assert len(views) == 2
-    return claim, views[1]
+    assert len(views) == 3
+    matching = tuple(view for view in views if view.verified_kernel == kernel)
+    assert len(matching) == 1
+    return claim, matching[0]
+
+
+def materialization_auxiliary(module):
+    """Return the ingress reservation-materialization auxiliary view."""
+
+    return ingress_auxiliary(
+        module,
+        "production_ingress_reservation_materialization_refines_"
+        "protected_ownership_kernel",
+    )
+
+
+def leader_wire_auxiliary(module):
+    """Return the ingress claim and its durable leader-wire auxiliary view."""
+
+    return ingress_auxiliary(
+        module,
+        "production_leader_wire_admission_refines_lifecycle_ownership_kernel",
+    )
 
 
 def test_total_checked_gate_contract_cardinality_and_payload_schema() -> None:
-    """The four legacy and thirteen total claims cannot be mode-confused."""
+    """Thirteen total claims own exactly seventeen distinct checked gates."""
 
     module = load_checker()
     assert module.CROSS_TOOL_EVIDENCE_SCHEMA_VERSION == 3
@@ -2383,8 +2404,8 @@ def test_total_checked_gate_contract_cardinality_and_payload_schema() -> None:
         if claim.proof_mode == "total_checked_gate"
         for view in module._cross_tool_kernel_views(claim)
     ]
-    assert len(gates) == 16
-    assert len({gate.name for gate in gates}) == 16
+    assert len(gates) == 17
+    assert len({gate.name for gate in gates}) == 17
 
     claim = total_gate_claim(
         module, "ProductionDurableIntentTraceRefinesProgressWitness"
@@ -2398,23 +2419,49 @@ def test_total_checked_gate_contract_cardinality_and_payload_schema() -> None:
     assert document["theorem_projection_builder"] is None
 
 
-def test_ingress_claim_binds_durable_leader_wire_auxiliary_evidence() -> None:
-    """One existing ingress mapping owns the separate durable admission proof."""
+def test_claim_local_checked_token_contract_includes_borrower_seal() -> None:
+    """Every legacy and total claim payload binds the read-only token seam."""
 
     module = load_checker()
-    claim, view = leader_wire_auxiliary(module)
-    auxiliary = claim.supplemental_kernels[0]
+    assert module._cross_tool_claim_checked_token_contract() == {
+        "source": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+        "struct_item_token_sha256": module._CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256,
+        "borrower_item_token_sha256": (
+            module._CHECKED_PRODUCTION_TOKEN_BORROWER_SHA256
+        ),
+        "consumer_item_token_sha256": (
+            module._CHECKED_PRODUCTION_TOKEN_CONSUMER_SHA256
+        ),
+    }
+
+
+def test_ingress_claim_binds_materialization_and_leader_wire_evidence() -> None:
+    """Ingress owns reservation materialization before leader-wire evidence."""
+
+    module = load_checker()
+    claim, materialization_view = materialization_auxiliary(module)
+    _same_claim, leader_view = leader_wire_auxiliary(module)
+    materialization, leader_wire = claim.supplemental_kernels
     assert [len(contract.claims) for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS] == [
         4,
         7,
         6,
     ]
-    assert len(claim.supplemental_kernels) == 1
+    assert len(claim.supplemental_kernels) == 2
     assert (
-        auxiliary.auxiliary_verus_theorem
+        materialization.auxiliary_verus_theorem
+        == "production_ingress_reservation_materialization_refines_"
+        "protected_ownership"
+    )
+    assert (
+        leader_wire.auxiliary_verus_theorem
         == "production_leader_wire_admission_trace_refines_lifecycle_ownership"
     )
-    assert auxiliary.total_gate == module._LEADER_WIRE_ADMISSION_GATE
+    assert (
+        materialization.total_gate
+        == module._INGRESS_RESERVATION_MATERIALIZATION_GATE
+    )
+    assert leader_wire.total_gate == module._LEADER_WIRE_ADMISSION_GATE
     assert (
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"
         in claim.production_sources
@@ -2423,11 +2470,16 @@ def test_ingress_claim_binds_durable_leader_wire_auxiliary_evidence() -> None:
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"
         in module._verus_evidence_contract_module().REQUIRED_SOURCE_PATHS
     )
-    assert claim.source_item_seals == module._LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS
+    assert claim.source_item_seals == (
+        *module._INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS,
+        *module._LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS,
+    )
 
     relevant_sources = {
-        view.verified_kernel_source,
-        view.production_call_sites[0].source,
+        materialization_view.verified_kernel_source,
+        materialization_view.production_call_sites[0].source,
+        leader_view.verified_kernel_source,
+        leader_view.production_call_sites[0].source,
     }
     source_entries = [
         {
@@ -2437,30 +2489,346 @@ def test_ingress_claim_binds_durable_leader_wire_auxiliary_evidence() -> None:
         for relative in sorted(relevant_sources)
     ]
     verus_source = (ROOT_DIR / claim.verus_source).read_text(encoding="utf-8")
-    kernel_payload, _ = module._cross_tool_total_kernel_payload(
+    materialization_kernel, _ = module._cross_tool_total_kernel_payload(
         claim,
-        view,
+        materialization_view,
         source_entries=source_entries,
         verus_source=verus_source,
         root_dir=ROOT_DIR,
     )
-    theorem_payload = module._cross_tool_auxiliary_total_theorem_payload(
+    materialization_theorem = module._cross_tool_auxiliary_total_theorem_payload(
         claim,
-        view,
+        materialization_view,
         verus_source=verus_source,
     )
-    call_payload = module._cross_tool_total_call_site_payload(
+    materialization_call = module._cross_tool_total_call_site_payload(
         claim,
-        view,
-        view.production_call_sites[0],
+        materialization_view,
+        materialization_view.production_call_sites[0],
         source_entries=source_entries,
         root_dir=ROOT_DIR,
     )
-    assert kernel_payload["name"] == auxiliary.verified_kernel
-    assert theorem_payload["name"] == auxiliary.auxiliary_verus_theorem
-    assert call_payload["gate_call_count"] == 3
-    assert call_payload["mutation_authorization_indices"] == [0, 0, 2, 2, 2]
-    assert len(module._cross_tool_source_item_seal_payload(claim, root_dir=ROOT_DIR)) == 27
+    leader_kernel, _ = module._cross_tool_total_kernel_payload(
+        claim,
+        leader_view,
+        source_entries=source_entries,
+        verus_source=verus_source,
+        root_dir=ROOT_DIR,
+    )
+    leader_theorem = module._cross_tool_auxiliary_total_theorem_payload(
+        claim,
+        leader_view,
+        verus_source=verus_source,
+    )
+    leader_call = module._cross_tool_total_call_site_payload(
+        claim,
+        leader_view,
+        leader_view.production_call_sites[0],
+        source_entries=source_entries,
+        root_dir=ROOT_DIR,
+    )
+    assert materialization_kernel["name"] == materialization.verified_kernel
+    assert materialization_theorem["name"] == (
+        materialization.auxiliary_verus_theorem
+    )
+    assert materialization_call["gate_call_count"] == 1
+    assert materialization_call["mutation_authorization_indices"] == [0, 0, 0, 0]
+    assert leader_kernel["name"] == leader_wire.verified_kernel
+    assert leader_theorem["name"] == leader_wire.auxiliary_verus_theorem
+    assert leader_call["gate_call_count"] == 3
+    assert leader_call["mutation_authorization_indices"] == [0, 0, 2, 2, 2]
+    assert len(
+        module._cross_tool_source_item_seal_payload(claim, root_dir=ROOT_DIR)
+    ) == 29
+
+
+@pytest.mark.parametrize("mutation", ("missing", "reordered", "weakened_gate"))
+def test_ingress_auxiliary_inventory_rejects_materialization_drift(
+    mutation: str,
+) -> None:
+    """Materialization is the first exact supplemental ingress obligation."""
+
+    module = load_checker()
+    claim, _view = materialization_auxiliary(module)
+    materialization, leader_wire = claim.supplemental_kernels
+    if mutation == "missing":
+        supplemental = (leader_wire,)
+    elif mutation == "reordered":
+        supplemental = (leader_wire, materialization)
+    else:
+        assert materialization.total_gate is not None
+        weakened_gate = replace(
+            materialization.total_gate,
+            verus_kernel_arguments="projection",
+        )
+        supplemental = (
+            replace(materialization, total_gate=weakened_gate),
+            leader_wire,
+        )
+    errors, _gates, _calls = module._cross_tool_total_gate_promotion_contract_errors(
+        replace(claim, supplemental_kernels=supplemental)
+    )
+    assert any(
+        "reservation-materialization/leader-wire auxiliary" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    (
+        ("direct_kernel_fallback", "direct boolean kernel"),
+        ("missing_token", "exact checked-gate seam"),
+        ("dropped_token", "exact checked-gate seam"),
+        ("mutation_before_token", "state-changing linearization point"),
+    ),
+)
+def test_materialization_auxiliary_rejects_checked_token_bypasses(
+    tmp_path: Path,
+    mutation: str,
+    expected_error: str,
+) -> None:
+    """Reserved-slot publication requires one consumed token before mutation."""
+
+    module = load_checker()
+    claim, view = materialization_auxiliary(module)
+    call_site = view.production_call_sites[0]
+    destination = tmp_path / call_site.source
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT_DIR / call_site.source, destination)
+    source = destination.read_text(encoding="utf-8")
+    item = next(
+        candidate
+        for candidate in module.rust_items(source, call_site.item)
+        if candidate.brace_context == call_site.brace_context
+    )
+    consumption = (
+        "let _authorized_transition = checked_transition.into_projection();"
+    )
+    if mutation == "direct_kernel_fallback":
+        anchor = "let checked_transition ="
+        assert item.source.count(anchor) == 1
+        mutated_item = item.source.replace(
+            anchor,
+            "let _direct_fallback = "
+            "production_ingress_reservation_materialization_refines_"
+            "protected_ownership_kernel(ingress_trace);\n"
+            + anchor,
+            1,
+        )
+    elif mutation == "missing_token":
+        assert item.source.count(consumption) == 1
+        mutated_item = item.source.replace(consumption, "", 1)
+    elif mutation == "dropped_token":
+        assert item.source.count(consumption) == 1
+        mutated_item = item.source.replace(
+            consumption,
+            "drop(checked_transition);",
+            1,
+        )
+    else:
+        boundary = "self.reserved_body_available = None;"
+        gate = "let checked_transition ="
+        assert item.source.count(boundary) == 1
+        assert item.source.count(gate) == 1
+        mutated_item = item.source.replace(boundary, "", 1).replace(
+            gate,
+            boundary + "\n            " + gate,
+            1,
+        )
+    destination.write_text(
+        source.replace(item.source, mutated_item, 1),
+        encoding="utf-8",
+    )
+    mutated_source = destination.read_text(encoding="utf-8")
+    mutated_item = next(
+        candidate
+        for candidate in module.rust_items(mutated_source, call_site.item)
+        if candidate.brace_context == call_site.brace_context
+    )
+    live_call = replace(
+        call_site,
+        item_token_sha256=module._rust_sealed_item_token_sha256(mutated_item),
+    )
+    source_entries = [
+        {
+            "path": call_site.source,
+            "sha256": module._sha256_file(destination),
+        }
+    ]
+    with pytest.raises(ValueError, match=expected_error):
+        module._cross_tool_total_call_site_payload(
+            claim,
+            view,
+            live_call,
+            source_entries=source_entries,
+            root_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    (
+        ("production_macro", "shared macro"),
+        ("production_kernel", "exact nonconstant reviewed body"),
+        ("production_gate", "evaluate only its exact kernel"),
+        ("verus_kernel", "must exactly match production"),
+        ("verus_gate", "exactly mirror the production kernel"),
+    ),
+)
+def test_materialization_auxiliary_rejects_kernel_or_gate_weakening(
+    tmp_path: Path,
+    mutation: str,
+    expected_error: str,
+) -> None:
+    """The materialization macro, kernels, and total gates are exact mirrors."""
+
+    module = load_checker()
+    claim, view = materialization_auxiliary(module)
+    production_relative = view.verified_kernel_source
+    production_source = (ROOT_DIR / production_relative).read_text(encoding="utf-8")
+    verus_source = (ROOT_DIR / claim.verus_source).read_text(encoding="utf-8")
+    root_dir = ROOT_DIR
+    if mutation.startswith("production_"):
+        destination = tmp_path / production_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if mutation == "production_macro":
+            item = module.rust_macro_items(
+                production_source,
+                "production_ingress_reservation_materialization_trace_body",
+            )[0]
+            old = (
+                "$projection.ordinal_source_before "
+                "== $projection.ordinal_source_after"
+            )
+            new = "$projection.ordinal_source_before >= $projection.ordinal_source_after"
+        elif mutation == "production_kernel":
+            item = module.rust_items(production_source, view.verified_kernel)[0]
+            old = (
+                "production_ingress_reservation_materialization_trace_body!"
+                "(projection)"
+            )
+            new = "projection.reserved_slots_before == 1"
+        else:
+            assert view.total_gate is not None
+            item = module.rust_items(production_source, view.total_gate.name)[0]
+            old = "    } else {\n        None\n    }"
+            new = (
+                "    } else {\n"
+                "        Some(CheckedProductionTransition { projection })\n"
+                "    }"
+            )
+        assert item.source.count(old) == 1
+        mutated_item = item.source.replace(old, new, 1)
+        destination.write_text(
+            production_source.replace(item.source, mutated_item, 1),
+            encoding="utf-8",
+        )
+        root_dir = tmp_path
+        source_entries = [
+            {
+                "path": production_relative,
+                "sha256": module._sha256_file(destination),
+            }
+        ]
+    else:
+        item_name = (
+            view.verified_kernel
+            if mutation == "verus_kernel"
+            else view.total_gate.name
+        )
+        item = module.rust_items(verus_source, item_name)[0]
+        if mutation == "verus_kernel":
+            old = (
+                "production_ingress_reservation_materialization_trace_body!"
+                "(projection)"
+            )
+            new = "projection.reserved_slots_before == 1u8"
+        else:
+            old = "    } else {\n        None\n    }"
+            new = "    } else {\n        Some(projection)\n    }"
+        assert item.source.count(old) == 1
+        verus_source = verus_source.replace(
+            item.source,
+            item.source.replace(old, new, 1),
+            1,
+        )
+        source_entries = [
+            {
+                "path": production_relative,
+                "sha256": module._sha256_file(ROOT_DIR / production_relative),
+            }
+        ]
+    with pytest.raises(ValueError, match=expected_error):
+        module._cross_tool_total_kernel_payload(
+            claim,
+            view,
+            source_entries=source_entries,
+            verus_source=verus_source,
+            root_dir=root_dir,
+        )
+
+
+@pytest.mark.parametrize("source_index", (0, 1))
+def test_materialization_projection_source_seals_reject_layout_drift(
+    tmp_path: Path,
+    source_index: int,
+) -> None:
+    """Both production and Verus materialization projections are sealed."""
+
+    module = load_checker()
+    claim, _view = materialization_auxiliary(module)
+    seal = module._INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS[
+        source_index
+    ]
+    destination = tmp_path / seal.source
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source = (ROOT_DIR / seal.source).read_text(encoding="utf-8")
+    item = next(
+        candidate
+        for candidate in module.rust_struct_items(source, seal.item)
+        if candidate.brace_context == seal.brace_context
+    )
+    old = (
+        "pub(crate) reserved_slots_before: u8,"
+        if source_index == 0
+        else "pub reserved_slots_before: u8,"
+    )
+    new = old.replace("reserved_slots_before", "reservation_count_before")
+    assert item.source.count(old) == 1
+    destination.write_text(
+        source.replace(item.source, item.source.replace(old, new, 1), 1),
+        encoding="utf-8",
+    )
+    diagnostic_claim = replace(claim, source_item_seals=(seal,))
+    with pytest.raises(ValueError, match="cross-tool source seal"):
+        module._cross_tool_source_item_seal_payload(
+            diagnostic_claim,
+            root_dir=tmp_path,
+        )
+
+
+def test_materialization_auxiliary_rejects_verus_proof_weakening() -> None:
+    """The occupancy-preserving implication is exact auxiliary evidence."""
+
+    module = load_checker()
+    claim, view = materialization_auxiliary(module)
+    source = (ROOT_DIR / claim.verus_source).read_text(encoding="utf-8")
+    old = "projection.reserved_slots_before == 1u8"
+    new = "projection.reserved_slots_before >= 0u8"
+    theorem = module.rust_items(source, view.auxiliary_verus_theorem)[0]
+    assert theorem.source.count(old) == 1
+    mutated = source.replace(
+        theorem.source,
+        theorem.source.replace(old, new, 1),
+        1,
+    )
+    with pytest.raises(ValueError, match="exact reviewed implication token seal"):
+        module._cross_tool_auxiliary_total_theorem_payload(
+            claim,
+            view,
+            verus_source=mutated,
+        )
 
 
 @pytest.mark.parametrize(
@@ -2652,16 +3020,24 @@ def test_leader_wire_auxiliary_contract_rejects_missing_proof_inventory() -> Non
 
     module = load_checker()
     claim, _view = leader_wire_auxiliary(module)
-    auxiliary = claim.supplemental_kernels[0]
+    auxiliary = next(
+        kernel
+        for kernel in claim.supplemental_kernels
+        if kernel.auxiliary_verus_theorem
+        == "production_leader_wire_admission_trace_refines_lifecycle_ownership"
+    )
     weakened = replace(
         claim,
-        supplemental_kernels=(
+        supplemental_kernels=tuple(
             replace(
-                auxiliary,
+                kernel,
                 auxiliary_verus_theorem=None,
                 auxiliary_verus_parameters=None,
                 auxiliary_verus_theorem_item_sha256=None,
-            ),
+            )
+            if kernel == auxiliary
+            else kernel
+            for kernel in claim.supplemental_kernels
         ),
     )
     errors, _gates, _calls = (
@@ -3163,8 +3539,12 @@ def test_total_checked_gate_rejects_opaque_token_forging(
     "mutation",
     (
         "in_flight_projection_visibility",
+        "in_flight_macro_predicate",
+        "in_flight_kernel_body",
         "in_flight_constructor_always_some",
         "in_flight_constructor_wrong_kernel",
+        "materialization_projection_visibility",
+        "legacy_constructor_always_some",
         "borrower_visibility",
         "borrower_body",
     ),
@@ -3198,6 +3578,25 @@ def test_total_checked_gate_rejects_in_flight_token_contract_weakening(
             "    pub action: u8,",
             1,
         )
+    elif mutation == "in_flight_macro_predicate":
+        item = module.rust_macro_items(
+            source, "production_in_flight_reservation_transition_body"
+        )[0]
+        old = (
+            "projection.before.state "
+            "== refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT)"
+        )
+        new = "true"
+        assert item.source.count(old) >= 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation == "in_flight_kernel_body":
+        item = module.rust_items(
+            source, "production_in_flight_reservation_transition_kernel"
+        )[0]
+        old = "production_in_flight_reservation_transition_body!(projection)"
+        new = "projection.action > 0"
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
     elif mutation.startswith("in_flight_constructor_"):
         item = module.rust_items(
             source, "check_production_in_flight_reservation_transition"
@@ -3215,6 +3614,27 @@ def test_total_checked_gate_rejects_in_flight_token_contract_weakening(
                 "production_application_trace_refines_decision_completion_kernel("
                 "Default::default())"
             )
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation == "materialization_projection_visibility":
+        item = module.rust_struct_items(
+            source, "ProductionIngressReservationMaterializationTraceProjection"
+        )[0]
+        old = "    pub(crate) reserved_slots_before: u8,"
+        new = "    pub reserved_slots_before: u8,"
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation == "legacy_constructor_always_some":
+        item = module.rust_items(
+            source,
+            "check_production_body_ownership_effective_lock_transition",
+        )[0]
+        old = "    } else {\n        None\n    }"
+        new = (
+            "    } else {\n"
+            "        Some(CheckedProductionTransition { projection })\n"
+            "    }"
+        )
         assert item.source.count(old) == 1
         mutated = item.source.replace(old, new, 1)
     else:
@@ -3235,7 +3655,10 @@ def test_total_checked_gate_rejects_in_flight_token_contract_weakening(
             "sha256": module._sha256_file(path),
         }
     ]
-    with pytest.raises(ValueError, match="in-flight|borrowed|borrower|token"):
+    with pytest.raises(
+        ValueError,
+        match="in-flight|materialization|effective-lock|borrowed|borrower|token",
+    ):
         module._cross_tool_checked_token_payload(
             source_entries=entries,
             root_dir=tmp_path,
@@ -4665,16 +5088,29 @@ def test_effective_lock_checked_token_seams_bind_live_mutation_boundaries() -> N
         ],
         root_dir=ROOT_DIR,
     )
-    assert token_payload["constructor_count"] == 22
+    assert token_payload["constructor_count"] == 23
     assert token_payload["borrower_item_token_sha256"] == (
         module._CHECKED_PRODUCTION_TOKEN_BORROWER_SHA256
     )
     assert token_payload["in_flight_projection_item_token_sha256"] == (
         module._CHECKED_PRODUCTION_IN_FLIGHT_PROJECTION_SHA256
     )
+    assert token_payload["in_flight_macro_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_IN_FLIGHT_MACRO_SHA256
+    )
+    assert token_payload["in_flight_kernel_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_IN_FLIGHT_KERNEL_SHA256
+    )
     assert token_payload["in_flight_constructor_item_token_sha256"] == (
         module._CHECKED_PRODUCTION_IN_FLIGHT_CONSTRUCTOR_SHA256
     )
+    assert token_payload["materialization_projection_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_PROJECTION_SHA256
+    )
+    assert {
+        item["name"]: item["item_token_sha256"]
+        for item in token_payload["legacy_effective_lock_constructor_items"]
+    } == module._CHECKED_PRODUCTION_EFFECTIVE_LOCK_GATE_SHA256
 
     for claim in claims:
         relatives = {

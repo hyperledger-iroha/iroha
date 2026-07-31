@@ -187,6 +187,7 @@ fn abi_syscall_list_matches_golden() {
         S::SYSCALL_STATE_MAP_KEY_AT,
         S::SYSCALL_STATE_VALUE_ENCODE,
         S::SYSCALL_STATE_VALUE_DECODE,
+        S::SYSCALL_STATE_PATH_FROM_NAME,
         S::SYSCALL_JSON_BUILD,
         S::SYSCALL_INT_FROM_I64,
         S::SYSCALL_INT_FROM_U64,

@@ -7,39 +7,57 @@ state, Torii app endpoints, and the CLI helpers for operators and SDK authors.
 ## High-level flow
 
 1. **Authoritative VK creation** – An operator or compiler artefact produces a verifying key and its 32-byte commitment. VKs are versioned and namespaced by backend (`backend::name`).
-2. **Admission through Torii** – Operators post signed governance instructions to Torii (`/v1/zk/vk/*`). Accepted transactions register or update the VK registry that is stored on-chain and replicated across peers.
+2. **Admission through Torii** – An SDK either builds the registry transaction locally or asks
+   `/v1/zk/vk/{register,update}` for a canonical unsigned draft. Signing remains local; the signed
+   transaction is submitted through the ordinary transaction pipeline. Accepted transactions
+   update the VK registry stored on-chain and replicated across peers.
 3. **Contract/runtime usage** – Generic proof verification references VKs by `(backend, name)` through `vk_ref`. Specialized proof ISIs may carry proof-specific VK material only where their instruction binds it to a registered verifier commitment. Execution resolves VK commitments during proof verification.
-4. **Proof verification** – Clients submit proofs (`/v1/zk/verify` or `/v1/zk/submit-proof`). Verification runs inside `iroha_core::zk` during transaction execution. Successful verifications materialise `ProofRecord`s that can be queried via Torii (`/v1/zk/proofs*`).
+4. **Proof verification** – Clients submit a signed transaction containing
+   `VerifyProof` (or the applicable proof-bearing instruction) through the
+   ordinary transaction pipeline. Verification runs inside `iroha_core::zk`
+   during transaction execution. Successful verifications materialise
+   `ProofRecord`s that can be queried via Torii (`/v1/zk/proofs*`).
 5. **Background reporting** – The optional Torii prover worker (`torii.zk_prover_enabled=true`) scans attachments, verifies `ProofAttachment` payloads, and exports telemetry describing proof sizes and processing latency. Reports are deleted automatically after the configured TTL.
 
 ## Verifying keys
 
 - Registry entries live in the world state under `verifying_keys[(backend, name)]`.
 - When a new VK is registered, the commitment must match the hashed payload or inline bytes bundled with the transaction. Updates bump the version and must preserve monotonicity.
+- A VK update is a key rotation for the same circuit identity: `circuit_id` is immutable for a registered `(backend, name)`. Register a distinct key id when introducing a different circuit.
+- `CanManageVerifyingKeys` is a global, zero-field capability. The ledger requires its exact canonical unit payload; same-name permissions carrying arbitrary JSON do not authorize registry changes.
 
 ### Relevant endpoints
 
-- `POST /v1/zk/vk/register` – submit a signed `RegisterVerifyingKey` instruction.
-- `POST /v1/zk/vk/update` – submit `UpdateVerifyingKey` with a higher version.
+- `POST /v1/zk/vk/register` – validate and prepare an unsigned
+  `RegisterVerifyingKey` transaction.
+- `POST /v1/zk/vk/update` – validate and prepare an unsigned
+  `UpdateVerifyingKey` transaction with a higher version and the existing `circuit_id`.
 - `GET  /v1/zk/vk` – list VKs with optional filters (`backend`, `status`, `name_contains`).
 - `GET  /v1/zk/vk/{backend}/{name}` – fetch a single VK record.
 
 ### CLI helpers
 
-`iroha_cli app zk` exposes thin wrappers that post the JSON DTOs Torii expects:
+`iroha_cli app zk` builds, quotes, signs, and submits registry transactions with the active client
+configuration:
 
 - `iroha_cli app zk vk register --json path/to/register.json`
 - `iroha_cli app zk vk update --json path/to/update.json`
-- `iroha_cli app zk vk deprecate --json path/to/deprecate.json`
 - `iroha_cli app zk vk get --backend halo2/ipa --name vk_transfer`
 
-The JSON DTOs mirror the `iroha_data_model::proof` payloads. Embedded VK record bytes remain base64-encoded, while commitments are lowercase hex strings.
+The CLI JSON files contain public VK record data only and reject embedded authorities, private keys,
+and unknown fields. Embedded VK record bytes remain base64-encoded, while commitments are lowercase
+hex strings. SDKs that call the POST draft endpoints must additionally verify the returned canonical
+payload, payload hash, chain, authority, single instruction, key id, and record before local signing.
 
 ## Proof lifecycle
 
 ### Submission & verification
 
-- Proof envelopes are accepted via `/v1/zk/verify` (synchronous) or `/v1/zk/submit-proof` (for later inspection). Both accept either Norito-encoded envelopes or JSON DTOs.
+- The pre-release decode-only `/v1/zk/verify` and `/v1/zk/submit-proof`
+  convenience routes were removed because their success responses could be
+  mistaken for cryptographic or ledger acceptance. Proofs enter the
+  authoritative lifecycle only through a signed transaction containing
+  `VerifyProof` or another proof-bearing instruction.
 - During transaction execution, `iroha_core::smartcontracts::isi::zk::VerifyProof` computes a domain-separated, length-prefixed proof hash from the backend name and proof bytes, derives a `ProofId`, and ensures the proof is unique across the ledger.
 - Generic `VerifyProof` resolves VK commitments from the referenced `(backend, name)` pair only. The referenced record must be active, gas-scheduled, active for its circuit/version, and bound to the proof envelope's circuit, schema, and `vk_hash`.
 - The resulting `ProofRecord` stores:

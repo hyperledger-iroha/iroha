@@ -82,26 +82,15 @@ impl SnapshotState {
     }
 }
 
-/// Outcome of a reference-data validation attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValidationOutcome {
-    /// Validation executed because the dataset was available.
-    Enforced,
-    /// Validation skipped due to the dataset not being configured.
-    Skipped,
-}
-
-impl ValidationOutcome {
-    /// Returns `true` when the validation was performed.
-    #[must_use]
-    pub fn is_enforced(self) -> bool {
-        matches!(self, ValidationOutcome::Enforced)
-    }
-}
-
 /// Errors that occur while validating ISO reference data records.
 #[derive(Debug, Error)]
 pub enum ReferenceDataError {
+    #[error("{kind_label} dataset is not configured", kind_label = .kind.label())]
+    /// Reference data required for validation was not configured.
+    DatasetUnavailable {
+        /// Dataset kind required by the validation.
+        kind: DatasetKind,
+    },
     #[error("{kind_label} dataset failed to load reference data: {diagnostics}", kind_label = .kind.label(), diagnostics = .diagnostics.as_deref().unwrap_or("unknown error"))]
     /// Reference data loader was unable to ingest the dataset.
     DatasetFailed {
@@ -714,112 +703,100 @@ impl ReferenceDataSnapshots {
         }
     }
 
+    fn required_dataset_records<T>(
+        snapshot: &DatasetSnapshot<T>,
+    ) -> Result<&T, ReferenceDataError> {
+        Self::dataset_records_or_skip(snapshot)?.ok_or(ReferenceDataError::DatasetUnavailable {
+            kind: snapshot.kind,
+        })
+    }
+
     /// Validate that an ISIN appears in the crosswalk snapshot.
     ///
     /// # Errors
     /// Returns [`ReferenceDataError`] if the dataset is unavailable or the ISIN is unknown.
-    pub fn validate_isin(&self, isin: &str) -> Result<ValidationOutcome, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.isin_cusip)?.map_or_else(
-            || Ok(ValidationOutcome::Skipped),
-            |records| {
-                if records.by_isin(isin).is_some() {
-                    Ok(ValidationOutcome::Enforced)
-                } else {
-                    Err(ReferenceDataError::NotFound {
-                        kind: DatasetKind::IsinCusip,
-                        value: normalise_upper_ascii(isin),
-                    })
-                }
-            },
-        )
+    pub fn validate_isin(&self, isin: &str) -> Result<(), ReferenceDataError> {
+        let records = Self::required_dataset_records(&self.isin_cusip)?;
+        if records.by_isin(isin).is_some() {
+            Ok(())
+        } else {
+            Err(ReferenceDataError::NotFound {
+                kind: DatasetKind::IsinCusip,
+                value: normalise_upper_ascii(isin),
+            })
+        }
     }
 
     /// Validate that a CUSIP maps to a known ISIN.
     ///
     /// # Errors
     /// Returns [`ReferenceDataError`] if the dataset is unavailable or the CUSIP is unknown.
-    pub fn validate_cusip(&self, cusip: &str) -> Result<ValidationOutcome, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.isin_cusip)?.map_or_else(
-            || Ok(ValidationOutcome::Skipped),
-            |records| {
-                if records.by_cusip(cusip).is_some() {
-                    Ok(ValidationOutcome::Enforced)
-                } else {
-                    Err(ReferenceDataError::NotFound {
-                        kind: DatasetKind::IsinCusip,
-                        value: normalise_upper_ascii(cusip),
-                    })
-                }
-            },
-        )
+    pub fn validate_cusip(&self, cusip: &str) -> Result<(), ReferenceDataError> {
+        let records = Self::required_dataset_records(&self.isin_cusip)?;
+        if records.by_cusip(cusip).is_some() {
+            Ok(())
+        } else {
+            Err(ReferenceDataError::NotFound {
+                kind: DatasetKind::IsinCusip,
+                value: normalise_upper_ascii(cusip),
+            })
+        }
     }
 
     /// Validate that a BIC is registered in the BIC↔LEI dataset.
     ///
     /// # Errors
     /// Returns [`ReferenceDataError`] if the dataset is unavailable or the BIC has no mapping.
-    pub fn validate_bic(&self, bic: &str) -> Result<ValidationOutcome, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.bic_lei)?.map_or_else(
-            || Ok(ValidationOutcome::Skipped),
-            |records| {
-                if records.lei_by_bic(bic).is_some() {
-                    Ok(ValidationOutcome::Enforced)
-                } else {
-                    Err(ReferenceDataError::NotFound {
-                        kind: DatasetKind::BicLei,
-                        value: normalise_upper_ascii(bic),
-                    })
-                }
-            },
-        )
+    pub fn validate_bic(&self, bic: &str) -> Result<(), ReferenceDataError> {
+        let records = Self::required_dataset_records(&self.bic_lei)?;
+        if records.lei_by_bic(bic).is_some() {
+            Ok(())
+        } else {
+            Err(ReferenceDataError::NotFound {
+                kind: DatasetKind::BicLei,
+                value: normalise_upper_ascii(bic),
+            })
+        }
     }
 
     /// Validate that a LEI is present in the BIC↔LEI dataset.
     ///
     /// # Errors
     /// Returns [`ReferenceDataError`] if the dataset is unavailable or the LEI is unknown.
-    pub fn validate_lei(&self, lei: &str) -> Result<ValidationOutcome, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.bic_lei)?.map_or_else(
-            || Ok(ValidationOutcome::Skipped),
-            |records| {
-                if records.bics_by_lei(lei).is_some() {
-                    Ok(ValidationOutcome::Enforced)
-                } else {
-                    Err(ReferenceDataError::NotFound {
-                        kind: DatasetKind::BicLei,
-                        value: normalise_upper_ascii(lei),
-                    })
-                }
-            },
-        )
+    pub fn validate_lei(&self, lei: &str) -> Result<(), ReferenceDataError> {
+        let records = Self::required_dataset_records(&self.bic_lei)?;
+        if records.bics_by_lei(lei).is_some() {
+            Ok(())
+        } else {
+            Err(ReferenceDataError::NotFound {
+                kind: DatasetKind::BicLei,
+                value: normalise_upper_ascii(lei),
+            })
+        }
     }
 
     /// Validate that a MIC exists and is active in the MIC directory.
     ///
     /// # Errors
     /// Returns [`ReferenceDataError`] if the dataset is unavailable or the MIC is unknown.
-    pub fn validate_mic(&self, mic: &str) -> Result<ValidationOutcome, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.mic_directory)?.map_or_else(
-            || Ok(ValidationOutcome::Skipped),
-            |records| {
-                records.by_mic(mic).map_or_else(
-                    || {
-                        Err(ReferenceDataError::NotFound {
-                            kind: DatasetKind::MicDirectory,
-                            value: normalise_upper_ascii(mic),
-                        })
-                    },
-                    |record| {
-                        if mic_is_active(record.status.as_deref()) {
-                            Ok(ValidationOutcome::Enforced)
-                        } else {
-                            Err(ReferenceDataError::MicInactive {
-                                mic: normalise_upper_ascii(mic),
-                                status: record.status.clone(),
-                            })
-                        }
-                    },
-                )
+    pub fn validate_mic(&self, mic: &str) -> Result<(), ReferenceDataError> {
+        let records = Self::required_dataset_records(&self.mic_directory)?;
+        records.by_mic(mic).map_or_else(
+            || {
+                Err(ReferenceDataError::NotFound {
+                    kind: DatasetKind::MicDirectory,
+                    value: normalise_upper_ascii(mic),
+                })
+            },
+            |record| {
+                if mic_is_active(record.status.as_deref()) {
+                    Ok(())
+                } else {
+                    Err(ReferenceDataError::MicInactive {
+                        mic: normalise_upper_ascii(mic),
+                        status: record.status.clone(),
+                    })
+                }
             },
         )
     }
@@ -832,29 +809,25 @@ impl ReferenceDataSnapshots {
     pub fn validate_instrument_ledger_mapping(
         &self,
         instrument: &str,
-    ) -> Result<ValidationOutcome, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.isin_cusip)?.map_or_else(
-            || Ok(ValidationOutcome::Skipped),
-            |records| {
-                let isin = normalise_upper_ascii(instrument);
-                let record = records.by_isin(&isin).or_else(|| records.by_cusip(&isin));
-                let Some(record) = record else {
-                    return Err(ReferenceDataError::NotFound {
-                        kind: DatasetKind::IsinCusip,
-                        value: isin,
-                    });
-                };
-                if record.asset_definition_id.is_some() || record.asset_id.is_some() {
-                    Ok(ValidationOutcome::Enforced)
-                } else {
-                    Err(ReferenceDataError::MissingLedgerMapping {
-                        kind: DatasetKind::IsinCusip,
-                        value: record.isin.clone(),
-                        mapping: "asset_definition_id_or_asset_id",
-                    })
-                }
-            },
-        )
+    ) -> Result<(), ReferenceDataError> {
+        let records = Self::required_dataset_records(&self.isin_cusip)?;
+        let isin = normalise_upper_ascii(instrument);
+        let record = records.by_isin(&isin).or_else(|| records.by_cusip(&isin));
+        let Some(record) = record else {
+            return Err(ReferenceDataError::NotFound {
+                kind: DatasetKind::IsinCusip,
+                value: isin,
+            });
+        };
+        if record.asset_definition_id.is_some() || record.asset_id.is_some() {
+            Ok(())
+        } else {
+            Err(ReferenceDataError::MissingLedgerMapping {
+                kind: DatasetKind::IsinCusip,
+                value: record.isin.clone(),
+                mapping: "asset_definition_id_or_asset_id",
+            })
+        }
     }
 
     /// Validate that a settlement venue maps to a configured CSD ledger domain.
@@ -862,28 +835,24 @@ impl ReferenceDataSnapshots {
     /// # Errors
     /// Returns [`ReferenceDataError`] if the dataset failed to load, the MIC is
     /// unknown, or the row lacks a ledger-domain identifier.
-    pub fn validate_csd_venue(&self, mic: &str) -> Result<ValidationOutcome, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.csd_venue)?.map_or_else(
-            || Ok(ValidationOutcome::Skipped),
-            |records| {
-                let key = normalise_upper_ascii(mic);
-                let Some(record) = records.by_mic(&key) else {
-                    return Err(ReferenceDataError::NotFound {
-                        kind: DatasetKind::CsdVenue,
-                        value: key,
-                    });
-                };
-                if record.ledger_domain_id.is_some() {
-                    Ok(ValidationOutcome::Enforced)
-                } else {
-                    Err(ReferenceDataError::MissingLedgerMapping {
-                        kind: DatasetKind::CsdVenue,
-                        value: key,
-                        mapping: "ledger_domain_id",
-                    })
-                }
-            },
-        )
+    pub fn validate_csd_venue(&self, mic: &str) -> Result<(), ReferenceDataError> {
+        let records = Self::required_dataset_records(&self.csd_venue)?;
+        let key = normalise_upper_ascii(mic);
+        let Some(record) = records.by_mic(&key) else {
+            return Err(ReferenceDataError::NotFound {
+                kind: DatasetKind::CsdVenue,
+                value: key,
+            });
+        };
+        if record.ledger_domain_id.is_some() {
+            Ok(())
+        } else {
+            Err(ReferenceDataError::MissingLedgerMapping {
+                kind: DatasetKind::CsdVenue,
+                value: key,
+                mapping: "ledger_domain_id",
+            })
+        }
     }
 
     /// Validate that a securities settlement account maps to a ledger account.
@@ -895,36 +864,32 @@ impl ReferenceDataSnapshots {
         &self,
         account: &str,
         bic: Option<&str>,
-    ) -> Result<ValidationOutcome, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.securities_account)?.map_or_else(
-            || Ok(ValidationOutcome::Skipped),
-            |records| {
-                let key = normalise_upper_ascii(account);
-                let Some(record) = records.by_account(&key) else {
-                    return Err(ReferenceDataError::NotFound {
-                        kind: DatasetKind::SecuritiesAccount,
-                        value: key,
-                    });
-                };
-                if let (Some(expected), Some(actual)) = (record.bic.as_deref(), bic)
-                    && expected != normalise_upper_ascii(actual)
-                {
-                    return Err(ReferenceDataError::NotFound {
-                        kind: DatasetKind::SecuritiesAccount,
-                        value: format!("{key}:{}", normalise_upper_ascii(actual)),
-                    });
-                }
-                if record.account_id.is_some() {
-                    Ok(ValidationOutcome::Enforced)
-                } else {
-                    Err(ReferenceDataError::MissingLedgerMapping {
-                        kind: DatasetKind::SecuritiesAccount,
-                        value: key,
-                        mapping: "account_id",
-                    })
-                }
-            },
-        )
+    ) -> Result<(), ReferenceDataError> {
+        let records = Self::required_dataset_records(&self.securities_account)?;
+        let key = normalise_upper_ascii(account);
+        let Some(record) = records.by_account(&key) else {
+            return Err(ReferenceDataError::NotFound {
+                kind: DatasetKind::SecuritiesAccount,
+                value: key,
+            });
+        };
+        if let (Some(expected), Some(actual)) = (record.bic.as_deref(), bic)
+            && expected != normalise_upper_ascii(actual)
+        {
+            return Err(ReferenceDataError::NotFound {
+                kind: DatasetKind::SecuritiesAccount,
+                value: format!("{key}:{}", normalise_upper_ascii(actual)),
+            });
+        }
+        if record.account_id.is_some() {
+            Ok(())
+        } else {
+            Err(ReferenceDataError::MissingLedgerMapping {
+                kind: DatasetKind::SecuritiesAccount,
+                value: key,
+                mapping: "account_id",
+            })
+        }
     }
 
     /// Validate that a securities cash leg maps to a ledger asset definition.
@@ -936,32 +901,28 @@ impl ReferenceDataSnapshots {
         &self,
         currency: &str,
         payment_type: Option<&str>,
-    ) -> Result<ValidationOutcome, ReferenceDataError> {
-        Self::dataset_records_or_skip(&self.cash_leg)?.map_or_else(
-            || Ok(ValidationOutcome::Skipped),
-            |records| {
-                let currency_key = normalise_upper_ascii(currency);
-                let payment_key = payment_type.map(normalise_upper_ascii);
-                let record = records.by_currency_and_payment(&currency_key, payment_key.as_deref());
-                let Some(record) = record else {
-                    return Err(ReferenceDataError::NotFound {
-                        kind: DatasetKind::CashLeg,
-                        value: payment_key.map_or(currency_key.clone(), |payment| {
-                            format!("{currency_key}:{payment}")
-                        }),
-                    });
-                };
-                if record.asset_definition_id.is_some() {
-                    Ok(ValidationOutcome::Enforced)
-                } else {
-                    Err(ReferenceDataError::MissingLedgerMapping {
-                        kind: DatasetKind::CashLeg,
-                        value: currency_key,
-                        mapping: "asset_definition_id",
-                    })
-                }
-            },
-        )
+    ) -> Result<(), ReferenceDataError> {
+        let records = Self::required_dataset_records(&self.cash_leg)?;
+        let currency_key = normalise_upper_ascii(currency);
+        let payment_key = payment_type.map(normalise_upper_ascii);
+        let record = records.by_currency_and_payment(&currency_key, payment_key.as_deref());
+        let Some(record) = record else {
+            return Err(ReferenceDataError::NotFound {
+                kind: DatasetKind::CashLeg,
+                value: payment_key.map_or(currency_key.clone(), |payment| {
+                    format!("{currency_key}:{payment}")
+                }),
+            });
+        };
+        if record.asset_definition_id.is_some() {
+            Ok(())
+        } else {
+            Err(ReferenceDataError::MissingLedgerMapping {
+                kind: DatasetKind::CashLeg,
+                value: currency_key,
+                mapping: "asset_definition_id",
+            })
+        }
     }
 
     /// Lookup an instrument record by ISIN when the dataset is loaded.
@@ -1854,23 +1815,44 @@ mod tests {
         };
 
         let snapshots = ReferenceDataSnapshots::from_config(&config);
-        assert_eq!(
-            snapshots.validate_bic("DEUTDEFF").expect("validation"),
-            ValidationOutcome::Enforced
-        );
+        snapshots.validate_bic("DEUTDEFF").expect("validation");
         let err = snapshots.validate_bic("FOOBARXX").unwrap_err();
         assert!(matches!(err, ReferenceDataError::NotFound { .. }));
     }
 
     #[test]
-    fn validate_bic_skips_when_dataset_missing() {
+    fn validation_fails_closed_when_dataset_is_missing() {
         let _guard = iso_reference_test_guard();
         let config = IsoReferenceData::default();
         let snapshots = ReferenceDataSnapshots::from_config(&config);
-        assert_eq!(
-            snapshots.validate_bic("DEUTDEFF").expect("validation"),
-            ValidationOutcome::Skipped
-        );
+        for result in [
+            snapshots.validate_bic("DEUTDEFF"),
+            snapshots.validate_lei("5493001KJTIIGC8Y1R12"),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ReferenceDataError::DatasetUnavailable {
+                    kind: DatasetKind::BicLei
+                })
+            ));
+        }
+        for result in [
+            snapshots.validate_isin("US0378331005"),
+            snapshots.validate_cusip("037833100"),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ReferenceDataError::DatasetUnavailable {
+                    kind: DatasetKind::IsinCusip
+                })
+            ));
+        }
+        assert!(matches!(
+            snapshots.validate_mic("XNAS"),
+            Err(ReferenceDataError::DatasetUnavailable {
+                kind: DatasetKind::MicDirectory
+            })
+        ));
     }
 
     #[test]
@@ -1949,10 +1931,7 @@ mod tests {
         };
 
         let snapshots = ReferenceDataSnapshots::from_config(&config);
-        assert_eq!(
-            snapshots.validate_mic("XNAS").expect("validation"),
-            ValidationOutcome::Enforced
-        );
+        snapshots.validate_mic("XNAS").expect("validation");
         let err = snapshots.validate_mic("XTBD").unwrap_err();
         assert!(matches!(err, ReferenceDataError::MicInactive { .. }));
     }
@@ -1998,30 +1977,18 @@ mod tests {
 
         let snapshots = ReferenceDataSnapshots::from_config(&config);
 
-        assert_eq!(
-            snapshots
-                .validate_instrument_ledger_mapping("037833100")
-                .expect("instrument ledger mapping"),
-            ValidationOutcome::Enforced
-        );
-        assert_eq!(
-            snapshots
-                .validate_csd_venue("XNAS")
-                .expect("CSD venue mapping"),
-            ValidationOutcome::Enforced
-        );
-        assert_eq!(
-            snapshots
-                .validate_securities_account("DLVRY-ACC", Some("DEUTDEFF"))
-                .expect("securities account mapping"),
-            ValidationOutcome::Enforced
-        );
-        assert_eq!(
-            snapshots
-                .validate_cash_leg("USD", Some("APMT"))
-                .expect("cash-leg mapping"),
-            ValidationOutcome::Enforced
-        );
+        snapshots
+            .validate_instrument_ledger_mapping("037833100")
+            .expect("instrument ledger mapping");
+        snapshots
+            .validate_csd_venue("XNAS")
+            .expect("CSD venue mapping");
+        snapshots
+            .validate_securities_account("DLVRY-ACC", Some("DEUTDEFF"))
+            .expect("securities account mapping");
+        snapshots
+            .validate_cash_leg("USD", Some("APMT"))
+            .expect("cash-leg mapping");
     }
 
     #[test]

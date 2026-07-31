@@ -30,7 +30,7 @@ use iroha_data_model::{
     Encode,
     account::AccountId,
     da::{
-        commitment::{DaCommitmentBundle, KzgCommitment},
+        commitment::DaCommitmentBundle,
         ingest::DaStripeLayout,
         types::{BlobDigest, DaRentQuote, StorageTicketId},
     },
@@ -55,6 +55,7 @@ use iroha_primitives::numeric::XorQuantity;
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
 use norito::{
+    NoritoDeserialize,
     codec::Decode,
     from_bytes,
     json::{self, Value},
@@ -294,29 +295,54 @@ fn parse_storage_ticket_hex_validates_variants() {
     assert!(parse_storage_ticket_hex("ab").is_err(), "too short");
 }
 
-fn spool_artifact_file_name(
+fn spool_artifact_path(
+    spool_dir: &Path,
     prefix: &str,
     ticket: &StorageTicketId,
     sequence: u64,
     fingerprint: [u8; 32],
-) -> String {
-    spool_artifact_file_name_for_key(prefix, LaneId::new(1), 1, sequence, ticket, fingerprint)
+) -> PathBuf {
+    spool_artifact_path_for_key(
+        spool_dir,
+        prefix,
+        LaneId::new(1),
+        1,
+        sequence,
+        ticket,
+        fingerprint,
+    )
 }
 
-fn spool_artifact_file_name_for_key(
+fn spool_artifact_path_for_key(
+    spool_dir: &Path,
     prefix: &str,
     lane_id: LaneId,
     epoch: u64,
     sequence: u64,
     ticket: &StorageTicketId,
     fingerprint: [u8; 32],
-) -> String {
-    format!(
-        "{prefix}{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito",
-        lane = lane_id.as_u32(),
-        ticket_hex = hex::encode(ticket.as_bytes()),
-        fingerprint_hex = hex::encode(fingerprint)
-    )
+) -> PathBuf {
+    match prefix {
+        "manifest-" | "pdp-commitment-" => {
+            let file_name = if prefix == "manifest-" {
+                "manifest.norito"
+            } else {
+                "pdp-commitment.norito"
+            };
+            let artifact_dir = persistence::ticket_artifact_dir(spool_dir, ticket);
+            fs::create_dir_all(&artifact_dir).expect("create ticket artifact fixture directory");
+            artifact_dir.join(file_name)
+        }
+        "da-commitment-" | "da-commitment-schedule-" | "da-pin-intent-" => {
+            let lane = lane_id.as_u32();
+            let ticket_hex = hex::encode(ticket.as_bytes());
+            let fingerprint_hex = hex::encode(fingerprint);
+            spool_dir.join(format!(
+                "{prefix}{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito"
+            ))
+        }
+        other => panic!("unknown spool artifact prefix `{other}`"),
+    }
 }
 
 fn write_sample_manifest_artifact(
@@ -328,14 +354,15 @@ fn write_sample_manifest_artifact(
 ) {
     let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
     let ticket = context.artifacts.storage_ticket;
-    let path = dir.join(spool_artifact_file_name_for_key(
+    let path = spool_artifact_path_for_key(
+        dir,
         "manifest-",
         context.request.lane_id,
         context.request.epoch,
         context.request.sequence,
         &ticket,
         *context.artifacts.fingerprint.as_bytes(),
-    ));
+    );
     fs::write(&path, &context.artifacts.encoded).expect("manifest artifact");
     let artifact =
         persistence::load_manifest_artifact_from_spool(dir, &ticket).expect("manifest artifact");
@@ -438,14 +465,15 @@ fn load_manifest_from_spool_locates_ticket() {
     let dir = tempdir().expect("dir");
     let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
     let ticket = context.artifacts.storage_ticket;
-    let path = dir.path().join(spool_artifact_file_name_for_key(
+    let path = spool_artifact_path_for_key(
+        dir.path(),
         "manifest-",
         context.request.lane_id,
         context.request.epoch,
         context.request.sequence,
         &ticket,
         *context.artifacts.fingerprint.as_bytes(),
-    ));
+    );
     fs::write(&path, &context.artifacts.encoded).expect("manifest file");
 
     let bytes = persistence::load_manifest_from_spool(dir.path(), &ticket).expect("manifest bytes");
@@ -461,12 +489,7 @@ fn load_manifest_from_spool_locates_ticket() {
 fn load_pdp_commitment_from_spool_locates_ticket() {
     let dir = tempdir().expect("dir");
     let ticket = StorageTicketId::new([0x99; 32]);
-    let path = dir.path().join(spool_artifact_file_name(
-        "pdp-commitment-",
-        &ticket,
-        2,
-        [0x55; 32],
-    ));
+    let path = spool_artifact_path(dir.path(), "pdp-commitment-", &ticket, 2, [0x55; 32]);
     let commitment = sample_pdp_commitment_for_tests();
     let bytes = encode_pdp_commitment_bytes(&commitment).expect("encode commitment");
     fs::write(&path, &bytes).expect("commitment file");
@@ -482,36 +505,33 @@ fn load_pdp_commitment_from_spool_locates_ticket() {
 }
 
 #[test]
-fn load_manifest_from_spool_rejects_malformed_ticket_match() {
+fn load_manifest_from_spool_ignores_unrelated_flat_artifacts() {
     let dir = tempdir().expect("dir");
-    let ticket = StorageTicketId::new([0x77; 32]);
-    let ticket_hex = hex::encode(ticket.as_bytes());
-    let path = dir.path().join(format!(
-        "manifest-00000001-0000000000000001-0000000000000002-{ticket_hex}-deadbeef.norito"
-    ));
-    fs::write(&path, b"manifest-bytes").expect("manifest file");
-
-    let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
-        .expect_err("malformed filename should fail closed");
-
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-    assert!(
-        err.to_string()
-            .contains("malformed spool artifact filename"),
-        "unexpected error: {err}"
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let ticket = context.artifacts.storage_ticket;
+    let path = spool_artifact_path_for_key(
+        dir.path(),
+        "manifest-",
+        context.request.lane_id,
+        context.request.epoch,
+        context.request.sequence,
+        &ticket,
+        *context.artifacts.fingerprint.as_bytes(),
     );
+    fs::write(&path, &context.artifacts.encoded).expect("manifest file");
+    fs::create_dir(dir.path().join("manifest-malformed.norito"))
+        .expect("create unrelated malformed flat artifact");
+
+    let loaded = persistence::load_manifest_from_spool(dir.path(), &ticket)
+        .expect("ticket-indexed manifest");
+    assert_eq!(loaded, context.artifacts.encoded);
 }
 
 #[test]
 fn load_manifest_from_spool_rejects_manifest_shaped_directory() {
     let dir = tempdir().expect("dir");
     let ticket = StorageTicketId::new([0x77; 32]);
-    let path = dir.path().join(spool_artifact_file_name(
-        "manifest-",
-        &ticket,
-        2,
-        [0x44; 32],
-    ));
+    let path = spool_artifact_path(dir.path(), "manifest-", &ticket, 2, [0x44; 32]);
     fs::create_dir(path).expect("create manifest-shaped directory");
 
     let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
@@ -525,43 +545,19 @@ fn load_manifest_from_spool_rejects_manifest_shaped_directory() {
 }
 
 #[test]
-fn load_manifest_from_spool_rejects_duplicate_ticket_matches() {
-    let dir = tempdir().expect("dir");
-    let ticket = StorageTicketId::new([0x77; 32]);
-    let first = dir.path().join(spool_artifact_file_name(
-        "manifest-",
-        &ticket,
-        2,
-        [0x44; 32],
-    ));
-    let second = dir.path().join(spool_artifact_file_name(
-        "manifest-",
-        &ticket,
-        3,
-        [0x45; 32],
-    ));
-    fs::write(first, b"manifest-a").expect("manifest a");
-    fs::write(second, b"manifest-b").expect("manifest b");
-
-    let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
-        .expect_err("duplicate strict matches should fail");
-
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-}
-
-#[test]
 fn load_manifest_from_spool_rejects_body_ticket_mismatch() {
     let dir = tempdir().expect("dir");
     let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
     let ticket = context.artifacts.storage_ticket;
-    let path = dir.path().join(spool_artifact_file_name_for_key(
+    let path = spool_artifact_path_for_key(
+        dir.path(),
         "manifest-",
         context.request.lane_id,
         context.request.epoch,
         context.request.sequence,
         &ticket,
         *context.artifacts.fingerprint.as_bytes(),
-    ));
+    );
     let mut manifest = context.artifacts.manifest.clone();
     manifest.storage_ticket = StorageTicketId::new([0x99; 32]);
     let bytes = to_bytes(&manifest).expect("encode mismatched manifest");
@@ -578,80 +574,82 @@ fn load_manifest_from_spool_rejects_fingerprint_mismatch() {
     let dir = tempdir().expect("dir");
     let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
     let ticket = context.artifacts.storage_ticket;
-    let mut wrong_fingerprint = *context.artifacts.fingerprint.as_bytes();
-    wrong_fingerprint[0] ^= 0xFF;
-    let path = dir.path().join(spool_artifact_file_name_for_key(
+    let path = spool_artifact_path_for_key(
+        dir.path(),
         "manifest-",
         context.request.lane_id,
         context.request.epoch,
         context.request.sequence,
         &ticket,
-        wrong_fingerprint,
-    ));
-    fs::write(&path, &context.artifacts.encoded).expect("manifest file");
+        *context.artifacts.fingerprint.as_bytes(),
+    );
+    let mut manifest = context.artifacts.manifest.clone();
+    manifest.blob_hash = BlobDigest::new([0xA5; 32]);
+    fs::write(
+        &path,
+        to_bytes(&manifest).expect("encode tampered manifest"),
+    )
+    .expect("manifest file");
 
     let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
-        .expect_err("filename fingerprint mismatch must fail");
+        .expect_err("canonical manifest fingerprint mismatch must fail");
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 }
 
+#[cfg(unix)]
 #[test]
-fn load_pdp_commitment_from_spool_rejects_duplicate_ticket_matches() {
+fn load_manifest_from_spool_rejects_ticket_shard_symlink() {
+    use std::os::unix::fs::symlink;
+
     let dir = tempdir().expect("dir");
-    let ticket = StorageTicketId::new([0x99; 32]);
-    let first = dir.path().join(spool_artifact_file_name(
-        "pdp-commitment-",
-        &ticket,
-        2,
-        [0x55; 32],
-    ));
-    let second = dir.path().join(spool_artifact_file_name(
-        "pdp-commitment-",
-        &ticket,
-        3,
-        [0x56; 32],
-    ));
-    fs::write(first, b"commitment-a").expect("commitment a");
-    fs::write(second, b"commitment-b").expect("commitment b");
-
-    let err = persistence::load_pdp_commitment_from_spool(dir.path(), &ticket)
-        .expect_err("duplicate strict matches should fail");
-
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-}
-
-#[test]
-fn load_pdp_commitment_from_spool_rejects_malformed_ticket_match() {
-    let dir = tempdir().expect("dir");
-    let ticket = StorageTicketId::new([0x99; 32]);
+    let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
+    let ticket = context.artifacts.storage_ticket;
     let ticket_hex = hex::encode(ticket.as_bytes());
-    let path = dir.path().join(format!(
-        "pdp-commitment-00000001-0000000000000001-0000000000000002-{ticket_hex}-deadbeef.norito"
-    ));
-    fs::write(path, b"commitment").expect("commitment file");
+    let artifacts_dir = dir.path().join("artifacts");
+    fs::create_dir(&artifacts_dir).expect("create artifact index");
+    let external_shard = dir.path().join("external-shard");
+    let external_ticket = external_shard.join(&ticket_hex);
+    fs::create_dir_all(&external_ticket).expect("create external ticket directory");
+    fs::write(
+        external_ticket.join("manifest.norito"),
+        &context.artifacts.encoded,
+    )
+    .expect("write external manifest");
+    symlink(&external_shard, artifacts_dir.join(&ticket_hex[..2]))
+        .expect("create ticket shard symlink");
 
-    let err = persistence::load_pdp_commitment_from_spool(dir.path(), &ticket)
-        .expect_err("malformed filename should fail closed");
+    let err = persistence::load_manifest_from_spool(dir.path(), &ticket)
+        .expect_err("ticket shard symlink must fail closed");
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
-        err.to_string()
-            .contains("malformed spool artifact filename"),
-        "unexpected error: {err}"
+        err.to_string().contains("DA spool path"),
+        "unexpected ticket shard error: {err}"
     );
+}
+
+#[test]
+fn load_pdp_commitment_from_spool_ignores_unrelated_flat_artifacts() {
+    let dir = tempdir().expect("dir");
+    let ticket = StorageTicketId::new([0x99; 32]);
+    let path = spool_artifact_path(dir.path(), "pdp-commitment-", &ticket, 2, [0x55; 32]);
+    let commitment = sample_pdp_commitment_for_tests();
+    let bytes = encode_pdp_commitment_bytes(&commitment).expect("encode commitment");
+    fs::write(path, &bytes).expect("commitment");
+    fs::create_dir(dir.path().join("pdp-commitment-malformed.norito"))
+        .expect("create unrelated malformed flat artifact");
+
+    let loaded =
+        persistence::load_pdp_commitment_from_spool(dir.path(), &ticket).expect("commitment");
+    assert_eq!(loaded, bytes);
 }
 
 #[test]
 fn load_pdp_commitment_from_spool_rejects_commitment_shaped_directory() {
     let dir = tempdir().expect("dir");
     let ticket = StorageTicketId::new([0x99; 32]);
-    let path = dir.path().join(spool_artifact_file_name(
-        "pdp-commitment-",
-        &ticket,
-        2,
-        [0x55; 32],
-    ));
+    let path = spool_artifact_path(dir.path(), "pdp-commitment-", &ticket, 2, [0x55; 32]);
     fs::create_dir(path).expect("create PDP-shaped directory");
 
     let err = persistence::load_pdp_commitment_from_spool(dir.path(), &ticket)
@@ -700,12 +698,7 @@ fn load_pdp_commitment_from_spool_rejects_spool_dir_symlink() {
 fn load_pdp_commitment_from_spool_rejects_invalid_body() {
     let dir = tempdir().expect("dir");
     let ticket = StorageTicketId::new([0x99; 32]);
-    let path = dir.path().join(spool_artifact_file_name(
-        "pdp-commitment-",
-        &ticket,
-        2,
-        [0x55; 32],
-    ));
+    let path = spool_artifact_path(dir.path(), "pdp-commitment-", &ticket, 2, [0x55; 32]);
     let mut commitment = sample_pdp_commitment_for_tests();
     commitment.manifest_digest = [0; 32];
     fs::write(
@@ -761,14 +754,15 @@ fn manifest_response_attaches_pdp_commitment_header() {
     let mut commitment = sample_pdp_commitment_for_tests();
     commitment.manifest_digest = *manifest_hash.as_bytes();
     let bytes = encode_pdp_commitment_bytes(&commitment).expect("encode commitment");
-    let path = dir.path().join(spool_artifact_file_name_for_key(
+    let path = spool_artifact_path_for_key(
+        dir.path(),
         "pdp-commitment-",
         context.request.lane_id,
         context.request.epoch,
         context.request.sequence,
         &ticket,
         *context.artifacts.fingerprint.as_bytes(),
-    ));
+    );
     fs::write(&path, &bytes).expect("commitment file");
     let response =
         utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
@@ -794,14 +788,15 @@ fn manifest_response_rejects_corrupt_pdp_commitment_sidecar() {
     let dir = tempdir().expect("dir");
     let (context, manifest_artifact, manifest_hash) = write_sample_manifest_artifact(dir.path());
     let ticket = context.artifacts.storage_ticket;
-    let path = dir.path().join(spool_artifact_file_name_for_key(
+    let path = spool_artifact_path_for_key(
+        dir.path(),
         "pdp-commitment-",
         context.request.lane_id,
         context.request.epoch,
         context.request.sequence,
         &ticket,
         *context.artifacts.fingerprint.as_bytes(),
-    ));
+    );
     fs::write(&path, b"not a PDP commitment").expect("commitment file");
     let response =
         utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
@@ -819,38 +814,6 @@ fn manifest_response_rejects_corrupt_pdp_commitment_sidecar() {
 }
 
 #[test]
-fn manifest_response_rejects_pdp_commitment_key_mismatch() {
-    let dir = tempdir().expect("dir");
-    let (context, manifest_artifact, manifest_hash) = write_sample_manifest_artifact(dir.path());
-    let ticket = context.artifacts.storage_ticket;
-    let mut commitment = sample_pdp_commitment_for_tests();
-    commitment.manifest_digest = *manifest_hash.as_bytes();
-    let bytes = encode_pdp_commitment_bytes(&commitment).expect("encode commitment");
-    let path = dir.path().join(spool_artifact_file_name_for_key(
-        "pdp-commitment-",
-        context.request.lane_id,
-        context.request.epoch,
-        context.request.sequence.saturating_add(1),
-        &ticket,
-        *context.artifacts.fingerprint.as_bytes(),
-    ));
-    fs::write(&path, &bytes).expect("mismatched PDP commitment");
-    let response =
-        utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
-
-    let err = attach_pdp_commitment_header_from_spool(
-        dir.path(),
-        &manifest_artifact,
-        &manifest_hash,
-        response,
-        ResponseFormat::Json,
-    )
-    .expect_err("wrong-key PDP commitment should fail manifest response");
-    let response = axum::response::IntoResponse::into_response(err);
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-#[test]
 fn manifest_response_rejects_pdp_commitment_manifest_digest_mismatch() {
     let dir = tempdir().expect("dir");
     let (context, manifest_artifact, manifest_hash) = write_sample_manifest_artifact(dir.path());
@@ -859,14 +822,15 @@ fn manifest_response_rejects_pdp_commitment_manifest_digest_mismatch() {
     commitment.manifest_digest = *manifest_hash.as_bytes();
     commitment.manifest_digest[0] ^= 0xFF;
     let bytes = encode_pdp_commitment_bytes(&commitment).expect("encode commitment");
-    let path = dir.path().join(spool_artifact_file_name_for_key(
+    let path = spool_artifact_path_for_key(
+        dir.path(),
         "pdp-commitment-",
         context.request.lane_id,
         context.request.epoch,
         context.request.sequence,
         &ticket,
         *context.artifacts.fingerprint.as_bytes(),
-    ));
+    );
     fs::write(&path, &bytes).expect("digest-mismatched PDP commitment");
     let response =
         utils::respond_value_with_format(Value::Object(Default::default()), ResponseFormat::Json);
@@ -1416,7 +1380,7 @@ fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
     request.signature = checked_signature(keypair.private_key(), &request.signing_digest());
     let replication_policy = DaReplicationPolicy::default();
     let rent_policy = DaRentPolicyV1::default();
-    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::KzgBls12_381);
+    let nexus = nexus_with_scheme(request.lane_id, DaProofScheme::MerkleSha256);
 
     let computed = compute_da_manifest_artifacts(
         &request,
@@ -1430,7 +1394,7 @@ fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
     )
     .expect("canonical DA compute pipeline");
 
-    assert_eq!(computed.proof_scheme, DaProofScheme::KzgBls12_381);
+    assert_eq!(computed.proof_scheme, DaProofScheme::MerkleSha256);
     assert_eq!(computed.canonical_payload, request.payload);
     assert_eq!(
         computed.manifest.manifest.retention_policy,
@@ -1451,7 +1415,7 @@ fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
 
 #[test]
 fn compute_da_manifest_artifacts_authenticates_before_lane_lookup() {
-    let nexus = nexus_with_scheme(LaneId::new(1), DaProofScheme::KzgBls12_381);
+    let nexus = nexus_with_scheme(LaneId::new(1), DaProofScheme::MerkleSha256);
     let replication_policy = DaReplicationPolicy::default();
     let rent_policy = DaRentPolicyV1::default();
 
@@ -1736,15 +1700,6 @@ fn fingerprint_ignores_manifest_storage_ticket_and_timestamp() {
 }
 
 #[test]
-fn lane_proof_scheme_accepts_kzg_policy() {
-    let lane_id = LaneId::new(3);
-    let nexus = nexus_with_scheme(lane_id, DaProofScheme::KzgBls12_381);
-
-    let scheme = lane_proof_scheme(&nexus, lane_id, 1).expect("kzg lane should resolve");
-    assert_eq!(scheme, DaProofScheme::KzgBls12_381);
-}
-
-#[test]
 fn lane_proof_scheme_rejects_stale_geometry_only_lane() {
     let stale_lane = LaneId::new(3);
     let authoritative_catalog = lane_catalog_with_lanes(vec![ModelLaneConfig::default()]);
@@ -1754,7 +1709,7 @@ fn lane_proof_scheme_rejects_stale_geometry_only_lane() {
             id: stale_lane,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "stale-ingest".to_owned(),
-            proof_scheme: DaProofScheme::KzgBls12_381,
+            proof_scheme: DaProofScheme::MerkleSha256,
             ..ModelLaneConfig::default()
         },
     ]);
@@ -1779,7 +1734,7 @@ fn lane_proof_scheme_rejects_future_created_autoscale_lane_before_committed_heig
         id: lane_id,
         dataspace_id: DataSpaceId::UNIVERSAL,
         alias: "elastic-lane-1".to_owned(),
-        proof_scheme: DaProofScheme::KzgBls12_381,
+        proof_scheme: DaProofScheme::MerkleSha256,
         ..ModelLaneConfig::default()
     };
     elastic_lane.metadata.insert(
@@ -1805,7 +1760,7 @@ fn lane_proof_scheme_rejects_future_created_autoscale_lane_before_committed_heig
 
     let scheme = lane_proof_scheme(&nexus, lane_id, 7)
         .expect("autoscale lane should resolve at creation height");
-    assert_eq!(scheme, DaProofScheme::KzgBls12_381);
+    assert_eq!(scheme, DaProofScheme::MerkleSha256);
 }
 
 #[test]
@@ -4685,8 +4640,41 @@ fn persist_manifest_for_sorafs_writes_and_is_idempotent() {
     )
     .expect("persist manifest")
     .expect("spool path");
+    let ticket_hex = hex::encode(manifest.storage_ticket.as_bytes());
+    assert_eq!(
+        first_path,
+        manifest_dir
+            .join("artifacts")
+            .join(&ticket_hex[..2])
+            .join(&ticket_hex)
+            .join("manifest.norito"),
+        "manifest persistence must use the direct sharded ticket index"
+    );
     let bytes = fs::read(&first_path).expect("read manifest file");
     assert_eq!(bytes, manifest.encoded);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = fs::metadata(&first_path)
+            .expect("read manifest permissions")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "persisted DA artifacts must not be accessible by group or other users"
+        );
+        let directory_mode = fs::metadata(first_path.parent().expect("ticket artifact directory"))
+            .expect("read ticket directory permissions")
+            .permissions()
+            .mode();
+        assert_eq!(
+            directory_mode & 0o077,
+            0,
+            "ticket artifact directories must not be accessible by group or other users"
+        );
+    }
 
     let second_path = persistence::persist_manifest_for_sorafs(
         manifest_dir,
@@ -4743,6 +4731,16 @@ fn persist_pdp_commitment_writes_and_is_idempotent() {
     )
     .expect("persist commitment")
     .expect("spool path");
+    let ticket_hex = hex::encode(manifest.storage_ticket.as_bytes());
+    assert_eq!(
+        first_path,
+        manifest_dir
+            .join("artifacts")
+            .join(&ticket_hex[..2])
+            .join(&ticket_hex)
+            .join("pdp-commitment.norito"),
+        "PDP persistence must use the direct sharded ticket index"
+    );
     let bytes = fs::read(&first_path).expect("read commitment file");
     let archived = from_bytes::<PdpCommitmentV1>(&bytes).expect("decode commitment");
     let decoded = PdpCommitmentV1::deserialize(archived);
@@ -4817,59 +4815,6 @@ fn build_da_commitment_record_reflects_artifacts() {
     assert_eq!(record.storage_ticket, manifest.storage_ticket);
     assert!(record.proof_digest.is_some(), "expected proof digest");
     assert_eq!(record.proof_scheme, DaProofScheme::MerkleSha256);
-    assert!(
-        record.kzg_commitment.is_none(),
-        "merkle lanes must not include KZG commitments"
-    );
-}
-
-#[test]
-fn build_da_commitment_record_sets_kzg_commitment_for_kzg_lane() {
-    let request = sample_request();
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    let manifest = resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_500_000,
-        &rent_policy,
-    )
-    .expect("manifest");
-    let mut pdp_commitment = sample_pdp_commitment_for_tests();
-    pdp_commitment.manifest_digest = *manifest.manifest_hash.as_bytes();
-    let pdp_bytes = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
-    let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
-    let receipt = build_receipt(
-        &checked_random_keypair(),
-        &request,
-        1_701_500_000,
-        manifest.blob_hash,
-        manifest.chunk_root,
-        manifest.manifest_hash,
-        manifest.storage_ticket,
-        pdp_bytes.clone(),
-        manifest.manifest.rent_quote.clone(),
-        stripe_layout,
-    )
-    .expect("build receipt");
-    let record = build_da_commitment_record(
-        &request,
-        &manifest,
-        &request.retention_policy,
-        &receipt.operator_signature,
-        &pdp_bytes,
-        DaProofScheme::KzgBls12_381,
-    );
-    let expected_kzg = derive_kzg_commitment(&manifest.chunk_root, &manifest.storage_ticket);
-    assert_eq!(record.proof_scheme, DaProofScheme::KzgBls12_381);
-    assert_eq!(record.kzg_commitment, Some(expected_kzg));
-    assert!(record.proof_digest.is_some(), "expected proof digest");
 }
 
 #[test]
@@ -5106,7 +5051,6 @@ fn persist_spool_artifacts_reject_body_tuple_mismatches() {
         ManifestDigest::new(*manifest.manifest_hash.as_bytes()),
         DaProofScheme::MerkleSha256,
         Hash::prehashed(*manifest.chunk_root.as_bytes()),
-        None,
         Some(Hash::new(&pdp_bytes)),
         request.retention_policy.clone(),
         manifest.storage_ticket,
@@ -5140,6 +5084,21 @@ fn persist_spool_artifacts_reject_body_tuple_mismatches() {
             &manifest.fingerprint,
         ),
         "invalid PDP commitment body",
+    );
+
+    let mut wrong_fingerprint = *manifest.fingerprint.as_bytes();
+    wrong_fingerprint[0] ^= 0xFF;
+    assert_invalid_input(
+        persistence::persist_pdp_commitment(
+            manifest_dir,
+            &pdp_commitment,
+            request.lane_id,
+            request.epoch,
+            request.sequence,
+            &manifest.storage_ticket,
+            &ReplayFingerprint::from(wrong_fingerprint),
+        ),
+        "PDP ticket fingerprint mismatch",
     );
 
     assert_invalid_input(
@@ -5272,14 +5231,15 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
             ),
         };
 
-    let manifest_path = manifest_dir.join(spool_artifact_file_name_for_key(
+    let manifest_path = spool_artifact_path_for_key(
+        manifest_dir,
         "manifest-",
         request.lane_id,
         request.epoch,
         request.sequence,
         &manifest.storage_ticket,
         fingerprint,
-    ));
+    );
     fs::write(&manifest_path, b"poison-manifest").expect("poison manifest");
     assert_invalid_data(
         persistence::persist_manifest_for_sorafs(
@@ -5294,14 +5254,15 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         "manifest",
     );
 
-    let pdp_path = manifest_dir.join(spool_artifact_file_name_for_key(
+    let pdp_path = spool_artifact_path_for_key(
+        manifest_dir,
         "pdp-commitment-",
         request.lane_id,
         request.epoch,
         request.sequence,
         &manifest.storage_ticket,
         fingerprint,
-    ));
+    );
     fs::write(&pdp_path, b"poison-pdp").expect("poison pdp");
     assert_invalid_data(
         persistence::persist_pdp_commitment(
@@ -5316,14 +5277,15 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         "pdp",
     );
 
-    let commitment_path = manifest_dir.join(spool_artifact_file_name_for_key(
+    let commitment_path = spool_artifact_path_for_key(
+        manifest_dir,
         "da-commitment-",
         request.lane_id,
         request.epoch,
         request.sequence,
         &manifest.storage_ticket,
         fingerprint,
-    ));
+    );
     fs::write(&commitment_path, b"poison-commitment").expect("poison commitment");
     assert_invalid_data(
         persistence::persist_da_commitment_record(
@@ -5338,14 +5300,15 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         "commitment",
     );
 
-    let schedule_path = manifest_dir.join(spool_artifact_file_name_for_key(
+    let schedule_path = spool_artifact_path_for_key(
+        manifest_dir,
         "da-commitment-schedule-",
         request.lane_id,
         request.epoch,
         request.sequence,
         &manifest.storage_ticket,
         fingerprint,
-    ));
+    );
     fs::write(&schedule_path, b"poison-schedule").expect("poison schedule");
     assert_invalid_data(
         persistence::persist_da_commitment_schedule_entry(
@@ -5361,14 +5324,15 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         "schedule",
     );
 
-    let pin_path = manifest_dir.join(spool_artifact_file_name_for_key(
+    let pin_path = spool_artifact_path_for_key(
+        manifest_dir,
         "da-pin-intent-",
         request.lane_id,
         request.epoch,
         request.sequence,
         &manifest.storage_ticket,
         fingerprint,
-    ));
+    );
     fs::write(&pin_path, b"poison-pin").expect("poison pin");
     assert_invalid_data(
         persistence::persist_da_pin_intent(
@@ -5412,14 +5376,15 @@ fn persist_spool_artifacts_reject_existing_target_symlink() {
     let fingerprint = *manifest.fingerprint.as_bytes();
     let target = manifest_dir.join("manifest-target.norito");
     fs::write(&target, &manifest.encoded).expect("write symlink target");
-    let manifest_path = manifest_dir.join(spool_artifact_file_name_for_key(
+    let manifest_path = spool_artifact_path_for_key(
+        manifest_dir,
         "manifest-",
         request.lane_id,
         request.epoch,
         request.sequence,
         &manifest.storage_ticket,
         fingerprint,
-    ));
+    );
     symlink(&target, &manifest_path).expect("create manifest artifact symlink");
 
     let err = persistence::persist_manifest_for_sorafs(
@@ -6452,7 +6417,7 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
 }
 
 #[test]
-fn da_receipt_log_rejects_receipt_fingerprint_mismatch_against_manifest_on_open() {
+fn da_receipt_log_rejects_receipt_hash_mismatch_against_ticket_manifest_on_open() {
     let temp_dir = tempdir().expect("temp dir");
     let spool_dir = temp_dir.path();
     let context = sample_manifest_context_for(BlobClass::NexusLaneSidecar);
@@ -6490,17 +6455,22 @@ fn da_receipt_log_rejects_receipt_fingerprint_mismatch_against_manifest_on_open(
         receipt: receipt.clone(),
     };
     let correct_fingerprint = *manifest.fingerprint.as_bytes();
-    let mut wrong_fingerprint = correct_fingerprint;
-    wrong_fingerprint[0] ^= 0xFF;
-    let manifest_path = spool_dir.join(spool_artifact_file_name_for_key(
+    let manifest_path = spool_artifact_path_for_key(
+        spool_dir,
         "manifest-",
         request.lane_id,
         request.epoch,
         request.sequence,
         &manifest.storage_ticket,
-        wrong_fingerprint,
-    ));
-    fs::write(&manifest_path, &manifest.encoded).expect("write mismatched manifest sidecar");
+        correct_fingerprint,
+    );
+    let mut mismatched_manifest = manifest.manifest.clone();
+    mismatched_manifest.issued_at_unix = mismatched_manifest.issued_at_unix.saturating_add(1);
+    fs::write(
+        &manifest_path,
+        to_bytes(&mismatched_manifest).expect("encode mismatched manifest sidecar"),
+    )
+    .expect("write mismatched manifest sidecar");
     let receipt_path = spool_dir.join(receipt_spool_file_name(
         &receipt,
         request.sequence,
@@ -6514,14 +6484,13 @@ fn da_receipt_log_rejects_receipt_fingerprint_mismatch_against_manifest_on_open(
         Arc::clone(&cursor_store),
         signer.public_key().clone(),
     ) {
-        Ok(_) => {
-            panic!("receipt/manifest fingerprint mismatch must reject receipt-log recovery")
-        }
+        Ok(_) => panic!("receipt/manifest hash mismatch must reject receipt-log recovery"),
         Err(err) => err,
     };
 
     assert!(
-        format!("{err:?}").contains("does not match manifest fingerprint"),
+        format!("{err:?}")
+            .contains("receipt manifest hash does not match ticket-indexed DA manifest artifact"),
         "unexpected receipt-log recovery error: {err:?}"
     );
     assert!(
@@ -7802,6 +7771,53 @@ fn resolve_manifest_emits_parity_chunks() {
         assert_eq!(chunk.length, request.chunk_size);
         assert!(chunk.parity);
     }
+}
+
+#[test]
+fn resolve_manifest_rejects_malformed_request_manifest_without_panicking() {
+    let mut request = sample_request();
+    let canonical = normalize_payload(&request)
+        .expect("normalize payload")
+        .into_vec();
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let metadata =
+        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
+    let rent_policy = DaRentPolicyV1::default();
+    let valid = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &metadata,
+        &request.retention_policy,
+        1_701_000_112,
+        &rent_policy,
+    )
+    .expect("resolve valid manifest");
+    let mut malformed = to_bytes(&valid.manifest).expect("encode valid manifest");
+    malformed.truncate(malformed.len().saturating_sub(1));
+    request.norito_manifest = Some(malformed);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        resolve_manifest(
+            &request,
+            &chunk_store,
+            canonical.as_slice(),
+            &metadata,
+            &request.retention_policy,
+            1_701_000_113,
+            &rent_policy,
+        )
+    }));
+    let err = result
+        .expect("malformed request manifest must not panic")
+        .expect_err("malformed request manifest must be rejected");
+
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("failed to decode DA manifest"),
+        "unexpected malformed manifest error: {}",
+        err.1
+    );
 }
 
 #[test]

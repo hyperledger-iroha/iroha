@@ -72,6 +72,16 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
     }
   }
 
+  /** Rejects transaction payload bytes that are not the exact canonical Norito encoding. */
+  public static void validateCanonicalTransactionPayload(final byte[] encoded)
+      throws NoritoException {
+    try {
+      TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded);
+    } catch (final Exception ex) {
+      throw new NoritoException("Invalid canonical Norito transaction payload", ex);
+    }
+  }
+
   public static byte[] encodeMultisigProposeRequest(
       final MultisigProposeRequest request, final int chainDiscriminant) throws NoritoException {
     try {

@@ -561,7 +561,7 @@ mod small_vector {
                     usize::try_from(elem_len).map_err(|_| ncore::Error::LengthMismatch)?;
 
                 if elem_len == 0 {
-                    if core::mem::size_of::<ncore::Archived<A::Item>>() != 0 {
+                    if ncore::archived_payload_size::<A::Item>() != 0 {
                         return Err(ncore::Error::LengthMismatch);
                     }
                     let (value, used) =

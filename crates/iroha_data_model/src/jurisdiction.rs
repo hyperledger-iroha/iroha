@@ -35,7 +35,7 @@ pub const JDG_SDN_COMMITMENT_DOMAIN_TAG_V1: &[u8] = b"iroha:jurisdiction:sdn:com
 /// Identifier for a jurisdiction (e.g., derived from BIC/ClearingSystemId).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
-#[norito(transparent, decode_from_slice)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -615,7 +615,7 @@ impl JdgSdnRegistry {
 /// Committee identifier bound into an attestation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
-#[norito(transparent, decode_from_slice)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

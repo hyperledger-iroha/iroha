@@ -18,7 +18,7 @@ use std::{
     num::NonZeroU16,
     path::{Component, Path, PathBuf},
     sync::{
-        Arc, RwLock,
+        Arc,
         atomic::{AtomicBool, Ordering as AtomicOrdering},
     },
     time::{Duration, Instant},
@@ -28,6 +28,7 @@ use blake3::Hasher;
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use flate2::read::GzDecoder;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use thiserror::Error;
 use url::{Host, Url};
 
@@ -2329,17 +2330,11 @@ impl GatewayComplianceController {
 
     fn read_state(
         &self,
-    ) -> Result<
-        std::sync::RwLockReadGuard<'_, GatewayComplianceControllerState>,
-        GatewayComplianceError,
-    > {
+    ) -> Result<RwLockReadGuard<'_, GatewayComplianceControllerState>, GatewayComplianceError> {
         if self.fenced.load(AtomicOrdering::Acquire) {
             return Err(GatewayComplianceError::CheckpointConflict);
         }
-        let guard = self
-            .state
-            .read()
-            .map_err(|_| GatewayComplianceError::StatePoisoned)?;
+        let guard = self.state.read();
         if self.fenced.load(AtomicOrdering::Acquire) {
             return Err(GatewayComplianceError::CheckpointConflict);
         }
@@ -2348,17 +2343,12 @@ impl GatewayComplianceController {
 
     fn write_state(
         &self,
-    ) -> Result<
-        std::sync::RwLockWriteGuard<'_, GatewayComplianceControllerState>,
-        GatewayComplianceError,
-    > {
+    ) -> Result<RwLockWriteGuard<'_, GatewayComplianceControllerState>, GatewayComplianceError>
+    {
         if self.fenced.load(AtomicOrdering::Acquire) {
             return Err(GatewayComplianceError::CheckpointConflict);
         }
-        let guard = self
-            .state
-            .write()
-            .map_err(|_| GatewayComplianceError::StatePoisoned)?;
+        let guard = self.state.write();
         if self.fenced.load(AtomicOrdering::Acquire) {
             return Err(GatewayComplianceError::CheckpointConflict);
         }
@@ -2367,7 +2357,7 @@ impl GatewayComplianceController {
 
     fn commit(
         &self,
-        guard: &mut std::sync::RwLockWriteGuard<'_, GatewayComplianceControllerState>,
+        guard: &mut RwLockWriteGuard<'_, GatewayComplianceControllerState>,
         mut next: GatewayComplianceControllerState,
     ) -> Result<(), GatewayComplianceError> {
         next.checkpoint.revision = guard.checkpoint.revision.checked_add(1).ok_or_else(|| {

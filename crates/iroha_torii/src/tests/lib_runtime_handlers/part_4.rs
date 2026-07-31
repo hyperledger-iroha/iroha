@@ -2366,25 +2366,21 @@
         method: Method,
         uri: axum::http::Uri,
         value: T,
-    ) -> (
-        Method,
-        axum::http::Uri,
-        HeaderMap,
-        crate::utils::extractors::NoritoJsonWithBytes<T>,
-    )
+    ) -> (Method, axum::http::Uri, HeaderMap, axum::body::Bytes)
     where
-        T: Clone + norito::json::JsonSerialize,
+        T: norito::json::JsonSerialize,
     {
         let body = norito::json::to_vec(&value).expect("encode push body");
-        let headers = signed_app_headers(account_id, key_pair, &method, &uri, body.as_ref());
+        let mut headers = signed_app_headers(account_id, key_pair, &method, &uri, body.as_ref());
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
         (
             method,
             uri,
             headers,
-            crate::utils::extractors::NoritoJsonWithBytes {
-                value,
-                raw: axum::body::Bytes::from(body),
-            },
+            axum::body::Bytes::from(body),
         )
     }
 
@@ -2399,8 +2395,8 @@
     #[cfg(all(feature = "app_api", feature = "push"))]
     #[tokio::test]
     async fn push_registration_rejected_when_disabled() {
-        let app = mk_app_state_for_tests();
         let (key_pair, account_id) = push_test_identity(1);
+        let app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
         let req = mk_push_request(&account_id, "t-disabled");
         let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
         let (method, uri, headers, body) =
@@ -2497,29 +2493,75 @@
 
     #[cfg(all(feature = "app_api", feature = "push"))]
     #[tokio::test]
-    async fn push_registration_rejects_unsigned_request() {
+    async fn push_device_writes_authenticate_before_media_and_body_decode() {
         let (_key_pair, account_id) = push_test_identity(5);
         let _data_dir = crate::test_utils::TestDataDirGuard::new();
         let app = mk_app_state_for_tests_with_world_and_push(
             world_with_account(&account_id),
             push_test_config(),
         );
-        let req = mk_push_request(&account_id, "t-unsigned");
-        let raw = norito::json::to_vec(&req).expect("push json");
-        let resp = super::handler_push_register_device(
-            State(app),
+        let register = super::handler_push_register_device(
+            State(app.clone()),
             Method::POST,
             "/v1/notify/devices".parse().expect("uri"),
             HeaderMap::new(),
-            crate::utils::extractors::NoritoJsonWithBytes {
-                value: req,
-                raw: axum::body::Bytes::from(raw),
-            },
+            axum::body::Bytes::from_static(b"{malformed"),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-        let err = extract_error(resp).await;
-        assert_eq!(err.code(), "push_auth_required");
+        let unregister = super::handler_push_unregister_device(
+            State(app),
+            Method::DELETE,
+            "/v1/notify/devices".parse().expect("uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from_static(b"{malformed"),
+        )
+        .await;
+        for response in [register, unregister] {
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let error = extract_error(response).await;
+            assert_eq!(error.code(), "push_auth_required");
+        }
+    }
+
+    #[cfg(all(feature = "app_api", feature = "push"))]
+    #[tokio::test]
+    async fn push_registration_rejects_body_account_mismatch_without_mutation() {
+        let (signer_keys, signer) = push_test_identity(0x51);
+        let (_other_keys, other) = push_test_identity(0x52);
+        let _data_dir = crate::test_utils::TestDataDirGuard::new();
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id).build(&signer);
+        let world = World::with(
+            [domain],
+            [
+                Account::new(signer.clone()).build(&signer),
+                Account::new(other.clone()).build(&signer),
+            ],
+            [],
+        );
+        let app = mk_app_state_for_tests_with_world_and_push(
+            world,
+            push_test_config(),
+        );
+        let request = mk_push_request(&other, "t-mismatch");
+        let uri: axum::http::Uri = "/v1/notify/devices".parse().expect("uri");
+        let (method, uri, headers, body) =
+            signed_push_json(&signer, &signer_keys, Method::POST, uri, request);
+
+        let response =
+            super::handler_push_register_device(State(app.clone()), method, uri, headers, body)
+                .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let error = extract_error(response).await;
+        assert_eq!(error.code(), "push_account_mismatch");
+        assert_eq!(
+            app.push
+                .as_ref()
+                .expect("push bridge configured")
+                .device_count(),
+            0
+        );
     }
 
     #[cfg(all(feature = "app_api", feature = "push"))]
@@ -2821,4 +2863,3 @@
             app.state.update_latest_block_header_cache_for_tests(header);
         }
     }
-

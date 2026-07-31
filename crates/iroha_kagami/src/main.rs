@@ -50,6 +50,7 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami wizard --profile nexus\n",
     "  kagami localnet --out-dir ./localnet\n",
     "  kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml\n",
+    "  kagami keys --out-dir ./key-custody\n",
     "  kagami keys --algorithm bls_normal --pop --json\n",
     "  kagami advanced markdown-help\n",
 );
@@ -350,6 +351,13 @@ mod tests {
             )
             .is_err()
         )
+    }
+
+    #[test]
+    fn keys_owner_only_output_is_a_distinct_format() {
+        assert!(parse("kagami keys --out-dir ./custody").is_ok());
+        assert!(parse("kagami keys --out-dir ./custody --compact").is_err());
+        assert!(parse("kagami keys --out-dir ./custody --json").is_err());
     }
 
     #[test]

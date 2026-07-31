@@ -19,11 +19,12 @@
 //! The fixed verifier derives every transcript challenge, residual coefficient,
 //! and IPA accumulator from proof bytes; none is caller-selected wire data.
 //! The production build retains the native terminal Eq/Vesta and Ep/Pallas
-//! decisions over authenticated parameters and verifier keys. Tests retain the
-//! fixed-key Poseidon proof wires, canonical BGH19 IPA folding, and exact
-//! bounded proof bytes. Both recursive fixed-VK verifier halves constrain those
-//! same operations. Production availability remains false pending the
-//! authenticated complete archive, independent review, and physical-device gates.
+//! decisions over authenticated, canonically derived transparent parameters and
+//! verifier keys. Tests retain the fixed-key Poseidon proof wires, canonical
+//! BGH19 IPA folding, and exact bounded proof bytes. Both recursive fixed-VK
+//! verifier halves constrain those same operations. Production availability
+//! remains false pending the authenticated complete archive, independent
+//! review, and physical-device gates.
 
 #[cfg(test)]
 use iroha_data_model::offline::KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4;
@@ -32,10 +33,10 @@ use iroha_data_model::offline::{
     KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5, KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4,
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
-    KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-    KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactKindV4,
-    KagemushaPastaCycleParityV1, KagemushaRecursiveSpendArtifactManifestV4,
-    KagemushaRecursiveSpendPublicStatementV4,
+    KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
+    KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4, KagemushaAuthenticatedReleaseV4,
+    KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleParityV1,
+    KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendPublicStatementV4,
 };
 pub use iroha_data_model::offline::{KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4};
 use norito::codec::{Decode, Encode};
@@ -3768,17 +3769,8 @@ fn parse_kagemusha_params_from_source_v4<C>(
 where
     C: CurveAffine,
 {
-    use halo2_proofs::poly::commitment::Params as _;
-
-    let domain_size = 1_u64
-        .checked_shl(expected_k)
-        .ok_or_else(|| format!("Kagemusha V4 {role} ParamsIPA domain size overflow"))?;
-    let expected_len = domain_size
-        .checked_mul(2)
-        .and_then(|points| points.checked_add(2))
-        .and_then(|points| points.checked_mul(32))
-        .and_then(|point_bytes| point_bytes.checked_add(4))
-        .ok_or_else(|| format!("Kagemusha V4 {role} ParamsIPA length overflow"))?;
+    validate_kagemusha_parameter_degree_v4(expected_k, role)?;
+    let expected_len = kagemusha_params_encoded_bytes_v4::<C>(expected_k, role)?;
     super::kagemusha_artifact_source_v4::with_kagemusha_authenticated_artifact_payload_from_source_v4(
         source,
         parity,
@@ -3796,18 +3788,24 @@ where
             if u32::from_le_bytes(k_bytes) != expected_k {
                 return Err(format!("Kagemusha V4 {role} ParamsIPA degree mismatch"));
             }
-            let mut replay = std::io::Cursor::new(k_bytes).chain(reader);
-            let params = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                halo2_proofs::poly::ipa::commitment::ParamsIPA::<C>::read(&mut replay)
-            }))
-            .map_err(|_| format!("Kagemusha V4 {role} ParamsIPA reader panicked"))?
-            .map_err(|error| {
-                format!("failed to parse Kagemusha V4 {role} parameters: {error}")
+            let expected_remaining = expected_len
+                .checked_sub(KAGEMUSHA_HALO2_LENGTH_PREFIX_BYTES_V4)
+                .ok_or_else(|| {
+                    format!("Kagemusha V4 {role} ParamsIPA payload length underflows")
+                })?;
+            let consumed = std::io::copy(reader, &mut std::io::sink()).map_err(|error| {
+                format!("failed to consume Kagemusha V4 {role} ParamsIPA payload: {error}")
             })?;
-            if params.k() != expected_k {
-                return Err(format!("Kagemusha V4 {role} ParamsIPA degree mismatch"));
+            if consumed != expected_remaining {
+                return Err(format!(
+                    "Kagemusha V4 {role} ParamsIPA payload length changed during authentication"
+                ));
             }
-            Ok(params)
+            canonical_kagemusha_params_for_digest_v4::<C>(
+                expected_k,
+                header.payload_sha256,
+                role,
+            )
         },
     )
 }
@@ -4032,22 +4030,9 @@ fn parse_kagemusha_params_v4<C>(
 where
     C: CurveAffine,
 {
-    use halo2_proofs::poly::commitment::Params as _;
-
+    validate_kagemusha_parameter_degree_v4(expected_k, role)?;
     validate_kagemusha_params_encoding_v4::<C>(bytes, expected_k, role)?;
-    let mut cursor = std::io::Cursor::new(bytes);
-    let params = halo2_proofs::poly::ipa::commitment::ParamsIPA::<C>::read(&mut cursor)
-        .map_err(|error| format!("failed to parse Kagemusha V4 {role} parameters: {error}"))?;
-    if cursor.position()
-        != u64::try_from(bytes.len())
-            .map_err(|_| format!("Kagemusha V4 {role} parameter length does not fit u64"))?
-        || params.k() != expected_k
-    {
-        return Err(format!(
-            "Kagemusha V4 {role} parameters have a trailing byte or degree mismatch"
-        ));
-    }
-    Ok(params)
+    canonical_kagemusha_params_for_digest_v4::<C>(expected_k, Sha256::digest(bytes).into(), role)
 }
 
 fn parse_kagemusha_eq_vk_v4(
@@ -4173,6 +4158,60 @@ impl std::io::Write for KagemushaSha256WriterV4 {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+fn validate_kagemusha_parameter_degree_v4(expected_k: u32, role: &str) -> Result<(), String> {
+    if (KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4..=KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4)
+        .contains(&expected_k)
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Kagemusha V4 {role} parameter degree {expected_k} is outside the fixed {}..={} corridor",
+            KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4
+        ))
+    }
+}
+
+fn canonical_kagemusha_params_for_digest_v4<C>(
+    expected_k: u32,
+    expected_sha256: [u8; 32],
+    role: &str,
+) -> Result<halo2_proofs::poly::ipa::commitment::ParamsIPA<C>, String>
+where
+    C: CurveAffine,
+{
+    use halo2_proofs::poly::{
+        commitment::{Params as _, ParamsProver as _},
+        ipa::commitment::ParamsIPA,
+    };
+
+    // Both production entry points first require the exact first-release
+    // corridor. Keep an independent upper bound here so this allocation
+    // primitive also remains safe for small focused test fixtures.
+    if expected_k > KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4 {
+        return Err(format!(
+            "Kagemusha V4 {role} parameter degree {expected_k} exceeds the fixed maximum {}",
+            KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4
+        ));
+    }
+    let params = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ParamsIPA::<C>::new(expected_k)
+    }))
+    .map_err(|_| format!("Kagemusha V4 {role} canonical ParamsIPA derivation panicked"))?;
+    let mut writer = KagemushaSha256WriterV4::default();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| params.write(&mut writer)))
+        .map_err(|_| format!("Kagemusha V4 {role} canonical ParamsIPA serialization panicked"))?
+        .map_err(|error| {
+            format!("failed to serialize Kagemusha V4 {role} canonical parameters: {error}")
+        })?;
+    let canonical_sha256: [u8; 32] = writer.0.finalize().into();
+    if canonical_sha256 != expected_sha256 {
+        return Err(format!(
+            "Kagemusha V4 {role} parameters do not match the canonical transparent IPA derivation"
+        ));
+    }
+    Ok(params)
 }
 
 fn canonical_kagemusha_vk_sha256_v4<C>(
@@ -5945,17 +5984,23 @@ fn parse_kagemusha_eq_pk_spool_v5(
         .seek(std::io::SeekFrom::Start(0))
         .map_err(|error| format!("failed to rewind Kagemusha V5 Eq PK: {error}"))?;
     #[cfg(feature = "circuit-params")]
-    let key = ProvingKey::read::<_, KagemushaStepEqCircuitV4>(
-        &mut reader,
-        SerdeFormat::Processed,
-        circuit_params,
-    )
+    let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ProvingKey::read::<_, KagemushaStepEqCircuitV4>(
+            &mut reader,
+            SerdeFormat::Processed,
+            circuit_params,
+        )
+    }))
+    .map_err(|_| "Kagemusha V5 Eq proving-key reader panicked".to_owned())?
     .map_err(|error| format!("failed to stream-parse Kagemusha V5 Eq PK: {error}"))?;
     #[cfg(not(feature = "circuit-params"))]
     let key = {
         let _ = circuit_params;
-        ProvingKey::read::<_, KagemushaStepEqCircuitV4>(&mut reader, SerdeFormat::Processed)
-            .map_err(|error| format!("failed to stream-parse Kagemusha V5 Eq PK: {error}"))?
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ProvingKey::read::<_, KagemushaStepEqCircuitV4>(&mut reader, SerdeFormat::Processed)
+        }))
+        .map_err(|_| "Kagemusha V5 Eq proving-key reader panicked".to_owned())?
+        .map_err(|error| format!("failed to stream-parse Kagemusha V5 Eq PK: {error}"))?
     };
     reader.finish()?;
     Ok(key)
@@ -5979,17 +6024,23 @@ fn parse_kagemusha_ep_pk_spool_v5(
         .seek(std::io::SeekFrom::Start(0))
         .map_err(|error| format!("failed to rewind Kagemusha V5 Ep PK: {error}"))?;
     #[cfg(feature = "circuit-params")]
-    let key = ProvingKey::read::<_, KagemushaStepEpCircuitV4>(
-        &mut reader,
-        SerdeFormat::Processed,
-        circuit_params,
-    )
+    let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ProvingKey::read::<_, KagemushaStepEpCircuitV4>(
+            &mut reader,
+            SerdeFormat::Processed,
+            circuit_params,
+        )
+    }))
+    .map_err(|_| "Kagemusha V5 Ep proving-key reader panicked".to_owned())?
     .map_err(|error| format!("failed to stream-parse Kagemusha V5 Ep PK: {error}"))?;
     #[cfg(not(feature = "circuit-params"))]
     let key = {
         let _ = circuit_params;
-        ProvingKey::read::<_, KagemushaStepEpCircuitV4>(&mut reader, SerdeFormat::Processed)
-            .map_err(|error| format!("failed to stream-parse Kagemusha V5 Ep PK: {error}"))?
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ProvingKey::read::<_, KagemushaStepEpCircuitV4>(&mut reader, SerdeFormat::Processed)
+        }))
+        .map_err(|_| "Kagemusha V5 Ep proving-key reader panicked".to_owned())?
+        .map_err(|error| format!("failed to stream-parse Kagemusha V5 Ep PK: {error}"))?
     };
     reader.finish()?;
     Ok(key)
@@ -10127,27 +10178,34 @@ fn constrain_kagemusha_eq_secure_relations_v4(
     // The secure membership relation exposes the exact output leaf positions.
     // Copy-bind those positions to the append-only public-state frontier so a
     // recursive proof cannot skip an empty leaf or seed an arbitrary frontier.
-    constrain_kagemusha_output_frontier_v4(ctx, range, bindings, &output, topup[6]);
+    constrain_kagemusha_output_frontier_v4(ctx, range, bindings, &output, topup.leaf_index);
 
     let operation = &bindings.operation;
     let init_amount = operation_u128_v4(ctx, range, operation, kagemusha_v2::I_CURRENT_AMOUNT_LO);
     for (lhs, rhs) in [
-        (topup[0], bindings.recipient_commitment),
+        (topup.output_commitment, bindings.recipient_commitment),
         (
-            topup[1],
+            topup.spend_nullifier,
             operation.fields[kagemusha_v2::I_CURRENT_NULLIFIER],
         ),
-        (topup[2], bindings.input_root),
-        (topup[3], bindings.output_root),
-        (topup[4], init_amount),
-        (topup[5], operation.fields[kagemusha_v2::I_ASSET_SCALE]),
-        (topup[7], operation.fields[kagemusha_v2::I_ASSET_TAG]),
-        (topup[8], operation.fields[kagemusha_v2::I_CHAIN_TAG]),
+        (topup.initial_root, bindings.input_root),
+        (topup.finalized_root, bindings.output_root),
+        (topup.atomic_amount, init_amount),
+        (
+            topup.asset_scale,
+            operation.fields[kagemusha_v2::I_ASSET_SCALE],
+        ),
+        (topup.asset_tag, operation.fields[kagemusha_v2::I_ASSET_TAG]),
+        (topup.chain_tag, operation.fields[kagemusha_v2::I_CHAIN_TAG]),
     ] {
         constrain_equal_if_v4(ctx, range, bindings.is_init, lhs, rhs);
     }
     super::kagemusha_step_transition::constrain_kagemusha_step_init_topup_tags_v4(
-        ctx, range, bindings, topup[9], topup[10],
+        ctx,
+        range,
+        bindings,
+        topup.payer_tag,
+        topup.operation_tag,
     );
 
     let input_amount = operation_u128_v4(ctx, range, operation, kagemusha_v2::I_INPUT_AMOUNT_LO);
@@ -13648,6 +13706,31 @@ mod tests {
     }
 
     #[test]
+    fn v5_spool_parsers_contain_vendored_halo2_reader_panics() {
+        let source = include_str!("kagemusha_recursion_adapter.rs");
+        for (start, end) in [
+            (
+                "fn parse_kagemusha_eq_pk_spool_v5(",
+                "fn parse_kagemusha_ep_pk_spool_v5(",
+            ),
+            (
+                "fn parse_kagemusha_ep_pk_spool_v5(",
+                "pub(crate) struct KagemushaPastaCycleProverV4",
+            ),
+        ] {
+            let parser = source
+                .split_once(start)
+                .expect("proving-key spool parser")
+                .1
+                .split_once(end)
+                .expect("end proving-key spool parser")
+                .0;
+            assert!(parser.contains("catch_unwind"));
+            assert!(parser.contains("proving-key reader panicked"));
+        }
+    }
+
+    #[test]
     fn v5_scalar_audit_prepass_is_witness_only() {
         let source = include_str!("kagemusha_recursion_adapter.rs");
         let prepass = source
@@ -13749,6 +13832,48 @@ mod tests {
             )
             .is_err(),
             "a different candidate manifest digest must fail closed"
+        );
+    }
+
+    #[test]
+    fn kagemusha_params_require_the_canonical_transparent_derivation() {
+        use halo2_proofs::{
+            halo2curves::pasta::EqAffine,
+            poly::{
+                commitment::{Params as _, ParamsProver as _},
+                ipa::commitment::ParamsIPA,
+            },
+        };
+
+        const TEST_K: u32 = 4;
+        let params = ParamsIPA::<EqAffine>::new(TEST_K);
+        let mut canonical = Vec::new();
+        params
+            .write(&mut canonical)
+            .expect("serialize canonical transparent parameters");
+        let digest: [u8; 32] = Sha256::digest(&canonical).into();
+        let derived = canonical_kagemusha_params_for_digest_v4::<EqAffine>(TEST_K, digest, "test")
+            .expect("canonical parameter digest");
+        assert_eq!(derived.k(), TEST_K);
+
+        let mut substituted_digest = digest;
+        substituted_digest[0] ^= 1;
+        assert!(
+            canonical_kagemusha_params_for_digest_v4::<EqAffine>(
+                TEST_K,
+                substituted_digest,
+                "test",
+            )
+            .expect_err("signed but substituted generators must fail")
+            .contains("canonical transparent IPA derivation")
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                canonical_kagemusha_params_for_digest_v4::<EqAffine>(u32::MAX, digest, "test")
+            })
+            .expect("untrusted degree must be rejected without panicking")
+            .expect_err("untrusted degree must fail")
+            .contains("exceeds the fixed maximum")
         );
     }
 

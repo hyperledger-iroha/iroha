@@ -113,6 +113,11 @@ pub(crate) const PQ_MASP_STARK_KAT_PROOF_SHA256_V1: [u8; 32] = [
     0x47, 0x10, 0x63, 0xc3, 0x20, 0xc5, 0x07, 0xe4, 0x05, 0x86, 0x4a, 0xf3, 0xe6, 0x43, 0xb8, 0x1d,
 ];
 
+/// SHA-256 of the complete deterministic `PQA1` facade proof from the same
+/// canonical full-domain fixture. This pins the reserved block-two hedge,
+/// ML-DSA authorization, and exact inner proof as one end-to-end producer.
+pub(crate) const PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1: [u8; 32] = [0; 32];
+
 const PQ_MASP_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     aggregate::AggregateStarkParametersV1 {
         proof_magic: *b"PQS1",
@@ -1787,7 +1792,20 @@ mod tests {
         verify_pq_masp_stark_v1(&statement, &binding, &limits, &proof)
             .expect("full-domain PQ-MASP verification");
         let proof_digest: [u8; 32] = Sha256::digest(&proof).into();
+        let authorized_proof_digest: [u8; 32] = Sha256::digest(&authorized_proof).into();
+        eprintln!(
+            "PQ_MASP_STARK_KAT_PROOF_SHA256_V1={}",
+            hex::encode(proof_digest)
+        );
+        eprintln!(
+            "PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1={}",
+            hex::encode(authorized_proof_digest)
+        );
         assert_eq!(proof_digest, PQ_MASP_STARK_KAT_PROOF_SHA256_V1);
+        assert_eq!(
+            authorized_proof_digest,
+            PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1
+        );
 
         assert!(
             verify_pq_masp_stark_v1(&statement, &binding, &limits, &vec![0; proof.len()],).is_err(),

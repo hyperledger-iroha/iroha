@@ -26,12 +26,13 @@ use std::{
 use super::v2_core::{
     EFFECTIVE_LOCK_TRACE_SERVICE, EffectiveLockTraceProjection, EventTag,
     ExactBodyCompletionOwnership, MAX_EFFECTS_PER_STEP,
-    ProductionIngressIdentityAndClassTraceProjection, SERVICE_CLASS_COMPLETION, SERVICE_CLASS_NONE,
-    ProductionIngressReservationMaterializationTraceProjection, SERVICE_CLASS_NORMAL,
-    SERVICE_CLASS_PROGRESS, ScheduleState, ScheduledWork,
-    check_production_body_service_effective_lock_transition, check_production_ingress_transition,
+    ProductionIngressIdentityAndClassTraceProjection,
+    ProductionIngressReservationMaterializationTraceProjection, SERVICE_CLASS_COMPLETION,
+    SERVICE_CLASS_NONE, SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS, ScheduleState, ScheduledWork,
+    check_production_body_service_effective_lock_transition,
     check_production_ingress_reservation_materialization_transition,
-    classify_exact_body_completion_ownership, select_bounded_service_class,
+    check_production_ingress_transition, classify_exact_body_completion_ownership,
+    select_bounded_service_class,
 };
 use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode as _, Encode as _};
@@ -2490,6 +2491,14 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         &self,
         command: &TaggedCommand<C>,
     ) -> Result<Option<RuntimeDormantLocalFifoReservation>, EnqueueError> {
+        self.dormant_local_fifo_replacement_inner(command, false)
+    }
+
+    fn dormant_local_fifo_replacement_inner(
+        &self,
+        command: &TaggedCommand<C>,
+        allow_reserved_body_alias: bool,
+    ) -> Result<Option<RuntimeDormantLocalFifoReservation>, EnqueueError> {
         let Some(producer_stage) = command.restored_producer_stage else {
             return Ok(None);
         };
@@ -2508,11 +2517,12 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             class: command.class,
         };
         if self.dormant_local_fifo_reservations.contains(&expected) {
-            if self
-                .reserved_body_available
-                .as_ref()
-                .and_then(|reservation| reservation.dormant_replacement.as_ref())
-                == Some(&expected)
+            if !allow_reserved_body_alias
+                && self
+                    .reserved_body_available
+                    .as_ref()
+                    .and_then(|reservation| reservation.dormant_replacement.as_ref())
+                    == Some(&expected)
             {
                 // The unpublished body token is already the physical alias of
                 // this dormant slot. Only its exact materialization may remove
@@ -3030,7 +3040,9 @@ pub(crate) struct RuntimeQueueSnapshot {
 /// command. An exact completion already owned by the serialized runtime yields
 /// a coalescing reservation instead. The executor commits this token only
 /// after the body-fetch service transfers its exact owner; until then it may
-/// abort the token without changing any queued command.
+/// abort its attempt without changing or releasing the process-local token.
+/// Restart reconstructs the lifecycle only from the existing durable dormant
+/// or effect owner; the unpublished token itself is not persisted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use = "a body-available reservation must be committed or aborted"]
 pub(crate) struct BodyAvailableReservation {
@@ -3583,7 +3595,8 @@ impl BoundedIngress<AdapterCommand> {
         tag: EventTag,
         candidate: &BodyPipelineCompletionEvidence,
     ) -> (usize, usize) {
-        self.commands
+        let counts = self
+            .commands
             .iter()
             .filter(|queued| queued.tag == tag)
             .fold((0usize, 0usize), |(owners, exact), queued| {
@@ -3595,7 +3608,31 @@ impl BoundedIngress<AdapterCommand> {
                     owners.saturating_add(1),
                     exact.saturating_add(usize::from(is_exact)),
                 )
-            })
+            });
+        let Some(reservation) = self
+            .reserved_body_available
+            .as_ref()
+            .filter(|reservation| reservation.tag == tag)
+        else {
+            return counts;
+        };
+        let BodyPipelineCompletionEvidence::BodyAvailable {
+            manifest: candidate_manifest,
+        } = candidate
+        else {
+            return counts;
+        };
+        if reservation.manifest.round != candidate_manifest.round
+            || reservation.manifest.subject != candidate_manifest.subject
+        {
+            return counts;
+        }
+        (
+            counts.0.saturating_add(1),
+            counts
+                .1
+                .saturating_add(usize::from(&reservation.manifest == candidate_manifest)),
+        )
     }
 
     #[cfg(test)]
@@ -3829,9 +3866,95 @@ impl BoundedIngress<AdapterCommand> {
         owner: Option<&RuntimeLifecycleOwner>,
         restored_producer_stage: Option<u8>,
     ) -> Result<BodyAvailableReservation, EnqueueError> {
-        if self.reserved_body_available.is_some() {
+        if restored_producer_stage.is_some() && owner.is_none() {
+            return Err(EnqueueError::FailClosed);
+        }
+        let body_command = AdapterCommand::BodyAvailable {
+            manifest: manifest.clone(),
+        };
+        let mut prospective = if let Some(owner) = owner {
+            if !owner.validate_exact() {
+                return Err(EnqueueError::FailClosed);
+            }
+            TaggedCommand::with_causal_origin(
+                tag,
+                CommandClass::Completion,
+                body_command,
+                Instant::now(),
+                owner.causal_origin().clone(),
+                owner.lifecycle_ordinal(),
+            )?
+        } else {
+            TaggedCommand::new(tag, CommandClass::Completion, body_command, Instant::now())
+        };
+        prospective.restored_producer_stage = restored_producer_stage;
+        if owner.is_some() {
+            self.validate_preassigned_lifecycle_owner(&prospective, &[])?;
+        }
+        let dormant_replacement = self.dormant_local_fifo_replacement_inner(&prospective, true)?;
+        if restored_producer_stage
+            .is_some_and(RuntimeDormantLocalFifoReservation::is_local_fifo_stage)
+            && dormant_replacement.is_none()
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+
+        if let Some(existing) = &self.reserved_body_available {
+            let physical_admission_ordinal =
+                existing.admission_ordinal.ok_or(EnqueueError::FailClosed)?;
+            let expected_lifecycle_ordinal = prospective.lifecycle_ordinal;
+            let expected_causal_origin = if expected_lifecycle_ordinal.is_some() {
+                Some(prospective.causal_origin.clone())
+            } else {
+                let retained_origin = existing
+                    .causal_origin
+                    .as_ref()
+                    .ok_or(EnqueueError::FailClosed)?;
+                if tag != retained_origin.root_tag
+                    && !tag.strictly_advances(retained_origin.root_tag)
+                {
+                    return Err(EnqueueError::DuplicateCompletionOwnership);
+                }
+                let mut causal_origin = RuntimeCandidateCausalOrigin::mint(
+                    retained_origin.root_tag,
+                    CommandClass::Completion,
+                    &prospective.command,
+                    None,
+                );
+                if !causal_origin.bind_lifecycle_ordinal(physical_admission_ordinal) {
+                    return Err(EnqueueError::FailClosed);
+                }
+                Some(causal_origin)
+            };
+            let expected_lifecycle_ordinal =
+                expected_lifecycle_ordinal.or(Some(physical_admission_ordinal));
+            let exact_retry = existing.tag == tag
+                && existing.manifest == manifest
+                && existing.owns_new_slot
+                && existing.lifecycle_ordinal == expected_lifecycle_ordinal
+                && existing.causal_origin == expected_causal_origin
+                && existing.restored_producer_stage == restored_producer_stage
+                && existing.dormant_replacement == dormant_replacement
+                && existing
+                    .lifecycle_owner()
+                    .is_some_and(|retained| retained.validate_exact())
+                && self
+                    .lifecycle_ordinals
+                    .recognizes_minted(physical_admission_ordinal)
+                    .map_err(|_| EnqueueError::FailClosed)?
+                && self
+                    .lifecycle_ordinals
+                    .recognizes_minted(expected_lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?)
+                    .map_err(|_| EnqueueError::FailClosed)?
+                && dormant_replacement.as_ref().is_none_or(|replacement| {
+                    self.dormant_local_fifo_reservations.contains(replacement)
+                });
+            if exact_retry {
+                return Ok(existing.clone());
+            }
             return Err(EnqueueError::DuplicateCompletionOwnership);
         }
+
         let conflicting = self
             .commands
             .iter()
@@ -3841,45 +3964,63 @@ impl BoundedIngress<AdapterCommand> {
                     .is_authenticated_proposal_conflicting_with(&manifest)
             })
             .count();
-        let occupied_after_commit = self
-            .commands
-            .len()
-            .saturating_sub(conflicting)
-            .checked_add(self.dormant_local_fifo_reservations.len())
+        let retained_commands = self.commands.len().saturating_sub(conflicting);
+        let dormant_reservations_before = self.active_dormant_local_fifo_reservation_count()?;
+        let dormant_reservations_after = dormant_reservations_before
+            .checked_sub(usize::from(dormant_replacement.is_some()))
+            .ok_or(EnqueueError::FailClosed)?;
+        let occupied_after_commit = retained_commands
+            .checked_add(dormant_reservations_after)
             .and_then(|occupied| occupied.checked_add(1))
             .ok_or(EnqueueError::FailClosed)?;
         if occupied_after_commit > self.config.capacity {
             return Err(EnqueueError::Full);
         }
-        let queue_len_before = u64::try_from(self.commands.len().saturating_sub(conflicting))
-            .map_err(|_| EnqueueError::FailClosed)?;
+        let queue_len_before =
+            u64::try_from(retained_commands).map_err(|_| EnqueueError::FailClosed)?;
         let queue_len_after = queue_len_before
             .checked_add(1)
             .ok_or(EnqueueError::FailClosed)?;
         let queue_capacity =
             u64::try_from(self.config.capacity).map_err(|_| EnqueueError::FailClosed)?;
+        let dormant_reservations_before =
+            u64::try_from(dormant_reservations_before).map_err(|_| EnqueueError::FailClosed)?;
+        let dormant_reservations_after =
+            u64::try_from(dormant_reservations_after).map_err(|_| EnqueueError::FailClosed)?;
         self.with_checked_admission_ordinal_range(
             1,
             move |ingress, admission_ordinal, ordinal_successor| {
+                if prospective
+                    .lifecycle_ordinal
+                    .is_some_and(|ordinal| ordinal >= admission_ordinal)
+                {
+                    return Err(EnqueueError::FailClosed);
+                }
                 let mut reservation = BodyAvailableReservation::reserved_with_admission_ordinal(
                     tag,
                     manifest,
                     admission_ordinal,
                 )?;
-                if let Some(owner) = owner {
-                    if !owner.validate_exact() {
-                        return Err(EnqueueError::FailClosed);
-                    }
-                    reservation.lifecycle_ordinal = Some(owner.lifecycle_ordinal());
-                    reservation.causal_origin = Some(owner.causal_origin().clone());
+                if let Some(lifecycle_ordinal) = prospective.lifecycle_ordinal {
+                    reservation.lifecycle_ordinal = Some(lifecycle_ordinal);
+                    reservation.causal_origin = Some(prospective.causal_origin.clone());
                 }
                 reservation.restored_producer_stage = restored_producer_stage;
+                reservation.dormant_replacement = dormant_replacement;
                 let lifecycle_ordinal = reservation
                     .lifecycle_ordinal
                     .ok_or(EnqueueError::FailClosed)?;
-                let dormant_reservations =
-                    u64::try_from(ingress.dormant_local_fifo_reservations.len())
-                        .map_err(|_| EnqueueError::FailClosed)?;
+                if reservation
+                    .dormant_replacement
+                    .as_ref()
+                    .is_some_and(|replacement| {
+                        !ingress
+                            .dormant_local_fifo_reservations
+                            .contains(replacement)
+                    })
+                {
+                    return Err(EnqueueError::FailClosed);
+                }
                 let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
                     incoming_height: tag.height(),
                     incoming_view: tag.view(),
@@ -3896,9 +4037,12 @@ impl BoundedIngress<AdapterCommand> {
                     physical_admission_ordinal: admission_ordinal,
                     lifecycle_ordinal,
                     ordinal_source_after: ordinal_successor,
-                    dormant_reservations_before: dormant_reservations,
-                    dormant_reservations_after: dormant_reservations,
-                    dormant_owner_ordinal: 0,
+                    dormant_reservations_before,
+                    dormant_reservations_after,
+                    dormant_owner_ordinal: reservation
+                        .dormant_replacement
+                        .as_ref()
+                        .map_or(0, |replacement| replacement.admission_ordinal),
                     ordinal_minted: true,
                 };
                 let checked_transition = check_production_ingress_transition(ingress_trace)
@@ -3923,23 +4067,38 @@ impl BoundedIngress<AdapterCommand> {
         if self.reserved_body_available.as_ref() != Some(&reservation) {
             return Err(EnqueueError::FailClosed);
         }
+        let mut command = TaggedCommand::new(
+            reservation.tag(),
+            CommandClass::Completion,
+            AdapterCommand::BodyAvailable {
+                manifest: reservation.manifest.clone(),
+            },
+            Instant::now(),
+        );
+        command.admission_ordinal = reservation.admission_ordinal;
+        command.lifecycle_ordinal = reservation.lifecycle_ordinal;
+        command.restored_producer_stage = reservation.restored_producer_stage;
+        command.causal_origin = reservation
+            .causal_origin
+            .clone()
+            .ok_or(EnqueueError::FailClosed)?;
+        if !command.validate_admission_identity() {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.validate_preassigned_lifecycle_owner(&command, &[])?;
+        let dormant_replacement = self.dormant_local_fifo_replacement_inner(&command, true)?;
+        if dormant_replacement != reservation.dormant_replacement {
+            return Err(EnqueueError::FailClosed);
+        }
         let lifecycle_ordinals = self.lifecycle_ordinals.clone();
         lifecycle_ordinals.with_checked_current(move |source_current| {
-            let mut command = TaggedCommand::new(
-                reservation.tag(),
-                CommandClass::Completion,
-                AdapterCommand::BodyAvailable {
-                    manifest: reservation.manifest.clone(),
-                },
-                Instant::now(),
-            );
-            command.admission_ordinal = reservation.admission_ordinal;
-            command.lifecycle_ordinal = reservation.lifecycle_ordinal;
-            command.restored_producer_stage = reservation.restored_producer_stage;
-            command.causal_origin = reservation
-                .causal_origin
-                .clone()
-                .ok_or(EnqueueError::FailClosed)?;
+            if self.reserved_body_available.as_ref() != Some(&reservation)
+                || dormant_replacement.as_ref().is_some_and(|replacement| {
+                    !self.dormant_local_fifo_reservations.contains(replacement)
+                })
+            {
+                return Err(EnqueueError::FailClosed);
+            }
             let physical_admission_ordinal = reservation
                 .admission_ordinal
                 .ok_or(EnqueueError::FailClosed)?;
@@ -3957,15 +4116,18 @@ impl BoundedIngress<AdapterCommand> {
                         .is_authenticated_proposal_conflicting_with(reservation.manifest())
                 })
                 .count();
-            let queue_len_before = u64::try_from(retained_len)
-                .expect("bounded runtime ingress length is representable as u64");
+            let queue_len_before =
+                u64::try_from(retained_len).map_err(|_| EnqueueError::FailClosed)?;
             let queue_len_after = queue_len_before
                 .checked_add(1)
-                .expect("bounded runtime ingress length cannot overflow u64");
-            let dormant_reservations =
+                .ok_or(EnqueueError::FailClosed)?;
+            let dormant_reservations_before =
                 u64::try_from(self.dormant_local_fifo_reservations.len())
                     .map_err(|_| EnqueueError::FailClosed)?;
-            let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
+            let dormant_reservations_after = dormant_reservations_before
+                .checked_sub(u64::from(dormant_replacement.is_some()))
+                .ok_or(EnqueueError::FailClosed)?;
+            let ingress_trace = ProductionIngressReservationMaterializationTraceProjection {
                 incoming_height: incoming_tag.height(),
                 incoming_view: incoming_tag.view(),
                 incoming_generation: incoming_tag.generation().get(),
@@ -3976,23 +4138,31 @@ impl BoundedIngress<AdapterCommand> {
                 stored_class: command.class.service_code(),
                 queue_len_before,
                 queue_len_after,
+                reserved_slots_before: 1,
+                reserved_slots_after: 0,
                 queue_capacity: u64::try_from(self.config.capacity)
                     .expect("bounded runtime ingress capacity is representable as u64"),
                 ordinal_source_before: source_current,
                 physical_admission_ordinal,
                 lifecycle_ordinal,
                 ordinal_source_after: source_current,
-                dormant_reservations_before: dormant_reservations,
-                dormant_reservations_after: dormant_reservations,
-                dormant_owner_ordinal: 0,
-                ordinal_minted: false,
+                dormant_reservations_before,
+                dormant_reservations_after,
+                dormant_owner_ordinal: dormant_replacement
+                    .as_ref()
+                    .map_or(0, |replacement| replacement.admission_ordinal),
             };
-            let checked_transition = check_production_ingress_transition(ingress_trace)
-                .ok_or(EnqueueError::FailClosed)?;
+            let checked_transition =
+                check_production_ingress_reservation_materialization_transition(ingress_trace)
+                    .ok_or(EnqueueError::FailClosed)?;
             let _authorized_transition = checked_transition.into_projection();
 
             // Materialization does not mint another owner; keep the source
             // locked through the infallible reserved-slot replacement.
+            if let Some(replacement) = dormant_replacement.as_ref() {
+                let removed = self.dormant_local_fifo_reservations.remove(replacement);
+                debug_assert!(removed);
+            }
             self.reserved_body_available = None;
             self.discard_proposals_conflicting_with(reservation.manifest());
             self.commands.push_back(command);
@@ -4001,11 +4171,14 @@ impl BoundedIngress<AdapterCommand> {
     }
 
     fn abort_canonical_body_available(&mut self, reservation: BodyAvailableReservation) {
-        if reservation.owns_new_slot()
-            && self.reserved_body_available.as_ref() == Some(&reservation)
-        {
-            self.reserved_body_available = None;
-        }
+        // Rejection by a later service boundary is retryable ownership, not a
+        // terminal event. Retain the entire token (including its ordinal and
+        // dormant backing) so the exact retry reclaims it without reminting.
+        // Abort carries no retirement authority: a stale or mismatched token
+        // is therefore the same intentional no-op and cannot clear the exact
+        // retained owner.
+        let _retained_exact_owner = !reservation.owns_new_slot()
+            || self.reserved_body_available.as_ref() == Some(&reservation);
     }
 
     fn discard_proposals_conflicting_with(&mut self, manifest: &wire::PayloadManifest) {
@@ -4035,6 +4208,13 @@ impl BoundedIngress<AdapterCommand> {
                 rebound_count = rebound_count.saturating_add(1);
             }
         }
+        if let Some(reservation) = &mut self.reserved_body_available
+            && reservation.tag == previous
+            && reservation.manifest == *manifest
+        {
+            reservation.tag = rebound;
+            rebound_count = rebound_count.saturating_add(1);
+        }
         rebound_count
     }
 
@@ -4052,7 +4232,23 @@ impl BoundedIngress<AdapterCommand> {
                         if queued_manifest == manifest
                 ))
         });
-        before.saturating_sub(self.commands.len())
+        let mut retired = before.saturating_sub(self.commands.len());
+        if self
+            .reserved_body_available
+            .as_ref()
+            .is_some_and(|reservation| reservation.tag == tag && reservation.manifest == *manifest)
+        {
+            let reservation = self
+                .reserved_body_available
+                .take()
+                .expect("matched body reservation remains present");
+            if let Some(replacement) = reservation.dormant_replacement {
+                let removed = self.dormant_local_fifo_reservations.remove(&replacement);
+                debug_assert!(removed);
+            }
+            retired = retired.saturating_add(1);
+        }
+        retired
     }
 
     fn retire_body_pipeline_completions(
@@ -4068,6 +4264,25 @@ impl BoundedIngress<AdapterCommand> {
             }
             !retired.record_matching_command(&queued.command, round, subject)
         });
+        if self
+            .reserved_body_available
+            .as_ref()
+            .is_some_and(|reservation| {
+                reservation.tag == tag
+                    && reservation.manifest.round == round
+                    && reservation.manifest.subject == subject
+            })
+        {
+            let reservation = self
+                .reserved_body_available
+                .take()
+                .expect("matched body reservation remains present");
+            if let Some(replacement) = reservation.dormant_replacement {
+                let removed = self.dormant_local_fifo_reservations.remove(&replacement);
+                debug_assert!(removed);
+            }
+            retired.record_body_available();
+        }
         retired
     }
 
@@ -4080,6 +4295,17 @@ impl BoundedIngress<AdapterCommand> {
         let mut counts = RetiredBodyPipelineCompletions::default();
         for queued in self.commands.iter().filter(|queued| queued.tag == tag) {
             counts.record_matching_command(&queued.command, round, subject);
+        }
+        if self
+            .reserved_body_available
+            .as_ref()
+            .is_some_and(|reservation| {
+                reservation.tag == tag
+                    && reservation.manifest.round == round
+                    && reservation.manifest.subject == subject
+            })
+        {
+            counts.record_body_available();
         }
         counts
     }
@@ -7540,7 +7766,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     ///
     /// Capacity and conflicting queued proposals are evaluated without
     /// exposing a reducer command. The returned token exclusively owns any
-    /// claimed completion slot until committed or aborted by the executor.
+    /// claimed completion slot until committed or terminally retired. An
+    /// executor abort retains this exact unpublished owner for retry.
     pub(crate) fn reserve_body_available(
         &mut self,
         tag: EventTag,
@@ -7549,7 +7776,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
             manifest: manifest.clone(),
         };
-        if self.body_pipeline_completion_is_owned(tag, &evidence)? {
+        let already_owned = self.body_pipeline_completion_is_owned(tag, &evidence)?;
+        if already_owned && self.ingress.reserved_body_available.is_none() {
             return Ok(BodyAvailableReservation::coalesced(tag, manifest));
         }
         let command = AdapterCommand::BodyAvailable {
@@ -7587,7 +7815,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 .as_ref()
                 .map(|(_, producer_stage)| *producer_stage),
         );
-        if result == Err(EnqueueError::FailClosed) {
+        if matches!(
+            result,
+            Err(EnqueueError::FailClosed | EnqueueError::DuplicateCompletionOwnership)
+        ) {
             self.latch_fail_closed("body-available reservation ownership validation failed");
         }
         result
@@ -7607,7 +7838,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
             manifest: manifest.clone(),
         };
-        if self.body_pipeline_completion_is_owned(tag, &evidence)? {
+        let already_owned = self.body_pipeline_completion_is_owned(tag, &evidence)?;
+        if already_owned && self.ingress.reserved_body_available.is_none() {
             return Ok(BodyAvailableReservation::coalesced(tag, manifest));
         }
         let command = AdapterCommand::BodyAvailable {
@@ -7648,7 +7880,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 .as_ref()
                 .map(|(_, producer_stage)| *producer_stage),
         );
-        if result == Err(EnqueueError::FailClosed) {
+        if matches!(
+            result,
+            Err(EnqueueError::FailClosed | EnqueueError::DuplicateCompletionOwnership)
+        ) {
             self.latch_fail_closed("owned body-available reservation validation failed");
         }
         result
@@ -7668,8 +7903,11 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         result
     }
 
-    /// Release an unpublished completion reservation after an all-or-error
-    /// service transfer rejected the operation.
+    /// Retain an unpublished completion reservation after an all-or-error
+    /// service transfer rejected the operation. The exact retry reclaims the
+    /// same token and ordinal; this is not a terminal release. A stale or
+    /// mismatched token is an intentional no-op because abort carries no
+    /// authority to clear the retained owner.
     pub(crate) fn abort_body_available(&mut self, reservation: BodyAvailableReservation) {
         self.ingress.abort_canonical_body_available(reservation);
     }
@@ -8762,6 +9000,7 @@ mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("runtime fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"runtime ingress nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -9095,6 +9334,63 @@ mod tests {
             runtime.ingress.commands[0].lifecycle_ordinal, lifecycle_ordinal,
             "view/generation rebinding retains the logical lifecycle owner"
         );
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner() {
+        let directory = TempDir::new().expect("temporary reserved-body rebind directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let initial = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0x8B);
+        let reservation = runtime
+            .reserve_body_available(initial, manifest.clone())
+            .expect("reserve an unpublished body completion");
+        let source_after_reserve = runtime
+            .ingress
+            .lifecycle_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect ordinal source after reservation");
+        let rebound = EventTag::new(
+            initial.height(),
+            initial.view() + 1,
+            Generation::new(initial.generation().get() + 1),
+        );
+        observe_enter_view_for_test(&mut runtime, initial, rebound, &manifest);
+
+        assert!(
+            runtime
+                .rebind_body_available(initial, rebound, &manifest)
+                .expect("the unpublished token is a serialized body owner")
+        );
+        let mut rebound_reservation = reservation;
+        rebound_reservation.tag = rebound;
+        assert_eq!(
+            runtime.ingress.reserved_body_available.as_ref(),
+            Some(&rebound_reservation),
+        );
+        let retry = runtime
+            .reserve_body_available(rebound, manifest.clone())
+            .expect("rebound exact retry reclaims the immutable root token");
+        assert_eq!(retry, rebound_reservation);
+        assert_eq!(
+            runtime
+                .ingress
+                .lifecycle_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect source after rebound retry"),
+            source_after_reserve,
+            "rebind and retry cannot remint the token",
+        );
+
+        assert!(
+            runtime
+                .retire_body_available(rebound, &manifest)
+                .expect("terminal supersession retires the exact unpublished owner")
+        );
+        assert!(runtime.ingress.reserved_body_available.is_none());
+        assert_eq!(runtime.queued_commands(), 0);
         assert!(!runtime.fail_closed);
     }
 
@@ -12149,6 +12445,234 @@ mod tests {
         assert_eq!(completion.admission_ordinal, Some(1));
         assert_eq!(completion.lifecycle_ordinal, Some(1));
         assert!(ingress.conflicts_with_pending_body_available(&conflicting_proposal));
+    }
+
+    #[test]
+    fn aborted_body_completion_retry_reclaims_the_entire_token_without_reminting() {
+        let directory = TempDir::new().expect("temporary body retry directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(3, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0xB1);
+        runtime
+            .enqueue_network(signed_runtime_proposal(&context, &keys, 0xB3))
+            .expect("ordinary ingress occupies its sole unreserved slot");
+        runtime
+            .enqueue_network(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                    signed_runtime_timeout_certificate(&context, &keys),
+                ),
+            ))
+            .expect("certified progress occupies the progress slot");
+        assert_eq!(runtime.remaining_completion_capacity(), 1);
+        let reservation = runtime
+            .reserve_body_available(owner_tag, manifest.clone())
+            .expect("reserve one unpublished exact completion");
+        assert_eq!(runtime.remaining_completion_capacity(), 0);
+        let source_after_reserve = runtime
+            .ingress
+            .lifecycle_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect source after body reservation");
+
+        let mut mismatched_abort = reservation.clone();
+        mismatched_abort.tag = tag(1);
+        runtime.abort_body_available(mismatched_abort);
+        assert_eq!(
+            runtime.ingress.reserved_body_available.as_ref(),
+            Some(&reservation),
+            "a mismatched abort has no authority to clear the exact token",
+        );
+        runtime.abort_body_available(reservation.clone());
+        assert_eq!(
+            runtime.ingress.reserved_body_available.as_ref(),
+            Some(&reservation),
+            "abort retains the exact token instead of orphaning its ordinal",
+        );
+        let retry = runtime
+            .reserve_body_available(owner_tag, manifest.clone())
+            .expect("exact retry reclaims the unpublished token");
+        assert_eq!(retry, reservation);
+        assert_eq!(
+            runtime
+                .ingress
+                .lifecycle_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect source after exact retry"),
+            source_after_reserve,
+            "exact retry cannot mint a second physical ordinal",
+        );
+
+        let competing_ordinal = runtime
+            .ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .expect("advance the shared source through another actor owner");
+        let source_before_materialization = runtime
+            .ingress
+            .lifecycle_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect actual shared source before materialization");
+        assert_eq!(competing_ordinal, source_after_reserve);
+        runtime
+            .commit_body_available(retry)
+            .expect("materialize the exact retained reservation");
+        assert_eq!(
+            runtime
+                .ingress
+                .lifecycle_ordinals
+                .next_ordinal_for_test()
+                .expect("materialization preserves the shared source"),
+            source_before_materialization,
+            "materialization observes but never advances the current source",
+        );
+    }
+
+    #[test]
+    fn conflicting_body_completion_retry_latches_without_replacing_the_exact_token() {
+        let directory = TempDir::new().expect("temporary body conflict directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0xB4);
+        let reservation = runtime
+            .reserve_body_available(owner_tag, manifest.clone())
+            .expect("reserve one unpublished exact completion");
+        let source_after_reserve = runtime
+            .ingress
+            .lifecycle_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect source after body reservation");
+        let conflicting = wire::PayloadManifest {
+            chunk_root: Hash::new(b"conflicting retained body root"),
+            chunk_hashes: vec![Hash::new(b"conflicting retained body chunk")],
+            ..manifest
+        };
+
+        assert_eq!(
+            runtime.reserve_body_available(owner_tag, conflicting),
+            Err(EnqueueError::DuplicateCompletionOwnership),
+            "same logical slot with different evidence cannot replace the retained token",
+        );
+        assert!(runtime.fail_closed);
+        assert_eq!(
+            runtime.ingress.reserved_body_available.as_ref(),
+            Some(&reservation),
+        );
+        assert_eq!(
+            runtime
+                .ingress
+                .lifecycle_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect source after rejected conflict"),
+            source_after_reserve,
+            "conflicting evidence cannot burn a fresh physical ordinal",
+        );
+    }
+
+    #[test]
+    fn dormant_body_reservation_aliases_full_capacity_across_abort_retry_and_commit() {
+        let directory = TempDir::new().expect("temporary dormant body retry directory");
+        let (_runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let owner_tag = tag(0);
+        let manifest = runtime_manifest(&context, 0xB2);
+        let lifecycle_key = Hash::new(b"dormant body completion lifecycle");
+        let body_command = AdapterCommand::BodyAvailable {
+            manifest: manifest.clone(),
+        };
+        let owner = RuntimeCandidateCausalOrigin::restore_producer_lifecycle(
+            owner_tag,
+            CommandClass::Completion,
+            &body_command,
+            None,
+            lifecycle_key,
+            1,
+        )
+        .expect("restore exact dormant body owner");
+        let dormant = RuntimeDormantLocalFifoReservation::completion(lifecycle_key, 1, 8);
+        let source = RuntimeLifecycleOrdinalSource::after_high_watermark(1);
+        let mut ingress = BoundedIngress::with_lifecycle_ordinals(
+            RuntimeQueueConfig::new(1, 0, 0),
+            source.clone(),
+        );
+        ingress
+            .install_dormant_local_fifo_reservations(vec![dormant])
+            .expect("install the full-capacity dormant completion owner");
+        assert_eq!(ingress.remaining_capacity(), 0);
+
+        let reservation = ingress
+            .reserve_canonical_body_available_internal(
+                owner_tag,
+                manifest.clone(),
+                Some(&owner),
+                Some(8),
+            )
+            .expect("unpublished token aliases the dormant capacity owner");
+        assert_eq!(reservation.lifecycle_ordinal, Some(1));
+        assert_eq!(reservation.admission_ordinal, Some(2));
+        assert_eq!(reservation.dormant_replacement, Some(dormant));
+        assert!(ingress.dormant_local_fifo_reservations.contains(&dormant));
+        assert_eq!(ingress.remaining_capacity(), 0);
+        let source_after_reserve = source
+            .next_ordinal_for_test()
+            .expect("inspect source after dormant reservation");
+
+        ingress.abort_canonical_body_available(reservation.clone());
+        let retry = ingress
+            .reserve_canonical_body_available_internal(owner_tag, manifest, Some(&owner), Some(8))
+            .expect("exact dormant retry reclaims the whole token");
+        assert_eq!(retry, reservation);
+        assert_eq!(
+            source
+                .next_ordinal_for_test()
+                .expect("inspect source after dormant retry"),
+            source_after_reserve,
+        );
+        assert_eq!(
+            ingress.reserve_canonical_body_available_internal(
+                owner_tag,
+                retry.manifest().clone(),
+                Some(&owner),
+                Some(9),
+            ),
+            Err(EnqueueError::FailClosed),
+            "retry cannot replace the exact dormant stage",
+        );
+        assert_eq!(ingress.reserved_body_available.as_ref(), Some(&reservation));
+
+        let source_before_failed_commit = source
+            .next_ordinal_for_test()
+            .expect("inspect source before rejected dormant commit");
+        let mut mismatched_commit = retry.clone();
+        mismatched_commit.tag = tag(1);
+        assert_eq!(
+            ingress.commit_canonical_body_available(mismatched_commit),
+            Err(EnqueueError::FailClosed),
+        );
+        assert_eq!(ingress.reserved_body_available.as_ref(), Some(&reservation));
+        assert!(ingress.dormant_local_fifo_reservations.contains(&dormant));
+        assert_eq!(
+            source
+                .next_ordinal_for_test()
+                .expect("rejected dormant commit preserves the source"),
+            source_before_failed_commit,
+        );
+
+        ingress
+            .commit_canonical_body_available(retry)
+            .expect("materialization atomically replaces token and dormant backing");
+        assert!(ingress.reserved_body_available.is_none());
+        assert!(ingress.dormant_local_fifo_reservations.is_empty());
+        assert_eq!(ingress.len(), 1);
+        assert_eq!(ingress.commands[0].admission_ordinal, Some(2));
+        assert_eq!(ingress.commands[0].lifecycle_ordinal, Some(1));
+        assert_eq!(
+            source
+                .next_ordinal_for_test()
+                .expect("materialization preserves the source"),
+            source_after_reserve,
+        );
     }
 
     #[test]

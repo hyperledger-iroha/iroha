@@ -106,7 +106,8 @@ zk-ipa-native = []
 zk-halo2-ipa-poseidon = ["zk-halo2-ipa"]
 # Temporary helper to match halo2's default circuit-params toggle.
 circuit-params = ["halo2_proofs/circuit-params"]
-# Enable stateless pre-verify + dedup wiring (mock via metadata)
+# Enable stateless advisory pre-verification, deduplication, and trace diagnostics.
+# Ledger execution still runs the authoritative guarded cryptographic verifier.
 zk-preverify = []
 # Gate zk-heavy tests; enable with `--features zk-tests` when needed
 zk-tests = ["iroha-core-tests"]

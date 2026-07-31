@@ -15,7 +15,6 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[display("SET `{_0}`")]
-    #[cfg_attr(feature = "json", norito(transparent))]
     #[repr(transparent)]
     pub struct SetParameter(pub Parameter);
 }
@@ -483,7 +482,6 @@ isi! {
     /// Generic instruction for upgrading runtime objects.
     #[derive(Constructor, Display)]
     #[display("UPGRADE")]
-    #[cfg_attr(feature = "json", norito(transparent))]
     #[repr(transparent)]
     pub struct Upgrade {
         /// Object to upgrade.

@@ -150,7 +150,7 @@ pub enum ZkAcePrivacyWitnessValidationErrorV1 {
 /// Transcript family frozen into the dedicated proof implementation.
 pub const ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1: &str = "iroha:privacy:zk-ace:transparent-stark:v1";
 /// Source and relation description frozen into the compiled profile.
-pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:type-name-independent-ordered-length-framed-public-transcript:private-witness:masked-poseidon2-execution-trace:fp4-deep-ali:independent-pre-batching-fri-mask:fp4-fri:producer=preflight+rand0.9-trycrypto-health64-exact-replay+self-verify:v1";
+pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:type-name-independent-ordered-length-framed-public-transcript:private-witness:masked-poseidon2-execution-trace:fp4-deep-ali:independent-pre-batching-fri-mask:fp4-fri:producer=preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind+self-verify:v1";
 /// Exact native proof wire description frozen into the compiled profile.
 pub const ZK_ACE_PROOF_WIRE_V1: &[u8] =
     b"ZKA1:fixed-shape-big-endian:1341142:strict-exact:no-lengths:no-generic-envelope";
@@ -171,8 +171,8 @@ pub const ZK_ACE_PROVABLE_SOUNDNESS_BITS_V1: u16 = PROVABLE_SOUNDNESS_BITS_V1;
 pub const ZK_ACE_MAX_ROM_QUERY_LOG2_V1: u8 = MAX_ROM_QUERY_LOG2_V1;
 /// Frozen digest of every compiled verifier-profile field below.
 pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
-    0x8b, 0xd8, 0xdb, 0x18, 0xb7, 0xa5, 0x01, 0x73, 0x3d, 0x1e, 0x98, 0x9c, 0x1f, 0x86, 0xbc, 0xa0,
-    0xaa, 0x98, 0x24, 0x68, 0x5b, 0x1b, 0x08, 0x1b, 0xc7, 0x03, 0x38, 0xe8, 0x07, 0xed, 0x14, 0x7a,
+    0x88, 0xb9, 0x47, 0x02, 0x57, 0x81, 0x53, 0x2f, 0x27, 0x58, 0x52, 0x13, 0x8c, 0xfd, 0x3b, 0xd1,
+    0x82, 0x6a, 0x3b, 0xb1, 0xa8, 0x0b, 0xb3, 0xbf, 0xe5, 0xcb, 0x6e, 0xaf, 0xbc, 0x3c, 0x37, 0x1c,
 ];
 
 /// Return the frozen digest of the exact compiled native verifier profile.

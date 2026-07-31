@@ -22,7 +22,6 @@ use iroha_data_model::{
             SubmitSorafsModerationReveal,
         },
     },
-    name::Name,
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
@@ -62,6 +61,7 @@ use iroha_data_model::{
             sorafs_moderation_sortition_seed_v1,
         },
     },
+    state_path::StatePath,
 };
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_canonical_with_limits, decode_from_bytes_with_limits};
@@ -297,30 +297,30 @@ fn eligibility_class(class: PopEligibilityClassV1) -> ModerationJurorEligibility
     }
 }
 
-fn policy_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
-    KEY.get_or_init(|| Name::from_str(POLICY_STATE_KEY).expect("static state key is valid"))
+fn policy_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
+    KEY.get_or_init(|| StatePath::from_str(POLICY_STATE_KEY).expect("static state key is valid"))
 }
 
-fn status_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
-    KEY.get_or_init(|| Name::from_str(STATUS_STATE_KEY).expect("static state key is valid"))
+fn status_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
+    KEY.get_or_init(|| StatePath::from_str(STATUS_STATE_KEY).expect("static state key is valid"))
 }
 
-fn event_journal_head_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
+fn event_journal_head_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
-        Name::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
+        StatePath::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
     })
 }
 
-fn event_key(sequence: u64) -> Name {
-    Name::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
+fn event_key(sequence: u64) -> StatePath {
+    StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
 
-fn digest_key(prefix: &str, digest: [u8; 32]) -> Name {
-    Name::from_str(&format!("{prefix}{}", hex::encode(digest)))
+fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
+    StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static prefix plus lowercase hex is a valid state key")
 }
 
@@ -404,65 +404,65 @@ fn appeal_proof_token_digest(proof_token_digest: [u8; 32]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-fn appeal_key(case_id: &str, round_id: &str) -> Name {
+fn appeal_key(case_id: &str, round_id: &str) -> StatePath {
     digest_key(APPEAL_STATE_KEY_PREFIX, case_digest(case_id, round_id))
 }
 
-fn eligibility_key(case_id: &str, round_id: &str, juror: &AccountId) -> Name {
+fn eligibility_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         ELIGIBILITY_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
 
-fn nullifier_key(nullifier: [u8; 32]) -> Name {
+fn nullifier_key(nullifier: [u8; 32]) -> StatePath {
     digest_key(NULLIFIER_STATE_KEY_PREFIX, nullifier_digest(nullifier))
 }
 
-fn appeal_deposit_key(deposit_lock_digest: [u8; 32]) -> Name {
+fn appeal_deposit_key(deposit_lock_digest: [u8; 32]) -> StatePath {
     digest_key(
         APPEAL_DEPOSIT_STATE_KEY_PREFIX,
         appeal_deposit_digest(deposit_lock_digest),
     )
 }
 
-fn appeal_proof_token_key(proof_token_digest: [u8; 32]) -> Name {
+fn appeal_proof_token_key(proof_token_digest: [u8; 32]) -> StatePath {
     digest_key(
         APPEAL_PROOF_TOKEN_STATE_KEY_PREFIX,
         appeal_proof_token_digest(proof_token_digest),
     )
 }
 
-fn case_key(case_id: &str, round_id: &str) -> Name {
+fn case_key(case_id: &str, round_id: &str) -> StatePath {
     digest_key(CASE_STATE_KEY_PREFIX, case_digest(case_id, round_id))
 }
 
-fn commit_key(case_id: &str, round_id: &str, juror: &AccountId) -> Name {
+fn commit_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         COMMIT_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
 
-fn reveal_key(case_id: &str, round_id: &str, juror: &AccountId) -> Name {
+fn reveal_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         REVEAL_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
 
-fn challenge_key(case_id: &str, round_id: &str, challenge_id: &str) -> Name {
+fn challenge_key(case_id: &str, round_id: &str, challenge_id: &str) -> StatePath {
     digest_key(
         CHALLENGE_STATE_KEY_PREFIX,
         challenge_digest(case_id, round_id, challenge_id),
     )
 }
 
-fn outcome_key(case_id: &str, round_id: &str) -> Name {
+fn outcome_key(case_id: &str, round_id: &str) -> StatePath {
     digest_key(OUTCOME_STATE_KEY_PREFIX, case_digest(case_id, round_id))
 }
 
-fn no_show_key(case_id: &str, round_id: &str, juror: &AccountId) -> Name {
+fn no_show_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         NO_SHOW_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
@@ -605,7 +605,7 @@ fn ensure_no_event_after_head(
     head: Option<ModerationEventJournalHeadV1>,
 ) -> Result<(), InstructionExecutionError> {
     let prefix_start =
-        Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
+        StatePath::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
     let first_event_key = world
         .smart_contract_state()
         .range(prefix_start..)
@@ -630,7 +630,7 @@ fn ensure_no_event_after_head(
         }
     }
     let start = head.map_or_else(
-        || Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid"),
+        || StatePath::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid"),
         |head| event_key(head.last_sequence),
     );
     for (key, _) in world.smart_contract_state().range(start..) {
@@ -3148,7 +3148,7 @@ struct ModerationSnapshotReadBudget {
 }
 
 impl ModerationSnapshotReadBudget {
-    fn charge(&mut self, key: &Name, payload: &[u8]) -> Result<(), InstructionExecutionError> {
+    fn charge(&mut self, key: &StatePath, payload: &[u8]) -> Result<(), InstructionExecutionError> {
         self.records = self
             .records
             .checked_add(1)
@@ -3174,7 +3174,7 @@ impl ModerationSnapshotReadBudget {
 
 fn charge_existing_snapshot_state(
     world: &impl WorldReadOnly,
-    key: &Name,
+    key: &StatePath,
     budget: &mut ModerationSnapshotReadBudget,
 ) -> Result<(), InstructionExecutionError> {
     if let Some(payload) = world.smart_contract_state().get(key) {
@@ -3188,12 +3188,12 @@ fn scan_moderation_state_prefix<T>(
     prefix: &'static str,
     label: &'static str,
     budget: &mut ModerationSnapshotReadBudget,
-    mut validate: impl FnMut(&Name, T) -> Result<T, InstructionExecutionError>,
+    mut validate: impl FnMut(&StatePath, T) -> Result<T, InstructionExecutionError>,
 ) -> Result<Vec<T>, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
-    let start = Name::from_str(prefix).expect("static moderation state prefix is valid");
+    let start = StatePath::from_str(prefix).expect("static moderation state prefix is valid");
     let mut records = Vec::new();
     for (key, payload) in world.smart_contract_state().range(start..) {
         if !key.to_string().starts_with(prefix) {
@@ -6922,7 +6922,7 @@ mod tests {
 
     #[test]
     fn snapshot_budget_fails_closed_at_record_and_byte_ceilings() {
-        let key = Name::from_str("moderation_budget_probe").expect("bounded probe key");
+        let key = StatePath::from_str("moderation_budget_probe").expect("bounded probe key");
         let mut byte_budget = ModerationSnapshotReadBudget {
             records: 0,
             encoded_bytes: MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,

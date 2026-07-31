@@ -192,6 +192,7 @@ class CrossToolTotalGateContract:
     production_item_sha256: str
     verus_item_sha256: str
     production_visibility: str = "pub(crate)"
+    verus_kernel_arguments: str | None = None
 
 
 @dataclass(frozen=True)
@@ -302,6 +303,7 @@ def _total_gate(
     success_value: str = "projection",
     production_return: str | None = None,
     production_visibility: str = "pub(crate)",
+    verus_kernel_arguments: str | None = None,
 ) -> CrossToolTotalGateContract:
     """Build one immutable checked-gate signature contract."""
 
@@ -318,6 +320,7 @@ def _total_gate(
         production_item_sha256=production_sha256,
         verus_item_sha256=verus_sha256,
         production_visibility=production_visibility,
+        verus_kernel_arguments=verus_kernel_arguments,
     )
 
 
@@ -437,6 +440,29 @@ _LEADER_WIRE_ADMISSION_GATE = _total_gate(
     "projection",
     "318cf388efe2a8777d5a5c005aee114dc97017f75611683510780c4ecb891b5d",
     "8590c7f5b987a3552bb2ec9d43858a13cb89223033adb6a08ac267c82bb94784",
+)
+_INGRESS_RESERVATION_MATERIALIZATION_GATE = _total_gate(
+    "check_production_ingress_reservation_materialization_transition",
+    "ProductionIngressReservationMaterializationTraceProjection",
+    "projection",
+    _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_GATE_SHA256,
+    _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_VERUS_GATE_SHA256,
+    verus_kernel_arguments="projection,",
+)
+_INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS = (
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "ProductionIngressReservationMaterializationTraceProjection",
+        _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_PROJECTION_SHA256,
+        "struct",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+        "ProductionIngressReservationMaterializationTraceProjection",
+        _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_VERUS_PROJECTION_SHA256,
+        "struct",
+        (("verus", "!"),),
+    ),
 )
 _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
@@ -624,7 +650,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_one": "b09f804c4bd9a39d44b6b670036bdb6b114525a7023b0a176febca8e3c03ae38",
     "ingress_batch": "34ee27dae41b4e054af344f4a27697b3528040c77c446df86dbd4fc8a3deb4e0",
     "body_available_prepare": "7abd833689ce0bd3211f26745c2985da3091d9bb16876d2ffeb01d238f8478e0",
-    "body_available_commit": "cc6c3d153bfb275d531aa4064a357849720066c2d14eab36404036dba7853f74",
+    "body_available_commit": "b41866a0e52ed0760c8221fcee78c1dc1bb88ec7d79c75bb5ec4928a388bc522",
     "relay_retry": "4eaa732c6b69e6c455ac7bef64be8b0c76425c70bb5ce5138fb1fa4f063395c1",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
@@ -797,96 +823,6 @@ def _total_gate_call_sites(
                 mutation_boundaries=(
                     "self.next_admission_ordinal = ordinal_successor;",
                     "self.reserved_body_available = Some(reservation.clone());",
-                ),
-            ),
-            CrossToolProductionCallContract(
-                "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-                "commit_canonical_body_available",
-                "ingress_trace",
-                """
-                    if !reservation.owns_new_slot() {
-                        return Ok(());
-                    }
-                    if self.reserved_body_available.as_ref()
-                        != Some(&reservation)
-                    {
-                        return Err(EnqueueError::FailClosed);
-                    }
-                    let mut command = TaggedCommand::new(
-                        reservation.tag(),
-                        CommandClass::Completion,
-                        AdapterCommand::BodyAvailable {
-                            manifest: reservation.manifest.clone(),
-                        },
-                        Instant::now(),
-                    );
-                    command.admission_ordinal = reservation.admission_ordinal;
-                    command.lifecycle_ordinal = reservation.lifecycle_ordinal;
-                    command.causal_origin = reservation
-                        .causal_origin
-                        .clone()
-                        .expect("new body reservation retains its causal root");
-                    let incoming_tag = command.tag;
-                    let incoming_class = command.class.service_code();
-                    let retained_len = self
-                        .commands
-                        .iter()
-                        .filter(|queued| {
-                            !queued
-                                .command
-                                .is_authenticated_proposal_conflicting_with(
-                                    reservation.manifest()
-                                )
-                        })
-                        .count();
-                    let queue_len_before = u64::try_from(retained_len)
-                        .expect(
-                            "bounded runtime ingress length is representable as u64"
-                        );
-                    let queue_len_after = queue_len_before
-                        .checked_add(1)
-                        .expect(
-                            "bounded runtime ingress length cannot overflow u64"
-                        );
-                    let ingress_trace =
-                        ProductionIngressIdentityAndClassTraceProjection {
-                            incoming_height: incoming_tag.height(),
-                            incoming_view: incoming_tag.view(),
-                            incoming_generation: incoming_tag.generation().get(),
-                            incoming_class,
-                            stored_height: command.tag.height(),
-                            stored_view: command.tag.view(),
-                            stored_generation: command.tag.generation().get(),
-                            stored_class: command.class.service_code(),
-                            queue_len_before,
-                            queue_len_after,
-                            queue_capacity: u64::try_from(self.config.capacity)
-                                .expect(
-                                    "bounded runtime ingress capacity is representable as u64"
-                                ),
-                        };
-                    let checked_transition =
-                        check_production_ingress_transition(ingress_trace)
-                            .expect(
-                                "Sumeragi v2 canonical body prospective ingress must pass its gate"
-                            );
-                    let _authorized_transition = checked_transition.into_projection();
-                    self.reserved_body_available = None;
-                    self.discard_proposals_conflicting_with(
-                        reservation.manifest()
-                    );
-                    self.commands.push_back(command);
-                    Ok(())
-                """,
-                (("impl", "BoundedIngress", "<", "AdapterCommand", ">"),),
-                hashes["body_available_commit"],
-                token_consumptions=(
-                    "let _authorized_transition = checked_transition.into_projection();",
-                ),
-                mutation_boundaries=(
-                    "self.reserved_body_available = None;",
-                    "self.discard_proposals_conflicting_with(reservation.manifest());",
-                    "self.commands.push_back(command);",
                 ),
             ),
         ),
@@ -1243,6 +1179,70 @@ def _reliable_flush_supplemental_total_contracts(
     )
 
 
+def _ingress_reservation_materialization_supplemental_total_contract(
+) -> CrossToolSupplementalKernelContract:
+    """Bind exact reserved-slot materialization as auxiliary ingress evidence."""
+
+    call_site = CrossToolProductionCallContract(
+        source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        item="commit_canonical_body_available",
+        projection="ingress_trace",
+        required_expression="""
+            let checked_transition =
+                check_production_ingress_reservation_materialization_transition(
+                    ingress_trace
+                )
+                    .ok_or(EnqueueError::FailClosed)?;
+            let _authorized_transition = checked_transition.into_projection();
+        """,
+        brace_context=(("impl", "BoundedIngress", "<", "AdapterCommand", ">"),),
+        item_token_sha256=_TOTAL_GATE_CALL_ITEM_SHA256["body_available_commit"],
+        token_consumptions=(
+            "let _authorized_transition = checked_transition.into_projection();",
+        ),
+        mutation_boundaries=(
+            "self.dormant_local_fifo_reservations.remove(replacement)",
+            "self.reserved_body_available = None;",
+            "self.discard_proposals_conflicting_with(reservation.manifest());",
+            "self.commands.push_back(command);",
+        ),
+        mutation_authorization_indices=(0, 0, 0, 0),
+    )
+    return CrossToolSupplementalKernelContract(
+        verified_kernel=(
+            "production_ingress_reservation_materialization_refines_"
+            "protected_ownership_kernel"
+        ),
+        verified_kernel_source=(
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+        ),
+        verified_kernel_parameters=(
+            "projection: ProductionIngressReservationMaterializationTraceProjection,"
+        ),
+        verified_kernel_body=(
+            "production_ingress_reservation_materialization_trace_body!(projection)"
+        ),
+        theorem_kernel_projection="projection",
+        theorem_projection_builders=(),
+        verified_kernel_shared_macro_sha256=((
+            "production_ingress_reservation_materialization_trace_body",
+            _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_MACRO_SHA256,
+        ),),
+        production_call_sites=(call_site,),
+        total_gate=_INGRESS_RESERVATION_MATERIALIZATION_GATE,
+        auxiliary_verus_theorem=(
+            "production_ingress_reservation_materialization_refines_"
+            "protected_ownership"
+        ),
+        auxiliary_verus_parameters=(
+            "projection: ProductionIngressReservationMaterializationTraceProjection,"
+        ),
+        auxiliary_verus_theorem_item_sha256=(
+            _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_AUXILIARY_THEOREM_SHA256
+        ),
+    )
+
+
 def _leader_wire_admission_supplemental_total_contract(
 ) -> CrossToolSupplementalKernelContract:
     """Bind durable leader-wire admission as auxiliary ingress evidence."""
@@ -1298,7 +1298,7 @@ def _leader_wire_admission_supplemental_total_contract(
         verified_kernel_shared_macro_sha256=(
             (
                 "refinement_tag_value",
-                "c9db1bb31593739398ae19abf9000ebd3ca8ea7b044aeb7d70afb071def6a607",
+                "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e",
             ),
             (
                 "canonical_identity_is_typed_body",
@@ -1359,6 +1359,7 @@ def _install_total_checked_gate_contracts(
                         "ingress claim may not predeclare supplemental kernels"
                     )
                 supplemental = (
+                    _ingress_reservation_materialization_supplemental_total_contract(),
                     _leader_wire_admission_supplemental_total_contract(),
                 )
                 production_sources = (
@@ -1366,7 +1367,8 @@ def _install_total_checked_gate_contracts(
                     "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
                 )
                 supplemental_source_item_seals = (
-                    _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS
+                    *_INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS,
+                    *_LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS,
                 )
             if claim.constant == "ProductionReliableFlushTraceRefinesOutboundOwnership":
                 supplemental = _reliable_flush_supplemental_total_contracts(
@@ -3074,16 +3076,17 @@ def _cross_tool_contract_errors() -> list[str]:
     if unknown_modes:
         errors.append(f"cross-tool claims have unknown proof modes {unknown_modes!r}")
     if auxiliary_verus_theorems != [
-        "production_leader_wire_admission_trace_refines_lifecycle_ownership"
+        "production_ingress_reservation_materialization_refines_protected_ownership",
+        "production_leader_wire_admission_trace_refines_lifecycle_ownership",
     ]:
         errors.append(
             "cross-tool auxiliary Verus theorem inventory must contain exactly "
-            "the durable leader-wire admission proof"
+            "the reservation-materialization and durable leader-wire proofs"
         )
-    if len(total_gate_names) != 16 or len(set(total_gate_names)) != 16:
+    if len(total_gate_names) != 17 or len(set(total_gate_names)) != 17:
         errors.append(
             "cross-tool total checked-gate inventory must contain exactly "
-            "sixteen unique gates"
+            "seventeen unique gates"
         )
     return errors
 
@@ -3497,19 +3500,24 @@ def _cross_tool_total_gate_promotion_contract_errors(
         == "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership"
     ):
         canonical_supplemental = (
+            _ingress_reservation_materialization_supplemental_total_contract(),
             _leader_wire_admission_supplemental_total_contract(),
         )
         if claim.supplemental_kernels != canonical_supplemental:
             errors.append(
                 f"cross-tool claim {claim.constant} changed its canonical "
-                "durable leader-wire auxiliary kernel/gate/proof contract"
+                "reservation-materialization/leader-wire auxiliary "
+                "kernel/gate/proof contract"
             )
         if tuple(claim.source_item_seals) != tuple(
-            _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS
+            (
+                *_INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS,
+                *_LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS,
+            )
         ):
             errors.append(
                 f"cross-tool claim {claim.constant} changed its canonical "
-                "durable leader-wire type/identity/lifecycle source seals"
+                "materialization/leader-wire type and identity source seals"
             )
     if (
         claim.constant
@@ -3616,6 +3624,12 @@ def _cross_tool_total_gate_promotion_contract_errors(
             == "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership"
             and kernel_index == 1
         ):
+            canonical_gate = _INGRESS_RESERVATION_MATERIALIZATION_GATE
+        elif (
+            claim.constant
+            == "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership"
+            and kernel_index == 2
+        ):
             canonical_gate = _LEADER_WIRE_ADMISSION_GATE
         elif (
             claim.constant
@@ -3668,6 +3682,9 @@ def _cross_tool_total_gate_promotion_contract_errors(
             kernel_view.verified_kernel_parameters
         )
         gate_argument_tokens = rust_code_tokens(gate.kernel_arguments)
+        verus_gate_argument_tokens = rust_code_tokens(
+            gate.verus_kernel_arguments or gate.kernel_arguments
+        )
         theorem_argument_tokens = rust_code_tokens(gate.theorem_arguments)
         gate_parameter_tokens = rust_code_tokens(gate.parameters)
         if not gate_parameter_names or set(gate_parameter_names) != set(
@@ -3685,6 +3702,15 @@ def _cross_tool_total_gate_promotion_contract_errors(
             errors.append(
                 f"cross-tool claim {claim.constant} total gate {gate.name} must "
                 "pass its exact named inputs to the kernel"
+            )
+        if tuple(
+            token
+            for token in verus_gate_argument_tokens
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token)
+        ) != gate_parameter_names:
+            errors.append(
+                f"cross-tool claim {claim.constant} total gate {gate.name} must "
+                "pass its exact named inputs to the Verus kernel mirror"
             )
         if "bool" in gate_parameter_tokens:
             errors.append(
@@ -5037,6 +5063,9 @@ def _cross_tool_claim_contract_document(
             "kernel_arguments": _normalized_rust_contract(
                 gate.kernel_arguments
             ),
+            "verus_kernel_arguments": _normalized_rust_contract(
+                gate.verus_kernel_arguments or gate.kernel_arguments
+            ),
             "theorem_arguments": _normalized_rust_contract(
                 gate.theorem_arguments
             ),
@@ -5892,9 +5921,10 @@ def _cross_tool_total_gate_payload(
         raise ValueError(
             f"cross-tool Verus total gate {gate.name} has a changed exact signature"
         )
+    verus_kernel_arguments = gate.verus_kernel_arguments or gate.kernel_arguments
     expected_verus_body = rust_code_tokens(
         f"""
-        if {kernel_view.verified_kernel}({gate.kernel_arguments}) {{
+        if {kernel_view.verified_kernel}({verus_kernel_arguments}) {{
             Some({gate.success_value})
         }} else {{
             None
@@ -5919,6 +5949,9 @@ def _cross_tool_total_gate_payload(
         "production_item_token_sha256": production_item_sha256,
         "verus_item_token_sha256": verus_item_sha256,
         "kernel_arguments": _normalized_rust_contract(gate.kernel_arguments),
+        "verus_kernel_arguments": _normalized_rust_contract(
+            verus_kernel_arguments
+        ),
         "theorem_arguments": _normalized_rust_contract(gate.theorem_arguments),
         "accepted_value": _normalized_rust_contract(gate.success_value),
         "theorem_accepted_value": _normalized_rust_contract(
@@ -6666,7 +6699,7 @@ def _all_total_gate_kernel_views(
 ) -> tuple[
     tuple[CrossToolClaimContract, _CrossToolKernelContractView], ...
 ]:
-    """Return the canonical sixteen total gate/kernel pairs."""
+    """Return the canonical seventeen total gate/kernel pairs."""
 
     return tuple(
         (claim, kernel_view)
@@ -6872,6 +6905,69 @@ def _cross_tool_checked_token_payload(
             "match its exact reviewed token seal"
         )
 
+    in_flight_macros = rust_macro_items(
+        source, "production_in_flight_reservation_transition_body"
+    )
+    if len(in_flight_macros) != 1:
+        raise ValueError(
+            "cross-tool checked-token closure requires exactly one in-flight "
+            "reservation transition macro"
+        )
+    in_flight_macro = in_flight_macros[0]
+    if (
+        in_flight_macro.brace_context != ()
+        or in_flight_macro.delimiter_context != ()
+        or in_flight_macro.attributes
+        or in_flight_macro.ancestor_inner_attributes
+    ):
+        raise ValueError(
+            "cross-tool in-flight reservation transition macro must remain "
+            "unconditional and top-level"
+        )
+    in_flight_macro_sha256 = _rust_item_token_sha256(in_flight_macro)
+    if in_flight_macro_sha256 != _CHECKED_PRODUCTION_IN_FLIGHT_MACRO_SHA256:
+        raise ValueError(
+            "cross-tool in-flight reservation transition macro does not match "
+            "its exact reviewed token seal"
+        )
+
+    in_flight_kernels = rust_items(
+        source, "production_in_flight_reservation_transition_kernel"
+    )
+    if len(in_flight_kernels) != 1:
+        raise ValueError(
+            "cross-tool checked-token closure requires exactly one in-flight "
+            "reservation transition kernel"
+        )
+    in_flight_kernel = in_flight_kernels[0]
+    if (
+        in_flight_kernel.brace_context != ()
+        or in_flight_kernel.attributes
+        or in_flight_kernel.ancestor_inner_attributes
+        or _rust_item_header_tokens(in_flight_kernel)
+        != rust_code_tokens(
+            """
+                pub(crate) const fn production_in_flight_reservation_transition_kernel(
+                    projection: ProductionInFlightReservationTransitionProjection,
+                ) -> bool
+            """
+        )
+        or rust_code_tokens(in_flight_kernel.body)
+        != rust_code_tokens(
+            "production_in_flight_reservation_transition_body!(projection)"
+        )
+    ):
+        raise ValueError(
+            "cross-tool in-flight reservation transition kernel changed its "
+            "exact reviewed shape"
+        )
+    in_flight_kernel_sha256 = _rust_item_token_sha256(in_flight_kernel)
+    if in_flight_kernel_sha256 != _CHECKED_PRODUCTION_IN_FLIGHT_KERNEL_SHA256:
+        raise ValueError(
+            "cross-tool in-flight reservation transition kernel does not match "
+            "its exact reviewed token seal"
+        )
+
     in_flight_constructors = rust_items(
         source, "check_production_in_flight_reservation_transition"
     )
@@ -6926,14 +7022,199 @@ def _cross_tool_checked_token_payload(
             "match its exact reviewed token seal"
         )
 
+    materialization_projections = rust_struct_items(
+        source, "ProductionIngressReservationMaterializationTraceProjection"
+    )
+    if len(materialization_projections) != 1:
+        raise ValueError(
+            "cross-tool checked-token closure requires exactly one ingress "
+            "reservation materialization projection"
+        )
+    materialization_projection = materialization_projections[0]
+    if (
+        materialization_projection.brace_context != ()
+        or materialization_projection.ancestor_inner_attributes
+        or tuple(
+            rust_code_tokens(attribute)
+            for attribute in materialization_projection.attributes
+        )
+        != ((
+            "#",
+            "[",
+            "derive",
+            "(",
+            "Clone",
+            ",",
+            "Copy",
+            ",",
+            "Debug",
+            ",",
+            "Default",
+            ",",
+            "PartialEq",
+            ",",
+            "Eq",
+            ")",
+            "]",
+        ),)
+        or _rust_item_header_tokens(materialization_projection)
+        != rust_code_tokens(
+            "pub struct ProductionIngressReservationMaterializationTraceProjection"
+        )
+        or rust_code_tokens(materialization_projection.body)
+        != rust_code_tokens(
+            """
+                pub(crate) incoming_height: u64,
+                pub(crate) incoming_view: u64,
+                pub(crate) incoming_generation: u64,
+                pub(crate) incoming_class: u8,
+                pub(crate) stored_height: u64,
+                pub(crate) stored_view: u64,
+                pub(crate) stored_generation: u64,
+                pub(crate) stored_class: u8,
+                pub(crate) queue_len_before: u64,
+                pub(crate) queue_len_after: u64,
+                pub(crate) reserved_slots_before: u8,
+                pub(crate) reserved_slots_after: u8,
+                pub(crate) queue_capacity: u64,
+                pub(crate) ordinal_source_before: u128,
+                pub(crate) physical_admission_ordinal: u128,
+                pub(crate) lifecycle_ordinal: u128,
+                pub(crate) ordinal_source_after: u128,
+                pub(crate) dormant_reservations_before: u64,
+                pub(crate) dormant_reservations_after: u64,
+                pub(crate) dormant_owner_ordinal: u128,
+            """
+        )
+    ):
+        raise ValueError(
+            "cross-tool ingress reservation materialization projection changed "
+            "its exact reviewed layout"
+        )
+    materialization_projection_sha256 = _rust_sealed_item_token_sha256(
+        materialization_projection
+    )
+    if (
+        materialization_projection_sha256
+        != _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_PROJECTION_SHA256
+    ):
+        raise ValueError(
+            "cross-tool ingress reservation materialization projection does not "
+            "match its exact reviewed token seal"
+        )
+
+    legacy_gate_contracts = (
+        (
+            "check_production_enter_view_effective_lock_transition",
+            """
+                pub(crate) fn check_production_enter_view_effective_lock_transition(
+                    trace: EffectiveLockTraceProjection,
+                    enter_view: EnterViewProjection,
+                ) -> Option<CheckedProductionTransition<(
+                    EffectiveLockTraceProjection, EnterViewProjection
+                )>>
+            """,
+            """
+                if production_enter_view_uses_post_install_effective_lock_kernel(trace, enter_view) {
+                    Some(CheckedProductionTransition {
+                        projection: (trace, enter_view),
+                    })
+                } else {
+                    None
+                }
+            """,
+        ),
+        (
+            "check_production_body_ownership_effective_lock_transition",
+            """
+                pub(crate) fn check_production_body_ownership_effective_lock_transition(
+                    projection: EffectiveLockTraceProjection,
+                ) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>>
+            """,
+            """
+                if production_body_ownership_preserves_effective_lock_kernel(projection) {
+                    Some(CheckedProductionTransition { projection })
+                } else {
+                    None
+                }
+            """,
+        ),
+        (
+            "check_production_body_capacity_retirement_effective_lock_transition",
+            """
+                pub(crate) fn check_production_body_capacity_retirement_effective_lock_transition(
+                    projection: EffectiveLockTraceProjection,
+                ) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>>
+            """,
+            """
+                if production_body_capacity_retirement_preserves_effective_lock_kernel(projection) {
+                    Some(CheckedProductionTransition { projection })
+                } else {
+                    None
+                }
+            """,
+        ),
+        (
+            "check_production_body_service_effective_lock_transition",
+            """
+                pub(crate) fn check_production_body_service_effective_lock_transition(
+                    projection: EffectiveLockTraceProjection,
+                ) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>>
+            """,
+            """
+                if production_body_service_refines_async_fairness_kernel(projection) {
+                    Some(CheckedProductionTransition { projection })
+                } else {
+                    None
+                }
+            """,
+        ),
+    )
+    legacy_gate_payload: list[dict[str, str]] = []
+    for legacy_name, legacy_header, legacy_body in legacy_gate_contracts:
+        legacy_items = rust_items(source, legacy_name)
+        if len(legacy_items) != 1:
+            raise ValueError(
+                "cross-tool checked-token closure requires exactly one legacy "
+                f"effective-lock constructor {legacy_name}"
+            )
+        legacy_item = legacy_items[0]
+        if (
+            legacy_item.brace_context != ()
+            or legacy_item.ancestor_inner_attributes
+            or tuple(
+                rust_code_tokens(attribute) for attribute in legacy_item.attributes
+            )
+            != (("#", "[", "must_use", "]"),)
+            or _rust_item_header_tokens(legacy_item)
+            != rust_code_tokens(legacy_header)
+            or rust_code_tokens(legacy_item.body) != rust_code_tokens(legacy_body)
+        ):
+            raise ValueError(
+                "cross-tool legacy effective-lock checked constructor "
+                f"{legacy_name} changed its exact fail-closed shape"
+            )
+        legacy_sha256 = _rust_sealed_item_token_sha256(legacy_item)
+        if (
+            legacy_sha256
+            != _CHECKED_PRODUCTION_EFFECTIVE_LOCK_GATE_SHA256[legacy_name]
+        ):
+            raise ValueError(
+                "cross-tool legacy effective-lock checked constructor "
+                f"{legacy_name} does not match its exact reviewed token seal"
+            )
+        legacy_gate_payload.append(
+            {"name": legacy_name, "item_token_sha256": legacy_sha256}
+        )
+
     source_tokens = rust_code_tokens(source)
     constructor_count = _token_sequence_count(
         source_tokens, ("CheckedProductionTransition", "{")
     )
-    if constructor_count != 22:
+    if constructor_count != 23:
         raise ValueError(
-            "cross-tool opaque token closure must contain exactly twenty-two "
-            "checked constructors (sixteen total gates, four effective-lock gates, and "
+            "cross-tool opaque token closure must contain exactly twenty-three "
+            "checked constructors (seventeen total gates, four effective-lock gates, and "
             "the outer reducer plus in-flight reservation transition gates); "
             f"found {constructor_count}"
         )
@@ -6997,7 +7278,13 @@ def _cross_tool_checked_token_payload(
         "borrower_item_token_sha256": borrower_sha256,
         "consumer_item_token_sha256": consumer_sha256,
         "in_flight_projection_item_token_sha256": in_flight_projection_sha256,
+        "in_flight_macro_item_token_sha256": in_flight_macro_sha256,
+        "in_flight_kernel_item_token_sha256": in_flight_kernel_sha256,
         "in_flight_constructor_item_token_sha256": in_flight_constructor_sha256,
+        "materialization_projection_item_token_sha256": (
+            materialization_projection_sha256
+        ),
+        "legacy_effective_lock_constructor_items": legacy_gate_payload,
         "constructor_count": constructor_count,
         "reexports": reexport_payload,
     }
@@ -7432,6 +7719,17 @@ def _cross_tool_auxiliary_total_theorem_payload(
     }
 
 
+def _cross_tool_claim_checked_token_contract() -> dict[str, str]:
+    """Return every claim-local opaque-token source seal."""
+
+    return {
+        "source": _CHECKED_PRODUCTION_TOKEN_SOURCE,
+        "struct_item_token_sha256": _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256,
+        "borrower_item_token_sha256": _CHECKED_PRODUCTION_TOKEN_BORROWER_SHA256,
+        "consumer_item_token_sha256": _CHECKED_PRODUCTION_TOKEN_CONSUMER_SHA256,
+    }
+
+
 def _cross_tool_total_checked_claim_payload(
     claim: CrossToolClaimContract,
     *,
@@ -7599,11 +7897,7 @@ def _cross_tool_total_checked_claim_payload(
     source_item_seals = _cross_tool_source_item_seal_payload(
         claim, root_dir=root_dir
     )
-    checked_token = {
-        "source": _CHECKED_PRODUCTION_TOKEN_SOURCE,
-        "struct_item_token_sha256": _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256,
-        "consumer_item_token_sha256": _CHECKED_PRODUCTION_TOKEN_CONSUMER_SHA256,
-    }
+    checked_token = _cross_tool_claim_checked_token_contract()
     production_sources: list[dict[str, str]] = []
     for relative in claim.production_sources:
         path = root_dir / relative
@@ -8032,13 +8326,7 @@ def _cross_tool_claim_payload(
         "production_call_sites": call_site_payloads,
         "linked_consumers": linked_consumers,
         "plan_carriers": plan_carriers,
-        "checked_token": {
-            "source": _CHECKED_PRODUCTION_TOKEN_SOURCE,
-            "struct_item_token_sha256": _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256,
-            "consumer_item_token_sha256": (
-                _CHECKED_PRODUCTION_TOKEN_CONSUMER_SHA256
-            ),
-        },
+        "checked_token": _cross_tool_claim_checked_token_contract(),
         "enter_view_identity_production_items": enter_view_identity_items,
         "source_item_seals": source_item_seals,
         "production_sources": production_sources,

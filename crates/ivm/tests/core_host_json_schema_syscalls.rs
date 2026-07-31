@@ -3,7 +3,7 @@
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     nexus::DataSpaceId,
-    prelude::{AccountId, AssetDefinitionId, Name},
+    prelude::{AccountId, AssetDefinitionId, StatePath},
     smart_contract::ContractAddress,
 };
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
@@ -813,9 +813,10 @@ fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
         let tlv = vm
             .memory
             .validate_tlv(vm.register(10))
-            .expect("name output tlv");
-        assert_eq!(tlv.type_id, PointerType::Name);
-        let path: Name = norito::decode_from_bytes(tlv.payload).expect("decode path name");
+            .expect("StatePath output tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let path: StatePath =
+            norito::decode_from_bytes(tlv.payload).expect("decode canonical StatePath");
         assert_eq!(path.as_ref(), expected_path);
     };
 

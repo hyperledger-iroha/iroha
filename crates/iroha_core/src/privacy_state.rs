@@ -17,10 +17,10 @@ use iroha_data_model::{
         IVM_PRIVATE_NOTE_MAX_INPUTS_V1, IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
         IrohaZkX509StarkP256StatementV1, ORCHARD_MAX_ACTIONS_V1, PQ_MASP_MAX_INPUTS_V1,
         PQ_MASP_MAX_OUTPUTS_V1, PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
-        PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
-        PRIVACY_ZK_ACE_MAX_POLICIES_V1, PrivacyActivationValidationError, PrivacyCommitmentV1,
-        PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1, PrivacyFcmpKeyImageV1,
-        PrivacyFcmpOutputIdV1, PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
+        PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
+        PrivacyActivationValidationError, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
+        PrivacyConsensusPolicyV1, PrivacyFcmpKeyImageV1, PrivacyFcmpOutputIdV1,
+        PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
         PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1,
         PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
         PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
@@ -54,6 +54,13 @@ use norito::{
     json,
 };
 use thiserror::Error;
+
+mod pgc_account_root;
+
+pub(crate) use pgc_account_root::compute_privacy_pgc_account_state_root_v1;
+pub use pgc_account_root::{
+    PrivacyPgcAccountStateRootErrorV1, derive_privacy_pgc_account_state_root_v1,
+};
 
 const PRIVACY_PGC_POOL_INVARIANT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:pgc-pool-invariant:v1";
 
@@ -650,77 +657,6 @@ impl PrivacyPgcAccountStateV1 {
     pub(crate) fn validate(self) -> Result<(), &'static str> {
         Self::new(self.encrypted_balance, self.epoch, self.provenance).map(|_| ())
     }
-}
-
-/// Deterministically derive one complete PGC encrypted account-state root.
-///
-/// Accounts must be a complete table in strict public-key order. The closed
-/// first-release cardinalities ensure this operation is bounded by 64 entries.
-pub(crate) fn compute_privacy_pgc_account_state_root_v1(
-    namespace: PrivacyNamespaceV1,
-    epoch: u64,
-    total_supply: u32,
-    accounts: &[PrivacyPgcAccountV1],
-) -> Result<PrivacyRootV1, &'static str> {
-    namespace
-        .validate()
-        .map_err(|_| "privacy PGC account-root namespace is invalid")?;
-    if namespace.protocol_id() != PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
-        return Err("privacy PGC account-root namespace has the wrong protocol");
-    }
-    if epoch == 0 {
-        return Err("privacy PGC account-root epoch must be non-zero");
-    }
-    if total_supply == 0 {
-        return Err("privacy PGC account-root total supply must be non-zero");
-    }
-    let count = u32::try_from(accounts.len())
-        .map_err(|_| "privacy PGC account-root count cannot be represented")?;
-    if !ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1.contains(&count) {
-        return Err("privacy PGC account-root count is not a closed first-release size");
-    }
-    for (index, account) in accounts.iter().enumerate() {
-        if account.public_key.is_zero()
-            || account.encrypted_balance.left.is_zero()
-            || account.encrypted_balance.right.is_zero()
-        {
-            return Err("privacy PGC account-root contains a zero point");
-        }
-        if index > 0 && accounts[index - 1].public_key >= account.public_key {
-            return Err("privacy PGC account-root keys are not strictly increasing");
-        }
-        for point in [
-            account.public_key,
-            account.encrypted_balance.left,
-            account.encrypted_balance.right,
-        ] {
-            crate::privacy_engines::p256::CompressedPointV1::from_slice(point.as_bytes()).map_err(
-                |_| "privacy PGC account-root contains an invalid canonical P-256 point",
-            )?;
-        }
-    }
-
-    let namespace_bytes =
-        norito::to_bytes(&namespace).map_err(|_| "privacy PGC namespace encoding failed")?;
-    let namespace_len = u64::try_from(namespace_bytes.len())
-        .map_err(|_| "privacy PGC namespace encoding length overflow")?;
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1);
-    hasher.update(&namespace_len.to_le_bytes());
-    hasher.update(&namespace_bytes);
-    hasher.update(&epoch.to_le_bytes());
-    hasher.update(&total_supply.to_le_bytes());
-    hasher.update(&count.to_le_bytes());
-    for account in accounts {
-        hasher.update(account.public_key.as_bytes());
-        hasher.update(account.encrypted_balance.left.as_bytes());
-        hasher.update(account.encrypted_balance.right.as_bytes());
-    }
-    let root = PrivacyRootV1::new(*hasher.finalize().as_bytes());
-    if root.is_zero() {
-        return Err("privacy PGC account-root digest is zero");
-    }
-    Ok(root)
 }
 
 /// Fully validated, transaction-local view of one existing Anonymous PGC pool.
@@ -12078,46 +12014,53 @@ mod tests {
     fn pgc_account_root_rejects_noncanonical_tables() {
         let namespace = pgc_namespace(20);
         let accounts = pgc_accounts(16);
-        assert!(
-            compute_privacy_pgc_account_state_root_v1(namespace, 0, 160, &accounts).is_err(),
-            "epoch zero is not a persistable root"
+        assert_eq!(
+            derive_privacy_pgc_account_state_root_v1(namespace, 0, 160, &accounts),
+            Err(PrivacyPgcAccountStateRootErrorV1::ZeroEpoch),
+            "epoch zero must fail at the typed public boundary"
         );
-        assert!(
-            compute_privacy_pgc_account_state_root_v1(namespace, 1, 0, &accounts).is_err(),
-            "zero supply is not a persistable root"
+        assert_eq!(
+            derive_privacy_pgc_account_state_root_v1(namespace, 1, 0, &accounts),
+            Err(PrivacyPgcAccountStateRootErrorV1::ZeroTotalSupply),
+            "zero supply must fail at the typed public boundary"
         );
-        assert!(
-            compute_privacy_pgc_account_state_root_v1(namespace, 1, 160, &accounts[..15]).is_err(),
-            "cardinality outside the closed 16/32/64 set must reject"
+        assert_eq!(
+            derive_privacy_pgc_account_state_root_v1(namespace, 1, 160, &accounts[..15]),
+            Err(PrivacyPgcAccountStateRootErrorV1::InvalidAccountCount),
+            "cardinality outside the closed 16/32/64 set must fail explicitly"
         );
 
         let mut unordered = accounts.clone();
         unordered.swap(4, 5);
-        assert!(
-            compute_privacy_pgc_account_state_root_v1(namespace, 1, 160, &unordered).is_err(),
-            "account keys must be in one canonical strict order"
+        assert_eq!(
+            derive_privacy_pgc_account_state_root_v1(namespace, 1, 160, &unordered),
+            Err(PrivacyPgcAccountStateRootErrorV1::KeysNotStrictlyIncreasing),
+            "account keys must have one canonical strict order"
         );
 
         let mut duplicate = accounts.clone();
         duplicate[5].public_key = duplicate[4].public_key;
-        assert!(
-            compute_privacy_pgc_account_state_root_v1(namespace, 1, 160, &duplicate).is_err(),
-            "duplicate accounts must reject"
+        assert_eq!(
+            derive_privacy_pgc_account_state_root_v1(namespace, 1, 160, &duplicate),
+            Err(PrivacyPgcAccountStateRootErrorV1::KeysNotStrictlyIncreasing),
+            "duplicate accounts must fail at the ordering gate"
         );
 
         let mut zero_component = accounts;
         zero_component[3].encrypted_balance.right = PrivacyP256PointV1::new([0; 33]);
-        assert!(
-            compute_privacy_pgc_account_state_root_v1(namespace, 1, 160, &zero_component).is_err(),
-            "zero encoded points must reject before hashing"
+        assert_eq!(
+            derive_privacy_pgc_account_state_root_v1(namespace, 1, 160, &zero_component),
+            Err(PrivacyPgcAccountStateRootErrorV1::ZeroPoint),
+            "zero encoded points must fail before hashing"
         );
 
         let mut off_curve = pgc_accounts(16);
         let mut invalid = [u8::MAX; 33];
         invalid[0] = 2;
         off_curve[3].encrypted_balance.right = PrivacyP256PointV1::new(invalid);
-        assert!(
-            compute_privacy_pgc_account_state_root_v1(namespace, 1, 160, &off_curve).is_err(),
+        assert_eq!(
+            derive_privacy_pgc_account_state_root_v1(namespace, 1, 160, &off_curve),
+            Err(PrivacyPgcAccountStateRootErrorV1::InvalidPoint),
             "non-zero off-curve encodings must not enter durable account state"
         );
     }

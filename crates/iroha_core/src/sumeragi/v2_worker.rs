@@ -87,10 +87,10 @@ use super::{
     v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
-        CompletionDisposition, ConsensusSignTask, DurableApplyCompletion, EffectExecutorError,
-        EffectExecutorStatus, EffectRuntime, EffectTransportError, EffectWorkId,
-        PendingTipRecoveryAttemptResult, PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
-        V2EffectExecutor, V2EffectServices,
+        CertifiedBodyFetchCompletionDisposition, CompletionDisposition, ConsensusSignTask,
+        DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectRuntime,
+        EffectTransportError, EffectWorkId, PendingTipRecoveryAttemptResult,
+        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{DurableLaneRolloverAuthority, V2LaneWorkEffect, lane_output_identity},
     v2_runtime::{
@@ -13621,8 +13621,12 @@ impl ProductionV2Services {
         Ok(BodyFetchServiceOwner::None)
     }
 
-    fn remove_exact_body_fetch_owner(&mut self, task: &BodyFetchTask) -> Result<(), String> {
-        match self.body_fetch_service_owner(task.id())? {
+    fn plan_exact_body_fetch_owner_removal(
+        &self,
+        task: &BodyFetchTask,
+    ) -> Result<BodyFetchServiceOwner, String> {
+        let owner = self.body_fetch_service_owner(task.id())?;
+        match owner {
             BodyFetchServiceOwner::Live => {
                 let existing = self
                     .fetches
@@ -13633,14 +13637,6 @@ impl ProductionV2Services {
                         "Sumeragi v2 body-fetch work {} differs from executor ownership",
                         task.id().get()
                     ));
-                }
-                let manifest_hash = existing.task.manifest().map(HashOf::new);
-                self.fetches
-                    .remove(&task.id())
-                    .expect("live body-fetch owner was classified above");
-                if let Some(manifest_hash) = manifest_hash {
-                    let removed = self.fetch_by_manifest.remove(&manifest_hash);
-                    debug_assert_eq!(removed, Some(task.id()));
                 }
             }
             BodyFetchServiceOwner::Reconstructed(index) => {
@@ -13656,9 +13652,6 @@ impl ProductionV2Services {
                         task.id().get()
                     ));
                 }
-                self.local_completions
-                    .remove(index)
-                    .expect("queued body-fetch owner was classified above");
             }
             BodyFetchServiceOwner::None => {
                 return Err(format!(
@@ -13667,6 +13660,38 @@ impl ProductionV2Services {
                 ));
             }
         }
+        Ok(owner)
+    }
+
+    fn commit_exact_body_fetch_owner_removal(
+        &mut self,
+        task: &BodyFetchTask,
+        owner: BodyFetchServiceOwner,
+    ) {
+        match owner {
+            BodyFetchServiceOwner::Live => {
+                self.fetches
+                    .remove(&task.id())
+                    .expect("preflighted live body-fetch owner remains present");
+                if let Some(manifest_hash) = task.manifest().map(HashOf::new) {
+                    let removed = self.fetch_by_manifest.remove(&manifest_hash);
+                    debug_assert_eq!(removed, Some(task.id()));
+                }
+            }
+            BodyFetchServiceOwner::Reconstructed(index) => {
+                self.local_completions
+                    .remove(index)
+                    .expect("preflighted queued body-fetch owner remains present");
+            }
+            BodyFetchServiceOwner::None => {
+                unreachable!("exact body-fetch removal preflight excludes an absent owner")
+            }
+        }
+    }
+
+    fn remove_exact_body_fetch_owner(&mut self, task: &BodyFetchTask) -> Result<(), String> {
+        let owner = self.plan_exact_body_fetch_owner_removal(task)?;
+        self.commit_exact_body_fetch_owner_removal(task, owner);
         Ok(())
     }
 
@@ -17262,20 +17287,27 @@ impl V2EffectServices for ProductionV2Services {
         Ok(())
     }
 
-    fn complete_certified_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+    fn complete_certified_body_fetch(
+        &mut self,
+        task: &BodyFetchTask,
+    ) -> Result<CertifiedBodyFetchCompletionDisposition, Self::Error> {
         if task.certified_request().is_none() {
             return Err(format!(
                 "Sumeragi v2 body-fetch work {} completed without certified authority",
                 task.id().get()
             ));
         }
-        self.remove_exact_body_fetch_owner(task)?;
+        // Complete every fallible ownership check before arming the fail-stop
+        // boundary. The guarded tail is then one infallible removal, so every
+        // returned error leaves the exact service owner byte-for-byte intact.
+        let owner = self.plan_exact_body_fetch_owner_removal(task)?;
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        self.commit_exact_body_fetch_owner_removal(task, owner);
         operation.complete();
-        Ok(())
+        Ok(CertifiedBodyFetchCompletionDisposition::Completed)
     }
 
     fn accept_authenticated_chunk(
@@ -18638,6 +18670,7 @@ pub(super) mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"v2-worker-test-context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 8,
@@ -23607,6 +23640,66 @@ pub(super) mod tests {
             .expect("certified response retires queued reconstruction");
         assert!(service.local_completions.is_empty());
         assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation() {
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let live_task = certified_fetch_task(
+            &service,
+            55,
+            tag,
+            Some(payload.manifest().clone()),
+            proposal.round,
+            proposal.subject,
+        );
+        service
+            .enqueue_body_fetch(live_task.clone())
+            .expect("start exact hybrid fetch");
+        let mismatched_tag = EventTag::new(
+            tag.height(),
+            tag.view(),
+            Generation::new(tag.generation().get().saturating_add(1)),
+        );
+        let mismatched = certified_fetch_task(
+            &service,
+            55,
+            mismatched_tag,
+            Some(payload.manifest().clone()),
+            proposal.round,
+            proposal.subject,
+        );
+        let manifest_hash = HashOf::new(payload.manifest());
+
+        let error = service
+            .complete_certified_body_fetch(&mismatched)
+            .expect_err("a different executor task cannot retire the live service owner");
+
+        assert!(error.contains("differs from executor ownership"));
+        assert_eq!(
+            service
+                .fetches
+                .get(&live_task.id())
+                .map(|fetch| &fetch.task),
+            Some(&live_task),
+        );
+        assert_eq!(
+            service.fetch_by_manifest.get(&manifest_hash),
+            Some(&live_task.id()),
+        );
+        assert!(service.local_completions.is_empty());
+        assert!(
+            !service.output_guard.restart_required(),
+            "preflight rejection occurs before the guarded mutation boundary",
+        );
     }
 
     #[test]

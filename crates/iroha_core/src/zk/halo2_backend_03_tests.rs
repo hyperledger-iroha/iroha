@@ -69,7 +69,7 @@
         let backend = backend_tag_anon_transfer_merkle(8, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-        assert!(!super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -132,7 +132,7 @@
         let backend = backend_tag_anon_transfer_merkle(8, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-        assert!(!super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     // --- Tiny Poseidon circuits (base) negative ZK1 tests ---
@@ -198,7 +198,7 @@
         let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -263,7 +263,7 @@
         let backend = "halo2/pasta/ipa/tiny-merkle2";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env.clone());
         let prf_box1 = ProofBox::new(backend.into(), prf_env1);
-        assert!(!super::verify_backend(backend, &prf_box1, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(backend, &prf_box1, Some(&vk_box)));
 
         // Case 2: rows > MAX_INST_ROWS
         let mut prf_env2 = zk1::wrap_start();
@@ -274,7 +274,7 @@
         prf_env2.extend_from_slice(&rows_ext.to_le_bytes());
 
         let prf_box2 = ProofBox::new(backend.into(), prf_env2);
-        assert!(!super::verify_backend(backend, &prf_box2, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(backend, &prf_box2, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -352,7 +352,7 @@
         let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -413,7 +413,7 @@
         let backend = "halo2/pasta/ipa/tiny-merkle2";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     // ZK1 is canonical: duplicate proof payloads and unknown tags fail closed.
@@ -502,7 +502,7 @@
         let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -600,7 +600,7 @@
         let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     // ZK1 duplicate instance payloads fail closed regardless of ordering.
@@ -681,7 +681,7 @@
         let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     // Reversed duplicate-instance ordering must fail identically.
@@ -760,7 +760,7 @@
         let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     // Randomized deterministic unknown-TLV stress must fail closed.
@@ -860,7 +860,7 @@
             let backend = "halo2/pasta/ipa/tiny-commit-open";
             let vk_box = VerifyingKeyBox::new(backend.into(), vk_env.clone());
             let prf_box = ProofBox::new(backend.into(), prf_env);
-            assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
+            assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
         }
     }
 
@@ -974,7 +974,7 @@
             let vk_box = VerifyingKeyBox::new(backend.into(), vk_env_base.clone());
             let prf_box = ProofBox::new(backend.into(), prf_env);
             assert_eq!(
-                super::verify_backend(backend, &prf_box, Some(&vk_box)),
+                super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)),
                 expect_ok
             );
         };
@@ -1039,7 +1039,7 @@
         let backend = "halo2/pasta/ipa/tiny-add"; // any recognized halo2 backend tag
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -1172,7 +1172,7 @@
         let backend = "halo2/pasta/ipa/tiny-add2inst-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -1302,7 +1302,7 @@
         let backend = "halo2/pasta/ipa/tiny-anon-transfer-2x2";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -1403,7 +1403,7 @@
         let backend = "halo2/pasta/ipa/tiny-vote-bool";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -1507,7 +1507,7 @@
         zk1::wrap_append_proof(&mut proof_env1, &proof_bytes);
         let vk_box1 = VerifyingKeyBox::new(backend.into(), vk_env.clone());
         let prf_box1 = ProofBox::new(backend.into(), proof_env1);
-        assert!(!super::verify_backend(backend, &prf_box1, Some(&vk_box1)));
+        assert!(!super::verify_halo2_ipa(backend, &prf_box1, Some(&vk_box1)));
 
         // Case 2: With INST → should succeed
         let mut proof_env2 = zk1::wrap_start();
@@ -1515,7 +1515,7 @@
         zk1::wrap_append_instances_pasta_fp(&[Scalar::from(7u64)], &mut proof_env2);
         let vk_box2 = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box2 = ProofBox::new(backend.into(), proof_env2);
-        assert!(super::verify_backend(backend, &prf_box2, Some(&vk_box2)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box2, Some(&vk_box2)));
     }
 
     #[cfg(all(
@@ -1645,7 +1645,7 @@
         let backend = "halo2/pasta/ipa/tiny-add-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(feature = "zk-halo2")]
@@ -1776,7 +1776,7 @@
         let backend = "halo2/pasta/tiny-mul-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(feature = "zk-halo2")]
@@ -1907,7 +1907,7 @@
         let backend = "halo2/pasta/tiny-add-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(feature = "zk-halo2")]
@@ -2038,5 +2038,5 @@
         let backend = "halo2/pasta/tiny-add-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2(backend, &prf_box, Some(&vk_box)));
     }

@@ -73,7 +73,6 @@ mod model {
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
     #[debug("IVM bytecode(len = {})", self.0.len())]
-    #[cfg_attr(feature = "json", norito(transparent))]
     #[repr(transparent)]
     // SAFETY: `IvmBytecode` has no trap representation in `Vec<u8>`
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
@@ -100,7 +99,7 @@ mod model {
 
     /// Bounded canonical bytes for one schema-bound Kotodama argument record.
     #[derive(derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-    #[norito(transparent, reuse_archived)]
+    #[norito(reuse_archived)]
     #[repr(transparent)]
     pub struct ContractArgumentRecord(pub(super) Vec<u8>);
 

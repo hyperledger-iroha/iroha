@@ -714,22 +714,22 @@ pub mod codec {
             eprintln!(
                 "norito.codec.decode_adaptive: len={} align={} ptr={:?}",
                 bytes.len(),
-                ::core::mem::align_of::<core::Archived<T>>(),
+                core::archived_payload_align::<T>(),
                 bytes.as_ptr()
             );
         }
 
-        let min_size = ::core::mem::size_of::<core::Archived<T>>();
+        let min_size = core::archived_payload_size::<T>();
         let logical_len = bytes.len();
         if min_size > 0 && logical_len == 0 {
             return Err(core::Error::LengthMismatch);
         }
 
-        let align = ::core::mem::align_of::<core::Archived<T>>();
+        let align = core::archived_payload_align::<T>();
 
-        // If the payload is shorter than the archived footprint, pad with zeros so we
-        // can safely form an `Archived<T>` reference while keeping the logical length
-        // constrained to the original slice for bounds checks during decode.
+        // If the payload is shorter than the established storage footprint,
+        // pad temporary storage while keeping the logical length constrained
+        // to the original slice for bounds checks during decode.
         let backing: &[u8];
         let _owned_pad: Option<Vec<u8>>;
         if min_size > 0 && logical_len < min_size {
@@ -10128,7 +10128,7 @@ where
         return Err(Error::ChecksumMismatch);
     }
 
-    let min_size = ::core::mem::size_of::<core::Archived<T>>();
+    let min_size = core::archived_payload_size::<T>();
     let logical_len = payload.len();
     let padded = if min_size > 0 && logical_len < min_size {
         core::reserve_decode_allocation(min_size)?;
@@ -10183,7 +10183,7 @@ where
 
     let flags = header.flags;
     let flags_hint = header.minor;
-    let min_size = ::core::mem::size_of::<core::Archived<T>>();
+    let min_size = core::archived_payload_size::<T>();
     let logical_len = payload.len();
     let padded = if min_size > 0 && logical_len < min_size {
         core::reserve_decode_allocation(min_size)?;
@@ -11542,7 +11542,7 @@ where
             checksum: header.checksum,
             flags_guard,
             scratch: core::stream::AlignedScratch::new(),
-            archived_align: std::mem::align_of::<core::Archived<T>>(),
+            archived_align: core::archived_payload_align::<T>(),
             decode_budget: None,
             _marker: std::marker::PhantomData,
         })
@@ -11618,13 +11618,11 @@ where
                     Err(error) => return Some(Err(error)),
                 };
                 let value = if len == 0 {
-                    if std::mem::size_of::<core::Archived<T>>() != 0 {
+                    if core::archived_payload_size::<T>() != 0 {
                         Err(Error::LengthMismatch)
                     } else {
                         let _pg = core::PayloadCtxGuard::enter(&[]);
-                        let archived = unsafe {
-                            &*std::ptr::NonNull::<core::Archived<T>>::dangling().as_ptr()
-                        };
+                        let archived = core::empty_archived_marker::<T>();
                         guarded_try_deserialize(|| T::try_deserialize(archived))
                     }
                 } else {
@@ -12320,11 +12318,11 @@ where
 
 #[cfg(test)]
 mod archive_slice_tests {
-    use super::{ArchiveSlice, core::Archived};
+    use super::{ArchiveSlice, core};
 
     #[test]
     fn misaligned_slice_is_realigned() {
-        let align = std::mem::align_of::<Archived<[u64; 2]>>();
+        let align = core::archived_payload_align::<[u64; 2]>();
         assert!(align > 1);
 
         let backing = vec![0u8; align * 2 + 1];

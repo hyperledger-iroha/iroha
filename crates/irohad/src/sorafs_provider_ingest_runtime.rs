@@ -71,9 +71,9 @@ use sorafs_node::{
     ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
     ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
     ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
-    ProviderIngestLocalStorageV1, ProviderIngestRuntimePolicyV1, ProviderIngestRuntimeV1,
-    ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1,
-    ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
+    ProviderIngestLocalStorageV1, ProviderIngestRuntimeErrorV1, ProviderIngestRuntimePolicyV1,
+    ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1,
+    ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
     ProviderIngestTransactionObservationV1, store::StorageError,
 };
 
@@ -1658,7 +1658,8 @@ enum RuntimeDependencyProbeV1 {
     Ready,
     Unavailable,
     Rejected,
-    TimedOutOrPanicked,
+    TimedOut,
+    Panicked,
 }
 
 async fn bounded_blocking_readiness_probe<F>(
@@ -1670,7 +1671,8 @@ where
 {
     match tokio::time::timeout(deadline, tokio::task::spawn_blocking(probe)).await {
         Ok(Ok(result)) => result,
-        Ok(Err(_)) | Err(_) => RuntimeDependencyProbeV1::TimedOutOrPanicked,
+        Ok(Err(_)) => RuntimeDependencyProbeV1::Panicked,
+        Err(_) => RuntimeDependencyProbeV1::TimedOut,
     }
 }
 
@@ -1708,10 +1710,14 @@ fn combine_runtime_dependency_probes(
     if source == RuntimeDependencyProbeV1::Rejected || signer == RuntimeDependencyProbeV1::Rejected
     {
         RuntimeDependencyProbeV1::Rejected
-    } else if source == RuntimeDependencyProbeV1::TimedOutOrPanicked
-        || signer == RuntimeDependencyProbeV1::TimedOutOrPanicked
+    } else if source == RuntimeDependencyProbeV1::Panicked
+        || signer == RuntimeDependencyProbeV1::Panicked
     {
-        RuntimeDependencyProbeV1::TimedOutOrPanicked
+        RuntimeDependencyProbeV1::Panicked
+    } else if source == RuntimeDependencyProbeV1::TimedOut
+        || signer == RuntimeDependencyProbeV1::TimedOut
+    {
+        RuntimeDependencyProbeV1::TimedOut
     } else if source == RuntimeDependencyProbeV1::Unavailable
         || signer == RuntimeDependencyProbeV1::Unavailable
     {
@@ -2009,8 +2015,11 @@ async fn qualify_provider_ingest_startup(
         RuntimeDependencyProbeV1::Rejected => {
             bail!("SoraFS provider-ingest runtime dependency qualification was rejected");
         }
-        RuntimeDependencyProbeV1::TimedOutOrPanicked => {
+        RuntimeDependencyProbeV1::TimedOut => {
             bail!("SoraFS provider-ingest runtime dependency readiness probe failed its deadline");
+        }
+        RuntimeDependencyProbeV1::Panicked => {
+            bail!("SoraFS provider-ingest runtime dependency readiness probe panicked");
         }
     }
     Ok(ProviderIngestStartupQualificationV1 {
@@ -2112,6 +2121,13 @@ fn assemble_native_provider_ingest_runtime(
 enum ProviderIngestWorkerControlV1 {
     Continue,
     Stop,
+}
+
+fn provider_ingest_tick_error_is_transient(error: &ProviderIngestRuntimeErrorV1) -> bool {
+    matches!(
+        error,
+        ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable
+    )
 }
 
 struct ProviderIngestWorkerV1 {
@@ -2263,11 +2279,19 @@ impl ProviderIngestWorkerV1 {
                     .external_dependencies_healthy
                     .store(false, Ordering::Release);
                 self.handle.tick_in_flight.store(false, Ordering::Release);
-                iroha_logger::error!(
-                    error = %error,
-                    "SoraFS provider-ingest reconciliation failed; stopping supervised worker"
-                );
-                ProviderIngestWorkerControlV1::Stop
+                if provider_ingest_tick_error_is_transient(&error) {
+                    iroha_logger::warn!(
+                        error = %error,
+                        "SoraFS provider-ingest reconciliation dependency is temporarily unavailable; retrying on the next bounded tick"
+                    );
+                    ProviderIngestWorkerControlV1::Continue
+                } else {
+                    iroha_logger::error!(
+                        error = %error,
+                        "SoraFS provider-ingest reconciliation failed fatally; stopping supervised worker"
+                    );
+                    ProviderIngestWorkerControlV1::Stop
+                }
             }
         }
     }
@@ -2297,7 +2321,7 @@ impl ProviderIngestWorkerV1 {
         }
         match self.adapter_identity_probe() {
             RuntimeDependencyProbeV1::Ready => {}
-            RuntimeDependencyProbeV1::Unavailable => {
+            RuntimeDependencyProbeV1::Unavailable | RuntimeDependencyProbeV1::TimedOut => {
                 self.handle
                     .counters
                     .failed_ticks
@@ -2308,7 +2332,7 @@ impl ProviderIngestWorkerV1 {
                 );
                 return ProviderIngestWorkerControlV1::Continue;
             }
-            RuntimeDependencyProbeV1::Rejected | RuntimeDependencyProbeV1::TimedOutOrPanicked => {
+            RuntimeDependencyProbeV1::Rejected | RuntimeDependencyProbeV1::Panicked => {
                 self.handle.tick_in_flight.store(false, Ordering::Release);
                 iroha_logger::error!(
                     "SoraFS provider-ingest runtime adapter identity or qualification was rejected; stopping supervised worker"
@@ -2335,6 +2359,17 @@ impl ProviderIngestWorkerV1 {
                 );
                 return ProviderIngestWorkerControlV1::Continue;
             }
+            RuntimeDependencyProbeV1::TimedOut => {
+                self.handle
+                    .counters
+                    .failed_ticks
+                    .fetch_add(1, Ordering::Relaxed);
+                self.handle.tick_in_flight.store(false, Ordering::Release);
+                iroha_logger::warn!(
+                    "SoraFS provider-ingest runtime dependency probe exceeded its deadline; retrying on the next bounded tick"
+                );
+                return ProviderIngestWorkerControlV1::Continue;
+            }
             RuntimeDependencyProbeV1::Rejected => {
                 self.handle
                     .counters
@@ -2346,14 +2381,14 @@ impl ProviderIngestWorkerV1 {
                 );
                 return ProviderIngestWorkerControlV1::Stop;
             }
-            RuntimeDependencyProbeV1::TimedOutOrPanicked => {
+            RuntimeDependencyProbeV1::Panicked => {
                 self.handle
                     .counters
                     .failed_ticks
                     .fetch_add(1, Ordering::Relaxed);
                 self.handle.tick_in_flight.store(false, Ordering::Release);
                 iroha_logger::error!(
-                    "SoraFS provider-ingest runtime dependency probe exceeded its deadline or panicked; stopping supervised worker"
+                    "SoraFS provider-ingest runtime dependency probe panicked; stopping supervised worker"
                 );
                 return ProviderIngestWorkerControlV1::Stop;
             }
@@ -4071,6 +4106,25 @@ mod tests {
             RuntimeDependencyProbeV1::Ready
         })
         .await;
-        assert_eq!(result, RuntimeDependencyProbeV1::TimedOutOrPanicked);
+        assert_eq!(result, RuntimeDependencyProbeV1::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn panicked_readiness_probe_is_distinct_from_transient_timeout() {
+        let result = bounded_blocking_readiness_probe(Duration::from_secs(1), || {
+            panic!("synthetic readiness probe panic");
+        })
+        .await;
+        assert_eq!(result, RuntimeDependencyProbeV1::Panicked);
+    }
+
+    #[test]
+    fn only_temporary_finalized_ledger_loss_is_a_retryable_tick_error() {
+        assert!(provider_ingest_tick_error_is_transient(
+            &ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable
+        ));
+        assert!(!provider_ingest_tick_error_is_transient(
+            &ProviderIngestRuntimeErrorV1::InvalidFinalizedPage
+        ));
     }
 }

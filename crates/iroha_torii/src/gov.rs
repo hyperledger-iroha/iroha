@@ -3,8 +3,10 @@
 //!
 //! This module hosts minimal DTOs and handlers for governance endpoints
 //! described in `gov.md` and `specs/contract_deployment.md`.
-//! Handlers validate inputs, build instruction skeletons, and reject legacy
-//! `private_key` payloads so callers must submit locally signed transactions.
+//! Handlers validate inputs and build instruction skeletons for callers to
+//! submit through the locally signed transaction pipeline. Draft request
+//! schemas that previously exposed server-side signing inputs are strict and
+//! no longer admit private signing material.
 //!
 //! Notes
 //! - JSON parsing uses Norito's serde wrappers via the `NoritoJson` extractor.
@@ -42,14 +44,12 @@ use crate::{
     routing::{MaybeTelemetry, parse_account_literal_with_state},
 };
 
-const CONTEXT_GOV_PROPOSE_DEPLOY_AUTHORITY: &str = "/v1/gov/proposals/deploy-contract#authority";
 const CONTEXT_GOV_BALLOT_ZK_AUTHORITY: &str = "/v1/gov/ballots/zk#authority";
 const CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY: &str = "/v1/gov/ballots/zk-v1#authority";
 const CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY: &str =
     "/v1/gov/ballots/zk-v1/ballot-proof#authority";
 const CONTEXT_GOV_BALLOT_PLAIN_AUTHORITY: &str = "/v1/gov/ballots/plain#authority";
 const CONTEXT_GOV_BALLOT_PLAIN_OWNER: &str = "/v1/gov/ballots/plain#owner";
-const CONTEXT_GOV_FINALIZE_AUTHORITY: &str = "/v1/gov/finalize#authority";
 const CONTEXT_GOV_PROTECTED_AUTHORITY: &str = "/v1/gov/protected-namespaces#authority";
 const CONTEXT_MINISTRY_AGENDA_DRAFT_AUTHORITY: &str =
     "/v1/ministry/agenda/proposals/draft#authority";
@@ -139,6 +139,7 @@ impl norito::core::DecodeFromSlice<'_> for AtWindowDto {
 }
 
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request body for proposing deployment of IVM bytecode via governance.
 ///
 /// All hashes are 32-byte hex, with or without `0x` prefix.
@@ -166,12 +167,6 @@ pub struct ProposeDeployContractDto {
     /// Optional manifest provenance (public key + signature over the manifest payload).
     #[norito(default)]
     pub manifest_provenance: Option<ManifestProvenance>,
-    /// Optional authority as canonical I105 or on-chain account alias.
-    #[norito(default)]
-    pub authority: Option<String>,
-    /// Legacy private key field; rejected when provided.
-    #[norito(default)]
-    pub private_key: Option<String>,
 }
 
 impl norito::core::NoritoSerialize for ProposeDeployContractDto {
@@ -299,6 +294,7 @@ pub enum MinistryAgendaProposalDraftOutcome {
 }
 
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request body for submitting a zero-knowledge ballot.
 pub struct ZkBallotDto {
     /// Authority as canonical I105 or on-chain account alias.
@@ -311,9 +307,6 @@ pub struct ZkBallotDto {
     /// Public inputs (opaque for now)
     #[norito(default)]
     pub public: Option<norito::json::Value>,
-    /// Optional private key to submit the ballot directly.
-    #[norito(default)]
-    pub private_key: Option<String>,
 }
 
 impl norito::core::NoritoSerialize for ZkBallotDto {
@@ -341,6 +334,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for ZkBallotDto {
 }
 
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request body for submitting a plain (non-ZK) quadratic ballot.
 pub struct PlainBallotDto {
     /// Authority as canonical I105 or on-chain account alias.
@@ -356,12 +350,10 @@ pub struct PlainBallotDto {
     pub duration_blocks: String,
     /// One of: "Aye" | "Nay" | "Abstain"
     pub direction: String,
-    /// Optional private key to submit the ballot directly.
-    #[norito(default)]
-    pub private_key: Option<String>,
 }
 
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request body for drafting an equal signed Parliament body ballot.
 pub struct ParliamentBallotDto {
     /// Authority as canonical I105 or on-chain account alias.
@@ -374,9 +366,6 @@ pub struct ParliamentBallotDto {
     pub body: ParliamentBody,
     /// Equal citizen decision.
     pub decision: ParliamentDecision,
-    /// Optional private key is rejected; clients must sign locally.
-    #[norito(default)]
-    pub private_key: Option<String>,
 }
 
 impl norito::core::NoritoSerialize for ParliamentBallotDto {
@@ -591,6 +580,7 @@ fn parse_canonical_u64_decimal(field: &str, value: &str) -> Result<u64, String> 
 
 // -------- ZK Ballot V1 DTO --------
 #[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request body for submitting a ZK ballot using BallotProof-style fields.
 pub struct ZkBallotV1Dto {
     /// Authority submitting the ballot (AccountId string)
@@ -620,32 +610,27 @@ pub struct ZkBallotV1Dto {
     /// Optional nullifier hint (hex-32, 0x allowed)
     #[norito(default)]
     pub nullifier: Option<String>,
-    /// Optional private key to submit the ballot directly.
-    #[norito(default)]
-    pub private_key: Option<String>,
 }
 
 #[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request body that carries a BallotProof directly along with transaction context.
 pub struct ZkBallotV1BallotProofDto {
     pub authority: String,
     pub chain_id: String,
     pub election_id: String,
     pub ballot: iroha_data_model::isi::governance::BallotProof,
-    #[norito(default)]
-    pub private_key: Option<String>,
 }
 
 /// POST /v1/gov/ballots/zk-v1 — accept BallotProof-like DTO and build an instruction skeleton.
 ///
-/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
+/// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` for invalid chain id or authority. Invalid payloads are
 /// reflected in the response body.
 pub async fn handle_gov_ballot_zk_v1(
     chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
     NoritoJsonWithBytes { value: body, raw }: NoritoJsonWithBytes<ZkBallotV1Dto>,
@@ -668,7 +653,7 @@ pub async fn handle_gov_ballot_zk_v1(
         }));
     }
     ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
-    let authority_id = parse_authority_literal(
+    let _authority_id = parse_authority_literal(
         state.as_ref(),
         body.authority.as_str(),
         &telemetry,
@@ -730,44 +715,24 @@ pub async fn handle_gov_ballot_zk_v1(
         proof_b64: body.envelope_b64,
         public_inputs_json,
     };
-    let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
-    let tx_instructions = vec![tx_instr_from_box(boxed)];
-    let submitted = maybe_submit_with_authority(
-        chain_id,
-        queue,
-        state,
-        telemetry,
-        &authority_id,
-        body.private_key.as_deref(),
-        core::iter::once(iroha_data_model::isi::InstructionBox::from(instr)),
-        "/v1/gov/ballots/zk-v1",
-    )
-    .await?;
+    let tx_instructions = vec![tx_instr_from_box(instr.into())];
     Ok(JsonBody(BallotSubmitResponse {
         ok: true,
         accepted: true,
-        reason: Some(
-            if submitted {
-                "submitted transaction"
-            } else {
-                "build transaction skeleton"
-            }
-            .to_string(),
-        ),
+        reason: Some("build transaction skeleton".to_string()),
         tx_instructions,
     }))
 }
 
 /// POST /v1/gov/ballots/zk-v1/ballot-proof — accept BallotProof JSON and build instruction skeleton.
 ///
-/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
+/// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` for invalid chain id or authority. Malformed payloads are
 /// reported via the response payload.
 pub async fn handle_gov_ballot_zk_v1_ballotproof(
     chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
     NoritoJsonWithBytes { value: body, raw }: NoritoJsonWithBytes<ZkBallotV1BallotProofDto>,
@@ -784,7 +749,7 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         }));
     }
     ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
-    let authority_id = parse_authority_literal(
+    let _authority_id = parse_authority_literal(
         state.as_ref(),
         body.authority.as_str(),
         &telemetry,
@@ -842,30 +807,11 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         proof_b64,
         public_inputs_json,
     };
-    let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
-    let tx_instructions = vec![tx_instr_from_box(boxed)];
-    let submitted = maybe_submit_with_authority(
-        chain_id,
-        queue,
-        state,
-        telemetry,
-        &authority_id,
-        body.private_key.as_deref(),
-        core::iter::once(iroha_data_model::isi::InstructionBox::from(instr)),
-        "/v1/gov/ballots/zk-v1/ballot-proof",
-    )
-    .await?;
+    let tx_instructions = vec![tx_instr_from_box(instr.into())];
     Ok(JsonBody(BallotSubmitResponse {
         ok: true,
         accepted: true,
-        reason: Some(
-            if submitted {
-                "submitted transaction"
-            } else {
-                "build transaction skeleton"
-            }
-            .to_string(),
-        ),
+        reason: Some("build transaction skeleton".to_string()),
         tx_instructions,
     }))
 }
@@ -1345,55 +1291,6 @@ fn parse_canonical_authority_literal(
     parse_authority_literal(state, trimmed, telemetry, context)
 }
 
-fn reject_server_side_signing(endpoint: &'static str) -> crate::Error {
-    crate::routing::conversion_error(format!(
-        "{endpoint} no longer accepts private_key payloads; submit a locally signed transaction instead"
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn maybe_submit_with_authority(
-    _chain_id: Arc<iroha_data_model::ChainId>,
-    _queue: Arc<iroha_core::queue::Queue>,
-    _state: Arc<iroha_core::state::State>,
-    _telemetry: MaybeTelemetry,
-    authority: &iroha_data_model::account::AccountId,
-    private_key: Option<&str>,
-    _instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
-    endpoint: &'static str,
-) -> Result<bool, crate::Error> {
-    let Some(_private_key) = private_key else {
-        return Ok(false);
-    };
-    let _ = authority;
-    Err(reject_server_side_signing(endpoint))
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn maybe_submit_optional_signer(
-    _chain_id: Arc<iroha_data_model::ChainId>,
-    _queue: Arc<iroha_core::queue::Queue>,
-    state: Arc<iroha_core::state::State>,
-    telemetry: MaybeTelemetry,
-    authority: Option<&str>,
-    private_key: Option<&str>,
-    authority_context: &'static str,
-    _instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
-    endpoint: &'static str,
-) -> Result<bool, crate::Error> {
-    match (authority, private_key) {
-        (None, None) => Ok(false),
-        (Some(_), None) | (None, Some(_)) => Err(crate::routing::conversion_error(
-            "authority and private_key must be provided together".into(),
-        )),
-        (Some(authority), Some(_private_key)) => {
-            let _authority_id =
-                parse_authority_literal(state.as_ref(), authority, &telemetry, authority_context)?;
-            Err(reject_server_side_signing(endpoint))
-        }
-    }
-}
-
 fn instruction_skeleton_for_propose(
     instr: &iroha_data_model::isi::governance::ProposeDeployContract,
 ) -> Vec<TxInstr> {
@@ -1412,30 +1309,14 @@ fn build_signable_transaction_b64(
     chain_id: &iroha_data_model::ChainId,
     authority: &iroha_data_model::account::AccountId,
     instructions: Vec<iroha_data_model::isi::InstructionBox>,
-) -> Result<String, crate::Error> {
-    let dummy_key_pair = iroha_crypto::KeyPair::try_from_seed(
-        b"torii-governance-signable-payload-dummy-signer-v1".to_vec(),
-        iroha_crypto::Algorithm::Ed25519,
-    )
-    .map_err(|err| {
-        crate::Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to derive governance signable-payload dummy signer: {err}"
-        )))
-    })?;
-    let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
+) -> String {
+    let builder = iroha_data_model::transaction::signed::TransactionBuilder::new(
         chain_id.clone(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
-    .with_instructions(instructions)
-    .try_sign(dummy_key_pair.private_key())
-    .map_err(|err| {
-        crate::Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "failed to build governance signable transaction payload: {err}"
-        )))
-    })?
-    .with_authority(authority.clone());
-    Ok(base64::engine::general_purpose::STANDARD.encode(tx.payload().encode()))
+    .with_instructions(instructions);
+    base64::engine::general_purpose::STANDARD.encode(builder.encode_payload())
 }
 
 fn canonical_hex32(value: &str, field: &str) -> Result<(String, [u8; 32]), crate::Error> {
@@ -1611,6 +1492,10 @@ pub struct ReferendumGetResponse {
 pub struct TallyGetResponse {
     /// Referendum id.
     pub referendum_id: String,
+    /// Committed block height whose state was used for the tally.
+    pub evaluated_block_height: u64,
+    /// Committed block hash whose state was used for the tally.
+    pub evaluated_block_hash: String,
     /// Approve votes.
     pub approve: u128,
     /// Reject votes.
@@ -1694,7 +1579,7 @@ pub async fn handle_gov_get_referendum(
 /// the fixed consensus tally domain, a PLAIN lock carries an invalid direction,
 /// or the referendum belongs to the validation-fee governance flow. Validation-fee
 /// callers must use the typed proposal-detail endpoint, which validates the frozen
-/// electorate and retained ballot rules. Missing records result in zeroed tallies.
+/// electorate and retained ballot rules. Missing referenda return `NotFound`.
 pub async fn handle_gov_get_tally(
     state: Arc<iroha_core::state::State>,
     id: axum::extract::Path<String>,
@@ -1721,18 +1606,34 @@ pub async fn handle_gov_get_tally(
              /v1/validation-fee/proposals/{typed_proposal_id} endpoint"
         )));
     }
+    let referendum = world
+        .governance_referenda()
+        .get(&rid)
+        .copied()
+        .ok_or_else(|| {
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    let evaluated_block_height = state.committed_height() as u64;
+    let evaluated_block_hash = match state.latest_block_hash_fast() {
+        Some(hash) => hex::encode(hash.as_ref()),
+        None if evaluated_block_height == 0 => hex::encode([0_u8; 32]),
+        None => {
+            return Err(crate::Error::Query(
+                iroha_data_model::ValidationFail::InternalError(
+                    "governance snapshot height has no committed block hash".to_owned(),
+                ),
+            ));
+        }
+    };
     let gov_cfg = state.gov.clone();
     // Mirror FinalizeReferendum tally logic without mutating state.
     let now_h = state.committed_height() as u64;
     let mut approve: u128 = 0;
     let mut reject: u128 = 0;
     let mut abstain: u128 = 0;
-    let mode = world
-        .governance_referenda()
-        .get(&rid)
-        .map(|rec| rec.mode)
-        .unwrap_or(iroha_core::state::GovernanceReferendumMode::Plain);
-    match mode {
+    match referendum.mode {
         iroha_core::state::GovernanceReferendumMode::Plain => {
             if let Some(locks) = world.governance_locks().get(&rid) {
                 let step = gov_cfg.conviction_step_blocks.max(1);
@@ -1783,6 +1684,8 @@ pub async fn handle_gov_get_tally(
     }
     Ok(JsonBody(TallyGetResponse {
         referendum_id: rid,
+        evaluated_block_height,
+        evaluated_block_hash,
         approve,
         reject,
         abstain,
@@ -1819,18 +1722,13 @@ fn integer_sqrt_u128(n: u128) -> u128 {
 }
 
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 /// Request body for finalizing a referendum
 pub struct FinalizeDto {
     /// Referendum identifier
     pub referendum_id: String,
     /// Proposal id (hex 64)
     pub proposal_id: String,
-    /// Optional authority as canonical I105 or on-chain account alias.
-    #[norito(default)]
-    pub authority: Option<String>,
-    /// Legacy private key field; rejected when provided.
-    #[norito(default)]
-    pub private_key: Option<String>,
 }
 
 #[derive(Debug, JsonSerialize)]
@@ -1844,15 +1742,11 @@ pub struct FinalizeResponse {
 
 /// Handler for finalizing a referendum (draft transaction).
 ///
-/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
+/// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when `proposal_id` is not 32-byte hex.
 pub async fn handle_gov_finalize(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
-    state: Arc<iroha_core::state::State>,
-    telemetry: MaybeTelemetry,
     NoritoJson(body): NoritoJson<FinalizeDto>,
 ) -> Result<JsonBody<FinalizeResponse>, crate::Error> {
     // Parse proposal id hex
@@ -1880,18 +1774,6 @@ pub async fn handle_gov_finalize(
     };
     let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
     let tx_instructions = vec![tx_instr_from_box(boxed)];
-    let _submitted = maybe_submit_optional_signer(
-        chain_id,
-        queue,
-        state,
-        telemetry,
-        body.authority.as_deref(),
-        body.private_key.as_deref(),
-        CONTEXT_GOV_FINALIZE_AUTHORITY,
-        core::iter::once(iroha_data_model::isi::InstructionBox::from(instr)),
-        iroha_torii_shared::uri::GOV_FINALIZE,
-    )
-    .await?;
     Ok(JsonBody(FinalizeResponse {
         ok: true,
         tx_instructions,
@@ -2119,7 +2001,7 @@ pub async fn handle_gov_protected_set(
             chain_id.as_ref(),
             &authority_id,
             vec![instruction],
-        )?)
+        ))
     } else {
         None
     };
@@ -2371,10 +2253,7 @@ pub async fn handle_gov_contract_get(
 /// Returns `crate::Error::Query` when the contract target, hashes, ABI version, or request
 /// options fail validation (e.g., malformed hex or unsupported voting mode).
 pub async fn handle_gov_propose_deploy(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
-    telemetry: MaybeTelemetry,
     NoritoJson(body): NoritoJson<ProposeDeployContractDto>,
 ) -> Result<JsonBody<ProposeDeployContractResponse>, crate::Error> {
     use iroha_data_model::isi::governance as gov;
@@ -2456,19 +2335,6 @@ pub async fn handle_gov_propose_deploy(
     let proposal_id_bytes =
         compute_proposal_id(&instr.contract_address, &code_hash_bytes, &abi_hash_bytes);
     let proposal_id = hex::encode(proposal_id_bytes);
-    let _submitted = maybe_submit_optional_signer(
-        chain_id,
-        queue,
-        state,
-        telemetry,
-        body.authority.as_deref(),
-        body.private_key.as_deref(),
-        CONTEXT_GOV_PROPOSE_DEPLOY_AUTHORITY,
-        core::iter::once(iroha_data_model::isi::InstructionBox::from(instr.clone())),
-        iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY,
-    )
-    .await?;
-
     Ok(JsonBody(ProposeDeployContractResponse {
         ok: true,
         proposal_id,
@@ -2478,7 +2344,7 @@ pub async fn handle_gov_propose_deploy(
 
 /// POST /v1/gov/proposals/sccp-route-governance — build a proposal id and instruction skeleton.
 ///
-/// Legacy `private_key` payloads are rejected; callers must submit locally
+/// The request schema excludes private signing material; callers submit locally
 /// signed transactions after building the draft instructions.
 ///
 /// # Errors
@@ -2567,7 +2433,7 @@ pub async fn handle_ministry_agenda_proposal_draft(
         chain_id.as_ref(),
         &authority_id,
         vec![iroha_data_model::isi::InstructionBox::from(instr)],
-    )?;
+    );
 
     Ok(MinistryAgendaProposalDraftOutcome::Draft(
         MinistryAgendaProposalDraftResponse {
@@ -2604,14 +2470,13 @@ pub async fn handle_ministry_agenda_proposal_get(
 
 /// POST /v1/gov/ballot/zk — accept a ZK ballot and build an instruction skeleton.
 ///
-/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
+/// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` for invalid chain id or authority. Invalid proofs result in an
 /// `ok = false` response.
 pub async fn handle_gov_ballot_zk(
     chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
     NoritoJson(body): NoritoJson<ZkBallotDto>,
@@ -2636,10 +2501,9 @@ pub async fn handle_gov_ballot_zk(
         election_id,
         proof_b64,
         public,
-        private_key,
     } = body;
     ensure_chain_id_matches(chain_id.as_ref(), &body_chain_id)?;
-    let authority_id = parse_authority_literal(
+    let _authority_id = parse_authority_literal(
         state.as_ref(),
         authority.as_str(),
         &telemetry,
@@ -2674,50 +2538,29 @@ pub async fn handle_gov_ballot_zk(
         proof_b64,
         public_inputs_json: norito::json::to_json(&public_inputs).unwrap_or_else(|_| "{}".into()),
     };
-    let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
-    let tx_instructions = vec![tx_instr_from_box(boxed)];
-    let submitted = maybe_submit_with_authority(
-        chain_id,
-        queue,
-        state,
-        telemetry,
-        &authority_id,
-        private_key.as_deref(),
-        core::iter::once(iroha_data_model::isi::InstructionBox::from(instr)),
-        iroha_torii_shared::uri::GOV_BALLOT_ZK,
-    )
-    .await?;
+    let tx_instructions = vec![tx_instr_from_box(instr.into())];
     Ok(JsonBody(BallotSubmitResponse {
         ok: true,
         accepted: true,
-        reason: Some(
-            if submitted {
-                "submitted transaction"
-            } else {
-                "build transaction skeleton"
-            }
-            .to_string(),
-        ),
+        reason: Some("build transaction skeleton".to_string()),
         tx_instructions,
     }))
 }
 
 /// POST /v1/gov/ballot/plain — accept a plain quadratic ballot and build an instruction skeleton.
 ///
-/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
+/// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the ballot fields fail validation (direction, authority,
 /// owner, amount parsing, or chain id mismatch).
 pub async fn handle_gov_ballot_plain(
     chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     NoritoJson(body): NoritoJson<PlainBallotDto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
     handle_gov_ballot_plain_with_policy(
         chain_id,
-        queue,
         state,
         NoritoJson(body),
         MaybeTelemetry::disabled(),
@@ -2729,7 +2572,6 @@ pub async fn handle_gov_ballot_plain(
 /// policy, enabling address parsing coverage across Torii and tests.
 pub async fn handle_gov_ballot_plain_with_policy(
     chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     NoritoJson(body): NoritoJson<PlainBallotDto>,
     telemetry: MaybeTelemetry,
@@ -2774,30 +2616,11 @@ pub async fn handle_gov_ballot_plain_with_policy(
             _ => 2,
         },
     };
-    let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
-    let tx_instructions = vec![tx_instr_from_box(boxed)];
-    let submitted = maybe_submit_with_authority(
-        chain_id,
-        queue,
-        state,
-        telemetry,
-        &authority_id,
-        body.private_key.as_deref(),
-        core::iter::once(iroha_data_model::isi::InstructionBox::from(instr)),
-        iroha_torii_shared::uri::GOV_BALLOT_PLAIN,
-    )
-    .await?;
+    let tx_instructions = vec![tx_instr_from_box(instr.into())];
     Ok(JsonBody(BallotSubmitResponse {
         ok: true,
         accepted: true,
-        reason: Some(
-            if submitted {
-                "submitted transaction"
-            } else {
-                "build transaction skeleton"
-            }
-            .to_string(),
-        ),
+        reason: Some("build transaction skeleton".to_string()),
         tx_instructions,
     }))
 }
@@ -2813,7 +2636,7 @@ pub async fn handle_gov_parliament_ballot(
     NoritoJson(body): NoritoJson<ParliamentBallotDto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
     ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
-    let authority_id = parse_account_literal_from_state(
+    let _authority_id = parse_account_literal_from_state(
         state.as_ref(),
         body.authority.as_str(),
         &telemetry,
@@ -2822,9 +2645,6 @@ pub async fn handle_gov_parliament_ballot(
     .map_err(|err| {
         crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
     })?;
-    if body.private_key.is_some() {
-        return Err(reject_server_side_signing("/v1/gov/parliament/ballots"));
-    }
     let (_proposal_hex, proposal_id) = canonical_hex32(&body.proposal_id, "proposal_id")?;
     let instr = iroha_data_model::isi::governance::CastParliamentBallot {
         body: body.body,
@@ -2832,7 +2652,6 @@ pub async fn handle_gov_parliament_ballot(
         decision: body.decision,
     };
     let tx_instructions = vec![tx_instr_from_box(instr.into())];
-    let _ = authority_id;
     Ok(JsonBody(BallotSubmitResponse {
         ok: true,
         accepted: true,
@@ -2907,7 +2726,7 @@ mod tests {
             State, World,
         },
     };
-    use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ChainId, Registrable,
         account::{Account, AccountId},
@@ -3483,8 +3302,6 @@ seiyaku GovernedReadFixture {
             mode: None,
             limits: Some(crate::json_object(vec![("max_pages", 64u64)])),
             manifest_provenance: None,
-            authority: None,
-            private_key: None,
         };
         let s = norito::json::to_json(&req).unwrap();
         let _: ProposeDeployContractDto = norito::json::from_str(&s).unwrap();
@@ -3575,22 +3392,14 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn finalize_builds_instruction_skeleton() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (_state, _queue, _chain_id) = mk_basic_context();
         let dto = FinalizeDto {
             referendum_id: "ref-xyz".to_string(),
             proposal_id: format!("0x{}", "aa".repeat(32)),
-            authority: None,
-            private_key: None,
         };
-        let res = handle_gov_finalize(
-            chain_id,
-            queue,
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(dto),
-        )
-        .await
-        .expect("handler ok");
+        let res = handle_gov_finalize(NoritoJson(dto))
+            .await
+            .expect("handler ok");
         let body = res.0;
         assert!(body.ok);
         assert_eq!(body.tx_instructions.len(), 1);
@@ -3600,7 +3409,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn propose_deploy_builds_instruction_skeleton() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, _chain_id) = mk_basic_context();
         let code_hash_input = format!("blake2b32:0X{}", "11".repeat(32));
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let abi_hash_input = format!("0x{}", hex::encode(canonical_abi));
@@ -3617,20 +3426,12 @@ seiyaku GovernedReadFixture {
             mode: Some("Zk".to_string()),
             limits: Some(norito::json::Value::Object(norito::json::Map::new())),
             manifest_provenance: None,
-            authority: None,
-            private_key: None,
         };
         let (code_hex, code_bytes) = super::canonical_hex32(&code_hash_input, "code_hash").unwrap();
         let (abi_hex, abi_bytes) = super::canonical_hex32(&abi_hash_input, "abi_hash").unwrap();
-        let res = handle_gov_propose_deploy(
-            chain_id,
-            queue,
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(dto),
-        )
-        .await
-        .expect("handler ok");
+        let res = handle_gov_propose_deploy(state, NoritoJson(dto))
+            .await
+            .expect("handler ok");
         let body = res.0;
         assert!(body.ok);
         assert_eq!(body.tx_instructions.len(), 1);
@@ -3779,9 +3580,46 @@ seiyaku GovernedReadFixture {
         }
     }
 
+    #[test]
+    fn governance_mutation_dtos_reject_retired_signing_fields_during_decode() {
+        macro_rules! assert_rejects_field {
+            ($field:literal; $($request:ty),+ $(,)?) => {
+                $(
+                    let error = norito::json::from_str::<$request>(
+                        concat!(r#"{"#, $field, r#"": "must-not-cross-torii"}"#),
+                    )
+                    .expect_err("retired signing field must fail JSON admission");
+                    let message = error.to_string();
+                    assert!(
+                        message.contains("unknown field") && message.contains($field),
+                        "{} admitted retired field `{}`: {message}",
+                        stringify!($request),
+                        $field,
+                    );
+                )+
+            };
+        }
+
+        assert_rejects_field!(
+            "private_key";
+            ProposeDeployContractDto,
+            ZkBallotDto,
+            PlainBallotDto,
+            ParliamentBallotDto,
+            ZkBallotV1Dto,
+            ZkBallotV1BallotProofDto,
+            FinalizeDto,
+        );
+        assert_rejects_field!(
+            "authority";
+            ProposeDeployContractDto,
+            FinalizeDto,
+        );
+    }
+
     #[tokio::test]
     async fn propose_deploy_rejects_unknown_mode() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, _chain_id) = mk_basic_context();
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let dto = ProposeDeployContractDto {
             contract_address: Some(sample_contract_address()),
@@ -3793,24 +3631,16 @@ seiyaku GovernedReadFixture {
             mode: Some("quadratic".to_string()),
             limits: Some(norito::json::Value::Object(norito::json::Map::new())),
             manifest_provenance: None,
-            authority: None,
-            private_key: None,
         };
-        let err = handle_gov_propose_deploy(
-            chain_id,
-            queue,
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(dto),
-        )
-        .await
-        .unwrap_err();
+        let err = handle_gov_propose_deploy(state, NoritoJson(dto))
+            .await
+            .unwrap_err();
         assert!(format!("{err:?}").contains("unsupported voting mode"));
     }
 
     #[tokio::test]
     async fn propose_deploy_rejects_mismatched_abi_hash() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, _chain_id) = mk_basic_context();
         let dto = ProposeDeployContractDto {
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
@@ -3821,18 +3651,10 @@ seiyaku GovernedReadFixture {
             mode: None,
             limits: Some(norito::json::Value::Object(norito::json::Map::new())),
             manifest_provenance: None,
-            authority: None,
-            private_key: None,
         };
-        let err = handle_gov_propose_deploy(
-            chain_id,
-            queue,
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(dto),
-        )
-        .await
-        .unwrap_err();
+        let err = handle_gov_propose_deploy(state, NoritoJson(dto))
+            .await
+            .unwrap_err();
         assert!(format!("{err:?}").contains("abi_hash does not match canonical hash"));
     }
 
@@ -3977,7 +3799,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_plain_builds_instruction_skeleton() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let canonical = canonical_literal(ACCOUNT_AUTHORITY);
         let chain_id_str = chain_id.as_str().to_string();
         // Build DTO via JSON to ensure serde shape is satisfied
@@ -3994,7 +3816,6 @@ seiyaku GovernedReadFixture {
             norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
         let res = handle_gov_ballot_plain_with_policy(
             chain_id,
-            queue,
             state,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
@@ -4009,7 +3830,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_plain_accepts_account_aliases() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let authority = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
             .expect("account parses")
             .into_account_id();
@@ -4028,7 +3849,6 @@ seiyaku GovernedReadFixture {
             norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
         let res = handle_gov_ballot_plain_with_policy(
             chain_id,
-            queue,
             state,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
@@ -4042,7 +3862,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_plain_rejects_authority_mismatch() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let canonical_authority = canonical_literal(ACCOUNT_AUTHORITY);
         let canonical_owner = canonical_literal(ACCOUNT_OWNER_ALT);
         let chain_id_str = chain_id.as_str().to_string();
@@ -4059,7 +3879,6 @@ seiyaku GovernedReadFixture {
             norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
         let err = handle_gov_ballot_plain_with_policy(
             chain_id,
-            queue,
             state,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
@@ -4072,7 +3891,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_plain_accepts_raw_public_key_literals() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let body = crate::json_object(vec![
             crate::json_entry("authority", ACCOUNT_AUTHORITY),
@@ -4087,7 +3906,6 @@ seiyaku GovernedReadFixture {
             norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
         handle_gov_ballot_plain_with_policy(
             chain_id,
-            queue,
             state,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
@@ -4098,7 +3916,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_zk_builds_instruction_skeleton() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         // minimal non-empty proof bytes
         let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
@@ -4108,17 +3926,11 @@ seiyaku GovernedReadFixture {
             election_id: "e1".to_string(),
             proof_b64,
             public: Some(norito::json::Value::Object(norito::json::Map::new())),
-            private_key: None,
         };
-        let res = handle_gov_ballot_zk(
-            chain_id,
-            queue,
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(dto),
-        )
-        .await
-        .expect("handler ok");
+        let res =
+            handle_gov_ballot_zk(chain_id, state, MaybeTelemetry::disabled(), NoritoJson(dto))
+                .await
+                .expect("handler ok");
         let body = res.0;
         assert!(body.ok);
         assert!(body.accepted);
@@ -4127,7 +3939,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_zk_rejects_non_object_public_inputs() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
         let dto = ZkBallotDto {
@@ -4136,17 +3948,11 @@ seiyaku GovernedReadFixture {
             election_id: "e1".to_string(),
             proof_b64,
             public: Some(norito::json::Value::String("oops".to_string())),
-            private_key: None,
         };
-        let res = handle_gov_ballot_zk(
-            chain_id,
-            queue,
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(dto),
-        )
-        .await
-        .expect("handler ok");
+        let res =
+            handle_gov_ballot_zk(chain_id, state, MaybeTelemetry::disabled(), NoritoJson(dto))
+                .await
+                .expect("handler ok");
         let body = res.0;
         assert!(!body.ok);
         assert!(!body.accepted);
@@ -4158,7 +3964,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_zk_rejects_partial_lock_hints() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
         let mut map = norito::json::Map::new();
@@ -4172,17 +3978,11 @@ seiyaku GovernedReadFixture {
             election_id: "e1".to_string(),
             proof_b64,
             public: Some(norito::json::Value::Object(map)),
-            private_key: None,
         };
-        let res = handle_gov_ballot_zk(
-            chain_id,
-            queue,
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(dto),
-        )
-        .await
-        .expect("handler ok");
+        let res =
+            handle_gov_ballot_zk(chain_id, state, MaybeTelemetry::disabled(), NoritoJson(dto))
+                .await
+                .expect("handler ok");
         let body = res.0;
         assert!(!body.ok);
         assert!(!body.accepted);
@@ -4194,7 +3994,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_zk_rejects_noncanonical_owner_hint() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
         let owner = noncanonical_literal(ACCOUNT_AUTHORITY);
@@ -4211,17 +4011,11 @@ seiyaku GovernedReadFixture {
             election_id: "e1".to_string(),
             proof_b64,
             public: Some(norito::json::Value::Object(map)),
-            private_key: None,
         };
-        let res = handle_gov_ballot_zk(
-            chain_id,
-            queue,
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(dto),
-        )
-        .await
-        .expect("handler ok");
+        let res =
+            handle_gov_ballot_zk(chain_id, state, MaybeTelemetry::disabled(), NoritoJson(dto))
+                .await
+                .expect("handler ok");
         let body = res.0;
         assert!(!body.ok);
         assert!(!body.accepted);
@@ -4233,7 +4027,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_zk_rejects_deprecated_public_inputs() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
         let mut map = norito::json::Map::new();
@@ -4247,17 +4041,11 @@ seiyaku GovernedReadFixture {
             election_id: "e1".to_string(),
             proof_b64,
             public: Some(norito::json::Value::Object(map)),
-            private_key: None,
         };
-        let res = handle_gov_ballot_zk(
-            chain_id,
-            queue,
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(dto),
-        )
-        .await
-        .expect("handler ok");
+        let res =
+            handle_gov_ballot_zk(chain_id, state, MaybeTelemetry::disabled(), NoritoJson(dto))
+                .await
+                .expect("handler ok");
         let body = res.0;
         assert!(!body.ok);
         assert!(!body.accepted);
@@ -4265,6 +4053,44 @@ seiyaku GovernedReadFixture {
             body.reason.as_deref(),
             Some("public inputs must use root_hint (unsupported key rootHint)")
         );
+    }
+
+    #[tokio::test]
+    async fn parliament_ballot_builds_instruction_skeleton() {
+        let (state, _queue, chain_id) = mk_basic_context();
+        let dto = ParliamentBallotDto {
+            authority: canonical_literal(ACCOUNT_AUTHORITY),
+            chain_id: chain_id.as_str().to_owned(),
+            proposal_id: "11".repeat(32),
+            body: ParliamentBody::PolicyJury,
+            decision: ParliamentDecision::Approve,
+        };
+
+        let response = handle_gov_parliament_ballot(
+            chain_id,
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(dto),
+        )
+        .await
+        .expect("valid Parliament ballot must draft")
+        .0;
+
+        assert!(response.ok);
+        assert!(response.accepted);
+        assert_eq!(
+            response.reason.as_deref(),
+            Some("build transaction skeleton")
+        );
+        assert_eq!(response.tx_instructions.len(), 1);
+        let instruction = decode_tx_instruction(&response.tx_instructions[0]);
+        let ballot = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::governance::CastParliamentBallot>()
+            .expect("exact Parliament ballot instruction");
+        assert_eq!(ballot.body, ParliamentBody::PolicyJury);
+        assert_eq!(ballot.proposal_id, [0x11; 32]);
+        assert_eq!(ballot.decision, ParliamentDecision::Approve);
     }
 
     #[test]
@@ -4370,6 +4196,33 @@ seiyaku GovernedReadFixture {
         let body = res.0;
         assert_eq!(body.approve, 9);
         assert_eq!(body.reject, 0);
+        assert_eq!(body.evaluated_block_hash.len(), 64);
+        assert!(
+            body.evaluated_block_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        );
+    }
+
+    #[tokio::test]
+    async fn gov_get_tally_rejects_missing_referendum() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let err = handle_gov_get_tally(
+            Arc::new(state),
+            axum::extract::Path("missing-referendum".to_owned()),
+        )
+        .await
+        .expect_err("a nonexistent referendum must not look like a zero tally");
+
+        assert!(matches!(
+            err,
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            ))
+        ));
     }
 
     #[tokio::test]
@@ -4828,18 +4681,10 @@ seiyaku GovernanceFlowFixture {
             mode: Some("Plain".to_string()),
             limits: None,
             manifest_provenance: Some(manifest_provenance),
-            authority: None,
-            private_key: None,
         };
-        let res = handle_gov_propose_deploy(
-            harness.chain_id.clone(),
-            harness.queue.clone(),
-            harness.state.clone(),
-            MaybeTelemetry::disabled(),
-            NoritoJson(propose),
-        )
-        .await
-        .expect("propose ok");
+        let res = handle_gov_propose_deploy(harness.state.clone(), NoritoJson(propose))
+            .await
+            .expect("propose ok");
         let proposal_id = res.0.proposal_id.clone();
         queue_instruction_skeleton(&harness, &res.0.tx_instructions);
         let mut height = 1_u64;
@@ -4907,11 +4752,9 @@ seiyaku GovernanceFlowFixture {
             amount: 100_u64.into(),
             duration_blocks: "10".to_owned(),
             direction: "Aye".to_string(),
-            private_key: None,
         };
         let ballot = handle_gov_ballot_plain_with_policy(
             harness.chain_id.clone(),
-            harness.queue.clone(),
             harness.state.clone(),
             NoritoJson(ballot),
             MaybeTelemetry::disabled(),
@@ -5034,18 +4877,10 @@ seiyaku GovernanceFlowFixture {
             mode: Some("Plain".to_string()),
             limits: None,
             manifest_provenance: Some(manifest_provenance),
-            authority: None,
-            private_key: None,
         };
-        let res = handle_gov_propose_deploy(
-            harness.chain_id.clone(),
-            harness.queue.clone(),
-            harness.state.clone(),
-            MaybeTelemetry::disabled(),
-            NoritoJson(propose),
-        )
-        .await
-        .expect("handler ok");
+        let res = handle_gov_propose_deploy(harness.state.clone(), NoritoJson(propose))
+            .await
+            .expect("handler ok");
         let proposal_id = res.0.proposal_id.clone();
         queue_instruction_skeleton(&harness, &res.0.tx_instructions);
         let errors = apply_queued_block_allow_errors(&harness.state, &harness.queue, 1);
@@ -5071,24 +4906,23 @@ seiyaku GovernanceFlowFixture {
         use http_body_util::BodyExt as _;
         use tower::ServiceExt as _;
 
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         // Route for zk-v1
-        let app = Router::new().route(
-            "/v1/gov/ballots/zk-v1",
-            post({
-                let state = state.clone();
-                let queue = queue.clone();
-                let chain_id = chain_id.clone();
-                move |body: crate::NoritoJsonWithBytes<super::ZkBallotV1Dto>| {
-                    let telemetry = MaybeTelemetry::disabled();
-                    async move {
-                        super::handle_gov_ballot_zk_v1(chain_id, queue, state, telemetry, body)
-                            .await
+        let app =
+            Router::new().route(
+                "/v1/gov/ballots/zk-v1",
+                post({
+                    let state = state.clone();
+                    let chain_id = chain_id.clone();
+                    move |body: crate::NoritoJsonWithBytes<super::ZkBallotV1Dto>| {
+                        let telemetry = MaybeTelemetry::disabled();
+                        async move {
+                            super::handle_gov_ballot_zk_v1(chain_id, state, telemetry, body).await
+                        }
                     }
-                }
-            }),
-        );
+                }),
+            );
 
         // Build DTO
         let owner = canonical_literal(ACCOUNT_AUTHORITY);
@@ -5104,7 +4938,6 @@ seiyaku GovernanceFlowFixture {
             duration_blocks: Some(200),
             direction: Some("Aye".to_string()),
             nullifier: Some(hex::encode([0x11u8; 32])),
-            private_key: None,
         };
         let req = http::Request::builder()
             .method("POST")
@@ -5135,7 +4968,7 @@ seiyaku GovernanceFlowFixture {
 
     #[tokio::test]
     async fn ballot_zk_v1_rejects_invalid_root_hint() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let dto = super::ZkBallotV1Dto {
             authority: ACCOUNT_AUTHORITY.to_string(),
@@ -5149,13 +4982,11 @@ seiyaku GovernanceFlowFixture {
             duration_blocks: None,
             direction: None,
             nullifier: None,
-            private_key: None,
         };
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let res = super::handle_gov_ballot_zk_v1(
             chain_id,
-            queue,
             state,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
@@ -5173,7 +5004,7 @@ seiyaku GovernanceFlowFixture {
 
     #[tokio::test]
     async fn ballot_zk_v1_rejects_partial_lock_hints() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let dto = super::ZkBallotV1Dto {
             authority: ACCOUNT_AUTHORITY.to_string(),
@@ -5187,13 +5018,11 @@ seiyaku GovernanceFlowFixture {
             duration_blocks: None,
             direction: None,
             nullifier: None,
-            private_key: None,
         };
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let res = super::handle_gov_ballot_zk_v1(
             chain_id,
-            queue,
             state,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
@@ -5211,7 +5040,7 @@ seiyaku GovernanceFlowFixture {
 
     #[tokio::test]
     async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
         let root_hint = hex::encode([0u8; 32]);
@@ -5227,7 +5056,6 @@ seiyaku GovernanceFlowFixture {
             duration_blocks: None,
             direction: None,
             nullifier: None,
-            private_key: None,
         };
         let root_hint_alias = root_hint.clone();
         let raw = Bytes::from(
@@ -5244,7 +5072,6 @@ seiyaku GovernanceFlowFixture {
         );
         let res = super::handle_gov_ballot_zk_v1(
             chain_id,
-            queue,
             state,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
@@ -5262,7 +5089,7 @@ seiyaku GovernanceFlowFixture {
 
     #[tokio::test]
     async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let owner = noncanonical_literal(ACCOUNT_AUTHORITY);
         let dto = super::ZkBallotV1Dto {
@@ -5277,13 +5104,11 @@ seiyaku GovernanceFlowFixture {
             duration_blocks: Some(200),
             direction: None,
             nullifier: None,
-            private_key: None,
         };
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let res = super::handle_gov_ballot_zk_v1(
             chain_id,
-            queue,
             state,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
@@ -5306,22 +5131,19 @@ seiyaku GovernanceFlowFixture {
         use iroha_data_model::isi::governance::BallotProof;
         use tower::ServiceExt as _;
 
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         // Route for zk-v1/ballot-proof
         let app = Router::new().route(
             "/v1/gov/ballots/zk-v1/ballot-proof",
             post({
                 let state = state.clone();
-                let queue = queue.clone();
                 let chain_id = chain_id.clone();
                 move |body: crate::NoritoJsonWithBytes<super::ZkBallotV1BallotProofDto>| {
                     let telemetry = MaybeTelemetry::disabled();
                     async move {
-                        super::handle_gov_ballot_zk_v1_ballotproof(
-                            chain_id, queue, state, telemetry, body,
-                        )
-                        .await
+                        super::handle_gov_ballot_zk_v1_ballotproof(chain_id, state, telemetry, body)
+                            .await
                     }
                 }
             }),
@@ -5348,7 +5170,6 @@ seiyaku GovernanceFlowFixture {
             chain_id: chain_id_str,
             election_id: "ref-1".to_string(),
             ballot,
-            private_key: None,
         };
         let req = http::Request::builder()
             .method("POST")
@@ -5381,7 +5202,7 @@ seiyaku GovernanceFlowFixture {
     async fn ballot_zk_v1_ballotproof_rejects_alias_keys_in_raw_json() {
         use iroha_data_model::isi::governance::BallotProof;
 
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
         let root_hint = hex::encode([0xAAu8; 32]);
@@ -5400,7 +5221,6 @@ seiyaku GovernanceFlowFixture {
             chain_id: chain_id_str.clone(),
             election_id: "ref-1".to_string(),
             ballot,
-            private_key: None,
         };
         let root_hint_alias = root_hint.clone();
         let raw = Bytes::from(
@@ -5419,7 +5239,6 @@ seiyaku GovernanceFlowFixture {
         );
         let res = super::handle_gov_ballot_zk_v1_ballotproof(
             chain_id,
-            queue,
             state,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
@@ -5439,7 +5258,7 @@ seiyaku GovernanceFlowFixture {
     async fn ballot_zk_v1_ballotproof_rejects_noncanonical_owner_hint_in_raw_json() {
         use iroha_data_model::isi::governance::BallotProof;
 
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
         let owner_canonical = canonical_literal(ACCOUNT_AUTHORITY);
@@ -5463,7 +5282,6 @@ seiyaku GovernanceFlowFixture {
             chain_id: chain_id_str.clone(),
             election_id: "ref-1".to_string(),
             ballot,
-            private_key: None,
         };
         let raw = Bytes::from(
             norito::json::to_vec(&norito::json!({
@@ -5482,7 +5300,6 @@ seiyaku GovernanceFlowFixture {
         );
         let res = super::handle_gov_ballot_zk_v1_ballotproof(
             chain_id,
-            queue,
             state,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
@@ -5502,7 +5319,7 @@ seiyaku GovernanceFlowFixture {
     async fn ballot_zk_v1_ballotproof_rejects_partial_lock_hints() {
         use iroha_data_model::isi::governance::BallotProof;
 
-        let (state, queue, chain_id) = mk_basic_context();
+        let (state, _queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let ballot = BallotProof {
             backend: "halo2/ipa".into(),
@@ -5523,13 +5340,11 @@ seiyaku GovernanceFlowFixture {
             chain_id: chain_id_str,
             election_id: "ref-1".to_string(),
             ballot,
-            private_key: None,
         };
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let res = super::handle_gov_ballot_zk_v1_ballotproof(
             chain_id,
-            queue,
             state,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },

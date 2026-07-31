@@ -24,8 +24,9 @@ fn vecdeque_unit_roundtrip() {
     }
 
     let bytes = to_bytes(&queue).expect("serialize VecDeque<()> with unit elements");
-    match decode_from_bytes::<VecDeque<()>>(&bytes) {
-        Ok(_) => panic!("VecDeque<()> should be rejected under canonical encoding"),
-        Err(err) => assert!(matches!(err, norito::Error::LengthMismatch)),
-    }
+    let decoded: VecDeque<()> =
+        decode_from_bytes(&bytes).expect("deserialize VecDeque<()> with unit elements");
+
+    assert_eq!(decoded, queue);
+    assert_eq!(decoded.len(), 4);
 }

@@ -1377,6 +1377,7 @@ mod tests {
             roster,
             quorum,
             nexus_amx_context_hash: Hash::new(b"pk2 finality verifier test nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,

@@ -43,7 +43,24 @@ function selectFixture(fixtures, name) {
   return match;
 }
 
-function assertUniqueFixtureIdentities(fixtures, { requireEncodedFile = false } = {}) {
+function requirePositiveFixtureTtl(record, context) {
+  if (!Object.prototype.hasOwnProperty.call(record, "time_to_live_ms")) {
+    throw new Error(`${context}.time_to_live_ms is required`);
+  }
+  const ttl = record.time_to_live_ms;
+  if (!Number.isSafeInteger(ttl)) {
+    throw new Error(`${context}.time_to_live_ms must be an integer`);
+  }
+  if (ttl <= 0) {
+    throw new Error(`${context}.time_to_live_ms must be positive`);
+  }
+  return ttl;
+}
+
+function assertUniqueFixtureIdentities(
+  fixtures,
+  { requireEncodedFile = false } = {},
+) {
   assert.ok(Array.isArray(fixtures), "fixture collection must be an array");
   const names = new Set();
   const encodedFiles = new Set();
@@ -52,9 +69,28 @@ function assertUniqueFixtureIdentities(fixtures, { requireEncodedFile = false } 
   const signedHashes = new Set();
   const signedBytesValues = new Set();
   for (const fixture of fixtures) {
-    assert.equal(typeof fixture?.name, "string", "fixture name must be a string");
-    assert.ok(!names.has(fixture.name), `duplicate fixture name: ${fixture.name}`);
+    assert.equal(
+      typeof fixture?.name,
+      "string",
+      "fixture name must be a string",
+    );
+    assert.ok(
+      !names.has(fixture.name),
+      `duplicate fixture name: ${fixture.name}`,
+    );
     names.add(fixture.name);
+    const descriptorTtl = requirePositiveFixtureTtl(fixture, fixture.name);
+    if (fixture.payload != null) {
+      const payloadTtl = requirePositiveFixtureTtl(
+        fixture.payload,
+        `${fixture.name}.payload`,
+      );
+      if (payloadTtl !== descriptorTtl) {
+        throw new Error(
+          `${fixture.name}: top-level and payload time_to_live_ms values must match`,
+        );
+      }
+    }
     if (requireEncodedFile) {
       assert.equal(
         typeof fixture.encoded_file,
@@ -122,7 +158,9 @@ function assertUniqueFixtureIdentities(fixtures, { requireEncodedFile = false } 
 
 function validateLoadedFixtureCollections() {
   assertUniqueFixtureIdentities(sourcePayloadFixtures);
-  assertUniqueFixtureIdentities(canonicalManifest.fixtures, { requireEncodedFile: true });
+  assertUniqueFixtureIdentities(canonicalManifest.fixtures, {
+    requireEncodedFile: true,
+  });
   assert.deepEqual(
     sourcePayloadFixtures.map(({ name }) => name).sort(),
     canonicalManifest.fixtures.map(({ name }) => name).sort(),
@@ -152,12 +190,12 @@ function compactLength(value) {
   return Buffer.from(output);
 }
 
-function signedTransactionHashHex(canonicalBareSignedTransaction) {
+function externalTransactionEntrypointHashHex(canonicalPayload) {
   return irohaHashHex(
     Buffer.concat([
       Buffer.alloc(4),
-      compactLength(canonicalBareSignedTransaction.length),
-      canonicalBareSignedTransaction,
+      compactLength(canonicalPayload.length),
+      canonicalPayload,
     ]),
   );
 }
@@ -165,6 +203,7 @@ function signedTransactionHashHex(canonicalBareSignedTransaction) {
 test("fixture collections reject duplicate names and encoded files before lookup", () => {
   const fixture = {
     name: "first",
+    time_to_live_ms: 100_000,
     encoded_file: "first.norito",
     payload_hash: "payload-hash",
     payload_base64: "AA==",
@@ -191,11 +230,67 @@ test("fixture collections reject duplicate names and encoded files before lookup
       assertUniqueFixtureIdentities(
         [
           fixture,
-          { ...fixture, name: "renamed-clone", encoded_file: "renamed-clone.norito" },
+          {
+            ...fixture,
+            name: "renamed-clone",
+            encoded_file: "renamed-clone.norito",
+          },
         ],
         { requireEncodedFile: true },
       ),
     /duplicate fixture payload_hash: payload-hash/,
+  );
+});
+
+test("fixture descriptors require explicit matching positive TTL", () => {
+  const fixture = {
+    name: "ttl-fixture",
+    time_to_live_ms: 100_000,
+    payload: { time_to_live_ms: 100_000 },
+    payload_hash: "payload-hash",
+    payload_base64: "AA==",
+    signed_hash: "signed-hash",
+    signed_base64: "AQ==",
+  };
+  assert.doesNotThrow(() => assertUniqueFixtureIdentities([fixture]));
+
+  for (const [invalid, diagnostic] of [
+    [null, /time_to_live_ms must be an integer/],
+    [0, /time_to_live_ms must be positive/],
+  ]) {
+    assert.throws(
+      () =>
+        assertUniqueFixtureIdentities([
+          { ...fixture, time_to_live_ms: invalid },
+        ]),
+      diagnostic,
+    );
+    assert.throws(
+      () =>
+        assertUniqueFixtureIdentities([
+          { ...fixture, payload: { time_to_live_ms: invalid } },
+        ]),
+      diagnostic,
+    );
+  }
+
+  const missingDescriptorTtl = { ...fixture };
+  delete missingDescriptorTtl.time_to_live_ms;
+  assert.throws(
+    () => assertUniqueFixtureIdentities([missingDescriptorTtl]),
+    /time_to_live_ms is required/,
+  );
+  const missingPayloadTtl = { ...fixture, payload: {} };
+  assert.throws(
+    () => assertUniqueFixtureIdentities([missingPayloadTtl]),
+    /time_to_live_ms is required/,
+  );
+  assert.throws(
+    () =>
+      assertUniqueFixtureIdentities([
+        { ...fixture, payload: { time_to_live_ms: 99_999 } },
+      ]),
+    /time_to_live_ms values must match/,
   );
 });
 
@@ -235,7 +330,7 @@ test("fixture base64 hashes match manifest", () => {
       `${fixture.name}: signed length mismatch`,
     );
     assert.equal(
-      signedTransactionHashHex(signedBytes),
+      externalTransactionEntrypointHashHex(payloadBytes),
       fixture.signed_hash,
       `${fixture.name}: signed hash mismatch`,
     );
@@ -262,8 +357,15 @@ test("source payload metadata matches canonical manifest metadata", () => {
     );
 
     const payload = sourceFixture.payload;
-    assert.ok(payload, `${fixture.name}: source fixture is missing payload metadata`);
-    assert.equal(payload.chain, fixture.chain, `${fixture.name}: chain mismatch`);
+    assert.ok(
+      payload,
+      `${fixture.name}: source fixture is missing payload metadata`,
+    );
+    assert.equal(
+      payload.chain,
+      fixture.chain,
+      `${fixture.name}: chain mismatch`,
+    );
     assert.equal(
       payload.authority,
       fixture.authority,
@@ -275,8 +377,8 @@ test("source payload metadata matches canonical manifest metadata", () => {
       `${fixture.name}: creation_time_ms mismatch`,
     );
     assert.equal(
-      payload.time_to_live_ms ?? null,
-      fixture.time_to_live_ms ?? null,
+      payload.time_to_live_ms,
+      fixture.time_to_live_ms,
       `${fixture.name}: time_to_live_ms mismatch`,
     );
     assert.equal(
@@ -290,8 +392,15 @@ test("source payload metadata matches canonical manifest metadata", () => {
 test("burn_asset fixture retains the expected burn wire payload", () => {
   const burnFixture = selectFixture(sourcePayloadFixtures, "burn_asset");
   const instructions = burnFixture.payload?.executable?.Instructions;
-  assert.ok(Array.isArray(instructions), "burn_asset payload must carry wire instructions");
-  assert.equal(instructions.length, 1, "burn_asset fixture should contain exactly one instruction");
+  assert.ok(
+    Array.isArray(instructions),
+    "burn_asset payload must carry wire instructions",
+  );
+  assert.equal(
+    instructions.length,
+    1,
+    "burn_asset fixture should contain exactly one instruction",
+  );
   assert.equal(instructions[0].wire_name, "iroha.burn");
   assert.equal(typeof instructions[0].payload_base64, "string");
   assert.ok(

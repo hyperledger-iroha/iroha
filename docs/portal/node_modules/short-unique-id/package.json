@@ -1,0 +1,68 @@
+{
+  "name": "short-unique-id",
+  "version": "5.3.2",
+  "description": "Generate random or sequential UUID of any length",
+  "keywords": [
+    "short",
+    "random",
+    "uid",
+    "uuid",
+    "guid",
+    "node",
+    "unique id",
+    "generator",
+    "tiny"
+  ],
+  "bin": {
+    "short-unique-id": "bin/short-unique-id",
+    "suid": "bin/short-unique-id"
+  },
+  "main": "dist/short-unique-id.js",
+  "types": "dist/short-unique-id.d.ts",
+  "homepage": "https://shortunique.id",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jeanlescure/short-unique-id"
+  },
+  "license": "Apache-2.0",
+  "runkitExampleFilename": "./runkit.js",
+  "scripts": {
+    "types:check": "tsc --noEmit",
+    "test": "tsx ./src/test.ts",
+    "test:all": "npm run build && tsc --noEmit --project ./specs/esm/tsconfig.json && tsx ./specs/esm/import.spec.ts && node ./specs/cjs/require.spec.js && npm run test",
+    "build": "./scripts/build && tsc --noEmit ./dist/short-unique-id.d.ts",
+    "docs": "./scripts/docs",
+    "release": "release-it"
+  },
+  "release-it": {
+    "git": {
+      "changelog": "auto-changelog --stdout -l false -u -t ./assets/changelog-compact.hbs"
+    },
+    "hooks": {
+      "after:bump": "./scripts/release"
+    },
+    "npm": {
+      "publish": false
+    }
+  },
+  "files": [
+    "bin",
+    "dist",
+    "runkit.js",
+    "package.json"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.13.13",
+    "auto-changelog": "^2.5.0",
+    "esbuild": "^0.25.1",
+    "refup": "^1.1.0",
+    "release-it": "^18.1.2",
+    "tslib": "^2.8.1",
+    "tsx": "^4.19.3",
+    "typedoc": "^0.25.13",
+    "typedoc-plugin-extras": "^3.0.0",
+    "typedoc-plugin-rename-defaults": "^0.7.0",
+    "typedoc-plugin-script-inject": "^2.0.0",
+    "typescript": "^5.8.2"
+  }
+}

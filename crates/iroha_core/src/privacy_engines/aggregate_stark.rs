@@ -20,6 +20,7 @@ use chacha20poly1305::{
     aead::{Aead as _, KeyInit as _, Payload},
 };
 use rand::TryRngCore;
+use rayon::prelude::*;
 #[cfg(target_os = "linux")]
 use rustix::fs::{MemfdFlags, SealFlags, fcntl_get_seals, memfd_create};
 use sha2::{Digest as _, Sha256};
@@ -43,6 +44,9 @@ const FRI_MASK_NODE_DOMAIN_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-
 const FRI_MASK_ROOT_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:fri-mask-oracle-root:v1";
 const DEEP_POINT_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:deep-point:v1";
 const DEEP_OPENINGS_LABEL_V1: &[u8] = b"iroha:privacy:aggregate-stark:deep-openings:v1";
+/// Exact maximum number of independent masked-trace LDE columns retained
+/// concurrently by one deterministic parallel batch.
+pub(crate) const MASKED_TRACE_LDE_COLUMN_BATCH_V1: usize = 8;
 /// Shared aggregate-STARK failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum AggregateStarkErrorV1 {
@@ -1678,6 +1682,14 @@ pub(crate) struct StreamingTraceMaskSetV1 {
 /// every return path.
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
 
+impl ZeroizingFieldColumnV1 {
+    /// Transfer ownership to another zeroizing container without duplicating
+    /// the secret-bearing allocation.
+    pub(super) fn into_vec_v1(mut self) -> Vec<F> {
+        core::mem::take(&mut self.0)
+    }
+}
+
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];
 
@@ -2027,16 +2039,29 @@ where
             masked_trace_coefficients_with_mask_v1(&native, native_trace_log2, mask.coefficients())
                 .map_err(map_transparent_error_v1)?,
         );
-        let evaluations = ZeroizingFieldColumnV1(
-            masked_trace_coefficients_on_coset_v1(
-                &coefficients,
-                native_trace_log2,
-                commitment_lde_log2,
-            )
-            .map_err(map_transparent_error_v1)?,
-        );
-        commitment.absorb_column(&evaluations)?;
         columns.push(coefficients);
+    }
+    // The profile's eight-column batch is a memory ceiling as well as a
+    // throughput choice. Coefficients and masks are sampled serially above,
+    // preserving the byte-exact transcript, while independent LDEs within
+    // each bounded batch use the release runner's fixed Rayon pool. Roots are
+    // still absorbed in canonical column order.
+    for batch in columns.chunks(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+        let evaluations = batch
+            .par_iter()
+            .map(|coefficients| {
+                masked_trace_coefficients_on_coset_v1(
+                    coefficients,
+                    native_trace_log2,
+                    commitment_lde_log2,
+                )
+                .map(ZeroizingFieldColumnV1)
+                .map_err(map_transparent_error_v1)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for evaluation in &evaluations {
+            commitment.absorb_column(evaluation)?;
+        }
     }
     let polynomials = MaskedTracePolynomialSetV1 {
         native_trace_log2,
@@ -2068,10 +2093,19 @@ pub(crate) fn replay_masked_trace_polynomial_columns_v1(
         polynomials.width(),
         opening_indices,
     )?;
-    for column in 0..polynomials.width() {
-        let evaluations =
-            polynomials.evaluate_column_on_coset_v1(column, polynomials.commitment_lde_log2)?;
-        commitment.absorb_column(&evaluations)?;
+    for batch_start in (0..polynomials.width()).step_by(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+        let batch_end = batch_start
+            .checked_add(MASKED_TRACE_LDE_COLUMN_BATCH_V1)
+            .map_or(polynomials.width(), |end| end.min(polynomials.width()));
+        let evaluations = (batch_start..batch_end)
+            .into_par_iter()
+            .map(|column| {
+                polynomials.evaluate_column_on_coset_v1(column, polynomials.commitment_lde_log2)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for evaluation in &evaluations {
+            commitment.absorb_column(evaluation)?;
+        }
     }
     commitment.finish()
 }
@@ -5873,6 +5907,10 @@ pub(crate) fn verify_opened_query_relations_with_deep_v1<
 }
 
 #[cfg(test)]
+#[path = "aggregate_stark/retained_polynomial_tests.rs"]
+mod retained_polynomial_tests;
+
+#[cfg(test)]
 mod tests {
     use rand::{SeedableRng as _, rngs::StdRng};
 
@@ -7148,81 +7186,6 @@ mod tests {
             evaluate_masked_trace_polynomial_columns_at_deep_v1(&polynomials, E::ONE),
             Err(AggregateStarkErrorV1::DeepOpening)
         );
-    }
-
-    #[test]
-    fn retained_polynomial_commitment_rejects_before_witness_source_work() {
-        fn reject_before_source(
-            leaf_domain: &[u8],
-            node_domain: &'static [u8],
-            group: usize,
-            native_log2: u8,
-            lde_log2: u8,
-            width: usize,
-            mask_degree: usize,
-            indices: &[usize],
-        ) {
-            let calls = std::cell::Cell::new(0_usize);
-            let mut rng = StdRng::from_seed([0xD2; 32]);
-            assert_eq!(
-                commit_masked_trace_polynomial_columns_v1(
-                    leaf_domain,
-                    node_domain,
-                    group,
-                    native_log2,
-                    lde_log2,
-                    width,
-                    mask_degree,
-                    indices,
-                    &mut rng,
-                    |_| {
-                        calls.set(calls.get() + 1);
-                        Ok(vec![F::ZERO; 8])
-                    },
-                )
-                .map(|_| ()),
-                Err(AggregateStarkErrorV1::InvalidLayout)
-            );
-            assert_eq!(
-                calls.get(),
-                0,
-                "shape and commitment allocation preflight precede source work"
-            );
-        }
-
-        reject_before_source(b"", b"node", 0, 3, 6, 2, 3, &[]);
-        reject_before_source(b"leaf", b"", 0, 3, 6, 2, 3, &[]);
-        reject_before_source(b"leaf", b"node", 0, 3, 3, 2, 3, &[]);
-        reject_before_source(b"leaf", b"node", 0, 3, 6, 0, 3, &[]);
-        reject_before_source(b"leaf", b"node", 0, 3, 6, 2, 56, &[]);
-        reject_before_source(b"leaf", b"node", 0, 3, 6, 2, 3, &[1, 1]);
-        reject_before_source(b"leaf", b"node", 0, 3, 6, 2, 3, &[2, 1]);
-        reject_before_source(b"leaf", b"node", 0, 3, 6, 2, 3, &[64]);
-        reject_before_source(b"leaf", b"node", usize::from(u16::MAX) + 1, 3, 6, 2, 3, &[]);
-        reject_before_source(b"leaf", b"node", 0, 3, 6, usize::from(u16::MAX) + 1, 3, &[]);
-
-        let calls = std::cell::Cell::new(0_usize);
-        let mut rng = StdRng::from_seed([0xD3; 32]);
-        assert_eq!(
-            commit_masked_trace_polynomial_columns_v1(
-                b"leaf",
-                b"node",
-                0,
-                3,
-                6,
-                2,
-                3,
-                &[],
-                &mut rng,
-                |_| {
-                    calls.set(calls.get() + 1);
-                    Ok(vec![F::ZERO; 7])
-                },
-            )
-            .map(|_| ()),
-            Err(AggregateStarkErrorV1::InvalidLayout)
-        );
-        assert_eq!(calls.get(), 1, "malformed first column stops immediately");
     }
 
     #[test]

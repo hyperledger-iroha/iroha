@@ -1093,7 +1093,7 @@ internal static class SccpSubmitValidation
         }
     }
 
-    private static byte[] RequireCanonicalAuthority(ReadOnlySpan<byte> payload)
+    internal static byte[] RequireCanonicalAuthority(ReadOnlySpan<byte> payload)
     {
         var cursor = new CompactTransactionCursor(payload);
         var controllerTag = cursor.TakeUInt32("authority.controller");
@@ -1604,6 +1604,9 @@ internal static class SccpSubmitValidation
         }
     }
 
+    internal static void RequireEmptyTransactionMetadata(ReadOnlySpan<byte> payload) =>
+        RequireCanonicalMetadata(payload);
+
     private static void RequireCanonicalFeePayment(
         ReadOnlySpan<byte> payload,
         FeePaymentIntent? expectedFeePayment = null)
@@ -1698,6 +1701,10 @@ internal static class SccpSubmitValidation
                 "SCCP transaction fee_payment changed the expected payer, sponsor revision, or gas bound.");
         }
     }
+
+    internal static void RequireCanonicalTransactionFeePayment(
+        ReadOnlySpan<byte> payload) =>
+        RequireCanonicalFeePayment(payload);
 
     private static void RequireCanonicalFeeChargeLimits(ReadOnlySpan<byte> payload)
     {

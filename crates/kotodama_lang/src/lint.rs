@@ -16,7 +16,7 @@ use iroha_data_model::{
 };
 
 use super::ast::{Block, Expr, Item, Pattern, PatternBinding, Program, Statement};
-use crate::builtins::{Builtin, PointerConstructor};
+use crate::builtins::{Builtin, BuiltinSurface, PointerConstructor};
 use crate::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
 use crate::pointer_abi::{self, PointerType};
 
@@ -923,14 +923,40 @@ fn is_literal_state_key(expr: &Expr) -> bool {
     }
 }
 
+fn is_literal_state_base_name(expr: &Expr) -> bool {
+    let Expr::Call { name, args, .. } = expr.kind() else {
+        return false;
+    };
+    matches!(
+        Builtin::from_source_name(name),
+        Some(Builtin::PointerConstructor(PointerConstructor::Name))
+    ) && args.len() == 1
+        && args
+            .first()
+            .is_some_and(|argument| matches!(argument.kind(), Expr::String(_) | Expr::Bytes(_)))
+}
+
 fn is_literal_state_path(expr: &Expr) -> bool {
     match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
             unreachable!("kind() strips provenance wrappers")
         }
-        Expr::String(_) | Expr::Bytes(_) => true,
-        Expr::Call { name, args, .. } => match Builtin::from_source_name(name) {
-            Some(Builtin::PointerConstructor(PointerConstructor::Name)) => {
+        Expr::Call {
+            name,
+            args,
+            implicit_receiver,
+            ..
+        } => match if *implicit_receiver {
+            Builtin::from_name(name).filter(|builtin| {
+                matches!(
+                    builtin.surface(),
+                    BuiltinSurface::MethodOnly | BuiltinSurface::FunctionOrMethod
+                )
+            })
+        } else {
+            Builtin::from_source_name(name)
+        } {
+            Some(Builtin::PointerConstructor(PointerConstructor::NoritoBytes)) => {
                 args.len() == 1
                     && args.first().is_some_and(|argument| {
                         matches!(argument.kind(), Expr::String(_) | Expr::Bytes(_))
@@ -940,7 +966,7 @@ fn is_literal_state_path(expr: &Expr) -> bool {
                 if args.len() != 2 {
                     return false;
                 }
-                is_literal_state_path(&args[0])
+                is_literal_state_base_name(&args[0])
                     && (matches!(args[1].kind(), Expr::IntLiteral(_))
                         || is_literal_state_key(&args[1]))
             }
@@ -2418,10 +2444,8 @@ fn main(Name k) { let _x = Foo.get(k); }"#,
     #[test]
     fn lint_nonliteral_state_path_warns() {
         for call in ["state::get(p)", "state::set(p, 1)", "state::delete(p)"] {
-            let program = parse(&format!(
-                "fn main() {{ let p = Name::parse(\"foo\"); {call}; }}"
-            ))
-            .expect("parse state path");
+            let program =
+                parse(&format!("fn main(bytes p) {{ {call}; }}")).expect("parse state path");
             let warnings = lint_program(&program);
             assert!(
                 warnings.iter().any(|w| w.code == "nonliteral-state-path"),
@@ -2433,9 +2457,9 @@ fn main(Name k) { let _x = Foo.get(k); }"#,
     #[test]
     fn lint_literal_state_path_is_silent() {
         for call in [
-            "state::get(Name::parse(\"foo\"))",
-            "state::set(Name::parse(\"foo\"), 1)",
-            "state::delete(Name::parse(\"foo\"))",
+            "state::get(Name::parse(\"foo\").path(1))",
+            "state::set(Name::parse(\"foo\").path(1), b\"value\")",
+            "state::delete(Name::parse(\"foo\").path(1))",
         ] {
             let program = parse(&format!("fn main() {{ {call}; }}")).expect("parse state path");
             let warnings = lint_program(&program);

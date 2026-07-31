@@ -46,7 +46,6 @@ mod model {
     )]
     #[allow(clippy::multiple_inherent_impl)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
-    #[cfg_attr(feature = "json", norito(transparent))]
     #[repr(transparent)]
     #[getset(get = "pub")]
     pub struct Executor {
@@ -156,7 +155,7 @@ mod model {
             /// Contained error message if its used internally. Empty for external users.
             /// Never serialized to not to expose internal errors to the end user.
             #[codec(skip)]
-            #[cfg_attr(feature = "json", norito(with = crate::json_helpers::secret_string))]
+            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::secret_string"))]
             #[skip_from]
             #[skip_try_from]
             String,

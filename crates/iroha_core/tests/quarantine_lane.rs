@@ -6,11 +6,20 @@
 use std::{borrow::Cow, sync::Arc};
 
 use iroha_core::{
-    block::{self, BlockBuilder},
-    governance::manifest::LaneManifestRegistry,
-    state::StateReadOnly,
+    block::BlockBuilder, governance::manifest::LaneManifestRegistry, state::StateReadOnly,
 };
 use iroha_data_model::prelude::*;
+
+fn quarantine_metadata() -> Metadata {
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "quarantine"
+            .parse()
+            .expect("canonical quarantine metadata key"),
+        true,
+    );
+    metadata
+}
 
 #[test]
 fn quarantine_overflow_rejects_one_tx() {
@@ -35,22 +44,16 @@ fn quarantine_overflow_rejects_one_tx() {
     let mut cfg = state.view().pipeline().clone();
     cfg.quarantine_max_txs_per_block = 1;
     cfg.quarantine_tx_max_cycles = 0;
-    cfg.quarantine_tx_max_millis = 0;
     state.set_pipeline(cfg);
 
-    // Install a simple deterministic classifier that marks all txs as quarantine.
-    fn classify_all(_: &iroha_data_model::transaction::SignedTransaction) -> bool {
-        true
-    }
-    block::set_quarantine_classifier(Some(classify_all));
-
-    // Build two simple log transactions signed by the authority.
+    // Build two transactions whose signed metadata opts into the quarantine lane.
     let tx1 = TransactionBuilder::new(
         chain_id.clone(),
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "q1".to_string())])
+    .with_metadata(quarantine_metadata())
     .sign(kp.private_key());
     let tx2 = TransactionBuilder::new(
         chain_id.clone(),
@@ -58,6 +61,7 @@ fn quarantine_overflow_rejects_one_tx() {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "q2".to_string())])
+    .with_metadata(quarantine_metadata())
     .sign(kp.private_key());
 
     // Convert into accepted txs and build a block with both.
@@ -74,9 +78,6 @@ fn quarantine_overflow_rejects_one_tx() {
         .validate_and_record_transactions(&mut sb)
         .unpack(|_| {});
     let _ = sb.commit();
-
-    // Clear the classifier to avoid cross-test contamination.
-    block::set_quarantine_classifier(None);
 
     // Inspect results: exactly one Approved and one Validation(NotPermitted("quarantine overflow"))
     let block = vb.as_ref();

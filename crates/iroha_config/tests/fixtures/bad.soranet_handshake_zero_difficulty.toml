@@ -1,0 +1,4 @@
+extends = "minimal_with_trusted_peers.toml"
+
+[network.soranet_handshake.pow]
+difficulty = 0

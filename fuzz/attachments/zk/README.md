@@ -5,13 +5,15 @@ This directory contains small, ready-to-use samples for the ZK app API commands 
 Files
 - `vk_register.json` — JSON body for `iroha zk vk register --json vk_register.json` (uses base64 `AQID`, i.e. `[1,2,3]`)
 - `vk_update.json` — JSON body for `iroha zk vk update --json vk_update.json`
-- `vk_deprecate.json` — JSON body for `iroha zk vk deprecate --json vk_deprecate.json`
 - `proof.json` — tiny JSON proof-like payload for attachments upload
 - `zk1_min.b64` — base64 of a minimal ZK1 Norito envelope (4 bytes: `ZK1\0`)
 
 Commands (examples)
 
-1) Verifying Key registry (register/update/deprecate)
+1) Verifying Key registry (register/update)
+
+The active client configuration supplies the signing account and private key. VK JSON files contain
+only public registry data.
 
 ```bash
 # Register (uses vk_bytes as base64 placeholder)
@@ -19,9 +21,6 @@ iroha zk vk register --json vk_register.json
 
 # Update (version must increase)
 iroha zk vk update --json vk_update.json
-
-# Deprecate (marks as Deprecated; retained up to per‑backend cap)
-iroha zk vk deprecate --json vk_deprecate.json
 
 # Read a VK record
 iroha zk vk get --backend halo2/ipa --name vk_add

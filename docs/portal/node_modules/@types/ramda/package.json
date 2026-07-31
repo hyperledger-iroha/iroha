@@ -1,0 +1,56 @@
+{
+    "name": "@types/ramda",
+    "version": "0.30.2",
+    "description": "TypeScript definitions for ramda",
+    "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/ramda",
+    "license": "MIT",
+    "contributors": [
+        {
+            "name": "Harris Miller",
+            "githubUsername": "harris-miller",
+            "url": "https://github.com/harris-miller"
+        },
+        {
+            "name": "Nicholai Nissen",
+            "githubUsername": "Nicholaiii",
+            "url": "https://github.com/Nicholaiii"
+        },
+        {
+            "name": "Kevin Wallace",
+            "githubUsername": "kedashoe",
+            "url": "https://github.com/kedashoe"
+        },
+        {
+            "name": "Wang Zengdi",
+            "githubUsername": "adispring",
+            "url": "https://github.com/adispring"
+        }
+    ],
+    "main": "",
+    "types": "index.d.ts",
+    "exports": {
+        ".": {
+            "require": "./src/index.js",
+            "import": "./es/index.js",
+            "default": "./src/index.js"
+        },
+        "./es/*": "./es/*.js",
+        "./src/*": "./src/*.js",
+        "./dist/*": "./dist/*.js",
+        "./es/": "./es/",
+        "./src/": "./src/",
+        "./dist/": "./dist/",
+        "./package.json": "./package.json"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+        "directory": "types/ramda"
+    },
+    "scripts": {},
+    "dependencies": {
+        "types-ramda": "^0.30.1"
+    },
+    "typesPublisherContentHash": "d47191124087c1581b55fef0239f371af7615e90dee29ef4ddd56b51f48dd013",
+    "typeScriptVersion": "4.8"
+}

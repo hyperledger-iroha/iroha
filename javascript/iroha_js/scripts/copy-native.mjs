@@ -1998,6 +1998,43 @@ function publishStagedPair({
   return published;
 }
 
+function assertBuildSourceMatchesCurrent(
+  buildProvenance,
+  sourceState,
+  { phase = "publication" } = {},
+) {
+  if (
+    sourceState.sourceGitRevision !== buildProvenance.source_git_revision
+  ) {
+    throw new Error(
+      `Native build provenance does not match the current source revision during ${phase}.`,
+    );
+  }
+  if (sourceState.sourceTreeClean !== buildProvenance.source_tree_clean) {
+    throw new Error(
+      "Native publication requires build provenance and current source to be clean for release profiles or identically dirty for a debug build.",
+    );
+  }
+  const currentDigest = sourceState.sourceTreeSha256;
+  if (
+    sourceState.sourceTreeClean === false &&
+    (typeof currentDigest !== "string" ||
+      currentDigest !== buildProvenance.source_tree_sha256)
+  ) {
+    throw new Error(
+      `Native build provenance does not match the exact dirty source tree during ${phase}.`,
+    );
+  }
+  if (
+    currentDigest !== undefined &&
+    currentDigest !== buildProvenance.source_tree_sha256
+  ) {
+    throw new Error(
+      `Native build provenance does not match the exact source tree during ${phase}.`,
+    );
+  }
+}
+
 /**
  * Stage, authenticate, probe, and transactionally publish one native binding.
  * The source and destination must be on the same machine; staging occurs in
@@ -2065,19 +2102,13 @@ export async function publishNativeBinding({
     throw new Error("Native build provenance Cargo profile does not match publication.");
   }
   const publicationSource = readSourceState(repoRoot);
+  assertBuildSourceMatchesCurrent(buildProvenance, publicationSource);
   if (
-    buildProvenance.source_tree_clean !== true ||
-    publicationSource.sourceTreeClean !== true
+    cargoProfile !== "debug" &&
+    buildProvenance.source_tree_clean !== true
   ) {
     throw new Error(
-      "Native publication requires build provenance and current source to be clean.",
-    );
-  }
-  if (
-    publicationSource.sourceGitRevision !== buildProvenance.source_git_revision
-  ) {
-    throw new Error(
-      "Native build provenance does not match the current source revision.",
+      "Native release publication requires build provenance and current source to be clean.",
     );
   }
   mkdirSync(destinationDirectory, { recursive: true });
@@ -2211,12 +2242,9 @@ export async function publishNativeBinding({
     if (!staged?.ok) throw verificationError("Staged native binding", staged);
     probeBinding(stagedNative, requiredExports);
     const postProbeSource = readSourceState(repoRoot);
-    if (
-      postProbeSource.sourceTreeClean !== true ||
-      postProbeSource.sourceGitRevision !== publicationSource.sourceGitRevision
-    ) {
-      throw new Error("Native source changed while the staged addon was probed.");
-    }
+    assertBuildSourceMatchesCurrent(buildProvenance, postProbeSource, {
+      phase: "staged addon probing",
+    });
 
     transaction.next = pairIdentity(stagedNative, stagedManifest);
     if (staged.sha256 !== undefined && staged.sha256 !== transaction.next.nativeSha256) {

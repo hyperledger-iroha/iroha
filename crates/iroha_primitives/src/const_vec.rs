@@ -536,8 +536,8 @@ where
         let bytes = ctx_len
             .and_then(|len| bytes_full.get(..len))
             .unwrap_or(bytes_full);
-        let align = core::mem::align_of::<ncore::Archived<ConstVec<T>>>()
-            .max(core::mem::align_of::<ncore::Archived<Vec<T>>>())
+        let align = ncore::archived_payload_align::<ConstVec<T>>()
+            .max(ncore::archived_payload_align::<Vec<T>>())
             .max(core::mem::align_of::<u128>());
         #[cfg(debug_assertions)]
         if norito::debug_trace_enabled() {
@@ -667,8 +667,8 @@ where
         + for<'de> NoritoDeserialize<'de>
         + for<'slice> ncore::DecodeFromSlice<'slice>,
 {
-    let align = core::mem::align_of::<ncore::Archived<Vec<T>>>()
-        .max(core::mem::align_of::<ncore::Archived<ConstVec<T>>>())
+    let align = ncore::archived_payload_align::<Vec<T>>()
+        .max(ncore::archived_payload_align::<ConstVec<T>>())
         .max(core::mem::align_of::<u128>());
     let aligned = align_payload_for::<T>(bytes, align)?;
     let decode_bytes = aligned.as_slice();

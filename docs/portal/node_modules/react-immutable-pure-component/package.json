@@ -1,0 +1,70 @@
+{
+  "name": "react-immutable-pure-component",
+  "version": "2.2.2",
+  "description": "React PureComponent implementation embracing Immutable.js",
+  "main": "lib/react-immutable-pure-component.js",
+  "module": "lib/react-immutable-pure-component.es.js",
+  "types": "types/react-immutable-pure-component.d.ts",
+  "files": [
+    "types",
+    "lib"
+  ],
+  "scripts": {
+    "build": "rollup -c ./rollup.config.js",
+    "test": "jest",
+    "lint": "eslint .",
+    "lint:fix": "eslint --fix .",
+    "testAndBuild": "yarn test; yarn lint; yarn build",
+    "publish-please": "publish-please",
+    "prepublishOnly": "publish-please guard"
+  },
+  "keywords": [
+    "react",
+    "memo",
+    "immutable",
+    "pure",
+    "component",
+    "PureComponent"
+  ],
+  "author": "Piotr Tomasz Monarski",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Monar/react-immutable-pure-component"
+  },
+  "devDependencies": {
+    "@babel/core": "7.7.0",
+    "@babel/plugin-transform-object-assign": "7.2.0",
+    "@babel/preset-env": "7.7.1",
+    "@babel/preset-react": "7.7.0",
+    "@types/react": "16.9.11",
+    "babel-core": "7.0.0-bridge.0",
+    "babel-eslint": "10.0.3",
+    "babel-jest": "24.9.0",
+    "enzyme": "3.10.0",
+    "enzyme-adapter-react-16": "1.15.1",
+    "eslint": "6.6.0",
+    "eslint-config-monar": "1.0.2",
+    "eslint-config-prettier": "6.5.0",
+    "eslint-plugin-babel": "5.3.0",
+    "eslint-plugin-flowtype": "4.3.0",
+    "eslint-plugin-import": "2.18.2",
+    "eslint-plugin-prettier": "3.1.1",
+    "eslint-plugin-react": "7.16.0",
+    "immutable": "4.0.0-rc.12",
+    "jest": "24.9.0",
+    "prettier": "1.18.2",
+    "publish-please": "5.5.1",
+    "react": "16.11.0",
+    "react-dom": "16.11.0",
+    "react-test-renderer": "16.11.0",
+    "rollup": "1.26.3",
+    "rollup-plugin-babel": "4.3.3",
+    "rollup-plugin-copy": "3.1.0"
+  },
+  "peerDependencies": {
+    "immutable": ">= 2 || >= 4.0.0-rc",
+    "react": ">= 16.6",
+    "react-dom": ">= 16.6"
+  }
+}

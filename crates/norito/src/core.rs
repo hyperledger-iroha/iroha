@@ -1259,22 +1259,6 @@ fn payload_bytes_with_offset(ptr: *const u8) -> Result<(&'static [u8], usize), E
         return Ok((payload, offset));
     }
 
-    if let Some((root_base, root_len)) = payload_root_span() {
-        let root_end = root_base
-            .checked_add(root_len)
-            .ok_or(Error::LengthMismatch)?;
-        if ptr_us >= root_base && ptr_us <= root_end {
-            payload_ctx_state_mut(|state| {
-                if state.max_access < state.len {
-                    state.max_access = state.len;
-                }
-            });
-            let payload = unsafe { core::slice::from_raw_parts(root_base as *const u8, root_len) };
-            let offset = ptr_us - root_base;
-            return Ok((payload, offset));
-        }
-    }
-
     Err(Error::LengthMismatch)
 }
 
@@ -1868,8 +1852,8 @@ pub fn use_field_bitset() -> bool {
 
 /// Decode packed-struct offsets when the layout is enabled.
 ///
-/// Returns the computed offsets, number of header bytes consumed, and packed
-/// data length.
+/// Returns the computed offsets, number of header bytes consumed, packed data
+/// length, and packed tail length.
 pub fn decode_packed_offsets_slice(
     slice: &[u8],
     count: usize,
@@ -1909,6 +1893,13 @@ pub fn decode_packed_offsets_slice(
         offsets.push(off);
     }
     let data_len = *offsets.last().unwrap_or(&0);
+    let available_data = slice
+        .len()
+        .checked_sub(bytes_needed)
+        .ok_or(Error::LengthMismatch)?;
+    if data_len > available_data {
+        return Err(Error::LengthMismatch);
+    }
     Ok((offsets, bytes_needed, data_len, 0))
 }
 
@@ -4778,12 +4769,17 @@ where
                 let flags = effective_layout_flags();
                 let _flags_guard = DecodeFlagsGuard::enter(flags);
                 let schema = <T as NoritoSerialize>::schema_hash();
-                let align = core::mem::align_of::<Archived<T>>();
+                let align = archived_payload_align::<T>();
                 let archive = ArchiveSlice::new(&bytes[start..end], align)?;
                 let slice = archive.as_slice();
                 let payload_guard =
                     PayloadCtxGuard::enter_with_schema_flags_hint(slice, schema, flags, flags);
-                let archived = unsafe { &*(slice.as_ptr() as *const Archived<T>) };
+                let archived_ptr = if slice.is_empty() {
+                    empty_archived_ptr::<T>()
+                } else {
+                    slice.as_ptr().cast::<Archived<T>>()
+                };
+                let archived = unsafe { &*archived_ptr };
                 let value = crate::guarded_try_deserialize(|| T::try_deserialize(archived))?;
                 drop(payload_guard);
                 record_slice_access(bytes, end);
@@ -5230,7 +5226,7 @@ const fn payload_alignment_padding_for_align(align: usize) -> usize {
 
 #[inline]
 pub(crate) fn payload_alignment_padding_for<T>() -> usize {
-    payload_alignment_padding_for_align(core::mem::align_of::<Archived<T>>())
+    payload_alignment_padding_for_align(archived_payload_align::<T>())
 }
 
 #[inline]
@@ -5389,24 +5385,78 @@ pub trait NoritoDeserialize<'a>: Sized {
     }
 }
 
-/// Archived representation of a value. For most primitive types this is just the
-/// value itself in little-endian form. For structs it contains offsets for
-/// dynamic data.
+/// Opaque address marker for the archived bytes of `T`.
+///
+/// This type deliberately does not contain a `T`. Archived payload bytes are
+/// wire data and may not be a valid in-memory Rust value (for example, before a
+/// fallible decoder validates a niche or enum tag). Decoders use this marker's
+/// address together with the active payload context; they must not treat the
+/// marker itself as a reconstructed `T`.
 #[repr(C)]
-pub struct Archived<T: ?Sized>(T);
+pub struct Archived<T: ?Sized> {
+    _marker: PhantomData<T>,
+}
+
+#[inline]
+fn empty_archived_ptr<T: ?Sized>() -> *const Archived<T> {
+    core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
+}
+
+#[inline]
+pub(crate) fn empty_archived_marker<'a, T: ?Sized>() -> &'a Archived<T> {
+    // SAFETY: every `Archived<_>` is the same zero-sized, byte-aligned marker,
+    // so the non-null aligned dangling pointer is a valid ZST reference. The
+    // unconstrained lifetime is sound because no borrowed `T` is stored.
+    unsafe { &*empty_archived_ptr::<T>() }
+}
+
+/// Return the logical archived-storage footprint associated with `T`.
+///
+/// This is intentionally separate from `size_of::<Archived<T>>()`: an
+/// [`Archived`] value is only an address marker, while payload allocation and
+/// framing still use the wire type's established storage footprint.
+#[inline]
+pub const fn archived_payload_size<T>() -> usize {
+    core::mem::size_of::<T>()
+}
+
+/// Return the archived payload alignment associated with `T`.
+///
+/// The marker itself has byte alignment. Framing and temporary-storage code
+/// must use this function when preserving the canonical payload layout.
+#[inline]
+pub const fn archived_payload_align<T>() -> usize {
+    core::mem::align_of::<T>()
+}
+
+#[inline]
+fn try_read_archived_bytes<T: ?Sized, const N: usize>(
+    archived: &Archived<T>,
+) -> Result<[u8; N], Error> {
+    let ptr = core::ptr::from_ref(archived).cast::<u8>();
+    let payload = payload_range_from_ptr(ptr, N)?;
+    let mut bytes = [0_u8; N];
+    bytes.copy_from_slice(payload);
+    Ok(bytes)
+}
+
+#[inline]
+fn read_archived_bytes<T: ?Sized, const N: usize>(archived: &Archived<T>) -> [u8; N] {
+    try_read_archived_bytes(archived).expect("archived scalar footprint")
+}
 
 impl<T: ?Sized> Archived<T> {
-    /// Reinterpret the archived value as a different archived type.
+    /// Retag this archived-byte address for another decoder.
     ///
-    /// # Safety
-    ///
-    /// The caller must ensure that the archived representation of `T` and `U`
-    /// is identical. This is typically true for newtype wrappers with
-    /// `#[repr(transparent)]`.
+    /// Every `Archived<_>` is the same opaque zero-sized address marker, so this
+    /// operation does not reinterpret a Rust `T` as a Rust `U`. The target
+    /// decoder remains responsible for validating the wire bytes at the
+    /// marker's address against its own schema and payload bounds.
     #[allow(unsafe_code)]
     pub fn cast<U>(&self) -> &Archived<U> {
-        // SAFETY: the caller guarantees that `T` and `U` have the same archived
-        // layout so reinterpreting the pointer is sound.
+        // SAFETY: `Archived<T>` and `Archived<U>` are both zero-sized,
+        // byte-aligned markers; changing the phantom type preserves the
+        // reference's layout and address.
         unsafe { &*core::ptr::from_ref(self).cast::<Archived<U>>() }
     }
 }
@@ -5418,8 +5468,8 @@ enum ArchivedBacking<'a> {
 
 /// Owned or borrowed handle to an archived value reconstructed from a byte
 /// slice. When the input slice is misaligned for `T` the bytes are copied into
-/// an internal buffer with suitable alignment, ensuring the returned reference
-/// is always well-formed.
+/// an internal buffer with suitable alignment for decoders that perform
+/// aligned payload reads.
 pub struct ArchivedRef<'a, T: ?Sized> {
     ptr: *const Archived<T>,
     backing: ArchivedBacking<'a>,
@@ -5430,12 +5480,16 @@ impl<'a, T: ?Sized> ArchivedRef<'a, T> {
     #[inline]
     #[allow(unsafe_code)]
     fn as_ref_impl(&self) -> &Archived<T> {
-        // SAFETY: `ptr` always points to a properly aligned `Archived<T>`
-        // backed by either the borrowed slice or an owned aligned buffer.
+        // SAFETY: `ptr` is non-null and byte-aligned. The marker is zero-sized,
+        // and the corresponding payload backing outlives this reference.
         unsafe { &*self.ptr }
     }
 
-    /// Reference to the archived value.
+    /// Return the typed marker at the start of the archived payload.
+    ///
+    /// The marker does not contain a `T`. Callers of
+    /// [`archived_from_slice`] must install a payload context for
+    /// [`Self::bytes`] before invoking a decoder.
     #[inline]
     pub fn archived(&self) -> &Archived<T> {
         self.as_ref_impl()
@@ -5450,7 +5504,10 @@ impl<'a, T: ?Sized> ArchivedRef<'a, T> {
         }
     }
 
-    /// Reinterpret the archived value as a different archived type.
+    /// Retag the payload-start marker for a different decoder.
+    ///
+    /// This preserves only the marker address; it neither validates the bytes
+    /// nor grants the target decoder access beyond [`Self::bytes`].
     #[inline]
     pub fn cast<U>(&self) -> &Archived<U> {
         self.archived().cast::<U>()
@@ -5488,7 +5545,7 @@ impl<T> ArchivedBox<T> {
     #[inline]
     pub(crate) fn from_payload(payload: Vec<u8>) -> Self {
         let len = payload.len();
-        let align = core::mem::align_of::<Archived<T>>();
+        let align = archived_payload_align::<T>();
         if len == 0 || align <= 1 {
             return Self {
                 buffer: payload,
@@ -5519,15 +5576,20 @@ impl<T> ArchivedBox<T> {
         }
     }
 
-    /// Reference to the archived value.
+    /// Return the typed marker at the start of the owned archived payload.
+    ///
+    /// The marker does not contain a `T`. Decoding is valid only while a
+    /// payload context covering [`Self::bytes`] is active.
     #[inline]
     pub fn archived(&self) -> &Archived<T> {
         if self.len == 0 {
-            // SAFETY: zero-sized archived values do not require backing storage.
-            return unsafe { &*core::ptr::NonNull::<Archived<T>>::dangling().as_ptr() };
+            // SAFETY: the dangling pointer is valid for the zero-sized marker;
+            // the payload context prevents a decoder from reading any bytes.
+            return unsafe { &*empty_archived_ptr::<T>() };
         }
         let ptr = unsafe { self.buffer.as_ptr().add(self.offset) as *const Archived<T> };
-        // SAFETY: `ptr` always points into `buffer` with `Archived<T>` alignment.
+        // SAFETY: `ptr` points into live payload storage. The zero-sized marker
+        // itself has no storage-alignment requirement.
         unsafe { &*ptr }
     }
 
@@ -5571,7 +5633,7 @@ where
     T: for<'de> NoritoDeserialize<'de>,
 {
     let logical_len = bytes.len();
-    let min_size = core::mem::size_of::<Archived<T>>();
+    let min_size = archived_payload_size::<T>();
     let mut padded = Vec::new();
     let decode_bytes = if logical_len < min_size {
         padded
@@ -5585,16 +5647,16 @@ where
     } else {
         bytes
     };
-    let archived = ArchiveSlice::new_owned(decode_bytes, core::mem::align_of::<Archived<T>>())?;
+    let archived = ArchiveSlice::new_owned(decode_bytes, archived_payload_align::<T>())?;
     let archived_bytes = archived.as_slice();
     let _payload_guard = PayloadCtxGuard::enter_with_len(archived_bytes, logical_len);
     let archived_ptr = if archived_bytes.is_empty() {
-        core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
+        empty_archived_ptr::<T>()
     } else {
         archived_bytes.as_ptr().cast::<Archived<T>>()
     };
-    // SAFETY: `ArchiveSlice::new_owned` keeps one allocation with the required
-    // `Archived<T>` alignment alive for this entire deserialization call.
+    // SAFETY: `ArchiveSlice::new_owned` keeps the payload allocation alive for
+    // this entire deserialization call.
     crate::guarded_try_deserialize(|| T::try_deserialize(unsafe { &*archived_ptr }))
 }
 
@@ -5610,11 +5672,11 @@ where
 /// `T` or if a misaligned payload cannot be copied into aligned storage.
 #[inline]
 pub fn archived_from_slice<'a, T>(bytes: &'a [u8]) -> Result<ArchivedRef<'a, T>, Error> {
-    let min = core::mem::size_of::<Archived<T>>();
+    let min = archived_payload_size::<T>();
     if min > 0 && bytes.len() < min {
         return Err(Error::LengthMismatch);
     }
-    let type_align = core::mem::align_of::<Archived<T>>();
+    let type_align = archived_payload_align::<T>();
     let min_align = core::mem::align_of::<u128>();
     let align_target = type_align.max(min_align);
     let ptr_usize = bytes.as_ptr() as usize;
@@ -5630,7 +5692,7 @@ pub fn archived_from_slice<'a, T>(bytes: &'a [u8]) -> Result<ArchivedRef<'a, T>,
         })
     } else {
         let ptr = if bytes.is_empty() {
-            core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
+            empty_archived_ptr::<T>()
         } else {
             bytes.as_ptr() as *const Archived<T>
         };
@@ -5657,7 +5719,11 @@ impl NoritoSerialize for u8 {
 
 impl<'a> NoritoDeserialize<'a> for u8 {
     fn deserialize(archived: &'a Archived<u8>) -> Self {
-        archived.0
+        read_archived_bytes::<_, 1>(archived)[0]
+    }
+
+    fn try_deserialize(archived: &'a Archived<u8>) -> Result<Self, Error> {
+        Ok(try_read_archived_bytes::<_, 1>(archived)?[0])
     }
 }
 
@@ -5676,7 +5742,11 @@ impl NoritoSerialize for i8 {
 
 impl<'a> NoritoDeserialize<'a> for i8 {
     fn deserialize(archived: &'a Archived<i8>) -> Self {
-        archived.0
+        i8::from_le_bytes(read_archived_bytes(archived))
+    }
+
+    fn try_deserialize(archived: &'a Archived<i8>) -> Result<Self, Error> {
+        try_read_archived_bytes(archived).map(i8::from_le_bytes)
     }
 }
 
@@ -5695,7 +5765,11 @@ impl NoritoSerialize for u16 {
 
 impl<'a> NoritoDeserialize<'a> for u16 {
     fn deserialize(archived: &'a Archived<u16>) -> Self {
-        u16::from_le(archived.0)
+        u16::from_le_bytes(read_archived_bytes(archived))
+    }
+
+    fn try_deserialize(archived: &'a Archived<u16>) -> Result<Self, Error> {
+        try_read_archived_bytes(archived).map(u16::from_le_bytes)
     }
 }
 
@@ -5722,7 +5796,7 @@ impl<'a> NoritoDeserialize<'a> for NonZeroU16 {
 
     fn try_deserialize(archived: &'a Archived<NonZeroU16>) -> Result<Self, Error> {
         let val_arch: &Archived<u16> = archived.cast();
-        let value = <u16 as NoritoDeserialize>::deserialize(val_arch);
+        let value = <u16 as NoritoDeserialize>::try_deserialize(val_arch)?;
         NonZeroU16::new(value).ok_or(Error::InvalidNonZero)
     }
 }
@@ -5742,7 +5816,11 @@ impl NoritoSerialize for i16 {
 
 impl<'a> NoritoDeserialize<'a> for i16 {
     fn deserialize(archived: &'a Archived<i16>) -> Self {
-        i16::from_le(archived.0)
+        i16::from_le_bytes(read_archived_bytes(archived))
+    }
+
+    fn try_deserialize(archived: &'a Archived<i16>) -> Result<Self, Error> {
+        try_read_archived_bytes(archived).map(i16::from_le_bytes)
     }
 }
 
@@ -5761,7 +5839,11 @@ impl NoritoSerialize for u32 {
 
 impl<'a> NoritoDeserialize<'a> for u32 {
     fn deserialize(archived: &'a Archived<u32>) -> Self {
-        u32::from_le(archived.0)
+        u32::from_le_bytes(read_archived_bytes(archived))
+    }
+
+    fn try_deserialize(archived: &'a Archived<u32>) -> Result<Self, Error> {
+        try_read_archived_bytes(archived).map(u32::from_le_bytes)
     }
 }
 
@@ -5788,7 +5870,7 @@ impl<'a> NoritoDeserialize<'a> for NonZeroU32 {
 
     fn try_deserialize(archived: &'a Archived<NonZeroU32>) -> Result<Self, Error> {
         let val_arch: &Archived<u32> = archived.cast();
-        let value = <u32 as NoritoDeserialize>::deserialize(val_arch);
+        let value = <u32 as NoritoDeserialize>::try_deserialize(val_arch)?;
         NonZeroU32::new(value).ok_or(Error::InvalidNonZero)
     }
 }
@@ -5808,7 +5890,15 @@ impl NoritoSerialize for bool {
 
 impl<'a> NoritoDeserialize<'a> for bool {
     fn deserialize(archived: &'a Archived<bool>) -> Self {
-        archived.0
+        Self::try_deserialize(archived).expect("invalid bool")
+    }
+
+    fn try_deserialize(archived: &'a Archived<bool>) -> Result<Self, Error> {
+        match <u8 as NoritoDeserialize>::try_deserialize(archived.cast())? {
+            0 => Ok(false),
+            1 => Ok(true),
+            tag => Err(Error::invalid_tag("bool", tag)),
+        }
     }
 }
 
@@ -5827,9 +5917,14 @@ impl NoritoSerialize for char {
 
 impl<'a> NoritoDeserialize<'a> for char {
     fn deserialize(archived: &'a Archived<char>) -> Self {
-        // SAFETY-FREE: decode via integer path stored little-endian
-        let v = u32::from_le(unsafe { *(archived as *const _ as *const u32) });
+        let v = <u32 as NoritoDeserialize>::deserialize(archived.cast());
         char::from_u32(v).expect("invalid char")
+    }
+
+    fn try_deserialize(archived: &'a Archived<char>) -> Result<Self, Error> {
+        let value = <u32 as NoritoDeserialize>::try_deserialize(archived.cast())?;
+        char::from_u32(value)
+            .ok_or_else(|| Error::Message(format!("invalid Unicode scalar value {value:#x}")))
     }
 }
 
@@ -5884,7 +5979,11 @@ impl NoritoSerialize for i32 {
 
 impl<'a> NoritoDeserialize<'a> for i32 {
     fn deserialize(archived: &'a Archived<i32>) -> Self {
-        i32::from_le(archived.0)
+        i32::from_le_bytes(read_archived_bytes(archived))
+    }
+
+    fn try_deserialize(archived: &'a Archived<i32>) -> Result<Self, Error> {
+        try_read_archived_bytes(archived).map(i32::from_le_bytes)
     }
 }
 
@@ -5903,7 +6002,11 @@ impl NoritoSerialize for u64 {
 
 impl<'a> NoritoDeserialize<'a> for u64 {
     fn deserialize(archived: &'a Archived<u64>) -> Self {
-        u64::from_le(archived.0)
+        u64::from_le_bytes(read_archived_bytes(archived))
+    }
+
+    fn try_deserialize(archived: &'a Archived<u64>) -> Result<Self, Error> {
+        try_read_archived_bytes(archived).map(u64::from_le_bytes)
     }
 }
 
@@ -5930,7 +6033,7 @@ impl<'a> NoritoDeserialize<'a> for NonZeroU64 {
 
     fn try_deserialize(archived: &'a Archived<NonZeroU64>) -> Result<Self, Error> {
         let val_arch: &Archived<u64> = archived.cast();
-        let value = <u64 as NoritoDeserialize>::deserialize(val_arch);
+        let value = <u64 as NoritoDeserialize>::try_deserialize(val_arch)?;
         NonZeroU64::new(value).ok_or(Error::InvalidNonZero)
     }
 }
@@ -5950,7 +6053,11 @@ impl NoritoSerialize for i64 {
 
 impl<'a> NoritoDeserialize<'a> for i64 {
     fn deserialize(archived: &'a Archived<i64>) -> Self {
-        i64::from_le(archived.0)
+        i64::from_le_bytes(read_archived_bytes(archived))
+    }
+
+    fn try_deserialize(archived: &'a Archived<i64>) -> Result<Self, Error> {
+        try_read_archived_bytes(archived).map(i64::from_le_bytes)
     }
 }
 
@@ -5969,7 +6076,12 @@ impl NoritoSerialize for usize {
 
 impl<'a> NoritoDeserialize<'a> for usize {
     fn deserialize(archived: &'a Archived<usize>) -> Self {
-        usize::from_le(archived.0)
+        Self::try_deserialize(archived).expect("archived usize does not fit this target")
+    }
+
+    fn try_deserialize(archived: &'a Archived<usize>) -> Result<Self, Error> {
+        let value = u64::from_le_bytes(try_read_archived_bytes(archived)?);
+        usize::try_from(value).map_err(|_| Error::LengthMismatch)
     }
 }
 
@@ -5988,7 +6100,12 @@ impl NoritoSerialize for isize {
 
 impl<'a> NoritoDeserialize<'a> for isize {
     fn deserialize(archived: &'a Archived<isize>) -> Self {
-        isize::from_le(archived.0)
+        Self::try_deserialize(archived).expect("archived isize does not fit this target")
+    }
+
+    fn try_deserialize(archived: &'a Archived<isize>) -> Result<Self, Error> {
+        let value = i64::from_le_bytes(try_read_archived_bytes(archived)?);
+        isize::try_from(value).map_err(|_| Error::LengthMismatch)
     }
 }
 
@@ -6007,7 +6124,11 @@ impl NoritoSerialize for u128 {
 
 impl<'a> NoritoDeserialize<'a> for u128 {
     fn deserialize(archived: &'a Archived<u128>) -> Self {
-        u128::from_le(archived.0)
+        u128::from_le_bytes(read_archived_bytes(archived))
+    }
+
+    fn try_deserialize(archived: &'a Archived<u128>) -> Result<Self, Error> {
+        try_read_archived_bytes(archived).map(u128::from_le_bytes)
     }
 }
 
@@ -6026,7 +6147,11 @@ impl NoritoSerialize for i128 {
 
 impl<'a> NoritoDeserialize<'a> for i128 {
     fn deserialize(archived: &'a Archived<i128>) -> Self {
-        i128::from_le(archived.0)
+        i128::from_le_bytes(read_archived_bytes(archived))
+    }
+
+    fn try_deserialize(archived: &'a Archived<i128>) -> Result<Self, Error> {
+        try_read_archived_bytes(archived).map(i128::from_le_bytes)
     }
 }
 
@@ -6045,56 +6170,11 @@ impl NoritoSerialize for f32 {
 
 impl<'a> NoritoDeserialize<'a> for f32 {
     fn deserialize(archived: &'a Archived<f32>) -> Self {
-        // Prefer reading from the validated payload context when available.
-        // Falls back to a direct pointer read otherwise.
-        let ptr = archived as *const _ as *const u8;
-        if let Some((base, total)) = payload_ctx() {
-            let ptr_us = ptr as usize;
-            let base_end = match base.checked_add(total) {
-                Some(v) => v,
-                None => {
-                    return Self::from_bits(u32::from_le_bytes({
-                        let mut tmp = [0u8; 4];
-                        unsafe { tmp.copy_from_slice(std::slice::from_raw_parts(ptr, 4)) };
-                        tmp
-                    }));
-                }
-            };
-            let ptr_end = match ptr_us.checked_add(4) {
-                Some(v) => v,
-                None => {
-                    return Self::from_bits(u32::from_le_bytes({
-                        let mut tmp = [0u8; 4];
-                        unsafe { tmp.copy_from_slice(std::slice::from_raw_parts(ptr, 4)) };
-                        tmp
-                    }));
-                }
-            };
-            if ptr_us >= base && ptr_end <= base_end {
-                let off = ptr_us - base;
-                let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-                let mut lb = [0u8; 4];
-                let slice_end = match off.checked_add(4) {
-                    Some(v) => v,
-                    None => {
-                        return f32::from_bits(u32::from_le_bytes({
-                            let mut tmp = [0u8; 4];
-                            unsafe { tmp.copy_from_slice(std::slice::from_raw_parts(ptr, 4)) };
-                            tmp
-                        }));
-                    }
-                };
-                if slice_end <= total {
-                    lb.copy_from_slice(&payload[off..slice_end]);
-                    return f32::from_bits(u32::from_le_bytes(lb));
-                }
-            }
-        }
-        let mut bytes = [0u8; 4];
-        unsafe {
-            bytes.copy_from_slice(std::slice::from_raw_parts(ptr, 4));
-        }
-        f32::from_bits(u32::from_le_bytes(bytes))
+        Self::from_bits(<u32 as NoritoDeserialize>::deserialize(archived.cast()))
+    }
+
+    fn try_deserialize(archived: &'a Archived<f32>) -> Result<Self, Error> {
+        <u32 as NoritoDeserialize>::try_deserialize(archived.cast()).map(Self::from_bits)
     }
 }
 
@@ -6113,69 +6193,12 @@ impl NoritoSerialize for f64 {
 
 impl<'a> NoritoDeserialize<'a> for f64 {
     fn deserialize(archived: &'a Archived<f64>) -> Self {
-        let ptr = archived as *const _ as *const u8;
-        if let Some((base, total)) = payload_ctx() {
-            let ptr_us = ptr as usize;
-            let base_end = match base.checked_add(total) {
-                Some(v) => v,
-                None => {
-                    let mut tmp = [0u8; 8];
-                    unsafe { tmp.copy_from_slice(std::slice::from_raw_parts(ptr, 8)) };
-                    return f64::from_bits(u64::from_le_bytes(tmp));
-                }
-            };
-            let ptr_end = match ptr_us.checked_add(8) {
-                Some(v) => v,
-                None => {
-                    let mut tmp = [0u8; 8];
-                    unsafe { tmp.copy_from_slice(std::slice::from_raw_parts(ptr, 8)) };
-                    return f64::from_bits(u64::from_le_bytes(tmp));
-                }
-            };
-            if ptr_us >= base && ptr_end <= base_end {
-                let off = ptr_us - base;
-                let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-                let mut lb = [0u8; 8];
-                let slice_end = match off.checked_add(8) {
-                    Some(v) => v,
-                    None => {
-                        let mut tmp = [0u8; 8];
-                        unsafe { tmp.copy_from_slice(std::slice::from_raw_parts(ptr, 8)) };
-                        return f64::from_bits(u64::from_le_bytes(tmp));
-                    }
-                };
-                if slice_end <= total {
-                    lb.copy_from_slice(&payload[off..slice_end]);
-                    return f64::from_bits(u64::from_le_bytes(lb));
-                }
-            }
-        }
-        let mut bytes = [0u8; 8];
-        unsafe {
-            bytes.copy_from_slice(std::slice::from_raw_parts(ptr, 8));
-        }
-        f64::from_bits(u64::from_le_bytes(bytes))
+        Self::from_bits(<u64 as NoritoDeserialize>::deserialize(archived.cast()))
     }
-}
 
-#[inline]
-unsafe fn decode_archived_string_without_ctx(ptr: *const u8) -> String {
-    unsafe { decode_archived_string_without_ctx_fixed(ptr) }
-}
-
-#[inline]
-unsafe fn decode_archived_string_without_ctx_fixed(ptr: *const u8) -> String {
-    let mut len_bytes = [0u8; 8];
-    let len_src = unsafe { core::slice::from_raw_parts(ptr, 8) };
-    len_bytes.copy_from_slice(len_src);
-    let len = len_u64_to_usize(u64::from_le_bytes(len_bytes))
-        .unwrap_or_else(|_| panic!("norito: archived String length overflow"));
-    if 8usize.checked_add(len).is_none() {
-        panic!("norito: archived String length overflow");
+    fn try_deserialize(archived: &'a Archived<f64>) -> Result<Self, Error> {
+        <u64 as NoritoDeserialize>::try_deserialize(archived.cast()).map(Self::from_bits)
     }
-    let body_ptr = unsafe { ptr.add(8) };
-    let bytes = unsafe { std::slice::from_raw_parts(body_ptr, len) };
-    String::from_utf8(bytes.to_vec()).expect("norito: invalid UTF-8 in archived String")
 }
 
 impl NoritoSerialize for String {
@@ -6196,14 +6219,8 @@ impl NoritoSerialize for String {
 
 impl<'a> NoritoDeserialize<'a> for String {
     fn deserialize(archived: &'a Archived<String>) -> Self {
-        match Self::try_deserialize(archived) {
-            Ok(value) => value,
-            Err(Error::MissingPayloadContext) => {
-                let ptr = archived as *const _ as *const u8;
-                unsafe { decode_archived_string_without_ctx(ptr) }
-            }
-            Err(err) => panic!("norito: invalid archived String: {err:?}"),
-        }
+        Self::try_deserialize(archived)
+            .unwrap_or_else(|err| panic!("norito: invalid archived String: {err:?}"))
     }
 
     fn try_deserialize(archived: &'a Archived<String>) -> Result<Self, Error> {
@@ -6254,21 +6271,8 @@ impl<'a> NoritoDeserialize<'a> for &'a str {
     }
 
     fn deserialize(archived: &'a Archived<&'a str>) -> Self {
-        match Self::try_deserialize(archived) {
-            Ok(value) => value,
-            Err(Error::MissingPayloadContext) => {
-                let ptr = archived as *const _ as *const u8;
-                unsafe {
-                    let mut len_bytes = [0u8; 8];
-                    len_bytes.copy_from_slice(std::slice::from_raw_parts(ptr, 8));
-                    let len = len_u64_to_usize(u64::from_le_bytes(len_bytes))
-                        .unwrap_or_else(|_| panic!("norito: archived &str length overflow"));
-                    let bytes = std::slice::from_raw_parts(ptr.add(8), len);
-                    std::str::from_utf8(bytes).expect("invalid utf8")
-                }
-            }
-            Err(err) => panic!("norito: invalid archived &str: {err:?}"),
-        }
+        Self::try_deserialize(archived)
+            .unwrap_or_else(|err| panic!("norito: invalid archived &str: {err:?}"))
     }
 
     fn try_deserialize(archived: &'a Archived<&'a str>) -> Result<Self, Error> {
@@ -6343,8 +6347,7 @@ impl<'a> NoritoDeserialize<'a> for Cow<'a, str> {
     }
 
     fn deserialize(archived: &'a Archived<Cow<'a, str>>) -> Self {
-        let ptr = archived as *const Archived<Cow<'a, str>> as *const Archived<&'a str>;
-        let s = <&'a str as NoritoDeserialize>::deserialize(unsafe { &*ptr });
+        let s = <&'a str as NoritoDeserialize>::deserialize(archived.cast());
         Cow::Borrowed(s)
     }
 }
@@ -6491,13 +6494,11 @@ impl<T: NoritoSerialize + Copy> NoritoSerialize for Cell<T> {
 
 impl<'a, T: NoritoDeserialize<'a> + Copy> NoritoDeserialize<'a> for Cell<T> {
     fn deserialize(archived: &'a Archived<Cell<T>>) -> Self {
-        let inner = unsafe { &*(archived as *const _ as *const Archived<T>) };
-        Cell::new(T::deserialize(inner))
+        Cell::new(T::deserialize(archived.cast()))
     }
 
     fn try_deserialize(archived: &'a Archived<Cell<T>>) -> Result<Self, Error> {
-        let inner = unsafe { &*(archived as *const _ as *const Archived<T>) };
-        guarded_try_deserialize(|| T::try_deserialize(inner)).map(Cell::new)
+        guarded_try_deserialize(|| T::try_deserialize(archived.cast())).map(Cell::new)
     }
 }
 
@@ -6515,13 +6516,11 @@ impl<T: NoritoSerialize> NoritoSerialize for RefCell<T> {
 
 impl<'a, T: NoritoDeserialize<'a>> NoritoDeserialize<'a> for RefCell<T> {
     fn deserialize(archived: &'a Archived<RefCell<T>>) -> Self {
-        let inner = unsafe { &*(archived as *const _ as *const Archived<T>) };
-        RefCell::new(T::deserialize(inner))
+        RefCell::new(T::deserialize(archived.cast()))
     }
 
     fn try_deserialize(archived: &'a Archived<RefCell<T>>) -> Result<Self, Error> {
-        let inner = unsafe { &*(archived as *const _ as *const Archived<T>) };
-        guarded_try_deserialize(|| T::try_deserialize(inner)).map(RefCell::new)
+        guarded_try_deserialize(|| T::try_deserialize(archived.cast())).map(RefCell::new)
     }
 }
 
@@ -6571,7 +6570,7 @@ where
 
     fn try_deserialize(archived: &'a Archived<Option<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
-        let tag = unsafe { *ptr };
+        let tag = payload_range_from_ptr(ptr, 1)?[0];
         match tag {
             0 => Ok(None),
             1 => {
@@ -6671,7 +6670,7 @@ where
         match tag {
             0 => {
                 let _depth = DecodeDepthGuard::enter()?;
-                let layout = Layout::from_size_align(len, core::mem::align_of::<Archived<T>>())
+                let layout = Layout::from_size_align(len, archived_payload_align::<T>())
                     .map_err(|_| Error::LengthMismatch)?;
                 let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) }?;
                 if let Err(err) = unsafe { copy_from_payload(field.as_ptr(), tmp_ptr, len) } {
@@ -6680,15 +6679,19 @@ where
                 }
                 let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, len) };
                 let _g = PayloadCtxGuard::enter(tmp_slice);
-                let value = guarded_try_deserialize(|| unsafe {
-                    T::try_deserialize(&*(tmp_ptr as *const Archived<T>))
-                });
+                let archived_ptr = if len == 0 {
+                    empty_archived_ptr::<T>()
+                } else {
+                    tmp_ptr.cast::<Archived<T>>()
+                };
+                let value =
+                    guarded_try_deserialize(|| unsafe { T::try_deserialize(&*archived_ptr) });
                 unsafe { dealloc_checked(tmp_ptr, layout, needs_dealloc) };
                 value.map(Ok)
             }
             1 => {
                 let _depth = DecodeDepthGuard::enter()?;
-                let layout = Layout::from_size_align(len, core::mem::align_of::<Archived<E>>())
+                let layout = Layout::from_size_align(len, archived_payload_align::<E>())
                     .map_err(|_| Error::LengthMismatch)?;
                 let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) }?;
                 if let Err(err) = unsafe { copy_from_payload(field.as_ptr(), tmp_ptr, len) } {
@@ -6697,9 +6700,12 @@ where
                 }
                 let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, len) };
                 let _g = PayloadCtxGuard::enter(tmp_slice);
-                let err = guarded_try_deserialize(|| unsafe {
-                    E::try_deserialize(&*(tmp_ptr as *const Archived<E>))
-                });
+                let archived_ptr = if len == 0 {
+                    empty_archived_ptr::<E>()
+                } else {
+                    tmp_ptr.cast::<Archived<E>>()
+                };
+                let err = guarded_try_deserialize(|| unsafe { E::try_deserialize(&*archived_ptr) });
                 unsafe { dealloc_checked(tmp_ptr, layout, needs_dealloc) };
                 err.map(Err)
             }
@@ -6811,9 +6817,8 @@ impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'
             let field = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
             let _depth = DecodeDepthGuard::enter()?;
             unsafe {
-                let layout =
-                    Layout::from_size_align(elem_len, core::mem::align_of::<Archived<T>>())
-                        .map_err(|_| Error::LengthMismatch)?;
+                let layout = Layout::from_size_align(elem_len, archived_payload_align::<T>())
+                    .map_err(|_| Error::LengthMismatch)?;
                 let (tmp_ptr, needs_dealloc) = alloc_checked(layout)?;
                 if let Err(err) = copy_from_payload(field.as_ptr(), tmp_ptr, elem_len) {
                     dealloc_checked(tmp_ptr, layout, needs_dealloc);
@@ -6821,7 +6826,12 @@ impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'
                 }
                 let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, elem_len);
                 let _g = PayloadCtxGuard::enter(tmp_slice);
-                let archived = &*(tmp_ptr as *const Archived<T>);
+                let archived_ptr = if elem_len == 0 {
+                    empty_archived_ptr::<T>()
+                } else {
+                    tmp_ptr.cast::<Archived<T>>()
+                };
+                let archived = &*archived_ptr;
                 let result = guarded_try_deserialize(|| T::try_deserialize(archived));
                 dealloc_checked(tmp_ptr, layout, needs_dealloc);
                 out.push(result?);
@@ -6844,7 +6854,7 @@ pub mod stream {
 
     use super::{
         Archived, Compression, DecodeFlagsGuard, Error, Header, NoritoDeserialize, PayloadCtxGuard,
-        header_flags,
+        archived_payload_align, archived_payload_size, empty_archived_ptr, header_flags,
     };
     use crate::guarded_try_deserialize;
 
@@ -6919,7 +6929,7 @@ pub mod stream {
         let mut acc = init(len_decoder.total_len())?;
 
         let mut scratch = AlignedScratch::new();
-        let archived_align = std::mem::align_of::<Archived<T>>();
+        let archived_align = archived_payload_align::<T>();
 
         while let Some(elem_len) = len_decoder.next_len(&mut payload)? {
             let available = payload_len
@@ -6930,11 +6940,11 @@ pub mod stream {
             }
             let _depth = super::DecodeDepthGuard::enter()?;
             if elem_len == 0 {
-                if std::mem::size_of::<Archived<T>>() != 0 {
+                if archived_payload_size::<T>() != 0 {
                     return Err(Error::LengthMismatch);
                 }
                 let _pg = PayloadCtxGuard::enter(&[]);
-                let archived = unsafe { &*std::ptr::NonNull::<Archived<T>>::dangling().as_ptr() };
+                let archived = unsafe { &*empty_archived_ptr::<T>() };
                 let val = guarded_try_deserialize(|| {
                     <T as NoritoDeserialize>::try_deserialize(archived)
                 })?;
@@ -7461,7 +7471,7 @@ where
         out.try_reserve(len).map_err(|_| Error::AllocationFailed {
             bytes: limit_to_u64(output_bytes),
         })?;
-        let align = core::mem::align_of::<Archived<T>>();
+        let align = archived_payload_align::<T>();
         let mut cap = 1usize;
         let mut layout = Layout::from_size_align(cap, align).map_err(|_| Error::LengthMismatch)?;
         let (mut buf, mut buf_needs_dealloc) = unsafe { alloc_checked(layout) }?;
@@ -7708,7 +7718,7 @@ macro_rules! impl_tuple {
                     let $var = unsafe {
                         let layout = Layout::from_size_align(
                             elem_len,
-                            core::mem::align_of::<Archived<$name>>(),
+                            archived_payload_align::<$name>(),
                         ).map_err(|_| Error::LengthMismatch)?;
                         let (tmp_ptr, needs_dealloc) = alloc_checked(layout)?;
                         if let Err(err) = copy_from_payload(field.as_ptr(), tmp_ptr, elem_len) {
@@ -7717,7 +7727,12 @@ macro_rules! impl_tuple {
                         }
                         let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, elem_len);
                         let _g = PayloadCtxGuard::enter(tmp_slice);
-                        let archived = &*(tmp_ptr as *const Archived<$name>);
+                        let archived_ptr = if elem_len == 0 {
+                            empty_archived_ptr::<$name>()
+                        } else {
+                            tmp_ptr.cast::<Archived<$name>>()
+                        };
+                        let archived = &*archived_ptr;
                         let result = guarded_try_deserialize(|| $name::try_deserialize(archived));
                         dealloc_checked(tmp_ptr, layout, needs_dealloc);
                         result?
@@ -8625,8 +8640,10 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
 
 /// Obtain a reference to an archived value from bytes.
 ///
-/// The function validates the header, verifies the checksum and schema hash and
-/// then returns a reference to the archived payload without any allocation.
+/// The function validates the frame header, checksum, schema hash, payload
+/// length, and alignment, then returns an opaque marker at the payload start
+/// without allocating. Type-specific payload bounds and structure are checked
+/// by the subsequent fallible [`NoritoDeserialize::try_deserialize`] call.
 pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a Archived<T>, Error> {
     let mut cursor = std::io::Cursor::new(bytes);
     let header = Header::read(&mut cursor)?;
@@ -8648,11 +8665,7 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
     if crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
-    let min_size = core::mem::size_of::<Archived<T>>();
-    if payload.len() < min_size {
-        return Err(Error::LengthMismatch);
-    }
-    let align = std::mem::align_of::<Archived<T>>();
+    let align = archived_payload_align::<T>();
     if align > 1 && (payload.as_ptr() as usize & (align - 1)) != 0 {
         return Err(Error::misaligned(align, payload.as_ptr()));
     }
@@ -8663,8 +8676,13 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
         Some(header.flags),
         Some(header.minor),
     );
-    // SAFETY: layout of Archived<T> is validated by construction in `to_bytes`.
-    let ptr = payload.as_ptr() as *const Archived<T>;
+    let ptr = if payload.is_empty() {
+        empty_archived_ptr::<T>()
+    } else {
+        payload.as_ptr().cast::<Archived<T>>()
+    };
+    // SAFETY: `ptr` addresses either the validated payload or the non-null
+    // dangling marker used only for a zero-sized archived payload.
     Ok(unsafe { &*ptr })
 }
 
@@ -8712,7 +8730,7 @@ impl<'a> ArchiveView<'a> {
     }
 
     /// Decode a value from the payload using the strict-safe slice-based path,
-    /// enforcing the header schema hash.
+    /// enforcing the header schema hash and payload-derived resource limits.
     pub fn decode<T>(&self) -> Result<T, Error>
     where
         T: DecodeFromSlice<'a> + NoritoDeserialize<'a>,
@@ -8723,10 +8741,13 @@ impl<'a> ArchiveView<'a> {
         if self.padding_len != payload_alignment_padding_for::<T>() {
             return Err(Error::LengthMismatch);
         }
-        self.decode_inner(true)
+        with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
+            self.decode_inner(true)
+        })
     }
 
-    /// Decode a value while requiring the slice decoder to consume the complete payload.
+    /// Decode a value under payload-derived resource limits while requiring the
+    /// slice decoder to consume the complete payload.
     ///
     /// This is intended for custom codecs whose payload decoder itself enforces one
     /// canonical representation. Unlike [`Self::decode`], it does not accept a
@@ -8741,12 +8762,17 @@ impl<'a> ArchiveView<'a> {
         if self.padding_len != payload_alignment_padding_for::<T>() {
             return Err(Error::LengthMismatch);
         }
-        self.decode_inner(false)
+        with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
+            self.decode_inner(false)
+        })
     }
 
-    /// Decode a value from the payload without enforcing the schema hash.
+    /// Decode a value under payload-derived resource limits without enforcing
+    /// the schema hash.
     pub fn decode_unchecked<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
-        self.decode_inner(true)
+        with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
+            self.decode_inner(true)
+        })
     }
 }
 
@@ -8820,8 +8846,8 @@ where
     let payload_src = view.as_bytes();
     let flags = view.flags;
     let flags_hint = view.flags_hint;
-    let align = core::mem::align_of::<Archived<T>>();
-    let header_len = core::mem::size_of::<Archived<T>>();
+    let align = archived_payload_align::<T>();
+    let header_len = archived_payload_size::<T>();
     let ptr_us = payload_src.as_ptr() as usize;
     let needs_realign = align > 1 && !ptr_us.is_multiple_of(align);
     let needs_slice = needs_realign || (header_len > 0 && payload_src.len() < header_len);
@@ -8836,7 +8862,7 @@ where
     }
 
     let archived_ptr: *const Archived<T> = if header_len == 0 {
-        core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
+        empty_archived_ptr::<T>()
     } else {
         payload_src.as_ptr() as *const Archived<T>
     };
@@ -8922,17 +8948,15 @@ where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
 {
     fn archived_align(&self) -> usize {
-        core::mem::align_of::<Archived<T>>()
+        archived_payload_align::<T>()
     }
 
     fn archived_size(&self) -> usize {
-        core::mem::size_of::<Archived<T>>()
+        archived_payload_size::<T>()
     }
 
     fn dangling_archived(&self) -> *const u8 {
-        core::ptr::NonNull::<Archived<T>>::dangling()
-            .as_ptr()
-            .cast::<u8>()
+        empty_archived_ptr::<T>().cast::<u8>()
     }
 
     fn type_name(&self) -> &'static str {
@@ -9338,40 +9362,6 @@ where
     Ok(value)
 }
 
-/// Preserve the legacy enum-field retry that treats the remaining payload as canonical.
-#[doc(hidden)]
-#[inline(never)]
-pub fn decode_context_field_flexible<T>(ptr: *const u8, offset: &mut usize) -> Result<T, Error>
-where
-    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
-{
-    let payload = payload_slice_from_ptr(ptr)?;
-    let start = *offset;
-    let remaining = payload.get(start..).ok_or(Error::LengthMismatch)?;
-    let (field_len, header_len) = read_len_dyn_slice(remaining)?;
-    let data_start = start.checked_add(header_len).ok_or(Error::LengthMismatch)?;
-    let data_end = data_start
-        .checked_add(field_len)
-        .ok_or(Error::LengthMismatch)?;
-    let bounded = payload
-        .get(data_start..data_end)
-        .ok_or(Error::LengthMismatch)?;
-    let full = payload.get(data_start..).ok_or(Error::LengthMismatch)?;
-
-    match decode_field_canonical::<T>(full) {
-        Ok((value, used)) => {
-            *offset = data_start.checked_add(used).ok_or(Error::LengthMismatch)?;
-            Ok(value)
-        }
-        Err(error) if error.is_decode_resource_limit() => Err(error),
-        Err(_) => {
-            let value = decode_archived_field::<T>(bounded)?;
-            *offset = data_end;
-            Ok(value)
-        }
-    }
-}
-
 /// Finish a derive-generated field sequence at the active decode boundary.
 ///
 /// Canonical field decodes must consume the complete payload. Prefix decodes
@@ -9403,12 +9393,10 @@ where
     T: for<'de> crate::NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
 {
     if bytes.is_empty() {
-        if core::mem::size_of::<Archived<T>>() == 0 {
+        if archived_payload_size::<T>() == 0 {
             let _guard = PayloadCtxGuard::enter(&[]);
             let value = unsafe {
-                crate::guarded_try_deserialize(|| {
-                    T::try_deserialize(&*std::ptr::NonNull::<Archived<T>>::dangling().as_ptr())
-                })?
+                crate::guarded_try_deserialize(|| T::try_deserialize(&*empty_archived_ptr::<T>()))?
             };
             return Ok((value, 0));
         }
@@ -9545,6 +9533,29 @@ mod tests {
     }
 
     #[test]
+    fn packed_offsets_are_bounded_by_the_supplied_payload() {
+        let mut valid = Vec::new();
+        for offset in [0_u64, 1, 3] {
+            valid.extend_from_slice(&offset.to_le_bytes());
+        }
+        valid.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+
+        let (offsets, header_len, data_len, tail_len) =
+            decode_packed_offsets_slice(&valid, 2).expect("bounded offsets");
+        assert_eq!(offsets, [0, 1, 3]);
+        assert_eq!(header_len, 24);
+        assert_eq!(data_len, 3);
+        assert_eq!(tail_len, 0);
+
+        let mut out_of_bounds = valid;
+        out_of_bounds[16..24].copy_from_slice(&4_u64.to_le_bytes());
+        assert!(matches!(
+            decode_packed_offsets_slice(&out_of_bounds, 2),
+            Err(Error::LengthMismatch)
+        ));
+    }
+
+    #[test]
     fn copy_from_payload_allows_zero_len() {
         let mut out = 0u8;
         let ptr = core::ptr::NonNull::<u8>::dangling().as_ptr();
@@ -9643,7 +9654,7 @@ mod tests {
         };
         let (mut payload, flags) = encode_with_header_flags(&expected);
         assert!(
-            payload.len() >= core::mem::size_of::<Archived<PrefixRecord>>(),
+            payload.len() >= archived_payload_size::<PrefixRecord>(),
             "test payload must exercise direct archived deserialization"
         );
         payload.push(0xAA);
@@ -9668,7 +9679,7 @@ mod tests {
         let (mut payload, flags) = encode_with_header_flags(&expected);
         payload.push(0xAA);
         assert!(
-            payload.len() < core::mem::size_of::<Archived<PrefixRecord>>(),
+            payload.len() < archived_payload_size::<PrefixRecord>(),
             "test payload must exercise slice-based deserialization"
         );
         let frame = frame_bare_with_header_flags::<PrefixRecord>(&payload, flags)
@@ -9753,7 +9764,7 @@ mod tests {
         storage.extend_from_slice(&encoded);
         let misaligned = &storage[1..];
         assert_ne!(
-            misaligned.as_ptr() as usize % core::mem::align_of::<Archived<String>>(),
+            misaligned.as_ptr() as usize % archived_payload_align::<String>(),
             0,
             "test payload must exercise the realignment path"
         );
@@ -9777,11 +9788,18 @@ mod tests {
                     archived as *const Archived<Self> as usize,
                     Ordering::Relaxed,
                 );
-                archived.0
+                let bytes = payload_range_from_ptr(
+                    core::ptr::from_ref(archived).cast::<u8>(),
+                    core::mem::size_of::<Self>(),
+                )
+                .expect("overaligned test field payload");
+                let mut field = [0_u8; 64];
+                field.copy_from_slice(bytes);
+                Self(field)
             }
         }
 
-        assert_eq!(core::mem::size_of::<Archived<OveralignedField>>(), 64);
+        assert_eq!(archived_payload_size::<OveralignedField>(), 64);
         let bytes = [0xA5_u8; 64];
         let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes.len(), usize::MAX);
         let decoded =
@@ -9792,7 +9810,7 @@ mod tests {
         assert_eq!(decoded, OveralignedField(bytes));
         assert_ne!(decoded_address, bytes.as_ptr() as usize);
         assert_eq!(
-            decoded_address % core::mem::align_of::<Archived<OveralignedField>>(),
+            decoded_address % archived_payload_align::<OveralignedField>(),
             0
         );
 
@@ -9926,7 +9944,7 @@ mod tests {
         storage.extend_from_slice(&buf);
         let misaligned = &storage[1..];
         assert_ne!(
-            misaligned.as_ptr() as usize % core::mem::align_of::<Archived<u32>>(),
+            misaligned.as_ptr() as usize % archived_payload_align::<u32>(),
             0,
             "expected misaligned scalar payload"
         );
@@ -10074,7 +10092,7 @@ mod tests {
         storage.extend_from_slice(&encoded);
         let misaligned = &storage[1..];
         assert_ne!(
-            misaligned.as_ptr() as usize % core::mem::align_of::<Archived<Vec<Vec<u64>>>>(),
+            misaligned.as_ptr() as usize % archived_payload_align::<Vec<Vec<u64>>>(),
             0,
             "expected misaligned test payload"
         );
@@ -10436,8 +10454,44 @@ mod tests {
     }
 
     #[test]
+    fn archived_cast_is_an_opaque_address_marker_and_cannot_bypass_bounds() {
+        assert_eq!(core::mem::size_of::<Archived<u8>>(), 0);
+        assert_eq!(core::mem::size_of::<Archived<[u8; 4096]>>(), 0);
+        assert_eq!(core::mem::align_of::<Archived<u8>>(), 1);
+        assert_eq!(core::mem::align_of::<Archived<[u128; 8]>>(), 1);
+
+        let payload = [0xA5_u8];
+        let archived = archived_from_slice::<u8>(&payload).expect("one-byte archive");
+        let retagged = archived.cast::<u64>();
+        assert_eq!(
+            core::ptr::from_ref(archived.archived()).cast::<u8>(),
+            core::ptr::from_ref(retagged).cast::<u8>()
+        );
+
+        let missing =
+            <u64 as NoritoDeserialize>::try_deserialize(retagged).expect_err("context is required");
+        assert!(matches!(missing, Error::MissingPayloadContext));
+
+        let _payload = PayloadCtxGuard::enter(archived.bytes());
+        let bounded = <u64 as NoritoDeserialize>::try_deserialize(retagged)
+            .expect_err("a cast cannot enlarge the active payload");
+        assert!(matches!(bounded, Error::LengthMismatch));
+        drop(_payload);
+
+        let empty = archived_from_slice::<()>(&[]).expect("empty archive marker");
+        let option = empty.cast::<Option<u64>>();
+        let missing = <Option<u64> as NoritoDeserialize>::try_deserialize(option)
+            .expect_err("an opaque empty marker cannot be read without a payload context");
+        assert!(matches!(missing, Error::MissingPayloadContext));
+        let _empty_payload = PayloadCtxGuard::enter(empty.bytes());
+        let bounded = <Option<u64> as NoritoDeserialize>::try_deserialize(option)
+            .expect_err("an opaque empty marker cannot provide an option tag");
+        assert!(matches!(bounded, Error::LengthMismatch));
+    }
+
+    #[test]
     fn archived_from_slice_propagates_realign_allocation_limit() {
-        let align = core::mem::align_of::<Archived<u128>>();
+        let align = archived_payload_align::<u128>();
         let mut storage = vec![0_u8; core::mem::size_of::<u128>() + align];
         let base = storage.as_mut_ptr() as usize;
         let offset = (0..align)
@@ -10485,7 +10539,7 @@ mod tests {
             "offset slice must retain original payload bytes"
         );
         assert_ne!(
-            misaligned.as_ptr() as usize % core::mem::align_of::<Archived<AlignSensitive>>(),
+            misaligned.as_ptr() as usize % archived_payload_align::<AlignSensitive>(),
             0,
             "expected misaligned payload for test coverage"
         );
@@ -10538,7 +10592,7 @@ mod tests {
     }
 
     #[test]
-    fn payload_slice_from_ptr_falls_back_to_root_span() {
+    fn payload_slice_from_ptr_cannot_escape_the_active_field() {
         reset_decode_state();
         let payload: Vec<u8> = (0..64).collect();
         set_decode_root(&payload);
@@ -10546,9 +10600,11 @@ mod tests {
         let guard = PayloadCtxGuard::enter(ctx);
         let ptr = payload[48..].as_ptr();
 
-        let slice = payload_slice_from_ptr(ptr).expect("fallback to root span");
-        assert_eq!(slice, &payload[48..]);
-        assert_eq!(payload_ctx_max_access().unwrap(), ctx.len());
+        assert!(matches!(
+            payload_slice_from_ptr(ptr),
+            Err(Error::LengthMismatch)
+        ));
+        assert_eq!(payload_ctx_max_access().unwrap(), 0);
 
         drop(guard);
         clear_decode_root();
@@ -10767,7 +10823,7 @@ mod tests {
     fn archived_box_aligns_payload() {
         let archived = ArchivedBox::<Align64>::from_payload(vec![0xAA]);
         let ptr = archived.archived() as *const Archived<Align64> as usize;
-        assert_eq!(ptr % core::mem::align_of::<Archived<Align64>>(), 0);
+        assert_eq!(ptr % archived_payload_align::<Align64>(), 0);
         assert_eq!(archived.bytes(), &[0xAA]);
     }
 
@@ -10977,6 +11033,28 @@ mod tests {
         let archived = crate::from_bytes::<StringAndNumber>(&bytes).expect("decode struct");
         let decoded = StringAndNumber::deserialize(archived);
         assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn archive_marker_accepts_short_valid_variable_payload() {
+        let input = String::from("ok");
+        let bytes = to_bytes(&input).expect("encode short string");
+        let archived = from_bytes::<String>(&bytes).expect("validate short string frame");
+        let decoded =
+            String::try_deserialize(archived).expect("decode bounded short string payload");
+        assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn archive_marker_defers_fixed_payload_bounds_to_fallible_decode() {
+        let bytes = frame_bare_with_header_flags::<u64>(&[0_u8; 7], 0)
+            .expect("frame deliberately truncated fixed payload");
+        let archived =
+            from_bytes::<u64>(&bytes).expect("frame validation must not reinterpret payload bytes");
+        assert!(matches!(
+            u64::try_deserialize(archived),
+            Err(Error::LengthMismatch)
+        ));
     }
 
     #[test]
@@ -11523,6 +11601,30 @@ mod tests {
         assert_eq!(decoded, v);
     }
 
+    #[derive(Debug)]
+    struct DecodeBudgetProbe;
+
+    impl<'a> DecodeFromSlice<'a> for DecodeBudgetProbe {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
+            enforce_decode_sequence_length(u64::MAX)?;
+            Ok((Self, bytes.len()))
+        }
+    }
+
+    #[test]
+    fn archive_view_decode_installs_payload_derived_resource_limits() {
+        let bytes = to_bytes(&0_u8).expect("encode a minimal archive");
+        let view = from_bytes_view(&bytes).expect("validate archive framing");
+
+        assert!(matches!(
+            view.decode_unchecked::<DecodeBudgetProbe>(),
+            Err(Error::SequenceLengthExceeded {
+                length: u64::MAX,
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn view_decode_exact_rejects_a_zero_filled_logical_tail() {
         let value = 7_u8;
@@ -11806,5 +11908,54 @@ mod tests {
         reset_decode_state();
     }
 
-    include!("core/core_tail_tests.rs");
+    #[test]
+    fn string_and_str_decode_require_payload_context() {
+        clear_payload_ctx();
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&2u64.to_le_bytes());
+        payload.extend_from_slice(b"ok");
+
+        let align = archived_payload_align::<String>().max(archived_payload_align::<&str>());
+        let archive = crate::ArchiveSlice::new(&payload, align).expect("align payload");
+
+        let archived_string = unsafe { &*(archive.as_slice().as_ptr() as *const Archived<String>) };
+        let error = String::try_deserialize(archived_string)
+            .expect_err("a raw archived address has no payload bounds");
+        assert!(matches!(error, Error::MissingPayloadContext));
+
+        clear_payload_ctx();
+        let archived_str = unsafe { &*(archive.as_slice().as_ptr() as *const Archived<&str>) };
+        let error = <&str as NoritoDeserialize>::try_deserialize(archived_str)
+            .expect_err("a raw archived address has no payload bounds");
+        assert!(matches!(error, Error::MissingPayloadContext));
+
+        let _payload = PayloadCtxGuard::enter_with_flags(archive.as_slice(), 0);
+        assert_eq!(
+            String::try_deserialize(archived_string).expect("string"),
+            "ok"
+        );
+        assert_eq!(
+            <&str as NoritoDeserialize>::try_deserialize(archived_str).expect("str"),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn aos_views_reject_oversize_field_len() {
+        reset_decode_state();
+        let _guard = DecodeFlagsGuard::enter_with_hint(0, 0);
+        let overflow = (usize::MAX as u128)
+            .checked_add(1)
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(16);
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u64.to_le_bytes());
+        body.push(crate::aos::AOS_FORMAT_VERSION);
+        body.extend_from_slice(&1u64.to_le_bytes());
+        body.extend_from_slice(&overflow.to_le_bytes());
+
+        let result = crate::columnar::view_aos_u64_str_bool(&body);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
+    }
 }

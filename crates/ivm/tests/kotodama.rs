@@ -1054,7 +1054,7 @@ fn compile_emits_state_introspection_helpers() {
     let src = r#"
         seiyaku StateIntrospection {
         view fn f() -> (bytes, bool, int, int) {
-            let prefix = Name::parse("Orders");
+            let prefix = Name::parse("Orders").path(0);
             let keys = state::keys(path: prefix, offset: 0, limit: 2);
             let present = state::contains(prefix);
             let len = state::len(prefix);
@@ -1083,13 +1083,32 @@ fn compile_emits_state_introspection_helpers() {
 #[test]
 fn semantic_rejects_state_introspection_helper_args() {
     let prog = parse(
-        r#"seiyaku C { fn f() { let _keys = state::keys(path: Name::parse("Orders"), offset: 0, limit: b"bad"); } }"#,
+        r#"seiyaku C { fn f() { let prefix = Name::parse("Orders").path(0); let _keys = state::keys(path: prefix, offset: 0, limit: b"bad"); } }"#,
     )
     .unwrap();
     let err = analyze(&prog).expect_err("expected state_keys type error");
     assert!(
         err.message()
-            .contains("state::keys expects (Name, int offset, int limit)"),
+            .contains("state::keys expects (bytes StatePath, int offset, int limit)"),
+        "unexpected error: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn semantic_rejects_legacy_name_state_path_carriers() {
+    // `Name` is retained here only as an explicit negative ABI fixture. V1
+    // durable-state calls require `bytes` containing canonical Norito
+    // `StatePath`, even though ordinary business identifiers remain `Name`.
+    let prog = parse(
+        r#"seiyaku C { fn f() { let _keys = state::keys(path: Name::parse("Orders"), offset: 0, limit: 1); } }"#,
+    )
+    .unwrap();
+    let err = analyze(&prog).expect_err("legacy Name state path must be rejected");
+    assert_eq!(err.code(), "K2003");
+    assert!(
+        err.message()
+            .contains("state::keys expects (bytes StatePath, int offset, int limit)"),
         "unexpected error: {}",
         err.message()
     );

@@ -3084,17 +3084,17 @@ fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixIn
     length.copy_from_slice(len_bytes);
     let payload_len =
         usize::try_from(u64::from_le_bytes(length)).map_err(|_| ncore::Error::LengthMismatch)?;
-    let _padding = if core::mem::align_of::<ncore::Archived<T>>() <= 1 {
+    let _padding = if ncore::archived_payload_align::<T>() <= 1 {
         0
     } else {
-        let rem = ncore::Header::SIZE % core::mem::align_of::<ncore::Archived<T>>();
+        let rem = ncore::Header::SIZE % ncore::archived_payload_align::<T>();
         if rem == 0 {
             0
         } else {
-            core::mem::align_of::<ncore::Archived<T>>() - rem
+            ncore::archived_payload_align::<T>() - rem
         }
     };
-    let consumed = framed_payload_len(payload_len, core::mem::align_of::<ncore::Archived<T>>())
+    let consumed = framed_payload_len(payload_len, ncore::archived_payload_align::<T>())
         .filter(|size| *size <= bytes.len())
         .ok_or(ncore::Error::LengthMismatch)?;
     let _flags = *bytes

@@ -1,11 +1,11 @@
 //! Lane privacy proof attachments for Nexus private lanes.
 //!
-//! These helpers let transactions attach Merkle or zk-SNARK witnesses that can
-//! be verified against the lane privacy registry at admission time.
+//! These helpers let transactions attach domain-separated Merkle witnesses
+//! that can be verified against the lane privacy registry at admission time.
 
 use iroha_crypto::{
     Hash, HashOf, MerkleProof,
-    privacy::{LaneCommitmentId, MerkleWitness, PrivacyWitness, SnarkWitness},
+    privacy::{LaneCommitmentId, MerkleWitness, PrivacyWitness},
 };
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -21,7 +21,7 @@ use thiserror::Error;
 pub struct LanePrivacyProof {
     /// Commitment identifier advertised by the lane manifest.
     pub commitment_id: LaneCommitmentId,
-    /// Witness payload proving membership or circuit validity.
+    /// Witness payload proving membership.
     pub witness: LanePrivacyWitness,
 }
 
@@ -34,7 +34,7 @@ impl LanePrivacyProof {
 
     /// Convert to the runtime witness representation for verification.
     #[must_use]
-    pub fn as_privacy_witness(&self) -> PrivacyWitness<'_> {
+    pub fn as_privacy_witness(&self) -> PrivacyWitness {
         self.witness.as_privacy_witness()
     }
 
@@ -48,9 +48,9 @@ impl LanePrivacyProof {
 
     /// Construct a Merkle-based lane privacy proof from raw sibling hashes.
     ///
-    /// The `leaf` and each `audit_path` entry are treated as already-hashed
-    /// digests; they are wrapped with [`Hash::prehashed`] to preserve the bit
-    /// layout expected by the runtime.
+    /// `leaf` is the raw 32-byte lane leaf. Each `audit_path` entry is an
+    /// already-hashed sibling digest and is wrapped with [`Hash::prehashed`]
+    /// to preserve the canonical hash representation expected by the runtime.
     ///
     /// # Errors
     ///
@@ -65,6 +65,9 @@ impl LanePrivacyProof {
         if audit_path.is_empty() {
             return Err(LanePrivacyProofError::EmptyMerklePath);
         }
+        if let Some(index) = audit_path.iter().position(Option::is_none) {
+            return Err(LanePrivacyProofError::MissingMerkleSibling { index });
+        }
 
         let audit_path = audit_path
             .into_iter()
@@ -77,14 +80,13 @@ impl LanePrivacyProof {
         Ok(Self {
             commitment_id,
             witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
-                leaf: Hash::prehashed(leaf).into(),
+                leaf,
                 proof: MerkleProof::from_audit_path(leaf_index, audit_path),
             }),
         })
     }
 }
 
-/// Witness payload for a lane privacy proof.
 /// Merkle witness payload for lane privacy proofs.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -100,22 +102,6 @@ pub struct LanePrivacyMerkleWitness {
     pub proof: MerkleProof<[u8; 32]>,
 }
 
-/// zk-SNARK witness payload for lane privacy proofs.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct LanePrivacySnarkWitness {
-    /// Canonical encoding of the public inputs.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
-    pub public_inputs: Vec<u8>,
-    /// Proof bytes emitted by the prover.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
-    pub proof: Vec<u8>,
-}
-
 /// Witness payload for a lane privacy proof.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -128,24 +114,17 @@ pub enum LanePrivacyWitness {
     /// Merkle inclusion proof bound to a committed root.
     #[norito(rename = "merkle")]
     Merkle(LanePrivacyMerkleWitness),
-    /// zk-SNARK witness bound to the circuit commitment.
-    #[norito(rename = "snark")]
-    Snark(LanePrivacySnarkWitness),
 }
 
 impl LanePrivacyWitness {
     /// Convert the attachment to a runtime witness suitable for verification.
     #[must_use]
-    pub fn as_privacy_witness(&self) -> PrivacyWitness<'_> {
+    pub fn as_privacy_witness(&self) -> PrivacyWitness {
         match self {
             Self::Merkle(witness) => {
                 let witness = MerkleWitness::from_leaf_bytes(witness.leaf, witness.proof.clone());
                 PrivacyWitness::Merkle(witness)
             }
-            Self::Snark(witness) => PrivacyWitness::Snark(SnarkWitness {
-                public_inputs: &witness.public_inputs,
-                proof: &witness.proof,
-            }),
         }
     }
 }
@@ -156,11 +135,20 @@ pub enum LanePrivacyProofError {
     /// Merkle proofs must carry at least one sibling entry.
     #[error("merkle path must not be empty")]
     EmptyMerklePath,
+    /// Lane privacy Merkle paths must contain a sibling at every level.
+    #[error("merkle path is missing sibling at index {index}")]
+    MissingMerkleSibling {
+        /// Zero-based path entry containing `None`.
+        index: usize,
+    },
 }
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::MerkleTree;
+    use iroha_crypto::{
+        MerkleTree,
+        privacy::{LanePrivacyCommitment, MerkleCommitment, PrivacyError},
+    };
 
     use super::*;
 
@@ -187,17 +175,11 @@ mod tests {
         )
         .expect("builder should succeed");
 
-        let LanePrivacyWitness::Merkle(witness) = built.witness else {
-            panic!("expected merkle witness")
-        };
+        let LanePrivacyWitness::Merkle(witness) = built.witness;
         assert_eq!(witness.proof.leaf_index(), proof.leaf_index());
         assert_eq!(witness.proof.audit_path().len(), proof.audit_path().len());
         assert_eq!(witness.leaf.len(), 32);
-        assert_eq!(
-            witness.leaf[31] & 1,
-            1,
-            "lsb should be set by Hash::prehashed"
-        );
+        assert_eq!(witness.leaf, leaf, "raw leaf bytes must be preserved");
 
         for (expected, actual) in audit_path.iter().zip(witness.proof.audit_path().iter()) {
             match (expected, actual) {
@@ -232,5 +214,55 @@ mod tests {
         )
         .expect_err("empty path must be rejected");
         assert_eq!(err, LanePrivacyProofError::EmptyMerklePath);
+    }
+
+    #[test]
+    fn merkle_from_raw_path_rejects_missing_sibling() {
+        let err = LanePrivacyProof::merkle_from_raw_path(
+            LaneCommitmentId::new(1),
+            [0_u8; 32],
+            0,
+            vec![None],
+        )
+        .expect_err("sparse lane privacy paths must be rejected");
+        assert_eq!(
+            err,
+            LanePrivacyProofError::MissingMerkleSibling { index: 0 }
+        );
+    }
+
+    #[test]
+    fn decoded_empty_merkle_path_is_rejected_by_runtime_verifier() {
+        let wire = LanePrivacyProof {
+            commitment_id: LaneCommitmentId::new(3),
+            witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
+                leaf: [0xAA; 32],
+                proof: MerkleProof::from_audit_path_bytes(0, Vec::new()),
+            }),
+        };
+        let bytes = norito::to_bytes(&wire).expect("encode lane privacy proof");
+        let archived =
+            norito::from_bytes::<LanePrivacyProof>(&bytes).expect("decode lane privacy proof");
+        let decoded: LanePrivacyProof = norito::core::NoritoDeserialize::deserialize(archived);
+        let commitment = LanePrivacyCommitment::merkle(
+            LaneCommitmentId::new(3),
+            MerkleCommitment::from_root_bytes([0xAA; 32], 8),
+        );
+        assert_eq!(
+            commitment
+                .verify(decoded.as_privacy_witness())
+                .expect_err("decoded empty path must fail at the verifier"),
+            PrivacyError::EmptyMerkleProof
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn removed_snark_witness_is_rejected_by_json_decoder() {
+        let stale = r#"{"kind":"snark","payload":{}}"#;
+        assert!(
+            norito::json::from_str::<LanePrivacyWitness>(stale).is_err(),
+            "the data model must not decode the removed hash-only SNARK witness"
+        );
     }
 }

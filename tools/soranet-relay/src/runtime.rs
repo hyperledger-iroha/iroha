@@ -3,15 +3,15 @@
 #![allow(unexpected_cfgs)]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Write as _,
     fs,
-    io::Write as _,
+    io::{self, Read as _, Write as _},
     net::SocketAddr,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicU16, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -28,8 +28,15 @@ use iroha_crypto::{
             RuntimeParams as NoiseRuntimeParams, SessionSecrets, process_client_hello,
             relay_finalize_handshake, update_suite_list,
         },
-        pow::{self, Parameters as PowParameters, Ticket as PowTicket},
+        pow::{
+            self, Parameters as PowParameters, Ticket as PowTicket, TicketRevocationStore,
+            TicketRevocationStoreLimits,
+        },
         puzzle::{self, ChallengeBinding as PuzzleBinding},
+        record::{
+            RecordEndpoint, RecordLayer, RecordReader, RecordStreamContext, RecordStreamKind,
+            RecordWriter,
+        },
         token::{self, AdmissionToken, DecodeError as TokenDecodeError},
     },
 };
@@ -57,7 +64,10 @@ use norito::{
     streaming::SoranetAccessKind,
     to_bytes,
 };
-use quinn::{ClosedStream, Connection, Endpoint, Incoming, RecvStream, SendStream, VarInt};
+use quinn::{
+    ClosedStream, Connection, Dir, Endpoint, Incoming, RecvStream, SendStream, Side, StreamId,
+    VarInt, crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
+};
 use rand::{SeedableRng, rngs::StdRng};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use thiserror::Error;
@@ -127,7 +137,7 @@ struct VpnBackendBridgeContext<'a> {
 }
 
 #[derive(Clone)]
-struct MetricsResources {
+struct AdminResources {
     metrics: Arc<Metrics>,
     privacy: Arc<PrivacyAggregator>,
     privacy_events: Arc<PrivacyEventBuffer>,
@@ -135,8 +145,106 @@ struct MetricsResources {
     performance: Arc<Mutex<RelayPerformanceAccumulator>>,
 }
 
+#[derive(Clone, Debug)]
+struct AdminAuthorization {
+    token_hash: blake3::Hash,
+}
+
+impl AdminAuthorization {
+    fn load(path: &Path) -> Result<Self, ConfigError> {
+        let mut file = fs::File::open(path).map_err(|error| {
+            ConfigError::Admin(format!(
+                "failed to open admin_auth_token_path ({}): {error}",
+                path.display()
+            ))
+        })?;
+        let metadata = file.metadata().map_err(|error| {
+            ConfigError::Admin(format!(
+                "failed to inspect admin_auth_token_path ({}): {error}",
+                path.display()
+            ))
+        })?;
+        if !metadata.is_file() {
+            return Err(ConfigError::Admin(format!(
+                "admin_auth_token_path ({}) must be a regular file",
+                path.display()
+            )));
+        }
+        if metadata.len() > 258 {
+            return Err(ConfigError::Admin(
+                "admin authentication token file exceeds 256 bytes plus a line ending".to_string(),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mode = metadata.permissions().mode();
+            if mode & 0o027 != 0 {
+                return Err(ConfigError::Admin(format!(
+                    "admin_auth_token_path ({}) must not be writable by its group or accessible by other users",
+                    path.display()
+                )));
+            }
+        }
+
+        let capacity = usize::try_from(metadata.len()).map_err(|_| {
+            ConfigError::Admin(
+                "admin authentication token file length is not representable".to_string(),
+            )
+        })?;
+        let mut bytes = Vec::with_capacity(capacity);
+        (&mut file)
+            .take(259)
+            .read_to_end(&mut bytes)
+            .map_err(|error| {
+                ConfigError::Admin(format!(
+                    "failed to read admin_auth_token_path ({}): {error}",
+                    path.display()
+                ))
+            })?;
+        if bytes.len() > 258 {
+            bytes.fill(0);
+            return Err(ConfigError::Admin(
+                "admin authentication token file exceeds 256 bytes plus a line ending".to_string(),
+            ));
+        }
+        let token_hash = Self::hash_token(&bytes);
+        bytes.fill(0);
+        Ok(Self {
+            token_hash: token_hash?,
+        })
+    }
+
+    fn hash_token(bytes: &[u8]) -> Result<blake3::Hash, ConfigError> {
+        let token = std::str::from_utf8(bytes).map_err(|_| {
+            ConfigError::Admin("admin authentication token must be valid UTF-8".to_string())
+        })?;
+        let token = token.trim_end_matches(|character| matches!(character, '\r' | '\n'));
+        if !(32..=256).contains(&token.len()) {
+            return Err(ConfigError::Admin(
+                "admin authentication token must contain 32 to 256 bytes".to_string(),
+            ));
+        }
+        if !token.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return Err(ConfigError::Admin(
+                "admin authentication token must contain only printable non-whitespace ASCII"
+                    .to_string(),
+            ));
+        }
+        Ok(blake3::hash(token.as_bytes()))
+    }
+
+    fn matches(&self, candidate: &str) -> bool {
+        // `blake3::Hash` equality is constant-time, so the secret is never
+        // compared byte-by-byte with an attacker-controlled prefix.
+        self.token_hash == blake3::hash(candidate.as_bytes())
+    }
+}
+
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4";
 const NDJSON_CONTENT_TYPE: &str = "application/x-ndjson";
+const PLAIN_TEXT_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
 const SORANET_HANDSHAKE_LOG_TARGET: &str = "soranet.handshake";
 const HANDSHAKE_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_PAYLOAD_TIMEOUT: Duration = Duration::from_secs(5);
@@ -161,6 +269,18 @@ const DEFAULT_HANDSHAKE_SUITES: [HandshakeSuite; 2] = [
 ];
 const VPN_BACKEND_BOOTSTRAP_MAGIC: &[u8; 8] = b"SVPNBE1\0";
 const VPN_BACKEND_STATUS_READY: u8 = 1;
+
+fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
+    let initiator = match stream_id.initiator() {
+        Side::Client => RecordEndpoint::Client,
+        Side::Server => RecordEndpoint::Relay,
+    };
+    let kind = match stream_id.dir() {
+        Dir::Bi => RecordStreamKind::Bidirectional,
+        Dir::Uni => RecordStreamKind::Unidirectional,
+    };
+    RecordStreamContext::new(initiator, kind, stream_id.index())
+}
 
 /// Shared context required by `monitor_circuit`.
 #[derive(Clone)]
@@ -1105,6 +1225,7 @@ fn record_route_open_egress_metrics(
 /// Fully configured relay runtime ready to serve traffic.
 pub struct RelayRuntime {
     config: RelayConfig,
+    admin_authorization: Option<AdminAuthorization>,
     metrics: Arc<Metrics>,
     privacy: Arc<PrivacyAggregator>,
     privacy_events: Arc<PrivacyEventBuffer>,
@@ -1128,6 +1249,7 @@ pub struct RelayRuntime {
     lane_manager: Arc<ConstantRateLaneManager>,
     vpn: Option<Arc<VpnOverlay>>,
     vpn_redeemed_tickets: Arc<Mutex<HashMap<[u8; 16], u64>>>,
+    ticket_replays: Arc<StdMutex<TicketReplayState>>,
 }
 
 #[derive(Clone)]
@@ -1155,6 +1277,82 @@ struct CircuitContext {
     lane_manager: Arc<ConstantRateLaneManager>,
     vpn: Option<Arc<VpnOverlay>>,
     vpn_redeemed_tickets: Arc<Mutex<HashMap<[u8; 16], u64>>>,
+    ticket_replays: Arc<StdMutex<TicketReplayState>>,
+}
+
+#[derive(Debug)]
+struct TicketReplayState {
+    persisted: TicketRevocationStore,
+    pending: HashSet<[u8; 32]>,
+    capacity: usize,
+}
+
+impl TicketReplayState {
+    fn load(config: &config::PowConfig, now: SystemTime) -> Result<Self, ConfigError> {
+        let capacity = usize::try_from(config.revocation_store_capacity).map_err(|_| {
+            ConfigError::TicketReplayStore(format!(
+                "pow.revocation_store_capacity {} exceeds this platform's usize",
+                config.revocation_store_capacity
+            ))
+        })?;
+        let limits = TicketRevocationStoreLimits::new(
+            capacity,
+            Duration::from_secs(config.revocation_store_ttl_secs),
+        )
+        .map_err(|error| ConfigError::TicketReplayStore(error.to_string()))?;
+        let persisted =
+            TicketRevocationStore::load(config.revocation_store_path.clone(), limits, now)
+                .map_err(|error| ConfigError::TicketReplayStore(error.to_string()))?;
+        Ok(Self {
+            persisted,
+            pending: HashSet::new(),
+            capacity,
+        })
+    }
+}
+
+fn verify_and_consume_ticket(
+    ticket: &PowTicket,
+    replay_state: &StdMutex<TicketReplayState>,
+    verify: impl FnOnce() -> Result<(), HandshakeError>,
+) -> Result<(), HandshakeError> {
+    let fingerprint = ticket.revocation_fingerprint();
+    {
+        let mut state = replay_state
+            .lock()
+            .map_err(|_| HandshakeError::ReplayStore("ticket replay lock poisoned".to_owned()))?;
+        let now = SystemTime::now();
+        if state.persisted.is_ticket_payload_revoked(ticket, now)
+            || state.pending.contains(&fingerprint)
+        {
+            return Err(HandshakeError::Pow(pow::Error::Replay));
+        }
+        if state.persisted.len(now).saturating_add(state.pending.len()) >= state.capacity {
+            return Err(HandshakeError::ReplayStore(
+                "ticket replay store at capacity".to_owned(),
+            ));
+        }
+        state.pending.insert(fingerprint);
+    }
+
+    if let Err(error) = verify() {
+        let mut state = replay_state
+            .lock()
+            .map_err(|_| HandshakeError::ReplayStore("ticket replay lock poisoned".to_owned()))?;
+        state.pending.remove(&fingerprint);
+        return Err(error);
+    }
+
+    let mut state = replay_state
+        .lock()
+        .map_err(|_| HandshakeError::ReplayStore("ticket replay lock poisoned".to_owned()))?;
+    let consumed = pow::record_revocation(ticket, Some(&mut state.persisted), SystemTime::now())
+        .map_err(|error| match error {
+            pow::Error::RevocationStore(message) => HandshakeError::ReplayStore(message),
+            other => HandshakeError::Pow(other),
+        });
+    state.pending.remove(&fingerprint);
+    consumed
 }
 
 fn verify_puzzle_ticket_binding(
@@ -1162,10 +1360,13 @@ fn verify_puzzle_ticket_binding(
     params: &puzzle::Parameters,
     descriptor_commit: &[u8],
     relay_id: &[u8],
-    transcript_hash: Option<&[u8]>,
-) -> Result<(), puzzle::Error> {
+    transcript_hash: &[u8; 32],
+    replay_state: &StdMutex<TicketReplayState>,
+) -> Result<(), HandshakeError> {
     let binding = PuzzleBinding::new(descriptor_commit, relay_id, transcript_hash);
-    puzzle::verify(ticket, &binding, params)
+    verify_and_consume_ticket(ticket, replay_state, || {
+        puzzle::verify(ticket, &binding, params).map_err(HandshakeError::Puzzle)
+    })
 }
 
 fn verify_pow_ticket_binding(
@@ -1173,10 +1374,21 @@ fn verify_pow_ticket_binding(
     params: &PowParameters,
     descriptor_commit: &[u8],
     relay_id: &[u8],
-    transcript_hash: Option<&[u8]>,
-) -> Result<(), pow::Error> {
+    transcript_hash: &[u8; 32],
+    replay_state: &StdMutex<TicketReplayState>,
+) -> Result<(), HandshakeError> {
     let binding = pow::ChallengeBinding::new(descriptor_commit, relay_id, transcript_hash);
-    pow::verify(ticket, &binding, params)
+    verify_and_consume_ticket(ticket, replay_state, || {
+        pow::verify(ticket, &binding, params).map_err(HandshakeError::Pow)
+    })
+}
+
+fn continue_after_admission<T>(
+    admission: Result<(), HandshakeError>,
+    expensive_handshake: impl FnOnce() -> Result<T, HandshakeError>,
+) -> Result<T, HandshakeError> {
+    admission?;
+    expensive_handshake()
 }
 
 async fn redeem_vpn_helper_ticket(
@@ -1200,6 +1412,10 @@ impl RelayRuntime {
     /// descriptor commits, guard snapshots, and identity keys along the way.
     pub fn new(mut config: RelayConfig) -> Result<Self, RelayError> {
         config.validate()?;
+        let admin_authorization = config
+            .admin_auth_token_path()
+            .map(AdminAuthorization::load)
+            .transpose()?;
         let validation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| {
@@ -1386,6 +1602,10 @@ impl RelayRuntime {
         let base_pow_params = pow_config.parameters()?;
         let puzzle_params = pow_config.puzzle_parameters(&base_pow_params)?;
         let token_policy = pow_config.token_policy().map_err(RelayError::Config)?;
+        let ticket_replays = Arc::new(StdMutex::new(TicketReplayState::load(
+            &pow_config,
+            SystemTime::now(),
+        )?));
 
         let grease_entries = policy.grease_entries()?;
 
@@ -1513,6 +1733,7 @@ impl RelayRuntime {
         ));
         Ok(Self {
             config,
+            admin_authorization,
             metrics: Arc::clone(&metrics),
             privacy,
             privacy_events,
@@ -1536,6 +1757,7 @@ impl RelayRuntime {
             lane_manager,
             vpn: vpn_overlay,
             vpn_redeemed_tickets: Arc::new(Mutex::new(HashMap::new())),
+            ticket_replays,
         })
     }
 
@@ -1589,6 +1811,7 @@ impl RelayRuntime {
             lane_manager: Arc::clone(&self.lane_manager),
             vpn: self.vpn.clone(),
             vpn_redeemed_tickets: Arc::clone(&self.vpn_redeemed_tickets),
+            ticket_replays: Arc::clone(&self.ticket_replays),
         }
     }
 
@@ -1621,7 +1844,11 @@ impl RelayRuntime {
 
         let metrics_task = if let Some(admin_addr) = admin_addr {
             let relay_id = self.relay_id;
-            let resources = MetricsResources {
+            let authorization = self
+                .admin_authorization
+                .clone()
+                .expect("validated admin listener has authentication");
+            let resources = AdminResources {
                 metrics: Arc::clone(&self.metrics),
                 privacy: Arc::clone(&self.privacy),
                 privacy_events: Arc::clone(&self.privacy_events),
@@ -1630,9 +1857,10 @@ impl RelayRuntime {
             };
             Some(tokio::spawn(async move {
                 if let Err(error) =
-                    RelayRuntime::serve_metrics(resources, relay_id, admin_addr, mode).await
+                    RelayRuntime::serve_admin(resources, relay_id, admin_addr, mode, authorization)
+                        .await
                 {
-                    warn!(%error, "metrics server terminated");
+                    warn!(%error, "admin server terminated");
                 }
             }))
         } else {
@@ -1998,6 +2226,20 @@ impl RelayRuntime {
                 vpn_session,
                 vpn_helper_ticket,
             }) => {
+                let record_layer =
+                    match RecordLayer::new(&session.session_key, RecordEndpoint::Relay) {
+                        Ok(layer) => Arc::new(layer),
+                        Err(error) => {
+                            metrics.record_failure();
+                            warn!(
+                                remote = %remote,
+                                %error,
+                                "rejecting handshake with unusable application record key"
+                            );
+                            connection.close(0u32.into(), b"invalid record key");
+                            return;
+                        }
+                    };
                 let elapsed = attempt.elapsed();
                 metrics.record_success();
                 context.dos.record_success(&attempt, elapsed);
@@ -2182,6 +2424,7 @@ impl RelayRuntime {
                     resources,
                     vpn_session,
                     vpn_helper_ticket,
+                    record_layer,
                 )
                 .await;
             }
@@ -2369,6 +2612,7 @@ impl RelayRuntime {
         resources: MonitorCircuitResources,
         vpn_session: Option<VpnSessionHandle>,
         vpn_helper_ticket: Option<VpnHelperTicketV1>,
+        record_layer: Arc<RecordLayer>,
     ) {
         let privacy_mode: SoranetPrivacyModeV1 = resources.mode.into();
         let measurement_resources = resources.clone();
@@ -2391,6 +2635,7 @@ impl RelayRuntime {
             connection.clone(),
             measurement_resources,
             remote,
+            Arc::clone(&record_layer),
         ));
         let exit_task = match (
             resources.vpn.clone(),
@@ -2404,6 +2649,7 @@ impl RelayRuntime {
                     vpn,
                     session,
                     helper_ticket,
+                    Arc::clone(&record_layer),
                 ))
             }
             _ => tokio::spawn(Self::serve_exit_streams(
@@ -2411,6 +2657,7 @@ impl RelayRuntime {
                 exit_resources,
                 remote,
                 vpn_session.clone(),
+                record_layer,
             )),
         };
 
@@ -2541,6 +2788,7 @@ impl RelayRuntime {
         connection: Connection,
         resources: MonitorCircuitResources,
         remote: SocketAddr,
+        record_layer: Arc<RecordLayer>,
     ) {
         let MonitorCircuitResources {
             performance,
@@ -2557,6 +2805,19 @@ impl RelayRuntime {
             match connection.accept_uni().await {
                 Ok(stream) => {
                     let compliance = compliance_logger.clone();
+                    let record_stream =
+                        match record_layer.stream(record_stream_context(stream.id())) {
+                            Ok(stream) => stream,
+                            Err(error) => {
+                                warn!(
+                                    remote = %remote,
+                                    %error,
+                                    "failed to derive measurement record keys"
+                                );
+                                break;
+                            }
+                        };
+                    let stream = RecordReader::new(stream, record_stream.opener);
                     if let Err(error) = Self::process_measurement_stream(
                         stream,
                         Arc::clone(&performance),
@@ -2596,14 +2857,31 @@ impl RelayRuntime {
         resources: ExitStreamResources,
         remote: SocketAddr,
         vpn_session: Option<VpnSessionHandle>,
+        record_layer: Arc<RecordLayer>,
     ) {
         loop {
             match connection.accept_bi().await {
                 Ok((mut send, mut recv)) => {
+                    let record_stream = match record_layer.stream(record_stream_context(send.id()))
+                    {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            warn!(
+                                remote = %remote,
+                                %error,
+                                "failed to derive exit-stream record keys"
+                            );
+                            let _ = send.reset(VarInt::from_u32(0));
+                            let _ = recv.stop(VarInt::from_u32(0));
+                            continue;
+                        }
+                    };
+                    let mut protected_send = RecordWriter::new(&mut send, record_stream.sealer);
+                    let mut protected_recv = RecordReader::new(&mut recv, record_stream.opener);
                     if let Err(error) = Self::process_exit_stream(
                         &resources,
-                        &mut send,
-                        &mut recv,
+                        &mut protected_send,
+                        &mut protected_recv,
                         remote,
                         vpn_session.clone(),
                     )
@@ -2635,8 +2913,7 @@ impl RelayRuntime {
                                     (Some(*stream), None)
                                 }
                                 ExitStreamError::RouteLookup(_) => (None, None),
-                                ExitStreamError::Truncated { .. }
-                                | ExitStreamError::Read(_)
+                                ExitStreamError::Read(_)
                                 | ExitStreamError::Decode(_)
                                 | ExitStreamError::RecvRead(_)
                                 | ExitStreamError::SendWrite(_)
@@ -2679,6 +2956,8 @@ impl RelayRuntime {
                                 "failed to process exit stream"
                             ),
                         }
+                        drop(protected_send);
+                        drop(protected_recv);
                         let _ = send.reset(VarInt::from_u32(0));
                         let _ = recv.stop(VarInt::from_u32(0));
                     }
@@ -2699,6 +2978,7 @@ impl RelayRuntime {
         overlay: Arc<VpnOverlay>,
         vpn_session: VpnSessionHandle,
         helper_ticket: VpnHelperTicketV1,
+        record_layer: Arc<RecordLayer>,
     ) {
         let Some(backend_endpoint) = overlay.config().backend_endpoint() else {
             warn!(
@@ -2722,6 +3002,7 @@ impl RelayRuntime {
                             helper_ticket,
                             stream,
                             backend_label,
+                            Arc::clone(&record_layer),
                         )
                         .await;
                     }
@@ -2756,6 +3037,7 @@ impl RelayRuntime {
                             helper_ticket,
                             stream,
                             backend_label,
+                            record_layer,
                         )
                         .await;
                     }
@@ -2789,6 +3071,7 @@ impl RelayRuntime {
         helper_ticket: VpnHelperTicketV1,
         backend: S,
         backend_addr: String,
+        record_layer: Arc<RecordLayer>,
     ) where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -2861,11 +3144,26 @@ impl RelayRuntime {
             return;
         }
         let remaining = Duration::from_millis(helper_ticket.expires_at_ms.saturating_sub(now_ms));
+        let record_stream = match record_layer.stream(record_stream_context(send.id())) {
+            Ok(stream) => stream,
+            Err(error) => {
+                warn!(
+                    remote = %remote,
+                    session_id = %hex::encode(helper_ticket.session_id),
+                    %error,
+                    "failed to derive vpn tunnel record keys"
+                );
+                connection.close(0u32.into(), b"vpn record key failure");
+                return;
+            }
+        };
+        let mut protected_send = RecordWriter::new(&mut send, record_stream.sealer);
+        let mut protected_recv = RecordReader::new(&mut recv, record_stream.opener);
         match timeout(
             remaining,
             Self::bridge_vpn_backend_streams(
-                &mut send,
-                &mut recv,
+                &mut protected_send,
+                &mut protected_recv,
                 VpnBackendBridgeContext {
                     bridge,
                     adapter: &adapter,
@@ -2898,6 +3196,14 @@ impl RelayRuntime {
                 );
                 connection.close(0u32.into(), b"vpn helper ticket expired");
             }
+        }
+        if let Err(error) = protected_send.shutdown().await {
+            debug!(
+                remote = %remote,
+                session_id = %hex::encode(helper_ticket.session_id),
+                %error,
+                "failed to finish protected vpn tunnel stream"
+            );
         }
     }
 
@@ -2971,23 +3277,21 @@ impl RelayRuntime {
         }
     }
 
-    async fn process_exit_stream(
+    async fn process_exit_stream<W, R>(
         resources: &ExitStreamResources,
-        send: &mut SendStream,
-        recv: &mut RecvStream,
+        send: &mut W,
+        recv: &mut R,
         remote: SocketAddr,
         vpn_session: Option<VpnSessionHandle>,
-    ) -> Result<(), ExitStreamError> {
+    ) -> Result<(), ExitStreamError>
+    where
+        W: AsyncWrite + Unpin,
+        R: AsyncRead + Unpin,
+    {
         let mut header = [0u8; RouteOpenFrame::length()];
-        match recv.read_exact(&mut header).await {
-            Ok(()) => {}
-            Err(quinn::ReadExactError::FinishedEarly(received)) => {
-                return Err(ExitStreamError::Truncated { received });
-            }
-            Err(quinn::ReadExactError::ReadError(error)) => {
-                return Err(ExitStreamError::Read(error));
-            }
-        }
+        recv.read_exact(&mut header)
+            .await
+            .map_err(ExitStreamError::Read)?;
 
         let frame = RouteOpenFrame::decode(&header)?;
         let vpn_adapter = vpn_session.as_ref().and_then(|session| {
@@ -3028,14 +3332,18 @@ impl RelayRuntime {
         Ok(())
     }
 
-    async fn handle_norito_stream(
+    async fn handle_norito_stream<W, R>(
         resources: &ExitStreamResources,
-        send: &mut SendStream,
-        recv: &mut RecvStream,
+        send: &mut W,
+        recv: &mut R,
         remote: SocketAddr,
         frame: RouteOpenFrame,
         vpn_adapter: Option<VpnAdapter>,
-    ) -> Result<(), ExitStreamError> {
+    ) -> Result<(), ExitStreamError>
+    where
+        W: AsyncWrite + Unpin,
+        R: AsyncRead + Unpin,
+    {
         let authenticated = frame.flags().is_authenticated();
         let (category, norito_state) = match resources.norito.as_ref() {
             Some(state) => (
@@ -3175,14 +3483,18 @@ impl RelayRuntime {
         .await
     }
 
-    async fn handle_kaigi_stream(
+    async fn handle_kaigi_stream<W, R>(
         resources: &ExitStreamResources,
-        send: &mut SendStream,
-        recv: &mut RecvStream,
+        send: &mut W,
+        recv: &mut R,
         remote: SocketAddr,
         frame: RouteOpenFrame,
         vpn_adapter: Option<VpnAdapter>,
-    ) -> Result<(), ExitStreamError> {
+    ) -> Result<(), ExitStreamError>
+    where
+        W: AsyncWrite + Unpin,
+        R: AsyncRead + Unpin,
+    {
         let authenticated = frame.flags().is_authenticated();
         let (category, kaigi_state) = match resources.kaigi.as_ref() {
             Some(state) => (
@@ -3326,16 +3638,20 @@ impl RelayRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn bridge_websocket_stream(
-        send: &mut SendStream,
-        recv: &mut RecvStream,
+    async fn bridge_websocket_stream<W, R>(
+        send: &mut W,
+        recv: &mut R,
         ws_stream: ToriiWebSocket,
         handshake_bytes: Bytes,
         label: &'static str,
         remote: SocketAddr,
         padding: Option<PaddingSchedule>,
         vpn_adapter: Option<VpnAdapter>,
-    ) -> Result<(), ExitStreamError> {
+    ) -> Result<(), ExitStreamError>
+    where
+        W: AsyncWrite + Unpin,
+        R: AsyncRead + Unpin,
+    {
         let (sink, stream) = ws_stream.split();
         let sink = Arc::new(Mutex::new(sink));
         let last_send = Arc::new(Mutex::new(Instant::now()));
@@ -3393,7 +3709,7 @@ impl RelayRuntime {
                         }
                         result = recv_stream.read(&mut buf) => {
                             match result.map_err(ExitStreamError::RecvRead)? {
-                                Some(bytes) if bytes > 0 => {
+                                bytes if bytes > 0 => {
                                     let payload = Bytes::copy_from_slice(&buf[..bytes]);
                                     if let Some(adapter) = vpn_adapter.as_ref() {
                                         adapter.record_ingress_frame_count(bytes as u64, false);
@@ -3492,7 +3808,10 @@ impl RelayRuntime {
                         Message::Frame(_) => {}
                     }
                 }
-                send_stream.finish().map_err(ExitStreamError::SendFinish)?;
+                send_stream
+                    .shutdown()
+                    .await
+                    .map_err(ExitStreamError::SendFinish)?;
                 shutdown.notify_waiters();
                 Ok::<(), ExitStreamError>(())
             }
@@ -3612,8 +3931,8 @@ impl RelayRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn process_measurement_stream(
-        mut stream: RecvStream,
+    async fn process_measurement_stream<R>(
+        mut stream: R,
         performance: Arc<Mutex<RelayPerformanceAccumulator>>,
         relay_id: RelayId,
         incentives: Option<Arc<IncentiveLogger>>,
@@ -3622,7 +3941,10 @@ impl RelayRuntime {
         mode: RelayMode,
         compliance: Option<Arc<ComplianceLogger>>,
         remote: SocketAddr,
-    ) -> Result<(), IncentiveStreamError> {
+    ) -> Result<(), IncentiveStreamError>
+    where
+        R: AsyncRead + Unpin,
+    {
         let mut len_buf = [0u8; 4];
         while let Some(frame) = Self::read_measurement_frame(&mut stream, &mut len_buf).await? {
             Self::handle_bandwidth_proof(
@@ -3641,10 +3963,13 @@ impl RelayRuntime {
         Ok(())
     }
 
-    async fn read_measurement_frame(
-        stream: &mut RecvStream,
+    async fn read_measurement_frame<R>(
+        stream: &mut R,
         len_buf: &mut [u8; 4],
-    ) -> Result<Option<Vec<u8>>, IncentiveStreamError> {
+    ) -> Result<Option<Vec<u8>>, IncentiveStreamError>
+    where
+        R: AsyncRead + Unpin,
+    {
         if !Self::read_exact_or_eof(stream, len_buf).await? {
             return Ok(None);
         }
@@ -3656,31 +3981,44 @@ impl RelayRuntime {
             return Err(IncentiveStreamError::FrameTooLarge { length: frame_len });
         }
         let mut frame = vec![0u8; frame_len];
-        Self::read_exact_or_eof(stream, &mut frame).await?;
+        if !Self::read_exact_or_eof(stream, &mut frame).await? {
+            return Err(IncentiveStreamError::UnexpectedEof {
+                expected: frame_len,
+                received: 0,
+            });
+        }
         Ok(Some(frame))
     }
 
-    async fn read_exact_or_eof(
-        stream: &mut RecvStream,
+    async fn read_exact_or_eof<R>(
+        stream: &mut R,
         buf: &mut [u8],
-    ) -> Result<bool, IncentiveStreamError> {
+    ) -> Result<bool, IncentiveStreamError>
+    where
+        R: AsyncRead + Unpin,
+    {
         if buf.is_empty() {
             return Ok(true);
         }
-        match stream.read_exact(buf).await {
-            Ok(()) => Ok(true),
-            Err(quinn::ReadExactError::FinishedEarly(read)) => {
-                if read == 0 {
+        let mut received = 0;
+        while received < buf.len() {
+            let read = stream
+                .read(&mut buf[received..])
+                .await
+                .map_err(IncentiveStreamError::Read)?;
+            if read == 0 {
+                return if received == 0 {
                     Ok(false)
                 } else {
                     Err(IncentiveStreamError::UnexpectedEof {
                         expected: buf.len(),
-                        received: read,
+                        received,
                     })
-                }
+                };
             }
-            Err(quinn::ReadExactError::ReadError(error)) => Err(IncentiveStreamError::Read(error)),
+            received += read;
         }
+        Ok(true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3971,6 +4309,7 @@ impl RelayRuntime {
         let mut negotiated = negotiate_capabilities(&client_caps, context.server_caps.as_ref())
             .map_err(HandshakeError::Capability)?;
         validate_client_selection(&negotiated, client_hello.kem_id(), client_hello.sig_id())?;
+        let transcript_binding = pow::derive_admission_transcript(&client_frame);
 
         let mut response_caps = negotiated.clone();
         response_caps.grease.extend(context.grease.iter().cloned());
@@ -3982,81 +4321,75 @@ impl RelayRuntime {
                 .map_err(HandshakeError::Noise)?;
         let relay_caps_bytes = append_grease_tlvs(relay_caps_bytes, &grease_entries)?;
 
-        let mut rng = StdRng::from_os_rng();
-        let runtime_params = NoiseRuntimeParams {
-            descriptor_commit: context.descriptor_commit.as_slice(),
-            client_capabilities: client_hello.raw_capabilities(),
-            relay_capabilities: &relay_caps_bytes,
-            kem_id: negotiated.kem.id.code(),
-            sig_id: client_hello.sig_id(),
-            resume_hash: client_hello.resume_hash(),
-        };
-
-        let (relay_hello, relay_state) = match process_client_hello(
-            &client_frame,
-            &runtime_params,
-            context.identity_key.as_ref(),
-            &mut rng,
-        ) {
-            Ok(result) => result,
-            Err(NoiseHandshakeError::Downgrade {
-                warnings,
-                telemetry,
-            }) => {
-                return Err(HandshakeError::Downgrade {
-                    warnings,
-                    telemetry,
-                });
-            }
-            Err(error) => return Err(HandshakeError::Noise(error)),
-        };
-
-        if let (Some(params), Some(ticket)) =
+        let admission = if let (Some(params), Some(ticket)) =
             (puzzle_params.as_ref(), pending_puzzle_ticket.as_ref())
         {
-            let transcript_binding = client_hello
-                .resume_hash()
-                .map(|_| relay_state.transcript_hash().as_slice());
             let verify_start = Instant::now();
-            verify_puzzle_ticket_binding(
+            let result = verify_puzzle_ticket_binding(
                 ticket,
                 params,
                 context.descriptor_commit.as_slice(),
                 context.relay_id.as_slice(),
-                transcript_binding,
-            )
-            .map_err(HandshakeError::Puzzle)?;
+                &transcript_binding,
+                context.ticket_replays.as_ref(),
+            );
             let elapsed = verify_start.elapsed();
             context.metrics.record_puzzle_verify(elapsed);
             let micros = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
             puzzle_verify_micros = Some(micros);
-        }
-
-        if let Some(ticket) = pending_pow_ticket.as_ref() {
-            let transcript_binding = client_hello
-                .resume_hash()
-                .map(|_| relay_state.transcript_hash().as_slice());
+            result
+        } else if let Some(ticket) = pending_pow_ticket.as_ref() {
             verify_pow_ticket_binding(
                 ticket,
                 &pow_params,
                 context.descriptor_commit.as_slice(),
                 context.relay_id.as_slice(),
-                transcript_binding,
+                &transcript_binding,
+                context.ticket_replays.as_ref(),
             )
-            .map_err(HandshakeError::Pow)?;
-        }
-
-        if let Some(token) = admission_token.as_ref() {
+        } else if let Some(token) = admission_token.as_ref() {
             context
                 .dos
                 .verify_token(
                     token,
                     &context.relay_id,
-                    relay_state.transcript_hash(),
+                    &transcript_binding,
                     SystemTime::now(),
                 )
-                .map_err(HandshakeError::Token)?;
-        }
+                .map_err(HandshakeError::Token)
+        } else {
+            Ok(())
+        };
+
+        // Admission must complete before the handshake engine validates or
+        // encapsulates any client ML-KEM material.
+        let (relay_hello, relay_state) = continue_after_admission(admission, || {
+            let mut rng = StdRng::from_os_rng();
+            let runtime_params = NoiseRuntimeParams {
+                descriptor_commit: context.descriptor_commit.as_slice(),
+                client_capabilities: client_hello.raw_capabilities(),
+                relay_capabilities: &relay_caps_bytes,
+                kem_id: negotiated.kem.id.code(),
+                sig_id: client_hello.sig_id(),
+                resume_hash: client_hello.resume_hash(),
+            };
+            match process_client_hello(
+                &client_frame,
+                &runtime_params,
+                context.identity_key.as_ref(),
+                &mut rng,
+            ) {
+                Ok(result) => Ok(result),
+                Err(NoiseHandshakeError::Downgrade {
+                    warnings,
+                    telemetry,
+                }) => Err(HandshakeError::Downgrade {
+                    warnings,
+                    telemetry,
+                }),
+                Err(error) => Err(HandshakeError::Noise(error)),
+            }
+        })?;
 
         match timeout(
             HANDSHAKE_PAYLOAD_TIMEOUT,
@@ -4142,6 +4475,117 @@ impl RelayRuntime {
         Ok(())
     }
 
+    fn admin_http_response(
+        status: &str,
+        content_type: &str,
+        body: &str,
+        extra_headers: &str,
+    ) -> String {
+        format!(
+            concat!(
+                "HTTP/1.1 {status}\r\n",
+                "content-type: {content_type}\r\n",
+                "content-length: {length}\r\n",
+                "cache-control: no-store\r\n",
+                "{extra_headers}",
+                "connection: close\r\n",
+                "\r\n",
+                "{body}"
+            ),
+            status = status,
+            content_type = content_type,
+            length = body.len(),
+            extra_headers = extra_headers,
+            body = body,
+        )
+    }
+
+    fn admin_bearer_token(request: &str) -> Option<&str> {
+        let mut token = None;
+        for line in request.lines().skip(1) {
+            if line.is_empty() {
+                break;
+            }
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            if !name.eq_ignore_ascii_case("authorization") {
+                continue;
+            }
+            if token.is_some() {
+                return None;
+            }
+            let mut parts = value.split_ascii_whitespace();
+            let scheme = parts.next()?;
+            let candidate = parts.next()?;
+            if !scheme.eq_ignore_ascii_case("bearer") || parts.next().is_some() {
+                return None;
+            }
+            token = Some(candidate);
+        }
+        token
+    }
+
+    async fn render_admin_request(
+        request: &str,
+        authorization: &AdminAuthorization,
+        context: AdminRenderContext<'_>,
+        relay_id: RelayId,
+        mode: RelayMode,
+    ) -> String {
+        let Some(request_line) = request.lines().next() else {
+            return Self::admin_http_response(
+                "400 Bad Request",
+                PLAIN_TEXT_CONTENT_TYPE,
+                "malformed request\n",
+                "",
+            );
+        };
+        let mut fields = request_line.split_ascii_whitespace();
+        let (Some(method), Some(path), Some(version)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            return Self::admin_http_response(
+                "400 Bad Request",
+                PLAIN_TEXT_CONTENT_TYPE,
+                "malformed request\n",
+                "",
+            );
+        };
+        if fields.next().is_some() || !matches!(version, "HTTP/1.0" | "HTTP/1.1") {
+            return Self::admin_http_response(
+                "400 Bad Request",
+                PLAIN_TEXT_CONTENT_TYPE,
+                "malformed request\n",
+                "",
+            );
+        }
+        if method != "GET" {
+            return Self::admin_http_response(
+                "405 Method Not Allowed",
+                PLAIN_TEXT_CONTENT_TYPE,
+                "method not allowed\n",
+                "allow: GET\r\n",
+            );
+        }
+        if path == "/healthz" {
+            return Self::admin_http_response("200 OK", PLAIN_TEXT_CONTENT_TYPE, "ok\n", "");
+        }
+
+        let authorized = Self::admin_bearer_token(request)
+            .is_some_and(|candidate| authorization.matches(candidate));
+        if !authorized {
+            return Self::admin_http_response(
+                "401 Unauthorized",
+                PLAIN_TEXT_CONTENT_TYPE,
+                "authentication required\n",
+                "www-authenticate: Bearer realm=\"soranet-relay-admin\"\r\n",
+            );
+        }
+
+        Self::render_admin_response(path, context, relay_id, mode).await
+    }
+
     async fn render_admin_response(
         path: &str,
         context: AdminRenderContext<'_>,
@@ -4150,34 +4594,18 @@ impl RelayRuntime {
     ) -> String {
         if path == "/privacy/events" {
             let body = context.privacy_events.drain_ndjson();
-            return format!(
-                concat!(
-                    "HTTP/1.1 200 OK\r\n",
-                    "content-type: {content_type}\r\n",
-                    "content-length: {length}\r\n",
-                    "connection: close\r\n",
-                    "\r\n",
-                    "{body}"
-                ),
-                content_type = NDJSON_CONTENT_TYPE,
-                length = body.len(),
-                body = body,
-            );
+            return Self::admin_http_response("200 OK", NDJSON_CONTENT_TYPE, &body, "");
         }
         if path == "/policy/proxy-toggle" {
             let body = context.proxy_policy_events.drain_ndjson();
-            return format!(
-                concat!(
-                    "HTTP/1.1 200 OK\r\n",
-                    "content-type: {content_type}\r\n",
-                    "content-length: {length}\r\n",
-                    "connection: close\r\n",
-                    "\r\n",
-                    "{body}"
-                ),
-                content_type = NDJSON_CONTENT_TYPE,
-                length = body.len(),
-                body = body,
+            return Self::admin_http_response("200 OK", NDJSON_CONTENT_TYPE, &body, "");
+        }
+        if path != "/metrics" {
+            return Self::admin_http_response(
+                "404 Not Found",
+                PLAIN_TEXT_CONTENT_TYPE,
+                "not found\n",
+                "",
             );
         }
 
@@ -4197,28 +4625,17 @@ impl RelayRuntime {
             body.push('\n');
         }
         body.push_str(&privacy_metrics);
-        format!(
-            concat!(
-                "HTTP/1.1 200 OK\r\n",
-                "content-type: {content_type}\r\n",
-                "content-length: {length}\r\n",
-                "connection: close\r\n",
-                "\r\n",
-                "{body}"
-            ),
-            content_type = PROMETHEUS_CONTENT_TYPE,
-            length = body.len(),
-            body = body,
-        )
+        Self::admin_http_response("200 OK", PROMETHEUS_CONTENT_TYPE, &body, "")
     }
 
-    async fn serve_metrics(
-        resources: MetricsResources,
+    async fn serve_admin(
+        resources: AdminResources,
         relay_id: RelayId,
         addr: SocketAddr,
         mode: RelayMode,
+        authorization: AdminAuthorization,
     ) -> Result<(), RelayError> {
-        let MetricsResources {
+        let AdminResources {
             metrics,
             privacy,
             privacy_events,
@@ -4227,7 +4644,7 @@ impl RelayRuntime {
         } = resources;
         let listener = TcpListener::bind(addr).await?;
         let actual = listener.local_addr()?;
-        info!(listen = %actual, "metrics server listening");
+        info!(listen = %actual, "authenticated admin server listening");
 
         loop {
             let (mut stream, peer) = listener.accept().await?;
@@ -4236,8 +4653,9 @@ impl RelayRuntime {
             let privacy_events = Arc::clone(&privacy_events);
             let proxy_policy_events = Arc::clone(&proxy_policy_events);
             let performance = Arc::clone(&performance);
+            let authorization = authorization.clone();
             tokio::spawn(async move {
-                debug!(peer = %peer, "serving metrics request");
+                debug!(peer = %peer, "serving admin request");
                 let mut request_buf = [0u8; 1024];
                 let read = match stream.read(&mut request_buf).await {
                     Ok(bytes) => bytes,
@@ -4247,9 +4665,6 @@ impl RelayRuntime {
                     }
                 };
                 let request = std::str::from_utf8(&request_buf[..read]).unwrap_or_default();
-                let mut lines = request.lines();
-                let request_line = lines.next().unwrap_or_default();
-                let path = request_line.split_whitespace().nth(1).unwrap_or("/metrics");
 
                 let context = AdminRenderContext {
                     metrics: metrics.as_ref(),
@@ -4259,11 +4674,17 @@ impl RelayRuntime {
                     performance: performance.as_ref(),
                 };
 
-                let response =
-                    RelayRuntime::render_admin_response(path, context, relay_id, mode).await;
+                let response = RelayRuntime::render_admin_request(
+                    request,
+                    &authorization,
+                    context,
+                    relay_id,
+                    mode,
+                )
+                .await;
 
                 if let Err(error) = stream.write_all(response.as_bytes()).await {
-                    debug!(%error, "failed to send metrics response");
+                    debug!(%error, "failed to send admin response");
                 }
                 let _ = stream.shutdown().await;
             });
@@ -4276,8 +4697,7 @@ impl RelayRuntime {
     ) -> Result<quinn::ServerConfig, RelayError> {
         let certs = Self::load_certificates(cert_path)?;
         let key = Self::load_private_key(key_path)?;
-        quinn::ServerConfig::with_single_cert(certs, key)
-            .map_err(|error| RelayError::Tls(error.to_string()))
+        Self::server_config(certs, key)
     }
 
     fn self_signed_server_config(subject: &str) -> Result<quinn::ServerConfig, RelayError> {
@@ -4287,8 +4707,32 @@ impl RelayRuntime {
         let cert_der = cert.der().clone();
         let key_der = PrivateKeyDer::try_from(signing_key.serialize_der())
             .map_err(|error| RelayError::Tls(error.to_string()))?;
-        quinn::ServerConfig::with_single_cert(vec![cert_der], key_der)
-            .map_err(|error| RelayError::Tls(error.to_string()))
+        Self::server_config(vec![cert_der], key_der)
+    }
+
+    fn server_config(
+        certs: Vec<CertificateDer<'static>>,
+        key: PrivateKeyDer<'static>,
+    ) -> Result<quinn::ServerConfig, RelayError> {
+        let tls = Self::tls_server_config(certs, key)?;
+        let crypto = QuinnRustlsServerConfig::try_from(Arc::new(tls))
+            .map_err(|error| RelayError::Tls(error.to_string()))?;
+        Ok(quinn::ServerConfig::with_crypto(Arc::new(crypto)))
+    }
+
+    fn tls_server_config(
+        certs: Vec<CertificateDer<'static>>,
+        key: PrivateKeyDer<'static>,
+    ) -> Result<rustls::ServerConfig, RelayError> {
+        let mut tls =
+            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_no_client_auth()
+                .with_single_cert(certs, key)
+                .map_err(|error| RelayError::Tls(error.to_string()))?;
+        // The signed hybrid handshake and the SNR1 record layer run after QUIC setup.
+        // Replayable TLS 0-RTT data must never reach either protocol.
+        tls.max_early_data_size = 0;
+        Ok(tls)
     }
 
     fn load_certificates(
@@ -4318,10 +4762,8 @@ impl RelayRuntime {
 
 #[derive(Debug, Error)]
 enum ExitStreamError {
-    #[error("route open frame truncated (received {received} bytes)")]
-    Truncated { received: usize },
     #[error("failed to read route open frame: {0}")]
-    Read(quinn::ReadError),
+    Read(io::Error),
     #[error(transparent)]
     Decode(#[from] RouteOpenFrameError),
     #[error("{stream} exit routing disabled in configuration")]
@@ -4368,11 +4810,11 @@ enum ExitStreamError {
         error: tungstenite::Error,
     },
     #[error("exit stream read error: {0}")]
-    RecvRead(quinn::ReadError),
+    RecvRead(io::Error),
     #[error("exit stream write error: {0}")]
-    SendWrite(quinn::WriteError),
+    SendWrite(io::Error),
     #[error("failed to finish exit stream: {0}")]
-    SendFinish(ClosedStream),
+    SendFinish(io::Error),
 }
 
 #[derive(Debug, Error)]
@@ -4390,7 +4832,7 @@ enum IncentiveStreamError {
     #[error("measurement frame contains {0} trailing bytes after decoding proof")]
     TrailingBytes(usize),
     #[error("measurement stream read error: {0}")]
-    Read(quinn::ReadError),
+    Read(io::Error),
 }
 
 #[derive(Debug, Error)]
@@ -4424,6 +4866,8 @@ enum HandshakeError {
     Pow(#[from] pow::Error),
     #[error("puzzle verification failed: {0}")]
     Puzzle(#[from] puzzle::Error),
+    #[error("ticket replay store failed closed: {0}")]
+    ReplayStore(String),
     #[error("missing admission challenge")]
     MissingChallenge,
     #[error("token decode failed: {0}")]
@@ -5223,48 +5667,143 @@ mod tests {
         assert!(engine.apply_congestion_hint(CELL_SIZE_BYTES).is_none());
     }
 
+    fn in_memory_ticket_replays(capacity: usize) -> StdMutex<TicketReplayState> {
+        let limits =
+            TicketRevocationStoreLimits::new(capacity, Duration::from_secs(300)).expect("limits");
+        let persisted = TicketRevocationStore::in_memory(limits).expect("replay store");
+        StdMutex::new(TicketReplayState {
+            persisted,
+            pending: HashSet::new(),
+            capacity,
+        })
+    }
+
+    fn client_hello_frame_with_resume(resume_hash: Option<&[u8]>) -> Vec<u8> {
+        let mut frame = Vec::new();
+        frame.push(crate::handshake::CLIENT_HELLO_TYPE);
+        frame.extend_from_slice(&32u16.to_be_bytes());
+        frame.extend_from_slice(&[0xAA; 32]);
+        frame.push(1);
+        frame.push(1);
+        frame.extend_from_slice(&[0x11; 32]);
+        frame.extend_from_slice(&4u16.to_be_bytes());
+        frame.extend_from_slice(&[0x22; 4]);
+        frame.extend_from_slice(&2u16.to_be_bytes());
+        frame.extend_from_slice(&[0x80, 0x01]);
+        match resume_hash {
+            Some(resume_hash) => {
+                frame.push(1);
+                frame.extend_from_slice(
+                    &u16::try_from(resume_hash.len())
+                        .expect("test resume hash length fits")
+                        .to_be_bytes(),
+                );
+                frame.extend_from_slice(resume_hash);
+            }
+            None => frame.push(0),
+        }
+        frame.resize(crate::handshake::NOISE_PADDING_BLOCK, 0);
+        frame
+    }
+
     #[test]
-    fn verify_puzzle_ticket_respects_resume_hash_binding() {
+    fn admission_transcript_commits_to_the_exact_client_hello() {
+        let without_resume = client_hello_frame_with_resume(None);
+        let with_resume = client_hello_frame_with_resume(Some(&[0x44; 32]));
+        ClientHello::parse(&without_resume).expect("parse hello without resume hash");
+        ClientHello::parse(&with_resume).expect("parse hello with resume hash");
+
+        let first = pow::derive_admission_transcript(&without_resume);
+        assert_eq!(
+            first,
+            pow::derive_admission_transcript(&without_resume),
+            "the same client hello must derive the same binding"
+        );
+        assert_ne!(
+            first,
+            pow::derive_admission_transcript(&with_resume),
+            "changing any client hello field must change the admission binding"
+        );
+    }
+
+    #[test]
+    fn rejected_admission_never_runs_expensive_handshake() {
+        let expensive_ran = std::cell::Cell::new(false);
+        let result = continue_after_admission::<()>(
+            Err(HandshakeError::ReplayStore("rejected".to_owned())),
+            || {
+                expensive_ran.set(true);
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(HandshakeError::ReplayStore(message)) if message == "rejected"
+        ));
+        assert!(
+            !expensive_ran.get(),
+            "ML-KEM handshake work must stay behind admission"
+        );
+    }
+
+    #[test]
+    fn verify_puzzle_ticket_requires_binding_and_consumes_once() {
         let params = PuzzleParameters::new(
-            NonZeroU32::new(1_024).expect("non-zero memory"),
+            NonZeroU32::new(puzzle::MIN_MEMORY_KIB).expect("non-zero memory"),
             NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
-            8,
+            1,
             Duration::from_secs(180),
             Duration::from_secs(45),
         );
         let descriptor = vec![0xD4; 32];
         let relay_id = vec![0xC3; 32];
-        let resume_hash = [0x9Au8; 32];
+        let admission_transcript = [0x9Au8; 32];
         let mut rng = StdRng::from_seed([0x5Au8; 32]);
+        let replays = in_memory_ticket_replays(4);
 
-        let binding = PuzzleBinding::new(&descriptor, &relay_id, Some(&resume_hash));
+        let binding = PuzzleBinding::new(&descriptor, &relay_id, &admission_transcript);
         let ticket = puzzle::mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng)
-            .expect("mint ticket with resume hash");
-        verify_puzzle_ticket_binding(&ticket, &params, &descriptor, &relay_id, Some(&resume_hash))
-            .expect("ticket should verify with matching resume hash");
-
-        let mismatched = [0x44u8; 32];
-        let err = verify_puzzle_ticket_binding(
+            .expect("mint transcript-bound ticket");
+        verify_puzzle_ticket_binding(
             &ticket,
             &params,
             &descriptor,
             &relay_id,
-            Some(&mismatched),
+            &admission_transcript,
+            &replays,
         )
-        .expect_err("mismatched resume hash must fail verification");
+        .expect("ticket should verify with matching admission transcript");
+        assert!(matches!(
+            verify_puzzle_ticket_binding(
+                &ticket,
+                &params,
+                &descriptor,
+                &relay_id,
+                &admission_transcript,
+                &replays,
+            ),
+            Err(HandshakeError::Pow(pow::Error::Replay))
+        ));
+
+        let mismatched = [0x44u8; 32];
+        let mismatched_replays = in_memory_ticket_replays(4);
+        let mismatched_ticket =
+            puzzle::mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng)
+                .expect("mint second ticket");
+        let err = verify_puzzle_ticket_binding(
+            &mismatched_ticket,
+            &params,
+            &descriptor,
+            &relay_id,
+            &mismatched,
+            &mismatched_replays,
+        )
+        .expect_err("mismatched admission transcript must fail verification");
         match err {
-            puzzle::Error::InvalidSolution => {}
+            HandshakeError::Puzzle(puzzle::Error::InvalidSolution) => {}
             other => panic!("unexpected puzzle verification error: {other:?}"),
         }
-
-        // Ensure tickets without a resume hash continue to verify.
-        let base_binding = PuzzleBinding::new(&descriptor, &relay_id, None);
-        let base_ticket =
-            puzzle::mint_ticket(&params, &base_binding, Duration::from_secs(180), &mut rng)
-                .expect("mint ticket without resume hash");
-        verify_puzzle_ticket_binding(&base_ticket, &params, &descriptor, &relay_id, None)
-            .expect("ticket without resume hash should verify");
     }
 
     #[test]
@@ -5279,24 +5818,26 @@ mod tests {
         );
         let descriptor = vec![0x51; 32];
         let relay_id = vec![0x42; 32];
-        let resume_hash = [0x24u8; 32];
+        let admission_transcript = [0x24u8; 32];
         let mut rng = StdRng::from_seed([0x91u8; 32]);
 
-        let binding = PuzzleBinding::new(&descriptor, &relay_id, Some(&resume_hash));
+        let binding = PuzzleBinding::new(&descriptor, &relay_id, &admission_transcript);
         let ticket = puzzle::mint_ticket(&params, &binding, Duration::from_secs(50), &mut rng)
             .expect("mint ticket with relay binding");
         let mismatched_relay = vec![0x99; 32];
+        let replays = in_memory_ticket_replays(4);
 
         let err = verify_puzzle_ticket_binding(
             &ticket,
             &params,
             &descriptor,
             &mismatched_relay,
-            Some(&resume_hash),
+            &admission_transcript,
+            &replays,
         )
         .expect_err("relay mismatch must fail verification");
         match err {
-            puzzle::Error::InvalidSolution => {}
+            HandshakeError::Puzzle(puzzle::Error::InvalidSolution) => {}
             other => panic!("unexpected puzzle verification error: {other:?}"),
         }
     }
@@ -5307,19 +5848,25 @@ mod tests {
         let descriptor = [0xAA; 32];
         let relay_a = [0x01; 32];
         let relay_b = [0x02; 32];
+        let transcript = [0x03; 32];
         let mut rng = StdRng::from_seed([0x22; 32]);
 
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_a, None);
+        let binding = pow::ChallengeBinding::new(&descriptor, &relay_a, &transcript);
         let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
             .expect("mint pow ticket");
+        let replays = in_memory_ticket_replays(4);
 
-        verify_pow_ticket_binding(&ticket, &params, &descriptor, &relay_a, None)
-            .expect("ticket should verify with matching relay");
-
-        let err = verify_pow_ticket_binding(&ticket, &params, &descriptor, &relay_b, None)
-            .expect_err("relay mismatch must fail verification");
+        let err = verify_pow_ticket_binding(
+            &ticket,
+            &params,
+            &descriptor,
+            &relay_b,
+            &transcript,
+            &replays,
+        )
+        .expect_err("relay mismatch must fail verification");
         match err {
-            pow::Error::InvalidSolution => {}
+            HandshakeError::Pow(pow::Error::InvalidSolution) => {}
             other => panic!("unexpected pow verification error: {other:?}"),
         }
     }
@@ -5332,19 +5879,148 @@ mod tests {
         let transcript = [0xFE; 32];
         let mut rng = StdRng::from_seed([0x33; 32]);
 
-        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, Some(&transcript));
+        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
         let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(40), &mut rng)
             .expect("mint pow ticket with transcript");
+        let replays = in_memory_ticket_replays(4);
 
-        verify_pow_ticket_binding(&ticket, &params, &descriptor, &relay_id, Some(&transcript))
-            .expect("ticket should verify with matching transcript");
-
-        let err = verify_pow_ticket_binding(&ticket, &params, &descriptor, &relay_id, None)
-            .expect_err("missing transcript must fail verification");
+        let mismatched = [0xAA; 32];
+        let err = verify_pow_ticket_binding(
+            &ticket,
+            &params,
+            &descriptor,
+            &relay_id,
+            &mismatched,
+            &replays,
+        )
+        .expect_err("mismatched transcript must fail verification");
         match err {
-            pow::Error::InvalidSolution => {}
+            HandshakeError::Pow(pow::Error::InvalidSolution) => {}
             other => panic!("unexpected pow verification error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn relay_ticket_replay_is_rejected_after_store_reload() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("relay-ticket-replays.norito");
+        let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
+        let params = PowParameters::new(0, Duration::from_secs(180), Duration::from_secs(30));
+        let descriptor = [0x35; 32];
+        let relay_id = [0x46; 32];
+        let transcript = [0x57; 32];
+        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
+        let mut rng = StdRng::from_seed([0x68; 32]);
+        let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
+            .expect("mint ticket");
+
+        let persisted =
+            TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("load store");
+        let replays = StdMutex::new(TicketReplayState {
+            persisted,
+            pending: HashSet::new(),
+            capacity: limits.max_entries,
+        });
+        verify_pow_ticket_binding(
+            &ticket,
+            &params,
+            &descriptor,
+            &relay_id,
+            &transcript,
+            &replays,
+        )
+        .expect("first ticket use");
+        drop(replays);
+
+        let persisted =
+            TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("reload store");
+        let reloaded = StdMutex::new(TicketReplayState {
+            persisted,
+            pending: HashSet::new(),
+            capacity: limits.max_entries,
+        });
+        assert!(matches!(
+            verify_pow_ticket_binding(
+                &ticket,
+                &params,
+                &descriptor,
+                &relay_id,
+                &transcript,
+                &reloaded,
+            ),
+            Err(HandshakeError::Pow(pow::Error::Replay))
+        ));
+    }
+
+    #[test]
+    fn full_replay_store_rejects_before_costly_ticket_verification() {
+        let replays = in_memory_ticket_replays(1);
+        let params = PowParameters::new(0, Duration::from_secs(180), Duration::from_secs(30));
+        let descriptor = [0x11; 32];
+        let relay_id = [0x22; 32];
+        let transcript = [0x33; 32];
+        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
+        let mut rng = StdRng::from_seed([0x44; 32]);
+        let first = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
+            .expect("mint first");
+        let second = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
+            .expect("mint second");
+
+        verify_and_consume_ticket(&first, &replays, || Ok(())).expect("consume first");
+        let costly_verify_ran = std::cell::Cell::new(false);
+        let err = verify_and_consume_ticket(&second, &replays, || {
+            costly_verify_ran.set(true);
+            Ok(())
+        })
+        .expect_err("capacity must fail closed");
+        assert!(matches!(err, HandshakeError::ReplayStore(_)));
+        assert!(
+            !costly_verify_ran.get(),
+            "capacity gate must run before Argon2 or ML-KEM work"
+        );
+    }
+
+    #[test]
+    fn concurrent_duplicate_ticket_is_rejected_while_first_use_is_pending() {
+        let replays = Arc::new(in_memory_ticket_replays(2));
+        let params = PowParameters::new(0, Duration::from_secs(180), Duration::from_secs(30));
+        let descriptor = [0x71; 32];
+        let relay_id = [0x72; 32];
+        let transcript = [0x73; 32];
+        let binding = pow::ChallengeBinding::new(&descriptor, &relay_id, &transcript);
+        let mut rng = StdRng::from_seed([0x74; 32]);
+        let ticket = pow::mint_ticket(&params, &binding, Duration::from_secs(60), &mut rng)
+            .expect("mint ticket");
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        let first_replays = Arc::clone(&replays);
+        let first = std::thread::spawn(move || {
+            verify_and_consume_ticket(&ticket, first_replays.as_ref(), || {
+                entered_tx.send(()).expect("signal pending verification");
+                release_rx.recv().expect("release pending verification");
+                Ok(())
+            })
+        });
+        entered_rx.recv().expect("first verification entered");
+
+        let second_verify_ran = std::cell::Cell::new(false);
+        let duplicate = verify_and_consume_ticket(&ticket, replays.as_ref(), || {
+            second_verify_ran.set(true);
+            Ok(())
+        })
+        .expect_err("concurrent duplicate must fail");
+        assert!(matches!(duplicate, HandshakeError::Pow(pow::Error::Replay)));
+        assert!(
+            !second_verify_ran.get(),
+            "duplicate must be rejected before verification work"
+        );
+
+        release_tx.send(()).expect("release first verification");
+        first
+            .join()
+            .expect("first verification thread")
+            .expect("first ticket use succeeds");
     }
 
     #[test]
@@ -5470,7 +6146,16 @@ mod tests {
     fn load_config(json: &str) -> RelayConfig {
         let file = NamedTempFile::new().expect("create temp file");
         std::fs::write(file.path(), json).expect("write config");
-        RelayConfig::load(file.path()).expect("load config")
+        let mut config = RelayConfig::load(file.path()).expect("load config");
+        let default_replay_path = config::PowConfig::default().revocation_store_path;
+        if config.pow_config().revocation_store_path == default_replay_path {
+            config
+                .pow
+                .as_mut()
+                .expect("PoW defaults applied")
+                .revocation_store_path = file.path().with_extension("ticket-replays.norito");
+        }
+        config
     }
 
     fn sample_account(seed: u8) -> AccountId {
@@ -5651,6 +6336,19 @@ mod tests {
     }
 
     #[test]
+    fn relay_quic_server_rejects_tls_early_data() {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["relay.test".to_owned()])
+                .expect("generate test certificate");
+        let key =
+            PrivateKeyDer::try_from(signing_key.serialize_der()).expect("encode test private key");
+        let tls = RelayRuntime::tls_server_config(vec![cert.der().clone()], key)
+            .expect("build relay TLS configuration");
+
+        assert_eq!(tls.max_early_data_size, 0);
+    }
+
+    #[test]
     fn runtime_uses_fallback_identity_when_missing() {
         let json = r#"
             {
@@ -5686,8 +6384,7 @@ mod tests {
                     "certificate": {{
                         "bundle_path": "{bundle}",
                         "issuer_ed25519_hex": "{issuer_ed}",
-                        "issuer_mldsa_hex": "{issuer_mldsa}",
-                        "validation_phase": "phase3_require_dual"
+                        "issuer_mldsa_hex": "{issuer_mldsa}"
                     }}
                 }}
             }}"#,
@@ -5722,8 +6419,7 @@ mod tests {
                     "certificate": {{
                         "bundle_path": "{bundle}",
                         "issuer_ed25519_hex": "{issuer_ed}",
-                        "issuer_mldsa_hex": "{issuer_mldsa}",
-                        "validation_phase": "phase3_require_dual"
+                        "issuer_mldsa_hex": "{issuer_mldsa}"
                     }}
                 }}
             }}"#,
@@ -5778,8 +6474,7 @@ mod tests {
                     "certificate": {{
                         "bundle_path": "{bundle}",
                         "issuer_ed25519_hex": "{issuer_ed}",
-                        "issuer_mldsa_hex": "{issuer_mldsa}",
-                        "validation_phase": "phase3_require_dual"
+                        "issuer_mldsa_hex": "{issuer_mldsa}"
                     }}
                 }}
             }}"#,
@@ -5804,7 +6499,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_requires_mldsa_key_for_phase3() {
+    fn runtime_config_requires_mldsa65_issuer_key() {
         let fixture = CertificateTestFixture::new();
         let json = format!(
             r#"{{
@@ -5815,8 +6510,7 @@ mod tests {
                     "descriptor_manifest_path": "{manifest}",
                     "certificate": {{
                         "bundle_path": "{bundle}",
-                        "issuer_ed25519_hex": "{issuer_ed}",
-                        "validation_phase": "phase3_require_dual"
+                        "issuer_ed25519_hex": "{issuer_ed}"
                     }}
                 }}
             }}"#,
@@ -5825,16 +6519,17 @@ mod tests {
             bundle = fixture.bundle_file.path().display(),
             issuer_ed = fixture.issuer_ed25519_hex,
         );
-        let config = load_config(&json);
-        match RelayRuntime::new(config) {
-            Err(RelayError::Config(ConfigError::Handshake(message))) => {
+        let file = NamedTempFile::new().expect("create temp config");
+        std::fs::write(file.path(), json).expect("write temp config");
+        match RelayConfig::load(file.path()) {
+            Err(ConfigError::Handshake(message)) => {
                 assert!(
                     message.contains("issuer_mldsa_hex"),
                     "unexpected error message: {message}"
                 );
             }
             Err(other) => panic!("expected handshake config error, got {other:?}"),
-            Ok(_) => panic!("expected certificate verification to fail"),
+            Ok(_) => panic!("missing ML-DSA issuer key must fail config validation"),
         }
     }
 
@@ -5972,24 +6667,62 @@ mod tests {
 
     #[test]
     fn runtime_enables_pow_when_required() {
-        let json = r#"
-            {
+        let dir = tempdir().expect("tempdir");
+        let replay_path = dir.path().join("ticket-replays.norito");
+        let json = format!(
+            r#"{{
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
-                "pow": {
+                "pow": {{
                     "required": true,
                     "difficulty": 6,
                     "max_future_skew_secs": 120,
-                    "min_ticket_ttl_secs": 10
-                }
-            }
-        "#;
-        let config = load_config(json);
+                    "min_ticket_ttl_secs": 10,
+                    "revocation_store_path": "{}"
+                }}
+            }}"#,
+            replay_path.display()
+        );
+        let config = load_config(&json);
         let runtime = RelayRuntime::new(config).expect("runtime");
         let context = runtime.circuit_context();
 
         assert!(context.dos.is_pow_required());
         assert_eq!(context.dos.current_pow_parameters().difficulty(), 6);
+        let replay_state = context.ticket_replays.lock().expect("ticket replay lock");
+        assert_eq!(replay_state.capacity, 8_192);
+    }
+
+    #[test]
+    fn runtime_fails_closed_on_corrupt_ticket_replay_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let replay_path = dir.path().join("ticket-replays.norito");
+        std::fs::write(&replay_path, b"corrupt replay snapshot").expect("write corrupt snapshot");
+        let json = format!(
+            r#"{{
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "pow": {{
+                    "required": true,
+                    "difficulty": 6,
+                    "max_future_skew_secs": 120,
+                    "min_ticket_ttl_secs": 10,
+                    "revocation_store_path": "{}"
+                }}
+            }}"#,
+            replay_path.display()
+        );
+        let config = load_config(&json);
+        match RelayRuntime::new(config) {
+            Err(RelayError::Config(ConfigError::TicketReplayStore(message))) => {
+                assert!(
+                    message.contains("parse"),
+                    "unexpected replay-store error: {message}"
+                );
+            }
+            Err(other) => panic!("expected ticket replay-store error, got {other:?}"),
+            Ok(_) => panic!("corrupt ticket replay state must fail startup"),
+        }
     }
 
     #[test]
@@ -6177,8 +6910,61 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn admin_authorization_verifies_the_complete_bearer_token() {
+        let file = NamedTempFile::new().expect("admin token file");
+        std::fs::write(file.path(), b"soranet-admin-token-0123456789abcdef\n")
+            .expect("write admin token");
+        let authorization =
+            AdminAuthorization::load(file.path()).expect("load protected admin token");
+
+        assert!(authorization.matches("soranet-admin-token-0123456789abcdef"));
+        assert!(!authorization.matches("soranet-admin-token-0123456789abcdeg"));
+        assert!(!authorization.matches("soranet-admin-token-0123456789abcde"));
+    }
+
+    #[test]
+    fn admin_authorization_rejects_placeholder_secret() {
+        let file = NamedTempFile::new().expect("admin token file");
+        std::fs::write(file.path(), b"REPLACE_ME").expect("write placeholder token");
+
+        let err = AdminAuthorization::load(file.path()).expect_err("short token must fail closed");
+        assert!(matches!(err, ConfigError::Admin(message) if message.contains("32 to 256")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admin_authorization_accepts_dedicated_read_only_group() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let file = NamedTempFile::new().expect("admin token file");
+        std::fs::write(file.path(), b"soranet-admin-token-0123456789abcdef")
+            .expect("write admin token");
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o640))
+            .expect("set dedicated-group token permissions");
+
+        AdminAuthorization::load(file.path()).expect("dedicated read-only group should be allowed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admin_authorization_rejects_world_readable_secret() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let file = NamedTempFile::new().expect("admin token file");
+        std::fs::write(file.path(), b"soranet-admin-token-0123456789abcdef")
+            .expect("write admin token");
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644))
+            .expect("set world-readable token permissions");
+
+        let err = AdminAuthorization::load(file.path()).expect_err("broad permissions must fail");
+        assert!(matches!(err, ConfigError::Admin(message) if message.contains("other users")));
+    }
+
     #[tokio::test]
     async fn admin_endpoint_serves_privacy_events() {
+        const ADMIN_TOKEN: &str = "soranet-test-admin-token-00000001";
+
         let metrics = Arc::new(Metrics::new());
         let privacy = Arc::new(PrivacyAggregator::new(PrivacyConfig::default()));
         let privacy_events = Arc::new(PrivacyEventBuffer::new(8));
@@ -6210,26 +6996,63 @@ mod tests {
         drop(listener);
 
         let server = {
-            let resources = MetricsResources {
+            let resources = AdminResources {
                 metrics: Arc::clone(&metrics),
                 privacy: Arc::clone(&privacy),
                 privacy_events: Arc::clone(&privacy_events),
                 proxy_policy_events: Arc::clone(&proxy_policy_events),
                 performance: Arc::clone(&performance),
             };
+            let authorization = AdminAuthorization {
+                token_hash: blake3::hash(ADMIN_TOKEN.as_bytes()),
+            };
             tokio::spawn(async move {
-                let _ = RelayRuntime::serve_metrics(resources, TEST_RELAY_ID, addr, mode).await;
+                let _ =
+                    RelayRuntime::serve_admin(resources, TEST_RELAY_ID, addr, mode, authorization)
+                        .await;
             })
         };
 
         sleep(Duration::from_millis(25)).await;
+
+        let mut unauthorized_stream = TcpStream::connect(addr)
+            .await
+            .expect("connect to protected admin endpoint");
+        unauthorized_stream
+            .write_all(
+                b"GET /privacy/events HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .expect("write unauthenticated HTTP request");
+        let mut unauthorized_response = Vec::new();
+        unauthorized_stream
+            .read_to_end(&mut unauthorized_response)
+            .await
+            .expect("read unauthenticated HTTP response");
+        let unauthorized_text =
+            String::from_utf8(unauthorized_response).expect("response must be UTF-8");
+        assert!(
+            unauthorized_text.starts_with("HTTP/1.1 401 Unauthorized"),
+            "expected authentication failure, got: {unauthorized_text}"
+        );
+        assert_eq!(
+            privacy_events.queue_depth(),
+            2,
+            "unauthenticated request must not drain privacy events"
+        );
 
         let mut stream = TcpStream::connect(addr)
             .await
             .expect("connect to admin endpoint");
         stream
             .write_all(
-                b"GET /privacy/events HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                concat!(
+                    "GET /privacy/events HTTP/1.1\r\n",
+                    "Host: localhost\r\n",
+                    "Authorization: Bearer soranet-test-admin-token-00000001\r\n",
+                    "Connection: close\r\n\r\n"
+                )
+                .as_bytes(),
             )
             .await
             .expect("write HTTP request");
@@ -6270,7 +7093,13 @@ mod tests {
             .expect("connect to proxy policy endpoint");
         downgrade_stream
             .write_all(
-                b"GET /policy/proxy-toggle HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                concat!(
+                    "GET /policy/proxy-toggle HTTP/1.1\r\n",
+                    "Host: localhost\r\n",
+                    "Authorization: Bearer soranet-test-admin-token-00000001\r\n",
+                    "Connection: close\r\n\r\n"
+                )
+                .as_bytes(),
             )
             .await
             .expect("write downgrade HTTP request");

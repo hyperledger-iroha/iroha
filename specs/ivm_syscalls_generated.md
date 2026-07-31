@@ -45,6 +45,7 @@ This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi
 | SYSCALL_STATE_MAP_KEY_AT | 0x10034 |  |
 | SYSCALL_STATE_VALUE_ENCODE | 0x10035 |  |
 | SYSCALL_STATE_VALUE_DECODE | 0x10036 |  |
+| SYSCALL_STATE_PATH_FROM_NAME | 0x10037 |  |
 | SYSCALL_DECODE_INT | 0x53 |  |
 | SYSCALL_TLV_LEN | 0x77 |  |
 | SYSCALL_JSON_GET_JSON | 0x79 |  |

@@ -1810,7 +1810,6 @@
             ZK_X509_INITIAL_RECORD_EPOCH_V1,
             100,
             1_000,
-            101,
             None,
             PrivacyZkX509RecordLifecycleV1::Active,
         );
@@ -1926,7 +1925,6 @@
             2,
             102,
             1_200,
-            103,
             Some(origin.record_digest),
             PrivacyZkX509RecordLifecycleV1::Active,
         );
@@ -1936,7 +1934,6 @@
             3,
             102,
             1_200,
-            103,
             Some(rotation.record_digest),
             PrivacyZkX509RecordLifecycleV1::Revoked,
         );
@@ -1951,7 +1948,6 @@
             2,
             102,
             1_000,
-            103,
             Some(origin.record_digest),
             PrivacyZkX509RecordLifecycleV1::Active,
         );
@@ -1972,7 +1968,6 @@
             2,
             100,
             1_200,
-            103,
             Some(origin.record_digest),
             PrivacyZkX509RecordLifecycleV1::Active,
         );
@@ -1995,7 +1990,6 @@
             2,
             100,
             1_000,
-            101,
             Some(origin.record_digest),
             PrivacyZkX509RecordLifecycleV1::Revoked,
         );
@@ -2009,7 +2003,6 @@
             3,
             105,
             1_400,
-            106,
             Some(revoked.record_digest),
             PrivacyZkX509RecordLifecycleV1::Active,
         );
@@ -2019,9 +2012,8 @@
         );
         let mut mutated_revocation = zk_x509_crl(
             2,
-            100,
-            1_000,
             107,
+            1_000,
             Some(origin.record_digest),
             PrivacyZkX509RecordLifecycleV1::Revoked,
         );
@@ -2251,4 +2243,3 @@
             Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged)
         );
     }
-

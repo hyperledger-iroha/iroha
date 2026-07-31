@@ -2374,6 +2374,116 @@ mod tests {
     use super::*;
     use crate::privacy_engines::anonymous_pgc::TwistedElGamalKeyPairV1;
 
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyDynamicUnsignedRangeProofV1 {
+        bit_commitments: Vec<CompressedPointV1>,
+        branch_challenges: Vec<CanonicalScalarV1>,
+        branch_responses: Vec<CanonicalScalarV1>,
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyDynamicPositiveRangeProofV1 {
+        unsigned: LegacyDynamicUnsignedRangeProofV1,
+        nonzero: PgcCommittedNonZeroProofV1,
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyDynamicRecipientSelectionProofV1 {
+        value_commitment: CompressedPointV1,
+        index_commitment: CompressedPointV1,
+        branch_challenges: Vec<CanonicalScalarV1>,
+        value_blinding_responses: Vec<CanonicalScalarV1>,
+        index_blinding_responses: Vec<CanonicalScalarV1>,
+        positive_range: LegacyDynamicPositiveRangeProofV1,
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyDynamicSenderSelectionProofV1 {
+        transfer_magnitude_commitment: CompressedPointV1,
+        post_balance_commitment: CompressedPointV1,
+        index_commitment: CompressedPointV1,
+        branch_challenges: Vec<CanonicalScalarV1>,
+        inverse_key_responses: Vec<CanonicalScalarV1>,
+        post_balance_blinding_responses: Vec<CanonicalScalarV1>,
+        transfer_blinding_responses: Vec<CanonicalScalarV1>,
+        index_blinding_responses: Vec<CanonicalScalarV1>,
+        transfer_range: LegacyDynamicPositiveRangeProofV1,
+        post_balance_range: LegacyDynamicUnsignedRangeProofV1,
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyDynamicPaymentProofV1 {
+        version: u8,
+        well_formed: Vec<PgcTransferWellFormedProofV1>,
+        balance_conservation: PgcBalanceConservationProofV1,
+        recipients: Vec<LegacyDynamicRecipientSelectionProofV1>,
+        recipient_distinctness: Vec<PgcCommittedNonZeroProofV1>,
+        decoys: Vec<PgcDecoySelectionProofV1>,
+        decoy_distinctness: Vec<PgcCommittedNonZeroProofV1>,
+        sender: LegacyDynamicSenderSelectionProofV1,
+    }
+
+    fn legacy_dynamic_unsigned_range_v1(
+        proof: &PgcUnsignedRangeProofV1,
+    ) -> LegacyDynamicUnsignedRangeProofV1 {
+        LegacyDynamicUnsignedRangeProofV1 {
+            bit_commitments: proof.bit_commitments.to_vec(),
+            branch_challenges: proof.branch_challenges.to_vec(),
+            branch_responses: proof.branch_responses.to_vec(),
+        }
+    }
+
+    fn legacy_dynamic_positive_range_v1(
+        proof: &PgcPositiveRangeProofV1,
+    ) -> LegacyDynamicPositiveRangeProofV1 {
+        LegacyDynamicPositiveRangeProofV1 {
+            unsigned: legacy_dynamic_unsigned_range_v1(&proof.unsigned),
+            nonzero: proof.nonzero,
+        }
+    }
+
+    fn legacy_dynamic_payment_v1(
+        proof: &AnonymousPgcPaymentProofV1,
+    ) -> LegacyDynamicPaymentProofV1 {
+        LegacyDynamicPaymentProofV1 {
+            version: proof.version,
+            well_formed: proof.well_formed.clone(),
+            balance_conservation: proof.balance_conservation,
+            recipients: proof
+                .recipients
+                .iter()
+                .map(|recipient| LegacyDynamicRecipientSelectionProofV1 {
+                    value_commitment: recipient.value_commitment,
+                    index_commitment: recipient.index_commitment,
+                    branch_challenges: recipient.branch_challenges.clone(),
+                    value_blinding_responses: recipient.value_blinding_responses.clone(),
+                    index_blinding_responses: recipient.index_blinding_responses.clone(),
+                    positive_range: legacy_dynamic_positive_range_v1(&recipient.positive_range),
+                })
+                .collect(),
+            recipient_distinctness: proof.recipient_distinctness.clone(),
+            decoys: proof.decoys.clone(),
+            decoy_distinctness: proof.decoy_distinctness.clone(),
+            sender: LegacyDynamicSenderSelectionProofV1 {
+                transfer_magnitude_commitment: proof.sender.transfer_magnitude_commitment,
+                post_balance_commitment: proof.sender.post_balance_commitment,
+                index_commitment: proof.sender.index_commitment,
+                branch_challenges: proof.sender.branch_challenges.clone(),
+                inverse_key_responses: proof.sender.inverse_key_responses.clone(),
+                post_balance_blinding_responses: proof
+                    .sender
+                    .post_balance_blinding_responses
+                    .clone(),
+                transfer_blinding_responses: proof.sender.transfer_blinding_responses.clone(),
+                index_blinding_responses: proof.sender.index_blinding_responses.clone(),
+                transfer_range: legacy_dynamic_positive_range_v1(&proof.sender.transfer_range),
+                post_balance_range: legacy_dynamic_unsigned_range_v1(
+                    &proof.sender.post_balance_range,
+                ),
+            },
+        }
+    }
+
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -2693,10 +2803,29 @@ mod tests {
                 hex::encode(Sha256::digest(proof.encode()))
             ),
             (
-                69_955,
-                "369a807673bdbc8f1a8def68e7b0fae1d637ef096a62000e66a30e6c46dec068".to_owned()
+                69_859,
+                "2293cddd7d3111d232265a3c0226a906bd6d6b71c01de683a3d4f7ffbabad01d".to_owned()
             )
         );
+    }
+
+    #[test]
+    fn first_release_rejects_legacy_dynamic_range_array_headers() {
+        let fixture = Fixture::new();
+        let statement = fixture.statement();
+        let proof = fixture.prove();
+        let canonical = proof.encode();
+        let legacy = norito::codec::encode_adaptive(&legacy_dynamic_payment_v1(&proof));
+        assert_eq!(
+            legacy.len(),
+            canonical.len() + 4 * 3 * core::mem::size_of::<u64>(),
+            "the retired wire carried one u64 Vec count for each of three fixed arrays in four range proofs"
+        );
+        assert_ne!(legacy, canonical);
+        assert!(matches!(
+            AnonymousPgcPaymentProofV1::decode_exact(&legacy, &statement),
+            Err(AnonymousPgcError::InvalidNoritoEncoding)
+        ));
     }
 
     #[test]

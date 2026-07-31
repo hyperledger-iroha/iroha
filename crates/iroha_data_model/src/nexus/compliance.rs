@@ -21,7 +21,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[repr(transparent)]
-#[norito(transparent, decode_from_slice)]
+#[norito(decode_from_slice)]
 pub struct LaneCompliancePolicyId(Hash);
 
 impl LaneCompliancePolicyId {

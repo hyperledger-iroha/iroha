@@ -130,28 +130,35 @@ jobs:
       - name: Clear cached benchmark evidence
         run: rm -rf "$CARGO_TARGET_DIR/criterion"
 
-      # Benchmark sources are revision-native. The policy requires every
-      # comparable identity exactly once in both revisions and every
-      # candidate-only identity exactly once in the candidate and zero times
-      # in the base, preventing a new harness from fabricating old evidence.
-      - name: Require explicit revision benchmark inventories
+      # Benchmark sources are revision-native. The policy also requires the
+      # exact selected Git commit and an independently authenticated digest of
+      # that revision's original Cargo.lock before any timing comparison. The
+      # digest is deliberately unavailable today, so this step preserves the
+      # documented release blocker rather than accepting a copied lockfile.
+      - name: Require authenticated predecessor provenance
         run: |
           python3 - <<'PY'
           import runpy
           from pathlib import Path
 
           policy = runpy.run_path("candidate/scripts/check_kotodama_perf.py")
+          base_sources = (
+              Path("baseline/crates/ivm/benches/bench_kotodama.rs"),
+              Path("baseline/crates/iroha_core/benches/kotodama_runtime_cache.rs"),
+              Path("baseline/crates/iroha_core/benches/queries.rs"),
+          )
+          candidate_sources = (
+              Path("candidate/crates/ivm/benches/bench_kotodama.rs"),
+              Path("candidate/crates/iroha_core/benches/kotodama_runtime_cache.rs"),
+              Path("candidate/crates/iroha_core/benches/queries.rs"),
+          )
           policy["validate_revision_inventories"](
-              base_sources=(
-                  Path("baseline/crates/ivm/benches/bench_kotodama.rs"),
-                  Path("baseline/crates/iroha_core/benches/kotodama_runtime_cache.rs"),
-                  Path("baseline/crates/iroha_core/benches/queries.rs"),
-              ),
-              candidate_sources=(
-                  Path("candidate/crates/ivm/benches/bench_kotodama.rs"),
-                  Path("candidate/crates/iroha_core/benches/kotodama_runtime_cache.rs"),
-                  Path("candidate/crates/iroha_core/benches/queries.rs"),
-              ),
+              base_sources=base_sources,
+              candidate_sources=candidate_sources,
+          )
+          policy["validate_predecessor_provenance"](
+              predecessor_root=Path("baseline"),
+              candidate_sources=candidate_sources,
           )
           PY
 
@@ -190,6 +197,7 @@ jobs:
         run: >-
           python3 scripts/check_kotodama_perf.py
           --criterion-dir ../target-kotodama-perf/criterion
+          --predecessor-root ../baseline
           --threshold 0.05
 
       - name: Build canonical Kotodama release tools

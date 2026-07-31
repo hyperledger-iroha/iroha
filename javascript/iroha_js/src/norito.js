@@ -196,8 +196,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes",
   "iroha_data_model::isi::zk::RegisterZkAsset":
     "iroha_data_model::isi::zk::RegisterZkAsset",
-  "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool":
-    "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool",
   "zk::ScheduleConfidentialPolicyTransition":
     "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
   "zk::CancelConfidentialPolicyTransition":
@@ -206,8 +204,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::zk::Shield",
   "iroha_data_model::isi::zk::ZkTransfer":
     "iroha_data_model::isi::zk::ZkTransfer",
-  "iroha_data_model::isi::zk::AssetHiddenZkTransfer":
-    "iroha_data_model::isi::zk::AssetHiddenZkTransfer",
   "iroha_data_model::isi::zk::Unshield":
     "iroha_data_model::isi::zk::Unshield",
   "iroha_data_model::isi::zk::CreateElection":
@@ -813,6 +809,30 @@ function encodeFeePaymentIntentValue(intent, context) {
   );
 }
 
+const INLINE_PRIVATE_KEY_FIELDS = new Set([
+  "private_key",
+  "privateKey",
+  "private_key_hex",
+  "privateKeyHex",
+  "private_key_bytes",
+  "privateKeyBytes",
+  "private_key_multihash",
+  "privateKeyMultihash",
+  "private_key_algorithm",
+  "privateKeyAlgorithm",
+]);
+
+function rejectInlinePrivateKeyFields(request, context) {
+  const fields = Object.keys(request).filter((key) =>
+    INLINE_PRIVATE_KEY_FIELDS.has(key),
+  );
+  if (fields.length !== 0) {
+    throw new TypeError(
+      `${context} does not accept private-key fields (${fields.join(", ")}); sign the returned transaction draft locally`,
+    );
+  }
+}
+
 /**
  * Encode a `/v1/multisig/propose` request DTO as a native Norito body.
  *
@@ -830,6 +850,7 @@ export function noritoEncodeMultisigProposeRequest(request) {
   if (!Array.isArray(request.instructions)) {
     throw new TypeError("MultisigProposeDto.instructions must be an array");
   }
+  rejectInlinePrivateKeyFields(request, "MultisigProposeDto");
   const validationFeeMetadata = normalizeMultisigProposeValidationFeeMetadata(request);
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
@@ -838,13 +859,6 @@ export function noritoEncodeMultisigProposeRequest(request) {
         encodeAccountIdValue(
           request.signer_account_id ?? request.signerAccountId,
           "MultisigProposeDto.signer_account_id",
-        ),
-      ],
-      [
-        encodeOptionValue(
-          request.private_key ?? request.privateKey ?? null,
-          encodeNoritoStringValue,
-          "MultisigProposeDto.private_key",
         ),
       ],
       [
@@ -1019,6 +1033,7 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
   if (!isPlainObject(request)) {
     throw new TypeError("MultisigContractCallProposeDto request must be an object");
   }
+  rejectInlinePrivateKeyFields(request, "MultisigContractCallProposeDto");
   const contractAddress = request.contract_address ?? request.contractAddress ?? null;
   const contractAlias = request.contract_alias ?? request.contractAlias ?? null;
   if ((contractAddress == null) === (contractAlias == null)) {
@@ -1037,13 +1052,6 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
         encodeAccountIdValue(
           request.signer_account_id ?? request.signerAccountId,
           "MultisigContractCallProposeDto.signer_account_id",
-        ),
-      ],
-      [
-        encodeOptionValue(
-          request.private_key ?? request.privateKey ?? null,
-          encodeNoritoStringValue,
-          "MultisigContractCallProposeDto.private_key",
         ),
       ],
       [
@@ -1121,6 +1129,7 @@ export function noritoEncodeMultisigContractCallApproveRequest(request) {
   if (!isPlainObject(request)) {
     throw new TypeError("MultisigContractCallApproveDto request must be an object");
   }
+  rejectInlinePrivateKeyFields(request, "MultisigContractCallApproveDto");
   const proposalId = request.proposal_id ?? request.proposalId ?? null;
   const instructionsHash = request.instructions_hash ?? request.instructionsHash ?? null;
   if (proposalId == null && instructionsHash == null) {
@@ -1138,13 +1147,6 @@ export function noritoEncodeMultisigContractCallApproveRequest(request) {
         encodeAccountIdValue(
           request.signer_account_id ?? request.signerAccountId,
           "MultisigContractCallApproveDto.signer_account_id",
-        ),
-      ],
-      [
-        encodeOptionValue(
-          request.private_key ?? request.privateKey ?? null,
-          encodeNoritoStringValue,
-          "MultisigContractCallApproveDto.private_key",
         ),
       ],
       [
@@ -1248,6 +1250,62 @@ export function noritoEncodeInstructionBoxArchive(instruction) {
   return withNoritoLengthFlags(COMPACT_LEN_FLAG, () =>
     encodeEmbeddedInstructionBox(instruction, "instruction"),
   );
+}
+
+/**
+ * Decode one exact canonical `InstructionBox` archive embedded in a compact
+ * transaction payload.
+ *
+ * Unlike {@link noritoDecodeInstruction}, this accepts the bare archive used
+ * inside `TransactionPayload::instructions`, not a framed public instruction.
+ * The decoded value is re-encoded and compared byte-for-byte so alternate
+ * length encodings, frame flags, padding, or payload layouts are rejected at
+ * signing boundaries.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @returns {unknown}
+ */
+export function noritoDecodeInstructionBoxArchive(bytes) {
+  const archive = toBuffer(bytes);
+  const outerFlags = COMPACT_LEN_FLAG;
+  const outerReader = new BufferReader(
+    archive,
+    "instruction archive",
+    outerFlags,
+  );
+  const wireId = decodeStringValue(
+    readNoritoField(outerReader, "wire"),
+    "instruction archive.wire",
+    outerFlags,
+  );
+  const innerField = readNoritoField(outerReader, "inner");
+  outerReader.assertEof();
+
+  const innerReader = new BufferReader(
+    innerField,
+    "instruction archive.inner",
+    0,
+  );
+  const innerFrame = readNoritoField(innerReader, "frame");
+  innerReader.assertEof();
+  const inner = decodeNoritoFrame(
+    innerFrame,
+    "instruction archive.frame",
+    INNER_SCHEMA_HASH_BY_WIRE_ID[wireId] ?? null,
+  );
+  const decoded = withNoritoLengthFlags(inner.flags, () =>
+    decodePureJsInstructionPayload(
+      wireId,
+      inner.payload,
+      inner.flags,
+      innerFrame,
+    ),
+  );
+  const canonical = noritoEncodeInstructionBoxArchive(decoded);
+  if (!archive.equals(canonical)) {
+    throw new Error("instruction archive is not canonical Norito");
+  }
+  return decoded;
 }
 
 /**
@@ -2038,12 +2096,10 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case "iroha_data_model::isi::kaigi::RegisterKaigiRelay":
       return decodeKaigiInstructionPayload(wireId, payload);
     case "iroha_data_model::isi::zk::RegisterZkAsset":
-    case "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool":
     case "zk::ScheduleConfidentialPolicyTransition":
     case "zk::CancelConfidentialPolicyTransition":
     case "iroha_data_model::isi::zk::Shield":
     case "iroha_data_model::isi::zk::ZkTransfer":
-    case "iroha_data_model::isi::zk::AssetHiddenZkTransfer":
     case "iroha_data_model::isi::zk::Unshield":
     case "iroha_data_model::isi::zk::CreateElection":
     case "iroha_data_model::isi::zk::SubmitBallot":
@@ -3298,39 +3354,6 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool": {
-      const fields = decodeStructFields(payload, "zk.RegisterAssetHiddenZkPool", [
-        "pool_id",
-        "storage_asset",
-        "asset_set_root",
-        "vk_transfer",
-      ]);
-      return {
-        zk: {
-          RegisterAssetHiddenZkPool: {
-            pool_id: decodeStringValue(
-              fields.pool_id,
-              "zk.RegisterAssetHiddenZkPool.pool_id",
-            ),
-            storage_asset: decodeAssetDefinitionIdValue(
-              fields.storage_asset,
-              "zk.RegisterAssetHiddenZkPool.storage_asset",
-            ),
-            asset_set_root: Array.from(
-              decodeFixedBytesValue(
-                fields.asset_set_root,
-                32,
-                "zk.RegisterAssetHiddenZkPool.asset_set_root",
-              ),
-            ),
-            vk_transfer: decodeVerifyingKeyIdValue(
-              fields.vk_transfer,
-              "zk.RegisterAssetHiddenZkPool.vk_transfer",
-            ),
-          },
-        },
-      };
-    }
     case "zk::ScheduleConfidentialPolicyTransition": {
       const fields = decodeStructFields(payload, "zk.ScheduleConfidentialPolicyTransition", [
         "asset",
@@ -3454,59 +3477,6 @@ function decodeZkInstructionPayload(wireId, payload) {
               (entry, context) =>
                 Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
               "zk.ZkTransfer.root_hint",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::AssetHiddenZkTransfer": {
-      const fields = decodeStructFields(payload, "zk.AssetHiddenZkTransfer", [
-        "pool_id",
-        "inputs",
-        "outputs",
-        "proof",
-        "root_hint",
-      ]);
-      return {
-        zk: {
-          AssetHiddenZkTransfer: {
-            pool_id: decodeStringValue(
-              fields.pool_id,
-              "zk.AssetHiddenZkTransfer.pool_id",
-            ),
-            inputs: decodeNoritoVec(
-              fields.inputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.AssetHiddenZkTransfer.inputs[${index}]`,
-                  ),
-                ),
-              "zk.AssetHiddenZkTransfer.inputs",
-            ),
-            outputs: decodeNoritoVec(
-              fields.outputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.AssetHiddenZkTransfer.outputs[${index}]`,
-                  ),
-                ),
-              "zk.AssetHiddenZkTransfer.outputs",
-            ),
-            proof: decodeProofAttachmentValue(
-              fields.proof,
-              "zk.AssetHiddenZkTransfer.proof",
-            ),
-            root_hint: decodeOptionValue(
-              fields.root_hint,
-              (entry, context) =>
-                Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
-              "zk.AssetHiddenZkTransfer.root_hint",
             ),
           },
         },
@@ -5419,12 +5389,10 @@ function decodeVerifyingKeyInstructionPayload(wireId, payload) {
 function encodeZkInstruction(instruction) {
   const entries = [
     ["RegisterZkAsset", "iroha_data_model::isi::zk::RegisterZkAsset", encodeRegisterZkAssetPayload],
-    ["RegisterAssetHiddenZkPool", "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool", encodeRegisterAssetHiddenZkPoolPayload],
     ["ScheduleConfidentialPolicyTransition", "zk::ScheduleConfidentialPolicyTransition", encodeScheduleConfidentialPolicyTransitionPayload],
     ["CancelConfidentialPolicyTransition", "zk::CancelConfidentialPolicyTransition", encodeCancelConfidentialPolicyTransitionPayload],
     ["Shield", "iroha_data_model::isi::zk::Shield", encodeShieldPayload],
     ["ZkTransfer", "iroha_data_model::isi::zk::ZkTransfer", encodeZkTransferPayload],
-    ["AssetHiddenZkTransfer", "iroha_data_model::isi::zk::AssetHiddenZkTransfer", encodeAssetHiddenZkTransferPayload],
     ["Unshield", "iroha_data_model::isi::zk::Unshield", encodeUnshieldPayload],
     ["CreateElection", "iroha_data_model::isi::zk::CreateElection", encodeCreateElectionPayload],
     ["SubmitBallot", "iroha_data_model::isi::zk::SubmitBallot", encodeSubmitBallotPayload],
@@ -5449,15 +5417,6 @@ function encodeRegisterZkAssetPayload(value) {
     [encodeOptionValue(value.vk_transfer, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_transfer")],
     [encodeOptionValue(value.vk_unshield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_unshield")],
     [encodeOptionValue(value.vk_shield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_shield")],
-  ]);
-}
-
-function encodeRegisterAssetHiddenZkPoolPayload(value) {
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.pool_id, "zk.RegisterAssetHiddenZkPool.pool_id"))],
-    [encodeAssetDefinitionIdValue(value.storage_asset, "zk.RegisterAssetHiddenZkPool.storage_asset")],
-    [encodeFixedBytesValue(value.asset_set_root, 32, "zk.RegisterAssetHiddenZkPool.asset_set_root")],
-    [encodeVerifyingKeyIdValue(value.vk_transfer, "zk.RegisterAssetHiddenZkPool.vk_transfer")],
   ]);
 }
 
@@ -5503,26 +5462,6 @@ function encodeZkTransferPayload(value) {
         value.root_hint,
         (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
         "zk.ZkTransfer.root_hint",
-      ),
-    ],
-  ]);
-}
-
-function encodeAssetHiddenZkTransferPayload(value) {
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.pool_id, "zk.AssetHiddenZkTransfer.pool_id"))],
-    [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.AssetHiddenZkTransfer.inputs[${index}]`),
-    )],
-    [encodeNoritoVec(value.outputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.AssetHiddenZkTransfer.outputs[${index}]`),
-    )],
-    [encodeProofAttachmentValue(value.proof, "zk.AssetHiddenZkTransfer.proof")],
-    [
-      encodeOptionValue(
-        value.root_hint,
-        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
-        "zk.AssetHiddenZkTransfer.root_hint",
       ),
     ],
   ]);
@@ -7242,6 +7181,16 @@ function encodeLanePrivacyWitnessValue(value, context) {
   }
   const kind = assertNonEmptyString(value.kind, `${context}.kind`).toLowerCase();
   if (kind === "merkle") {
+    const auditPath =
+      value.payload?.proof?.audit_path ?? value.payload?.proof?.auditPath;
+    if (!Array.isArray(auditPath) || auditPath.length === 0) {
+      throw new Error(
+        `${context}.payload.proof.audit_path must contain at least one sibling`,
+      );
+    }
+    if (auditPath.some((entry) => entry === null || entry === undefined)) {
+      throw new Error(`${context}.payload.proof.audit_path must not omit siblings`);
+    }
     return encodeEnumTagValue(0, () =>
       encodeStructValue([
         [encodeFixedBytesValue(value.payload.leaf, 32, `${context}.payload.leaf`)],
@@ -7249,15 +7198,7 @@ function encodeLanePrivacyWitnessValue(value, context) {
       ]),
     );
   }
-  if (kind === "snark") {
-    return encodeEnumTagValue(1, () =>
-      encodeStructValue([
-        [encodeByteVecValue(value.payload.public_inputs, `${context}.payload.public_inputs`)],
-        [encodeByteVecValue(value.payload.proof, `${context}.payload.proof`)],
-      ]),
-    );
-  }
-  throw new Error(`${context}.kind must be merkle or snark`);
+  throw new Error(`${context}.kind must be merkle`);
 }
 
 function decodeLanePrivacyWitnessValue(payload, context) {
@@ -7271,26 +7212,20 @@ function decodeLanePrivacyWitnessValue(payload, context) {
         "leaf",
         "proof",
       ]);
+      const proof = decodeMerkleProofValue(fields.proof, `${context}.payload.proof`);
+      if (proof.audit_path.length === 0) {
+        throw new Error(
+          `${context}.payload.proof.audit_path must contain at least one sibling`,
+        );
+      }
+      if (proof.audit_path.some((entry) => entry === null)) {
+        throw new Error(`${context}.payload.proof.audit_path must not omit siblings`);
+      }
       return {
         kind: "merkle",
         payload: {
           leaf: Array.from(decodeFixedBytesValue(fields.leaf, 32, `${context}.payload.leaf`)),
-          proof: decodeMerkleProofValue(fields.proof, `${context}.payload.proof`),
-        },
-      };
-    }
-    case 1: {
-      const fields = decodeStructFields(body ?? Buffer.alloc(0), `${context}.snark`, [
-        "public_inputs",
-        "proof",
-      ]);
-      return {
-        kind: "snark",
-        payload: {
-          public_inputs: Array.from(
-            decodeByteVecValue(fields.public_inputs, `${context}.payload.public_inputs`),
-          ),
-          proof: Array.from(decodeByteVecValue(fields.proof, `${context}.payload.proof`)),
+          proof,
         },
       };
     }

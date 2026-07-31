@@ -115,6 +115,9 @@ def test_archive_authority_is_canonical_portable_and_exact12(tmp_path: Path) -> 
         assert not row["path"].startswith("/")
         assert ".." not in Path(row["path"]).parts
     assert str(tmp_path) not in encoded.decode()
+    artifact_paths = {row["path"] for row in decoded["native_release_evidence"]}
+    assert authority.EVIDENCE_PATHS["x509_resource_norito"] in artifact_paths
+    assert authority.EVIDENCE_PATHS["x509_resource_json"] in artifact_paths
 
 
 def test_create_then_verify_rebuilds_exact_subject(tmp_path: Path) -> None:

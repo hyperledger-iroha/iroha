@@ -86,12 +86,14 @@ test("mintPuzzleTicket passes overrides", async () => {
   const client = new SoranetPuzzleClient(BASE_URL, {
     fetchImpl: createFetch(queue),
   });
-  const result = await client.mintPuzzleTicket({ ttlSecs: 90 });
+  const result = await client.mintPuzzleTicket("99".repeat(32), { ttlSecs: 90 });
   assert.equal(result.ticketB64, "Zm9v");
   assert.equal(result.signedTicketB64, null);
   assert.equal(result.signedTicketFingerprintHex, null);
   assert.equal(captured.url, `${BASE_URL}/v1/puzzle/mint`);
-  assert.equal(JSON.parse(captured.init.body).ttl_secs, 90);
+  const body = JSON.parse(captured.init.body);
+  assert.equal(body.ttl_secs, 90);
+  assert.equal(body.transcript_hash_hex, "99".repeat(32));
 });
 
 test("mintPuzzleTicket requests signed tickets with transcript binding", async () => {
@@ -114,9 +116,8 @@ test("mintPuzzleTicket requests signed tickets with transcript binding", async (
   const client = new SoranetPuzzleClient(BASE_URL, {
     fetchImpl: createFetch(queue),
   });
-  const result = await client.mintPuzzleTicket({
+  const result = await client.mintPuzzleTicket("aa".repeat(32), {
     ttlSecs: 90,
-    transcriptHashHex: "aa".repeat(32),
     signed: true,
   });
   const body = JSON.parse(captured.init.body);
@@ -124,6 +125,19 @@ test("mintPuzzleTicket requests signed tickets with transcript binding", async (
   assert.equal(body.transcript_hash_hex, "aa".repeat(32));
   assert.equal(result.signedTicketB64, "YmFy");
   assert.equal(result.signedTicketFingerprintHex, "11".repeat(32));
+});
+
+test("mintPuzzleTicket rejects missing or zero transcript binding", async () => {
+  const client = new SoranetPuzzleClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("request must not be sent");
+    },
+  });
+  await assert.rejects(() => client.mintPuzzleTicket(), /transcriptHashHex/);
+  await assert.rejects(
+    () => client.mintPuzzleTicket("00".repeat(32)),
+    /must not be all zeros/,
+  );
 });
 
 test("mintAdmissionToken validates hex + propagates TTL + flags", async () => {

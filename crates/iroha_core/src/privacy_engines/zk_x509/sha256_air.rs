@@ -6,10 +6,9 @@
 //! deterministic witness compiler intended for certificate, CRL, sparse-tree,
 //! transcript, and projection hashing.
 //!
-//! The gate rows are individually complete. Their global wire-copy argument is
-//! intentionally still listed in the AIR gap inventory: a final segmented
-//! proof must bind the execution-order gate accesses to an address-sorted wire
-//! memory table before this schedule can contribute to activation readiness.
+//! The global wire-copy argument binds execution-order gate accesses to the
+//! address-sorted SHA word-memory table, and the SHA call-bus STARK binds those
+//! words across aggregate segments.
 
 use thiserror::Error;
 
@@ -18,10 +17,9 @@ use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
 /// Manifest descriptor for the implemented local SHA-256 circuit.
 ///
-/// The descriptor explicitly retains the missing global copy argument. It can
-/// pin this reviewed primitive in the provisional engine manifest without
-/// implying that cross-segment SHA-256 wiring or a proof container exists.
-pub(crate) const ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1: &[u8] = b"sha256-local-air-v1:canonical-padding:private-message-length:word-input-bits-le:sha256-bytes-be:boolean-and-xor-full-adder:gates-per-block=55552:fixed-canonical-topology:acyclic-single-assignment-wire-addresses:mod2^32-carry-discard:output-digest-reconstruction:global-wire-copy-and-cross-segment-binding-pending";
+/// Global word-copy and cross-segment call binding are supplied by the
+/// manifest-bound SHA word AIR and SHA call-bus STARK respectively.
+pub(crate) const ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1: &[u8] = b"sha256-local-air-v1:canonical-padding:private-message-length:word-input-bits-le:sha256-bytes-be:boolean-and-xor-full-adder:gates-per-block=55552:fixed-canonical-topology:acyclic-single-assignment-wire-addresses:mod2^32-carry-discard:output-digest-reconstruction:global-wire-copy-and-cross-segment-binding=complete-via-sha256-word-air+sha-call-bus-stark";
 
 const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x6a09_e667,
@@ -682,7 +680,7 @@ mod tests {
     fn local_boolean_schedule_cannot_be_confused_with_release_resource_readiness() {
         let crl_rows =
             sha256_gate_rows_for_message_len_v1(ZK_X509_MAX_CRL_BYTES_V1).expect("bounded CRL");
-        assert_eq!(crl_rows, 14_276_864);
+        assert_eq!(crl_rows, 3_610_880);
         let compiled_sha_capacity = u64::try_from(
             SHA256_WORD_FIXED_BATCH_SEGMENT_ROWS_V1
                 .checked_mul(SHA256_WORD_FIXED_BATCH_SEGMENT_COUNT_V1)

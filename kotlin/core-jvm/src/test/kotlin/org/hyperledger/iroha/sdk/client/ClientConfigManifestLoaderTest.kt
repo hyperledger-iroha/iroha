@@ -67,6 +67,38 @@ class ClientConfigManifestLoaderTest {
         assertFalse(config.retryPolicy().shouldRetryError(1))
     }
 
+    @Test
+    fun loadsAndPreservesImmutableLocalSigningContext() {
+        val config = load(
+            manifest(extra = ""","chain_id":"test-chain""""),
+        )
+
+        assertEquals("test-chain", config.localSigningContext().get().chainId())
+        assertEquals(
+            "test-chain",
+            config.toBuilder().build().localSigningContext().get().chainId(),
+        )
+        assertFalse(load(manifest()).localSigningContext().isPresent)
+        assertFailsWith<IllegalArgumentException> {
+            load(manifest(extra = ""","chain_id":" invalid """"))
+        }
+    }
+
+    @Test
+    fun rejectsGenesisPrivacyFingerprintsAsClientProofPolicyAtAnyDepth() {
+        val nonAuthoritative = listOf(
+            manifest(extra = ""","confidential_features":{"zk_policy_hash":"00"}"""),
+            manifest(extra = ""","genesis":{"zk_policy_hash":"00"}"""),
+            manifest(extra = ""","genesis":{"confidentialFeatures":{}}"""),
+            manifest(extra = ""","client":{"privacy":{"zkPolicyHash":"00"}}"""),
+        )
+
+        nonAuthoritative.forEach { json ->
+            val error = assertFailsWith<IllegalStateException> { load(json) }
+            assertTrue(error.message?.contains("/v1/privacy/capabilities") == true)
+        }
+    }
+
     private fun assertRejected(json: String) {
         assertFailsWith<IllegalStateException> { load(json) }
     }

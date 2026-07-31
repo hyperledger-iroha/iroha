@@ -6,8 +6,7 @@ LOCALNET_DIR="${IROHA_TAIRA_LOCALNET_DIR:-$ROOT_DIR/dist/taira-localnet}"
 SCREEN_SESSION="${IROHA_TAIRA_SCREEN_SESSION:-taira-localnet}"
 GENESIS_JSON="${IROHA_TAIRA_GENESIS_JSON:-$LOCALNET_DIR/genesis.json}"
 GENESIS_SIGNED="${IROHA_TAIRA_GENESIS_SIGNED:-$LOCALNET_DIR/genesis.signed.nrt}"
-GENESIS_PRIVATE_KEY="${IROHA_TAIRA_GENESIS_PRIVATE_KEY:-}"
-LOCALNET_BASE_SEED_OVERRIDE="${IROHA_TAIRA_LOCALNET_SEED:-}"
+GENESIS_PRIVATE_KEY_FILE="${IROHA_TAIRA_GENESIS_PRIVATE_KEY_FILE:-$LOCALNET_DIR/genesis.private_key}"
 TAIRA_PROFILE_CONFIG="${IROHA_TAIRA_PROFILE_CONFIG:-$ROOT_DIR/configs/soranexus/taira/config.toml}"
 TAIRA_SECRETS_FILE="${IROHA_TAIRA_SECRETS_FILE:-$ROOT_DIR/configs/soranexus/taira/validator_secrets.local.toml}"
 TAIRA_ONBOARDING_TOKEN_FILE="${IROHA_TAIRA_ONBOARDING_TOKEN_FILE:-}"
@@ -166,9 +165,7 @@ load_localnet_genesis_signer_config() {
   while IFS= read -r line; do
     values+=("$line")
   done < <(
-    LOCALNET_BASE_SEED_OVERRIDE="$LOCALNET_BASE_SEED_OVERRIDE" \
-      python3 - "$LOCALNET_DIR/peer0.toml" "$LOCALNET_DIR/README.md" <<'PY'
-import os
+    python3 - "$LOCALNET_DIR/peer0.toml" <<'PY'
 import re
 import sys
 
@@ -177,24 +174,13 @@ match = re.search(r'(?ms)^\[genesis\]\n.*?^public_key\s*=\s*"([^"]+)"', peer_cfg
 if not match:
     raise SystemExit("missing genesis public_key")
 print(match.group(1))
-seed = os.environ.get('LOCALNET_BASE_SEED_OVERRIDE', '')
-if not seed:
-    try:
-        readme = open(sys.argv[2], encoding='utf-8').read()
-    except FileNotFoundError:
-        readme = ''
-    match = re.search(r'^- Base seed: `([^`]+)`$', readme, re.MULTILINE)
-    if match:
-        seed = match.group(1)
-print(seed)
 PY
   )
-  if [[ "${#values[@]}" -lt 2 ]]; then
+  if [[ "${#values[@]}" -lt 1 ]]; then
     echo "failed to load localnet genesis signer config from $LOCALNET_DIR" >&2
     exit 1
   fi
   LOCALNET_GENESIS_PUBLIC_KEY="${values[0]}"
-  LOCALNET_BASE_SEED="${values[1]}"
 }
 
 patch_peer_configs_for_taira_authority() {
@@ -920,7 +906,10 @@ extract_toml_string() {
 helper_supports_cli() {
   local candidate="$1"
   [[ -x "$candidate" ]] || return 1
-  "$candidate" --help 2>&1 | grep -q -- '--expected-genesis-public-key'
+  local help
+  help="$("$candidate" --help 2>&1)" || return 1
+  grep -q -- '--expected-genesis-public-key' <<<"$help" \
+    && grep -q -- '--genesis-private-key-file' <<<"$help"
 }
 
 discover_helper_bin() {
@@ -961,6 +950,7 @@ need_cmd jq
 need_cmd python3
 need_cmd screen
 need_file "$GENESIS_JSON"
+need_file "$GENESIS_PRIVATE_KEY_FILE"
 need_file "$LOCALNET_DIR/client.toml"
 need_file "$TAIRA_PROFILE_CONFIG"
 need_file "$SITE_BINDINGS_FILE"
@@ -1050,6 +1040,7 @@ helper_bin="$(discover_helper_bin || true)"
 echo "building signed Kaigi overlay genesis"
 helper_args=(
   --genesis "$GENESIS_JSON"
+  --genesis-private-key-file "$GENESIS_PRIVATE_KEY_FILE"
   --config "$LOCALNET_DIR/peer0.toml"
   --out-file "$GENESIS_SIGNED"
   --expected-genesis-public-key "$LOCALNET_GENESIS_PUBLIC_KEY"
@@ -1073,11 +1064,6 @@ else
     --bootstrap-authority-fee-asset-id "$FEE_ASSET_ID"
     --bootstrap-authority-fee-amount "$TAIRA_AUTHORITY_FUND_AMOUNT"
   )
-fi
-if [[ -n "$GENESIS_PRIVATE_KEY" ]]; then
-  helper_args+=(--genesis-private-key "$GENESIS_PRIVATE_KEY")
-elif [[ -n "$LOCALNET_BASE_SEED" ]]; then
-  helper_args+=(--seed "$LOCALNET_BASE_SEED")
 fi
 if [[ -n "$helper_bin" ]]; then
   "$helper_bin" "${helper_args[@]}"

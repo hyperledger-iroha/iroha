@@ -15,9 +15,11 @@
   },
   "SumeragiV2GenesisContextParameters": {
     "Struct": [
-      { "name": "da_layout", "type": "DataAvailabilityLayout" }
+      { "name": "da_layout", "type": "DataAvailabilityLayout" },
+      { "name": "nexus_amx_context_hash", "type": "[u8; 32]" },
+      { "name": "execution_policy_hash", "type": "[u8; 32]" }
     ],
-    "docs": "Required signed Sumeragi v2 height-context transport parameters."
+    "docs": "Required signed Sumeragi v2 height-context transport and execution-policy parameters."
   },
   "RawGenesisTx": {
     "Struct": [

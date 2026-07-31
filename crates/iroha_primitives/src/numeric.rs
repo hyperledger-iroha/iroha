@@ -2679,8 +2679,8 @@ impl<'a> NoritoDeserialize<'a> for Numeric {
     }
 
     fn try_deserialize(archived: &'a Archived<Numeric>) -> Result<Self, Error> {
-        let helper_align = core::mem::align_of::<Archived<scale_::NumericScaleHelper>>();
-        let numeric_align = core::mem::align_of::<Archived<Numeric>>();
+        let helper_align = norito::core::archived_payload_align::<scale_::NumericScaleHelper>();
+        let numeric_align = norito::core::archived_payload_align::<Numeric>();
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let aligned = numeric_align >= helper_align || (ptr as usize).is_multiple_of(helper_align);
 

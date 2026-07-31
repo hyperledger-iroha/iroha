@@ -3,7 +3,6 @@ package org.hyperledger.iroha.sdk.client
 /** Request body for `POST /v1/zk/vk/register`. */
 class VerifyingKeyRegisterRequest(
     val authority: String,
-    val privateKey: String,
     val backend: String,
     val name: String,
     val version: Long,

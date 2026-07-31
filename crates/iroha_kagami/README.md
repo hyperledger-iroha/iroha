@@ -65,14 +65,23 @@ kagami docker \
   --config-dir ./localnet \
   --image hyperledger/iroha:dev \
   --out-file docker-compose.yml
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/localnet/genesis.public_key"
+export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/localnet/genesis.private_key"
+docker compose -f docker-compose.yml up
 ```
 
 Ed25519 or BLS keys:
 
 ```bash
 kagami keys --algorithm ed25519
+kagami keys --out-dir ./key-custody
 kagami keys --algorithm bls_normal --pop --json
 ```
+
+`--out-dir` is the production-oriented form: it creates a mode-`0700`
+directory containing newline-terminated `public.key` and owner-only
+`private.key` files, refuses to reuse a non-empty directory, and never prints
+the private key.
 
 The generator commands print a concise summary with generated paths, the primary
 Torii URL, and exact next commands. `localnet` and `wizard` also emit a
@@ -103,6 +112,9 @@ generated `README.md` into the output directory.
   DA/RBC topology
 - Protects validator/client configs and runtime signer/token sidecars with
   owner-only permissions and emits a bundle-wide `.gitignore`
+- Emits `genesis.public_key` and an owner-only `genesis.private_key`; generated
+  Compose files consume these through runtime secret-file paths and never
+  contain the signing key
 - Fresh-custody bundles keep directories and lifecycle scripts at `0700`, all
   other files at `0600`, and lifecycle scripts enforce `umask 077` for new
   logs, pidfiles, and runtime state
@@ -114,6 +126,9 @@ generated `README.md` into the output directory.
 - Docker Compose generator for an existing config directory containing
   `genesis.json`
 - Use this after `kagami localnet` or after preparing/signing genesis manually
+- Requires `IROHA_GENESIS_PUBLIC_KEY_FILE` and
+  `IROHA_GENESIS_PRIVATE_KEY_FILE` when Compose is evaluated. Missing files,
+  malformed public-key records, and mismatched signing keys fail closed.
 
 `kagami genesis`
 - Power-user genesis generation, PoP embedding, validation, normalization, and
@@ -172,7 +187,8 @@ target/debug/kagami genesis sign \
   --topology "$TOPOLOGY_JSON" \
   --peer-pop "$PK_A=$POP_A" \
   --peer-pop "$PK_B=$POP_B" \
-  --private-key "$GENESIS_PRIVATE_KEY_HEX" \
+  --private-key-file "$GENESIS_PRIVATE_KEY_FILE" \
+  --expected-public-key "$GENESIS_PUBLIC_KEY" \
   --algorithm ed25519 \
   --out-file genesis.signed.nrt
 ```

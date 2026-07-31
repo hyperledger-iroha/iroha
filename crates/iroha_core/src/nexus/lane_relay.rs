@@ -8,7 +8,9 @@ use std::collections::{BTreeMap, VecDeque};
 
 use iroha_data_model::{
     block::consensus::LaneBlockCommitment,
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError, LaneRelayProofStatus},
+    nexus::{
+        DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError, LaneRelayFastpqMaterialStatus,
+    },
 };
 use iroha_p2p::{
     Broadcast, Priority,
@@ -166,7 +168,7 @@ pub enum LaneRelayBroadcastError {
 /// Broadcasts validated lane relay envelopes and records them in the local status snapshot.
 pub struct LaneRelayBroadcaster<N: LaneRelayTx> {
     network: N,
-    seen: BTreeMap<LaneRelayKey, LaneRelayProofStatus>,
+    seen: BTreeMap<LaneRelayKey, LaneRelayFastpqMaterialStatus>,
     seen_order: VecDeque<LaneRelayKey>,
     pending: BTreeMap<LaneRelayKey, PendingRelay<N::RetryToken>>,
     pending_order: VecDeque<LaneRelayKey>,
@@ -199,7 +201,7 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
         for envelope in envelopes {
             if let Err(err) = envelope.verify().and_then(|()| {
                 if envelope.fastpq_proof.is_some() {
-                    envelope.verify_fastpq_proof_material()
+                    envelope.validate_fastpq_proof_metadata()
                 } else {
                     Ok(())
                 }
@@ -216,10 +218,10 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
                 continue;
             }
             let key = LaneRelayKey::from_envelope(&envelope);
-            let proof_status = envelope.proof_status();
+            let metadata_status = envelope.fastpq_metadata_status();
             if self.seen.get(&key).is_some_and(|existing| {
-                *existing == LaneRelayProofStatus::Verified
-                    || proof_status == LaneRelayProofStatus::Pending
+                *existing == LaneRelayFastpqMaterialStatus::Present
+                    || metadata_status == LaneRelayFastpqMaterialStatus::Missing
             }) {
                 continue;
             }
@@ -250,7 +252,7 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
             if !self.seen.contains_key(&key) {
                 self.seen_order.push_back(key);
             }
-            self.seen.insert(key, proof_status);
+            self.seen.insert(key, metadata_status);
             status::push_lane_relay_envelope(envelope.clone());
             if let Some(pending) = self.pending.get_mut(&key) {
                 // An upgraded proof has a different exact actor shape; dropping the old token

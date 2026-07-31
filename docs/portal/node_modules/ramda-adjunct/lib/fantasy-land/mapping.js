@@ -1,0 +1,24 @@
+"use strict";
+
+exports.__esModule = true;
+exports.zero = exports.traverse = exports.reduce = exports.promap = exports.of = exports.map = exports.lte = exports.id = exports.extract = exports.extend = exports.equals = exports.empty = exports.contramap = exports.concat = exports.compose = exports.chainRec = exports.chain = exports.bimap = exports.ap = exports.alt = void 0;
+var equals = exports.equals = 'fantasy-land/equals';
+var lte = exports.lte = 'fantasy-land/lte';
+var compose = exports.compose = 'fantasy-land/compose';
+var id = exports.id = 'fantasy-land/id';
+var concat = exports.concat = 'fantasy-land/concat';
+var empty = exports.empty = 'fantasy-land/empty';
+var map = exports.map = 'fantasy-land/map';
+var contramap = exports.contramap = 'fantasy-land/contramap';
+var ap = exports.ap = 'fantasy-land/ap';
+var of = exports.of = 'fantasy-land/of';
+var alt = exports.alt = 'fantasy-land/alt';
+var zero = exports.zero = 'fantasy-land/zero';
+var reduce = exports.reduce = 'fantasy-land/reduce';
+var traverse = exports.traverse = 'fantasy-land/traverse';
+var chain = exports.chain = 'fantasy-land/chain';
+var chainRec = exports.chainRec = 'fantasy-land/chainRec';
+var extend = exports.extend = 'fantasy-land/extend';
+var extract = exports.extract = 'fantasy-land/extract';
+var bimap = exports.bimap = 'fantasy-land/bimap';
+var promap = exports.promap = 'fantasy-land/promap';

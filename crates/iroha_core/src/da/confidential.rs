@@ -93,7 +93,7 @@ mod tests {
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
-            commitment::{DaCommitmentRecord, DaProofScheme, KzgCommitment, RetentionClass},
+            commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
         nexus::{
@@ -140,7 +140,6 @@ mod tests {
             ManifestDigest::new([0xBB; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0xCC; 32]),
-            Some(KzgCommitment::new([0x11; 48])),
             None,
             RetentionClass::default(),
             StorageTicketId::new(ticket),

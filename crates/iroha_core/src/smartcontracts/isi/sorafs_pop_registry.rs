@@ -11,7 +11,6 @@ use iroha_data_model::{
             SetSorafsPopIssuerPolicy,
         },
     },
-    name::Name,
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
@@ -29,6 +28,7 @@ use iroha_data_model::{
         PopRegistryRevocationReasonV1, PopRegistryStatusV1, PopRevocationPublicationRecordV1,
         PopRevocationRecordV1, pop_registry_payload_digest_v1, pop_revocation_nonce_commitment_v1,
     },
+    state_path::StatePath,
 };
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_canonical_with_limits};
@@ -157,47 +157,51 @@ fn block_time_epoch(
     Ok(now)
 }
 
-fn policy_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
-    KEY.get_or_init(|| Name::from_str(POLICY_STATE_KEY).expect("static PoP policy key is valid"))
+fn policy_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
+    KEY.get_or_init(|| {
+        StatePath::from_str(POLICY_STATE_KEY).expect("static PoP policy key is valid")
+    })
 }
 
-fn status_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
-    KEY.get_or_init(|| Name::from_str(STATUS_STATE_KEY).expect("static PoP status key is valid"))
+fn status_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
+    KEY.get_or_init(|| {
+        StatePath::from_str(STATUS_STATE_KEY).expect("static PoP status key is valid")
+    })
 }
 
-fn digest_key(prefix: &str, digest: [u8; 32]) -> Name {
-    Name::from_str(&format!("{prefix}{}", hex::encode(digest)))
+fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
+    StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static PoP prefix plus lowercase hex is a valid state key")
 }
 
-fn sequence_key(prefix: &str, sequence: u64) -> Name {
-    Name::from_str(&format!("{prefix}{sequence:020}"))
+fn sequence_key(prefix: &str, sequence: u64) -> StatePath {
+    StatePath::from_str(&format!("{prefix}{sequence:020}"))
         .expect("static PoP prefix plus decimal sequence is a valid state key")
 }
 
-fn credential_key(commitment: [u8; 32]) -> Name {
+fn credential_key(commitment: [u8; 32]) -> StatePath {
     digest_key(CREDENTIAL_STATE_KEY_PREFIX, commitment)
 }
 
-fn nonce_binding_key(commitment: [u8; 32]) -> Name {
+fn nonce_binding_key(commitment: [u8; 32]) -> StatePath {
     digest_key(NONCE_BINDING_STATE_KEY_PREFIX, commitment)
 }
 
-fn root_key(version: u64) -> Name {
+fn root_key(version: u64) -> StatePath {
     sequence_key(ROOT_STATE_KEY_PREFIX, version)
 }
 
-fn revocation_publication_key(version: u64) -> Name {
+fn revocation_publication_key(version: u64) -> StatePath {
     sequence_key(REVOCATION_PUBLICATION_STATE_KEY_PREFIX, version)
 }
 
-fn revocation_key(commitment: [u8; 32]) -> Name {
+fn revocation_key(commitment: [u8; 32]) -> StatePath {
     digest_key(REVOCATION_STATE_KEY_PREFIX, commitment)
 }
 
-fn audit_key(sequence: u64) -> Name {
+fn audit_key(sequence: u64) -> StatePath {
     sequence_key(AUDIT_STATE_KEY_PREFIX, sequence)
 }
 

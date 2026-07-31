@@ -2570,8 +2570,7 @@ macro_rules! production_ingress_identity_and_class_trace_body {
         let exact_ordinal_transition = $projection.ordinal_minted
             && $projection.ordinal_source_before == $projection.physical_admission_ordinal
             && $projection.physical_admission_ordinal < u128::MAX
-            && $projection.ordinal_source_after
-                == $projection.physical_admission_ordinal + 1u128;
+            && $projection.ordinal_source_after == $projection.physical_admission_ordinal + 1u128;
         let exact_dormant_transition = if $projection.dormant_owner_ordinal == 0u128 {
             $projection.dormant_reservations_after == $projection.dormant_reservations_before
         } else {
@@ -4344,7 +4343,7 @@ pub struct ProductionSchedulerTraceProjection {
 }
 
 /// Primitive identity, queue-class, ordinal, and dormant-owner observation for
-/// one admitted command or one materialized exact reservation.
+/// one newly admitted physical owner.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub(crate) incoming_height: u64,
@@ -4367,8 +4366,9 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     /// Zero for an ordinary admission; otherwise the exact dormant lifecycle
     /// owner consumed by this physical FIFO publication.
     pub(crate) dormant_owner_ordinal: u128,
-    /// Whether this transition advances the shared ordinal source. A later
-    /// reservation materialization preserves the already-advanced source.
+    /// Whether this transition advances the shared ordinal source. Every
+    /// generic admission must set this; reservation materialization uses its
+    /// separate occupancy-preserving projection below.
     pub(crate) ordinal_minted: bool,
 }
 
@@ -7036,12 +7036,10 @@ pub(crate) fn check_production_ingress_transition(
 #[must_use]
 pub(crate) fn check_production_ingress_reservation_materialization_transition(
     projection: ProductionIngressReservationMaterializationTraceProjection,
-) -> Option<
-    CheckedProductionTransition<ProductionIngressReservationMaterializationTraceProjection>,
-> {
-    if production_ingress_reservation_materialization_refines_protected_ownership_kernel(
-        projection,
-    ) {
+) -> Option<CheckedProductionTransition<ProductionIngressReservationMaterializationTraceProjection>>
+{
+    if production_ingress_reservation_materialization_refines_protected_ownership_kernel(projection)
+    {
         Some(CheckedProductionTransition { projection })
     } else {
         None

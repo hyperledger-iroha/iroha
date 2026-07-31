@@ -4,7 +4,6 @@ use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
-    core::{self as ncore, DecodeFromSlice},
     to_bytes,
 };
 use thiserror::Error;
@@ -27,8 +26,6 @@ pub enum DaProofScheme {
     /// Merkle proof over SHA-256 chunk digests.
     #[default]
     MerkleSha256,
-    /// Polynomial commitment using BLS12-381 KZG.
-    KzgBls12_381,
 }
 
 /// Policy snapshot describing the proof scheme expected for a lane.
@@ -84,7 +81,6 @@ impl DaProofScheme {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::MerkleSha256 => "merkle_sha256",
-            Self::KzgBls12_381 => "kzg_bls12_381",
         }
     }
 }
@@ -106,7 +102,6 @@ impl FromStr for DaProofScheme {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "merkle_sha256" | "merkle-sha256" | "merkle" => Ok(Self::MerkleSha256),
-            "kzg_bls12_381" | "kzg-bls12-381" | "kzg" => Ok(Self::KzgBls12_381),
             other => Err(DaProofSchemeParseError(other.to_string())),
         }
     }
@@ -130,8 +125,6 @@ pub struct DaCommitmentRecord {
     pub proof_scheme: DaProofScheme,
     /// Merkle root over chunk digests for the blob.
     pub chunk_root: Hash,
-    /// Optional KZG commitment accompanying the chunk root.
-    pub kzg_commitment: Option<KzgCommitment>,
     /// Optional digest covering PDP/PoTR scheduling metadata.
     pub proof_digest: Option<Hash>,
     /// Retention summary applied to this blob.
@@ -153,7 +146,6 @@ impl DaCommitmentRecord {
         manifest_hash: ManifestDigest,
         proof_scheme: DaProofScheme,
         chunk_root: Hash,
-        kzg_commitment: Option<KzgCommitment>,
         proof_digest: Option<Hash>,
         retention_class: RetentionClass,
         storage_ticket: StorageTicketId,
@@ -167,7 +159,6 @@ impl DaCommitmentRecord {
             manifest_hash,
             proof_scheme,
             chunk_root,
-            kzg_commitment,
             proof_digest,
             retention_class,
             storage_ticket,
@@ -209,8 +200,9 @@ impl DaCommitmentBundle {
 
     /// Canonical Merkle root over the commitment records in this bundle.
     ///
-    /// Leaves are `hash(norito::to_bytes(DaCommitmentRecord))`. Odd leaves are
-    /// promoted unchanged to the next layer instead of being duplicated.
+    /// Leaves and internal nodes use distinct, versioned hash domains. Odd
+    /// leaves are promoted unchanged to the next layer instead of being
+    /// duplicated.
     #[must_use]
     pub fn merkle_root(&self) -> Option<Hash> {
         if self.commitments.is_empty() {
@@ -225,10 +217,7 @@ impl DaCommitmentBundle {
                 let combined = if pair.len() == 1 {
                     pair[0]
                 } else {
-                    let mut buf = Vec::with_capacity(Hash::LENGTH * 2);
-                    buf.extend_from_slice(pair[0].as_ref());
-                    buf.extend_from_slice(pair[1].as_ref());
-                    Hash::new(buf)
+                    commitment_internal_hash(&pair[0], &pair[1])
                 };
                 next.push(combined);
             }
@@ -238,67 +227,25 @@ impl DaCommitmentBundle {
         layer.pop()
     }
 
-    /// Hash the bundle with the canonical `Hash` function.
+    /// Header commitment to the V1 tree shape, leaf count, and Merkle root.
+    ///
+    /// This commitment can be reconstructed from a logarithmic membership
+    /// proof without the complete bundle.
     #[must_use]
-    pub fn canonical_hash(&self) -> HashOf<Self> {
-        // Encoding must not fail for well-formed bundles.
-        let encoded =
-            to_bytes(self).expect("DA commitment bundle Norito encoding must succeed for hashing");
-        HashOf::<Self>::from_untyped_unchecked(Hash::new(encoded))
+    pub fn merkle_commitment(&self) -> Option<HashOf<Self>> {
+        let leaf_count = u32::try_from(self.commitments.len()).ok()?;
+        let root = self.merkle_root()?;
+        Some(commitment_merkle_commitment(
+            self.version,
+            leaf_count,
+            &root,
+        ))
     }
 }
 
 impl Default for DaCommitmentBundle {
     fn default() -> Self {
         Self::new(Vec::new())
-    }
-}
-
-/// KZG commitment wrapper used when blocks embed polynomial proofs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[repr(transparent)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
-pub struct KzgCommitment(
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 48],
-);
-
-impl KzgCommitment {
-    /// Canonical zero commitment (identity point in compressed form).
-    pub const ZERO_BYTES: [u8; 48] = [0; 48];
-
-    /// Construct a commitment from raw bytes (BLS12-381 G1 compressed form).
-    #[must_use]
-    pub const fn new(bytes: [u8; 48]) -> Self {
-        Self(bytes)
-    }
-
-    /// Access the raw bytes.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 48] {
-        &self.0
-    }
-
-    /// Convenience constructor returning the zero commitment.
-    #[must_use]
-    pub const fn zero() -> Self {
-        Self(Self::ZERO_BYTES)
-    }
-}
-
-impl Default for KzgCommitment {
-    fn default() -> Self {
-        Self::zero()
-    }
-}
-
-impl<'a> DecodeFromSlice<'a> for KzgCommitment {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let mut cursor = bytes;
-        let start_len = cursor.len();
-        let value = Self::decode(&mut cursor)?;
-        let consumed = start_len - cursor.len();
-        Ok((value, consumed))
     }
 }
 
@@ -378,7 +325,7 @@ pub struct DaCommitmentProof {
     pub commitment: DaCommitmentRecord,
     /// Position of the commitment inside the block bundle.
     pub location: DaCommitmentLocation,
-    /// Hash of the full commitment bundle as stored in the block header.
+    /// Header commitment to the tree version, leaf count, and Merkle root.
     pub bundle_hash: HashOf<DaCommitmentBundle>,
     /// Total number of commitments in the bundle.
     pub bundle_len: u32,
@@ -388,12 +335,51 @@ pub struct DaCommitmentProof {
     pub path: Vec<MerklePathItem>,
 }
 
-/// Hash a commitment into its Merkle leaf value.
+const DA_COMMITMENT_MERKLE_LEAF_DOMAIN_V1: &[u8] = b"iroha:da:commitment-merkle:leaf:v1\0";
+const DA_COMMITMENT_MERKLE_INTERNAL_DOMAIN_V1: &[u8] = b"iroha:da:commitment-merkle:internal:v1\0";
+const DA_COMMITMENT_MERKLE_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"iroha:da:commitment-merkle:commitment:v1\0";
+
+/// Hash a commitment into its domain-separated Merkle leaf value.
 #[must_use]
 pub fn commitment_leaf_hash(record: &DaCommitmentRecord) -> Hash {
     // Encoding a commitment must be infallible; treat failures as unreachable.
     let bytes = to_bytes(record).expect("DA commitment must encode");
-    Hash::new(bytes)
+    let mut preimage = Vec::with_capacity(DA_COMMITMENT_MERKLE_LEAF_DOMAIN_V1.len() + bytes.len());
+    preimage.extend_from_slice(DA_COMMITMENT_MERKLE_LEAF_DOMAIN_V1);
+    preimage.extend_from_slice(&bytes);
+    Hash::new(preimage)
+}
+
+/// Hash two child nodes into a domain-separated DA commitment Merkle node.
+#[must_use]
+pub fn commitment_internal_hash(left: &Hash, right: &Hash) -> Hash {
+    let mut preimage =
+        Vec::with_capacity(DA_COMMITMENT_MERKLE_INTERNAL_DOMAIN_V1.len() + Hash::LENGTH * 2);
+    preimage.extend_from_slice(DA_COMMITMENT_MERKLE_INTERNAL_DOMAIN_V1);
+    preimage.extend_from_slice(left.as_ref());
+    preimage.extend_from_slice(right.as_ref());
+    Hash::new(preimage)
+}
+
+/// Reconstruct the header commitment for a DA commitment Merkle tree.
+#[must_use]
+pub fn commitment_merkle_commitment(
+    version: u16,
+    leaf_count: u32,
+    root: &Hash,
+) -> HashOf<DaCommitmentBundle> {
+    let mut preimage = Vec::with_capacity(
+        DA_COMMITMENT_MERKLE_COMMITMENT_DOMAIN_V1.len()
+            + core::mem::size_of::<u16>()
+            + core::mem::size_of::<u32>()
+            + Hash::LENGTH,
+    );
+    preimage.extend_from_slice(DA_COMMITMENT_MERKLE_COMMITMENT_DOMAIN_V1);
+    preimage.extend_from_slice(&version.to_le_bytes());
+    preimage.extend_from_slice(&leaf_count.to_le_bytes());
+    preimage.extend_from_slice(root.as_ref());
+    HashOf::from_untyped_unchecked(Hash::new(preimage))
 }
 
 #[cfg(test)]
@@ -414,7 +400,6 @@ mod tests {
             manifest_hash: ManifestDigest::new([0x22; 32]),
             proof_scheme: DaProofScheme::MerkleSha256,
             chunk_root: Hash::prehashed([0x33; 32]),
-            kzg_commitment: Some(KzgCommitment::new([0x44; 48])),
             proof_digest: Some(Hash::prehashed([0x55; 32])),
             retention_class: RetentionClass::default(),
             storage_ticket: StorageTicketId::new([0x66; 32]),
@@ -452,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn bundle_new_makes_hash_and_root_independent_of_input_order() {
+    fn bundle_new_makes_tree_commitment_independent_of_input_order() {
         let records: Vec<_> = (0..3)
             .map(|idx| {
                 let tag = u8::try_from(idx).expect("test index fits in u8");
@@ -475,8 +460,8 @@ mod tests {
 
         assert_eq!(canonical.commitments, records);
         assert_eq!(shuffled.commitments, canonical.commitments);
-        assert_eq!(shuffled.canonical_hash(), canonical.canonical_hash());
         assert_eq!(shuffled.merkle_root(), canonical.merkle_root());
+        assert_eq!(shuffled.merkle_commitment(), canonical.merkle_commitment());
     }
 
     #[test]
@@ -517,42 +502,63 @@ mod tests {
         let bundle = DaCommitmentBundle::new(records.clone());
 
         let leaves: Vec<_> = records.iter().map(commitment_leaf_hash).collect();
-        let level1_left = {
-            let mut buf = Vec::with_capacity(Hash::LENGTH * 2);
-            buf.extend_from_slice(leaves[0].as_ref());
-            buf.extend_from_slice(leaves[1].as_ref());
-            Hash::new(buf)
-        };
-        let expected_root = {
-            let mut buf = Vec::with_capacity(Hash::LENGTH * 2);
-            buf.extend_from_slice(level1_left.as_ref());
-            buf.extend_from_slice(leaves[2].as_ref());
-            Hash::new(buf)
-        };
+        let level1_left = commitment_internal_hash(&leaves[0], &leaves[1]);
+        let expected_root = commitment_internal_hash(&level1_left, &leaves[2]);
 
         assert_eq!(bundle.merkle_root(), Some(expected_root));
     }
 
     #[test]
-    fn canonical_hash_matches_encoded_bundle() {
+    fn merkle_leaf_and_internal_nodes_use_disjoint_hash_domains() {
         let record = sample_record();
-        let bundle = DaCommitmentBundle::new(vec![record]);
-        let encoded = to_bytes(&bundle).expect("encode bundle");
-        let expected = HashOf::<DaCommitmentBundle>::from_untyped_unchecked(Hash::new(encoded));
+        let encoded = to_bytes(&record).expect("encode commitment");
+        assert_ne!(commitment_leaf_hash(&record), Hash::new(&encoded));
 
-        assert_eq!(bundle.canonical_hash(), expected);
+        let left = Hash::new(b"left");
+        let right = Hash::new(b"right");
+        let mut untagged = Vec::with_capacity(Hash::LENGTH * 2);
+        untagged.extend_from_slice(left.as_ref());
+        untagged.extend_from_slice(right.as_ref());
+        assert_ne!(commitment_internal_hash(&left, &right), Hash::new(untagged));
     }
 
     #[test]
-    fn proof_scheme_from_str_handles_aliases() {
+    fn merkle_commitment_binds_version_leaf_count_and_root() {
+        let root = Hash::new(b"root");
+        let baseline = commitment_merkle_commitment(DaCommitmentBundle::VERSION_V1, 3, &root);
+
+        assert_ne!(
+            baseline,
+            commitment_merkle_commitment(DaCommitmentBundle::VERSION_V1 + 1, 3, &root)
+        );
+        assert_ne!(
+            baseline,
+            commitment_merkle_commitment(DaCommitmentBundle::VERSION_V1, 4, &root)
+        );
+        assert_ne!(
+            baseline,
+            commitment_merkle_commitment(
+                DaCommitmentBundle::VERSION_V1,
+                3,
+                &Hash::new(b"other-root"),
+            )
+        );
+        assert!(DaCommitmentBundle::default().merkle_commitment().is_none());
+    }
+
+    #[test]
+    fn proof_scheme_from_str_accepts_merkle_alias() {
         assert_eq!(
             DaProofScheme::from_str("merkle_sha256").expect("parse"),
             DaProofScheme::MerkleSha256
         );
-        assert_eq!(
-            DaProofScheme::from_str("kzg-bls12-381").expect("parse"),
-            DaProofScheme::KzgBls12_381
-        );
+    }
+
+    #[test]
+    fn proof_scheme_from_str_rejects_unimplemented_kzg() {
+        assert!(DaProofScheme::from_str("kzg_bls12_381").is_err());
+        assert!(DaProofScheme::from_str("kzg-bls12-381").is_err());
+        assert!(DaProofScheme::from_str("kzg").is_err());
     }
 
     #[test]
@@ -569,7 +575,7 @@ mod tests {
             proof_scheme: DaProofScheme::MerkleSha256,
         };
         let mut switched = base.clone();
-        switched.proof_scheme = DaProofScheme::KzgBls12_381;
+        switched.alias = "lane-b".to_string();
 
         let bundle_a = DaProofPolicyBundle::new(vec![base]);
         let bundle_b = DaProofPolicyBundle::new(vec![switched]);
@@ -589,7 +595,7 @@ mod tests {
             lane_id: LaneId::new(2),
             dataspace_id: DataSpaceId::new(2),
             alias: "two".to_string(),
-            proof_scheme: DaProofScheme::KzgBls12_381,
+            proof_scheme: DaProofScheme::MerkleSha256,
         };
 
         let first = DaProofPolicyBundle::new(vec![policy_a.clone(), policy_b.clone()]);

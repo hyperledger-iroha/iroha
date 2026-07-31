@@ -677,13 +677,19 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             let Some(checked_refinement) =
                                 refinement::check(transition)
                             else {
+                                let diagnostic = refinement::diagnose(transition);
+                                iroha_logger::error!(
+                                    event = ?audit_event,
+                                    ?diagnostic,
+                                    "Sumeragi v2 reducer rejected the transition refinement predicate"
+                                );
                                 return Err(ReducerError::RefinementViolation);
                             };
                         """,
                         mutation_boundaries=("*self = next;",),
                         brace_context=(("impl", "Reducer"),),
                         item_token_sha256=(
-                            "973c0e730c20011084928eab3fa0339fe2a6a8b25a4fa8aea891373131a89dfe"
+                            "c9f1ab80636f76db9de0ac05f8ce5ca6d121ec9ecdf46b235c551844f9263b97"
                         ),
                         token_consumptions=(
                             """
@@ -3208,6 +3214,44 @@ _CHECKED_PRODUCTION_IN_FLIGHT_PROJECTION_SHA256 = (
 )
 _CHECKED_PRODUCTION_IN_FLIGHT_CONSTRUCTOR_SHA256 = (
     "5c65b9aba0d560e58b8c85596902e53eb65b3cdcce48e474f7deb53ab493bb92"
+)
+_CHECKED_PRODUCTION_IN_FLIGHT_MACRO_SHA256 = (
+    "774849f95ce4344cab37cd0a8b6c53170eaf98012d268c3904b0c254ed4bc725"
+)
+_CHECKED_PRODUCTION_IN_FLIGHT_KERNEL_SHA256 = (
+    "c68bd376597d39cc72ae3195df249c286badeb8b8275c7933b1b1c933f9bd1aa"
+)
+_CHECKED_PRODUCTION_EFFECTIVE_LOCK_GATE_SHA256 = {
+    "check_production_enter_view_effective_lock_transition": (
+        "9820fc8dabfec2291a2449594f6245470ca28303a68789204a3c2ba699bcdbd7"
+    ),
+    "check_production_body_ownership_effective_lock_transition": (
+        "7a42604e801cbc2525c3020628143810f1e6b64691718427cdfc370979fe8992"
+    ),
+    "check_production_body_capacity_retirement_effective_lock_transition": (
+        "790ac268e1e3201793f0d57cc443c5b4f6ff4d2da5dd897d2b51444f7ae9701c"
+    ),
+    "check_production_body_service_effective_lock_transition": (
+        "694a844a95be5ad9236c211768c5b55393845596813cc740b2bd55331fb6827d"
+    ),
+}
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_PROJECTION_SHA256 = (
+    "fd5b0d359c46f6f058a5ad7925d5e2aa6db215fd13e325025213679ce676f232"
+)
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_VERUS_PROJECTION_SHA256 = (
+    "14e34dc3fd5650279c2bb5665f384dd831725d4863e873612d0758f726e072d2"
+)
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_MACRO_SHA256 = (
+    "16f4268fe5032a9f91c683b6d71b3c8403d71f2ac4d47e597f65043b72e48611"
+)
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_GATE_SHA256 = (
+    "f081f846a6ecba51118d404b0a628bf075098df6aa294183ea206cce244610d0"
+)
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_VERUS_GATE_SHA256 = (
+    "3a3c7b1e2c1c9ac68ab20fc8022666b7d8da7825775f7f3aa4e30477d109048f"
+)
+_CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_AUXILIARY_THEOREM_SHA256 = (
+    "67ebe84f470c8d16cc5207f20a574d778d542e52d970a6c5c57cf29ea60e7d47"
 )
 _TOTAL_GATE_THEOREM_ITEM_SHA256 = {
     "ProductionDurableIntentTraceRefinesProgressWitness": "129a6981dfcf42f154616ba6569eea2b671902267b2dfbddf4ede6add37560d0",

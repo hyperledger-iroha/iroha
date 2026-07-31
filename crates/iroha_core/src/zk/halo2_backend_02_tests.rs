@@ -84,7 +84,7 @@
         let backend = "halo2/pasta/ipa/tiny-commit-open";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -150,7 +150,7 @@
         let backend = "halo2/pasta/ipa/tiny-merkle2";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     // Depth-8 end-to-end checks for vote/transfer circuits (IPA)
@@ -245,7 +245,7 @@
         let backend = "halo2/pasta/ipa/vote-bool-commit-merkle8";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -359,7 +359,7 @@
         let backend = "halo2/pasta/ipa/anon-transfer-2x2-merkle8";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     // Poseidon-tagged (runtime-selected) variants: vote/transfer @ depth-8
@@ -455,7 +455,7 @@
         let backend = backend_tag_vote_bool_commit_merkle(8, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), proof_env);
-        assert!(super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -583,7 +583,7 @@
             let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env.clone());
             let prf_box = ProofBox::new(backend.clone().into(), prf_env);
             assert_eq!(
-                super::verify_backend(&backend, &prf_box, Some(&vk_box)),
+                super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)),
                 ok_expected
             );
         };
@@ -685,7 +685,7 @@
         let backend = backend_tag_vote_bool_commit_merkle(8, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-        assert!(!super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -748,7 +748,7 @@
         let backend = backend_tag_vote_bool_commit_merkle(8, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-        assert!(!super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -844,7 +844,7 @@
         let backend = backend_tag_vote_bool_commit_merkle(16, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-        assert!(super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -958,7 +958,7 @@
         let backend = backend_tag_anon_transfer_merkle(16, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-        assert!(super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -1026,7 +1026,7 @@
         let backend = backend_tag_vote_bool_commit_merkle(16, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-        assert!(!super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -1091,7 +1091,7 @@
         let backend = backend_tag_vote_bool_commit_merkle(16, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-        assert!(!super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -1163,7 +1163,7 @@
         let backend = backend_tag_anon_transfer_merkle(16, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-        assert!(!super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -1227,7 +1227,7 @@
         let backend = backend_tag_anon_transfer_merkle(16, true);
         let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env);
         let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-        assert!(!super::verify_backend(&backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -1374,7 +1374,7 @@
             let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env.clone());
             let prf_box = ProofBox::new(backend.clone().into(), prf_env);
             assert_eq!(
-                super::verify_backend(&backend, &prf_box, Some(&vk_box)),
+                super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)),
                 ok_expected
             );
         };
@@ -1547,7 +1547,10 @@
             }
             let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env.clone());
             let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-            assert_eq!(super::verify_backend(&backend, &prf_box, Some(&vk_box)), ok);
+            assert_eq!(
+                super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)),
+                ok
+            );
         };
 
         for (steps, ok) in scenarios {
@@ -1709,7 +1712,10 @@
             }
             let vk_box = VerifyingKeyBox::new(backend.clone().into(), vk_env.clone());
             let prf_box = ProofBox::new(backend.clone().into(), prf_env);
-            assert_eq!(super::verify_backend(&backend, &prf_box, Some(&vk_box)), ok);
+            assert_eq!(
+                super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)),
+                ok
+            );
         };
 
         for (steps, ok) in scenarios {

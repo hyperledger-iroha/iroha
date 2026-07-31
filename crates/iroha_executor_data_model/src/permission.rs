@@ -794,6 +794,12 @@ pub mod governance {
     }
 
     permission! {
+        /// Allow registering and rotating ledger verifying keys.
+        #[derive(Copy)]
+        pub struct CanManageVerifyingKeys;
+    }
+
+    permission! {
         /// Allow recording citizen service discipline events.
         pub struct CanRecordCitizenService {
             /// Citizen account targeted by the record.
@@ -1042,6 +1048,7 @@ mod tests {
         CanSetAssetHoldingLimit, CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit,
     };
     use super::escrow::CanResolveEscrowDispute;
+    use super::governance::CanManageVerifyingKeys;
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
@@ -1161,6 +1168,25 @@ mod tests {
         assert_eq!(
             CanResolveEscrowDispute::name().as_str(),
             "CanResolveEscrowDispute"
+        );
+    }
+
+    #[test]
+    fn manage_verifying_keys_is_an_exact_unit_capability() {
+        let canonical: iroha_data_model::permission::Permission = CanManageVerifyingKeys.into();
+        assert_eq!(canonical.name(), "CanManageVerifyingKeys");
+        assert_eq!(
+            CanManageVerifyingKeys::try_from(&canonical).expect("decode canonical unit payload"),
+            CanManageVerifyingKeys
+        );
+
+        let malformed = iroha_data_model::permission::Permission::new(
+            "CanManageVerifyingKeys".into(),
+            norito::json!({"circuit_id": "not-a-scope"}),
+        );
+        assert!(
+            CanManageVerifyingKeys::try_from(&malformed).is_err(),
+            "the global capability must not accept an invented resource scope"
         );
     }
 

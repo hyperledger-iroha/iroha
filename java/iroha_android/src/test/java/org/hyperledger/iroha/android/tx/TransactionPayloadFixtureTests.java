@@ -54,6 +54,7 @@ public final class TransactionPayloadFixtureTests {
     payload.put("chain", "00000001");
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 0L);
+    payload.put("time_to_live_ms", 100_000L);
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
 
@@ -62,6 +63,7 @@ public final class TransactionPayloadFixtureTests {
     fixtureMap.put("chain", "00000001");
     fixtureMap.put("authority", SAMPLE_AUTHORITY);
     fixtureMap.put("creation_time_ms", 0L);
+    fixtureMap.put("time_to_live_ms", 100_000L);
     fixtureMap.put("payload", payload);
 
     final TransactionPayloadFixtures.Fixture fixture =
@@ -99,6 +101,7 @@ public final class TransactionPayloadFixtureTests {
     payload.put("chain", "00000001");
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 0L);
+    payload.put("time_to_live_ms", 100_000L);
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
 
@@ -107,6 +110,7 @@ public final class TransactionPayloadFixtureTests {
     fixtureMap.put("chain", "00000001");
     fixtureMap.put("authority", SAMPLE_AUTHORITY);
     fixtureMap.put("creation_time_ms", 0L);
+    fixtureMap.put("time_to_live_ms", 100_000L);
     fixtureMap.put("payload", payload);
 
     final TransactionPayloadFixtures.Fixture fixture =
@@ -114,6 +118,41 @@ public final class TransactionPayloadFixtureTests {
     assertThrows(
         fixture::toPayload,
         "expected wire payload arguments to be rejected");
+  }
+
+  @Test
+  public void fixtureLoaderRequiresMatchingPositiveIntegerTtl() {
+    final TransactionPayloadFixtures.Fixture accepted =
+        TransactionPayloadFixtures.Fixture.fromObject(ttlFixture(100_000L, 100_000L));
+    assert accepted.timeToLiveMs().orElseThrow() == 100_000L;
+
+    for (Object invalid :
+        Arrays.asList(null, 0L, -1L, true, false, 1.0d, "100000")) {
+      assertThrows(
+          () -> TransactionPayloadFixtures.Fixture.fromObject(ttlFixture(invalid, 100_000L)),
+          "expected invalid top-level TTL to be rejected: " + invalid);
+      assertThrows(
+          () -> TransactionPayloadFixtures.Fixture.fromObject(ttlFixture(100_000L, invalid)),
+          "expected invalid payload TTL to be rejected: " + invalid);
+    }
+
+    final Map<String, Object> missingTopLevel = ttlFixture(100_000L, 100_000L);
+    missingTopLevel.remove("time_to_live_ms");
+    assertThrows(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(missingTopLevel),
+        "expected missing top-level TTL to be rejected");
+
+    final Map<String, Object> missingPayload = ttlFixture(100_000L, 100_000L);
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> nested = (Map<String, Object>) missingPayload.get("payload");
+    nested.remove("time_to_live_ms");
+    assertThrows(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(missingPayload),
+        "expected missing payload TTL to be rejected");
+
+    assertThrows(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(ttlFixture(100_000L, 99_999L)),
+        "expected mismatched TTL copies to be rejected");
   }
 
   public static void main(final String[] args) throws Exception {
@@ -319,6 +358,24 @@ public final class TransactionPayloadFixtureTests {
       }
     }
     return true;
+  }
+
+  private static Map<String, Object> ttlFixture(
+      final Object topLevelTtl, final Object payloadTtl) {
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("chain", "00000001");
+    payload.put("authority", SAMPLE_AUTHORITY);
+    payload.put("creation_time_ms", 0L);
+    payload.put("time_to_live_ms", payloadTtl);
+
+    final Map<String, Object> fixture = new LinkedHashMap<>();
+    fixture.put("name", "ttl_fixture");
+    fixture.put("chain", "00000001");
+    fixture.put("authority", SAMPLE_AUTHORITY);
+    fixture.put("creation_time_ms", 0L);
+    fixture.put("time_to_live_ms", topLevelTtl);
+    fixture.put("payload", payload);
+    return fixture;
   }
 
   private static void assertThrows(final Runnable runnable, final String message) {

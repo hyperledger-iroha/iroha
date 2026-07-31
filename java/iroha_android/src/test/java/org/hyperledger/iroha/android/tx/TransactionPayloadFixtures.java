@@ -147,18 +147,23 @@ final class TransactionPayloadFixtures {
           map.containsKey("creation_time_ms")
               ? map.get("creation_time_ms")
               : payload == null ? null : payload.get("creation_time_ms");
-      final Object timeToLiveRaw =
-          map.containsKey("time_to_live_ms")
-              ? map.get("time_to_live_ms")
-              : payload == null ? null : payload.get("time_to_live_ms");
       final Object nonceRaw =
           map.containsKey("nonce") ? map.get("nonce") : payload == null ? null : payload.get("nonce");
       final String chain = asString(chainRaw, "chain");
       final String authority = asString(authorityRaw, "authority");
       final long creationTimeMs =
           asNumber(creationTimeRaw, "creation_time_ms").longValue();
-      final Optional<Long> timeToLiveMs =
-          optionalLong(timeToLiveRaw, "time_to_live_ms");
+      final long timeToLiveMs =
+          requiredPositiveInteger(map, "time_to_live_ms", name + ".time_to_live_ms");
+      if (payload != null) {
+        final long payloadTimeToLiveMs =
+            requiredPositiveInteger(
+                payload, "time_to_live_ms", name + ".payload.time_to_live_ms");
+        if (payloadTimeToLiveMs != timeToLiveMs) {
+          throw new IllegalStateException(
+              name + ": top-level and payload time_to_live_ms values must match");
+        }
+      }
       final Optional<Long> nonce = optionalLong(nonceRaw, "nonce");
       final Object encoded = map.get("encoded");
       final Object payloadBase64 = map.get("payload_base64");
@@ -167,7 +172,14 @@ final class TransactionPayloadFixtures {
               ? Objects.toString(encoded)
               : payloadBase64 == null ? null : Objects.toString(payloadBase64);
       return new Fixture(
-          name, chain, authority, creationTimeMs, timeToLiveMs, nonce, payload, resolvedEncoded);
+          name,
+          chain,
+          authority,
+          creationTimeMs,
+          Optional.of(timeToLiveMs),
+          nonce,
+          payload,
+          resolvedEncoded);
     }
 
     String name() {
@@ -266,8 +278,9 @@ final class TransactionPayloadFixtures {
         throw new IllegalStateException("Executable variant missing");
       }
 
-      final Object ttl = payload.get("time_to_live_ms");
-      builder.setTimeToLiveMs(ttl == null ? null : asNumber(ttl, "time_to_live_ms").longValue());
+      builder.setTimeToLiveMs(
+          requiredPositiveInteger(
+              payload, "time_to_live_ms", name + ".payload.time_to_live_ms"));
 
       final Object nonce = payload.get("nonce");
       builder.setNonce(nonce == null ? null : asNumber(nonce, "nonce").longValue());
@@ -481,6 +494,25 @@ final class TransactionPayloadFixtures {
       return Optional.empty();
     }
     return Optional.of(asNumber(value, field).longValue());
+  }
+
+  private static long requiredPositiveInteger(
+      final Map<?, ?> map, final String key, final String field) {
+    if (!map.containsKey(key)) {
+      throw new IllegalStateException(field + " is required");
+    }
+    final Object value = map.get(key);
+    if (!(value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long)) {
+      throw new IllegalStateException(field + " must be an integer");
+    }
+    final long decoded = ((Number) value).longValue();
+    if (decoded <= 0) {
+      throw new IllegalStateException(field + " must be positive");
+    }
+    return decoded;
   }
 
 }

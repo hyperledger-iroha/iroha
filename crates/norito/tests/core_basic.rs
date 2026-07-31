@@ -125,8 +125,14 @@ struct B(u64);
 
 impl<'a> NoritoDeserialize<'a> for B {
     fn deserialize(archived: &'a Archived<B>) -> Self {
-        let ptr = archived as *const Archived<B> as *const u64;
-        B(u64::from_le(unsafe { *ptr }))
+        Self::try_deserialize(archived).expect("decode B")
+    }
+
+    fn try_deserialize(archived: &'a Archived<B>) -> Result<Self, Error> {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        let payload = norito::core::payload_range_from_ptr(ptr, core::mem::size_of::<u64>())?;
+        let bytes = payload.try_into().map_err(|_| Error::LengthMismatch)?;
+        Ok(B(u64::from_le_bytes(bytes)))
     }
 }
 

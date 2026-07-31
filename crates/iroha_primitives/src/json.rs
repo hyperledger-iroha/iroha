@@ -231,10 +231,14 @@ impl Json {
                         Number::U64(value) => out.push_str(&value.to_string()),
                         Number::F64(value) => {
                             const F64_SAFE_INT: f64 = 9_007_199_254_740_992.0; // 2^53
-                            if value.is_finite()
-                                && value.fract() == 0.0
-                                && value.abs() <= F64_SAFE_INT
-                            {
+                            if !value.is_finite() {
+                                // Match Norito's JSON serializer: JSON has no
+                                // non-finite number representation, so these
+                                // values normalize to null instead of
+                                // producing text that fails the Json
+                                // invariant.
+                                out.push_str("null");
+                            } else if value.fract() == 0.0 && value.abs() <= F64_SAFE_INT {
                                 let _ = write!(out, "{value:.1}");
                             } else {
                                 let _ = write!(out, "{value:?}");
@@ -777,6 +781,16 @@ mod tests {
             let serialized = Json::serialize_json_value_plain_str(&value);
             let reparsed = norito::json::parse_value(&serialized).expect("parse plain");
             assert_eq!(reparsed, value, "mismatch for {serialized}");
+        }
+    }
+
+    #[test]
+    fn norito_value_conversion_normalizes_non_finite_numbers_without_panicking() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let json = Json::from(norito::json::Value::Number(
+                norito::json::native::Number::F64(value),
+            ));
+            assert_eq!(json.get(), "null");
         }
     }
 

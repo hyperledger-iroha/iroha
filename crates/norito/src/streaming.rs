@@ -701,7 +701,12 @@ pub struct TicketPolicy {
     pub max_bandwidth_kbps: Option<u32>,
 }
 
-/// Streaming capability ticket embedding ZK commitments and policy metadata.
+/// Codec projection of streaming ticket metadata emitted by the ledger runtime.
+///
+/// This data-only type does not authenticate an issuer, verify a proof, debit
+/// traffic entitlements, or authorize relay access. Those decisions belong to
+/// the ledger event producer and the stateful streaming runtime; decoding this
+/// structure alone never establishes ticket authority.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct StreamingTicket {

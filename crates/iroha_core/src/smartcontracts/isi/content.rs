@@ -157,7 +157,7 @@ impl Execute for iroha_data_model::isi::content::PublishContentBundle {
 impl Execute for iroha_data_model::isi::content::RetireContentBundle {
     fn execute(
         self,
-        _: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let Some(record) = state_transaction
@@ -168,6 +168,11 @@ impl Execute for iroha_data_model::isi::content::RetireContentBundle {
         else {
             return Err(Error::InvariantViolation("content bundle not found".into()));
         };
+        if record.created_by != *authority {
+            return Err(Error::InvariantViolation(
+                "only the content bundle creator may retire it".into(),
+            ));
+        }
 
         state_transaction
             .world
@@ -522,6 +527,52 @@ mod tests {
         assert!(tx.world.content_bundles.get(&bundle_id).is_none());
         for hash in stored.chunk_hashes {
             assert!(tx.world.content_chunks.get(&hash).is_none());
+        }
+    }
+
+    #[test]
+    fn retire_content_bundle_rejects_non_creator() {
+        let tar = make_tar(&[("index.html", b"creator-owned")]);
+        let bundle_id = Hash::new(&tar);
+
+        let world = World::default();
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let creator = checked_account_id();
+        let attacker = checked_account_id();
+        assert_ne!(creator, attacker);
+        PublishContentBundle {
+            bundle_id,
+            tarball: tar,
+            expires_at_height: None,
+            manifest: None,
+        }
+        .execute(&creator, &mut tx)
+        .expect("creator publishes content");
+
+        let stored = tx
+            .world
+            .content_bundles
+            .get(&bundle_id)
+            .cloned()
+            .expect("published bundle");
+        let error = (RetireContentBundle { bundle_id })
+            .execute(&attacker, &mut tx)
+            .expect_err("non-creator must not retire content");
+        assert!(
+            error
+                .to_string()
+                .contains("only the content bundle creator may retire it")
+        );
+        assert!(tx.world.content_bundles.get(&bundle_id).is_some());
+        for hash in stored.chunk_hashes {
+            assert!(tx.world.content_chunks.get(&hash).is_some());
         }
     }
 }

@@ -127,7 +127,7 @@ fn ensure_conditional_escrow(record: &AssetEscrowRecord) -> Result<(), Error> {
     Ok(())
 }
 
-fn orderbook_channel_lock_marker_key(escrow_id: &EscrowId) -> Name {
+fn orderbook_channel_lock_marker_key(escrow_id: &EscrowId) -> StatePath {
     format!(
         "{ORDERBOOK_CHANNEL_LOCK_MARKER_KEY_PREFIX}{}",
         hex::encode(escrow_id.as_hash().as_ref())
@@ -136,7 +136,7 @@ fn orderbook_channel_lock_marker_key(escrow_id: &EscrowId) -> Name {
     .expect("static orderbook marker prefix plus lowercase hex is a valid state key")
 }
 
-fn orderbook_order_lock_marker_key(escrow_id: &EscrowId) -> Name {
+fn orderbook_order_lock_marker_key(escrow_id: &EscrowId) -> StatePath {
     format!(
         "{ORDERBOOK_ORDER_LOCK_MARKER_KEY_PREFIX}{}",
         hex::encode(escrow_id.as_hash().as_ref())

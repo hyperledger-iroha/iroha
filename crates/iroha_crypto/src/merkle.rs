@@ -119,10 +119,8 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for MerkleTree<T> {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        #[allow(unsafe_code)]
-        let inner = norito::core::NoritoDeserialize::try_deserialize(unsafe {
-            &*core::ptr::from_ref(archived).cast::<norito::core::Archived<Vec<Option<HashOf<T>>>>>()
-        })?;
+        let nodes = archived.cast::<Vec<Option<HashOf<T>>>>();
+        let inner = norito::core::NoritoDeserialize::try_deserialize(nodes)?;
         Self::from_nodes_checked(inner).map_err(|err| norito::core::Error::Message(err.to_string()))
     }
 }
@@ -1602,8 +1600,7 @@ mod tests {
                 &self,
                 mut writer: W,
             ) -> Result<(), norito::core::Error> {
-                let minimum =
-                    core::mem::size_of::<norito::core::Archived<MerkleProof<()>>>().max(16);
+                let minimum = norito::core::archived_payload_size::<MerkleProof<()>>().max(16);
                 let mut payload = vec![0_u8; minimum];
                 payload[..8].copy_from_slice(&u64::MAX.to_le_bytes());
                 writer.write_all(&payload)?;

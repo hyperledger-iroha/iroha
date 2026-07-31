@@ -5,59 +5,96 @@
 # Publishing @iroha/iroha-js
 
 This document captures the guidance for tagging and publishing the
-Iroha JS SDK to npm. You can either trigger the automated GitHub
-workflow (recommended) or follow the manual workflow below.
+Iroha JS SDK to npm. The current repository does not contain the
+previously documented `javascript-sdk-publish` workflow, so the checked-in
+package scripts and release helpers below are the authoritative release path.
 
-## Automation (Recommended)
+## Authoritative Release Boundary
 
-Publishing now runs automatically when a GitHub release tagged with
-`js-v<semver>` (or `v<semver>`) is published. The workflow performs the same
-checks you would execute locally (`npm ci`, native build, tests) and refuses to
-publish unless the changelog entry for the version is present and newer than the
-previous release.
+Run release work from an exact, clean source revision. A tag or GitHub release
+does not publish the package by itself in the current repository. The release
+owner must run the checked-in gates, retain their evidence, and invoke the
+publish command explicitly.
 
-1. Ensure the repository already contains the desired version bump,
-   changelog entry, and release notes.
-2. Create a GitHub release using the tag `js-v0.x.y` (or `v0.x.y`) and publish
-   it. The workflow reads the tag, strips the optional `js-`/`v` prefix, and
-   treats the result as the target version.
-3. Approve the workflow when prompted (environment `npm-publish`).
-4. On success, fetch the logs for provenance and copy the npm publication URL.
+`npm run build:native` is the only supported generator for the local native
+pair. It runs `scripts/build-native.mjs` followed by
+`scripts/copy-native.mjs`. The builder seals the source observed before and
+after one Cargo invocation and records V3 provenance with
+`build_execution_policy: "trusted-local-cargo-v1"`. The publisher then requires
+both the build provenance and current source to be clean and at the same Git
+revision, signs the staged Mach-O ad hoc on Darwin, verifies the current native
+ABI and required exports, and transactionally publishes:
 
-If you need a dry-run or ad-hoc publish, the *Actions → javascript-sdk-publish →
-Run workflow* entry remains available. Supply the `version` input to match
-`package.json` and, optionally, set `dry-run` to inspect the generated tarball
-without uploading it.
+```text
+javascript/iroha_js/native/iroha_js_host.node
+javascript/iroha_js/native/iroha_js_host.checksums.json
+```
 
-The workflow uses the organisation’s `NPM_TOKEN` secret and publishes the
-package with provenance via `npm publish --access public --provenance`.
+The generated manifest binds the native bytes to the exact source revision,
+source-tree digest, Cargo profile, and, where applicable, a platform-specific
+signing-independent digest. Do not edit the manifest or substitute a checksum
+by hand. If an old binary or invalid binary/manifest pair remains from another
+revision, preserve it outside the destination or remove it before rebuilding;
+the transactional publisher deliberately refuses to overwrite unauthenticated
+state.
+
+V3 provenance is a trusted-local-build statement, not a reproducible-build or
+hostile-executor proof. When policy requires independently produced native
+release evidence, obtain a complete binary and manifest pair from a controlled
+builder running this same generator against the exact clean release revision,
+verify its supplied release/signing evidence, and expose that verified
+directory through `IROHA_JS_NATIVE_DIR`. Never reconstruct a manifest around a
+binary whose V3 build provenance is unavailable.
 
 ## Prerequisites
 
-1. Ensure the changelog reflects the upcoming release.
-2. Verify that the native bindings build on the supported Node/Rust matrix:
+1. Ensure the version, changelog, and release notes reflect the upcoming
+   release, then confirm that the source tree is clean:
 
    ```bash
-   npm run build:native
-   npm test
+   git status --short
    ```
 
-3. Refresh the checksum manifest after the native build so runtime verification
-   matches the shipped artefact:
+2. Install dependencies and generate the native pair from the source checkout:
 
    ```bash
    cd javascript/iroha_js
-   shasum -a 256 native/iroha_js_host.node
-   # update native/iroha_js_host.checksums.json with the new digest for your platform
+   npm ci
+   npm run build:native
    ```
 
-4. Log in to npm using an account with publish rights:
+   The default native profile is `debug`. If the release policy calls for
+   another supported profile, select it explicitly; the choice is authenticated
+   in both build provenance and the checksum manifest. Keep the variable set
+   for every subsequent build and test gate:
+
+   ```bash
+   export IROHA_JS_NATIVE_BUILD_PROFILE=release
+   npm run build:native
+   ```
+
+3. Run the complete test and release gates. `npm test` invokes
+   `npm run build:native` before the Node test runner, so the native evidence is
+   regenerated and revalidated rather than trusted from an earlier command:
+
+   ```bash
+   npm test
+   npm run check:changelog
+   npm run bundle:check
+   npm run test:pack-install
+   ```
+
+4. Run `npm run release:provenance`. When a native binding is present, this
+   gate requires a valid V3 manifest, the exact clean release revision, and the
+   current native ABI/export contract before recording it as release evidence.
+
+5. Log in to npm using an account with publish rights:
 
    ```bash
    npm login
    ```
 
-5. Export `NPM_CONFIG_PROVENANCE=true` to enable Sigstore provenance for the
+6. Export `NPM_CONFIG_PROVENANCE=true` to enable Sigstore provenance for the
    package tarball (requires npm 9.5+).
 
 ## Metadata & Automated Checks
@@ -80,25 +117,22 @@ package with provenance via `npm publish --access public --provenance`.
   verbatim copy of `package.json` is stored alongside the metadata so auditors
   can confirm the published manifest matches the provenance bundle without
   network access.
-- `npm run release:publish` now invokes this helper automatically after the
-  test suite finishes, ensuring manual releases produce the same evidence as
-  the GitHub workflow.
+- `npm run release:publish` invokes the package's `prepublishOnly` lifecycle,
+  which runs the checked-in gates and this provenance helper before npm is
+  allowed to publish.
 
 ### Signed SBOM (JS5 gate)
 
-- The GitHub `javascript-sdk-publish` workflow now runs
-  `scripts/js_sbom_provenance.sh <version>` automatically, attaching a
-  `js-sdk-sbom-<version>` artifact that contains the npm tarball, CycloneDX
-  report, Sigstore bundle, and checksums.
-- To regenerate the bundle locally (or capture one ahead of the workflow run),
-  execute:
+- Generate the signed SBOM bundle explicitly before publishing:
 
   ```bash
   scripts/js_sbom_provenance.sh <version>
   ```
 
-  Ensure `syft` and `cosign` are installed; the script writes outputs to
-  `artifacts/js/sbom/<version>/`.
+  Ensure `syft` and `cosign` are installed. The script writes the npm tarball,
+  CycloneDX report, Sigstore bundle, and checksums to
+  `artifacts/js/sbom/<version>/`; archive that directory with the release
+  evidence.
 
 ### Release Candidate Matrix (JS5 gate)
 
@@ -238,12 +272,13 @@ checks in the same incident folder.
    git tag js-v0.2.0
    ```
 
-3. Push the tag to the remote repository and publish the release so the CI job
-   can promote the package automatically.
+3. Push the tag and publish the release notes only after the explicit package
+   publish and verification steps below succeed. In the current repository,
+   pushing the tag does not promote the npm package automatically.
 
 ## Publishing
 
-Use either the automated workflow above or the following manual command:
+After every prerequisite and evidence gate succeeds, publish explicitly:
 
 ```bash
 cd javascript/iroha_js
@@ -255,8 +290,12 @@ Notes:
 - The publish command signs the tarball using Sigstore when provenance is
   enabled and automatically stores the provenance bundle next to the tarball.
 - Use `npm publish --dry-run` to inspect the generated manifest before pushing.
-- The package bundles prebuilt TypeScript declarations (`index.d.ts`) and relies
-  on consumers running `npm run build:native` after install.
+- The registry tarball intentionally contains no platform-specific `.node`
+  binary, Cargo workspace, install hook, or implicit downloader. Registry
+  consumers cannot build the native host from a clean package installation.
+  Native-only applications must provision a separately built, checksum-verified
+  binary/manifest pair through `IROHA_JS_NATIVE_DIR`; portable browser exports
+  do not require that host.
 
 ## Post-Publish Checklist
 
@@ -271,10 +310,11 @@ Notes:
    Omit `--date` to default to today, and provide additional `--note` flags or
    `--notes-file <path>` entries as needed.
 
-2. If automation dashboards track npm availability, record the tag and version.
+2. Record the published tag, version, command transcript, and registry
+   verification result in the release evidence.
 3. Archive the latest `artifacts/js-sdk-provenance/v<version>_<timestamp>/`
-   directory alongside workflow evidence so auditors can refer to the
-   deterministic metadata.
+   directory alongside the signed SBOM and publish logs so auditors can refer
+   to the deterministic metadata.
 
 ## Future Automation
 

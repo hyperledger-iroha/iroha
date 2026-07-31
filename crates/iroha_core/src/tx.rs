@@ -111,12 +111,12 @@ struct PendingSealedTransactionCommitment {
 
 const SEALED_TRANSACTION_STATE_PREFIX: &str = "sealed_tx_commitment_";
 
-fn sealed_commitment_state_key(commitment: &iroha_crypto::Hash) -> iroha_data_model::name::Name {
-    iroha_data_model::name::Name::from_str(&format!(
+fn sealed_commitment_state_key(commitment: &iroha_crypto::Hash) -> StatePath {
+    StatePath::from_str(&format!(
         "{SEALED_TRANSACTION_STATE_PREFIX}{}",
         hex::encode(commitment.as_ref())
     ))
-    .expect("sealed transaction commitment key is a valid name")
+    .expect("sealed transaction commitment key is a valid state path")
 }
 
 fn sealed_state_decode_error(error: impl fmt::Display) -> TransactionRejectionReason {
@@ -1388,7 +1388,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     }
 
     fn framed_padding_for<T>() -> usize {
-        let align = core::mem::align_of::<norito::core::Archived<T>>();
+        let align = norito::core::archived_payload_align::<T>();
         if align <= 1 {
             return 0;
         }
@@ -1632,6 +1632,13 @@ impl<'tx> AcceptedTransaction<'tx> {
         if tx.creation_time().saturating_sub(now) > max_clock_drift {
             return Err(AcceptTransactionFail::TransactionInTheFuture);
         }
+
+        tx.payload().validate_fee_payment_intent().map_err(|err| {
+            AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
+                tx,
+                TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()),
+            ))
+        })?;
 
         Ok(())
     }
@@ -7721,6 +7728,82 @@ pub mod tests {
     }
 
     #[test]
+    fn every_prechecked_signature_path_rejects_invalid_fee_intent() {
+        let chain: ChainId = "prechecked-fee-intent-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("valid metadata key"),
+            Json::new("retired".to_owned()),
+        );
+        let builder = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "invalid fee intent".into())])
+        .with_metadata(metadata);
+        let signature = Signature::try_new(keypair.private_key(), &builder.payload_hash_bytes())
+            .expect("fixture signature");
+        let signed = builder.build_with_signature(signature);
+        let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
+        let crypto = iroha_config::parameters::actual::Crypto::default();
+        let now = signed.creation_time();
+
+        let assert_rejected = |result: Result<(), AcceptTransactionFail>, path: &str| {
+            let error = result.expect_err(path);
+            match error {
+                AcceptTransactionFail::SignatureVerification(failure) => {
+                    assert_eq!(failure.code(), SignatureRejectionCode::MalformedSignature);
+                    assert!(
+                        failure.detail.contains("fee_sponsor"),
+                        "{path} returned an unrelated rejection: {failure}"
+                    );
+                }
+                other => panic!("{path} returned an unrelated rejection: {other:?}"),
+            }
+        };
+
+        assert_rejected(
+            AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
+                &signed,
+                &chain,
+                Duration::ZERO,
+                TransactionParameters::default(),
+                &crypto,
+                now,
+                Some(Ok(())),
+                &prepared,
+            ),
+            "batch signature override",
+        );
+        assert_rejected(
+            AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
+                &signed,
+                &chain,
+                Duration::ZERO,
+                TransactionParameters::default(),
+                &crypto,
+                now,
+                &prepared,
+            ),
+            "single Ed25519 precheck",
+        );
+        assert_rejected(
+            AcceptedTransaction::validate_with_now_and_prepared_metadata(
+                &signed,
+                &chain,
+                Duration::ZERO,
+                TransactionParameters::default(),
+                &crypto,
+                now,
+                &prepared,
+            ),
+            "prepared deterministic verification",
+        );
+    }
+
+    #[test]
     fn decoded_versioned_signed_transaction_rejects_malformed_payloads() {
         let chain: ChainId = "decoded-versioned-reject-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
@@ -11692,14 +11775,14 @@ pub mod tests {
             commitment_id: LaneCommitmentId::new(1),
             witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
                 leaf: [0x11; 32],
-                proof: MerkleProof::from_audit_path_bytes(0, Vec::new()),
+                proof: MerkleProof::from_audit_path_bytes(0, vec![[0x33; 32]]),
             }),
         };
         let proof2 = LanePrivacyProof {
             commitment_id: LaneCommitmentId::new(2),
             witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
                 leaf: [0x22; 32],
-                proof: MerkleProof::from_audit_path_bytes(0, Vec::new()),
+                proof: MerkleProof::from_audit_path_bytes(0, vec![[0x44; 32]]),
             }),
         };
 

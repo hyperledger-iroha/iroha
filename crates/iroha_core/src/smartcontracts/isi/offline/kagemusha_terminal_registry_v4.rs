@@ -34,7 +34,6 @@ use std::{
 use iroha_crypto::Hash;
 use iroha_data_model::{
     confidential::ConfidentialStatus,
-    name::Name,
     offline::{
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
@@ -51,6 +50,7 @@ use iroha_data_model::{
         KagemushaRecursiveSpendReleasePolicyV1, KagemushaStepCircuitParamsV4,
     },
     proof::{VerifyingKeyBox, VerifyingKeyRecord},
+    state_path::StatePath,
     zk::BackendTag,
 };
 use norito::codec::{Decode, Encode};
@@ -390,6 +390,52 @@ impl KagemushaReleaseCatalogV4 {
     #[must_use]
     pub const fn configured_policy_sha256(&self) -> Option<[u8; 32]> {
         self.configured_policy_sha256
+    }
+
+    /// Load the immutable catalog selected by process-local offline-settlement policy.
+    ///
+    /// Disabled policy and an omitted policy/artifact pair both produce the explicit empty
+    /// catalog. A partially configured pair, or any authentication failure, is rejected. This
+    /// helper is shared by node startup and isolated genesis staging so both boundaries commit to
+    /// the same authenticated release-policy digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when only one catalog path is configured or when the configured catalog
+    /// or qualification seal cannot be authenticated.
+    pub fn from_offline_config(
+        config: &iroha_config::parameters::actual::Offline,
+    ) -> Result<Self, String> {
+        if !config.enabled {
+            return Ok(Self::empty());
+        }
+        match (
+            config.kagemusha_release_policy_path.as_deref(),
+            config.kagemusha_artifact_dir.as_deref(),
+        ) {
+            (None, None) => Ok(Self::empty()),
+            (Some(policy_path), Some(artifact_dir)) => {
+                if let Some(seal_path) = config.kagemusha_catalog_qualification_seal_path.as_deref()
+                {
+                    Self::load_with_decoded_budget_and_qualification_seal(
+                        policy_path,
+                        artifact_dir,
+                        config.kagemusha_max_decoded_bytes,
+                        seal_path,
+                    )
+                } else {
+                    Self::load_with_decoded_budget(
+                        policy_path,
+                        artifact_dir,
+                        config.kagemusha_max_decoded_bytes,
+                    )
+                }
+            }
+            _ => Err(
+                "Kagemusha V4 release policy and artifact directory must be configured together"
+                    .to_owned(),
+            ),
+        }
     }
 
     pub(crate) fn get(&self, manifest_sha256: &[u8; 32]) -> Option<&Arc<KagemushaCachedReleaseV4>> {
@@ -3387,7 +3433,7 @@ impl ResolvedKagemushaTerminalVerifierV4 {
 /// Deterministic V4-only state key for an authenticated release record.
 pub(crate) fn release_state_key(
     binding: &KagemushaRecursiveSpendArtifactBindingV4,
-) -> Result<Name, String> {
+) -> Result<StatePath, String> {
     binding
         .validate()
         .map_err(|error| format!("invalid Kagemusha V4 artifact binding: {error}"))?;

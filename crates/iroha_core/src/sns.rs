@@ -24,7 +24,6 @@ use iroha_data_model::{
     domain::DomainId,
     isi::{alias_setup::EnsureAlias, register::RegisterBox},
     metadata::Metadata,
-    name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
     permission::Permission,
     sns::{
@@ -33,6 +32,7 @@ use iroha_data_model::{
         ReservedNameV1, SuffixFeeSplitV1, SuffixId, SuffixPolicyV1, SuffixStatus, TokenValue,
         fixtures,
     },
+    state_path::StatePath,
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
@@ -95,7 +95,7 @@ const ALIAS_AUTO_RENEW_CURSOR_KEY: &str = "sns/auto_renew_cursor/v1";
 #[derive(Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
 struct AliasAutoRenewCursorV1 {
     version: u8,
-    last_storage_key: Name,
+    last_storage_key: StatePath,
 }
 
 /// Internal record proving that Core already debited the exact lease quote.
@@ -244,20 +244,20 @@ impl SnsNamespace {
 
 /// Compute the durable smart-contract-state key for a SNS record selector.
 #[must_use]
-pub fn record_storage_key(selector: &NameSelectorV1) -> Name {
-    Name::from_str(&format!(
+pub fn record_storage_key(selector: &NameSelectorV1) -> StatePath {
+    StatePath::from_str(&format!(
         "sns/records/{}/{}",
         selector.suffix_id,
         hex::encode(selector.name_hash())
     ))
-    .expect("static SNS storage key format is a valid Name")
+    .expect("static SNS storage key format is a valid StatePath")
 }
 
 /// Compute the durable smart-contract-state key for a SNS suffix policy.
 #[must_use]
-pub fn policy_storage_key(suffix_id: SuffixId) -> Name {
-    Name::from_str(&format!("sns/policies/{suffix_id}"))
-        .expect("static SNS policy storage key format is a valid Name")
+pub fn policy_storage_key(suffix_id: SuffixId) -> StatePath {
+    StatePath::from_str(&format!("sns/policies/{suffix_id}"))
+        .expect("static SNS policy storage key format is a valid StatePath")
 }
 
 /// Compute the durable key for one alias auto-renew configuration record.
@@ -265,10 +265,10 @@ pub fn policy_storage_key(suffix_id: SuffixId) -> Name {
 /// # Errors
 ///
 /// Returns [`SnsError`] if the resolved target is not canonical.
-pub fn alias_auto_renew_storage_key(target: &AliasTargetV1) -> Result<Name, SnsError> {
+pub fn alias_auto_renew_storage_key(target: &AliasTargetV1) -> Result<StatePath, SnsError> {
     let selector = crate::alias_setup::selector_for_resolved_alias_target(target)
         .map_err(|error| SnsError::BadRequest(error.to_string()))?;
-    Name::from_str(&format!(
+    StatePath::from_str(&format!(
         "sns/auto_renew/{}/{}",
         selector.suffix_id,
         hex::encode(selector.name_hash())
@@ -312,8 +312,8 @@ pub fn alias_auto_renew_state(
     Ok(Some(state))
 }
 
-fn alias_auto_renew_internal_key(literal: &str) -> Name {
-    Name::from_str(literal).expect("hard-coded alias auto-renew key is a valid Name")
+fn alias_auto_renew_internal_key(literal: &str) -> StatePath {
+    StatePath::from_str(literal).expect("hard-coded alias auto-renew key is a valid StatePath")
 }
 
 fn alias_auto_renew_cursor(
@@ -352,7 +352,7 @@ fn alias_auto_renew_cursor(
 
 fn persist_alias_auto_renew_cursor(
     state_transaction: &mut StateTransaction<'_, '_>,
-    last_storage_key: Name,
+    last_storage_key: StatePath,
 ) {
     let key = alias_auto_renew_internal_key(ALIAS_AUTO_RENEW_CURSOR_KEY);
     state_transaction.world.smart_contract_state.insert(
@@ -367,9 +367,9 @@ fn persist_alias_auto_renew_cursor(
 
 fn alias_auto_renew_candidate_keys(
     world: &impl WorldReadOnly,
-    last_storage_key: Option<&Name>,
+    last_storage_key: Option<&StatePath>,
     limit: usize,
-) -> Vec<Name> {
+) -> Vec<StatePath> {
     if limit == 0 {
         return Vec::new();
     }
@@ -405,7 +405,7 @@ fn alias_auto_renew_candidate_keys(
 
 fn alias_auto_renew_state_by_storage_key(
     world: &impl WorldReadOnly,
-    storage_key: &Name,
+    storage_key: &StatePath,
 ) -> Result<AliasAutoRenewStateV1, SnsError> {
     let bytes = world
         .smart_contract_state()
@@ -650,7 +650,7 @@ fn record_alias_auto_renew_failure(
 
 fn process_alias_auto_renew_storage_key(
     state_block: &mut StateBlock<'_>,
-    storage_key: &Name,
+    storage_key: &StatePath,
     now_ms: u64,
 ) {
     let state = match alias_auto_renew_state_by_storage_key(&state_block.world, storage_key) {
@@ -873,7 +873,7 @@ fn active_account_alias_lease_record(
     state_transaction: &StateTransaction<'_, '_>,
     owner: &AccountId,
     label: &AccountAlias,
-) -> Result<(Name, NameRecordV1), SnsError> {
+) -> Result<(StatePath, NameRecordV1), SnsError> {
     let selector = selector_for_account_alias(label, &state_transaction.nexus.dataspace_catalog)
         .map_err(|err| SnsError::BadRequest(err.to_string()))?;
     let storage_key = record_storage_key(&selector);
@@ -972,8 +972,8 @@ pub(crate) fn prepare_all_account_alias_lease_rekeys(
     state_transaction: &StateTransaction<'_, '_>,
     old_owner: &AccountId,
     new_owner: &AccountId,
-) -> Result<BTreeMap<AccountAlias, (Name, NameRecordV1)>, SnsError> {
-    let prefix = Name::from_str(&format!("sns/records/{ACCOUNT_ALIAS_SUFFIX_ID}/"))
+) -> Result<BTreeMap<AccountAlias, (StatePath, NameRecordV1)>, SnsError> {
+    let prefix = StatePath::from_str(&format!("sns/records/{ACCOUNT_ALIAS_SUFFIX_ID}/"))
         .expect("static account-alias SNS record prefix is valid");
     let prefix_literal = prefix.as_ref().to_owned();
     let mut updates = BTreeMap::new();
@@ -2649,7 +2649,7 @@ fn active_dynamic_dataspace_aliases_by_id(
     dataspace_id: DataSpaceId,
     now_ms: u64,
 ) -> Result<BTreeSet<String>, SnsError> {
-    let prefix = Name::from_str(&format!("sns/records/{DATASPACE_ALIAS_SUFFIX_ID}/"))
+    let prefix = StatePath::from_str(&format!("sns/records/{DATASPACE_ALIAS_SUFFIX_ID}/"))
         .expect("static dataspace SNS record prefix is valid");
     let prefix_literal = prefix.as_ref().to_owned();
     let mut aliases = BTreeSet::new();

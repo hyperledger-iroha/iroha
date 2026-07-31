@@ -23,6 +23,7 @@ import {
   machOSigningIndependentSHA256,
   peSigningIndependentSHA256,
 } from "./nativeArtifactHash.js";
+import { readNativeBuildSourceState } from "../scripts/native-build-provenance.mjs";
 
 const NATIVE_FILENAME = "iroha_js_host.node";
 const CHECKSUM_FILENAME = "iroha_js_host.checksums.json";
@@ -83,6 +84,65 @@ function formatForceNativeVerificationError(verification, paths) {
   }
 }
 
+export function nativeSourceProvenanceMatches(
+  verification,
+  currentSource,
+) {
+  if (
+    typeof verification?.sourceGitRevision !== "string" ||
+    typeof verification?.sourceTreeSha256 !== "string"
+  ) {
+    return false;
+  }
+  if (verification.sourceTreeClean === true) return true;
+  return (
+    verification.sourceTreeClean === false &&
+    verification.cargoProfile === "debug" &&
+    currentSource?.sourceTreeClean === false &&
+    currentSource.sourceGitRevision === verification.sourceGitRevision &&
+    currentSource.sourceTreeSha256 === verification.sourceTreeSha256
+  );
+}
+
+function assertLoadableSourceProvenance(verification, paths) {
+  if (
+    typeof verification.sourceGitRevision !== "string" ||
+    typeof verification.sourceTreeSha256 !== "string"
+  ) {
+    throw nativeBindingError(
+      `build provenance for ${paths.bindingPath} is missing exact source identity.`,
+      "source_provenance_error",
+    );
+  }
+  if (verification.sourceTreeClean === true) return;
+  if (
+    verification.sourceTreeClean !== false ||
+    verification.cargoProfile !== "debug"
+  ) {
+    throw nativeBindingError(
+      `build provenance for ${paths.bindingPath} records a dirty source tree outside the debug profile.`,
+      "source_provenance_error",
+    );
+  }
+
+  let currentSource;
+  try {
+    const repoRoot = resolve(paths.jsRoot, "..", "..");
+    currentSource = readNativeBuildSourceState(repoRoot);
+  } catch (error) {
+    throw nativeBindingError(
+      `dirty source tree provenance for ${paths.bindingPath} cannot be authenticated against the current SDK source: ${error?.message ?? error}.`,
+      "source_provenance_error",
+    );
+  }
+  if (!nativeSourceProvenanceMatches(verification, currentSource)) {
+    throw nativeBindingError(
+      `dirty source tree provenance for ${paths.bindingPath} does not match the exact current SDK source.`,
+      "source_provenance_error",
+    );
+  }
+}
+
 /**
  * Load the required native `iroha_js_host` binding.
  */
@@ -105,15 +165,7 @@ export function getNativeBinding() {
   if (!verification.ok) {
     throw formatForceNativeVerificationError(verification, paths);
   }
-  if (
-    verification.sourceTreeClean !== true ||
-    typeof verification.sourceGitRevision !== "string"
-  ) {
-    throw nativeBindingError(
-      `build provenance for ${paths.bindingPath} is missing or records a dirty source tree; rebuild from the exact clean SDK source.`,
-      "source_provenance_error",
-    );
-  }
+  assertLoadableSourceProvenance(verification, paths);
 
   let snapshot;
   try {

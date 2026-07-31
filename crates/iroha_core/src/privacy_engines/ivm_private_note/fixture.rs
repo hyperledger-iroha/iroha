@@ -6,13 +6,14 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     domain::DomainId,
     privacy::{
-        IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyEngineManifestDigestV1,
-        PrivacyNullifierV1, PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPoolIdV1,
-        PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-        PrivacyTransactionIntentDigestV1, PrivacyValueBalanceV1, PrivacyVerifierDigestV1,
+        IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyNullifierV1,
+        PrivacyPoolIdV1, PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementContextV1,
+        PrivacyTransactionIntentDigestV1, PrivacyValueBalanceV1,
     },
 };
 use rand_core_06::{CryptoRng, RngCore};
+
+use crate::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 
 use super::{
     IvmPrivateNoteInputWitnessV1, IvmPrivateNoteOutputWitnessV1, IvmPrivateNoteWitnessV1,
@@ -37,19 +38,27 @@ fn bytes(seed: u8) -> [u8; 32] {
     [seed; 32]
 }
 
-fn context() -> PrivacyStatementContextV1 {
+fn context_from_compiled_profile_v1(
+    profile: &CompiledPrivacyProfileV1,
+) -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
         chain_id: "taira-private-note-release-v1"
             .parse()
             .expect("fixed release chain id is canonical"),
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(bytes(0x31)),
-        parameter_id: PrivacyParameterIdV1::new(bytes(0x32)),
-        parameter_digest: PrivacyParameterDigestV1::new(bytes(0x33)),
-        verifier_digest: PrivacyVerifierDigestV1::new(bytes(0x34)),
-        statement_schema_digest: PrivacyStatementSchemaDigestV1::new(bytes(0x35)),
-        engine_manifest_digest: PrivacyEngineManifestDigestV1::new(bytes(0x36)),
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
     }
+}
+
+fn context() -> Result<PrivacyStatementContextV1, IvmPrivateNoteReleaseFixtureErrorV1> {
+    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+        .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?;
+    Ok(context_from_compiled_profile_v1(&profile))
 }
 
 fn conservation_program() -> Result<PrivateProgramV1, IvmPrivateNoteReleaseFixtureErrorV1> {
@@ -115,7 +124,7 @@ fn build_fixture<R: RngCore + CryptoRng>(
             .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
     );
     let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
-        context: context(),
+        context: context()?,
         asset_definition_id,
         pool_id,
         program_id,
@@ -283,10 +292,38 @@ mod tests {
     use crate::privacy_engines::ivm_private_note::relation::validate_private_note_relation_v1;
 
     #[test]
+    fn release_context_binds_every_compiled_profile_digest() {
+        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+            .expect("compiled IVM private-note profile");
+        let baseline =
+            norito::encode_canonical(&context_from_compiled_profile_v1(&profile)).expect("context");
+        let mutations: [fn(&mut CompiledPrivacyProfileV1); 5] = [
+            |profile| profile.parameter_id.0[0] ^= 1,
+            |profile| profile.parameter_digest.0[0] ^= 1,
+            |profile| profile.verifier_digest.0[0] ^= 1,
+            |profile| profile.statement_schema_digest.0[0] ^= 1,
+            |profile| profile.engine_manifest_digest.0[0] ^= 1,
+        ];
+        for mutate in mutations {
+            let mut changed = profile;
+            mutate(&mut changed);
+            assert_ne!(
+                norito::encode_canonical(&context_from_compiled_profile_v1(&changed))
+                    .expect("changed context"),
+                baseline
+            );
+        }
+    }
+
+    #[test]
     fn shared_normal_maximum_and_invalid_path_fixtures_are_exact() {
         let mut normal_rng = StdRng::seed_from_u64(0x49_50_4e_45);
         let normal =
             ivm_private_note_release_fixture_v1(false, &mut normal_rng).expect("normal fixture");
+        assert_eq!(
+            normal.statement.context,
+            context().expect("compiled release context")
+        );
         validate_private_note_relation_v1(&normal.statement, &normal.witness)
             .expect("normal relation");
         assert_eq!(normal.witness.inputs().len(), 1);

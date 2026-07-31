@@ -12,8 +12,8 @@
 //! The parser keeps its constructed-value stack as a push/pop permutation.
 //! Its byte table is exposed through a logarithmic-derivative lookup terminal,
 //! node and SET-pair events through four-lane products, and every terminal is
-//! carried to the final aggregate row.  RFC 5280 consumes those terminals in
-//! its own adapter; activation remains false until that linkage is registered.
+//! carried to the final aggregate row. RFC 5280 consumes those terminals in
+//! its own adapter through the sole complete MAIN aggregate registration.
 
 use thiserror::Error;
 
@@ -34,10 +34,10 @@ use crate::privacy_engines::transparent_stark::{
 };
 
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.
-pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:constraints898:degree7:two-base-and-four-aux-physical-chunks:registered-expression-degree-ceiling7:multi-direction-affine-audit-attains-seven:mask-multiplier-degree801:mask-coefficients802:quotient-bound3151335:quotient-coset-capacity4194303:fri-chunk-capacity1048575:four-chunk-composition-capacity4194303:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:cross-adapter-claims:rfc5280-and-byte-memory-consumer-registration-pending:activation=false";
+pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:constraints898:degree7:two-base-and-four-aux-physical-chunks:registered-expression-degree-ceiling7:multi-direction-affine-audit-attains-seven:mask-multiplier-degree801:mask-coefficients802:quotient-bound3151335:quotient-coset-capacity4194303:fri-chunk-capacity1048575:four-chunk-composition-capacity4194303:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:cross-adapter-claims:rfc5280-and-byte-memory-consumer-registrations=complete:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x68, 0x81, 0xad, 0x87, 0x8d, 0x44, 0xd0, 0xfd, 0xff, 0xc7, 0x32, 0x55, 0xa8, 0x74, 0xce, 0xef,
-    0x11, 0x6c, 0xa2, 0xab, 0x7c, 0x0a, 0xc7, 0xeb, 0x5b, 0x53, 0x47, 0x97, 0x0f, 0x41, 0xb7, 0x35,
+    0xd5, 0x2f, 0xc3, 0x6d, 0x71, 0x55, 0xc6, 0x4c, 0xa1, 0xe9, 0xe0, 0x1f, 0x96, 0x8b, 0xac, 0x70,
+    0x21, 0xc9, 0x2f, 0x18, 0x1e, 0x41, 0x5b, 0x45, 0x20, 0x72, 0x19, 0x94, 0x71, 0x94, 0xb5, 0x83,
 ];
 
 /// The aggregate native domain shared with SHA, projection, and every bus.
@@ -5491,6 +5491,14 @@ mod tests {
     #[test]
     fn descriptor_and_terminal_known_answer_are_pinned() {
         let descriptor: [u8; 32] = Sha256::digest(ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1).into();
+        assert!(
+            ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1.ends_with(b":standalone-activation=not-applicable")
+        );
+        assert!(
+            !ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1
+                .windows(b"pending".len())
+                .any(|window| window == b"pending")
+        );
         let nested = [
             0x30, 0x0a, 0x31, 0x04, 0x05, 0x00, 0x05, 0x00, 0x02, 0x02, 0x00, 0x80,
         ];

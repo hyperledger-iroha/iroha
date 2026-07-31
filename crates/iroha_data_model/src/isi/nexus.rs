@@ -39,9 +39,13 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
-    /// Persist a verified private-source lane relay so contracts can consume it by reference.
+    /// Persist a finalized, verified private-source lane relay for contract consumption.
+    ///
+    /// Any account may transport the instruction, but execution requires the envelope's commit QC
+    /// to satisfy the canonical on-chain lane committee and verifies its aggregate BLS signature.
+    /// A pending envelope without a QC can never create contract-visible relay state.
     pub struct RegisterVerifiedLaneRelay {
-        /// Canonical lane relay envelope being registered.
+        /// Canonical finalized lane relay envelope being registered.
         pub envelope: LaneRelayEnvelope,
         /// FASTPQ/AXT proof blob used to verify the relay payload.
         pub proof_blob: ProofBlob,

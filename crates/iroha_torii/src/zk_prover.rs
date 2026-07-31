@@ -3,6 +3,9 @@
 //! - Periodically scans `zk_attachments` for new items and produces a report
 //!   under `zk_prover/reports/<id>.json` with
 //!   `{ id, ok, error, content_type, size, created_ms, processed_ms, latency_ms }`.
+//!   Bounded query metadata is persisted independently under
+//!   `zk_prover/report_index/<id>.json`, so saving one report never rewrites
+//!   metadata for every other report.
 //! - This module is strictly app-facing and non-forking. It must not affect consensus.
 //! - Enabled and paced via `iroha_config` (torii.zk_prover_enabled, torii.zk_prover_scan_period_secs).
 //!
@@ -18,13 +21,14 @@ use std::{
     io::{Error as IoError, ErrorKind as IoErrorKind},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, OnceLock, RwLock,
+        Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use iroha_core::{
     state::{State as CoreState, WorldReadOnly},
@@ -39,13 +43,19 @@ use iroha_data_model::proof::{
 };
 use mv::storage::StorageReadOnly;
 use norito::json;
+use parking_lot::{Mutex, RwLock};
 use tokio::{
     runtime::{Handle, RuntimeFlavor},
     sync::Semaphore,
     task::{self, JoinSet},
 };
 
-use crate::{NoritoQuery, routing::MaybeTelemetry};
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
+use crate::NoritoQuery;
+use crate::{
+    routing::MaybeTelemetry,
+    zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
+};
 
 #[derive(
     Debug,
@@ -110,7 +120,7 @@ pub struct ProverReport {
     /// Wall-clock latency between attachment creation and prover processing (ms).
     #[norito(default)]
     pub latency_ms: u64,
-    /// For Norito ZK1 envelopes, discovered TLV tags.
+    /// For Norito ZK1 envelopes, discovered unique TLV tags (at most 64).
     #[norito(skip_serializing_if = "Option::is_none")]
     pub zk1_tags: Option<Vec<String>>,
     /// Proof backend (when the attachment holds a single proof).
@@ -207,13 +217,13 @@ pub fn configure(
         telemetry,
     };
     if let Some(lock) = PROVER_CFG.get() {
-        let mut guard = lock.write().expect("prover cfg lock poisoned");
+        let mut guard = lock.write();
         *guard = cfg;
         return;
     }
     if PROVER_CFG.set(RwLock::new(cfg.clone())).is_err() {
         if let Some(lock) = PROVER_CFG.get() {
-            let mut guard = lock.write().expect("prover cfg lock poisoned");
+            let mut guard = lock.write();
             *guard = cfg;
         }
     }
@@ -221,7 +231,7 @@ pub fn configure(
 
 fn with_cfg<R>(f: impl FnOnce(&ProverCfg) -> R) -> Option<R> {
     PROVER_CFG.get().map(|lock| {
-        let guard = lock.read().expect("prover cfg lock poisoned");
+        let guard = lock.read();
         f(&*guard)
     })
 }
@@ -290,9 +300,13 @@ fn ensure_dirs() {
     static LAST_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
     let slot = LAST_DIR.get_or_init(|| Mutex::new(None));
     let dir = reports_dir();
-    let mut guard = slot.lock().expect("reports dir lock poisoned");
+    let mut guard = slot.lock();
     if guard.as_ref() != Some(&dir) {
         let _ = fs::create_dir_all(&dir);
+        // The first-release store uses independent summary shards. Remove the
+        // obsolete generated aggregate rather than retaining attacker-amplified
+        // bytes that no code reads.
+        let _ = fs::remove_file(prover_dir().join("reports_index.json"));
         *guard = Some(dir);
     }
 }
@@ -307,8 +321,11 @@ fn now_ms() -> u64 {
 const ATTACHMENT_ID_HEX_LEN: usize = 64;
 const TENANT_KEY_HEX_LEN: usize = 64;
 const REPORT_FILE_MAX_BYTES: u64 = 8 * 1024 * 1024;
-
-static REPORT_INDEX_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+const REPORT_SUMMARY_FILE_MAX_BYTES: u64 = 64 * 1024;
+const REPORT_SUMMARY_ERROR_MAX_BYTES: usize = 4 * 1024;
+const REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES: usize = 256;
+const REPORT_SUMMARY_TAG_MAX_BYTES: usize = 32;
+static REPORT_SUMMARY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 struct AttachmentLocation {
@@ -366,22 +383,56 @@ fn report_path_from_sanitized(id: &str) -> PathBuf {
     reports_dir().join(format!("{}.json", id))
 }
 
-fn report_index_path() -> PathBuf {
-    prover_dir().join("reports_index.json")
+fn report_index_dir() -> PathBuf {
+    prover_dir().join("report_index")
+}
+
+fn report_summary_path_from_sanitized(id: &str) -> PathBuf {
+    report_index_dir().join(format!("{id}.json"))
 }
 
 fn report_summary_lock() -> &'static Mutex<()> {
-    REPORT_INDEX_LOCK.get_or_init(|| Mutex::new(()))
+    REPORT_SUMMARY_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn bounded_summary_text(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let marker = "...";
+    let mut end = max_bytes.saturating_sub(marker.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut bounded = value[..end].to_owned();
+    bounded.push_str(marker);
+    bounded
 }
 
 fn report_summary_from_report(report: &ProverReport) -> ProverReportSummary {
+    let zk1_tags = report.zk1_tags.as_ref().and_then(|tags| {
+        let mut bounded = Vec::new();
+        for tag in tags.iter().take(ZK1_MAX_TLV_COUNT) {
+            let tag = bounded_summary_text(tag, REPORT_SUMMARY_TAG_MAX_BYTES);
+            if !bounded.contains(&tag) {
+                bounded.push(tag);
+            }
+        }
+        (!bounded.is_empty()).then_some(bounded)
+    });
     ProverReportSummary {
         id: report.id.clone(),
         ok: report.ok,
-        error: report.error.clone(),
-        content_type: report.content_type.clone(),
+        error: report
+            .error
+            .as_deref()
+            .map(|error| bounded_summary_text(error, REPORT_SUMMARY_ERROR_MAX_BYTES)),
+        content_type: bounded_summary_text(
+            &report.content_type,
+            REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES,
+        ),
         processed_ms: report.processed_ms,
-        zk1_tags: report.zk1_tags.clone(),
+        zk1_tags,
     }
 }
 
@@ -397,25 +448,97 @@ fn normalize_report_summaries(raw: Vec<ProverReportSummary>) -> Vec<ProverReport
     by_id.into_values().collect()
 }
 
-fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io::Result<()> {
+fn persist_report_summary_locked(summary: &ProverReportSummary) -> std::io::Result<()> {
+    let Some(id) = sanitize_report_id(&summary.id) else {
+        return Err(IoError::new(
+            IoErrorKind::InvalidInput,
+            "invalid prover report summary id",
+        ));
+    };
     ensure_dirs();
-    let path = report_index_path();
+    fs::create_dir_all(report_index_dir())?;
+    let path = report_summary_path_from_sanitized(&id);
     let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    let body = norito::json::to_json_pretty(&summaries.to_vec()).unwrap_or_else(|_| "[]".into());
+    let mut normalized = summary.clone();
+    normalized.id = id;
+    let body = norito::json::to_json(&normalized)
+        .map_err(|error| IoError::new(IoErrorKind::InvalidData, error.to_string()))?;
+    if body.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            "prover report summary exceeds the hard size limit",
+        ));
+    }
     use std::io::Write as _;
     tmp.write_all(body.as_bytes())?;
     tmp.flush()?;
     tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
 }
 
+fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io::Result<()> {
+    ensure_dirs();
+    fs::create_dir_all(report_index_dir())?;
+    let normalized = normalize_report_summaries(summaries.to_vec());
+    let desired: HashSet<String> = normalized
+        .iter()
+        .map(|summary| summary.id.clone())
+        .collect();
+    for summary in &normalized {
+        persist_report_summary_locked(summary)?;
+    }
+    for entry in fs::read_dir(report_index_dir())? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let keep = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.strip_suffix(".json"))
+            .is_some_and(|id| desired.contains(id));
+        if !keep {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+    Ok(())
+}
+
 fn read_report_summaries_locked() -> Option<Vec<ProverReportSummary>> {
-    let mut f = fs::File::open(report_index_path()).ok()?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf).ok()?;
-    let s = std::str::from_utf8(&buf).ok()?;
-    let parsed = norito::json::from_json::<Vec<ProverReportSummary>>(s).ok()?;
-    Some(normalize_report_summaries(parsed))
+    let entries = fs::read_dir(report_index_dir()).ok()?;
+    let mut summaries = Vec::new();
+    for entry in entries {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_str()?;
+        let Some(raw_id) = name.strip_suffix(".json") else {
+            continue;
+        };
+        let id = sanitize_report_id(raw_id)?;
+        if raw_id != id {
+            return None;
+        }
+        let file_len = entry.metadata().ok()?.len();
+        if file_len > REPORT_SUMMARY_FILE_MAX_BYTES {
+            return None;
+        }
+        let mut reader = fs::File::open(entry.path())
+            .ok()?
+            .take(REPORT_SUMMARY_FILE_MAX_BYTES.saturating_add(1));
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).ok()?;
+        if buf.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
+            return None;
+        }
+        let s = std::str::from_utf8(&buf).ok()?;
+        let mut summary = norito::json::from_json::<ProverReportSummary>(s).ok()?;
+        summary.id = id;
+        summaries.push(summary);
+    }
+    Some(normalize_report_summaries(summaries))
 }
 
 fn rebuild_report_summaries_locked() -> Vec<ProverReportSummary> {
@@ -430,50 +553,45 @@ fn rebuild_report_summaries_locked() -> Vec<ProverReportSummary> {
 }
 
 fn load_report_summaries() -> Vec<ProverReportSummary> {
-    let _guard = report_summary_lock()
-        .lock()
-        .expect("report summary lock poisoned");
+    let _guard = report_summary_lock().lock();
     let mut summaries =
         read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+    let mut changed = false;
     let before = summaries.len();
     summaries.retain(|summary| report_path_from_sanitized(&summary.id).exists());
     if summaries.len() != before {
+        changed = true;
+    }
+    let mut indexed: HashSet<String> = summaries.iter().map(|summary| summary.id.clone()).collect();
+    for id in list_report_ids() {
+        if indexed.insert(id.clone())
+            && let Some(report) = load_report(&id)
+        {
+            summaries.push(report_summary_from_report(&report));
+            changed = true;
+        }
+    }
+    if changed {
         let _ = persist_report_summaries_locked(&summaries);
     }
-    summaries
+    normalize_report_summaries(summaries)
 }
 
-fn upsert_report_summary(report: &ProverReport) {
-    let _guard = report_summary_lock()
-        .lock()
-        .expect("report summary lock poisoned");
-    let mut summaries =
-        read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+fn upsert_report_summary(report: &ProverReport) -> std::io::Result<()> {
+    let _guard = report_summary_lock().lock();
     let summary = report_summary_from_report(report);
-    if let Some(existing) = summaries.iter_mut().find(|entry| entry.id == summary.id) {
-        *existing = summary;
-    } else {
-        summaries.push(summary);
-    }
-    let _ = persist_report_summaries_locked(&summaries);
+    persist_report_summary_locked(&summary)
 }
 
 fn remove_report_summary(id: &str) {
     let Some(clean) = sanitize_report_id(id) else {
         return;
     };
-    let _guard = report_summary_lock()
-        .lock()
-        .expect("report summary lock poisoned");
-    let mut summaries =
-        read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
-    let before = summaries.len();
-    summaries.retain(|entry| entry.id != clean);
-    if summaries.len() != before {
-        let _ = persist_report_summaries_locked(&summaries);
-    }
+    let _guard = report_summary_lock().lock();
+    let _ = fs::remove_file(report_summary_path_from_sanitized(&clean));
 }
 
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 fn filter_report_summary(
     summary: &ProverReportSummary,
     q: &ProverListQuery,
@@ -514,7 +632,7 @@ fn filter_report_summary(
     }
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 fn validate_zk1_tag_filter(q: &ProverListQuery) -> Result<(), &'static str> {
     let Some(tag) = q.has_tag.as_deref() else {
         return Ok(());
@@ -638,7 +756,7 @@ fn save_report(rep: &ProverReport) -> std::io::Result<()> {
     tmp.write_all(s.as_bytes())?;
     tmp.flush()?;
     tmp.persist(&path).map(|_| ()).map_err(|e| e.error)?;
-    upsert_report_summary(rep);
+    upsert_report_summary(rep)?;
     Ok(())
 }
 
@@ -718,22 +836,16 @@ pub fn gc_reports_once() -> usize {
     let now = now_ms();
     let ttl_ms = ttl.as_millis() as u64;
     let mut deleted = 0usize;
-    let _guard = report_summary_lock()
-        .lock()
-        .expect("report summary lock poisoned");
-    let mut summaries =
-        read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
-    let mut retained = Vec::with_capacity(summaries.len());
-    for summary in summaries.drain(..) {
+    let _guard = report_summary_lock().lock();
+    let summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
+    for summary in summaries {
         let age_ms = now.saturating_sub(summary.processed_ms);
         if age_ms > ttl_ms {
             let _ = fs::remove_file(report_path_from_sanitized(&summary.id));
+            let _ = fs::remove_file(report_summary_path_from_sanitized(&summary.id));
             deleted += 1;
-        } else {
-            retained.push(summary);
         }
     }
-    let _ = persist_report_summaries_locked(&retained);
     if deleted > 0 {
         let telemetry = telemetry_handle();
         telemetry.with_metrics(|tel| tel.inc_torii_zk_prover_gc(deleted as u64));
@@ -838,8 +950,8 @@ fn decode_proof_attachments(
 
     if content_type.contains(super::utils::NORITO_MIME_TYPE) {
         if body.len() >= 4 && &body[..4] == b"ZK1\0" {
-            return match zk1_minimal_validate(body) {
-                Ok(()) => Err("unsupported ZK1 envelope (expected ProofAttachment payload)".into()),
+            return match parse_zk1_tags(body) {
+                Ok(_) => Err("unsupported ZK1 envelope (expected ProofAttachment payload)".into()),
                 Err(err) => Err(err),
             };
         }
@@ -847,8 +959,8 @@ fn decode_proof_attachments(
             .map_err(|err| format!("norito decode error: {err}"));
     }
     if content_type.contains(ZK1_MIME_TYPE) {
-        return match zk1_minimal_validate(body) {
-            Ok(()) => Err("unsupported ZK1 envelope (expected ProofAttachment payload)".into()),
+        return match parse_zk1_tags(body) {
+            Ok(_) => Err("unsupported ZK1 envelope (expected ProofAttachment payload)".into()),
             Err(err) => Err(err),
         };
     }
@@ -1045,66 +1157,6 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     }
 }
 
-// Minimal ZK1 structural validation: accept bare magic or well-formed TLVs.
-// Recognized tags are advisory; unknown tags are allowed as long as TLVs are well-formed.
-fn zk1_minimal_validate(bytes: &[u8]) -> Result<(), String> {
-    if bytes.len() < 4 || &bytes[..4] != b"ZK1\0" {
-        return Err("missing ZK1 magic".into());
-    }
-    if bytes.len() == 4 {
-        return Ok(()); // bare envelope is allowed
-    }
-    let mut pos = 4usize;
-    const MAX_TLV_PAYLOAD: usize = 8 * 1024 * 1024; // 8 MiB safety bound
-    while pos < bytes.len() {
-        if pos + 8 > bytes.len() {
-            return Err("truncated TLV header".into());
-        }
-        let tag = &bytes[pos..pos + 4];
-        let len_le = &bytes[pos + 4..pos + 8];
-        let len = u32::from_le_bytes([len_le[0], len_le[1], len_le[2], len_le[3]]) as usize;
-        pos += 8;
-        if len > MAX_TLV_PAYLOAD {
-            return Err("TLV payload too large".into());
-        }
-        if pos + len > bytes.len() {
-            return Err("truncated TLV payload".into());
-        }
-        // Known tags are advisory; future well-formed TLVs remain admissible.
-        let _recognized = matches!(tag, b"PROF" | b"IPAK" | b"H2VK" | b"I10P");
-        pos += len;
-    }
-    Ok(())
-}
-
-fn zk1_extract_tags(bytes: &[u8]) -> Vec<String> {
-    let mut tags = Vec::new();
-    if bytes.len() < 4 || &bytes[..4] != b"ZK1\0" {
-        return tags;
-    }
-    let mut pos = 4usize;
-    while pos + 8 <= bytes.len() {
-        let tag_bytes = &bytes[pos..pos + 4];
-        let tag = core::str::from_utf8(tag_bytes)
-            .ok()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| format!("{:02X?}", tag_bytes));
-        tags.push(tag);
-        let len = u32::from_le_bytes([
-            bytes[pos + 4],
-            bytes[pos + 5],
-            bytes[pos + 6],
-            bytes[pos + 7],
-        ]) as usize;
-        pos += 8;
-        if pos + len > bytes.len() {
-            break;
-        }
-        pos += len;
-    }
-    tags
-}
-
 /// Process a single attachment id, emitting a report if not present yet.
 pub fn process_attachment_once(id: &str) -> Option<ProverReport> {
     let clean = sanitize_attachment_id(id)?;
@@ -1120,9 +1172,7 @@ fn process_attachment_once_at(loc: &AttachmentLocation) -> Option<ProverReport> 
     let meta = load_attachment_meta(loc)?;
     let body = load_attachment_body(loc)?;
     let zk1_tags = if body.len() >= 4 && &body[..4] == b"ZK1\0" {
-        zk1_minimal_validate(&body)
-            .ok()
-            .map(|_| zk1_extract_tags(&body))
+        parse_zk1_tags(&body).ok()
     } else {
         None
     };
@@ -1411,9 +1461,16 @@ pub fn start_worker() {
     });
 }
 
-// ---------------- App-facing endpoints (feature-gated) ----------------
+// ---------------- Report-store test adapters ----------------
+//
+// These helpers used to compile as dormant public HTTP handlers even though
+// no production router mounted them. Keep the query/render coverage in unit
+// tests without shipping an unauthenticated administrative surface. The
+// adapters compile only for unit tests or the explicit integration-test
+// feature. Any future report API must be declared in the route catalog with
+// `RequiredApiToken` before it is compiled for production.
 
-#[cfg(feature = "app_api")]
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
@@ -1449,7 +1506,7 @@ pub struct ProverListQuery {
     pub latest: Option<bool>,
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 /// GET /v1/zk/prover/reports — list prover reports with optional filters.
 pub async fn handle_list_reports(
     NoritoQuery(q): NoritoQuery<ProverListQuery>,
@@ -1545,7 +1602,7 @@ pub async fn handle_list_reports(
         .unwrap()
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 /// GET /v1/zk/prover/reports/count — return number of matching prover reports.
 pub async fn handle_count_reports(
     NoritoQuery(q): NoritoQuery<ProverListQuery>,
@@ -1582,7 +1639,7 @@ pub async fn handle_count_reports(
         .unwrap()
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 /// DELETE /v1/zk/prover/reports — bulk delete reports matching filters.
 pub async fn handle_delete_reports(
     NoritoQuery(q): NoritoQuery<ProverListQuery>,
@@ -1629,7 +1686,7 @@ pub async fn handle_delete_reports(
         .unwrap()
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 /// GET /v1/zk/prover/reports/{id} — get a single report by id.
 pub async fn handle_get_report(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
     let Some(clean) = sanitize_report_id(&id) else {
@@ -1651,7 +1708,7 @@ pub async fn handle_get_report(AxumPath(id): AxumPath<String>) -> impl IntoRespo
     )
 }
 
-#[cfg(feature = "app_api")]
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 /// DELETE /v1/zk/prover/reports/{id} — delete a single report by id.
 pub async fn handle_delete_report(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
     let Some(clean) = sanitize_report_id(&id) else {
@@ -1703,6 +1760,12 @@ mod tests {
 
     fn init_test_cfg() {
         configure_test_cfg(iroha_config::parameters::defaults::torii::zk_prover_allowed_circuits());
+    }
+
+    fn corrupt_report_summary(id: &str) {
+        fs::create_dir_all(report_index_dir()).expect("create report summary directory");
+        fs::write(report_summary_path_from_sanitized(id), "{not json")
+            .expect("write malformed report summary");
     }
 
     #[test]
@@ -2195,7 +2258,7 @@ mod tests {
         );
         save_report(&first).expect("save first report");
         save_report(&second).expect("save second report");
-        fs::write(report_index_path(), "{not json").expect("write malformed report index");
+        corrupt_report_summary(&first.id);
 
         let response = axum::response::IntoResponse::into_response(
             super::handle_delete_report(axum::extract::Path(first.id.clone())).await,
@@ -2249,6 +2312,64 @@ mod tests {
             summaries.iter().all(|summary| summary.id != id),
             "deleted report should be removed from index"
         );
+    }
+
+    #[test]
+    fn report_summary_upserts_touch_only_the_matching_shard() {
+        init_test_cfg();
+        let _env = TestDataDirGuard::new();
+
+        let first = sample_report("a1".repeat(32), true, None, "application/json", now_ms());
+        let second = sample_report(
+            "a2".repeat(32),
+            false,
+            Some("verification failed"),
+            "application/x-zk1",
+            first.processed_ms.saturating_add(1),
+        );
+        save_report(&first).expect("save first report");
+        let first_path = report_summary_path_from_sanitized(&first.id);
+        let first_bytes = fs::read(&first_path).expect("read first summary shard");
+
+        save_report(&second).expect("save second report");
+
+        assert_eq!(
+            fs::read(&first_path).expect("read unchanged first summary shard"),
+            first_bytes,
+            "saving another report must not rewrite existing summary shards"
+        );
+        assert!(report_summary_path_from_sanitized(&second.id).is_file());
+        assert!(
+            !prover_dir().join("reports_index.json").exists(),
+            "the quadratic monolithic report index must not be recreated"
+        );
+    }
+
+    #[test]
+    fn report_summary_bounds_untrusted_variable_length_fields() {
+        let mut report = sample_report("a3".repeat(32), false, None, "application/json", now_ms());
+        report.error = Some("é".repeat(REPORT_SUMMARY_ERROR_MAX_BYTES));
+        report.content_type = "x".repeat(REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES + 1);
+        report.zk1_tags = Some(
+            (0..(ZK1_MAX_TLV_COUNT + 1))
+                .map(|index| format!("{index:04}-{}", "x".repeat(REPORT_SUMMARY_TAG_MAX_BYTES)))
+                .collect(),
+        );
+
+        let summary = report_summary_from_report(&report);
+        assert!(
+            summary.error.as_deref().expect("bounded error").len()
+                <= REPORT_SUMMARY_ERROR_MAX_BYTES
+        );
+        assert!(summary.content_type.len() <= REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES);
+        let tags = summary.zk1_tags.as_ref().expect("bounded tags");
+        assert_eq!(tags.len(), ZK1_MAX_TLV_COUNT);
+        assert!(
+            tags.iter()
+                .all(|tag| tag.len() <= REPORT_SUMMARY_TAG_MAX_BYTES)
+        );
+        let encoded = norito::json::to_json(&summary).expect("encode bounded summary");
+        assert!(encoded.len() as u64 <= REPORT_SUMMARY_FILE_MAX_BYTES);
     }
 
     #[test]
@@ -2398,13 +2519,13 @@ mod tests {
     }
 
     #[test]
-    fn load_report_summaries_rebuilds_when_reports_index_is_malformed() {
+    fn load_report_summaries_rebuilds_when_report_summary_is_malformed() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
 
         let report = sample_report("bb".repeat(32), true, None, "application/json", now_ms());
         save_report(&report).expect("save report");
-        fs::write(report_index_path(), "{not json").expect("write malformed report index");
+        corrupt_report_summary(&report.id);
 
         let summaries = load_report_summaries();
         assert_eq!(summaries.len(), 1);
@@ -2513,7 +2634,7 @@ mod tests {
     }
 
     #[test]
-    fn save_report_rebuilds_index_when_existing_index_is_malformed() {
+    fn save_report_recovers_when_existing_summary_is_malformed() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
 
@@ -2527,7 +2648,7 @@ mod tests {
         );
 
         save_report(&first).expect("save first report");
-        fs::write(report_index_path(), "{not json").expect("write malformed report index");
+        corrupt_report_summary(&first.id);
         save_report(&second).expect("save second report");
 
         let summaries = load_report_summaries();
@@ -2821,13 +2942,13 @@ mod tests {
     }
 
     #[test]
-    fn gc_reports_once_rebuilds_when_reports_index_is_malformed() {
+    fn gc_reports_once_rebuilds_when_report_summary_is_malformed() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
 
         let fresh = sample_report("31".repeat(32), true, None, "application/json", now_ms());
         save_report(&fresh).expect("save fresh report");
-        fs::write(report_index_path(), "{not json").expect("write malformed report index");
+        corrupt_report_summary(&fresh.id);
 
         let deleted = gc_reports_once();
         assert_eq!(deleted, 0);
@@ -4220,8 +4341,30 @@ mod tests {
         v.extend_from_slice(b"IPAK");
         v.extend_from_slice(&4u32.to_le_bytes());
         v.extend_from_slice(&5u32.to_le_bytes());
-        let tags = zk1_extract_tags(&v);
+        let tags = parse_zk1_tags(&v).expect("valid bounded ZK1 envelope");
         assert!(tags.starts_with(&["PROF".to_string(), "IPAK".to_string()]));
+    }
+
+    #[test]
+    fn zk1_tlv_count_is_bounded_and_duplicate_tags_are_compacted() {
+        let mut envelope = b"ZK1\0".to_vec();
+        for _ in 0..ZK1_MAX_TLV_COUNT {
+            envelope.extend_from_slice(b"PROF");
+            envelope.extend_from_slice(&0u32.to_le_bytes());
+        }
+        assert_eq!(parse_zk1_tags(&envelope), Ok(vec!["PROF".to_string()]));
+
+        envelope.extend_from_slice(b"IPAK");
+        envelope.extend_from_slice(&0u32.to_le_bytes());
+        let error = parse_zk1_tags(&envelope).expect_err("65th TLV must be rejected");
+        assert!(error.contains("too many ZK1 TLVs"));
+        let decode_error = decode_proof_attachments("application/x-zk1", &envelope)
+            .expect_err("prover ingress must apply the same TLV limit");
+        assert!(decode_error.contains("too many ZK1 TLVs"));
+        assert!(
+            parse_zk1_tags(&envelope).is_err(),
+            "invalid envelopes must not expose partial tag metadata"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

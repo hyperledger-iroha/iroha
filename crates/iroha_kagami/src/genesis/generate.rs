@@ -653,9 +653,12 @@ pub fn generate_default(
     let cabbage_asset_definition_id =
         AssetDefinitionId::new(garden_of_live_flowers_domain.clone(), "cabbage".parse()?);
 
-    let mut builder = builder
-        .domain_with_metadata(wonderland_domain.clone(), meta.clone())
-        .account_with_metadata(ALICE_ID.expect_single_signatory().clone(), meta.clone())
+    let mut wonderland = builder.domain_with_metadata(wonderland_domain.clone(), meta.clone());
+    if genesis_account_id != *ALICE_ID {
+        wonderland = wonderland
+            .account_with_metadata(ALICE_ID.expect_single_signatory().clone(), meta.clone());
+    }
+    let mut builder = wonderland
         .asset("rose".parse()?, NumericSpec::default())
         .finish_domain()
         .domain(garden_of_live_flowers_domain.clone())
@@ -814,6 +817,42 @@ mod consensus_manifest_tests {
         )
         .expect_err("NPoS genesis without a seed must fail closed");
         assert!(error.to_string().contains("VRF seed"));
+    }
+
+    #[test]
+    fn generated_genesis_does_not_reregister_its_preseeded_authority() {
+        let manifest = generate_default(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("authority-is-alice"),
+                PathBuf::from("."),
+            ),
+            iroha_test_samples::ALICE_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Permissioned,
+            None,
+            None,
+        )
+        .expect("generate genesis with Alice as the genesis authority");
+
+        assert!(
+            !manifest
+                .transactions()
+                .iter()
+                .flat_map(iroha_genesis::RawGenesisTx::instructions)
+                .any(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+                        .is_some_and(|register| {
+                            matches!(
+                                register,
+                                iroha_data_model::isi::RegisterBox::Account(account)
+                                    if account.object().id() == &*ALICE_ID
+                            )
+                        })
+                }),
+            "the fresh-node world pre-seeds the genesis authority account"
+        );
     }
 }
 

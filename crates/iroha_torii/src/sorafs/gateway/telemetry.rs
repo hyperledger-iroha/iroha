@@ -137,11 +137,13 @@ fn format_timestamp(time: SystemTime) -> Option<String> {
 }
 
 fn sanitize(value: &str) -> String {
+    const MAX_ERROR_BYTES: usize = 256;
     value
         .chars()
-        .map(|c| match c {
-            ';' | '\n' | '\r' => '_',
-            _ => c,
+        .take(MAX_ERROR_BYTES)
+        .map(|character| match character {
+            ' '..='~' if character != ';' => character,
+            _ => '_',
         })
         .collect()
 }
@@ -169,5 +171,18 @@ mod tests {
         assert!(header.contains("expiry="));
         assert!(header.contains("renewed-at="));
         assert!(header.contains("last-error=temporary error_with newline"));
+    }
+
+    #[test]
+    fn error_sanitizer_produces_bounded_visible_ascii() {
+        let sanitized = sanitize(&format!("bad\0;☃{}", "x".repeat(300)));
+        assert!(sanitized.len() <= 256);
+        assert!(
+            sanitized
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+        );
+        assert!(!sanitized.contains(';'));
+        assert!(http::HeaderValue::try_from(&sanitized).is_ok());
     }
 }

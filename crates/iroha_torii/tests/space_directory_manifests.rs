@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use axum::{Router, http::Request, routing::post};
+use base64::Engine as _;
 use hex::ToHex;
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -27,10 +28,11 @@ use iroha_data_model::{
         UniversalAccountId,
     },
     peer::PeerId,
-    transaction::Executable,
+    transaction::{Executable, signed::TransactionPayload},
 };
 use iroha_primitives::numeric::Quantity;
 use iroha_torii::Torii;
+use norito::codec::Decode;
 use norito::json::{self, Value};
 use tower::ServiceExt as _;
 
@@ -49,6 +51,35 @@ fn checked_space_directory_account_fixture() -> AccountId {
             .public_key()
             .clone(),
     )
+}
+
+async fn decode_unsigned_transaction_draft(
+    response: axum::response::Response,
+) -> TransactionPayload {
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let draft: Value = json::from_slice(&body).expect("unsigned transaction draft JSON");
+    assert_eq!(draft["submitted"].as_bool(), Some(false));
+    let encoded = draft["transaction_payload_b64"]
+        .as_str()
+        .expect("transaction payload base64");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .expect("decode transaction payload base64");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&bytes),
+        encoded,
+        "transaction draft must use canonical padded base64",
+    );
+    let _guard = norito::core::PayloadCtxGuard::enter(&bytes);
+    let mut cursor = std::io::Cursor::new(bytes.as_slice());
+    let payload = TransactionPayload::decode(&mut cursor).expect("decode transaction payload");
+    assert_eq!(
+        usize::try_from(cursor.position()).unwrap(),
+        bytes.len(),
+        "transaction payload must not contain trailing bytes",
+    );
+    payload
 }
 
 #[test]
@@ -1157,7 +1188,7 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
 }
 
 #[tokio::test]
-async fn manifest_publish_endpoint_enqueues_transaction() {
+async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
@@ -1165,25 +1196,19 @@ async fn manifest_publish_endpoint_enqueues_transaction() {
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
     let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let router = Router::new().route(
         "/v1/space-directory/manifests",
         post({
             let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
-            let telemetry = telemetry.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>| {
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
-                let telemetry = telemetry.clone();
                 async move {
                     iroha_torii::handle_post_space_directory_manifest_publish(
-                        chain_id, queue, state, telemetry, req,
+                        chain_id, queue, state, req,
                     )
                     .await
                 }
@@ -1222,7 +1247,6 @@ async fn manifest_publish_endpoint_enqueues_transaction() {
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("manifest", manifest_value),
         iroha_torii::json_entry("reason", "QA publish trigger"),
     ]);
@@ -1239,8 +1263,12 @@ async fn manifest_publish_endpoint_enqueues_transaction() {
         .oneshot(req)
         .await
         .expect("publish response body");
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-    assert_eq!(queue.queued_len(), 1, "publish transaction queued");
+    let payload = decode_unsigned_transaction_draft(resp).await;
+    assert!(matches!(
+        payload.instructions(),
+        Executable::Instructions(_)
+    ));
+    assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
 }
 
 #[tokio::test]
@@ -1252,25 +1280,19 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
     let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let router = Router::new().route(
         "/v1/space-directory/manifests",
         post({
             let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
-            let telemetry = telemetry.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>| {
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
-                let telemetry = telemetry.clone();
                 async move {
                     iroha_torii::handle_post_space_directory_manifest_publish(
-                        chain_id, queue, state, telemetry, req,
+                        chain_id, queue, state, req,
                     )
                     .await
                 }
@@ -1328,7 +1350,6 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("manifest", manifest_value),
         iroha_torii::json_entry("reason", "QA publish trigger"),
     ]);
@@ -1345,17 +1366,10 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
         .oneshot(req)
         .await
         .expect("publish response body");
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-
-    let queued = {
-        let state_view = state.view();
-        queue.all_transactions(&state_view).collect::<Vec<_>>()
-    };
-    assert_eq!(queued.len(), 1, "publish transaction queued");
-    let tx = queued.first().expect("queued transaction");
-    let external = tx.external().expect("queued tx should be external");
-    let Executable::Instructions(instructions) = external.instructions() else {
-        panic!("publish request should enqueue instruction transaction");
+    let payload = decode_unsigned_transaction_draft(resp).await;
+    assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
+    let Executable::Instructions(instructions) = payload.instructions() else {
+        panic!("publish draft should contain an instruction transaction");
     };
     assert_eq!(instructions.len(), 1);
     let publish = instructions[0]
@@ -1381,25 +1395,19 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
     let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let router = Router::new().route(
         "/v1/space-directory/manifests",
         post({
             let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
-            let telemetry = telemetry.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>| {
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
-                let telemetry = telemetry.clone();
                 async move {
                     iroha_torii::handle_post_space_directory_manifest_publish(
-                        chain_id, queue, state, telemetry, req,
+                        chain_id, queue, state, req,
                     )
                     .await
                 }
@@ -1438,7 +1446,6 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("manifest", manifest_value),
     ]);
     let body = norito::json::to_json(&value).expect("serialize publish request");
@@ -1454,17 +1461,10 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
         .oneshot(req)
         .await
         .expect("publish response body");
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-
-    let queued = {
-        let state_view = state.view();
-        queue.all_transactions(&state_view).collect::<Vec<_>>()
-    };
-    assert_eq!(queued.len(), 1, "publish transaction queued");
-    let tx = queued.first().expect("queued transaction");
-    let external = tx.external().expect("queued tx should be external");
-    let Executable::Instructions(instructions) = external.instructions() else {
-        panic!("publish request should enqueue instruction transaction");
+    let payload = decode_unsigned_transaction_draft(resp).await;
+    assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
+    let Executable::Instructions(instructions) = payload.instructions() else {
+        panic!("publish draft should contain an instruction transaction");
     };
     let publish = instructions[0]
         .as_any()
@@ -1477,7 +1477,7 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
 }
 
 #[tokio::test]
-async fn manifest_revoke_endpoint_enqueues_transaction() {
+async fn manifest_revoke_endpoint_returns_unsigned_transaction_draft() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
@@ -1485,25 +1485,19 @@ async fn manifest_revoke_endpoint_enqueues_transaction() {
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
     let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let router = Router::new().route(
         "/v1/space-directory/manifests/revoke",
         post({
             let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
-            let telemetry = telemetry.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
-                let telemetry = telemetry.clone();
                 async move {
                     iroha_torii::handle_post_space_directory_manifest_revoke(
-                        chain_id, queue, state, telemetry, req,
+                        chain_id, queue, state, req,
                     )
                     .await
                 }
@@ -1516,7 +1510,6 @@ async fn manifest_revoke_endpoint_enqueues_transaction() {
     let uaid_literal = format!("uaid:{}", uaid_hash.as_ref().encode_hex::<String>());
     let value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("uaid", uaid_literal),
         iroha_torii::json_entry("dataspace", 11u64),
         iroha_torii::json_entry("revoked_epoch", 4096u64),
@@ -1535,8 +1528,12 @@ async fn manifest_revoke_endpoint_enqueues_transaction() {
         .oneshot(req)
         .await
         .expect("revoke response body");
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-    assert_eq!(queue.queued_len(), 1, "revocation transaction queued");
+    let payload = decode_unsigned_transaction_draft(resp).await;
+    assert!(matches!(
+        payload.instructions(),
+        Executable::Instructions(_)
+    ));
+    assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
 }
 
 #[tokio::test]
@@ -1548,25 +1545,19 @@ async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instructi
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
     let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let router = Router::new().route(
         "/v1/space-directory/manifests/revoke",
         post({
             let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
-            let telemetry = telemetry.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
-                let telemetry = telemetry.clone();
                 async move {
                     iroha_torii::handle_post_space_directory_manifest_revoke(
-                        chain_id, queue, state, telemetry, req,
+                        chain_id, queue, state, req,
                     )
                     .await
                 }
@@ -1583,7 +1574,6 @@ async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instructi
     );
     let value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("uaid", uaid_literal),
         iroha_torii::json_entry("dataspace", 11u64),
         iroha_torii::json_entry("revoked_epoch", 4096u64),
@@ -1602,17 +1592,10 @@ async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instructi
         .oneshot(req)
         .await
         .expect("revoke response body");
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-
-    let queued = {
-        let state_view = state.view();
-        queue.all_transactions(&state_view).collect::<Vec<_>>()
-    };
-    assert_eq!(queued.len(), 1, "revoke transaction queued");
-    let tx = queued.first().expect("queued transaction");
-    let external = tx.external().expect("queued tx should be external");
-    let Executable::Instructions(instructions) = external.instructions() else {
-        panic!("revoke request should enqueue instruction transaction");
+    let payload = decode_unsigned_transaction_draft(resp).await;
+    assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
+    let Executable::Instructions(instructions) = payload.instructions() else {
+        panic!("revoke draft should contain an instruction transaction");
     };
     let revoke = instructions[0]
         .as_any()
@@ -1633,25 +1616,19 @@ async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
     let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let router = Router::new().route(
         "/v1/space-directory/manifests/revoke",
         post({
             let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
-            let telemetry = telemetry.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
-                let telemetry = telemetry.clone();
                 async move {
                     iroha_torii::handle_post_space_directory_manifest_revoke(
-                        chain_id, queue, state, telemetry, req,
+                        chain_id, queue, state, req,
                     )
                     .await
                 }
@@ -1665,7 +1642,6 @@ async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
     let raw_hex = uaid_hash.as_ref().encode_hex::<String>();
     let value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("uaid", raw_hex),
         iroha_torii::json_entry("dataspace", 12u64),
         iroha_torii::json_entry("revoked_epoch", 8192u64),
@@ -1683,17 +1659,10 @@ async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
         .oneshot(req)
         .await
         .expect("revoke response body");
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-
-    let queued = {
-        let state_view = state.view();
-        queue.all_transactions(&state_view).collect::<Vec<_>>()
-    };
-    assert_eq!(queued.len(), 1, "revoke transaction queued");
-    let tx = queued.first().expect("queued transaction");
-    let external = tx.external().expect("queued tx should be external");
-    let Executable::Instructions(instructions) = external.instructions() else {
-        panic!("revoke request should enqueue instruction transaction");
+    let payload = decode_unsigned_transaction_draft(resp).await;
+    assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
+    let Executable::Instructions(instructions) = payload.instructions() else {
+        panic!("revoke draft should contain an instruction transaction");
     };
     let revoke = instructions[0]
         .as_any()
@@ -1704,7 +1673,7 @@ async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
     assert_eq!(revoke.revoked_epoch, 8192);
     assert!(
         revoke.reason.is_none(),
-        "omitted revoke reason should stay absent in the queued instruction",
+        "omitted revoke reason should stay absent in the drafted instruction",
     );
 }
 
@@ -1717,25 +1686,19 @@ async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
     let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
     let router = Router::new().route(
         "/v1/space-directory/manifests/revoke",
         post({
             let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
-            let telemetry = telemetry.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
-                let telemetry = telemetry.clone();
                 async move {
                     iroha_torii::handle_post_space_directory_manifest_revoke(
-                        chain_id, queue, state, telemetry, req,
+                        chain_id, queue, state, req,
                     )
                     .await
                 }
@@ -1746,7 +1709,6 @@ async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
     let creds = iroha_torii::test_utils::random_authority();
     let value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("uaid", "uaid:1234"),
         iroha_torii::json_entry("dataspace", 11u64),
         iroha_torii::json_entry("revoked_epoch", 4096u64),
@@ -1880,7 +1842,6 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let publish_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("manifest", manifest_value),
         iroha_torii::json_entry("reason", "router publish"),
     ]))
@@ -1914,7 +1875,6 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
     );
     let revoke_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
         iroha_torii::json_entry("uaid", uaid_literal),
         iroha_torii::json_entry("dataspace", dataspace.as_u64()),
         iroha_torii::json_entry("revoked_epoch", 4096u64),

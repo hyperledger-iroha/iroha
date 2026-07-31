@@ -284,10 +284,16 @@ Verifier behavior (native STARK)
   the selected production verifier family before dispatch. Halo2-family
   guardrails additionally bind decoded `OpenVerifyEnvelope.circuit_id` values to
   the requested backend label: concrete native Halo2 labels must normalize to the
-  same circuit, and the generic `halo2/ipa` envelope entry point rejects
-  cross-family or trusted-setup circuit ids, including bare and Halo2-prefixed
-  forms such as `kzg`, `halo2/ipa:kzg`, and `halo2/ipa:stark/fri`, before
-  verifier dispatch.
+  same circuit. The generic `halo2/ipa` entry point uses a closed v1 circuit
+  registry containing only IVM execution, Kaigi roster/usage, confidential
+  transfer/unshield, and Kagemusha top-up shielding. Tiny arithmetic,
+  anonymous-transfer demos, vote-bool demos, the historical IVM overlay-binding
+  stand-in, retired recursive-spend labels, cross-family ids, and trusted-setup
+  ids all fail before verifier dispatch. Prefixing or otherwise normalizing a
+  retired id never makes it admissible. Packaged Halo2 verifier keys are also
+  compared with the deterministic verifier key generated from the selected
+  compiled circuit, so a parseable demo or attacker-controlled constraint
+  system cannot be relabeled with an admitted production circuit id.
 - STARK `OpenVerifyEnvelope` construction, preverification, and guardrails bind
   circuit ids to the selected STARK family as well: the generic `stark/fri`
   entry point rejects circuit ids that advertise another proof family, including
@@ -390,51 +396,13 @@ Verifier behavior (native STARK)
   and commitment roots; the verifier recomputes the index and rejects envelopes whose
   payload `j` values do not match the derived result.
 
-### Governance vote tally (VoteBoolCommitMerkle)
+### Governance vote circuits
 
-Torii and governance hosts expect vote-tally proofs under:
-
-- `backend = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"`
-- `circuit_id = "halo2/pasta/vote-bool-commit-merkle8-v1"`
-- `envelope TLV`:
-  - `I10P` (`cols = 2`, `rows = 1`)
-  - column 0 = commitment `H(v, ρ)`
-  - column 1 = Merkle root of the voter registry
-- `public_inputs_schema_hash = 0xfae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3`
-
-Verifying key registry entries (`VerifyingKeyRecord`) for the tally circuit use:
-
-| Field                        | Value / Notes                                                |
-|-----------------------------|--------------------------------------------------------------|
-| `backend`                   | `Halo2IpaPasta`                                              |
-| `circuit_id`                | `halo2/pasta/vote-bool-commit-merkle8-v1`                    |
-| `curve`                     | `pallas`                                                     |
-| `public_inputs_schema_hash` | `0xfae4…64d3` (see above)                                    |
-| `commitment`                | `sha256("iroha:zk:v1:vk" || len(backend) || backend || len(vk_bytes) || vk_bytes)` |
-| `vk_len` / `max_proof_bytes`| Derived from the bundled `.zk1` artefacts                    |
-| `key`                       | Inline `VerifyingKeyBox` wrapping the ZK1-encoded verifier   |
-
-`cargo xtask zk-vote-tally-bundle` emits a reproducible bundle without any extra feature flags:
-
-```bash
-cargo xtask zk-vote-tally-bundle --out ./artifacts/zk_vote_tally --attestation ./artifacts/vote_tally.attestation.json
-```
-
-The command writes `vote_tally_vk.zk1`, `vote_tally_proof.zk1`, and `vote_tally_meta.json`, plus the optional attestation manifest if `--attestation` is supplied. The metadata JSON records:
-
-```jsonc
-{
-  "backend": "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1",
-  "circuit_id": "halo2/pasta/vote-bool-commit-merkle8-v1",
-  "vk_len": <length of verifying key bytes>,
-  "proof_len": <length of proof envelope bytes>,
-  "vk_commitment_hex": "<domain-separated sha256 vk commitment>",
-  "public_inputs_schema_hash_hex": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
-  "commit_hex": "20574662a58708e02e0000000000000000000000000000000000000000000000",
-  "root_hex": "b63752ff429362c3a9b3cd5966c23567fdb757ce3b38af724b9303a5ea2f5817"
-}
-```
-
-When `--attestation` is provided the manifest also captures `hash_algorithm = "blake2b-256"`, the bundle summary, and the Blake2b-256 digests/lengths for each artifact so auditors can archive the proofs alongside their checksum record. The `generated_unix_ms` value derives deterministically from the commitment/verifying-key fingerprint, so repeated regenerations remain comparable. During `--verify --attestation`, xtask checks that the manifest’s bundle metadata and artifact lengths match (the verifying-key and metadata digests stay stable; the proof digest changes with each regeneration).
-
-Auditors can recompute the vectors using the xtask helper (which calls the same deterministic generator as the tests) and compare the resulting files and hashes against governance attestations.
+The first-release Halo2 registry does not admit the historical
+`VoteBoolCommitMerkle` family. Those circuits were test fixtures with a toy
+compressor, and one verifier key was previously reinterpreted as both the
+`vote-ballot` and `vote-tally` role. Governance now requires exact, distinct
+role identifiers; the retired Halo2 labels fail key registration, proof
+attachment, preverification, and native dispatch. A future Halo2 governance
+design must introduce independently reviewed semantic ballot and tally
+circuits and add their exact identifiers to the closed registry.

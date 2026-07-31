@@ -20,6 +20,10 @@ DEFAULT_STATE_PATH = Path("artifacts/android_fixture_regen_state.json")
 MAX_TRANSACTION_NONCE = 0xFFFF_FFFF
 
 
+def is_valid_transaction_ttl(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 def is_valid_transaction_nonce(value: object) -> bool:
     return value is None or (
         isinstance(value, int)
@@ -124,7 +128,7 @@ class PayloadFixture:
     chain: str
     authority: str
     creation_time_ms: int
-    time_to_live_ms: Optional[int]
+    time_to_live_ms: int
     nonce: Optional[int]
 
 
@@ -209,9 +213,7 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
                 raise ValueError(
                     f"fixture entry {name} in {path} missing creation_time_ms integer"
                 )
-            if time_to_live_ms is not None and (
-                not isinstance(time_to_live_ms, int) or isinstance(time_to_live_ms, bool)
-            ):
+            if not is_valid_transaction_ttl(time_to_live_ms):
                 raise ValueError(
                     f"fixture entry {name} in {path} has invalid time_to_live_ms"
                 )
@@ -309,9 +311,7 @@ def compare(
         if not isinstance(creation_time_ms, int) or isinstance(creation_time_ms, bool):
             errors.append(f"manifest fixture missing creation_time_ms integer: {entry}")
             continue
-        if time_to_live_ms is not None and (
-            not isinstance(time_to_live_ms, int) or isinstance(time_to_live_ms, bool)
-        ):
+        if not is_valid_transaction_ttl(time_to_live_ms):
             errors.append(f"manifest fixture has invalid time_to_live_ms: {entry}")
             continue
         if not is_valid_transaction_nonce(nonce):

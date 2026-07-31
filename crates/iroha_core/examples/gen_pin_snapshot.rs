@@ -536,8 +536,7 @@ fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
 
 fn seed_completion_anchor(state: &State) {
     let mut committed_hashes = state.block_hashes.block();
-    committed_hashes
-        .push_for_tests(iroha_crypto::HashOf::new(&completion_anchor_header()));
+    committed_hashes.push_for_tests(iroha_crypto::HashOf::new(&completion_anchor_header()));
     committed_hashes.commit_for_tests();
 }
 

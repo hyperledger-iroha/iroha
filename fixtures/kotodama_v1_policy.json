@@ -160,6 +160,7 @@
     "get_or",
     "ensure",
     "remove",
+    "path",
     "get_int",
     "get_decimal",
     "get_quantity",

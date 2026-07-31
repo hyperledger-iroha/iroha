@@ -191,6 +191,21 @@ pub fn derive_pq_masp_authorization_key_digest_v1(
     )?))
 }
 
+/// Derive the committed ML-DSA-65 authorization-key digest from one canonical
+/// secret key without returning or requiring a caller-supplied public key.
+///
+/// This is the wallet boundary used by native transaction builders. It makes
+/// an inconsistent `(secret key, public key digest)` pair unrepresentable and
+/// keeps public-key derivation inside the same pinned ML-DSA implementation
+/// that authorizes the final PQ-MASP proof.
+pub fn derive_pq_masp_authorization_key_digest_from_secret_v1(
+    secret_key: &[u8],
+) -> Result<PrivacyAuthorizationKeyDigestV1, PqMaspWireErrorV1> {
+    let public_key = mldsa_public_key_from_secret_key(MlDsaSuite::MlDsa65, secret_key)
+        .map_err(|_| PqMaspWireErrorV1::InvalidAuthorizationSecretKey)?;
+    derive_pq_masp_authorization_key_digest_v1(&public_key)
+}
+
 /// Validate an ML-DSA-65 secret key and its exact statement key binding.
 pub(super) fn validate_pq_masp_authorization_secret_key_v1(
     expected_key_digest: PrivacyAuthorizationKeyDigestV1,

@@ -41,7 +41,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             authority: "authority",
             chain: "00000001",
             creationTimeMs: 1,
-            timeToLiveMs: nil,
+            timeToLiveMs: 100_000,
             nonce: nil,
             encodedFile: "shared.norito",
             encodedLen: 0,
@@ -128,6 +128,52 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
                     return XCTFail("unexpected base64 error for \(malformed): \(error)")
                 }
             }
+        }
+    }
+
+    func testFixtureLoaderRequiresPositiveIntegerTtl() throws {
+        func loadFixture(ttl: Any?) throws -> NoritoRpcFixtureLoader.Entry {
+            var fixture: [String: Any] = [
+                "name": "ttl-fixture",
+                "authority": "authority",
+                "chain": "00000001",
+                "creation_time_ms": 1,
+                "nonce": NSNull(),
+                "encoded_file": "ttl-fixture.norito",
+                "encoded_len": 1,
+                "signed_len": 1,
+                "payload_base64": "AA==",
+                "signed_base64": "AQ==",
+                "payload_hash": "payload-hash",
+                "signed_hash": "signed-hash",
+            ]
+            if let ttl {
+                fixture["time_to_live_ms"] = ttl
+            }
+            let data = try JSONSerialization.data(withJSONObject: ["fixtures": [fixture]])
+            let manifest = try JSONDecoder().decode(
+                NoritoRpcFixtureLoader.Manifest.self,
+                from: data
+            )
+            _ = try NoritoRpcFixtureLoader.validatedEntries(manifest.fixtures)
+            return try XCTUnwrap(manifest.fixtures.first)
+        }
+
+        XCTAssertEqual(try loadFixture(ttl: 1).timeToLiveMs, 1)
+        XCTAssertEqual(try loadFixture(ttl: 100_000).timeToLiveMs, 100_000)
+
+        let invalidValues: [(String, Any?)] = [
+            ("missing", nil),
+            ("null", NSNull()),
+            ("zero", 0),
+            ("negative", -1),
+            ("true", true),
+            ("false", false),
+            ("fractional", 1.5),
+            ("string", "100000"),
+        ]
+        for (label, value) in invalidValues {
+            XCTAssertThrowsError(try loadFixture(ttl: value), label)
         }
     }
 
@@ -276,7 +322,7 @@ private struct NoritoRpcFixtureLoader {
         let authority: String
         let chain: String
         let creationTimeMs: Int64
-        let timeToLiveMs: Int64?
+        let timeToLiveMs: Int64
         let nonce: Int64?
         let encodedFile: String
         let encodedLen: Int
@@ -327,6 +373,9 @@ private struct NoritoRpcFixtureLoader {
         var signedHashes = Set<String>()
         var signedBytesValues = Set<Data>()
         for entry in fixtures {
+            guard entry.timeToLiveMs > 0 else {
+                throw FixtureError.invalidTimeToLiveMs(entry.name)
+            }
             guard names.insert(entry.name).inserted else {
                 throw FixtureError.duplicateFixtureName(entry.name)
             }
@@ -492,4 +541,5 @@ private enum FixtureError: Error {
     case duplicateSignedHash(String)
     case duplicateSignedBytes(String)
     case invalidBase64(String)
+    case invalidTimeToLiveMs(String)
 }

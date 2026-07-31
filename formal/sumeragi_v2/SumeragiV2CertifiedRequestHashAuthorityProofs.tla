@@ -157,8 +157,9 @@ BY DecisionOutboxHasOneLogicalRegistration,
 THEOREM DecisionOutboxReplySemanticIsRouteFree ==
   \A node, qc:
     \A left, right \in DecisionRequestOccurrences(node, qc):
-      AsyncReplySemanticIdentity(left.kind, left.envelope)
-        = AsyncReplySemanticIdentity(right.kind, right.envelope)
+      AsyncReplySemanticIdentity(left.kind, left.source, left.envelope)
+        = AsyncReplySemanticIdentity(
+            right.kind, right.source, right.envelope)
 BY DecisionRawHashIsTransportFanoutIndependent, SMT
    DEF DecisionRequestOccurrences, CertifiedRequestOutbox,
        AsyncReplySemanticIdentity, DecisionRawRequestHash,

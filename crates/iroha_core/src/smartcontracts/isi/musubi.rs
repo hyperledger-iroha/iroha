@@ -16,6 +16,7 @@ use iroha_data_model::{
     },
     name::Name,
     query::{error::QueryExecutionFail, musubi::prelude::*},
+    state_path::StatePath,
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
@@ -562,7 +563,7 @@ fn package_release_refs_in_world(
 }
 
 fn package_catalog_in_world(world: &impl WorldReadOnly) -> Vec<MusubiPackageId> {
-    let key = Name::from_str(PACKAGE_CATALOG_KEY).expect("Musubi catalog key is valid");
+    let key = StatePath::from_str(PACKAGE_CATALOG_KEY).expect("Musubi catalog key is valid");
     world
         .smart_contract_state()
         .get(&key)
@@ -589,7 +590,8 @@ fn index_published_release(
         .smart_contract_state
         .insert(index_key, releases.encode());
 
-    let catalog_key = Name::from_str(PACKAGE_CATALOG_KEY).expect("Musubi catalog key is valid");
+    let catalog_key =
+        StatePath::from_str(PACKAGE_CATALOG_KEY).expect("Musubi catalog key is valid");
     let mut catalog = state_transaction
         .world
         .smart_contract_state
@@ -605,25 +607,25 @@ fn index_published_release(
         .insert(catalog_key, catalog.encode());
 }
 
-fn package_release_index_key(package: &MusubiPackageId) -> Name {
+fn package_release_index_key(package: &MusubiPackageId) -> StatePath {
     storage_key(
         PACKAGE_RELEASE_INDEX_PREFIX,
         package.canonical_name().as_bytes(),
     )
 }
 
-fn release_key(package: &MusubiPackageRef) -> Name {
+fn release_key(package: &MusubiPackageRef) -> StatePath {
     storage_key(RELEASE_KEY_PREFIX, package.canonical_ref().as_bytes())
 }
 
-fn short_alias_key(alias: &Name) -> Name {
+fn short_alias_key(alias: &Name) -> StatePath {
     storage_key(SHORT_ALIAS_KEY_PREFIX, alias.as_ref().as_bytes())
 }
 
-fn storage_key(prefix: &str, payload: &[u8]) -> Name {
+fn storage_key(prefix: &str, payload: &[u8]) -> StatePath {
     let digest = blake3::hash(payload);
-    Name::from_str(&format!("{prefix}{}", hex::encode(digest.as_bytes())))
-        .expect("Musubi registry storage keys are valid names")
+    StatePath::from_str(&format!("{prefix}{}", hex::encode(digest.as_bytes())))
+        .expect("Musubi registry storage keys are valid state paths")
 }
 
 fn decode_release_lossy(bytes: &[u8]) -> Option<MusubiRelease> {

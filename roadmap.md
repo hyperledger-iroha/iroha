@@ -1,9 +1,19 @@
 # Roadmap
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## First-release security remediation validation
+
+The source and cross-SDK remediation described in `status.md` is complete.
+Release evidence still requires the serialized build lane to become available,
+then regeneration of the canonical DA reconstruction fixture and unsigned
+OpenAPI development provenance from the final source state, focused Rust
+crate/test validation, and a broad locked offline workspace compile attempt.
+Do not promote the private audit ledger to complete until those source-bound
+commands and the final reconciliation pass are recorded.
 
 ## Repository structure follow-ups
 

@@ -1,0 +1,50 @@
+version: 2
+
+defaults: &defaults
+  working_directory: ~/repo
+  docker:
+    - image: circleci/node:10
+  steps:
+    - checkout
+    - run: npm install
+    - run: npm run test
+
+jobs:
+  test-node6:
+    <<: *defaults
+    docker:
+      - image: circleci/node:6
+
+  test-node8:
+    <<: *defaults
+    docker:
+      - image: circleci/node:8
+
+  test-node10:
+    <<: *defaults
+
+  test-browser:
+    <<: *defaults
+    docker:
+      - image: circleci/node:10-browsers
+    steps:
+      - checkout
+      - run: npm install
+      - run: npm run test:browser
+
+  lint:
+    <<: *defaults
+    steps:
+      - checkout
+      - run: npm install
+      - run: npm run lint
+
+workflows:
+  version: 2
+  test:
+    jobs:
+      - lint
+      - test-node6
+      - test-node8
+      - test-node10
+      - test-browser

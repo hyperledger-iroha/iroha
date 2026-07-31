@@ -2149,7 +2149,7 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                             lane_incarnation: lane.lane_incarnation,
                             block_height: lane.block_height,
                             descriptor_hash: lane.lane_block_descriptor_hash,
-                            merge_admissible: lane.is_merge_admissible(),
+                            merge_admissible: lane.has_merge_admission_material(),
                         })
                         .collect::<Vec<_>>()
                 })
