@@ -9985,7 +9985,7 @@ mod tests {
             .expect("open preowned leader-wire gate");
         ingress
             .bind_leader_wire_lifecycle_gate(
-                gate,
+                Arc::clone(&gate),
                 restore,
                 lifecycle_ordinals,
                 context.id(),
@@ -10014,9 +10014,37 @@ mod tests {
                     ownership.leader_wire_runtime_receipt().is_some(),
                     "checked dequeue atomically installs the durable runtime handoff"
                 );
+                let token = ownership
+                    .leader_wire_token()
+                    .expect("productive dequeue retains its immutable leader-wire token");
+                assert_eq!(
+                    gate.ingress_scheduler_ordinals()
+                        .expect("read durable owners after atomic handoff"),
+                    std::collections::BTreeSet::new(),
+                    "atomic handoff removes the owner from the durable Ingress selector"
+                );
+                {
+                    let state = ingress.state.lock();
+                    let record = state
+                        .leader_wire_lifecycles
+                        .get(&token.slot)
+                        .expect("atomic handoff retains the exact lifecycle record");
+                    assert_eq!(
+                        record.status,
+                        super::super::FairV2IngressLeaderWireStatus::Runtime,
+                        "atomic handoff publishes the in-memory Runtime owner"
+                    );
+                }
                 ingress
                     .bind_leader_wire_runtime_ownership(&mut ownership)
                     .expect("repeated preowned leader-wire bind is idempotent");
+                assert!(matches!(
+                    ingress.try_push(InboundBlockMessage::new(
+                        BlockMessage::V2(message.clone()),
+                        Some(semantic_origin.clone()),
+                    )),
+                    Ok(super::super::FairV2IngressPushDisposition::Coalesced)
+                ));
                 ownership
             })
             .collect();
