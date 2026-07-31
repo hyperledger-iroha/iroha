@@ -34,11 +34,11 @@ pub mod repair_ledger_projection;
 pub mod repair_transaction_forwarder;
 pub mod reputation;
 pub mod reserve_transaction_forwarder;
+pub mod reserve_transparency_runtime;
 pub mod scheduler;
 pub mod store;
 pub mod telemetry;
 mod transparency;
-
 pub use governance::{
     FencedTransparencyAuthoritativeHeadReaderV1, GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1,
     GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_BYTES_V1,

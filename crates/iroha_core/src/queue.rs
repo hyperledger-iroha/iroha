@@ -1081,6 +1081,11 @@ pub enum LaneQueueReservationError {
         "queue durability is faulted; transaction selection is disabled until restart recovery"
     )]
     DurabilityFault,
+    /// Replayed ownership has not completed its State/Kura-aware startup proof.
+    #[error(
+        "lane queue reservation startup reconciliation is pending; ordinary admission and selection remain closed"
+    )]
+    StartupReconciliationPending,
     /// Reservation identity is malformed: {0}.
     #[error("invalid lane queue reservation identity: {0}")]
     InvalidIdentity(String),
@@ -1109,7 +1114,9 @@ pub enum LaneQueueReservationError {
         hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
     },
     /// A live reservation and its indexed durable QueuePlan claim disagree.
-    #[error("live lane queue reservation {hash} has a mismatched durable QueuePlan claim: {reason}")]
+    #[error(
+        "live lane queue reservation {hash} has a mismatched durable QueuePlan claim: {reason}"
+    )]
     ReconciliationDurableClaimMismatch {
         /// Queue identity whose claim is inconsistent.
         hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
@@ -1622,6 +1629,13 @@ pub struct Queue {
     /// Sticky process-lifetime fault when accepted work exposes internally inconsistent immutable
     /// routing or fee-admission identity. Expected catalog retirement evicts affected work instead.
     accepted_work_validation_fault: AtomicBool,
+    /// Startup publication gate retained until V2 has classified every
+    /// replayed reservation owner against one State/Kura evidence snapshot.
+    ///
+    /// QueuePlan replay may materialize quarantined payload bytes while this
+    /// bit is set, but ordinary admission, gossip, and global/lane selection
+    /// remain closed.
+    lane_reservation_reconciliation_pending: AtomicBool,
     /// Exact queue hashes fenced by an in-construction global carrier candidate.
     global_selection_owners: parking_lot::Mutex<BTreeMap<SignedTxHash, u64>>,
     /// Monotonic, nonzero process-local global selection owner identity.
@@ -1649,6 +1663,10 @@ pub struct Queue {
     #[cfg(test)]
     install_reconciliation_append_fault:
         parking_lot::Mutex<Option<(usize, ReservationJournalAppendFault)>>,
+    /// One-shot test crash boundary after durable Commit and plan retirement,
+    /// before durable ForgetCommit removes the exact reservation owner.
+    #[cfg(test)]
+    hold_next_lane_reservation_commit_after_barrier: AtomicBool,
     /// Monotonic counter tagging test guards with their queue order.
     #[cfg(test)]
     guard_sequence: AtomicU64,
@@ -2034,6 +2052,26 @@ struct QueuePlanReplayReservationShape {
     durable_owned_hashes: HashSet<SignedTxHash>,
     durable_fifo_orders: HashMap<SignedTxHash, LaneQueueFifoOrderV5>,
     missing_payload_hashes: HashSet<SignedTxHash>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuePlanReplayReservationOwner {
+    Absent,
+    FifoAnchored(LaneQueueFifoOrderV5),
+    CommitBarrier,
+}
+
+impl QueuePlanReplayReservationOwner {
+    const fn is_present(self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+
+    const fn fifo_order(self) -> Option<LaneQueueFifoOrderV5> {
+        match self {
+            Self::FifoAnchored(order) => Some(order),
+            Self::Absent | Self::CommitBarrier => None,
+        }
+    }
 }
 
 /// Failure to derive a deterministic proposal gas upper bound from an accepted transaction.
@@ -3067,8 +3105,6 @@ impl Queue {
             *self.plan_journal.lock() = Some(journal);
             self.plan_journal_installed.store(true, Ordering::Release);
         }
-        self.finalize_commit_barriers()
-            .map_err(std::io::Error::other)?;
         Ok(replayable)
     }
 
@@ -3260,6 +3296,13 @@ impl Queue {
         store.commit_barriers = commit_barriers;
         store.release_barriers = release_barriers;
         store.completed_releases = completed_releases;
+        self.lane_reservation_reconciliation_pending.store(
+            !store.live_by_hash.is_empty()
+                || !store.commit_barriers.is_empty()
+                || !store.release_barriers.is_empty()
+                || !store.completed_releases.is_empty(),
+            Ordering::Release,
+        );
         for barrier in &store.release_barriers {
             store.ensure_release_no_conflict(barrier)?;
             if !barrier.ordered_keys.iter().all(|key| store.exact(key)) {
@@ -3288,8 +3331,6 @@ impl Queue {
         drop(queue_guard);
         drop(reservation_transition_guard);
 
-        self.finalize_commit_barriers()?;
-        self.finalize_completed_releases(None)?;
         let store = self.lane_reservations.lock();
         let summary = LaneQueueReservationReplaySummary {
             restored: store.live_by_hash.len(),
@@ -3384,6 +3425,9 @@ impl Queue {
         excluded_entrypoint_hashes: &BTreeSet<HashOf<TransactionEntrypoint>>,
         routing_mode: LaneQueueReservationRoutingMode,
     ) -> Result<Vec<LaneReservedTransaction>, LaneQueueReservationError> {
+        if self.lane_reservation_startup_reconciliation_pending() {
+            return Err(LaneQueueReservationError::StartupReconciliationPending);
+        }
         // Autonomous-lane selection is a production consumer of the queue. Run the bounded
         // residence sweep before taking lifecycle/queue ownership so expired entries cannot
         // accumulate indefinitely when the legacy pop path is unused.
@@ -3414,6 +3458,9 @@ impl Queue {
         Self::validate_reservation_scope_against_view(&routing_state_view, scope)?;
 
         let queue_guard = self.push_remove_lock.lock();
+        if self.lane_reservation_startup_reconciliation_pending() {
+            return Err(LaneQueueReservationError::StartupReconciliationPending);
+        }
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
@@ -4328,6 +4375,23 @@ impl Queue {
                 LaneQueueReservationOutcome::AlreadyFinalized
             });
         }
+        #[cfg(test)]
+        if self
+            .hold_next_lane_reservation_commit_after_barrier
+            .swap(false, Ordering::AcqRel)
+        {
+            drop(transition);
+            let publish_fault = self.compact_lane_reservations_off_lock();
+            if publish_fault {
+                self.publish_latched_lane_reservation_durability_fault(None);
+            }
+            self.publish_backpressure_state(self.active_len(), None);
+            return Ok(if newly_committed {
+                LaneQueueReservationOutcome::Finalized
+            } else {
+                LaneQueueReservationOutcome::AlreadyFinalized
+            });
+        }
         if let Err(error) =
             self.apply_lane_reservation_journal(|journal| journal.forget_commit(*key))
         {
@@ -4358,36 +4422,6 @@ impl Queue {
         } else {
             LaneQueueReservationOutcome::AlreadyFinalized
         })
-    }
-
-    /// Reconcile candidate reservations against an exact Kura payload lookup.
-    ///
-    /// `matching_kura_payload_exists` must be evaluated from a caller-held, stable Kura read
-    /// snapshot or equivalent reconciliation gate. Only candidates for which the lookup proves
-    /// absence are released. The exact-key release remains idempotent if recovery retries.
-    ///
-    /// # Errors
-    /// Returns the first exact-identity or durable journal error.
-    pub fn reconcile_orphaned_lane_reservations<F>(
-        &self,
-        candidates: &[LaneQueueReservationKeyV2],
-        mut matching_kura_payload_exists: F,
-    ) -> Result<usize, LaneQueueReservationError>
-    where
-        F: FnMut(&LaneQueueReservationKeyV2) -> bool,
-    {
-        if self.transaction_selection_durability_faulted() {
-            return Err(LaneQueueReservationError::DurabilityFault);
-        }
-        let mut orphaned = Vec::new();
-        for key in candidates {
-            if matching_kura_payload_exists(key) {
-                let _ = self.retain_lane_reservation(key)?;
-                continue;
-            }
-            orphaned.push(*key);
-        }
-        self.release_lane_reservations_in_order(&orphaned)
     }
 
     /// Durably release reservations for one exact retired lane incarnation.
@@ -4489,14 +4523,15 @@ impl Queue {
         claim: &QueuePlanDurableClaimIndexEntry,
     ) -> Result<LaneQueueReservationReconciliationRecordV1, LaneQueueReservationError> {
         let key = record.key;
-        let mismatch = |reason: String| {
-            LaneQueueReservationError::ReconciliationDurableClaimMismatch {
+        let mismatch =
+            |reason: String| LaneQueueReservationError::ReconciliationDurableClaimMismatch {
                 hash: key.signed_transaction_hash,
                 reason,
-            }
-        };
+            };
         let durable_admission = claim.durable_admission();
-        let binding = claim.global_admission_binding().map_err(mismatch)?;
+        let binding = claim
+            .global_admission_binding()
+            .map_err(|reason| mismatch(reason))?;
         if durable_admission.entrypoint_hash != key.entrypoint_hash {
             return Err(mismatch(
                 "entrypoint identity differs from the reservation key".to_owned(),
@@ -4549,6 +4584,87 @@ impl Queue {
         })
     }
 
+    /// Bind one replayed QueuePlan record to its exact reservation-side owner.
+    ///
+    /// A Commit barrier deliberately has no FIFO anchor: it quarantines the
+    /// transaction until State/Kura-aware startup reconciliation proves the
+    /// canonical carrier and consumes the barrier. Live and completed-release
+    /// owners retain their journaled FIFO identity. Every variant authenticates
+    /// the complete global-admission binding before QueuePlan replay may
+    /// materialize transaction bytes.
+    fn queue_plan_replay_reservation_owner(
+        &self,
+        hash: SignedTxHash,
+        claim: &QueuePlanDurableClaimIndexEntry,
+    ) -> Result<QueuePlanReplayReservationOwner, LaneQueueReservationError> {
+        let store = self.lane_reservations.lock();
+        let commit = store
+            .commit_barriers
+            .iter()
+            .find(|key| key.signed_transaction_hash == hash);
+        let mut records = store.live_by_hash.get(&hash).into_iter().chain(
+            store
+                .completed_releases
+                .iter()
+                .flat_map(|completion| completion.ordered_records.iter())
+                .filter(|record| record.key.signed_transaction_hash == hash),
+        );
+        let record = records.next();
+        if records.next().is_some() || (commit.is_some() && record.is_some()) {
+            return Err(
+                LaneQueueReservationError::ReconciliationDurableClaimMismatch {
+                    hash,
+                    reason: "multiple durable reservation owner states name one queue identity"
+                        .to_owned(),
+                },
+            );
+        }
+
+        if let Some(key) = commit {
+            claim
+                .global_admission_binding()
+                .and_then(|binding| binding.validate_for_lane_reservation_commit(key))
+                .map_err(|reason| {
+                    LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
+                })?;
+            return Ok(QueuePlanReplayReservationOwner::CommitBarrier);
+        }
+
+        if let Some(record) = record {
+            let key = &record.key;
+            claim
+                .global_admission_binding()
+                .and_then(|binding| binding.validate_for_lane_reservation_commit(key))
+                .map_err(|reason| {
+                    LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, reason }
+                })?;
+            let authenticated = Self::reconciliation_record_from_durable_claim(record, claim)?;
+            return Ok(QueuePlanReplayReservationOwner::FifoAnchored(
+                LaneQueueFifoOrderV5::new(authenticated.fifo_ordinal).map_err(|reason| {
+                    LaneQueueReservationError::ReconciliationDurableClaimMismatch {
+                        hash,
+                        reason: reason.to_string(),
+                    }
+                })?,
+            ));
+        }
+
+        if store.release_barriers.iter().any(|barrier| {
+            barrier
+                .ordered_keys
+                .iter()
+                .any(|key| key.signed_transaction_hash == hash)
+        }) {
+            return Err(
+                LaneQueueReservationError::ReconciliationDurableClaimMismatch {
+                    hash,
+                    reason: "prepared release barrier lost its exact live reservation".to_owned(),
+                },
+            );
+        }
+        Ok(QueuePlanReplayReservationOwner::Absent)
+    }
+
     /// Capture every live reservation and its exact durable QueuePlan claim for restart
     /// classification.
     ///
@@ -4589,9 +4705,7 @@ impl Queue {
                 .get(&hash)
                 .is_none_or(|fifo_order| *fifo_order.value() != record.fifo_order)
             {
-                return Err(
-                    LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash },
-                );
+                return Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash });
             }
             let claim = self
                 .durable_plan_claims
@@ -4604,9 +4718,8 @@ impl Queue {
         }
         drop(store);
 
-        ordered_records.sort_by_key(|record| {
-            (record.fifo_ordinal, record.key.signed_transaction_hash)
-        });
+        ordered_records
+            .sort_by_key(|record| (record.fifo_ordinal, record.key.signed_transaction_hash));
         for records in ordered_records.windows(2) {
             if records[0].fifo_ordinal == records[1].fifo_ordinal {
                 return Err(
@@ -4636,9 +4749,7 @@ impl Queue {
             };
             let group = &mut ordered_groups[group_index];
             group.ordered_keys.push(record.key);
-            if group.ordered_keys.len()
-                > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS
-            {
+            if group.ordered_keys.len() > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS {
                 return Err(LaneQueueReservationError::InvalidIdentity(format!(
                     "lane queue reconciliation group {:?} exceeds the maximum {} reservations",
                     group.identity,
@@ -4798,6 +4909,54 @@ impl Queue {
     #[must_use]
     pub fn lane_reservation_journal_installed(&self) -> bool {
         self.lane_reservation_journal.lock().is_some()
+    }
+
+    /// Return whether replayed reservation ownership is still quarantined
+    /// behind the State/Kura-aware startup publication gate.
+    #[must_use]
+    pub(crate) fn lane_reservation_startup_reconciliation_pending(&self) -> bool {
+        self.lane_reservation_reconciliation_pending
+            .load(Ordering::Acquire)
+    }
+
+    /// Publish successful State/Kura-aware reservation reconciliation.
+    ///
+    /// Commit and release crash barriers must already be fully consumed, and
+    /// every retained live owner must have recovered its exact QueuePlan
+    /// payload. Live current/certified reservations may remain quarantined from
+    /// ordinary FIFO ownership; the V2 lane adapter resumes those after this
+    /// publication boundary.
+    pub(crate) fn complete_lane_reservation_startup_reconciliation(
+        &self,
+    ) -> Result<(), LaneQueueReservationError> {
+        let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
+        let queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
+        let store = self.lane_reservations.lock();
+        if !store.commit_barriers.is_empty()
+            || !store.release_barriers.is_empty()
+            || !store.completed_releases.is_empty()
+        {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "startup reconciliation cannot publish while a durable commit or release barrier remains"
+                    .to_owned(),
+            ));
+        }
+        if !store.missing_payload_hashes.is_empty() {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "startup reconciliation cannot publish while a durable reservation payload is missing"
+                    .to_owned(),
+            ));
+        }
+        drop(store);
+        self.lane_reservation_reconciliation_pending
+            .store(false, Ordering::Release);
+        drop(queue_guard);
+        self.publish_backpressure_state(self.active_len(), None);
+        status::set_tx_queue_pressure(self.pressure_snapshot());
+        Ok(())
     }
 
     /// Return whether pending-plan durability is ambiguous until restart recovery.
@@ -5012,129 +5171,13 @@ impl Queue {
         keys
     }
 
-    fn finalize_completed_releases(
-        &self,
-        telemetry: Option<&StateTelemetry>,
-    ) -> Result<(), LaneQueueReservationError> {
-        let barriers = self
-            .lane_reservations
-            .lock()
-            .completed_releases
-            .iter()
-            .map(|completion| completion.barrier.clone())
-            .collect::<Vec<_>>();
-        for barrier in barriers {
-            if let Err(error) = self.finalize_lane_reservation_release_barrier(&barrier) {
-                if self.lane_reservation_durability_faulted() {
-                    self.publish_latched_lane_reservation_durability_fault(telemetry);
-                }
-                return Err(error);
-            }
-        }
-        Ok(())
-    }
-
-    fn finalize_commit_barriers(&self) -> Result<(), LaneQueueReservationError> {
-        let _reservation_transition_guard = self.lane_reservation_transition_lock.lock();
-        let queue_guard = self.push_remove_lock.lock();
-        let store = self.lane_reservations.lock();
-        let barriers = store.commit_barriers.clone();
-        if barriers.is_empty() {
-            return Ok(());
-        }
-        if self.lane_reservation_journal.lock().is_none() {
-            return Err(LaneQueueReservationError::JournalNotInstalled);
-        }
-        let mut queued_owners = Vec::with_capacity(barriers.len());
-        for key in &barriers {
-            let hash = key.signed_transaction_hash;
-            if let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) {
-                let Some(plan) = self.routing_plans.get(&hash).map(|entry| entry.clone()) else {
-                    return Err(LaneQueueReservationError::Conflict { hash });
-                };
-                if tx.as_accepted().hash_as_entrypoint() != key.entrypoint_hash
-                    || plan.digest() != key.routing_plan_digest
-                    || plan.coordinator_leg() != key.coordinator_leg
-                {
-                    return Err(LaneQueueReservationError::Conflict { hash });
-                }
-                queued_owners.push((tx, plan));
-            }
-        }
-        let transition = self
-            .begin_durability_transition_locked(
-                barriers.iter().map(|key| key.signed_transaction_hash),
-            )
-            .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
-        drop(store);
-        drop(queue_guard);
-
-        if self.remove_plan_journals_for_reservation_commit_batch(&barriers)?
-            == PlanJournalDurability::StartupPending
-        {
-            drop(transition);
-            let publish_fault = self.compact_lane_reservations_off_lock();
-            if publish_fault {
-                self.publish_latched_lane_reservation_durability_fault(None);
-            }
-            return Ok(());
-        }
-
-        // The plan batch is now durable for every barrier. Remove every corresponding in-memory
-        // owner before attempting the first independent ForgetCommit append. A failed append can
-        // then leave only idempotent durable barriers; it can never strand a later transaction
-        // whose plan claim was already tombstoned by the batch.
-        let queue_guard = self.push_remove_lock.lock();
-        let mut store = self.lane_reservations.lock();
-        let consumed_hashes = barriers
-            .iter()
-            .map(|key| key.signed_transaction_hash)
-            .collect::<HashSet<_>>();
-        self.remove_hashes_from_fifo_locked(&consumed_hashes);
-        for (tx, plan) in queued_owners {
-            self.remove_transaction_locked(&tx, &plan, None);
-        }
-        self.reconcile_missing_reservation_payloads_locked(&mut store);
-        drop(store);
-        drop(queue_guard);
-
-        let mut forgotten_commit_digests = HashSet::with_capacity(barriers.len());
-        let mut forget_error = None;
-        for key in barriers {
-            match self.apply_lane_reservation_journal(|journal| journal.forget_commit(key)) {
-                Ok(()) => {
-                    forgotten_commit_digests.insert(key.digest());
-                }
-                Err(error) => {
-                    forget_error = Some(error);
-                    break;
-                }
-            }
-        }
-        let queue_guard = self.push_remove_lock.lock();
-        let mut store = self.lane_reservations.lock();
-        store
-            .commit_barriers
-            .retain(|key| !forgotten_commit_digests.contains(&key.digest()));
-        self.reconcile_missing_reservation_payloads_locked(&mut store);
-        drop(store);
-        drop(transition);
-        drop(queue_guard);
-
-        if let Some(error) = forget_error {
-            let fault = std::io::Error::other(error.to_string());
-            self.latch_lane_reservation_post_plan_fault_locked(&fault);
-            self.publish_latched_lane_reservation_durability_fault(None);
-            return Err(error);
-        }
-        let publish_fault = self.compact_lane_reservations_off_lock();
-        if publish_fault {
-            self.publish_latched_lane_reservation_durability_fault(None);
-        } else {
-            self.publish_backpressure_state(self.active_len(), None);
-            status::set_tx_queue_pressure(self.pressure_snapshot());
-        }
-        Ok(())
+    /// Retain the next exact Commit barrier at the crash boundary immediately
+    /// before ForgetCommit. Test-only because production always drives the
+    /// terminal journal transition.
+    #[cfg(test)]
+    pub(crate) fn hold_next_lane_reservation_commit_after_barrier_for_test(&self) {
+        self.hold_next_lane_reservation_commit_after_barrier
+            .store(true, Ordering::Release);
     }
 
     /// Require the production startup shape before queue-plan replay publishes ownership.
@@ -5278,14 +5321,28 @@ impl Queue {
                 "queue-plan journal replay contains duplicate queue identities".to_owned(),
             ));
         }
-        if !reservation_shape
+        let commit_barrier_hashes = self
+            .lane_reservations
+            .lock()
+            .commit_barriers
+            .iter()
+            .map(|key| key.signed_transaction_hash)
+            .collect::<HashSet<_>>();
+        for hash in reservation_shape
             .missing_payload_hashes
-            .is_subset(&journal_hashes)
+            .difference(&journal_hashes)
         {
-            return Err(invalid(
-                "queue-plan replay cannot recover every payload-less durable reservation from the authenticated plan journal"
-                    .to_owned(),
-            ));
+            // A crash after the exact QueuePlan tombstone but before
+            // ForgetCommit legitimately leaves no payload record. Only an
+            // already-committed State member behind an exact Commit barrier
+            // may use this corridor; V2 still authenticates its Kura merge
+            // binding before forgetting the barrier.
+            if !commit_barrier_hashes.contains(hash) || state_view.transactions.get(hash).is_none()
+            {
+                return Err(invalid(format!(
+                    "queue-plan replay cannot recover payload-less durable reservation {hash} from the authenticated plan journal"
+                )));
+            }
         }
         let (max_clock_drift, transaction_limits) = state.transaction_admission_limits();
         let crypto = state.crypto();
@@ -5332,30 +5389,36 @@ impl Queue {
                 )));
             }
 
-            let restored_fifo_order = self
-                .restored_reservation_fifo_order_for_identity(
-                    hash,
-                    entrypoint_hash,
-                    &recorded_routing_plan,
-                )
+            let claim = QueuePlanDurableClaimIndexEntry {
+                entrypoint_hash,
+                signed_transaction_hash: recorded_signed_transaction_hash,
+                routing_plan: recorded_routing_plan.clone(),
+                admission_context: recorded_admission_context.clone(),
+                global_admission_identity: recorded_global_admission_identity,
+                enqueue_timestamp_ms,
+                journal_record_digest: recorded_journal_digest,
+            };
+            let reservation_owner = self
+                .queue_plan_replay_reservation_owner(hash, &claim)
                 .map_err(|error| {
                     invalid(format!(
                         "queue-plan journal transaction {hash} conflicts with durable reservation ownership: {error}"
                     ))
                 })?;
             if reservation_shape.durable_owned_hashes.contains(&hash)
-                != restored_fifo_order.is_some()
+                != reservation_owner.is_present()
             {
                 return Err(invalid(format!(
                     "queue-plan journal transaction {hash} has inconsistent durable reservation ownership"
                 )));
             }
             let has_materialized_owner = self.txs.contains_key(&hash);
-            let has_durable_reservation_owner = restored_fifo_order.is_some();
-            if state_view.transactions.get(&hash).is_some() {
-                if has_materialized_owner || has_durable_reservation_owner {
+            let has_durable_reservation_owner = reservation_owner.is_present();
+            let state_committed = state_view.transactions.get(&hash).is_some();
+            if state_committed && !has_durable_reservation_owner {
+                if has_materialized_owner {
                     return Err(invalid(format!(
-                        "queue-plan journal transaction {hash} is canonically committed while queue or reservation ownership remains live"
+                        "queue-plan journal transaction {hash} is canonically committed while an unowned in-memory transaction remains live"
                     )));
                 }
                 summary.tombstoned_committed = summary.tombstoned_committed.saturating_add(1);
@@ -5366,7 +5429,14 @@ impl Queue {
                 ));
                 continue;
             }
-            let global_registry_match = if recorded_global_admission_identity.is_some() {
+            // A committed reservation owner is quarantined for the later
+            // State/Kura-aware all-groups proof. Its immutable QueuePlan claim
+            // has already been authenticated above; current fee, registry,
+            // manifest, and route policy must not reject accepted work after
+            // canonical application.
+            let global_registry_match = if state_committed {
+                None
+            } else if recorded_global_admission_identity.is_some() {
                 let binding =
                     crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
                         &QueuePlanDurableAdmissionV2 {
@@ -5444,37 +5514,29 @@ impl Queue {
                 continue;
             }
 
-            let active_recorded_plan = resolve_routing_plan_for_queue_admission(
-                recorded_routing_plan.clone(),
-                state_view.nexus(),
-                state_view_height_for_routing(state_view),
-            )
-            .map_err(|error| {
-                invalid(format!(
-                    "queue-plan journal transaction {hash} no longer has its admitted routing plan active; retaining immutable ownership evidence: {error}"
-                ))
-            })?;
-            if active_recorded_plan != recorded_routing_plan
-                || !Self::durable_plan_claim_context_revalidates_in_view(
-                    state_view,
-                    &recorded_routing_plan,
-                    &recorded_admission_context,
+            if !state_committed {
+                let active_recorded_plan = resolve_routing_plan_for_queue_admission(
+                    recorded_routing_plan.clone(),
+                    state_view.nexus(),
+                    state_view_height_for_routing(state_view),
                 )
-            {
-                return Err(invalid(format!(
-                    "queue-plan journal transaction {hash} no longer authenticates its admitted route generation or active lane incarnations; retaining immutable ownership evidence"
-                )));
+                .map_err(|error| {
+                    invalid(format!(
+                        "queue-plan journal transaction {hash} no longer has its admitted routing plan active; retaining immutable ownership evidence: {error}"
+                    ))
+                })?;
+                if active_recorded_plan != recorded_routing_plan
+                    || !Self::durable_plan_claim_context_revalidates_in_view(
+                        state_view,
+                        &recorded_routing_plan,
+                        &recorded_admission_context,
+                    )
+                {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} no longer authenticates its admitted route generation or active lane incarnations; retaining immutable ownership evidence"
+                    )));
+                }
             }
-
-            let claim = QueuePlanDurableClaimIndexEntry {
-                entrypoint_hash,
-                signed_transaction_hash: recorded_signed_transaction_hash,
-                routing_plan: recorded_routing_plan.clone(),
-                admission_context: recorded_admission_context.clone(),
-                global_admission_identity: recorded_global_admission_identity,
-                enqueue_timestamp_ms,
-                journal_record_digest: recorded_journal_digest,
-            };
             if self.durable_plan_claims.contains_key(&hash)
                 || self.routing_decisions.contains_key(&hash)
                 || self.routing_plans.contains_key(&hash)
@@ -5491,18 +5553,43 @@ impl Queue {
             }
 
             let checked = CheckedTransaction::new_unchecked(accepted);
-            let next_block_height = state_view_height_for_routing(state_view).saturating_add(1);
-            let mut state_access = EagerAdmissionStateAccess::new(
-                state_view.world(),
-                &state_view.nexus,
-                &state_view.pipeline,
-                next_block_height,
-                state_view.latest_block().map_or(0, |block| {
-                    u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-                }),
-            );
-            let mut admission = self
-                .prepare_checked_for_enqueue(
+            let enforce_pending_limits = !state_committed;
+            let mut admission = if state_committed {
+                let proposal_gas_cost =
+                    Self::compute_proposal_gas_cost(checked.as_accepted()).map_err(|error| {
+                        invalid(format!(
+                            "committed reservation-owned queue-plan transaction {hash} has an invalid proposal gas bound: {error}"
+                        ))
+                    })?;
+                PreparedQueueAdmission {
+                    encoded_len: Self::compute_tx_encoded_len(checked.as_accepted()),
+                    proposal_gas_cost,
+                    routing_decision: recorded_routing_plan.coordinator_route(),
+                    routing_plan: recorded_routing_plan,
+                    checked,
+                    hash,
+                    enqueued_at_ms: enqueue_timestamp_ms,
+                    admission_context: None,
+                    global_admission_identity: None,
+                    expected_journal_record_digest: None,
+                    replayed_journal_record_digest: None,
+                    fee_reservation: None,
+                    #[cfg(feature = "telemetry")]
+                    pending_teu: 0,
+                }
+            } else {
+                let next_block_height = state_view_height_for_routing(state_view).saturating_add(1);
+                let mut state_access = EagerAdmissionStateAccess::new(
+                    state_view.world(),
+                    &state_view.nexus,
+                    &state_view.pipeline,
+                    next_block_height,
+                    state_view.latest_block().map_or(0, |block| {
+                        u64::try_from(block.header().creation_time().as_millis())
+                            .unwrap_or(u64::MAX)
+                    }),
+                );
+                self.prepare_checked_for_enqueue(
                     checked,
                     recorded_routing_plan,
                     &mut state_access,
@@ -5516,7 +5603,8 @@ impl Queue {
                         "queue-plan journal transaction {hash} failed current admission; retaining its durable record: {}",
                         failure.err
                     ))
-                })?;
+                })?
+            };
             admission.enqueued_at_ms = enqueue_timestamp_ms;
             admission.admission_context = Some(recorded_admission_context);
             admission.global_admission_identity = recorded_global_admission_identity;
@@ -5526,8 +5614,10 @@ impl Queue {
             pending_admissions.push((
                 admission,
                 claim,
-                restored_fifo_order,
+                reservation_owner.fifo_order(),
+                reservation_owner.is_present(),
                 replaces_missing_payload,
+                enforce_pending_limits,
             ));
         }
 
@@ -5552,8 +5642,14 @@ impl Queue {
         let mut projected_retained = self.retained_bytes();
         let mut per_user_increments = HashMap::<AccountId, usize>::new();
         let mut projected_fee_reservations = self.fee_admission_reservations.lock().clone();
-        for (admission, _claim, _restored_fifo_order, replaces_missing_payload) in
-            &pending_admissions
+        for (
+            admission,
+            _claim,
+            _restored_fifo_order,
+            _restored_reservation,
+            replaces_missing_payload,
+            enforce_pending_limits,
+        ) in &pending_admissions
         {
             let capacity_slots = usize::from(!*replaces_missing_payload);
             projected_active = projected_active
@@ -5578,33 +5674,37 @@ impl Queue {
                     "queue-plan journal replay exceeds aggregate queue capacity",
                 ));
             }
-            if let Some(authority) = admission.checked.as_ref().authority_opt() {
-                let delta = per_user_increments.entry(authority.clone()).or_default();
-                *delta = delta
-                    .checked_add(1)
-                    .ok_or_else(|| invalid("queue-plan replay per-user count overflow".into()))?;
-                let projected = self
-                    .queued_tx_count_for_user(authority)
-                    .checked_add(*delta)
-                    .ok_or_else(|| invalid("queue-plan replay per-user count overflow".into()))?;
-                if projected > self.capacity_per_user.get() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!(
-                            "queue-plan journal replay exceeds the per-user capacity for {authority}"
-                        ),
-                    ));
-                }
-            }
-            if let Some(reservation) = admission.fee_reservation.clone() {
-                projected_fee_reservations
-                    .reserve(admission.hash, reservation)
-                    .map_err(|error| {
-                        invalid(format!(
-                            "queue-plan journal transaction {} exceeds aggregate fee capacity: {error}",
-                            admission.hash
-                        ))
+            if *enforce_pending_limits {
+                if let Some(authority) = admission.checked.as_ref().authority_opt() {
+                    let delta = per_user_increments.entry(authority.clone()).or_default();
+                    *delta = delta.checked_add(1).ok_or_else(|| {
+                        invalid("queue-plan replay per-user count overflow".into())
                     })?;
+                    let projected = self
+                        .queued_tx_count_for_user(authority)
+                        .checked_add(*delta)
+                        .ok_or_else(|| {
+                            invalid("queue-plan replay per-user count overflow".into())
+                        })?;
+                    if projected > self.capacity_per_user.get() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            format!(
+                                "queue-plan journal replay exceeds the per-user capacity for {authority}"
+                            ),
+                        ));
+                    }
+                }
+                if let Some(reservation) = admission.fee_reservation.clone() {
+                    projected_fee_reservations
+                        .reserve(admission.hash, reservation)
+                        .map_err(|error| {
+                            invalid(format!(
+                                "queue-plan journal transaction {} exceeds aggregate fee capacity: {error}",
+                                admission.hash
+                            ))
+                        })?;
+                }
             }
         }
 
@@ -5655,11 +5755,7 @@ impl Queue {
         let anchors = pending_admissions
             .iter()
             .enumerate()
-            .filter_map(
-                |(index, (_admission, _claim, restored_fifo_order, _replaces_missing_payload))| {
-                    restored_fifo_order.map(|order| (index, order))
-                },
-            )
+            .filter_map(|(index, tuple)| tuple.2.map(|order| (index, order)))
             .collect::<Vec<_>>();
         if anchors
             .windows(2)
@@ -5731,11 +5827,19 @@ impl Queue {
 
         let mut final_fifo = Vec::with_capacity(pending_admissions.len());
         let mut admissions = Vec::with_capacity(pending_admissions.len());
-        for ((admission, claim, restored_fifo_order, replaces_missing_payload), assigned_order) in
-            pending_admissions.into_iter().zip(assigned_orders)
+        for (
+            (
+                admission,
+                claim,
+                restored_fifo_order,
+                restored_reservation,
+                replaces_missing_payload,
+                _enforce_pending_limits,
+            ),
+            assigned_order,
+        ) in pending_admissions.into_iter().zip(assigned_orders)
         {
             let hash = admission.hash;
-            let restored_reservation = restored_fifo_order.is_some();
             if restored_reservation != replaces_missing_payload {
                 return Err(invalid(format!(
                     "queue-plan replay found inconsistent missing-payload ownership for {hash}"
@@ -5882,18 +5986,20 @@ impl Queue {
                     teu: pending_teu,
                 },
             );
-            notifications.push(QueueAdmissionNotification {
-                hash,
-                entrypoint_hash: claim.entrypoint_hash,
-                lane_id,
-                dataspace_id,
-                enqueue_timestamp_ms: enqueued_at_ms,
-                journal_record_digest: Some(claim.journal_record_digest),
-                routing_plan,
-                admission_context,
-                global_admission_identity,
-                signed_transaction_hash: claim.signed_transaction_hash,
-            });
+            if !restored_reservation {
+                notifications.push(QueueAdmissionNotification {
+                    hash,
+                    entrypoint_hash: claim.entrypoint_hash,
+                    lane_id,
+                    dataspace_id,
+                    enqueue_timestamp_ms: enqueued_at_ms,
+                    journal_record_digest: Some(claim.journal_record_digest),
+                    routing_plan,
+                    admission_context,
+                    global_admission_identity,
+                    signed_transaction_hash: claim.signed_transaction_hash,
+                });
+            }
             let _ = authority;
         }
         self.apply_per_user_tx_count_increments(per_user_increments);
@@ -6068,21 +6174,6 @@ impl Queue {
         self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
         status::set_tx_queue_pressure(self.pressure_snapshot());
         Ok(summary)
-    }
-
-    /// Finish restart-idempotent lane-release ownership after queue-plan payload replay.
-    ///
-    /// This is deliberately a separate startup transition from [`Self::replay_plan_journal`].
-    /// Queue-plan replay has no fallible operation after its atomic journal/queue commit; a
-    /// reservation-journal `ForgetRelease` failure therefore cannot turn a committed queue-plan
-    /// replay into an error result. Startup must call this method immediately after successful
-    /// replay and before starting ingress, gossip, or consensus workers.
-    ///
-    /// # Errors
-    /// Returns an exact reservation-identity or reservation-journal recovery error.
-    pub fn finalize_plan_journal_startup_recovery(&self) -> std::io::Result<()> {
-        self.finalize_completed_releases(None)
-            .map_err(std::io::Error::other)
     }
 
     fn record_plan_journal_put_durable(
@@ -6306,120 +6397,6 @@ impl Queue {
             drop(queue_guard);
             return Ok(true);
         }
-    }
-
-    /// Append and force-sync one atomic pending-plan tombstone batch during startup reconciliation.
-    ///
-    /// The caller forgets reservation commit barriers only after the complete batch succeeds.
-    /// Every key is validated against the same content-bound plan-journal replay, avoiding one
-    /// full journal scan per restored barrier.
-    fn remove_plan_journals_for_reservation_commit_batch(
-        &self,
-        keys: &[LaneQueueReservationKeyV2],
-    ) -> std::io::Result<PlanJournalDurability> {
-        if keys.is_empty() {
-            return Ok(PlanJournalDurability::Synced);
-        }
-
-        let mut live_queue_owners = HashSet::with_capacity(keys.len());
-        for key in keys {
-            let indexed_claim = self
-                .durable_plan_claims
-                .get(&key.signed_transaction_hash)
-                .map(|claim| claim.value().clone());
-            if let Some(claim) = indexed_claim.as_ref() {
-                let binding = match claim.global_admission_binding() {
-                    Ok(binding) => binding,
-                    Err(reason) => {
-                        let error = std::io::Error::new(std::io::ErrorKind::InvalidData, reason);
-                        self.mark_plan_journal_durability_fault(&error, None);
-                        return Err(error);
-                    }
-                };
-                if let Err(reason) = binding.validate_for_lane_reservation_commit(key) {
-                    let error = std::io::Error::new(std::io::ErrorKind::InvalidData, reason);
-                    self.mark_plan_journal_durability_fault(&error, None);
-                    return Err(error);
-                }
-                live_queue_owners.insert(key.signed_transaction_hash);
-            }
-            if self.txs.contains_key(&key.signed_transaction_hash) {
-                if indexed_claim.is_none() {
-                    let error = std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "reservation commit found an in-memory transaction without its durable queue-plan claim",
-                    );
-                    self.mark_plan_journal_durability_fault(&error, None);
-                    return Err(error);
-                }
-                live_queue_owners.insert(key.signed_transaction_hash);
-            }
-        }
-
-        let mut guard = self.plan_journal.lock();
-        let Some(journal) = guard.as_mut() else {
-            return Ok(PlanJournalDurability::StartupPending);
-        };
-
-        if !live_queue_owners.is_empty() {
-            let mut live_entrypoints = HashSet::with_capacity(live_queue_owners.len());
-            if let Err(error) = journal.prepare_replay().and_then(|replay| {
-                replay.for_each_record(|record| {
-                    // Queue ownership uses the entrypoint-derived compatibility hash; the
-                    // record's optional signed-transaction hash is a different identity.
-                    if live_queue_owners
-                        .contains(&compatibility_queue_hash(record.entrypoint_hash.clone()))
-                    {
-                        live_entrypoints.insert(record.entrypoint_hash);
-                    }
-                    Ok(())
-                })
-            }) {
-                drop(guard);
-                self.mark_plan_journal_durability_fault(&error, None);
-                return Err(error);
-            }
-            if let Some(key) = keys.iter().find(|key| {
-                live_queue_owners.contains(&key.signed_transaction_hash)
-                    && !live_entrypoints.contains(&key.entrypoint_hash)
-            }) {
-                let error = std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "reservation commit journal tombstone is absent while in-memory ownership remains live for {}",
-                        key.signed_transaction_hash
-                    ),
-                );
-                drop(guard);
-                self.mark_plan_journal_durability_fault(&error, None);
-                return Err(error);
-            }
-        }
-
-        let outcomes = match journal.remove_exact_global_admission_bindings_strict_durable(keys) {
-            Ok(outcomes) => outcomes,
-            Err(error) => {
-                drop(guard);
-                self.mark_plan_journal_durability_fault(&error, None);
-                return Err(error);
-            }
-        };
-        if outcomes.len() != keys.len() {
-            let error = std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "reservation commit atomic removal batch returned the wrong result count",
-            );
-            drop(guard);
-            self.mark_plan_journal_durability_fault(&error, None);
-            return Err(error);
-        }
-        for (key, outcome) in keys.iter().zip(outcomes) {
-            if outcome == QueuePlanJournalExactRemoveResult::Removed {
-                self.durable_plan_claims
-                    .remove(&key.signed_transaction_hash);
-            }
-        }
-        Ok(PlanJournalDurability::Synced)
     }
 
     /// Append and force-sync one exact pending-plan tombstone for reservation commit ordering.
@@ -7505,6 +7482,7 @@ impl Queue {
                 plan_journal_durability_fault: AtomicBool::new(false),
                 lane_reservation_durability_fault: AtomicBool::new(false),
                 accepted_work_validation_fault: AtomicBool::new(false),
+                lane_reservation_reconciliation_pending: AtomicBool::new(false),
                 global_selection_owners: parking_lot::Mutex::new(BTreeMap::new()),
                 next_global_selection_owner: AtomicU64::new(1),
                 push_remove_lock: parking_lot::Mutex::new(()),
@@ -7515,6 +7493,8 @@ impl Queue {
                 durability_observer_lock_handoff: parking_lot::Mutex::new(None),
                 #[cfg(test)]
                 install_reconciliation_append_fault: parking_lot::Mutex::new(None),
+                #[cfg(test)]
+                hold_next_lane_reservation_commit_after_barrier: AtomicBool::new(false),
                 #[cfg(test)]
                 guard_sequence: AtomicU64::new(0),
                 inflight_guards: AtomicUsize::new(0),
@@ -7974,6 +7954,9 @@ impl Queue {
         state_view: &StateView<'_>,
         max_scan: NonZeroUsize,
     ) -> Option<(Vec<AcceptedTransaction<'static>>, GlobalQueueSelectionLease)> {
+        if self.lane_reservation_startup_reconciliation_pending() {
+            return None;
+        }
         // This is the normal Sumeragi v2 proposal path. Keep TTL reclamation reachable even when
         // the legacy destructive pop API is never called.
         let _ = self.cull_expired_entries_if_due();
@@ -7981,13 +7964,17 @@ impl Queue {
             return None;
         }
         let queue_guard = self.push_remove_lock.lock();
-        if self.transaction_selection_durability_faulted() {
+        if self.transaction_selection_durability_faulted()
+            || self.lane_reservation_startup_reconciliation_pending()
+        {
             return None;
         }
         let live_reservations = self.lane_reservations.lock().live_hashes();
         let mut global_owners = self.global_selection_owners.lock();
         let mut age_ring = self.queued_age_ring.lock();
-        if self.transaction_selection_durability_faulted() {
+        if self.transaction_selection_durability_faulted()
+            || self.lane_reservation_startup_reconciliation_pending()
+        {
             return None;
         }
         let mut remaining_scan = max_scan.get();
@@ -8110,7 +8097,9 @@ impl Queue {
 
     /// Returns `n` transactions in a batch for gossiping
     pub fn gossip_batch(&self, n: u32, state_view: &StateView) -> Vec<GossipBatchEntry> {
-        if self.transaction_selection_durability_faulted() {
+        if self.transaction_selection_durability_faulted()
+            || self.lane_reservation_startup_reconciliation_pending()
+        {
             return Vec::new();
         }
         #[cfg(feature = "telemetry")]
@@ -8135,7 +8124,9 @@ impl Queue {
 
     /// Returns `n` transactions in a batch for gossiping from one lifecycle-fenced state view.
     pub fn gossip_batch_with_state(&self, n: u32, state: &State) -> Vec<GossipBatchEntry> {
-        if self.transaction_selection_durability_faulted() {
+        if self.transaction_selection_durability_faulted()
+            || self.lane_reservation_startup_reconciliation_pending()
+        {
             return Vec::new();
         }
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
@@ -9675,7 +9666,14 @@ impl Queue {
         } else {
             Self::retained_byte_cost(encoded_len)
         };
-        let cheap_error = if self.transaction_selection_durability_faulted() {
+        let cheap_error = if preparation_mode == QueueAdmissionPreparationMode::Ordinary
+            && self.lane_reservation_startup_reconciliation_pending()
+        {
+            Some(Error::PlanJournalDurabilityRejected {
+                reason: "replayed lane reservation ownership is awaiting State/Kura startup reconciliation"
+                    .to_owned(),
+            })
+        } else if self.transaction_selection_durability_faulted() {
             Some(Error::PlanJournalDurabilityRejected {
                 reason: "queue ownership requires restart recovery".to_owned(),
             })
@@ -10113,6 +10111,16 @@ impl Queue {
             let queue_guard = self.push_remove_lock.lock();
             self.prune_durable_plan_claim_index_locked();
 
+            if self.lane_reservation_startup_reconciliation_pending() {
+                failure = Some(Failure {
+                    tx: checked.as_accepted().clone().into(),
+                    err: Error::PlanJournalDurabilityRejected {
+                        reason: "replayed lane reservation ownership is awaiting State/Kura startup reconciliation"
+                            .to_owned(),
+                    },
+                });
+                break;
+            }
             if plan_journal_mode != PlanJournalAdmissionMode::Skip
                 && self.transaction_selection_durability_faulted()
             {
@@ -10386,9 +10394,6 @@ impl Queue {
             });
             drop(transition);
             drop(queue_guard);
-        }
-        if let Err(error) = self.finalize_completed_releases(telemetry) {
-            warn!(%error, "failed to finish a replayed lane reservation release");
         }
         #[cfg(feature = "telemetry")]
         self.publish_teu_backlog_metric_keys(
@@ -11102,6 +11107,9 @@ impl Queue {
         state_view: &StateView,
         expired_transactions: &mut Vec<ExpiredQueueTransaction>,
     ) -> Option<TransactionGuard> {
+        if self.lane_reservation_startup_reconciliation_pending() {
+            return None;
+        }
         let _selection_attempt = self.begin_selection_attempt();
         #[cfg(feature = "telemetry")]
         let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
@@ -11389,7 +11397,9 @@ impl Queue {
         &self,
         backpressure_telemetry: Option<&StateTelemetry>,
     ) -> bool {
-        if self.transaction_selection_durability_faulted() {
+        if self.transaction_selection_durability_faulted()
+            || self.lane_reservation_startup_reconciliation_pending()
+        {
             return false;
         }
         if !self.tx_hashes.is_empty() || self.materialized_active_len() == 0 {
@@ -11400,7 +11410,9 @@ impl Queue {
         }
 
         let _guard = self.push_remove_lock.lock();
-        if self.transaction_selection_durability_faulted() {
+        if self.transaction_selection_durability_faulted()
+            || self.lane_reservation_startup_reconciliation_pending()
+        {
             return false;
         }
         if !self.tx_hashes.is_empty() || self.materialized_active_len() == 0 {
@@ -11683,6 +11695,9 @@ impl Queue {
 
     /// Remove expired transactions if the configured sweep interval has elapsed.
     pub(crate) fn cull_expired_entries_if_due(&self) -> usize {
+        if self.lane_reservation_startup_reconciliation_pending() {
+            return 0;
+        }
         let interval_ms = Self::duration_to_millis(self.expired_cull_interval);
         if interval_ms == 0 {
             return 0;
@@ -11752,7 +11767,9 @@ impl Queue {
     ) where
         F: FnMut(&mut Vec<ExpiredQueueTransaction>) -> Option<TransactionGuard>,
     {
-        if transactions.len() >= max_txs_in_block.get() {
+        if transactions.len() >= max_txs_in_block.get()
+            || self.lane_reservation_startup_reconciliation_pending()
+        {
             return;
         }
 
@@ -12603,7 +12620,9 @@ impl Queue {
         let mut transition_reorder_error = None;
         let selected = {
             let _queue_guard = self.push_remove_lock.lock();
-            if self.transaction_selection_durability_faulted() {
+            if self.transaction_selection_durability_faulted()
+                || self.lane_reservation_startup_reconciliation_pending()
+            {
                 return None;
             }
             let live_reservations = self.lane_reservations.lock().live_hashes();
@@ -12738,6 +12757,7 @@ impl Queue {
         // state onto count saturation so every existing admission, status, and consensus consumer
         // remains stopped; the component fault accessors expose the exact diagnosis.
         let saturated_by_count = self.transaction_selection_durability_faulted()
+            || self.lane_reservation_startup_reconciliation_pending()
             || tracked_tx_count >= self.capacity.get();
         let saturated_by_bytes =
             retained_bytes.saturating_add(TX_RETAINED_OVERHEAD_BYTES) > max_retained_bytes.get();
@@ -12798,6 +12818,9 @@ impl Queue {
     /// Remove any entries from `txs` that have expired, emitting expiration
     /// events for TTL-elapsed transactions.
     fn cull_expired_entries(&self, now: Duration) -> usize {
+        if self.lane_reservation_startup_reconciliation_pending() {
+            return 0;
+        }
         const CULL_WARN_MS: u64 = 1_000;
         let scan_start = std::time::Instant::now();
         let tracked_before = self.active_len();

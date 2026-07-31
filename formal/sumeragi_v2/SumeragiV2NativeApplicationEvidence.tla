@@ -5,12 +5,13 @@ EXTENDS FiniteSets, Naturals
 Bounded durability/publication model for control-only Native AMX participant
 application evidence.
 
-The storage abstraction has three participant heights. Heights 1 and 2 are
+The storage abstraction has four participant heights. Heights 1 and 2 are
 complete standalone evidence pairs retained at startup; height 2 is named by
-the descriptor-bound latest pointer. Height 3 is the newly finalized carrier.
-Each per-height publication represents the production write/fsync/no-clobber
-rename/readback sequence as one atomic model step, while prune-intent temp
-publication and every unlink remain separate crash boundaries.
+the descriptor-bound latest pointer. Height 3 is the newly finalized carrier,
+and height 4 exists only for the mutation that attempts to reserve a second
+incoming-pair publication window. Manifest and receipt temporary fsync and
+authenticated promotion are separate crash boundaries, as are prune-intent
+temporary publication and every unlink.
 
 The production refinement is source-bound separately to the Native signing,
 manifest/receipt validation, standalone Kura publication, descriptor-bound
@@ -29,31 +30,45 @@ NativeEvidenceModes ==
   {"Fixed", "PublishFrontierEarly", "PruneWithHashOnly",
    "SeparateSameRouteMarker", "DivergentSourceClaim",
    "NonContiguousRoute", "PartialGroupApplication",
-   "ForgedManifestLeaf", "DropStartupRepair", "AmbiguousLatestIndex"}
+   "ForgedManifestLeaf", "DropStartupRepair", "AmbiguousLatestIndex",
+   "SeparateArtifactBudgets", "TwoIncomingPairHeadroom",
+   "UnauthenticatedTempPromotion", "PuncturedRetainedHistory",
+   "NonOldestPrefixPrune", "NonHighestRepairHalf",
+   "MultipleRepairHalves", "ConflictingRetainedPairIdentity",
+   "RetainedPredecessorDrift"}
 
 NativeEvidencePhases ==
-  {"Certified", "FinalityDurable", "ManifestDurable",
-   "ReceiptDurable", "LatestDurable", "Published"}
+  {"Certified", "FinalityDurable", "ManifestTempDurable",
+   "ManifestDurable", "ReceiptTempDurable", "ReceiptDurable",
+   "LatestDurable", "Published"}
 
 NativePruneStages ==
   {"Idle", "TempDurable", "IntentDurable",
    "ManifestUnlinked", "ReceiptUnlinked", "Completed"}
 
 TargetHeight == 3
+ExtraIncomingHeight == 4
 PreviousLatestHeight == 2
 InitialEvidenceHeights == {1, 2}
-EvidenceHeights == 1..TargetHeight
+EvidenceHeights == 1..ExtraIncomingHeight
 RetentionLimit == 2
-PublicationTransientLimit == RetentionLimit + 1
 ArtifactByteUnit == 1
-PerKindRetainedByteLimit == RetentionLimit * ArtifactByteUnit
-PerKindStartupByteLimit == PublicationTransientLimit * ArtifactByteUnit
+EvidencePairByteUnits == 2 * ArtifactByteUnit
+StableAggregateByteLimit == RetentionLimit * EvidencePairByteUnits
+IncomingPairByteLimit == EvidencePairByteUnits
+PublicationTransientByteLimit ==
+  StableAggregateByteLimit + IncomingPairByteLimit
 
 NoHeight == 0
 PruneIntentVersion == 1
 ActiveRoute == 1
 ActiveIncarnation == 2
-PrunedHeight == 1
+OldestPrunableHeight == 1
+NonOldestPrunableHeight == 2
+PruneTargetHeight ==
+  IF Mode = "NonOldestPrefixPrune"
+  THEN NonOldestPrunableHeight
+  ELSE OldestPrunableHeight
 
 ManifestArtifactHash(height) == height + 10
 ReceiptArtifactHash(height) == height + 20
@@ -71,6 +86,22 @@ VARIABLES
   manifestFiles,
   \* @type: Set(Int);
   receiptFiles,
+  \* @type: Set(Int);
+  manifestTempFiles,
+  \* @type: Set(Int);
+  receiptTempFiles,
+  \* @type: Bool;
+  manifestTempAuthenticated,
+  \* @type: Bool;
+  receiptTempAuthenticated,
+  \* @type: Bool;
+  unauthenticatedTempPromoted,
+  \* @type: Bool;
+  publicationPairPendingCleanup,
+  \* @type: Bool;
+  retainedPairIdentitiesExact,
+  \* @type: Bool;
+  retainedPredecessorChainExact,
   \* @type: Bool;
   frontierPublished,
   \* @type: Int;
@@ -127,6 +158,8 @@ VARIABLES
   pruneIntentReceiptHash,
   \* @type: Set(Int);
   pruneIntentHeights,
+  \* @type: Set(Int);
+  removedEvidenceHeights,
   \* @type: Bool;
   startupRepairRequired,
   \* @type: Bool;
@@ -164,6 +197,10 @@ VARIABLES
 
 publicationVars ==
   <<phase, finalizedHeights, manifestFiles, receiptFiles,
+    manifestTempFiles, receiptTempFiles, manifestTempAuthenticated,
+    receiptTempAuthenticated, unauthenticatedTempPromoted,
+    publicationPairPendingCleanup,
+    retainedPairIdentitiesExact, retainedPredecessorChainExact,
     frontierPublished, frontierHeight, canonicalWireRetained,
     authenticatedProofAvailable, manifestLeafAuthenticated,
     manifestLeafExact, manifestTempPublicationExact,
@@ -178,7 +215,7 @@ pruneVars ==
     pruneTempPublishedNoClobber, pruneIntentStoredVersion,
     pruneIntentRoute, pruneIntentIncarnation,
     pruneIntentManifestHash, pruneIntentReceiptHash,
-    pruneIntentHeights, startupRepairRequired,
+    pruneIntentHeights, removedEvidenceHeights, startupRepairRequired,
     startupRepairCompleted, durableApplicationLost>>
 
 sameRouteVars == <<sameRouteSettled, separateParticipantMarker>>
@@ -196,6 +233,10 @@ groupVars ==
 
 vars ==
   <<phase, finalizedHeights, manifestFiles, receiptFiles,
+    manifestTempFiles, receiptTempFiles, manifestTempAuthenticated,
+    receiptTempAuthenticated, unauthenticatedTempPromoted,
+    publicationPairPendingCleanup,
+    retainedPairIdentitiesExact, retainedPredecessorChainExact,
     frontierPublished, frontierHeight, canonicalWireRetained,
     authenticatedProofAvailable, manifestLeafAuthenticated,
     manifestLeafExact, manifestTempPublicationExact,
@@ -208,7 +249,7 @@ vars ==
     pruneTempPublishedNoClobber, pruneIntentStoredVersion,
     pruneIntentRoute, pruneIntentIncarnation,
     pruneIntentManifestHash, pruneIntentReceiptHash,
-    pruneIntentHeights, startupRepairRequired,
+    pruneIntentHeights, removedEvidenceHeights, startupRepairRequired,
     startupRepairCompleted, durableApplicationLost,
     sameRouteSettled, separateParticipantMarker,
     sourceClaimRecorded, sourceClaimSessionCount, sourceClaimFieldsComplete,
@@ -221,13 +262,55 @@ manifestDurable == TargetHeight \in manifestFiles
 receiptDurable == TargetHeight \in receiptFiles
 sidecarsDurable == receiptDurable
 
+StableEvidencePayloadBytes ==
+  (Cardinality(manifestFiles) + Cardinality(receiptFiles)) * ArtifactByteUnit
+
+TemporaryEvidencePayloadBytes ==
+  (Cardinality(manifestTempFiles) + Cardinality(receiptTempFiles)) * ArtifactByteUnit
+
+TotalEvidencePayloadBytes ==
+  StableEvidencePayloadBytes + TemporaryEvidencePayloadBytes
+
+RetainedStableEvidencePayloadBytes ==
+  IF publicationPairPendingCleanup
+  THEN
+    (Cardinality(manifestFiles \ {TargetHeight}) +
+     Cardinality(receiptFiles \ {TargetHeight})) * ArtifactByteUnit
+  ELSE StableEvidencePayloadBytes
+
+IncomingEvidenceHeights ==
+  ((manifestFiles \union receiptFiles \union
+    manifestTempFiles \union receiptTempFiles) \ InitialEvidenceHeights)
+
+EffectiveManifestHeights == manifestFiles \ pruneIntentHeights
+EffectiveReceiptHeights == receiptFiles \ pruneIntentHeights
+EffectiveRetainedHeights ==
+  EffectiveManifestHeights \union EffectiveReceiptHeights
+EffectivePartialHeights ==
+  (EffectiveManifestHeights \ EffectiveReceiptHeights) \union
+  (EffectiveReceiptHeights \ EffectiveManifestHeights)
+
+ContiguousHeightInterval(heights) ==
+  \A lower \in heights:
+    \A upper \in heights:
+      lower <= upper => (lower..upper) \subseteq heights
+
+OldestPrefix(heights) ==
+  \/ heights = {}
+  \/ \E highest \in EvidenceHeights: heights = 1..highest
+
+HighestHalfRepairOnly ==
+  /\ Cardinality(EffectivePartialHeights) <= 1
+  /\ \A partial \in EffectivePartialHeights:
+       \A retained \in EffectiveRetainedHeights: retained <= partial
+
 ExactPruneIntentIdentity ==
   /\ pruneIntentStoredVersion = PruneIntentVersion
   /\ pruneIntentRoute = ActiveRoute
   /\ pruneIntentIncarnation = ActiveIncarnation
-  /\ pruneIntentHeights = {PrunedHeight}
-  /\ pruneIntentManifestHash = ManifestArtifactHash(PrunedHeight)
-  /\ pruneIntentReceiptHash = ReceiptArtifactHash(PrunedHeight)
+  /\ pruneIntentHeights = {PruneTargetHeight}
+  /\ pruneIntentManifestHash = ManifestArtifactHash(PruneTargetHeight)
+  /\ pruneIntentReceiptHash = ReceiptArtifactHash(PruneTargetHeight)
   /\ latestIndexHeight \notin pruneIntentHeights
 
 ResetPruneIntentIdentity ==
@@ -244,6 +327,14 @@ Init ==
   /\ finalizedHeights = InitialEvidenceHeights
   /\ manifestFiles = InitialEvidenceHeights
   /\ receiptFiles = InitialEvidenceHeights
+  /\ manifestTempFiles = {}
+  /\ receiptTempFiles = {}
+  /\ manifestTempAuthenticated = FALSE
+  /\ receiptTempAuthenticated = FALSE
+  /\ unauthenticatedTempPromoted = FALSE
+  /\ publicationPairPendingCleanup = FALSE
+  /\ retainedPairIdentitiesExact = TRUE
+  /\ retainedPredecessorChainExact = TRUE
   /\ frontierPublished = FALSE
   /\ frontierHeight = NoHeight
   /\ canonicalWireRetained = TRUE
@@ -272,6 +363,7 @@ Init ==
   /\ pruneIntentManifestHash = 0
   /\ pruneIntentReceiptHash = 0
   /\ pruneIntentHeights = {}
+  /\ removedEvidenceHeights = {}
   /\ startupRepairRequired = FALSE
   /\ startupRepairCompleted = FALSE
   /\ durableApplicationLost = FALSE
@@ -295,7 +387,11 @@ PersistFinality ==
   /\ phase' = "FinalityDurable"
   /\ finalizedHeights' = finalizedHeights \union {TargetHeight}
   /\ UNCHANGED
-       <<manifestFiles, receiptFiles, frontierPublished, frontierHeight,
+       <<manifestFiles, receiptFiles, manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact,
+         retainedPredecessorChainExact, frontierPublished, frontierHeight,
          canonicalWireRetained, authenticatedProofAvailable,
          manifestLeafAuthenticated, manifestLeafExact,
          manifestTempPublicationExact, receiptTempPublicationExact,
@@ -306,21 +402,83 @@ PersistFinality ==
   /\ UNCHANGED pruneVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
 
-PersistStandaloneManifest ==
+StageStandaloneManifestTemp ==
   /\ phase = "FinalityDurable"
   /\ finalityDurable
   /\ TargetHeight \notin manifestFiles
-  /\ phase' = "ManifestDurable"
-  /\ manifestFiles' = manifestFiles \union {TargetHeight}
+  /\ TargetHeight \notin manifestTempFiles
+  /\ phase' = "ManifestTempDurable"
+  /\ manifestTempFiles' = manifestTempFiles \union {TargetHeight}
+  /\ manifestTempAuthenticated' =
+       Mode \notin {"ForgedManifestLeaf", "UnauthenticatedTempPromotion"}
+  /\ publicationPairPendingCleanup' = TRUE
   /\ authenticatedProofAvailable' = TRUE
   /\ manifestLeafAuthenticated' = (Mode # "ForgedManifestLeaf")
   /\ manifestLeafExact' = (Mode # "ForgedManifestLeaf")
   /\ manifestTempPublicationExact' = (Mode # "AmbiguousLatestIndex")
   /\ manifestPublishedNoClobber' = (Mode # "AmbiguousLatestIndex")
   /\ UNCHANGED
-       <<finalizedHeights, receiptFiles, frontierPublished, frontierHeight,
-         canonicalWireRetained, receiptTempPublicationExact,
-         latestTempPublicationExact, receiptPublishedNoClobber,
+       <<finalizedHeights, manifestFiles, receiptFiles, receiptTempFiles,
+         receiptTempAuthenticated, unauthenticatedTempPromoted,
+         retainedPairIdentitiesExact, retainedPredecessorChainExact,
+         frontierPublished, frontierHeight, canonicalWireRetained,
+         receiptTempPublicationExact, latestTempPublicationExact,
+         receiptPublishedNoClobber, latestIndexPublished,
+         latestIndexHeight, latestIndexExact, latestIndexAmbiguous,
+         latestIndexBounded, legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
+PersistStandaloneManifest ==
+  /\ phase = "ManifestTempDurable"
+  /\ finalityDurable
+  /\ TargetHeight \in manifestTempFiles
+  /\ TargetHeight \notin manifestFiles
+  /\ (manifestTempAuthenticated
+       \/ Mode \in {"ForgedManifestLeaf", "UnauthenticatedTempPromotion"})
+  /\ phase' = "ManifestDurable"
+  /\ manifestFiles' = manifestFiles \union {TargetHeight}
+  /\ manifestTempFiles' = manifestTempFiles \ {TargetHeight}
+  /\ manifestTempAuthenticated' = FALSE
+  /\ unauthenticatedTempPromoted' =
+       unauthenticatedTempPromoted \/ ~manifestTempAuthenticated
+  /\ UNCHANGED
+       <<finalizedHeights, receiptFiles, receiptTempFiles,
+         receiptTempAuthenticated, retainedPairIdentitiesExact,
+         publicationPairPendingCleanup,
+         retainedPredecessorChainExact, frontierPublished, frontierHeight,
+         canonicalWireRetained, authenticatedProofAvailable,
+         manifestLeafAuthenticated, manifestLeafExact,
+         manifestTempPublicationExact, receiptTempPublicationExact,
+         latestTempPublicationExact, manifestPublishedNoClobber,
+         receiptPublishedNoClobber,
+         latestIndexPublished, latestIndexHeight, latestIndexExact,
+         latestIndexAmbiguous, latestIndexBounded,
+         legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
+StageStandaloneReceiptTemp ==
+  /\ phase = "ManifestDurable"
+  /\ finalityDurable
+  /\ manifestDurable
+  /\ TargetHeight \notin receiptFiles
+  /\ TargetHeight \notin receiptTempFiles
+  /\ phase' = "ReceiptTempDurable"
+  /\ receiptTempFiles' = receiptTempFiles \union {TargetHeight}
+  /\ receiptTempAuthenticated' =
+       manifestLeafAuthenticated /\ Mode # "UnauthenticatedTempPromotion"
+  /\ receiptTempPublicationExact' = (Mode # "AmbiguousLatestIndex")
+  /\ receiptPublishedNoClobber' = (Mode # "AmbiguousLatestIndex")
+  /\ UNCHANGED
+       <<finalizedHeights, manifestFiles, receiptFiles, manifestTempFiles,
+         manifestTempAuthenticated, unauthenticatedTempPromoted,
+         publicationPairPendingCleanup,
+         retainedPairIdentitiesExact, retainedPredecessorChainExact,
+         frontierPublished, frontierHeight, canonicalWireRetained,
+         authenticatedProofAvailable, manifestLeafAuthenticated,
+         manifestLeafExact, manifestTempPublicationExact,
+         latestTempPublicationExact, manifestPublishedNoClobber,
          latestIndexPublished, latestIndexHeight, latestIndexExact,
          latestIndexAmbiguous, latestIndexBounded,
          legacyDenseRejected, legacyDenseAccepted>>
@@ -328,20 +486,29 @@ PersistStandaloneManifest ==
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
 
 PersistStandaloneReceipt ==
-  /\ phase = "ManifestDurable"
+  /\ phase = "ReceiptTempDurable"
   /\ finalityDurable
   /\ manifestDurable
+  /\ TargetHeight \in receiptTempFiles
   /\ TargetHeight \notin receiptFiles
+  /\ (receiptTempAuthenticated
+       \/ Mode \in {"ForgedManifestLeaf", "UnauthenticatedTempPromotion"})
   /\ phase' = "ReceiptDurable"
   /\ receiptFiles' = receiptFiles \union {TargetHeight}
-  /\ receiptTempPublicationExact' = (Mode # "AmbiguousLatestIndex")
-  /\ receiptPublishedNoClobber' = (Mode # "AmbiguousLatestIndex")
+  /\ receiptTempFiles' = receiptTempFiles \ {TargetHeight}
+  /\ receiptTempAuthenticated' = FALSE
+  /\ unauthenticatedTempPromoted' =
+       unauthenticatedTempPromoted \/ ~receiptTempAuthenticated
   /\ UNCHANGED
-       <<finalizedHeights, manifestFiles, frontierPublished, frontierHeight,
+       <<finalizedHeights, manifestFiles, manifestTempFiles,
+         manifestTempAuthenticated, retainedPairIdentitiesExact,
+         publicationPairPendingCleanup,
+         retainedPredecessorChainExact, frontierPublished, frontierHeight,
          canonicalWireRetained, authenticatedProofAvailable,
          manifestLeafAuthenticated, manifestLeafExact,
-         manifestTempPublicationExact, latestTempPublicationExact,
-         manifestPublishedNoClobber, latestIndexPublished,
+         manifestTempPublicationExact, receiptTempPublicationExact,
+         latestTempPublicationExact, manifestPublishedNoClobber,
+         receiptPublishedNoClobber, latestIndexPublished,
          latestIndexHeight, latestIndexExact, latestIndexAmbiguous,
          latestIndexBounded, legacyDenseRejected, legacyDenseAccepted>>
   /\ UNCHANGED pruneVars
@@ -362,6 +529,11 @@ PublishDescriptorBoundLatest ==
   /\ legacyDenseAccepted' = (Mode = "AmbiguousLatestIndex")
   /\ UNCHANGED
        <<finalizedHeights, manifestFiles, receiptFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact,
+         retainedPredecessorChainExact,
          frontierPublished, frontierHeight, canonicalWireRetained,
          authenticatedProofAvailable, manifestLeafAuthenticated,
          manifestLeafExact, manifestTempPublicationExact,
@@ -377,13 +549,22 @@ PublishReplicatedFrontier ==
      ELSE /\ phase = "LatestDurable"
           /\ latestIndexPublished
           /\ latestIndexHeight = TargetHeight
-          /\ Cardinality(manifestFiles) <= RetentionLimit
-          /\ Cardinality(receiptFiles) <= RetentionLimit
+          /\ manifestTempFiles = {}
+          /\ receiptTempFiles = {}
+          /\ TotalEvidencePayloadBytes <= PublicationTransientByteLimit
   /\ phase' = "Published"
   /\ frontierPublished' = TRUE
   /\ frontierHeight' = TargetHeight
+  /\ publicationPairPendingCleanup' =
+       IF Mode = "SeparateArtifactBudgets"
+       THEN FALSE
+       ELSE publicationPairPendingCleanup
   /\ UNCHANGED
        <<finalizedHeights, manifestFiles, receiptFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, retainedPairIdentitiesExact,
+         retainedPredecessorChainExact,
          canonicalWireRetained, authenticatedProofAvailable,
          manifestLeafAuthenticated, manifestLeafExact,
          manifestTempPublicationExact, receiptTempPublicationExact,
@@ -407,6 +588,11 @@ PruneCanonicalWire ==
   /\ canonicalWireRetained' = FALSE
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestFiles, receiptFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact,
+         retainedPredecessorChainExact,
          frontierPublished, frontierHeight, authenticatedProofAvailable,
          manifestLeafAuthenticated, manifestLeafExact,
          manifestTempPublicationExact, receiptTempPublicationExact,
@@ -417,11 +603,145 @@ PruneCanonicalWire ==
   /\ UNCHANGED pruneVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
 
+StageSecondIncomingPair ==
+  /\ Mode = "TwoIncomingPairHeadroom"
+  /\ phase = "ReceiptDurable"
+  /\ manifestTempFiles = {}
+  /\ receiptTempFiles = {}
+  /\ manifestTempFiles' = {ExtraIncomingHeight}
+  /\ receiptTempFiles' = {ExtraIncomingHeight}
+  /\ manifestTempAuthenticated' = FALSE
+  /\ receiptTempAuthenticated' = FALSE
+  /\ UNCHANGED
+       <<phase, finalizedHeights, manifestFiles, receiptFiles,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact,
+         retainedPredecessorChainExact, frontierPublished, frontierHeight,
+         canonicalWireRetained, authenticatedProofAvailable,
+         manifestLeafAuthenticated, manifestLeafExact,
+         manifestTempPublicationExact, receiptTempPublicationExact,
+         latestTempPublicationExact, manifestPublishedNoClobber,
+         receiptPublishedNoClobber, latestIndexPublished,
+         latestIndexHeight, latestIndexExact, latestIndexAmbiguous,
+         latestIndexBounded, legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
+PunctureRetainedHistory ==
+  /\ Mode = "PuncturedRetainedHistory"
+  /\ phase = "ReceiptDurable"
+  /\ NonOldestPrunableHeight \in manifestFiles
+  /\ NonOldestPrunableHeight \in receiptFiles
+  /\ manifestFiles' = manifestFiles \ {NonOldestPrunableHeight}
+  /\ receiptFiles' = receiptFiles \ {NonOldestPrunableHeight}
+  /\ UNCHANGED
+       <<phase, finalizedHeights, manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact,
+         retainedPredecessorChainExact, frontierPublished, frontierHeight,
+         canonicalWireRetained, authenticatedProofAvailable,
+         manifestLeafAuthenticated, manifestLeafExact,
+         manifestTempPublicationExact, receiptTempPublicationExact,
+         latestTempPublicationExact, manifestPublishedNoClobber,
+         receiptPublishedNoClobber, latestIndexPublished,
+         latestIndexHeight, latestIndexExact, latestIndexAmbiguous,
+         latestIndexBounded, legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
+CreateNonHighestRepairHalf ==
+  /\ Mode = "NonHighestRepairHalf"
+  /\ phase = "Certified"
+  /\ OldestPrunableHeight \in receiptFiles
+  /\ receiptFiles' = receiptFiles \ {OldestPrunableHeight}
+  /\ UNCHANGED
+       <<phase, finalizedHeights, manifestFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact,
+         retainedPredecessorChainExact, frontierPublished, frontierHeight,
+         canonicalWireRetained, authenticatedProofAvailable,
+         manifestLeafAuthenticated, manifestLeafExact,
+         manifestTempPublicationExact, receiptTempPublicationExact,
+         latestTempPublicationExact, manifestPublishedNoClobber,
+         receiptPublishedNoClobber, latestIndexPublished,
+         latestIndexHeight, latestIndexExact, latestIndexAmbiguous,
+         latestIndexBounded, legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
+CreateMultipleRepairHalves ==
+  /\ Mode = "MultipleRepairHalves"
+  /\ phase = "Certified"
+  /\ receiptFiles = InitialEvidenceHeights
+  /\ receiptFiles' = {}
+  /\ UNCHANGED
+       <<phase, finalizedHeights, manifestFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact,
+         retainedPredecessorChainExact, frontierPublished, frontierHeight,
+         canonicalWireRetained, authenticatedProofAvailable,
+         manifestLeafAuthenticated, manifestLeafExact,
+         manifestTempPublicationExact, receiptTempPublicationExact,
+         latestTempPublicationExact, manifestPublishedNoClobber,
+         receiptPublishedNoClobber, latestIndexPublished,
+         latestIndexHeight, latestIndexExact, latestIndexAmbiguous,
+         latestIndexBounded, legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
+CorruptRetainedPairIdentity ==
+  /\ Mode = "ConflictingRetainedPairIdentity"
+  /\ retainedPairIdentitiesExact
+  /\ retainedPairIdentitiesExact' = FALSE
+  /\ UNCHANGED
+       <<phase, finalizedHeights, manifestFiles, receiptFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPredecessorChainExact,
+         frontierPublished, frontierHeight, canonicalWireRetained,
+         authenticatedProofAvailable, manifestLeafAuthenticated,
+         manifestLeafExact, manifestTempPublicationExact,
+         receiptTempPublicationExact, latestTempPublicationExact,
+         manifestPublishedNoClobber, receiptPublishedNoClobber,
+         latestIndexPublished, latestIndexHeight, latestIndexExact,
+         latestIndexAmbiguous, latestIndexBounded,
+         legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
+DriftRetainedPredecessor ==
+  /\ Mode = "RetainedPredecessorDrift"
+  /\ retainedPredecessorChainExact
+  /\ retainedPredecessorChainExact' = FALSE
+  /\ UNCHANGED
+       <<phase, finalizedHeights, manifestFiles, receiptFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact,
+         frontierPublished, frontierHeight, canonicalWireRetained,
+         authenticatedProofAvailable, manifestLeafAuthenticated,
+         manifestLeafExact, manifestTempPublicationExact,
+         receiptTempPublicationExact, latestTempPublicationExact,
+         manifestPublishedNoClobber, receiptPublishedNoClobber,
+         latestIndexPublished, latestIndexHeight, latestIndexExact,
+         latestIndexAmbiguous, latestIndexBounded,
+         legacyDenseRejected, legacyDenseAccepted>>
+  /\ UNCHANGED pruneVars
+  /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
+
 StageNativePruneIntentTemp ==
   /\ pruneStage = "Idle"
-  /\ PrunedHeight \in manifestFiles
-  /\ PrunedHeight \in receiptFiles
-  /\ latestIndexHeight # PrunedHeight
+  /\ (frontierPublished \/ Mode = "DropStartupRepair")
+  /\ PruneTargetHeight \in manifestFiles
+  /\ PruneTargetHeight \in receiptFiles
+  /\ latestIndexHeight # PruneTargetHeight
   /\ pruneStage' = "TempDurable"
   /\ pruneIntentTempPresent' = TRUE
   /\ pruneIntentDurable' = FALSE
@@ -429,9 +749,10 @@ StageNativePruneIntentTemp ==
   /\ pruneIntentStoredVersion' = PruneIntentVersion
   /\ pruneIntentRoute' = ActiveRoute
   /\ pruneIntentIncarnation' = ActiveIncarnation
-  /\ pruneIntentManifestHash' = ManifestArtifactHash(PrunedHeight)
-  /\ pruneIntentReceiptHash' = ReceiptArtifactHash(PrunedHeight)
-  /\ pruneIntentHeights' = {PrunedHeight}
+  /\ pruneIntentManifestHash' = ManifestArtifactHash(PruneTargetHeight)
+  /\ pruneIntentReceiptHash' = ReceiptArtifactHash(PruneTargetHeight)
+  /\ pruneIntentHeights' = {PruneTargetHeight}
+  /\ removedEvidenceHeights' = removedEvidenceHeights
   /\ startupRepairRequired' = FALSE
   /\ startupRepairCompleted' = FALSE
   /\ durableApplicationLost' = FALSE
@@ -450,7 +771,7 @@ PublishNativePruneIntent ==
        <<pruneTempPublishedNoClobber, pruneIntentStoredVersion,
          pruneIntentRoute, pruneIntentIncarnation,
          pruneIntentManifestHash, pruneIntentReceiptHash,
-         pruneIntentHeights, startupRepairRequired,
+         pruneIntentHeights, removedEvidenceHeights, startupRepairRequired,
          startupRepairCompleted, durableApplicationLost>>
   /\ UNCHANGED publicationVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
@@ -470,7 +791,7 @@ RecoverPruneIntentTempAtStartup ==
        <<pruneTempPublishedNoClobber, pruneIntentStoredVersion,
          pruneIntentRoute, pruneIntentIncarnation,
          pruneIntentManifestHash, pruneIntentReceiptHash,
-         pruneIntentHeights>>
+         pruneIntentHeights, removedEvidenceHeights>>
   /\ UNCHANGED publicationVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
 
@@ -487,17 +808,17 @@ CrashAfterPruneIntent ==
          pruneTempPublishedNoClobber, pruneIntentStoredVersion,
          pruneIntentRoute, pruneIntentIncarnation,
          pruneIntentManifestHash, pruneIntentReceiptHash,
-         pruneIntentHeights>>
+         pruneIntentHeights, removedEvidenceHeights>>
   /\ UNCHANGED publicationVars
   /\ UNCHANGED <<sameRouteVars, claimVars, admissionVars, groupVars>>
 
 UnlinkManifestBeforeCrash ==
   /\ pruneStage = "IntentDurable"
   /\ pruneIntentDurable
-  /\ PrunedHeight \in manifestFiles
-  /\ PrunedHeight \in receiptFiles
+  /\ PruneTargetHeight \in manifestFiles
+  /\ PruneTargetHeight \in receiptFiles
   /\ pruneStage' = "ManifestUnlinked"
-  /\ manifestFiles' = manifestFiles \ {PrunedHeight}
+  /\ manifestFiles' = manifestFiles \ {PruneTargetHeight}
   /\ startupRepairRequired' = TRUE
   /\ startupRepairCompleted' = FALSE
   /\ durableApplicationLost' = (Mode = "DropStartupRepair")
@@ -506,9 +827,14 @@ UnlinkManifestBeforeCrash ==
          pruneTempPublishedNoClobber, pruneIntentStoredVersion,
          pruneIntentRoute, pruneIntentIncarnation,
          pruneIntentManifestHash, pruneIntentReceiptHash,
-         pruneIntentHeights>>
+         pruneIntentHeights, removedEvidenceHeights>>
   /\ UNCHANGED
        <<phase, finalizedHeights, receiptFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact,
+         retainedPredecessorChainExact,
          frontierPublished, frontierHeight, canonicalWireRetained,
          authenticatedProofAvailable, manifestLeafAuthenticated,
          manifestLeafExact, manifestTempPublicationExact,
@@ -522,10 +848,10 @@ UnlinkManifestBeforeCrash ==
 UnlinkReceiptBeforeCrash ==
   /\ pruneStage = "IntentDurable"
   /\ pruneIntentDurable
-  /\ PrunedHeight \in manifestFiles
-  /\ PrunedHeight \in receiptFiles
+  /\ PruneTargetHeight \in manifestFiles
+  /\ PruneTargetHeight \in receiptFiles
   /\ pruneStage' = "ReceiptUnlinked"
-  /\ receiptFiles' = receiptFiles \ {PrunedHeight}
+  /\ receiptFiles' = receiptFiles \ {PruneTargetHeight}
   /\ startupRepairRequired' = TRUE
   /\ startupRepairCompleted' = FALSE
   /\ durableApplicationLost' = (Mode = "DropStartupRepair")
@@ -534,9 +860,14 @@ UnlinkReceiptBeforeCrash ==
          pruneTempPublishedNoClobber, pruneIntentStoredVersion,
          pruneIntentRoute, pruneIntentIncarnation,
          pruneIntentManifestHash, pruneIntentReceiptHash,
-         pruneIntentHeights>>
+         pruneIntentHeights, removedEvidenceHeights>>
   /\ UNCHANGED
        <<phase, finalizedHeights, manifestFiles,
+         manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, publicationPairPendingCleanup,
+         retainedPairIdentitiesExact,
+         retainedPredecessorChainExact,
          frontierPublished, frontierHeight, canonicalWireRetained,
          authenticatedProofAvailable, manifestLeafAuthenticated,
          manifestLeafExact, manifestTempPublicationExact,
@@ -562,13 +893,19 @@ CompletePruneWithoutCrash ==
   /\ pruneIntentIncarnation' = 0
   /\ pruneIntentManifestHash' = 0
   /\ pruneIntentReceiptHash' = 0
+  /\ removedEvidenceHeights' = removedEvidenceHeights \union pruneIntentHeights
   /\ pruneIntentHeights' = {}
+  /\ publicationPairPendingCleanup' =
+       publicationPairPendingCleanup /\ ~frontierPublished
   /\ startupRepairRequired' = FALSE
   /\ startupRepairCompleted' = TRUE
   /\ durableApplicationLost' = FALSE
   /\ UNCHANGED pruneTempPublishedNoClobber
   /\ UNCHANGED
-       <<phase, finalizedHeights, frontierPublished, frontierHeight,
+       <<phase, finalizedHeights, manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, retainedPairIdentitiesExact,
+         retainedPredecessorChainExact, frontierPublished, frontierHeight,
          canonicalWireRetained, authenticatedProofAvailable,
          manifestLeafAuthenticated, manifestLeafExact,
          manifestTempPublicationExact, receiptTempPublicationExact,
@@ -594,13 +931,19 @@ RunStartupPruneCompletion ==
   /\ pruneIntentIncarnation' = 0
   /\ pruneIntentManifestHash' = 0
   /\ pruneIntentReceiptHash' = 0
+  /\ removedEvidenceHeights' = removedEvidenceHeights \union pruneIntentHeights
   /\ pruneIntentHeights' = {}
+  /\ publicationPairPendingCleanup' =
+       publicationPairPendingCleanup /\ ~frontierPublished
   /\ startupRepairRequired' = FALSE
   /\ startupRepairCompleted' = TRUE
   /\ durableApplicationLost' = FALSE
   /\ UNCHANGED pruneTempPublishedNoClobber
   /\ UNCHANGED
-       <<phase, finalizedHeights, frontierPublished, frontierHeight,
+       <<phase, finalizedHeights, manifestTempFiles, receiptTempFiles,
+         manifestTempAuthenticated, receiptTempAuthenticated,
+         unauthenticatedTempPromoted, retainedPairIdentitiesExact,
+         retainedPredecessorChainExact, frontierPublished, frontierHeight,
          canonicalWireRetained, authenticatedProofAvailable,
          manifestLeafAuthenticated, manifestLeafExact,
          manifestTempPublicationExact, receiptTempPublicationExact,
@@ -659,11 +1002,19 @@ ApplyNativeGroup ==
 
 Next ==
   \/ PersistFinality
+  \/ StageStandaloneManifestTemp
   \/ PersistStandaloneManifest
+  \/ StageStandaloneReceiptTemp
   \/ PersistStandaloneReceipt
   \/ PublishDescriptorBoundLatest
   \/ PublishReplicatedFrontier
   \/ PruneCanonicalWire
+  \/ StageSecondIncomingPair
+  \/ PunctureRetainedHistory
+  \/ CreateNonHighestRepairHalf
+  \/ CreateMultipleRepairHalves
+  \/ CorruptRetainedPairIdentity
+  \/ DriftRetainedPredecessor
   \/ StageNativePruneIntentTemp
   \/ PublishNativePruneIntent
   \/ RecoverPruneIntentTempAtStartup
@@ -684,6 +1035,14 @@ NativeEvidenceTypeInvariant ==
   /\ finalizedHeights \subseteq EvidenceHeights
   /\ manifestFiles \subseteq EvidenceHeights
   /\ receiptFiles \subseteq EvidenceHeights
+  /\ manifestTempFiles \subseteq EvidenceHeights
+  /\ receiptTempFiles \subseteq EvidenceHeights
+  /\ manifestTempAuthenticated \in BOOLEAN
+  /\ receiptTempAuthenticated \in BOOLEAN
+  /\ unauthenticatedTempPromoted \in BOOLEAN
+  /\ publicationPairPendingCleanup \in BOOLEAN
+  /\ retainedPairIdentitiesExact \in BOOLEAN
+  /\ retainedPredecessorChainExact \in BOOLEAN
   /\ frontierPublished \in BOOLEAN
   /\ frontierHeight \in 0..TargetHeight
   /\ canonicalWireRetained \in BOOLEAN
@@ -712,6 +1071,7 @@ NativeEvidenceTypeInvariant ==
   /\ pruneIntentManifestHash \in 0..ManifestArtifactHash(TargetHeight)
   /\ pruneIntentReceiptHash \in 0..ReceiptArtifactHash(TargetHeight)
   /\ pruneIntentHeights \subseteq EvidenceHeights
+  /\ removedEvidenceHeights \subseteq EvidenceHeights
   /\ startupRepairRequired \in BOOLEAN
   /\ startupRepairCompleted \in BOOLEAN
   /\ durableApplicationLost \in BOOLEAN
@@ -739,19 +1099,38 @@ NativeStandaloneEvidenceInvariant ==
   /\ latestIndexHeight \in receiptFiles
 
 NativeEvidenceRetentionBoundInvariant ==
-  /\ Cardinality(manifestFiles) <= PublicationTransientLimit
-  /\ Cardinality(receiptFiles) <= PublicationTransientLimit
-  /\ Cardinality(manifestFiles) * ArtifactByteUnit
-       <= PerKindStartupByteLimit
-  /\ Cardinality(receiptFiles) * ArtifactByteUnit
-       <= PerKindStartupByteLimit
+  /\ TotalEvidencePayloadBytes <= PublicationTransientByteLimit
+  /\ Cardinality(IncomingEvidenceHeights) <= 1
+  /\ Cardinality(manifestTempFiles) <= 1
+  /\ Cardinality(receiptTempFiles) <= 1
   /\ (frontierPublished =>
-       /\ Cardinality(manifestFiles) <= RetentionLimit
-       /\ Cardinality(receiptFiles) <= RetentionLimit
-       /\ Cardinality(manifestFiles) * ArtifactByteUnit
-            <= PerKindRetainedByteLimit
-       /\ Cardinality(receiptFiles) * ArtifactByteUnit
-            <= PerKindRetainedByteLimit)
+       RetainedStableEvidencePayloadBytes <= StableAggregateByteLimit)
+
+MLNativeSharedEvidenceBudget ==
+  /\ RetainedStableEvidencePayloadBytes <= StableAggregateByteLimit
+  /\ (~publicationPairPendingCleanup =>
+       StableEvidencePayloadBytes <= StableAggregateByteLimit)
+
+MLNativeSingleIncomingPairHeadroom ==
+  /\ TotalEvidencePayloadBytes <= PublicationTransientByteLimit
+  /\ Cardinality(IncomingEvidenceHeights) <= 1
+
+MLNativeTempPromotionAuthenticated ==
+  /\ ~unauthenticatedTempPromoted
+  /\ manifestTempFiles \cap manifestFiles = {}
+  /\ receiptTempFiles \cap receiptFiles = {}
+
+MLNativeRetainedHistoryExact ==
+  /\ ContiguousHeightInterval(EffectiveRetainedHeights)
+  /\ HighestHalfRepairOnly
+  /\ retainedPairIdentitiesExact
+  /\ retainedPredecessorChainExact
+
+MLNativePruneOldestPrefix ==
+  /\ OldestPrefix(removedEvidenceHeights)
+  /\ ((pruneIntentTempPresent \/ pruneIntentDurable) =>
+       /\ removedEvidenceHeights \cap pruneIntentHeights = {}
+       /\ OldestPrefix(removedEvidenceHeights \union pruneIntentHeights))
 
 NativeNoClobberPublicationInvariant ==
   /\ manifestTempPublicationExact
@@ -782,8 +1161,8 @@ NativePruneJournalInvariant ==
             /\ pruneIntentTempPresent
             /\ ~pruneIntentDurable
             /\ ExactPruneIntentIdentity
-            /\ PrunedHeight \in manifestFiles
-            /\ PrunedHeight \in receiptFiles
+            /\ PruneTargetHeight \in manifestFiles
+            /\ PruneTargetHeight \in receiptFiles
             /\ ~startupRepairRequired
             /\ ~startupRepairCompleted
             /\ ~durableApplicationLost
@@ -791,16 +1170,16 @@ NativePruneJournalInvariant ==
             /\ ~pruneIntentTempPresent
             /\ pruneIntentDurable
             /\ ExactPruneIntentIdentity
-            /\ PrunedHeight \in manifestFiles
-            /\ PrunedHeight \in receiptFiles
+            /\ PruneTargetHeight \in manifestFiles
+            /\ PruneTargetHeight \in receiptFiles
             /\ ~startupRepairCompleted
             /\ ~durableApplicationLost
        [] pruneStage = "ManifestUnlinked" ->
             /\ ~pruneIntentTempPresent
             /\ pruneIntentDurable
             /\ ExactPruneIntentIdentity
-            /\ PrunedHeight \notin manifestFiles
-            /\ PrunedHeight \in receiptFiles
+            /\ PruneTargetHeight \notin manifestFiles
+            /\ PruneTargetHeight \in receiptFiles
             /\ startupRepairRequired
             /\ ~startupRepairCompleted
             /\ ~durableApplicationLost
@@ -808,8 +1187,8 @@ NativePruneJournalInvariant ==
             /\ ~pruneIntentTempPresent
             /\ pruneIntentDurable
             /\ ExactPruneIntentIdentity
-            /\ PrunedHeight \in manifestFiles
-            /\ PrunedHeight \notin receiptFiles
+            /\ PruneTargetHeight \in manifestFiles
+            /\ PruneTargetHeight \notin receiptFiles
             /\ startupRepairRequired
             /\ ~startupRepairCompleted
             /\ ~durableApplicationLost
@@ -817,8 +1196,8 @@ NativePruneJournalInvariant ==
             /\ ~pruneIntentTempPresent
             /\ ~pruneIntentDurable
             /\ ResetPruneIntentIdentity
-            /\ PrunedHeight \notin manifestFiles
-            /\ PrunedHeight \notin receiptFiles
+            /\ PruneTargetHeight \notin manifestFiles
+            /\ PruneTargetHeight \notin receiptFiles
             /\ ~startupRepairRequired
             /\ startupRepairCompleted
             /\ ~durableApplicationLost
@@ -876,6 +1255,11 @@ MLNativeManifestAuthenticates ==
 MLNativeDurabilityPrecedesFrontier ==
   /\ NativeStandaloneEvidenceInvariant
   /\ NativeEvidenceRetentionBoundInvariant
+  /\ MLNativeSharedEvidenceBudget
+  /\ MLNativeSingleIncomingPairHeadroom
+  /\ MLNativeTempPromotionAuthenticated
+  /\ MLNativeRetainedHistoryExact
+  /\ MLNativePruneOldestPrefix
   /\ NativePruneJournalInvariant
   /\ FrontierPublicationInvariant
   /\ (startupRepairRequired =>
@@ -909,6 +1293,11 @@ NativeApplicationEvidenceSafetyInvariant ==
   /\ NativeEvidenceTypeInvariant
   /\ NativeStandaloneEvidenceInvariant
   /\ NativeEvidenceRetentionBoundInvariant
+  /\ MLNativeSharedEvidenceBudget
+  /\ MLNativeSingleIncomingPairHeadroom
+  /\ MLNativeTempPromotionAuthenticated
+  /\ MLNativeRetainedHistoryExact
+  /\ MLNativePruneOldestPrefix
   /\ NativeNoClobberPublicationInvariant
   /\ NativeLegacyDenseRejectedInvariant
   /\ NativePruneJournalInvariant

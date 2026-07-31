@@ -48,6 +48,8 @@ pub mod sorafs_provider_ingest_runtime;
 pub mod sorafs_reputation_finalized_query;
 /// Supervised committed `SoraFS` reputation projector and publisher.
 pub mod sorafs_reputation_runtime;
+/// Supervised finalized reserve-event transparency ingestion.
+pub mod sorafs_reserve_transparency_runtime;
 
 pub use runtime_provider_broker::{
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
@@ -9647,14 +9649,6 @@ impl Iroha {
                 journal_path.display()
             ))
         })?;
-        queue
-            .finalize_plan_journal_startup_recovery()
-            .map_err(|err| {
-                Report::new(StartError::InitKura).attach(format!(
-                    "failed to finalize lane reservation recovery after queue plan replay {}: {err}",
-                    journal_path.display()
-                ))
-            })?;
         iroha_logger::info!(
             path = %journal_path.display(),
             replayable,
@@ -10801,6 +10795,11 @@ impl Iroha {
         let sorafs_reputation_governance_dag =
             runtime_deps.sorafs_reputation_governance_dag.clone();
         let sorafs_reputation_config = config.torii.sorafs_storage.reputation_runtime.clone();
+        let sorafs_reserve_transparency_config = config
+            .torii
+            .sorafs_storage
+            .reserve_transparency_runtime
+            .clone();
         let sorafs_hedging_billing_finalized_query =
             runtime_deps.sorafs_hedging_billing_finalized_query.clone();
         let sorafs_hedging_billing_journal_verifier =
@@ -11106,7 +11105,7 @@ impl Iroha {
                 control
             });
             let dependencies = sorafs_reputation_runtime::ReputationRuntimeDependenciesV1::require(
-                Some(finalized_query),
+                Some(Arc::clone(&finalized_query)),
                 sorafs_reputation_journal_checkpoint_provider,
                 Some(journal_transaction_submitter),
                 sorafs_reputation_threshold_signer,
@@ -11148,8 +11147,30 @@ impl Iroha {
                 ))
             })?;
             supervisor.monitor(child);
+            if let Some(scanner_config) = sorafs_reserve_transparency_config.as_ref() {
+                let child = sorafs_reserve_transparency_runtime::start(
+                    scanner_config,
+                    &config.common.chain,
+                    query_qualification,
+                    finalized_query,
+                    Arc::clone(&state),
+                    sorafs_node.clone(),
+                    supervisor.shutdown_signal(),
+                )
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to initialise finalized reserve transparency scanner: {error:#}"
+                    ))
+                })?;
+                supervisor.monitor(child);
+            }
             Some(handle)
         } else {
+            if sorafs_reserve_transparency_config.is_some() {
+                return Err(Report::new(StartError::StartTorii).attach(
+                    "enabled finalized reserve transparency scanner requires the committed reputation runtime and immutable finalized archive",
+                ));
+            }
             None
         };
         if let (Some(reputation_runtime), Some(reputation_config)) = (
@@ -15516,6 +15537,10 @@ fn validate_config_for_check(
     MainError,
 > {
     validate_config_offline(config).change_context(MainError::Config)?;
+    IrohaRuntimeProviderBindingsV1::try_from_config(config)
+        .map_err(Report::new)
+        .change_context(MainError::Config)
+        .attach("failed to validate the public runtime-provider binding catalog")?;
     iroha_torii::ensure_mandatory_offline_configuration_for_chain(
         &config.common.chain,
         &config.settlement.offline,
@@ -17367,6 +17392,12 @@ mod tests {
         let validation = run_main_source
             .find("validate_config_offline(&config).change_context(MainError::Config)?")
             .expect("offline validation in run_main");
+        let binding_projection = run_main_source
+            .find("IrohaRuntimeProviderBindingsV1::try_from_config(&config)")
+            .expect("runtime-provider binding projection in run_main");
+        let stock_broker = run_main_source
+            .find("StockRuntimeProviderBrokerRegistryV1::new")
+            .expect("stock runtime-provider broker construction in run_main");
         let resolution = run_main_source
             .find(
                 "runtime_provider_registry::resolve_runtime_deps(&config,runtime_provider_registry)",
@@ -17376,8 +17407,11 @@ mod tests {
             .find("tokio::runtime::Builder::new_multi_thread()")
             .expect("Tokio runtime construction in run_main");
         assert!(
-            validation < resolution && resolution < runtime_start,
-            "provider resolution must follow config validation and precede Tokio/node startup"
+            validation < binding_projection
+                && binding_projection < stock_broker
+                && stock_broker < resolution
+                && resolution < runtime_start,
+            "fixed-binding preflight must precede broker construction, and provider resolution must precede Tokio/node startup"
         );
     }
 
@@ -19852,6 +19886,46 @@ mod tests {
                 .expect("sample config should parse")
         }
 
+        fn configure_exact_moderation_strict_ingress(config: &mut Config) {
+            let qualification = iroha_torii::sorafs::moderation_runtime::
+                torii_moderation_strict_ingress_qualification_v1();
+            let authority = AccountId::new(config.common.key_pair.public_key().clone());
+            config.torii.sorafs_storage.moderation_orchestrator = Some(
+                iroha_config::parameters::actual::SorafsModerationOrchestrator {
+                    checkpoint_path: "/var/lib/iroha/sorafs/moderation.to".into(),
+                    checkpoint_store_handle: "sealed:moderation:checkpoint-primary".into(),
+                    checkpoint_store_revision: 1,
+                    checkpoint_store_policy_digest: [0x81; 32],
+                    maintenance_authority: authority,
+                    transaction_signer_handle: "hsm:moderation:signer-primary".into(),
+                    transaction_signer_revision: 1,
+                    transaction_signer_policy_digest: [0x82; 32],
+                    strict_ingress_handle: iroha_torii::sorafs::moderation_runtime::
+                        TORII_MODERATION_STRICT_INGRESS_HANDLE_V1.into(),
+                    strict_ingress_revision: qualification.revision(),
+                    strict_ingress_policy_digest: qualification.policy_digest(),
+                    settlement_handoff_handle: "queue:moderation:settlement-primary".into(),
+                    settlement_handoff_revision: 1,
+                    settlement_handoff_policy_digest: [0x83; 32],
+                    publication_handoff_handle: "dag:moderation:publication-primary".into(),
+                    publication_handoff_revision: 1,
+                    publication_handoff_policy_digest: [0x84; 32],
+                    panel_notification_handle: "queue:moderation:notification-primary".into(),
+                    panel_notification_revision: 1,
+                    panel_notification_policy_digest: [0x85; 32],
+                    max_cases: 8,
+                    max_events: 16,
+                    max_outbox_entries: 8,
+                    max_idempotency_records: 16,
+                    max_handoffs: 8,
+                    max_submit_attempts: 2,
+                    checkpoint_max_bytes: iroha_config_base::util::Bytes(1024 * 1024),
+                    worker_interval: std::time::Duration::from_secs(1),
+                    maintenance_batch_limit: 4,
+                },
+            );
+        }
+
         fn genesis_staging_state_for_test(
             config: &Config,
             genesis: &GenesisBlock,
@@ -20413,6 +20487,39 @@ mod tests {
                 rendered.contains("requires settlement.offline.enabled=true"),
                 "unexpected public Taira check-config error: {rendered}"
             );
+        }
+
+        #[test]
+        fn check_config_qualifies_the_fixed_moderation_strict_ingress() {
+            let mut exact = sample_config();
+            configure_exact_moderation_strict_ingress(&mut exact);
+            assert!(
+                validate_config_for_check(&exact, None, false)
+                    .expect("exact fixed moderation ingress must pass static check-config")
+                    .is_none()
+            );
+
+            for (mutation, expected) in [
+                (0, "runtime-provider binding is substituted"),
+                (1, "runtime-provider binding is stale or revoked"),
+            ] {
+                let mut invalid = exact.clone();
+                let moderation = invalid
+                    .torii
+                    .sorafs_storage
+                    .moderation_orchestrator
+                    .as_mut()
+                    .expect("configured moderation runtime");
+                if mutation == 0 {
+                    moderation.strict_ingress_handle =
+                        "torii.sorafs.moderation-strict-ingress.secondary".into();
+                } else {
+                    moderation.strict_ingress_revision += 1;
+                }
+                let report = validate_config_for_check(&invalid, None, false)
+                    .expect_err("invalid fixed ingress binding must fail check-config");
+                assert!(format!("{report:#}").contains(expected));
+            }
         }
 
         #[test]

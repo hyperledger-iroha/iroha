@@ -115,6 +115,11 @@ verified native artifact directory.
 
 ## Native SoraFS Reference Validation
 
+The repository SoraFS qualification runner pins
+`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-21 host
+artifact. Plain source-checkout builds remain `debug` unless the profile is
+selected explicitly.
+
 SoraFS orderbook validation is available from the package root and from
 `@iroha/iroha-js/sorafs`. Use `validateOrderbookPayload(kind, bytes, options)`
 with Norito-encoded orderbook bytes and a kind such as `order-request`,

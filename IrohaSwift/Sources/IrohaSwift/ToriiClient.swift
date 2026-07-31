@@ -23647,6 +23647,16 @@ public struct ToriiSumeragiNativeAmxParticipantApplication: Decodable, Sendable,
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder,
+            allowed: [
+                "lane_id", "dataspace_id", "lane_incarnation", "participant_height",
+                "participant_view", "predecessor_height", "predecessor_descriptor_hash",
+                "descriptor_hash", "proposal_hash", "settlement_hash", "source_count",
+                "application_block_height", "application_block_hash", "state",
+            ],
+            context: "Native AMX participant application diagnostics"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         laneID = try container.decode(UInt32.self, forKey: .laneID)
         dataspaceID = try container.decode(UInt64.self, forKey: .dataspaceID)

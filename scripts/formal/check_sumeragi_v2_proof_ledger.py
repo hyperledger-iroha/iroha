@@ -131,7 +131,7 @@ DECISION_RECOVERY_LIFECYCLE_SHA256 = {
         "eb588df10921974613f708c3af6efa6a0b2e1e54de7db276ad50cd4f124b71e2"
     ),
     DECISION_RECOVERY_LIFECYCLE_RUNNER: (
-        "5962d0ac5b981c7a0a07d74a8d8598d109c81e72aeb77b97054e98b93634e32a"
+        "252ee943a2392f866d93cd1c62af4e17be63c22dcdfcfb0f73cd6691ac7bd3a4"
     ),
 }
 
@@ -13112,6 +13112,15 @@ if state.open || state.len != 0 {
 if state.certified_serve_gate.is_some() {
     return Err("certified Serve gate is already bound".to_owned());
 }
+if state
+    .leader_wire_lifecycle_ordinals
+    .as_ref()
+    .is_some_and(|source| !gate.shares_lifecycle_ordinals(source))
+{
+    return Err(
+        "certified Serve gate changed the actor-global lifecycle ordinal source".to_owned(),
+    );
+}
 state.certified_serve_gate = Some(gate);
 """,
         "the per-height Serve gate must bind once before any ingress owner exists",
@@ -13464,7 +13473,7 @@ lane.entries.push_back(FairV2IngressEntry {
 fair_v2_ingress_admit_leader_wire(
     &mut state,
     derivation,
-    true,
+    true
 )
 """
             ),
@@ -13566,10 +13575,22 @@ if selected_serve_barrier.is_some_and(|serve| {
         receive,
         """
 entry.admission_ordinal < serve.carrier_ordinal()
-    || (entry.admission_ordinal == serve.carrier_ordinal()
-        && entry.certified_serve_reservation.as_ref().is_some_and(|reservation| {
-            reservation.matches_barrier(serve)
-        })
+    || (selected_serve_predecessors_cleared
+        && entry.admission_ordinal == serve.carrier_ordinal()
+        && entry
+            .certified_serve_reservation
+            .as_ref()
+            .is_some_and(|reservation| {
+                reservation.matches_barrier(serve)
+            })
+        && matches!(
+            entry.inbound.message(),
+            BlockMessage::V2(ConsensusMessageV2 {
+                payload:
+                    ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                ..
+            }) if HashOf::new(request) == serve.request_hash()
+        ))
 """,
         "selected Serve equality must retain exact lifecycle, request, and "
         "physical carrier identity",
@@ -14142,9 +14163,15 @@ def _serviced_candidate_production_source_fidelity_errors(
     if errors:
         return errors
 
-    sources = {
-        key: path.read_text(encoding="utf-8") for key, path in paths.items()
-    }
+    sources: dict[str, str] = {}
+    for key, path in paths.items():
+        relative = path.relative_to(repo_root).as_posix()
+        _loaded_path, sources[key] = _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            descriptions[key],
+        )
     structural = {
         key: mask_rust_comments_and_literals(source)
         for key, source in sources.items()
@@ -25948,6 +25975,9 @@ def _adequate_leader_global_blocker_cell_mutation_source_fidelity_errors(
             r'-config adequate_leader_global_blocker_exact_cell\.cfg '
             r'SumeragiV2AdequateLeaderGlobalBlockerCellMutation\.tla\n'
             r'\) >"\$run_dir/global-blocker-exact-cell\.log" 2>&1\n'
+            r'sumeragi_v2_tlc_assert_fixed_success '
+            r'"global-blocker-exact-cell" '
+            r'"\$run_dir/global-blocker-exact-cell\.log" 0\n'
             r'grep -Fq "Model checking completed\. No error has been found\." '
             r'"\$run_dir/global-blocker-exact-cell\.log" \|\| \{'
         ),
@@ -28895,9 +28925,10 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "SumeragiV2TypedRolloverHandoffLivenessMutation \\ "
             "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation \\ "
             "SumeragiV2TypedRolloverHandoffProofs; do",
-            "readonly TLC_FINISHED_PATTERN=",
+            'source "${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract.sh"',
             'assert_nonzero_state_space "$label" "$log"',
-            'grep -Ec "$TLC_FINISHED_PATTERN" "$log"',
+            'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
             'run_case typed-rollover-fixed \\ "$FIXED_MODEL" '
             'typed_rollover_handoff_fixed.cfg 0 \\ '
             '"Model checking completed. No error has been found."',
@@ -28914,7 +28945,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "readonly EXPECTED_MUTATION_COUNT=45",
             'readonly INVARIANT_MARKER="Error: Invariant '
             'TypedRolloverSafetyInvariant is violated."',
-            'readonly TEMPORAL_MARKER="Temporal properties were violated."',
+            'readonly TEMPORAL_MARKER="Error: Temporal properties were violated."',
             'actual_configs=("${FORMAL_DIR}"/'
             "typed_rollover_handoff_*_bug.cfg)",
             'if [[ "$actual_config" == "$REPEATED_HANDOFF_MUTATION_CONFIG" '
@@ -31964,8 +31995,9 @@ fn retained_dispatch_allows_network_ingress(
     &self,
     payload: &wire::ConsensusMessageV2Payload,
 ) -> bool {
-    self.retained_effect_batch.is_none()
-        || !Self::network_ingress_requires_reducer_order(payload)
+    self.retained_certified_body_response.is_none()
+        && (self.retained_effect_batch.is_none()
+            || !Self::network_ingress_requires_reducer_order(payload))
 }
 """,
         "retained dispatch transport-completion bypass",
@@ -37251,32 +37283,6 @@ match ref_peer.handle.post_recover_with_flush_ack(frame) {
     return errors
 
 
-def _retired_sidecar_gate_ttl_source_errors(
-    path: Path,
-    source: str,
-    role: str,
-) -> list[str]:
-    """Reject any server-request gate TTL identifier in executable Rust."""
-
-    retired_ttl_tokens = sorted(
-        {
-            token
-            for token in rust_code_tokens(source)
-            if "ttl" in token.lower()
-            and all(
-                fragment in token.lower()
-                for fragment in ("server", "request", "gate")
-            )
-        }
-    )
-    if not retired_ttl_tokens:
-        return []
-    return [
-        f"{path}: retired wall-clock sidecar gate TTL must remain absent "
-        f"from production; found identifiers {retired_ttl_tokens} in the "
-        f"{role} seam"
-    ]
-
 
 def _merge_runtime_config_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
@@ -37287,6 +37293,12 @@ def _merge_runtime_config_production_source_fidelity_errors(
     # source's token stream only for the current complete cross-layer pass instead of allowing
     # the global token cache to pin every prior variant.
     rust_code_tokens.cache_clear()
+    (
+        kura_inventory_path,
+        kura_inventory_source,
+        kura_component_sources,
+        kura_inventory_errors,
+    ) = _kura_production_source_inventory(repo_root)
     paths = {
         "defaults": (
             repo_root
@@ -37331,7 +37343,7 @@ def _merge_runtime_config_production_source_fidelity_errors(
         "merge": (
             repo_root / "crates" / "iroha_core" / "src" / "merge_sidecar.rs"
         ),
-        "kura": repo_root / "crates" / "iroha_core" / "src" / "kura.rs",
+        "kura": kura_inventory_path,
         "daemon": repo_root / "crates" / "irohad" / "src" / "main.rs",
     }
     errors: list[str] = []
@@ -37344,6 +37356,8 @@ def _merge_runtime_config_production_source_fidelity_errors(
             sources[role] = ""
         else:
             sources[role] = path.read_text(encoding="utf-8")
+    errors.extend(kura_inventory_errors)
+    sources["kura"] = kura_inventory_source
 
     if len(MERGE_RUNTIME_CONFIG_FIELDS) != 16:
         errors.append(
@@ -37376,6 +37390,14 @@ def _merge_runtime_config_production_source_fidelity_errors(
                 path,
                 sources[role],
                 role,
+            )
+        )
+    for relative, path, source in kura_component_sources:
+        errors.extend(
+            _retired_sidecar_gate_ttl_source_errors(
+                path,
+                source,
+                f"Kura production component {relative}",
             )
         )
 
@@ -38190,12 +38212,12 @@ def _shared_tlc_result_contract_source_fidelity_errors(
     }
     specialized_callers = set(SHARED_TLC_RESULT_SPECIALIZED_CALLERS)
     if (
-        len(SHARED_TLC_RESULT_CONTRACT_CALLERS) != 31
-        or len(expected_callers) != 31
+        len(SHARED_TLC_RESULT_CONTRACT_CALLERS) != 32
+        or len(expected_callers) != 32
     ):
         errors.append(
             "shared TLC result-contract caller inventory must contain "
-            "exactly thirty-one unique callers"
+            "exactly thirty-two unique callers"
         )
     if (
         len(SHARED_TLC_RESULT_SPECIALIZED_CALLERS) != 4
@@ -38247,7 +38269,7 @@ def _shared_tlc_result_contract_source_fidelity_errors(
     if digest_paths != expected_paths:
         errors.append(
             "shared TLC result-contract digest inventory must equal the "
-            f"helper and exact thirty-one callers; "
+            f"helper and exact thirty-two callers; "
             f"missing={sorted(expected_paths - digest_paths)}, "
             f"extra={sorted(digest_paths - expected_paths)}"
         )
@@ -39000,6 +39022,7 @@ AsyncControlServiceAdmissionStartsOrReplaces(item) ==
             (
                 """
 CanAdmitIngressItem(item) ==
+  /\\ ~IngressPacketPolicyRejected(item)
   /\\ ~AsyncControlServiceAdmissionCoalesced(item)
   /\\ ~AsyncControlServiceAdmissionBlockedByLivePredecessor(item)
 """,
@@ -40312,6 +40335,8 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla",
             "fixed_corridor_receipt_acquisition_fixed.cfg",
         ),
+        ("ordinary-ingress-carrier-rebase", "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla", "ordinary_ingress_carrier_rebase_fixed.cfg"),
+        ("serve-restart-dormant-debt", "SumeragiV2ServeRestartDormantDebtMutation.tla", "serve_restart_dormant_debt_fixed.cfg"),
     }
     expected_mutation_cases = {
         (
@@ -40695,6 +40720,16 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "fixed_corridor_receipt_acquisition_global_retire_bug.cfg",
             "ReceiptAcquisitionAndRetention",
         ),
+        ("ordinary-ingress-carrier-minimum-rebase", "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla", "ordinary_ingress_carrier_rebase_minimum_bug.cfg", "BusyDeferredOwnerUsesMinimumCompatibleCarrier"),
+        ("ordinary-ingress-carrier-identity-mutation", "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla", "ordinary_ingress_carrier_rebase_identity_bug.cfg", "IdentityMutationCannotCommit"),
+        ("serve-restart-drops-dormant-debt", "SumeragiV2ServeRestartDormantDebtMutation.tla", "serve_restart_dormant_debt_drop_bug.cfg", "RestartRetainsUnsealedServeDebt"),
+        ("serve-restart-reallocates-logical-ids", "SumeragiV2ServeRestartDormantDebtMutation.tla", "serve_restart_dormant_debt_new_ids_bug.cfg", "ExactPredrainRetryReactivatesSameLogicalIds"),
+        ("serve-restart-resurrects-completed-stage", "SumeragiV2ServeRestartDormantDebtMutation.tla", "serve_restart_dormant_debt_resurrection_bug.cfg", "CompletedTombstoneBlocksResurrection"),
+        ("serve-restart-dormant-producer-churn", "SumeragiV2ServeRestartDormantDebtMutation.tla", "serve_restart_dormant_debt_churn_bug.cfg", "DormantDebtBlocksCausalControlCompletionChurn"),
+        ("serve-restart-later-dormant-retry", "SumeragiV2ServeRestartDormantDebtMutation.tla", "serve_restart_dormant_debt_later_retry_bug.cfg", "EarliestDormantWaiterOwnsReactivation"),
+        ("serve-restart-lifecycle-zero-junk-debt", "SumeragiV2ServeRestartDormantDebtMutation.tla", "serve_restart_dormant_debt_junk_bug.cfg", "RestartDropsLifecycleZeroPolicyRejection"),
+        ("serve-restart-reuses-postdrain-scheduler", "SumeragiV2ServeRestartDormantDebtMutation.tla", "serve_restart_dormant_debt_postdrain_scheduler_bug.cfg", "PostDrainRetryRetainsLifecycleWithFreshScheduler"),
+        ("serve-receiver-close-drops-committed-lifecycle", "SumeragiV2ServeRestartDormantDebtMutation.tla", "serve_restart_dormant_debt_rollback_bug.cfg", "PendingCloseRetainsDormantCommittedSchedulerDebt"),
     }
     expected_temporal_mutation_cases = {
         (
@@ -40725,13 +40760,13 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     if observed_fixed_cases != expected_fixed_cases:
         errors.append(
             f"{runner_path}: repaired case matrix must equal the exact reviewed "
-            f"twenty-eight cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
+            f"thirty cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
             f"extra={sorted(observed_fixed_cases - expected_fixed_cases)}"
         )
     if observed_mutation_cases != expected_mutation_cases:
         errors.append(
             f"{runner_path}: failing case matrix must equal the exact reviewed "
-            "sixty-three config/invariant pairs; "
+            "seventy-three config/invariant pairs; "
             f"missing={sorted(expected_mutation_cases - observed_mutation_cases)}, "
             f"extra={sorted(observed_mutation_cases - expected_mutation_cases)}"
         )
@@ -40742,66 +40777,25 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             f"missing={sorted(expected_temporal_mutation_cases - observed_temporal_mutation_cases)}, "
             f"extra={sorted(observed_temporal_mutation_cases - expected_temporal_mutation_cases)}"
         )
-    state_helper_header = "assert_nonzero_state_space() {"
+    failure_contract_header = "assert_mutation_failure_contract() {"
     run_case_header = "run_case() {"
     fixed_cases_header = "fixed_cases=("
-    state_helper_offset = runner_source.find(state_helper_header)
+    failure_contract_offset = runner_source.find(failure_contract_header)
     run_case_offset = runner_source.find(run_case_header)
     fixed_cases_offset = runner_source.find(fixed_cases_header)
     runner_sections_are_exact = (
-        runner_source.count(state_helper_header) == 1
+        runner_source.count(failure_contract_header) == 1
         and runner_source.count(run_case_header) == 1
         and runner_source.count(fixed_cases_header) == 1
-        and state_helper_offset >= 0
-        and state_helper_offset < run_case_offset
+        and failure_contract_offset >= 0
+        and failure_contract_offset < run_case_offset
         and run_case_offset < fixed_cases_offset
     )
     if not runner_sections_are_exact:
         errors.append(
             f"{runner_path}: liveness-ownership runner must retain one exact "
-            "nonzero state-space helper before run_case and the case matrices"
+            "mutation-failure contract before run_case and the case matrices"
         )
-    else:
-        state_helper_source = runner_source[
-            state_helper_offset:run_case_offset
-        ]
-        run_case_source = runner_source[run_case_offset:fixed_cases_offset]
-        state_summary_parser = (
-            "  state_line=\"$(grep -E '^[0-9][0-9,]* states generated, "
-            "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 "
-            "|| true)\""
-        )
-        positive_state_rejection = (
-            "  if ((generated <= 0 || distinct <= 0)); then"
-        )
-        state_helper_invocation = (
-            '  assert_nonzero_state_space "$label" "$log"'
-        )
-        if (
-            state_helper_source.count(state_summary_parser) != 1
-            or runner_source.count(state_summary_parser) != 1
-        ):
-            errors.append(
-                f"{runner_path}: liveness-ownership nonzero state-space "
-                "helper must retain exactly one exact TLC state-summary parser"
-            )
-        if (
-            state_helper_source.count(positive_state_rejection) != 1
-            or runner_source.count(positive_state_rejection) != 1
-        ):
-            errors.append(
-                f"{runner_path}: liveness-ownership nonzero state-space "
-                "helper must reject generated or distinct TLC state counts "
-                "less than or equal to zero"
-            )
-        if (
-            run_case_source.count(state_helper_invocation) != 1
-            or runner_source.count(state_helper_invocation) != 1
-        ):
-            errors.append(
-                f"{runner_path}: liveness-ownership run_case must invoke the "
-                "nonzero state-space helper exactly once per TLC case"
-            )
     runner_contracts = (
         (
             'readonly TLA2TOOLS_VERSION="1.7.4"',
@@ -40816,15 +40810,23 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "pinned Java version",
         ),
         (
-            "readonly TLC_FINISHED_PATTERN='^Finished in "
-            "(([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|"
-            "([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|"
-            "[0-9]+d) at \\([0-9]{4}-[0-9]{2}-[0-9]{2} "
-            "[0-9]{2}:[0-9]{2}:[0-9]{2}\\)$'",
-            "exact TLC terminal-marker pattern",
+            'source "$TLC_RESULT_CONTRACT"',
+            "shared TLC result-contract source",
         ),
         (
-            'run_case "$label" "$model" "$config" 0 \\',
+            'sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"',
+            "shared fixed-success assertion",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+            "shared nonzero state-space assertion",
+        ),
+        (
+            'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "shared terminal-footer assertion",
+        ),
+        (
+            'run_case "$label" "$model" "$config" 0',
             "zero-status repaired-model check",
         ),
         (
@@ -40840,8 +40842,10 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "exact named invariant marker",
         ),
         (
-            "all 63 invariant and 1 temporal liveness-ownership mutations "
-            "produced their exact named counterexamples; repaired models passed",
+            'echo "[tlc] all ${#mutation_cases[@]} invariant and '
+            '${#temporal_mutation_cases[@]} temporal liveness-ownership '
+            'mutations produced their exact named counterexamples; all '
+            '${#fixed_cases[@]} repaired models passed"',
             "exact mutation completion marker",
         ),
     )
@@ -40851,23 +40855,15 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
                 f"{runner_path}: liveness-ownership runner must retain exactly "
                 f"one {description}"
             )
-    safe_terminal_count = (
-        'grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true'
-    )
-    safe_state_summary = (
-        "grep -E '^[0-9][0-9,]* states generated, "
-        "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 || true"
-    )
-    if (
-        runner_source.count("|| true") != 2
-        or runner_source.count(safe_terminal_count) != 1
-        or runner_source.count(safe_state_summary) != 1
+    for retired_token, description in (
+        ("assert_nonzero_state_space() {", "private state-space helper"),
+        ("readonly TLC_FINISHED_PATTERN=", "private terminal-marker pattern"),
     ):
-        errors.append(
-            f"{runner_path}: liveness-ownership runner may suppress only the "
-            "state-summary and terminal-marker grep statuses captured by its "
-            "exact nonzero/count assertions"
-        )
+        if retired_token in runner_source:
+            errors.append(
+                f"{runner_path}: retired {description} must remain absent; "
+                "the runner must use the shared TLC result contract"
+            )
 
     ci_path = repo_root / "ci" / "check_sumeragi_formal.sh"
     if not ci_path.is_file() or ci_path.is_symlink():
@@ -40933,9 +40929,9 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             f"extra={sorted(digest_names - expected_all)}"
         )
     expected_runner_sections = (
+        "configuration and shared result-contract binding",
         "preflight and SANY execution",
-        "nonzero state-space checker",
-        "TLC status and terminal-marker checker",
+        "TLC status and shared terminal assertions",
         "six-repaired then six-mutant execution tail",
     )
     observed_runner_sections = tuple(
@@ -41441,156 +41437,161 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
     if release_path.is_file() and not release_path.is_symlink():
         release_source = release_path.read_text(encoding="utf-8")
         release_operators = {
-            "AsyncServeIngressAdmission": (
-                "[node |-> node, identity |-> identity, ordinal |-> ordinal, "
-                "schedulerOrdinal |-> schedulerOrdinal, ingressPredecessors "
-                "|-> ingressPredecessors]"
+            'AsyncServeIngressAdmission': (
+                '[node |-> node, identity |-> identity, ordinal |-> ordinal, '
+                'schedulerOrdinal |-> schedulerOrdinal, lifecycleOrdinal |-> '
+                'lifecycleOrdinal, ingressPredecessors |-> ingressPredecessors]'
             ),
-            "AsyncServeIngressAdmissionSchedulerOrdinal": (
-                "AsyncServeIngressAdmissionRecord(node, "
-                "identity).schedulerOrdinal"
+            'AsyncServeIngressAdmissionSchedulerOrdinal': (
+                'AsyncServeIngressAdmissionRecord(node, identity).schedulerOrdinal'
             ),
-            "AsyncServeIngressAdmissionTyped": (
-                "/\\ DOMAIN admission = {\"node\", \"identity\", "
-                "\"ordinal\", \"schedulerOrdinal\", "
-                "\"ingressPredecessors\"} /\\ admission.node \\in "
-                "ValidatorIds /\\ admission.identity \\in "
-                "AsyncServeLogicalRequestIdentities /\\ "
-                "admission.identity.owner = admission.node /\\ "
-                "admission.ordinal \\in Nat \\ {0} /\\ "
-                "admission.schedulerOrdinal \\in Nat \\ {0} /\\ "
-                "admission.ingressPredecessors \\in [AsyncIngressSources "
-                "-> 0..AsyncIngressCapacity]"
+            'AsyncServeIngressAdmissionTyped': (
+                '/\\ DOMAIN admission = {"node", "identity", "ordinal", '
+                '"schedulerOrdinal", "lifecycleOrdinal", "ingressPredecessors"} /\\ '
+                'admission.node \\in ValidatorIds /\\ admission.identity \\in '
+                'AsyncServeLogicalRequestIdentities /\\ admission.identity.owner = '
+                'admission.node /\\ admission.ordinal \\in Nat \\ {0} /\\ '
+                'admission.schedulerOrdinal \\in Nat \\ {0} /\\ '
+                'admission.lifecycleOrdinal \\in Nat \\ {0} /\\ '
+                'admission.ingressPredecessors \\in [AsyncIngressSources -> '
+                '0..AsyncIngressCapacity]'
             ),
-            "AsyncServeEarliestIngressSchedulerOwnerIdentity": (
-                "CHOOSE identity \\in "
-                "AsyncServeIngressLifecycleOwnerIdentities(node): \\A other "
-                "\\in AsyncServeIngressLifecycleOwnerIdentities(node): "
-                "AsyncServeIngressAdmissionSchedulerOrdinal(node, identity) "
-                "<= AsyncServeIngressAdmissionSchedulerOrdinal(node, other)"
+            'AsyncServeEarliestIngressSchedulerOwnerIdentity': (
+                'CHOOSE identity \\in AsyncServeIngressLifecycleOwnerIdentities(node): '
+                '\\A other \\in AsyncServeIngressLifecycleOwnerIdentities(node): '
+                'AsyncServeIngressAdmissionSchedulerOrdinal(node, identity) <= '
+                'AsyncServeIngressAdmissionSchedulerOrdinal(node, other)'
             ),
-            "AsyncServeEarliestIngressSchedulerOrdinal": (
-                "IF AsyncServeIngressLifecycleOwnerIdentities(node) = {} THEN "
-                "AsyncNextCandidateLifecycleOrdinal(node) ELSE "
-                "AsyncServeIngressAdmissionSchedulerOrdinal( node, "
-                "AsyncServeEarliestIngressSchedulerOwnerIdentity(node))"
+            'AsyncServeEarliestIngressSchedulerOrdinal': (
+                'IF AsyncServeIngressLifecycleOwnerIdentities(node) = {} THEN '
+                'AsyncNextCandidateLifecycleOrdinal(node) ELSE '
+                'AsyncServeIngressAdmissionSchedulerOrdinal( node, '
+                'AsyncServeEarliestIngressSchedulerOwnerIdentity(node))'
             ),
-            "AsyncOlderRuntimeLifecyclePrecedesServeIngress": (
-                "/\\ AsyncServeIngressLifecycleOwnerIdentities(node) # {} "
-                "/\\ \\/ "
-                "AsyncOlderRunnableCandidateLifecyclePrecedesServeIngress(node) "
-                "\\/ AsyncOlderFrozenTimeoutLifecyclePrecedesServeIngress(node)"
+            'AsyncOlderRuntimeLifecyclePrecedesIngressScheduler': (
+                '/\\ AsyncIngressSchedulerBarrierActive(node) /\\ '
+                'AsyncSelectedRuntimeHasLifecycle(node) /\\ '
+                'AsyncSelectedRuntimeLifecycleOrdinal(node) < '
+                'AsyncEarliestIngressSchedulerOrdinal(node)'
             ),
-            "AsyncOlderLocalLifecyclePrecedesServeIngress": (
-                "/\\ AsyncServeIngressLifecycleOwnerIdentities(node) # {} "
-                "/\\ LocalAdmissionCanAdvance(node) /\\ "
-                "LocalSourceLifecycleOrdinal(node, SelectedLocalSource(node)) "
-                "< AsyncServeEarliestIngressSchedulerOrdinal(node)"
+            'AsyncOlderLocalLifecyclePrecedesServeIngress': (
+                '/\\ AsyncIngressSchedulerBarrierActive(node) /\\ '
+                'LocalAdmissionCanAdvance(node) /\\ LocalSourceLifecycleOrdinal(node, '
+                'SelectedLocalSource(node)) < '
+                'AsyncEarliestIngressSchedulerOrdinal(node)'
             ),
-            "SerializedRuntimePrecedesServeIngressStep": (
-                "/\\ asyncRunnerPhase[node] = \"Runtime\" /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) # {} /\\ "
-                "AsyncOlderRuntimeLifecyclePrecedesServeIngress(node) /\\ "
-                "UNCHANGED AsyncIoVars /\\ UNCHANGED AsyncLocalAdmissionVars "
-                "/\\ RuntimeStep(node) /\\ asyncRunnerPhase' = "
-                "[asyncRunnerPhase EXCEPT ![node] = \"Local\"] /\\ "
-                "asyncRunnerBudget' = [asyncRunnerBudget EXCEPT ![node] = "
-                "AsyncQueueCapacity]"
+            'SerializedRuntimePrecedesServeIngressStep': (
+                '/\\ asyncRunnerPhase[node] = "Runtime" /\\ '
+                'AsyncIngressSchedulerBarrierActive(node) /\\ '
+                'AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node) /\\ '
+                'AsyncIoTimeoutLifecycleRetirementTransition(node) /\\ UNCHANGED '
+                "AsyncLocalAdmissionVars /\\ RuntimeStep(node) /\\ asyncRunnerPhase' = "
+                '[asyncRunnerPhase EXCEPT ![node] = "Local"] /\\ asyncRunnerBudget\' = '
+                '[asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]'
             ),
-            "SerializedLocalPrecedesServeIngressStep": (
-                "/\\ AsyncOlderLocalLifecyclePrecedesServeIngress(node) "
-                "/\\ SelectedLocalAdmissionAdvance(node)"
+            'SerializedLocalPrecedesServeIngressStep': (
+                '/\\ AsyncOlderLocalLifecyclePrecedesServeIngress(node) /\\ '
+                'SelectedLocalAdmissionAdvance(node)'
             ),
-            "AsyncServeIngressTargetOnlyTurn": (
-                "/\\ AsyncServeIngressLifecycleOwnerIdentities(node) # {} "
-                "/\\ asyncRunnerPhase[node] \\in {\"Runtime\", \"Local\"} "
-                "/\\ ~( /\\ asyncRunnerPhase[node] = \"Runtime\" /\\ "
-                "AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)) /\\ "
-                "~( /\\ asyncRunnerPhase[node] = \"Local\" /\\ "
-                "AsyncOlderLocalLifecyclePrecedesServeIngress(node)) /\\ "
-                "UNCHANGED <<vars, asyncCommandQueues, "
-                "asyncNextCommandClass, asyncFifoOwed, asyncTimeoutEmitted, "
-                "AsyncLocalAdmissionVars, AsyncIoVars, AsyncDeferredVars, "
-                "asyncCausalQueues, asyncOutstandingTags, "
-                "asyncNodeDeadlines, asyncRetransmitDeadlines, "
-                "asyncSentItems, asyncRetainedControl, asyncActiveRequests, "
-                "asyncCertifiedResponseClaim, asyncTransport, "
-                "asyncIngressLanes, asyncIngressReady, asyncHeldChunks, "
-                "asyncHistoricalRecoveryTargets>> /\\ asyncRunnerPhase' = "
-                "[asyncRunnerPhase EXCEPT ![node] = \"Ingress\"] /\\ "
-                "asyncRunnerBudget' = [asyncRunnerBudget EXCEPT ![node] = "
-                "AsyncIngressCapacity]"
+            'AsyncServeIngressTargetOnlyTurn': (
+                '/\\ AsyncIngressSchedulerBarrierActive(node) /\\ '
+                'asyncRunnerPhase[node] \\in {"Runtime", "Local"} /\\ ~( /\\ '
+                'asyncRunnerPhase[node] = "Runtime" /\\ '
+                'AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node)) /\\ ~( /\\ '
+                'asyncRunnerPhase[node] = "Local" /\\ '
+                'AsyncOlderLocalLifecyclePrecedesServeIngress(node)) /\\ UNCHANGED '
+                '<<vars, asyncCommandQueues, asyncNextCommandClass, asyncFifoOwed, '
+                'asyncTimeoutEmitted, AsyncLocalAdmissionVars, AsyncIoVars, '
+                'AsyncDeferredVars, asyncCausalQueues, asyncOutstandingTags, '
+                'asyncNodeDeadlines, asyncRetransmitDeadlines, asyncSentItems, '
+                'asyncRetainedControl, asyncActiveRequests, '
+                'asyncCertifiedResponseClaim, asyncTransport, asyncIngressLanes, '
+                'asyncIngressReady, asyncHeldChunks, asyncHistoricalRecoveryTargets>> '
+                '/\\ asyncRunnerPhase\' = [asyncRunnerPhase EXCEPT ![node] = "Ingress"] '
+                "/\\ asyncRunnerBudget' = [asyncRunnerBudget EXCEPT ![node] = "
+                'AsyncIngressCapacity]'
             ),
-            "AsyncFreshServeIngressAdmissionsForNodeThisStep": (
-                "{admission \\in asyncServeIngressAdmissions': /\\ "
-                "admission.node = node /\\ "
-                "~AsyncServeIngressAdmissionOwned(node, admission.identity)}"
+            'AsyncFreshServeIngressAdmissionsForNodeThisStep': (
+                "{admission \\in asyncServeIngressAdmissions': /\\ admission.node = "
+                'node /\\ ~AsyncServeIngressAdmissionOwned(node, admission.identity)}'
             ),
-            "AsyncFreshServeIngressAdmissionsAreSingularThisStep": (
-                "\\A node \\in ValidatorIds: Cardinality( "
-                "AsyncFreshServeIngressAdmissionsForNodeThisStep(node)) <= 1"
+            'AsyncFreshServeIngressAdmissionsAreSingularThisStep': (
+                '\\A node \\in ValidatorIds: Cardinality( '
+                'AsyncFreshServeIngressAdmissionsForNodeThisStep(node)) <= 1'
             ),
-            "AsyncFreshServeIngressSchedulerReservationMatchesIn": (
-                "\\A node \\in ValidatorIds: \\A admission \\in "
-                "AsyncFreshServeIngressAdmissionsForNodeThisStep(node): "
-                "admission.schedulerOrdinal = "
-                "state.candidateLifecycleNextOrdinal[node]"
+            'AsyncFreshServeIngressSchedulerReservationMatchesIn': (
+                '\\A node \\in ValidatorIds: \\A admission \\in '
+                'AsyncFreshServeIngressAdmissionsForNodeThisStep(node): '
+                'admission.schedulerOrdinal = '
+                'state.candidateLifecycleNextOrdinal[node]'
             ),
-            "AsyncCandidateLifecycleStateAfterServeIngressAdmission": (
-                "[state EXCEPT !.candidateLifecycleNextOrdinal = [node \\in "
-                "ValidatorIds |-> state.candidateLifecycleNextOrdinal[node] "
-                "+ Cardinality( "
-                "AsyncFreshServeIngressAdmissionsForNodeThisStep(node))]]"
+            'AsyncCandidateLifecycleStateAfterServeIngressAdmission': (
+                '[state EXCEPT !.candidateLifecycleNextOrdinal = [node \\in '
+                'ValidatorIds |-> state.candidateLifecycleNextOrdinal[node] + '
+                'Cardinality( '
+                'AsyncFreshServeIngressAdmissionsForNodeThisStep(node))]]'
             ),
-            "AsyncSharedSchedulerOrdinalInjectionInvariant": (
-                "/\\ \\A admission \\in asyncServeIngressAdmissions, "
-                "record \\in AsyncCandidateLifecycleAdmissions: /\\ "
-                "admission.node = record.node => admission.schedulerOrdinal "
-                "# record.ordinal /\\ \\A admission \\in "
-                "asyncServeIngressAdmissions: "
-                "AsyncTimeoutLifecycleOwned(admission.node) => "
-                "admission.schedulerOrdinal # "
-                "AsyncTimeoutLifecycleOrdinal(admission.node)"
+            'AsyncSharedSchedulerOrdinalInjectionInvariant': (
+                '/\\ \\A admission \\in asyncServeIngressAdmissions, record \\in '
+                'AsyncCandidateLifecycleAdmissions: /\\ admission.node = record.node '
+                '=> admission.schedulerOrdinal # record.ordinal /\\ \\A admission \\in '
+                'asyncServeIngressAdmissions: '
+                'AsyncTimeoutLifecycleOwned(admission.node) => '
+                'admission.schedulerOrdinal # '
+                'AsyncTimeoutLifecycleOrdinal(admission.node) /\\ \\A carrier \\in '
+                'asyncControlServiceState.ordinaryIngressCarrierEvidence, admission '
+                '\\in asyncServeIngressAdmissions: carrier.node = admission.node => '
+                'carrier.schedulerOrdinal # admission.schedulerOrdinal /\\ \\A carrier '
+                '\\in asyncControlServiceState.ordinaryIngressCarrierEvidence, record '
+                '\\in AsyncCandidateLifecycleAdmissions: /\\ carrier.node = record.node '
+                '/\\ carrier.origin # record.origin => carrier.schedulerOrdinal # '
+                'record.ordinal /\\ \\A carrier \\in '
+                'asyncControlServiceState.ordinaryIngressCarrierEvidence: '
+                'AsyncTimeoutLifecycleOwned(carrier.node) => carrier.schedulerOrdinal '
+                '# AsyncTimeoutLifecycleOrdinal(carrier.node)'
             ),
-            "AsyncServeOrdinalInvariant": (
-                "/\\ asyncNextServeIngressOrdinal \\in [ValidatorIds -> "
-                "Nat \\ {0}] /\\ asyncNextServeAdmissionOrdinal \\in "
-                "[ValidatorIds -> Nat \\ {0}] /\\ \\A admission \\in "
-                "asyncServeIngressAdmissions: admission.ordinal < "
-                "asyncNextServeIngressOrdinal[admission.node] /\\ \\A "
-                "admission \\in asyncServeIngressAdmissions: "
-                "admission.schedulerOrdinal < "
-                "AsyncNextCandidateLifecycleOrdinal(admission.node) /\\ "
-                "\\A admission \\in asyncServeAdmissions: admission.ordinal "
-                "< asyncNextServeAdmissionOrdinal[admission.node] /\\ \\A "
-                "tombstone \\in asyncServeTombstones: tombstone.ordinal < "
-                "asyncNextServeAdmissionOrdinal[tombstone.node] /\\ \\A "
-                "reservation \\in asyncServeReservations: \\A tombstone "
-                "\\in reservation.rollbackTombstones: tombstone.ordinal < "
-                "asyncNextServeAdmissionOrdinal[tombstone.node]"
+            'AsyncServeOrdinalInvariant': (
+                '/\\ asyncNextServeIngressOrdinal \\in [ValidatorIds -> '
+                '1..(AsyncIngressPhysicalOrdinalMaximum + 1)] /\\ '
+                'asyncNextServeAdmissionOrdinal \\in [ValidatorIds -> Nat \\ {0}] /\\ \\A '
+                'admission \\in asyncServeIngressAdmissions: admission.ordinal < '
+                'asyncNextServeIngressOrdinal[admission.node] /\\ \\A admission \\in '
+                'asyncServeIngressAdmissions: admission.schedulerOrdinal < '
+                'AsyncNextCandidateLifecycleOrdinal(admission.node) /\\ \\A admission '
+                '\\in asyncServeAdmissions: admission.ordinal < '
+                'asyncNextServeAdmissionOrdinal[admission.node] /\\ \\A tombstone \\in '
+                'asyncServeTombstones: tombstone.ordinal < '
+                'asyncNextServeAdmissionOrdinal[tombstone.node] /\\ \\A reservation \\in '
+                'asyncServeReservations: \\A tombstone \\in '
+                'reservation.rollbackTombstones: tombstone.ordinal < '
+                'asyncNextServeAdmissionOrdinal[tombstone.node]'
             ),
-            "RunNodeWork": (
-                "/\\ node \\in AsyncActiveServiceNodes /\\ node \\in up /\\ "
-                "~NodeHasApplication(node) /\\ IF "
-                "ResponsiveReplayQuarantined(node) THEN /\\ "
-                "ResponsiveReplayDraining(node) /\\ ~NodeIdle(node) /\\ "
-                "asyncIngressReady[node] = <<>> /\\ \\/ "
-                "LocalAdmissionStep(node) \\/ IngressDrainStep(node) \\/ "
-                "SerializedRuntimeStep(node) ELSE IF /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) # {} /\\ "
-                "asyncRunnerPhase[node] \\in {\"Runtime\", \"Local\"} THEN "
-                "IF /\\ asyncRunnerPhase[node] = \"Runtime\" /\\ "
-                "AsyncOlderRuntimeLifecyclePrecedesServeIngress(node) THEN "
-                "SerializedRuntimePrecedesServeIngressStep(node) ELSE IF /\\ "
-                "asyncRunnerPhase[node] = \"Local\" /\\ "
-                "AsyncOlderLocalLifecyclePrecedesServeIngress(node) THEN "
-                "SerializedLocalPrecedesServeIngressStep(node) ELSE "
-                "AsyncServeIngressTargetOnlyTurn(node) ELSE \\/ "
-                "LocalAdmissionStep(node) \\/ IngressDrainStep(node) \\/ "
-                "SerializedRuntimeStep(node) /\\ UNCHANGED asyncNow /\\ "
-                "asyncNodeServiceDeadlines' = [asyncNodeServiceDeadlines "
-                "EXCEPT ![node] = asyncNow + AsyncDeliveryBound] /\\ "
-                "UNCHANGED asyncIoServiceDeadlines"
+            'RunNodeWork': (
+                '/\\ node \\in AsyncActiveServiceNodes /\\ node \\in up /\\ '
+                '~NodeHasApplication(node) /\\ IF '
+                'AsyncCandidateProducerContinuationRunnerResolutionRequired(node) '
+                'THEN IF '
+                'AsyncCandidateProducerContinuationRunnerResolutionReady(node) THEN '
+                'ResolveRunNodeCandidateProducerContinuation(node) ELSE '
+                'ReplayRunNodeCandidateProducerContinuation(node) ELSE IF '
+                'ResponsiveReplayQuarantined(node) THEN /\\ '
+                'ResponsiveReplayDraining(node) /\\ ~NodeIdle(node) /\\ '
+                'asyncIngressReady[node] = <<>> /\\ \\/ LocalAdmissionStep(node) \\/ '
+                'IngressDrainStep(node) \\/ SerializedRuntimeStep(node) ELSE IF /\\ '
+                'AsyncIngressSchedulerBarrierActive(node) /\\ asyncRunnerPhase[node] '
+                '\\in {"Runtime", "Local"} THEN IF /\\ asyncRunnerPhase[node] = '
+                '"Runtime" /\\ '
+                'AsyncOlderRuntimeLifecyclePrecedesIngressScheduler(node) THEN '
+                'SerializedRuntimePrecedesServeIngressStep(node) ELSE IF /\\ '
+                'asyncRunnerPhase[node] = "Local" /\\ '
+                'AsyncOlderLocalLifecyclePrecedesServeIngress(node) THEN '
+                'SerializedLocalPrecedesServeIngressStep(node) ELSE '
+                'AsyncServeIngressTargetOnlyTurn(node) ELSE \\/ '
+                'LocalAdmissionStep(node) \\/ IngressDrainStep(node) \\/ '
+                'SerializedRuntimeStep(node) /\\ UNCHANGED asyncNow /\\ '
+                "asyncNodeServiceDeadlines' = [asyncNodeServiceDeadlines EXCEPT "
+                '![node] = asyncNow + AsyncDeliveryBound] /\\ UNCHANGED '
+                'asyncIoServiceDeadlines'
             ),
         }
         for symbol, expected in release_operators.items():
@@ -41612,120 +41613,116 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 )
 
         release_theorems = {
-            "SerializedLocalPrecedesServeIngressExactFrame": (
-                "\\A node \\in ValidatorIds: "
-                "SerializedLocalPrecedesServeIngressStep(node) => /\\ "
-                "asyncRunnerPhase[node] = \"Local\" /\\ "
-                "asyncRunnerPhase' = asyncRunnerPhase /\\ "
-                "asyncRunnerBudget'[node] = asyncRunnerBudget[node] - 1 /\\ "
-                "LocalSourceLifecycleOrdinal( node, "
-                "SelectedLocalSource(node)) < "
-                "AsyncServeEarliestIngressSchedulerOrdinal(node) /\\ "
-                "asyncNextServeAdmissionOrdinal' = "
-                "asyncNextServeAdmissionOrdinal /\\ "
-                "asyncNextServeIngressOrdinal' = "
-                "asyncNextServeIngressOrdinal /\\ "
-                "asyncServeIngressAdmissions' = "
-                "asyncServeIngressAdmissions /\\ "
+            'SerializedLocalPrecedesServeIngressExactFrame': (
+                '\\A node \\in ValidatorIds: '
+                'SerializedLocalPrecedesServeIngressStep(node) => /\\ '
+                'asyncRunnerPhase[node] = "Local" /\\ asyncRunnerPhase\' = '
+                "asyncRunnerPhase /\\ asyncRunnerBudget'[node] = "
+                'asyncRunnerBudget[node] - 1 /\\ LocalSourceLifecycleOrdinal( node, '
+                'SelectedLocalSource(node)) < '
+                'AsyncEarliestIngressSchedulerOrdinal(node) /\\ '
+                "asyncNextServeAdmissionOrdinal' = asyncNextServeAdmissionOrdinal /\\ "
+                "asyncNextServeIngressOrdinal' = asyncNextServeIngressOrdinal /\\ "
+                "asyncServeIngressAdmissions' = asyncServeIngressAdmissions /\\ "
                 "AsyncServeIngressLifecycleOwnerIdentities(node)' = "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node)' # {} /\\ "
-                "asyncServeAdmissions' = asyncServeAdmissions /\\ "
-                "asyncServeReservations' = asyncServeReservations /\\ "
-                "asyncServeTombstones' = asyncServeTombstones BY Isa DEF "
-                "SerializedLocalPrecedesServeIngressStep, "
-                "SelectedLocalAdmissionAdvance, "
-                "AsyncOlderLocalLifecyclePrecedesServeIngress, "
-                "AdmitProducerCompletion, AdmitCausalHead, EnqueueCandidate, "
-                "AsyncServeEarliestIngressSchedulerOrdinal, "
-                "AsyncServeIngressLifecycleOwnerIdentities, AsyncIoVars, "
-                "AsyncServeLifecycleVars, AsyncServeIngressAdmissionVars"
+                'AsyncServeIngressLifecycleOwnerIdentities(node) /\\ '
+                "AsyncIngressSchedulerBarrierActive(node) /\\ asyncServeAdmissions' = "
+                "asyncServeAdmissions /\\ asyncServeReservations' = "
+                "asyncServeReservations /\\ asyncServeTombstones' = "
+                'asyncServeTombstones BY Isa DEF '
+                'SerializedLocalPrecedesServeIngressStep, '
+                'SelectedLocalAdmissionAdvance, '
+                'AsyncOlderLocalLifecyclePrecedesServeIngress, '
+                'AdmitProducerCompletion, AdmitCausalHead, EnqueueCandidate, '
+                'AsyncEarliestIngressSchedulerOrdinal, '
+                'AsyncIngressSchedulerBarrierActive, '
+                'AsyncServeIngressLifecycleOwnerIdentities, AsyncIoVars, '
+                'AsyncServeLifecycleVars, AsyncServeIngressAdmissionVars'
             ),
-            "AsyncServeIngressTargetOnlyCannotOvertakeOlderLocalLifecycle": (
-                "\\A node \\in ValidatorIds: /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) # {} /\\ "
-                "asyncRunnerPhase[node] = \"Local\" /\\ "
-                "AsyncOlderLocalLifecyclePrecedesServeIngress(node) => "
-                "~AsyncServeIngressTargetOnlyTurn(node) BY DEF "
-                "AsyncServeIngressTargetOnlyTurn"
+            'AsyncServeIngressTargetOnlyCannotOvertakeOlderLocalLifecycle': (
+                '\\A node \\in ValidatorIds: /\\ '
+                'AsyncIngressSchedulerBarrierActive(node) /\\ asyncRunnerPhase[node] = '
+                '"Local" /\\ AsyncOlderLocalLifecyclePrecedesServeIngress(node) => '
+                '~AsyncServeIngressTargetOnlyTurn(node) BY DEF '
+                'AsyncServeIngressTargetOnlyTurn'
             ),
-            "AsyncLaterServeTicketInterleavesOlderRuntimeEpisode": (
-                "\\A node \\in ValidatorIds: /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) # {} /\\ "
-                "AsyncTimeoutLifecycleOwned(node) /\\ "
-                "AsyncTimeoutLifecycleOrdinal(node) < "
-                "AsyncServeEarliestIngressSchedulerOrdinal(node) /\\ "
-                "asyncRunnerPhase[node] = \"Runtime\" /\\ "
-                "RunNodeWork(node) => "
-                "SerializedRuntimePrecedesServeIngressStep(node) BY Isa DEF "
-                "RunNodeWork, AsyncOlderRuntimeLifecyclePrecedesServeIngress, "
-                "AsyncOlderFrozenTimeoutLifecyclePrecedesServeIngress, "
-                "SerializedRuntimePrecedesServeIngressStep, "
-                "AsyncServeIngressTargetOnlyTurn"
+            'AsyncLaterServeTicketInterleavesOlderRuntimeEpisode': (
+                '\\A node \\in ValidatorIds: /\\ '
+                'AsyncIngressSchedulerBarrierActive(node) /\\ '
+                'AsyncTimeoutLifecycleOwned(node) /\\ '
+                'AsyncTimeoutLifecycleOrdinal(node) < '
+                'AsyncEarliestIngressSchedulerOrdinal(node) /\\ asyncRunnerPhase[node] '
+                '= "Runtime" /\\ '
+                '~AsyncCandidateProducerContinuationRunnerResolutionRequired(node) /\\ '
+                'RunNodeWork(node) => SerializedRuntimePrecedesServeIngressStep(node) '
+                'BY Isa DEF RunNodeWork, '
+                'AsyncOlderRuntimeLifecyclePrecedesIngressScheduler, '
+                'AsyncSelectedRuntimeHasLifecycle, '
+                'AsyncSelectedRuntimeLifecycleOrdinal, '
+                'SerializedRuntimePrecedesServeIngressStep, '
+                'AsyncServeIngressTargetOnlyTurn'
             ),
-            "AsyncLaterServeTicketInterleavesOlderLocalEpisode": (
-                "\\A node \\in ValidatorIds: /\\ "
-                "AsyncServeIngressLifecycleOwnerIdentities(node) # {} /\\ "
-                "LocalAdmissionCanAdvance(node) /\\ "
-                "LocalSourceLifecycleOrdinal(node, "
-                "SelectedLocalSource(node)) < "
-                "AsyncServeEarliestIngressSchedulerOrdinal(node) /\\ "
-                "asyncRunnerPhase[node] = \"Local\" /\\ RunNodeWork(node) "
-                "=> SerializedLocalPrecedesServeIngressStep(node) BY Isa DEF "
-                "RunNodeWork, AsyncOlderLocalLifecyclePrecedesServeIngress, "
-                "SerializedLocalPrecedesServeIngressStep, "
-                "AsyncServeIngressTargetOnlyTurn"
+            'AsyncLaterServeTicketInterleavesOlderLocalEpisode': (
+                '\\A node \\in ValidatorIds: /\\ '
+                'AsyncIngressSchedulerBarrierActive(node) /\\ '
+                'LocalAdmissionCanAdvance(node) /\\ LocalSourceLifecycleOrdinal(node, '
+                'SelectedLocalSource(node)) < '
+                'AsyncEarliestIngressSchedulerOrdinal(node) /\\ asyncRunnerPhase[node] '
+                '= "Local" /\\ '
+                '~AsyncCandidateProducerContinuationRunnerResolutionRequired(node) /\\ '
+                'RunNodeWork(node) => SerializedLocalPrecedesServeIngressStep(node) '
+                'BY Isa DEF RunNodeWork, '
+                'AsyncOlderLocalLifecyclePrecedesServeIngress, '
+                'SerializedLocalPrecedesServeIngressStep, '
+                'AsyncServeIngressTargetOnlyTurn'
             ),
-            "AsyncServeIngressAdmissionConsumesSharedSchedulerOrdinal": (
-                "\\A node \\in ValidatorIds, admission \\in "
-                "AsyncFreshServeIngressAdmissionsForNodeThisStep(node): /\\ "
-                "AsyncControlServiceStateTypeInvariant /\\ "
-                "AsyncControlServiceSlotTransition => /\\ "
-                "admission.schedulerOrdinal = "
-                "AsyncNextCandidateLifecycleOrdinal(node) /\\ "
-                "admission.schedulerOrdinal < "
+            'AsyncServeIngressAdmissionConsumesSharedSchedulerOrdinal': (
+                '\\A node \\in ValidatorIds, admission \\in '
+                'AsyncFreshServeIngressAdmissionsForNodeThisStep(node): /\\ '
+                'AsyncControlServiceStateTypeInvariant /\\ '
+                'AsyncControlServiceSlotTransition => /\\ admission.schedulerOrdinal = '
+                'AsyncNextCandidateLifecycleOrdinal(node) /\\ '
+                'admission.schedulerOrdinal < '
                 "AsyncNextCandidateLifecycleOrdinal(node)' BY IsaT(600) DEF "
-                "AsyncControlServiceSlotTransition, "
-                "AsyncFreshServeIngressSchedulerReservationMatchesIn, "
-                "AsyncCandidateLifecycleStateAfterServeIngressAdmission, "
-                "AsyncCandidateLifecycleStateAfterAdmission, "
-                "AsyncCandidateLifecycleStateAfterTimeoutOwnership, "
-                "AsyncControlServiceStateAfterReset, "
-                "AsyncControlServiceStateAfterAdmission, "
-                "AsyncControlServiceStateAfterService, "
-                "AsyncCertifiedResponseClaimStateAfterRetirement, "
-                "AsyncCertifiedResponseClaimStateAfterAdmission, "
-                "AsyncCandidateServiceStateAfterReclamation, "
-                "AsyncCandidateServiceStateAfterSuccessfulService, "
-                "AsyncCandidateServiceStateAfterTerminalRetirement, "
-                "AsyncCandidateLifecycleStateAfterServiceSlotTransfer, "
-                "AsyncCandidateLifecycleStateAfterCarrierUpdate, "
-                "AsyncCandidateLifecycleStateAfterCompaction, "
-                "AsyncNextCandidateLifecycleOrdinal, "
-                "AsyncControlServiceStateTypeInvariant"
+                'AsyncControlServiceSlotTransition, '
+                'AsyncFreshServeIngressSchedulerReservationMatchesIn, '
+                'AsyncCandidateLifecycleStateAfterServeIngressAdmission, '
+                'AsyncCandidateLifecycleStateAfterAdmission, '
+                'AsyncCandidateLifecycleStateAfterTimeoutOwnership, '
+                'AsyncCandidateLifecycleStateAfterOrdinaryIngressAdmission, '
+                'AsyncOrdinaryIngressCarrierStateAfterTransition, '
+                'AsyncControlServiceStateAfterReset, '
+                'AsyncControlServiceStateAfterAdmission, '
+                'AsyncControlServiceStateAfterService, '
+                'AsyncCertifiedResponseClaimStateAfterRetirement, '
+                'AsyncCertifiedResponseClaimStateAfterAdmission, '
+                'AsyncCandidateServiceStateAfterReclamation, '
+                'AsyncCandidateServiceStateAfterSuccessfulService, '
+                'AsyncCandidateServiceStateAfterTerminalRetirement, '
+                'AsyncCandidateLifecycleStateAfterServiceSlotTransfer, '
+                'AsyncCandidateLifecycleStateAfterCarrierUpdate, '
+                'AsyncCandidateLifecycleStateAfterCompaction, '
+                'AsyncNextCandidateLifecycleOrdinal, '
+                'AsyncControlServiceStateTypeInvariant'
             ),
-            "AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain": (
-                "\\A node \\in ValidatorIds, index \\in "
-                "1..Len(asyncIngressReady[node]), laneIndex \\in "
-                "1..Len(IngressLane(node, asyncIngressReady[node][index])), "
-                "identity \\in "
-                "AsyncServeIngressLifecycleOwnerIdentities(node): /\\ "
-                "AsyncServeIngressAdmissionInvariant /\\ "
-                "PopSelectedIngress(node, index, laneIndex) /\\ "
-                "AsyncServeIngressAdmissionOwned(node, identity)' => \\A "
-                "source \\in AsyncIngressSources: "
-                "AsyncServeIngressAdmissionPredecessorCounts(node, "
-                "identity)'[source] <= "
-                "AsyncServeIngressAdmissionPredecessorCounts( node, "
-                "identity)[source] BY IsaT(300) DEF PopSelectedIngress, "
-                "AsyncServeIngressAdmissionsAfterIngressDrain, "
-                "AsyncServeIngressAdmissionInvariant, "
-                "AsyncServeIngressAdmissionOwned, "
-                "AsyncServeIngressAdmissionRecords, "
-                "AsyncServeIngressAdmissionRecord, "
-                "AsyncServeIngressAdmissionPredecessorCounts, "
-                "AsyncServeIngressLifecycleOwnerIdentities, "
-                "AsyncServeIngressAdmissionIdentities"
+            'AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain': (
+                '\\A node \\in ValidatorIds, index \\in 1..Len(asyncIngressReady[node]), '
+                'laneIndex \\in 1..Len(IngressLane(node, '
+                'asyncIngressReady[node][index])), identity \\in '
+                'AsyncServeIngressLifecycleOwnerIdentities(node): /\\ '
+                'AsyncServeIngressAdmissionInvariant /\\ PopSelectedIngress(node, '
+                'index, laneIndex) /\\ AsyncServeIngressAdmissionOwned(node, '
+                "identity)' => \\A source \\in AsyncIngressSources: "
+                "AsyncServeIngressAdmissionPredecessorCounts(node, identity)'[source] "
+                '<= AsyncServeIngressAdmissionPredecessorCounts( node, '
+                'identity)[source] BY IsaT(300) DEF PopSelectedIngress, '
+                'AsyncServeIngressAdmissionsAfterIngressDrain, '
+                'AsyncServeIngressAdmissionInvariant, '
+                'AsyncServeIngressAdmissionOwned, AsyncServeIngressAdmissionRecords, '
+                'AsyncServeIngressAdmissionRecord, '
+                'AsyncServeIngressAdmissionPredecessorCounts, '
+                'AsyncServeIngressLifecycleOwnerIdentities, '
+                'AsyncServeIngressAdmissionIdentities'
             ),
         }
         for symbol, expected in release_theorems.items():
@@ -41750,9 +41747,9 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             release_source, preserve_string_contents=True
         )
         release_token_counts = {
-            "schedulerOrdinal == AsyncNextCandidateLifecycleOrdinal(node)": 3,
-            "node, identity, ingressOrdinal, schedulerOrdinal,": 3,
-            "admission.schedulerOrdinal,": 1,
+            "schedulerOrdinal == AsyncNextCandidateLifecycleOrdinal(node)": 2,
+            "node, identity, ingressOrdinal, schedulerOrdinal,": 2,
+            "admission.schedulerOrdinal,": 2,
         }
         for token, expected_count in release_token_counts.items():
             observed_count = stripped_release.count(token)
@@ -42015,12 +42012,9 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "pinned Java version",
             ),
             (
-                "readonly TLC_FINISHED_PATTERN='^Finished in "
-                "(([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|"
-                "([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|"
-                "[0-9]+d) at \\([0-9]{4}-[0-9]{2}-[0-9]{2} "
-                "[0-9]{2}:[0-9]{2}:[0-9]{2}\\)$'",
-                "exact TLC terminal-marker pattern",
+                'source "${REPO_ROOT}/scripts/formal/'
+                'sumeragi_v2_tlc_result_contract.sh"',
+                "shared TLC result-contract binding",
             ),
             (
                 'readonly MODEL="SumeragiV2ServeSchedulerOrdinalMutation.tla"',
@@ -42147,22 +42141,24 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
                 "exact six-case mutant completion set",
             ),
             (
-                '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-                "single TLC terminal-marker check",
+                'sumeragi_v2_tlc_assert_fixed_success '
+                '"$label" "$log" "$actual_status"',
+                "shared repaired-run result assertion",
             ),
             (
-                'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
-                "final TLC terminal-marker check",
+                'sumeragi_v2_tlc_assert_nonzero_state_space '
+                '"$label" "$log"',
+                "shared mutant nonzero-state assertion",
             ),
             (
-                "state_line=\"$(grep -E '^[0-9][0-9,]* states generated, "
-                "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 "
-                "|| true)\"",
-                "exact nonzero state-space summary parser",
+                'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+                "shared mutant terminal-footer assertion",
             ),
             (
-                "if ((generated <= 0 || distinct <= 0)); then",
-                "zero-state rejection",
+                'sumeragi_v2_tlc_assert_exact_line \\\n'
+                '    "Serve scheduler lasso" "$log" \\\n'
+                '    "Error: Temporal properties were violated."',
+                "shared exact temporal-primary assertion",
             ),
             (
                 'if [[ "$actual_status" -ne "$expected_status" ]]; then',
@@ -42171,10 +42167,6 @@ def _serve_scheduler_ordinal_mutation_source_fidelity_errors(
             (
                 '[[ "$(grep -Fxc "Model checking completed. No error has been found." "$log" || true)" == 1 ]]',
                 "exact repaired completion marker",
-            ),
-            (
-                'for marker in "Temporal properties were violated." "Stuttering"; do',
-                "exact temporal lasso markers",
             ),
             (
                 'if grep -Fq "Error: Invariant " "$log"; then',
@@ -42560,12 +42552,12 @@ def _commit_import_provenance_mutation_source_fidelity_errors(
                 "exact successor invariant marker",
             ),
             (
-                '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-                "single TLC terminal-marker check",
+                'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+                "shared nonzero state-space check",
             ),
             (
-                'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
-                "final TLC terminal-marker check",
+                'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+                "shared final TLC terminal check",
             ),
             (
                 "missing execution guard and successor-origin replacement "
@@ -42994,8 +42986,8 @@ def _indexed_service_activation_mutation_source_fidelity_errors(
             "status-12 invariant counterexample",
         ),
         (
-            'for marker in "Temporal properties were violated." "Stuttering"; do',
-            "exact liveness markers",
+            'assert_unique_primary_diagnostic \\\n  "unjoined-clock-owner" "$unjoined_clock_log" \\\n  "Error: Temporal properties were violated."',
+            "exact liveness primary diagnostic",
         ),
         (
             'readonly REENTRY_INVARIANT_MARKER="Error: Invariant ActivationMembershipCoherence is violated."',
@@ -43010,12 +43002,12 @@ def _indexed_service_activation_mutation_source_fidelity_errors(
             "invariant/liveness non-interchangeability check",
         ),
         (
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-            "single TLC terminal-marker check",
+            'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+            "shared nonzero state-space check",
         ),
         (
-            'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
-            "final TLC terminal-marker check",
+            'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "shared final TLC terminal check",
         ),
         (
             "unjoined clock ownership produced exact liveness status 13; "
@@ -43235,12 +43227,9 @@ def _historical_discovery_occurrence_rank_mutation_source_fidelity_errors(
             "pinned Java version",
         ),
         (
-            "readonly TLC_FINISHED_PATTERN='^Finished in "
-            "(([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|"
-            "([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|"
-            "[0-9]+d) at \\([0-9]{4}-[0-9]{2}-[0-9]{2} "
-            "[0-9]{2}:[0-9]{2}:[0-9]{2}\\)$'",
-            "exact TLC terminal-marker pattern",
+            'source "${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract.sh"',
+            "shared TLC result-contract source",
         ),
         (
             'readonly MODEL="SumeragiV2HistoricalDiscoveryOccurrenceRankMutation.tla"',
@@ -43291,12 +43280,12 @@ def _historical_discovery_occurrence_rank_mutation_source_fidelity_errors(
             "single SANY marker check",
         ),
         (
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-            "single TLC terminal-marker check",
+            'sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"',
+            "shared nonzero state-space check",
         ),
         (
-            'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
-            "final TLC terminal-marker check",
+            'sumeragi_v2_tlc_assert_terminal "$label" "$log"',
+            "shared final TLC terminal check",
         ),
         (
             "[[ \"$(grep -Ec '^(Error:|Deadlock reached[.])' "
@@ -44707,7 +44696,14 @@ fn synthetic_deferred_lifecycle_owner(
 fn dispatch_deferred(
     &mut self,
     eligible: &BTreeSet<u128>,
-) -> Result<Option<(Vec<Self::Effect>, DeferredServiceEvidence)>, Self::Error>;
+) -> Result<
+    Option<(
+        Vec<Self::Effect>,
+        DeferredServiceEvidence,
+        Option<ProducerContinuationHandoffToken>,
+    )>,
+    Self::Error,
+>;
 fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
 """
         )
@@ -45364,7 +45360,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
         "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
     ),
     "run_inner": (
-        "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9"
+        "e2b02f36f0f3111dc2946fa3cb608697a3e172140b9c14c37cdd1a83377302ac"
     ),
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
         "3245d9f8affaf523e99a6049a0aeab2d140cda6c099097390d0d85cafa5d3b5a"
@@ -53310,19 +53306,13 @@ iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_r
         ingress_reply_route,
         """
 fn certified_merge_sidecar_ingress_reply_route(
-    message: &iroha_core::merge_sidecar::CertifiedMergeSidecarMessage,
+    _message: &iroha_core::merge_sidecar::CertifiedMergeSidecarMessage,
     reply_route: iroha_p2p::network::NetworkReplyRoute,
-) -> Option<iroha_p2p::network::NetworkReplyRoute> {
-    match message {
-        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
-        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_)
-        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_)
-        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_)
-        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => Some(reply_route),
-    }
+) -> iroha_p2p::network::NetworkReplyRoute {
+    reply_route
 }
 """,
-        "daemon ingress must preserve the authenticated reply route for every certified sidecar message, including GenerationHint",
+        "daemon ingress must preserve the authenticated reply route for every certified sidecar message without a variant-specific drop path",
         errors,
     )
 
@@ -55634,7 +55624,7 @@ pub fn queue_plan_synced_request_id_from_chain_digest(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
     Hash::new(
-        norito::to_bytes(&(
+        norito::encode_canonical(&(
             QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,
             chain_id_digest,
             entrypoint_hash,
@@ -56478,6 +56468,8 @@ struct FairV2IngressReplyAttempt {
 pub(crate) struct FairV2IngressOwnershipEvidence {
     first: FairV2IngressOwnershipOccurrence,
     latest: FairV2IngressOwnershipOccurrence,
+    leader_wire_token: Option<FairV2IngressLeaderWireToken>,
+    leader_wire_runtime_receipt: Option<serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt>,
     admission_count: u128,
     occurrence_count: u128,
     action_counts: [u128; FairV2IngressOwnershipAction::COUNT],
@@ -56567,6 +56559,8 @@ let attempts_hash = fair_v2_ingress_attempt_cursor_hash(&attempts);
 let merged = Self {
     first: self.first.clone(),
     latest: candidate.latest,
+    leader_wire_token: self.leader_wire_token.clone(),
+    leader_wire_runtime_receipt: self.leader_wire_runtime_receipt.clone(),
     admission_count,
     occurrence_count,
     action_counts,
@@ -56637,7 +56631,9 @@ true
         ingress_path,
         ingress_seam_items["ingress::validate_exact"][1],
         """
-self.first.wire_key == self.latest.wire_key
+self.first.lifecycle_ordinal == self.latest.lifecycle_ordinal
+    && self.first.lifecycle_ordinal.is_none_or(|ordinal| ordinal != 0)
+    && self.first.wire_key == self.latest.wire_key
     && self.first.semantic_origin == self.latest.semantic_origin
     && self.first.authenticated_source == self.first.semantic_owner_source
     && (self.admission_count != 1
@@ -56646,6 +56642,20 @@ self.first.wire_key == self.latest.wire_key
     && self.first.class == self.latest.class
     && self.first.encoded_bytes.as_ref() == self.latest.encoded_bytes.as_ref()
     && self.first.encoded_len == self.latest.encoded_len
+    && self.leader_wire_token.as_ref().is_none_or(|token| {
+        self.first.semantic_origin.as_ref().is_some_and(|origin| &token.identity.semantic_origin == origin)
+            && token.identity.canonical_wire_hash == self.first.wire_key.hash && token.slot.semantic_origin == token.identity.semantic_origin
+            && token.slot.phase == token.identity.phase && token.source_class == token.identity.phase.source_class()
+            && (token.source_class == FairV2IngressLeaderWireSourceClass::Chunk) == token.slot.chunk_index.is_some()
+            && token.admission_ordinal != 0 && token.scheduler_ordinal != 0 && self.first.lifecycle_ordinal == Some(token.scheduler_ordinal)
+    }) && match (self.leader_wire_token.as_ref(), self.leader_wire_runtime_receipt.as_ref()) {
+        (None, None) | (Some(_), None) => true,
+        (Some(token), Some(receipt)) => {
+            receipt.token() == token && receipt.owner().causal_lifecycle_key() == token.identity_hash()
+                && receipt.owner().admission_ordinal() == token.scheduler_ordinal()
+        }
+        (None, Some(_)) => false,
+    }
     && self.first.validate_exact()
     && self.latest.validate_exact()
     && self.attempts_hash == fair_v2_ingress_attempt_cursor_hash(&self.attempts)
@@ -56655,7 +56665,7 @@ self.first.wire_key == self.latest.wire_key
         self.current_routes.as_ref(),
     )
 """,
-        "fair-ingress validation must bind semantic origin, canonical bytes, source ownership, routes, and non-regressing cursors",
+        "fair-ingress validation must bind lifecycle, productive runtime ownership, semantic origin, canonical bytes, routes, and non-regressing cursors",
         errors,
     )
     for item_key, payload_kind, description in (
@@ -56722,10 +56732,9 @@ if !ingress_ownership.validate_exact()
         worker_path,
         ingress_seam_items["worker::queue_commit_serve"][1],
         """
-if let (Some(retained_routes), Some(retained_ownership)) = (
-    tracked.reply_routes.as_ref(),
-    tracked.ingress_ownership.as_ref(),
-) {
+let (merged_reply_routes, merged_ingress_ownership) = if let (
+    Some(retained_routes), Some(retained_ownership),
+) = (tracked.reply_routes.as_ref(), tracked.ingress_ownership.as_ref(),) {
     let mut route_candidate = retained_routes.clone();
     let receipt = route_candidate
         .merge_observed_with_receipt(&reply_routes)
@@ -56738,16 +56747,14 @@ if let (Some(retained_routes), Some(retained_ownership)) = (
         .ok_or_else(|| {
             "exact Sumeragi v2 Serve retry changed fair-ingress identity".to_owned()
         })?;
-    tracked.reply_routes = Some(merged_routes);
-    tracked.ingress_ownership = Some(ownership_candidate);
+    (merged_routes, ownership_candidate)
 } else if tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none() {
-    tracked.reply_routes = Some(reply_routes);
-    tracked.ingress_ownership = Some(ingress_ownership);
+    (reply_routes, ingress_ownership)
 } else {
     return Err("Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned());
-}
+};
 """,
-        "exact Serve retries must consume one observed-route receipt into cloned ingress ownership and atomically install the resulting route/ownership pair",
+        "exact Serve retries must consume one observed-route receipt into a cloned route/ownership pair before the sealed function installs both together",
         errors,
     )
     _require_exact_rust_tokens(
@@ -56800,12 +56807,12 @@ if !ingress_ownership.validate_exact()
 match (&mut existing.ingress_ownership, ingress_ownership) {
     (Some(retained), Some(candidate)) => {
         if !retained.merge_downstream(candidate) {
-            return PayloadChunkDisposition::Rejected;
+            return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
         }
     }
     (None, None) if cfg!(test) => {}
     (Some(_), None) | (None, Some(_)) | (None, None) => {
-        return PayloadChunkDisposition::Rejected;
+        return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
     }
 }
 """,
@@ -56816,26 +56823,33 @@ match (&mut existing.ingress_ownership, ingress_ownership) {
         worker_path,
         ingress_seam_items["worker::replay_buffered_chunks"][1],
         """
-buffered.ingress_ownership.ok_or_else(|| {
-    "buffered payload chunk lost fair-ingress ownership".to_owned()
-})?,
+let Some(ingress_ownership) = buffered.ingress_ownership else {
+    let tail_result = self.retire_buffered_payload_chunk_tail(chunks);
+    return Err(tail_result.err().unwrap_or_else(|| {
+        "buffered payload chunk lost fair-ingress ownership".to_owned()
+    }));
+};
 """,
-        "orphan replay must preserve the exact ownership carrier into live chunk delivery",
+        "orphan replay must preserve exact ownership or retire every remaining productive carrier before failing",
         errors,
     )
     _require_rust_token_sequence(
         worker_path,
         ingress_seam_items["worker::deliver_payload_chunk"][1],
         """
-executor.accept_payload_chunk_with_ingress_ownership(
+let result = executor.accept_payload_chunk_with_ingress_ownership(
     work_id,
     chunk,
     &sender,
-    ingress_ownership,
+    &ingress_ownership,
     self,
-)
+);
+if let Some(runtime) = ingress_ownership.leader_wire_runtime_receipt() {
+    self.leader_wire_ingress.mark_leader_wire_volatile_terminal(runtime)?;
+}
+match result {
 """,
-        "live payload delivery must consume the exact fair-ingress carrier at the mutating effect seam",
+        "live payload delivery must consume the exact carrier and retire its productive lifecycle before classifying the result",
         errors,
     )
     _require_rust_token_sequence(
@@ -63420,6 +63434,7 @@ services.post_certified_merge_sidecar_with_reply_routes(
         """
 let (exact_output_service_owner, exact_output_transport_owner) =
     durable_exact_output_handoff_owner_pair();
+let durable_decided_subject = executor.local_proposal_directive()?.decided_subject();
 let mut services = ProductionV2Services::start(
     context.clone(),
 """,
@@ -63431,6 +63446,7 @@ let mut services = ProductionV2Services::start(
         runner_ack_items.get("run_inner"),
         """
 Arc::clone(&output_guard),
+Arc::clone(&block_rx),
 exact_output_service_owner,
 )
 .map_err(V2RunnerError::Service)?;
@@ -66120,6 +66136,8 @@ let (durable_receipt, durable_artifact) = executor
             "ready Sumeragi v2 executor has no durable finality authority".to_owned(),
         )
     })?;
+let _ = lane_work
+    .recover_decided_canonical_lane_body(&durable_receipt, &durable_artifact)?;
 lane_work.persist_anchored_sessions()?;
 let Some(durable_lane_authority) =
     lane_work.durable_lane_rollover_authority(&durable_artifact)?
@@ -66130,6 +66148,7 @@ else {
     continue;
 };
 certified_serve_ingress_binding.retire()?;
+leader_wire_ingress_binding.retire()?;
 lane_work.prune_finalized_merge_sidecars()?;
 services
     .handoff_applied_height_output_to_durable_reconstruction(
@@ -66211,7 +66230,7 @@ pending_successor_activation = Some(activation.bind(successor_authority)?);
         """
 if turn == OuterIngressTurn::Runtime {
     if services
-        .certified_serve_barrier_request_hash()
+        .certified_serve_barrier()
         .map_err(V2RunnerError::Service)?
         .is_some()
     {
@@ -66226,65 +66245,54 @@ if turn == OuterIngressTurn::Runtime {
         runner_items.get("drain_v2_ingress"),
         """
 let mut prepared_serve = None;
-let mut serve_barrier = services
-    .certified_serve_barrier_request_hash()
-    .map_err(V2RunnerError::Service)?;
-let Some(mut inbound) = receiver.try_recv_if(|inbound| {
-    if let Some(barrier_hash) = serve_barrier {
-        let is_barrier_target = matches!(
-            inbound.message(),
-            BlockMessage::V2(wire::ConsensusMessageV2 {
-                payload:
-                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
-                ..
-            }) if HashOf::new(request) == barrier_hash
-        );
-        if !is_barrier_target {
+let Some(mut inbound) = receiver
+    .try_recv_if_checked(|inbound| {
+        if !v2_ingress_head_can_drain(inbound, executor, terminal_subject) {
             return false;
         }
-    }
+        let BlockMessage::V2(message) = inbound.message() else {
+            return true;
+        };
+        if message.validate_version().is_err() {
+            prepared_serve = Some(PreparedCertifiedServe::Service(
+                "reserved certified-body ingress crossed version validation".to_owned(),
+            ));
+            return true;
+        }
 """,
-        "a pending exact Serve barrier must freeze ingress selection to its immutable request hash",
+        "checked ingress selection must honor the exact lifecycle head and fail closed before version-invalid Serve removal",
         errors,
     )
     _require_rust_token_sequence(
         runner_path,
         runner_items.get("drain_v2_ingress"),
         """
-if reply_routes.semantic_target() != sender
-    || !ingress_ownership.validate_exact()
-    || !ingress_ownership.matches_message(inbound.message())
-    || !ingress_ownership.matches_semantic_origin(Some(sender))
-    || !ingress_ownership.matches_reply_routes(Some(reply_routes))
-{
-    return true;
-}
-let authenticated =
-    match executor.authenticate_certified_body_request(request.clone(), sender) {
-        Ok(authenticated) => authenticated,
-        Err(error) => {
-            prepared_serve = Some(PreparedCertifiedServe::Rejected(error.to_string()));
-            return true;
-        }
-    };
 match services.prepare_certified_request(authenticated_via, authenticated) {
     Ok(admission) => {
         prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));
         true
     }
     Err(CertifiedServePrepareError::Backpressure) => {
-        serve_barrier = Some(HashOf::new(request));
         false
     }
+    Err(CertifiedServePrepareError::Rejected(reason)) => {
+        prepared_serve = Some(PreparedCertifiedServe::Rejected(reason));
+        true
+    }
+    Err(CertifiedServePrepareError::Service(reason)) => {
+        prepared_serve = Some(PreparedCertifiedServe::Service(reason));
+        true
+    }
+}
 """,
-        "exact Serve ingress must validate identity and reserve/coalesce its lifecycle atomically before the selected head can drain",
+        "exact Serve ingress must reserve, coalesce, or durably reject its lifecycle before the checked head can drain",
         errors,
     )
     _require_rust_token_sequence(
         runner_path,
         runner_items.get("drain_v2_ingress"),
         """
-let ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
     V2RunnerError::Service(
         "global Sumeragi v2 ingress lost its fair ownership carrier".to_owned(),
     )
@@ -66297,6 +66305,9 @@ if !ingress_ownership.validate_exact()
         "global Sumeragi v2 ingress carried altered fair ownership".to_owned(),
     ));
 }
+receiver
+    .bind_leader_wire_runtime_ownership(&mut ingress_ownership)
+    .map_err(V2RunnerError::Service)?;
 let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
 if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
 """,
@@ -66319,6 +66330,8 @@ match prepared_serve.take() {
     }
     Some(PreparedCertifiedServe::Rejected(reason)) => {
         iroha_logger::debug!(%reason, "rejected certified body request");
+        mark_leader_wire_volatile(receiver, &ingress_ownership)?;
+        continue;
     }
     Some(PreparedCertifiedServe::Service(reason)) => {
         return Err(V2RunnerError::Service(reason));
@@ -66699,9 +66712,7 @@ active_leader_wire_carriers.push((owner, carrier_ordinal));
         (
             """
 if !leader_wire_carrier_ordinals.is_empty() {
-    return Err(
-        "leader-wire carrier has no matching active lifecycle owner".to_owned(),
-    );
+    return Err("leader-wire carrier has no matching active lifecycle owner".to_owned());
 }
 active_leader_wire_carriers.sort_by_key(|(_, ordinal)| *ordinal);
 """,
@@ -66807,10 +66818,25 @@ def _exact_serve_runtime_episode_production_source_fidelity_errors(
     if errors:
         return errors
 
-    worker_source = worker_path.read_text(encoding="utf-8")
-    runner_source = runner_path.read_text(encoding="utf-8")
+    _loaded_path, worker_source = _read_reviewed_rust_source(
+        repo_root,
+        worker_path.relative_to(repo_root).as_posix(),
+        errors,
+        "exact-Serve queue/service implementation",
+    )
+    _loaded_path, runner_source = _read_reviewed_rust_source(
+        repo_root,
+        runner_path.relative_to(repo_root).as_posix(),
+        errors,
+        "exact-Serve serialized-runner implementation",
+    )
     effects_source = effects_path.read_text(encoding="utf-8")
-    runtime_source = runtime_path.read_text(encoding="utf-8")
+    _loaded_path, runtime_source = _read_reviewed_rust_source(
+        repo_root,
+        runtime_path.relative_to(repo_root).as_posix(),
+        errors,
+        "exact-Serve complete runtime owner comparison",
+    )
 
     for struct_name, expected_sha256 in (
         _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256.items()
@@ -66907,13 +66933,9 @@ enum CertifiedServeRuntimeEpisodeState {
             "logical and physical exact-Serve ordinals must both remain nonzero",
         ),
         (
-            """
-CertifiedServeBarrier {
-    request_hash: self.projection.request_hash,
-    lifecycle_ordinal: self.id.0,
-    carrier_ordinal,
-}
-""",
+            "CertifiedServeBarrier { request_hash: self.projection.request_hash, "
+            "scheduler_ordinal: self.id.0, lifecycle_id: self.lifecycle_id, "
+            "carrier_ordinal, }",
             "the runner barrier must project the exact request, lifecycle, and carrier",
         ),
     ):
@@ -66928,8 +66950,10 @@ CertifiedServeBarrier {
     reservation_match = reservation_items.get("matches_barrier")
     for sequence, description in (
         (
-            "self.id.0 == barrier.lifecycle_ordinal",
-            "episode claims must retain the exact logical Serve ordinal",
+            "self.id.0 == barrier.scheduler_ordinal "
+            "&& self.lifecycle_id == barrier.lifecycle_id",
+            "episode claims must retain the exact physical occurrence and "
+            "logical Serve lifecycle",
         ),
         (
             "self.projection.request_hash == barrier.request_hash",
@@ -67104,15 +67128,12 @@ let ordinal = match self.lifecycle_ordinals.reserve_one() {
     _require_rust_token_sequence(
         worker_path,
         producer_start,
-        """
-if state.serve_ingress_reservation.is_some() || state.serve_barrier.is_some() {
-    return Ok(None);
-}
-if state.producer_episode_active {
-    return Err("Sumeragi v2 runner nested an I/O producer episode".to_owned());
-}
-state.producer_episode_active = true;
-""",
+        "if state.serve_ingress_reservation.is_some() "
+        "|| !state.serve_ingress_waiters.is_empty() "
+        "|| state.serve_barrier.is_some() { return Ok(None); } "
+        "if state.producer_episode_active { return Err("
+        '"Sumeragi v2 runner nested an I/O producer episode".to_owned()); } '
+        "state.producer_episode_active = true;",
         "ordinary producers must acquire one queue-atomic episode only when no "
         "exact target exists",
         errors,
@@ -67236,13 +67257,11 @@ CertifiedServeRuntimeEpisodeState::Claimed {
     _require_rust_token_sequence(
         worker_path,
         enqueue,
-        """
-let exact_target_active =
-    state.serve_ingress_reservation.is_some() || state.serve_barrier.is_some();
-if exact_target_active && exact_predecessor_ordinal.is_none() {
-    return Err(V2IoTrySendError::Full(command));
-}
-""",
+        "let exact_target_active = state.serve_ingress_reservation.is_some() "
+        "|| !state.serve_ingress_waiters.is_empty() "
+        "|| state.serve_barrier.is_some(); "
+        "if exact_target_active && exact_predecessor_ordinal.is_none() "
+        "{ return Err(V2IoTrySendError::Full(command)); }",
         "later causal, Control, Completion, and priority work must be blocked "
         "while an exact target owns the next position",
         errors,
@@ -67551,7 +67570,7 @@ if services
 {
     services.drain_exact_serve_runtime_predecessor(
         &mut executor,
-        serve_barrier.lifecycle_ordinal(),
+        serve_barrier.scheduler_ordinal(),
     )?;
 """,
             "an exact target turn must claim before selecting one completed predecessor",
@@ -67560,7 +67579,7 @@ if services
             """
 if executor.older_runtime_lifecycle_predates_exact_serve(
     Instant::now(),
-    serve_barrier.lifecycle_ordinal(),
+    serve_barrier.scheduler_ordinal(),
 )? && services
     .certified_serve_runtime_predecessor_capacity_available(serve_barrier)
     .map_err(V2RunnerError::Service)?
@@ -67574,7 +67593,7 @@ if executor.older_runtime_lifecycle_predates_exact_serve(
 older_predecessor_remains = executor
     .older_runtime_lifecycle_predates_exact_serve(
         Instant::now(),
-        serve_barrier.lifecycle_ordinal(),
+        serve_barrier.scheduler_ordinal(),
     )?;
 services
     .finish_certified_serve_runtime_episode_turn(
@@ -67591,11 +67610,12 @@ let Some(_certified_serve_producer_episode) = services
     .try_begin_certified_serve_producer_episode()
     .map_err(V2RunnerError::Service)?
 else {
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
     continue;
 };
 """,
-            "the sole untimed continue must be the queue-locked handoff to an "
-            "exact target which won the admission race",
+            "the queue-locked handoff to an exact target which won the "
+            "admission race must retain a finite idle wait",
         ),
     ):
         _require_rust_token_sequence(
@@ -68022,7 +68042,7 @@ def _local_runner_service_contract_source_fidelity_errors(
         "let _ = wake_rx.recv_timeout(IDLE_POLL);",
         "every blocking idle/continue edge must retain the finite local wake bound",
         errors,
-        count=6,
+        count=8,
     )
     if run_inner is not None:
         tokens = rust_code_tokens(run_inner.source)
@@ -68049,33 +68069,17 @@ continue;
 """
             ),
         )
-        exact_admission_handoff_continue_count = _token_sequence_count(
-            tokens,
-            rust_code_tokens(
-                """
-let Some(_certified_serve_producer_episode) = services
-    .try_begin_certified_serve_producer_episode()
-    .map_err(V2RunnerError::Service)?
-else {
-    continue;
-};
-"""
-            ),
-        )
         if (
-            continue_count != 7
-            or directly_timed_continue_count != 5
+            continue_count != 8
+            or directly_timed_continue_count != 7
             or recovery_timed_continue_count != 1
-            or exact_admission_handoff_continue_count != 1
         ):
             errors.append(
-                f"{runner_path}:{run_inner.line}: all seven serialized "
-                "height-loop continue edges must be either finitely timed or "
-                "the sole queue-locked exact-admission handoff; "
+                f"{runner_path}:{run_inner.line}: all eight serialized "
+                "height-loop continue edges must retain finite local waits; "
                 f"continues={continue_count}, "
                 f"directly_timed={directly_timed_continue_count}, "
-                f"recovery_timed={recovery_timed_continue_count}, "
-                f"exact_handoff={exact_admission_handoff_continue_count}"
+                f"recovery_timed={recovery_timed_continue_count}"
             )
         if _token_sequence_count(tokens, rust_code_tokens("wake_rx.recv()")):
             errors.append(
@@ -68100,8 +68104,9 @@ else {
     _require_rust_token_sequence(
         runner_path,
         runner_items.get("outer_ingress_turns"),
-        "(0..limit.max(1)).flat_map(|_| [OuterIngressTurn::Runtime, OuterIngressTurn::Ingress])",
-        "ingress must alternate a finite runtime turn with each finite ingress turn",
+        "(0..limit.max(1)).flat_map(|_| { [OuterIngressTurn::Completion, "
+        "OuterIngressTurn::Runtime, OuterIngressTurn::Ingress,] })",
+        "ingress must alternate finite completion, runtime, and ingress turns",
         errors,
     )
     _require_rust_token_sequence(
@@ -68148,17 +68153,14 @@ def _kura_application_receipt_production_source_fidelity_errors(
 ) -> list[str]:
     """Bind application-receipt observation to the locked durability owner."""
 
-    kura_path = repo_root / "crates" / "iroha_core" / "src" / "kura.rs"
+    (
+        kura_path,
+        kura_source,
+        _kura_component_sources,
+        kura_inventory_errors,
+    ) = _kura_production_source_inventory(repo_root)
     release_path = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
-    errors: list[str] = []
-    if not kura_path.is_file() or kura_path.is_symlink():
-        errors.append(
-            f"{kura_path}: Kura application-receipt production source must be "
-            "a regular file"
-        )
-        kura_source = ""
-    else:
-        kura_source = kura_path.read_text(encoding="utf-8")
+    errors = list(kura_inventory_errors)
 
     kura_context = (("impl", "Kura"),)
     observation = _require_rust_item(
@@ -68727,20 +68729,15 @@ let metadata =
         ),
         (
             """
-let aggregate_bytes = match kind {
-    NativeAmxEvidenceKind::Manifest => &mut manifest_bytes,
-    NativeAmxEvidenceKind::Receipt => &mut receipt_bytes,
-};
-*aggregate_bytes = aggregate_bytes.checked_add(encoded_len)
+evidence_bytes = evidence_bytes.checked_add(encoded_len)
 """,
-            "standalone Native AMX manifest and receipt byte totals must be "
-            "independent and overflow checked",
+            "standalone Native AMX aggregate byte total must be overflow checked",
         ),
         (
             """
-if *aggregate_bytes > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES {
+if evidence_bytes > self.native_amx_participant_evidence_file_bytes() {
 """,
-            "standalone Native AMX aggregate byte bounds",
+            "standalone Native AMX aggregate byte bound must use the configured production limit",
         ),
         (
             """
@@ -71987,6 +71984,8 @@ def _async_historical_recovery_source_fidelity_errors(
         ),
         "HistoricalActiveCommitCertificateRequestReachesDecision": (
             "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
+            "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalProtectedServiceRankLeafProperties( "
             "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalCommitCertificateConcreteLeafProperties( "
@@ -72009,6 +72008,8 @@ def _async_historical_recovery_source_fidelity_errors(
         ),
         "HistoricalTargetDecisionReachesApplicationFromConcreteLeaves": (
             "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
+            "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalProtectedServiceRankLeafProperties( "
             "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalDecisionFrontierAvailabilityProperty( "
@@ -72034,6 +72035,8 @@ def _async_historical_recovery_source_fidelity_errors(
         ),
         "HistoricalRecoveryTargetDecisionFromExactCorridor": (
             "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
+            "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
             "AsyncSpecAt(initialContext)) "
             "=> HistoricalRecoveryTargetDecisionProgressProperty( "
@@ -72047,6 +72050,8 @@ def _async_historical_recovery_source_fidelity_errors(
         ),
         "ResponsiveDecisionApplicationFromExactCorridor": (
             "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
+            "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
             "AsyncSpecAt(initialContext)) "
             "=> ResponsiveDecisionApplicationProgressProperty( "
@@ -72060,6 +72065,8 @@ def _async_historical_recovery_source_fidelity_errors(
         ),
         "HistoricalRecoveryAsyncTemporalPrerequisitesFromExactCorridor": (
             "\\A initialContext: /\\ AsyncSpecAt(initialContext) "
+            "/\\ ProtectedServiceFiniteRunnerEpisodeClosureProperty( "
+            "AsyncSpecAt(initialContext)) "
             "/\\ HistoricalRecoveryAsyncTemporalClosurePremises( "
             "AsyncSpecAt(initialContext)) "
             "=> HistoricalRecoveryAsyncTemporalPrerequisites( "
@@ -75871,7 +75878,12 @@ def _production_liveness_release_inventory_errors(
             "source must be a regular file"
         )
     else:
-        late_lane_recovery_source = late_lane_recovery_path.read_text(encoding="utf-8")
+        _loaded_path, late_lane_recovery_source = _read_reviewed_rust_source(
+            repo_root,
+            late_lane_recovery_path.relative_to(repo_root).as_posix(),
+            errors,
+            "late canonical lane-recovery regression source",
+        )
         late_lane_recovery_test = _require_rust_item(
             late_lane_recovery_path,
             late_lane_recovery_source,
@@ -75929,8 +75941,11 @@ def _production_liveness_release_inventory_errors(
             "source must be a regular file"
         )
     else:
-        close_prefix_runner_source = close_prefix_runner_path.read_text(
-            encoding="utf-8"
+        _loaded_path, close_prefix_runner_source = _read_reviewed_rust_source(
+            repo_root,
+            close_prefix_runner_path.relative_to(repo_root).as_posix(),
+            errors,
+            "closed-prefix suffix-retry regression source",
         )
         close_prefix_retry_test = _require_rust_item(
             close_prefix_runner_path,
@@ -76596,10 +76611,10 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "32b3a409c731cb7c9619d1f8d6ee74e8b6bce666766dae557c04de7b3394b748"
     ),
     "scripts/normalize_sumeragi_v2_tlc_trace.py": (
-        "5a1b24ac957dc95e3b81e9061f456d22133ba965ae2c64d176dc563f8230dfe3"
+        "e21f876507ce5152a8e64a07cfcff235bc9709d294800f77130e819deccd3537"
     ),
     "scripts/formal/check_sumeragi_v2_replay_trace.sh": (
-        "3d1e6a4c22b6202d79af2e337817484d66e676fddf86c83ec8a0cc1a3d875c83"
+        "ccdae44c2fc9d12dfe7a1239988de036a3181aea7f76c522a83ce4809f300118"
     ),
     "crates/iroha_sumeragi_core/tests/model_trace_replay.rs": (
         "87305ef2c045f815b18d9bac556285fe15813b4b3ff801f3c1f19c7272a55349"
@@ -77467,33 +77482,6 @@ def _atomic_timeout_completion_source_fidelity_errors(
     return errors
 
 
-_SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
-    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "fc3c131df1f3511f80ce47720ab87043106239d332936f240348d3244550835e"
-    ),
-    "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "a1023bc4be73a325b99bf7390116d82eb378bcc45afde6d47174c01a43173dab"
-    ),
-    "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
-        "5c0e3d9acd7ca82304ff752338ab69f93962f6d85658c568119e5e09b69edb52"
-    ),
-    "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
-        "9fb4335289c39dae60b9a8299902e57a64d258070e61e331941c24201519c947"
-    ),
-    "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "1e144f784c02f945d6a258a4bea6d683d8d5285c04d08db343847d2b77dac0b8"
-    ),
-    "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "d84a426c7d967091e27a3fba79b9c1e0becf8dbe44a7dfe80f30ec150f4198a8"
-    ),
-    "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "23a2ba99f0c4aa466780bcad440e21fb45c813af40d8163927af749b1eedf902"
-    ),
-    "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "b0a35d3ed66c22fa6b37fc4cd0155ebcfb00de47afeb6ddf89f609f3bbdc70e0"
-    ),
-}
-
 
 _INSTALLED_TC_SELECTOR_PROOF_SHA256 = (
     "99743a47d15918454ec638c35556ed1a7d985247d982ecd31032d7dfec0292bf"
@@ -77593,11 +77581,14 @@ def _same_round_semantic_kernel_source_fidelity_errors(
     for relative, expected_sha256 in (
         _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256.items()
     ):
-        path = repo_root / relative
-        if not path.is_file() or path.is_symlink():
-            errors.append(f"{path}: same-round semantic kernel source must be regular")
+        path, source = _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            "same-round semantic kernel source",
+        )
+        if not source:
             continue
-        source = path.read_text(encoding="utf-8")
         observed_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
         if observed_sha256 != expected_sha256:
             errors.append(
@@ -77813,20 +77804,23 @@ let effect = self.start_persistence(
                 "view-zero proposal admission must bind the semantic parent decision",
             ),
             (
-                """
-if !refinement::accepts(transition) {
-    return Err(ReducerError::RefinementViolation);
-}
-""",
-                "Reducer::step must invoke the production refinement commit gate",
+                "let Some(checked_refinement) = refinement::check(transition) "
+                "else { let diagnostic = refinement::diagnose(transition); "
+                "iroha_logger::error!(event = ?audit_event, ?diagnostic, "
+                '"Sumeragi v2 reducer rejected the transition refinement predicate"); '
+                "return Err(ReducerError::RefinementViolation); };",
+                "Reducer::step must acquire checked production refinement "
+                "authority before committing candidate state",
             ),
             (
-                """
-if !production_durable_intent_trace_refines_progress_witness_kernel(
-    durable_intent_trace,
-)
-""",
-                "Reducer::step must invoke the shared durable-intent kernel",
+                "let Some(checked_transition) = "
+                "check_production_durable_intent_transition(durable_intent_trace) "
+                "else { iroha_logger::error!(event = ?audit_event, "
+                "?durable_intent_trace, "
+                '"Sumeragi v2 reducer rejected the durable-intent refinement predicate"); '
+                "return Err(ReducerError::RefinementViolation); };",
+                "Reducer::step must acquire the source-shared durable-intent "
+                "authorization token",
             ),
             (
                 """
@@ -77850,17 +77844,13 @@ let strict_same_round_timeout_upgrade = matches!(
                 "InstallTimeout acknowledgement must classify the exact strict same-round lock-only upgrade before applying durable state",
             ),
             (
-                """
-let next_generation =
-    if matches!(&pending.continuation, Continuation::InstallTimeout { .. }) {
-        self.generation
-            .next()
-            .ok_or(ReducerError::GenerationOverflow)?
-    } else {
-        self.generation
-    };
-""",
-                "InstallTimeout acknowledgement must reject generation exhaustion before applying WAL state or releasing its pending owner",
+                "let next_generation = match pending.entry.record() { "
+                "WalRecord::InstallTimeout(certificate) => self "
+                ".generation_after_timeout_install(certificate) "
+                ".ok_or(ReducerError::GenerationOverflow)?, "
+                "_ => self.generation, };",
+                "InstallTimeout acknowledgement must preflight same-round "
+                "generation exhaustion while allowing an advancing-view reset",
             ),
             (
                 "self.generation = next_generation;",
@@ -77917,13 +77907,13 @@ timeout_control_after: after
             ),
             (
                 """
-fn timeout_install_accepts_the_last_generation() {
+fn same_round_timeout_upgrade_accepts_the_last_generation() {
 """,
                 "the final representable InstallTimeout generation must remain covered by a positive regression",
             ),
             (
                 """
-fn timeout_install_generation_overflow_preserves_the_complete_state() {
+fn same_round_timeout_generation_overflow_preserves_the_complete_state() {
 """,
                 "generation overflow must retain a regression for complete reducer-state non-mutation",
             ),
@@ -78158,11 +78148,15 @@ if facts.install_view_unchanged {
                 "Verus volatile preservation must prove exact timeout control retention or advancing-view absence",
             ),
             (
-                """
-let facts = verified_facts_from_projection(projection);
-let accepted = verified_production_transition_gate(facts);
-""",
-                "the executable Verus production kernel must derive facts before gating",
+                "pub closed spec fn production_transition_action_relation("
+                "facts: ProductionTransitionFactsProjection,) -> bool { "
+                "production_transition_gate_body!(facts, "
+                "production_volatile_summary_well_formed, "
+                "production_named_action_relation, "
+                "production_effect_trace_relation, "
+                "production_transition_branch_relation,) }",
+                "the Verus production relation must gate source-derived facts "
+                "through the shared transition body",
             ),
         ),
     }
@@ -78497,18 +78491,14 @@ def _local_proposal_timeout_source_fidelity_errors(
         "crates/iroha_core/src/sumeragi/v2_core/tests.rs",
         "crates/iroha_sumeragi_core/src/verus_proofs.rs",
     ):
-        path = repo_root / relative
-        if not path.is_file() or path.is_symlink():
-            errors.append(
-                f"{path}: exact local-proposal timeout source must be regular"
-            )
-            continue
-        try:
-            sources[relative] = (path, path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError) as error:
-            errors.append(
-                f"{path}: cannot read exact local-proposal timeout source: {error}"
-            )
+        path, source = _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            "exact local-proposal timeout source",
+        )
+        if source:
+            sources[relative] = (path, source)
 
     specs = (
         (
@@ -79697,6 +79687,7 @@ def validate_ledger(
             formal_dir, ROOT_DIR
         )
     )
+    errors.extend(_reviewed_rust_include_manifest_errors(ROOT_DIR))
     errors.extend(_same_round_semantic_kernel_source_fidelity_errors(ROOT_DIR))
     errors.extend(_installed_tc_selector_source_fidelity_errors(formal_dir))
     errors.extend(_local_proposal_timeout_source_fidelity_errors(ROOT_DIR))

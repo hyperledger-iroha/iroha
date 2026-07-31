@@ -708,33 +708,33 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_SHA256 = {
         "965b2f2b71534f09b8b2bcbc701729b44549edcd51f5d0d7ce3fe89da6c93584"
     ),
     SERVE_SCHEDULER_ORDINAL_MUTATION_RUNNER: (
-        "556a595942ccc943ffc0acc896ca967c70f9c363fda24b55bfa235f17e85ad10"
+        "26dde32bedb3b54cdfa7ead672fa1498b853a936b6620a7715f9ba9ea77ea8e2"
     ),
 }
 SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256 = (
     (
+        "configuration and shared result-contract binding",
+        'readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"',
+        "if (($#)); then",
+        "babab96e058fa452cd5e03cd38be6318e8af3d20e1aad2486b2093d1a853ca54",
+    ),
+    (
         "preflight and SANY execution",
         "if (($#)); then",
-        "assert_nonzero_state_space() {",
+        "run_tlc() {",
         "cd4e26166d5fefa8422eb53db4bbe68a6304f75b73d9b1c32be9bf7a94525d39",
     ),
     (
-        "nonzero state-space checker",
-        "assert_nonzero_state_space() {",
-        "run_tlc() {",
-        "37270a8ab03ab36ace3d8582867a16bdc00b93072b2be85f01f0c7f89a1ae6fe",
-    ),
-    (
-        "TLC status and terminal-marker checker",
+        "TLC status and shared terminal assertions",
         "run_tlc() {",
         'shared_fixed_log="$(run_tlc shared-ordinal-fixed "$SHARED_FIXED_CONFIG" 0)"',
-        "2aadc6b5c6b1a8949af6540d9d0cd9c59bc4d4c1b565439a375f71b22ca8e943",
+        "9c825d3ac384408982f9130f7f7418723e727c6e0f69650d769bbe2a491d0380",
     ),
     (
         "six-repaired then six-mutant execution tail",
         'shared_fixed_log="$(run_tlc shared-ordinal-fixed "$SHARED_FIXED_CONFIG" 0)"',
         None,
-        "32263ec888f11ba49a9ae953043ec71ec06da855f2524fa1e271ae79c896d15c",
+        "2e086ef27315e606c56df8247b9fdf3ee1199d19acd73d403a636ce58a31f35e",
     ),
 )
 SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
@@ -743,7 +743,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "4486937d3ffe88832a4d5f113ac87875cffc1970227c1579714f77864b4229fd"
+        "2208d10a0a3636e919f85f4d9d611fc75c428934e03dc596732f01cf2c8fa616"
     ),
 }
 COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_ARTIFACTS = (
@@ -773,7 +773,7 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_SHA256 = {
         "dabf0dfd92215a53e7acc51e974af2188aaa542bb437d7e81da77596a76300bc"
     ),
     COMMIT_IMPORT_PROVENANCE_MUTATION_RUNNER: (
-        "129dbbcb237a97a636f0a52cfba725be87eee5dab6fa0833852891181271a899"
+        "4bd77eed89bce194b308769b0267a814628a6596ab298d68bf1d3ca8f198eaaa"
     ),
 }
 COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
@@ -783,10 +783,10 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "313fb65887b91ae0e9b340c8cab7130ad1ea016727845d78d6c5fb28b4709bea"
+        "2208d10a0a3636e919f85f4d9d611fc75c428934e03dc596732f01cf2c8fa616"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
-        "f9a5d50bef36931cb48591f6adc2b624c14872338ccba861574d7010bd567621"
+        "7bbc3620ad8bb0dc7bc3e3288e01c254563d54fce7b271bd05e393d938b924c0"
     ),
 }
 _FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS = (
@@ -802,6 +802,7 @@ SHARED_TLC_RESULT_CONTRACT = (
 SHARED_TLC_RESULT_CONTRACT_CALLERS = (
     "scripts/formal/check_sumeragi_v2_replay_trace.sh",
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh",
     "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh",
     "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh",
     "scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh",
@@ -843,97 +844,100 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "f89449d336dc4b6f3a9e7c78e3b05780e0d59ca7de200cce5669ca1fb9715f74"
     ),
     "scripts/formal/check_sumeragi_v2_replay_trace.sh": (
-        "f9db394da086d89622c1459a7dd497c495b52774acacb1b498c1dd3efd60769e"
+        "ccdae44c2fc9d12dfe7a1239988de036a3181aea7f76c522a83ce4809f300118"
     ),
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
-        "e219267868924ac2318757007855d090f26d3613d69f5b0894ec50fe0180757b"
+        "808cfababed87e4bc7d245986ab09de3549d7eb0569d11a06e7f51e47edb190b"
+    ),
+    "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
+        "2d8ce44f8a923ffa3f931e9783408183d68ed49112548793d61007229f43dec7"
     ),
     "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh": (
-        "1ca1f4aa0c48e43a8d671959621359fe935e8f3e641ac9a45c9ed71edfe40e84"
+        "a9bad39fa0caa6761cf7fa5aee259cba9e932234a79e4401ccecc380ca072200"
     ),
     "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh": (
-        "a57cbd496d759f43f1082cdce6e65a69a241f2a3abfb25f0ea6a931c72fdc4dd"
+        "28e4512bd6f856175e5dc5c601afa41f95e4a511f0e9d9aeac5127a309c1b610"
     ),
     "scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh": (
-        "b9b428904d383c42d1a7777ac33ec7fd0922ea5bca17f046883b8ab47b280f8d"
+        "da7d91db8c4b7123cda949b50601b2bf23db1f257bb66d1929860346b61bbffc"
     ),
     "scripts/formal/run_sumeragi_v2_certified_response_identity_separation_mutation.sh": (
-        "8f527b34e8e0bfc805aa308eafc1f0c76a07e87e77f73d5e4071bb436f471e1b"
+        "2b8dc5db20be959526ca0a5fe9d57ac0d34afb209cb5d7a9d80aeb6e55740569"
     ),
     "scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh": (
-        "c0194e00332dd0b9dfcee1298a04dc45821b192913e1156a24f4938f4690b120"
+        "166fbeb948d2e05015c6deed7c4d45e512bf9f29b8825f5feccb7608c0ef2eae"
     ),
     "scripts/formal/run_sumeragi_v2_certified_response_source_lineage_mutation.sh": (
-        "8c2ebdb33f53f243e33c611dede252b42165da9e0f81fa89d75d9298b9cfda8f"
+        "dbaba12f18e9f48a490891625ca6f5556f0b1517b22f8d5fabaa57e7835bb1d7"
     ),
     "scripts/formal/run_sumeragi_v2_commit_import_provenance_mutations.sh": (
-        "129dbbcb237a97a636f0a52cfba725be87eee5dab6fa0833852891181271a899"
+        "4bd77eed89bce194b308769b0267a814628a6596ab298d68bf1d3ca8f198eaaa"
     ),
     "scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh": (
-        "afec183a6cc8c5d1ff118e5e1676eb10877c0b43d6580fdfdd8574fa3b2a7932"
+        "252ee943a2392f866d93cd1c62af4e17be63c22dcdfcfb0f73cd6691ac7bd3a4"
     ),
     "scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh": (
-        "0c521f2d552215a2112254990d614b0e205fd134ddf2c78ce7525e1146efc137"
+        "c12af944bccd6587374576ecc0abf6779a468ac0162d59b3c6762ab09aab9017"
     ),
     "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
-        "46cc895ff6a6cbd410ab557dd887c264831fd65d5162df107d9736e71f2b9bc3"
+        "fe03d8b9a0234421cf9d394599adc4c8efe3e1e66ed2beea2260e744e86e225d"
     ),
     "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh": (
-        "260779cbee48cb30ebc35573d3d6f5f86520487f34463cd1b8450ab8793d0c09"
+        "2ab6aa430893197888a69b4ec56a120556e44e7465893dc5155a3941d236519e"
     ),
     "scripts/formal/run_sumeragi_v2_indexed_service_activation_mutations.sh": (
-        "aa819a23d9ec07154c9a60534fcd191a4e39674ca197f6452b1e37480c58ef6f"
+        "88c03a575317b85ec59660d4a8e7164798d0ce11b59c8e8da5809f4d5b8132af"
     ),
     "scripts/formal/run_sumeragi_v2_inflight_first_release.sh": (
-        "65702851d065468bc417ee2dc28feaef00cfc5f439b229a9643038d10e4de58c"
+        "25b658d7dd2866f04caf679fca9b3274091ce202f96c9f269d5e5d136ba1c466"
     ),
     "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh": (
-        "0b18255d2f7124f60097267b269f17a835ab20ea1cc8dec742e37b5b8adc4d14"
+        "7aaac40fa9cb9fd603f8809baba4152d8266ae19adad6a967aa04290e2a2af6b"
     ),
     "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh": (
-        "320f160009a54db1529e8e03290486931076ab778cfecb01431912fe3ca7c1d6"
+        "4bf965e65183469fc3434cdf96c486c921aa5f270a192580761ab6a0e7f6d7f8"
     ),
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
-        "7d7c3e43d9ac792c3cb648ead7fef3a602cfa4df9818239987834d1227f846fe"
+        "f66f25362a5513845abe4820a4c574d28197c17dde81a99da55f551d8241bc95"
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
-        "3c6c0a192bcba0ec20519f913df82c1287d621d0a40ef2066dc8434ed62bd660"
+        "50f55d47f8623eaec61d910ec56c97879041fbc346d6f6b6ed8fdb9a53d544fa"
     ),
     "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh": (
-        "0a6edde7fd8f827a7af32005fc2436a3370d02d00801e7a0a974477f6a8f554f"
+        "fc841bb679feaf1ded305f1ab0e39ba388e49876bcbc1e3cb39436b09be74a78"
     ),
     "scripts/formal/run_sumeragi_v2_persist_install_validation_mutation.sh": (
-        "e0d59013a307e6693d447ab8ef80f4b3a67fcbb43bd5161eb99ec4ee90969e2e"
+        "73dab6c69caa1ecba6da0aa7f8c0aec30f449aab9c39810c23ed928df0ed2bdb"
     ),
     "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh": (
-        "a0ff98fc89be2c5095b0c98e7a56fde83f48dd9b9ef53496d2603dc395080d03"
+        "9e8a9f07e50230929712a84d01abf4a75f134727a254a0fd21b57e19c93a4e8b"
     ),
     "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
-        "a1dd1eb6d9e9c925210c55ba0ced6b63669cc0b1f33f4a8319e6645f5cdb8de5"
+        "5cffb84945d844b38e8d5cc492ef1381519111750592c96a412ddcf170dde072"
     ),
     "scripts/formal/run_sumeragi_v2_progress_mutations.sh": (
-        "80c4d36d5aef2aed9d5ddd500cc3500344e7cf8b044a329dbe815b65689daa17"
+        "a3060703cbf35f08e0a60b35e9d2b3efcb4a72a4e6524d117726e365a3c89551"
     ),
     "scripts/formal/run_sumeragi_v2_replay_locked_body_carrier_mutation.sh": (
-        "04cf6200d9a8f0db91518087b3918c6037ab92b56ccb5e86ae9bda4f77c9fb14"
+        "6316f98a9bba2c0bc36155f14f720b60148c1d4d6eb866b7600ce80d0bc8aaea"
     ),
     "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh": (
-        "b1f66896acf7b68d2e2648bfd73e23d69d430ad50a475047b07811e30da06aa0"
+        "b18a14944ca8ece675b70307f3d091112d07b92ca31513612c47cdb152722729"
     ),
     "scripts/formal/run_sumeragi_v2_restart_locked_fetch_order_mutation.sh": (
-        "2647986ff71237568e0e4a6f08e2e906006cbd579bf61c7891ec3eb6036ac675"
+        "404ddb1393d21d33e83f0c01afb5bacf4e2d761420cbf6905351c043464a0596"
     ),
     "scripts/formal/run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh": (
-        "878b9b930f1b348d4122a9323dce4d0a08b8899418d3e3f41e8bd451f2ae1274"
+        "26dde32bedb3b54cdfa7ead672fa1498b853a936b6620a7715f9ba9ea77ea8e2"
     ),
     "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
-        "2628cc89a4e15ae1981ce0822a6133f5248b779a1e494f4eadfce1c58f8bbd88"
+        "01f822f4da7f7b91d5f4935dda9992a8de5a4d25e5c6e661ec2784cfbe88b944"
     ),
     "scripts/formal/run_sumeragi_v2_tlc.sh": (
-        "30b3b26e59a8f0d1792211f6d987498dee848f48865151c7fc36933f83e65abd"
+        "bceb90990f6ca635bf9d48ad23d140f1a9088954f5bf81952646ec756d517424"
     ),
     "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh": (
-        "b3cbbcf89f2706b63aca2b5ea78ed118107b881b46f7ca293858ffb8d7f98ed2"
+        "e1ac1e03c10f2667eb4254b99fa9cd60955417fc39540b7697f8721364313340"
     ),
 }
 SHARED_TLC_RESULT_BRANCH_PROFILES = {
@@ -943,6 +947,13 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
         5,
         0,
         1,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
+        1,
+        5,
+        0,
+        0,
         0,
     ),
     "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh": (
@@ -1149,6 +1160,13 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES = {
 }
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     {
+        "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
+            1,
+            1,
+            1,
+            1,
+            1,
+        ),
         "scripts/formal/check_sumeragi_v2_replay_trace.sh": (0, 0, 0, 0, 0),
         "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
             1,
@@ -1217,10 +1235,10 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     }
 )
 SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
-    "a9aac15ecae31c9acc872efc62338fa3ae80165288d224f1dfb156cdcecc6458"
+    "5fadddda7f21c5396893a17271e5bedf9ab9f43e2c6848a06abc8ffb60bd881d"
 )
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
-    "c0f77106efde5d9d5a7158e15d988a387ca90a5732f899e6ba052ce2ff3d6346"
+    "3af011606b9fd8045a51b3461dceab4e6808b536305dcbe6cebdf14c97c941ed"
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla": (
@@ -1584,7 +1602,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "a94a946e62230d7a656c0945737b744945e73051f812c7ece7d6c35f107a7e2a"
     ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "7d7c3e43d9ac792c3cb648ead7fef3a602cfa4df9818239987834d1227f846fe"
+        "f66f25362a5513845abe4820a4c574d28197c17dde81a99da55f551d8241bc95"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
@@ -1677,7 +1695,7 @@ INDEXED_SERVICE_ACTIVATION_MUTATION_SHA256 = {
         "11091b99cbaa5ebce85065da07dfb46eb326243da412e715e6d5bb774f162d81"
     ),
     INDEXED_SERVICE_ACTIVATION_MUTATION_RUNNER: (
-        "aa819a23d9ec07154c9a60534fcd191a4e39674ca197f6452b1e37480c58ef6f"
+        "88c03a575317b85ec59660d4a8e7164798d0ce11b59c8e8da5809f4d5b8132af"
     ),
 }
 INDEXED_SERVICE_ACTIVATION_MUTATION_FORMAL_GLOBS = (
@@ -1708,7 +1726,7 @@ HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_SHA256 = {
         "bdd9613583893b49e8f5762ea3342a50f5cc289689b225ef8b55c2aac0e8c49d"
     ),
     HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_RUNNER: (
-        "82075c8d6b565dfa18f0f7582aa3a3c4da1fae3b0cf8ef95c7f91ab214190f2b"
+        "fe03d8b9a0234421cf9d394599adc4c8efe3e1e66ed2beea2260e744e86e225d"
     ),
 }
 HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_FORMAL_GLOBS = (
@@ -1883,7 +1901,7 @@ EFFECT_CAPACITY_MUTATION_SHA256 = {
         "15cded2fae4c33a3276314718793e9a46b1f59571c8f2501f49eae114cc67524"
     ),
     EFFECT_CAPACITY_MUTATION_RUNNER: (
-        "e89b0abf648979dcf7a3263c787e848bc3a7248c461c798d65c247f3b0d431a1"
+        "c12af944bccd6587374576ecc0abf6779a468ac0162d59b3c6762ab09aab9017"
     ),
 }
 EFFECT_CAPACITY_MUTATION_FORMAL_GLOBS = (

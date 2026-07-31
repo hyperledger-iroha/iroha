@@ -176,12 +176,14 @@ def test_native_prepublication_contract_rejects_removed_prepublication_call(
         ),
         (
             ".prepublish_native_amx_participant_application_evidence(",
-            "!token.authenticates("
-            "committed_block.as_ref(), &native_amx_manifest, artifact)",
+            "State::native_amx_participant_frontier_markers(",
         ),
         (
-            "!token.authenticates("
-            "committed_block.as_ref(), &native_amx_manifest, artifact)",
+            "State::native_amx_participant_frontier_markers(",
+            "token.authenticates_state_frontiers(",
+        ),
+        (
+            "token.authenticates_state_frontiers(",
             ".apply_without_execution_with_verified_v2_finality("
             "&committed_block, commit_topology)",
         ),
@@ -193,7 +195,8 @@ def test_native_prepublication_contract_rejects_removed_prepublication_call(
     ),
     ids=(
         "finality-before-prepublication",
-        "prepublication-before-readback-token",
+        "prepublication-before-state-projection",
+        "state-projection-before-readback-token",
         "readback-token-before-wsv-stage",
         "wsv-stage-before-wsv-commit",
     ),

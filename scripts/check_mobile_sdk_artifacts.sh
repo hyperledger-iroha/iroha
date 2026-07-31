@@ -9,7 +9,8 @@ Usage:
 Checks that the Iroha mobile SDK packaging surface is ready for wallet
 integration:
   - SwiftPM package manifest and NoritoBridge binary target exist.
-  - NoritoBridge.xcframework contains iOS device, iOS simulator, and macOS slices.
+  - NoritoBridge.xcframework contains iOS device plus universal iOS simulator
+    and macOS slices.
   - The canonical manifest is embedded in the XCFramework, and the public
     NoritoBridge.artifacts.json path is its stable relative symlink.
   - The manifest records per-slice SHA-256 hashes and the privacy-production
@@ -1591,6 +1592,7 @@ check_swift_package() {
   require_literal "$package" '.binaryTarget(' "NoritoBridge binary target declaration"
   require_literal "$package" 'name: "NoritoBridge"' "NoritoBridge binary target name"
   require_literal "$package" '.iOS(.v15)' "IrohaSwift iOS platform floor"
+  require_literal "$package" '.macOS(.v12)' "IrohaSwift macOS platform floor"
   require_literal "$package" '"MOBILE_SDK_APPLE_ARTIFACT_DIR"' "external NoritoBridge artifact directory input"
   require_literal "$package" 'path: bridgeTargetPath' "resolved NoritoBridge artifact path"
 }
@@ -1603,7 +1605,7 @@ check_xcframework() {
   local checked_in_swift_loader="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
   local swift_loader="$checked_in_swift_loader"
   local privacy_marker="$xcframework/.privacy-production-enabled"
-  local slices=(ios-arm64 ios-arm64_x86_64-simulator macos-arm64)
+  local slices=(ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64)
   local slice
 
   require_dir "$xcframework" "NoritoBridge XCFramework"
@@ -1627,6 +1629,77 @@ check_xcframework() {
       fi
     fi
   done
+  if ! run_isolated_checker_python - "$info" <<'PY'
+from pathlib import Path
+import plistlib
+import sys
+
+
+expected = {
+    "ios-arm64": {
+        "architectures": ["arm64"],
+        "platform": "ios",
+        "variant": None,
+    },
+    "ios-arm64_x86_64-simulator": {
+        "architectures": ["arm64", "x86_64"],
+        "platform": "ios",
+        "variant": "simulator",
+    },
+    "macos-arm64_x86_64": {
+        "architectures": ["arm64", "x86_64"],
+        "platform": "macos",
+        "variant": None,
+    },
+}
+try:
+    with Path(sys.argv[1]).open("rb") as handle:
+        payload = plistlib.load(handle)
+    libraries = payload.get("AvailableLibraries")
+    valid = (
+        isinstance(payload, dict)
+        and payload.get("CFBundlePackageType") == "XFWK"
+        and payload.get("XCFrameworkFormatVersion") == "1.0"
+        and isinstance(libraries, list)
+        and len(libraries) == len(expected)
+        and all(isinstance(library, dict) for library in libraries)
+    )
+    indexed = {
+        library.get("LibraryIdentifier"): library
+        for library in libraries
+    } if valid else {}
+    valid = valid and len(indexed) == len(libraries) and set(indexed) == set(expected)
+    if valid:
+        for identifier, contract in expected.items():
+            library = indexed[identifier]
+            valid = (
+                library.get("LibraryPath") == "libNoritoBridge.a"
+                and (
+                    "BinaryPath" not in library
+                    or library["BinaryPath"] == "libNoritoBridge.a"
+                )
+                and library.get("HeadersPath") == "Headers"
+                and library.get("SupportedArchitectures")
+                == contract["architectures"]
+                and library.get("SupportedPlatform") == contract["platform"]
+                and (
+                    (
+                        contract["variant"] is None
+                        and "SupportedPlatformVariant" not in library
+                    )
+                    or library.get("SupportedPlatformVariant")
+                    == contract["variant"]
+                )
+            )
+            if not valid:
+                break
+except (OSError, plistlib.InvalidFileException, TypeError, ValueError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PY
+  then
+    fail "NoritoBridge Info.plist does not declare the canonical universal Apple slices"
+  fi
 
   require_file "$embedded_manifest" "embedded NoritoBridge artifact manifest"
   require_file "$checked_in_swift_loader" "IrohaSwift native bridge loader"
@@ -1757,6 +1830,18 @@ if (
 sha256 = re.compile(r"^[0-9a-f]{64}$")
 commit = re.compile(r"^[0-9a-f]{40}$")
 version = re.compile(r"^[0-9]+(?:\.[0-9]+){1,2}$")
+hashes = manifest.get("hashes")
+expected_hash_keys = {
+    "ios-arm64",
+    "ios-arm64_x86_64-simulator",
+    "macos-arm64_x86_64",
+}
+if (
+    not isinstance(hashes, dict)
+    or set(hashes) != expected_hash_keys
+    or any(not isinstance(value, str) or not sha256.fullmatch(value) for value in hashes.values())
+):
+    raise SystemExit(1)
 for field in (
     "hermetic_runner_sha256",
     "cargo_binary_sha256",
@@ -2003,12 +2088,12 @@ PY
         fi
         actual_arches="$(lipo -archs "$binary" 2>/dev/null || true)"
         case "$slice" in
-          ios-arm64|macos-arm64)
+          ios-arm64)
             if [[ "$actual_arches" != "arm64" ]]; then
               fail "NoritoBridge $slice architectures must be arm64 (found ${actual_arches:-unreadable})"
             fi
             ;;
-          ios-arm64_x86_64-simulator)
+          ios-arm64_x86_64-simulator|macos-arm64_x86_64)
             if [[ " $actual_arches " != *" arm64 "* \
               || " $actual_arches " != *" x86_64 "* \
               || "$(wc -w <<<"$actual_arches" | tr -d '[:space:]')" != "2" ]]; then

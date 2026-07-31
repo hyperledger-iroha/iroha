@@ -385,6 +385,7 @@ fn collect_moderation_viewer_bindings(
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     let storage = &config.torii.sorafs_storage;
     if let Some(runtime) = storage.moderation_orchestrator.as_ref() {
+        validate_moderation_strict_ingress_binding(runtime)?;
         bindings.push(IrohaRuntimeProviderBindingV1::try_new_moderation_checkpoint_store(runtime)?);
         for (slot, handle, revision, policy_digest) in [
             (
@@ -435,6 +436,37 @@ fn collect_moderation_viewer_bindings(
         );
     }
     Ok(())
+}
+
+fn validate_moderation_strict_ingress_binding(
+    runtime: &iroha_config::parameters::actual::SorafsModerationOrchestrator,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    use sorafs_node::moderation_orchestrator::{
+        ModerationRuntimeProviderQualificationErrorV1 as Error,
+        ModerationRuntimeProviderQualificationV1,
+    };
+
+    let configured_qualification = ModerationRuntimeProviderQualificationV1::new(
+        runtime.strict_ingress_revision,
+        runtime.strict_ingress_policy_digest,
+    );
+    iroha_torii::sorafs::moderation_runtime::qualify_torii_moderation_strict_ingress_binding_v1(
+        &runtime.strict_ingress_handle,
+        configured_qualification,
+    )
+    .map_err(|error| match error {
+        Error::TestMarkedConfiguredHandle | Error::TestMarkedProviderHandle => {
+            IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected
+        }
+        Error::InvalidConfiguredHandle
+        | Error::InvalidProviderHandle
+        | Error::SubstitutedProvider => IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
+        Error::InvalidConfiguredQualification
+        | Error::UnavailableOrStale
+        | Error::InvalidQualification
+        | Error::QualificationMismatch
+        | Error::IdentityOrPolicyChanged => IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked,
+    })
 }
 
 fn collect_pop_potr_gateway_bindings(

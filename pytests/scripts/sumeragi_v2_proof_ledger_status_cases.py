@@ -1377,7 +1377,15 @@ def test_tlc_runner_cannot_claim_or_mutate_proof_completion() -> None:
     assert 'grep -Ec "$TLC_FINISHED_PATTERN"' in runner
     assert '"$progress_count" -lt 1' in runner
     assert "TLC bounded simulation ${cfg} did not report one exact successful run" in runner
-    assert "all exhaustive searches, deterministic simulations, and the recovery witness" in runner
+    assert (
+        "all exhaustive searches, deterministic simulations, the recovery "
+        "witness, the layout-only in-flight carrier corpus, and the pinned "
+        "multilane Apalache gate" in runner
+    )
+    assert (
+        "all requested exhaustive searches, deterministic simulations, and "
+        "recovery witnesses" in runner
+    )
     assert module.REQUIRED_TLC_CONFIG_HEADERS["chain_epoch.cfg"] == (
         "SPECIFICATION ChainEpochTlcSpec"
     )

@@ -2745,14 +2745,23 @@
             ),
             Err(LaneBlockPayloadAvailability::MissingLaneArtifact)
         ));
-        assert!(
-            !kura.autonomous_lane_payload_matches_reservation(
-                &payload.reservation_keys[0],
+        let reservation_group =
+            autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
+        let classified = kura
+            .classify_autonomous_lane_reservation_groups(
+                &[reservation_group],
                 chain_id_hash,
-                epoch,
-            ),
-            "restart reconciliation must release a tombstoned reservation",
-        );
+                &[epoch],
+            )
+            .expect("classify tombstoned reservation through the strict grouped predicate");
+        assert!(matches!(
+            classified.as_slice(),
+            [AutonomousLaneReservationEvidenceV1::ExactRetired {
+                payload: exact_payload,
+                retirement: exact_retirement,
+                ..
+            }] if exact_payload == &payload && exact_retirement == &retirement
+        ));
         assert_eq!(
             kura.autonomous_lane_merge_bundle(certified, chain_id_hash, epoch),
             Err("autonomous lane merge payload is unavailable"),
@@ -2789,4 +2798,3 @@
             "restart must not resurrect the retired executable payload",
         );
     }
-

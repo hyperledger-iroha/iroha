@@ -125,6 +125,11 @@ device.
 
 `Package.swift` checks for `dist/NoritoBridge.xcframework` next to the repository root and fails package resolution when the bridge is missing. Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` include the same bridge-location hint for broken or unloaded bridge symbols.
 
+The canonical XCFramework contains `ios-arm64`, the universal
+`ios-arm64_x86_64-simulator` slice, and the universal
+`macos-arm64_x86_64` slice. The macOS slice must contain both `arm64` and
+`x86_64`; the artifact checker rejects single-architecture substitutions.
+
 The default bridge build deliberately keeps real privacy proving and verification
 fail-closed. After the privacy production-gate evidence has been approved, build
 an opt-in Apple artifact with:

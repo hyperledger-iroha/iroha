@@ -24637,7 +24637,7 @@ pub(super) mod tests {
 
     #[test]
     fn provisional_current_height_drain_is_rejected_and_unbacked_lifecycle_is_detected() {
-        let (mut service, keys) = fixture_with_block_payload();
+        let (service, keys) = fixture_with_block_payload();
         let context = service.context.clone();
         let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
         let request = authenticated_serve_request(
@@ -26056,7 +26056,7 @@ pub(super) mod tests {
 
     #[test]
     fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity() {
-        let (mut service, keys) = fixture_with_block_payload();
+        let (service, keys) = fixture_with_block_payload();
         let context = service.context.clone();
         let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
         let invalid = authenticated_serve_request(

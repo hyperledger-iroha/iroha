@@ -1329,14 +1329,22 @@
         );
         kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, chain_id_hash, epoch)
             .expect("old finalized release remains idempotently provable");
-        assert!(
-            kura.autonomous_lane_payload_matches_reservation(
-                &successor.reservation_keys[0],
+        let successor_group =
+            autonomous_reservation_reconciliation_group(successor.reservation_keys.clone());
+        let classified = kura
+            .classify_autonomous_lane_reservation_groups(
+                &[successor_group],
                 chain_id_hash,
-                epoch,
-            ),
-            "current reservation lookup must resolve only the fresh attempt",
-        );
+                &[epoch],
+            )
+            .expect("strict classifier resolves the fresh exact attempt");
+        assert!(matches!(
+            classified.as_slice(),
+            [AutonomousLaneReservationEvidenceV1::ExactLive {
+                payload: exact_payload,
+                ..
+            }] if exact_payload == &successor
+        ));
         drop(kura);
         let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
         assert_eq!(
@@ -2812,4 +2820,3 @@
             "the public repair-enabled reader must recover the missing lane artifact",
         );
     }
-

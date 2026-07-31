@@ -167,7 +167,7 @@ jobs:
           echo "MOBILE_SDK_SWIFT_SCRATCH_DIR=$swift_scratch_dir" >> "$GITHUB_ENV"
       - name: Install Apple Rust targets
         run: |
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
           cargo fetch --locked
       - name: Make reviewed Iroha source read-only
         run: chmod -R a-w "$GITHUB_WORKSPACE"

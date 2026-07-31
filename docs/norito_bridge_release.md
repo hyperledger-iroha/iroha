@@ -15,6 +15,8 @@ that workflow for local release verification.
 
 - A macOS host with the latest stable Xcode command line tools installed.
 - Rust toolchain that matches the workspace `rust-toolchain.toml`.
+- The `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`,
+  `aarch64-apple-darwin`, and `x86_64-apple-darwin` Rust targets.
 - Swift toolchain 5.9 or newer.
 - CocoaPods (via Ruby gems) if publishing to the central specs repository.
 - Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
@@ -35,9 +37,12 @@ that workflow for local release verification.
    ./scripts/build_norito_xcframework.sh --privacy-production-enabled
    ```
 
-   The release command requires a clean dependency-closure source tree, compiles the Rust
-   bridge for the iOS device, arm64 and x86_64 iOS simulator, and arm64 macOS targets,
-   and writes `dist/NoritoBridge.xcframework`. The canonical manifest is embedded at
+   The release command requires a clean dependency-closure source tree, compiles
+   the Rust bridge for the iOS device plus arm64 and x86_64 variants of both the
+   iOS simulator and macOS, and writes `dist/NoritoBridge.xcframework`. The
+   architecture-specific libraries are combined into the canonical
+   `ios-arm64_x86_64-simulator` and `macos-arm64_x86_64` slices. The manifest
+   is embedded at
    `dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the companion
    `dist/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
    one atomic XCFramework exchange publishes the binaries and manifest together. The

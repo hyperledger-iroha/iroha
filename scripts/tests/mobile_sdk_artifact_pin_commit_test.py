@@ -21,7 +21,7 @@ def loader(first: str = "1", *, extra: str = "") -> str:
     return (
         "enum Loader {\n"
         "    static let expectedHashes = [\n"
-        f'        "macos-arm64": "{first * 64}",\n'
+        f'        "macos-arm64_x86_64": "{first * 64}",\n'
         f'        "ios-arm64": "{first * 64}",\n'
         f'        "ios-arm64_x86_64-simulator": "{first * 64}"\n'
         "    ]\n"

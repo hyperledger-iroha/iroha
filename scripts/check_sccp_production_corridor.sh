@@ -1309,6 +1309,7 @@ ensure_swift_bridge_artifact() {
     aarch64-apple-ios-sim
     x86_64-apple-ios
     aarch64-apple-darwin
+    x86_64-apple-darwin
   )
 
   if [[ "$DRY_RUN" -eq 1 ]]; then

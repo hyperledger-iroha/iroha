@@ -152,6 +152,33 @@ run_mutant native-dropped-startup-repair "$NATIVE_MODULE" \
 run_mutant native-ambiguous-latest-index "$NATIVE_MODULE" \
   multilane_native_ambiguous_latest_index_bug.cfg \
   MLNativeLatestIndexExact
+run_mutant native-shared-evidence-budget "$NATIVE_MODULE" \
+  multilane_native_shared_evidence_budget_bug.cfg \
+  MLNativeSharedEvidenceBudget
+run_mutant native-second-incoming-pair "$NATIVE_MODULE" \
+  multilane_native_second_incoming_pair_bug.cfg \
+  MLNativeSingleIncomingPairHeadroom
+run_mutant native-unauthenticated-temp-promotion "$NATIVE_MODULE" \
+  multilane_native_unauthenticated_temp_promotion_bug.cfg \
+  MLNativeTempPromotionAuthenticated
+run_mutant native-punctured-retained-history "$NATIVE_MODULE" \
+  multilane_native_punctured_retained_history_bug.cfg \
+  MLNativeRetainedHistoryExact
+run_mutant native-nonoldest-prefix-prune "$NATIVE_MODULE" \
+  multilane_native_nonoldest_prefix_prune_bug.cfg \
+  MLNativePruneOldestPrefix
+run_mutant native-nonhighest-repair-half "$NATIVE_MODULE" \
+  multilane_native_nonhighest_repair_half_bug.cfg \
+  MLNativeRetainedHistoryExact
+run_mutant native-multiple-repair-halves "$NATIVE_MODULE" \
+  multilane_native_multiple_repair_halves_bug.cfg \
+  MLNativeRetainedHistoryExact
+run_mutant native-conflicting-retained-pair "$NATIVE_MODULE" \
+  multilane_native_conflicting_retained_pair_bug.cfg \
+  MLNativeRetainedHistoryExact
+run_mutant native-retained-predecessor-drift "$NATIVE_MODULE" \
+  multilane_native_retained_predecessor_drift_bug.cfg \
+  MLNativeRetainedHistoryExact
 
 readonly AUTONOMOUS_MODULE="SumeragiV2AutonomousReservationCarrier.tla"
 run_mutant autonomous-carrier-drift "$AUTONOMOUS_MODULE" \
@@ -227,4 +254,4 @@ run_mutant queue-plan-duplicate-execution "$QUEUE_PLAN_ADMISSION_MODULE" \
   multilane_queue_plan_duplicate_execution_bug.cfg \
   MLAdmissionAtMostOnceExecution
 
-echo "[tlc] all 37 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"
+echo "[tlc] all 46 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"

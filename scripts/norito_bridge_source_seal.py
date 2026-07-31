@@ -30,6 +30,7 @@ APPLE_TARGETS = (
     "aarch64-apple-ios-sim",
     "x86_64-apple-ios",
     "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
 )
 ANDROID_TARGETS = (
     "aarch64-linux-android",
@@ -103,13 +104,13 @@ SNAPSHOT_SCHEMA = "iroha.norito-bridge-source-seal.v1"
 SWIFT_NATIVE_BRIDGE_PATH = "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
 SWIFT_NATIVE_BRIDGE_HASH_KEYS = frozenset(
     {
-        "macos-arm64",
+        "macos-arm64_x86_64",
         "ios-arm64",
         "ios-arm64_x86_64-simulator",
     }
 )
 SWIFT_NATIVE_BRIDGE_HASH_PIN = re.compile(
-    rb'^(?P<prefix>[ \t]+)"(?P<key>macos-arm64|ios-arm64|ios-arm64_x86_64-simulator)"'
+    rb'^(?P<prefix>[ \t]+)"(?P<key>macos-arm64_x86_64|ios-arm64|ios-arm64_x86_64-simulator)"'
     rb': "(?P<digest>[0-9a-f]{64})"(?P<suffix>,?)$',
     re.MULTILINE,
 )

@@ -104,7 +104,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "crates/iroha_core/src/kura/lane_geometry.rs"
     )
     release_relative = Path("scripts/run_sumeragi_v2_release_gates.sh")
-    for relative in (kura_relative, lane_geometry_relative, release_relative):
+    for relative in (
+        kura_relative,
+        *KURA_PRODUCTION_COMPONENT_FILES,
+        lane_geometry_relative,
+        release_relative,
+    ):
         destination = fidelity_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
@@ -475,6 +480,18 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "None",
             "standalone Native AMX scanner must classify only canonical "
             "per-height names",
+        ),
+        (
+            "read_geometry_native_amx_per_height_evidence",
+            "evidence_bytes = evidence_bytes.checked_add(encoded_len)",
+            "evidence_bytes = encoded_len",
+            "standalone Native AMX aggregate byte total must be overflow checked",
+        ),
+        (
+            "read_geometry_native_amx_per_height_evidence",
+            "if evidence_bytes > self.native_amx_participant_evidence_file_bytes() {",
+            "if false {",
+            "standalone Native AMX aggregate byte bound must use the configured production limit",
         ),
         (
             "ensure_first_release_lane_retirement_admissible_with_certified_locked",

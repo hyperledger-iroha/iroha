@@ -78,6 +78,15 @@ An explicitly injected registry remains authoritative. There is no
 process-global registry, plugin loader, environment selector, or executable
 provider selector in configuration.
 
+When finalized moderation is enabled, that same catalog projection also
+qualifies the configured strict-ingress handle, revision, and public-policy
+digest against Torii's fixed V1 ingress binding. This happens before the stock
+broker client or an injected registry is invoked, and therefore before Tokio
+or node-owned durable state exists. The in-process ingress is intentionally not
+an external broker slot; missing, substituted, stale, zero-qualified, or
+test-marked configuration fails the common launcher preflight, while the live
+adapter remains requalified at Torii construction and around every operation.
+
 The source tree provides `serve_runtime_provider_broker_v1` as an injected
 broker-server library boundary, but no checked-in executable calls it and no
 HSM, KMS, sealed-store, credential loader, or production backend is packaged.
@@ -141,9 +150,10 @@ The stock Governance DAG binary likewise has no built-in credential loader;
 deployment launchers inject a
 `GovernanceDagServiceRuntimeProviderRegistryV1` through the library entrypoint.
 
-Moderation strict ingress and the stream-token identity gap above remain
-production blockers; this registry wiring alone is not a claim that the
-embedding launcher or a deployment is production-complete.
+The stream-token identity gap above remains a production blocker. Closing the
+moderation strict-ingress preflight likewise does not provide the real external
+moderation signer, settlement, publication, notification, archive, or
+multi-replica deployment evidence required for production readiness.
 
 ## Configuration
 

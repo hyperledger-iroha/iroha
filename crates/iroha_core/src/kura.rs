@@ -113,7 +113,10 @@ use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 use crate::{
     block::CommittedBlock,
     commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError},
-    queue::{LaneQueueReservationKeyV2, RoutingPlan},
+    queue::{
+        LaneQueueReservationGroupIdentityV1, LaneQueueReservationKeyV2,
+        LaneQueueReservationReconciliationGroupV1, RoutingPlan,
+    },
     sumeragi::output_guard::ConsensusOutputGuard,
 };
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
@@ -243,6 +246,7 @@ const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norit
 const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
 const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES: usize = 4 * 1024;
 const MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES: usize = 65_536;
+include!("kura/autonomous_reservation_bounds.rs");
 const AUTONOMOUS_LANE_BLOCK_VIEW_STATE_MAX_BYTES: usize =
     MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIMS_DIR_PREFIX: &str = "autonomous_entrypoint_claims";
@@ -4734,8 +4738,9 @@ impl Kura {
             && manifest_bytes
                 .checked_add(receipt_bytes)
                 .is_some_and(|bytes| {
-                    u64::try_from(bytes)
-                        .is_ok_and(|bytes| bytes <= self.native_amx_participant_evidence_file_bytes())
+                    u64::try_from(bytes).is_ok_and(|bytes| {
+                        bytes <= self.native_amx_participant_evidence_file_bytes()
+                    })
                 })
     }
 
@@ -4750,12 +4755,10 @@ impl Kura {
     fn native_amx_evidence_total_payload_bytes(
         inventory: &NativeAmxEvidenceInventory,
     ) -> Option<u64> {
-        inventory
-            .temporaries
-            .values()
-            .try_fold(Self::native_amx_evidence_stable_payload_bytes(inventory)?, |total, file| {
-                total.checked_add(file.metadata.file.len())
-            })
+        inventory.temporaries.values().try_fold(
+            Self::native_amx_evidence_stable_payload_bytes(inventory)?,
+            |total, file| total.checked_add(file.metadata.file.len()),
+        )
     }
 
     /// Validate the retained per-route evidence window independently of its
@@ -4783,7 +4786,9 @@ impl Kura {
                 .checked_add(1)
                 .is_none_or(|successor| successor != pair[1])
         }) {
-            return Err("retained Native AMX evidence is not a contiguous participant-height suffix");
+            return Err(
+                "retained Native AMX evidence is not a contiguous participant-height suffix",
+            );
         }
 
         let manifest_only = manifest_heights
@@ -4827,9 +4832,9 @@ impl Kura {
         for pair in retained_heights.windows(2) {
             let predecessor_height = pair[0];
             let successor_height = pair[1];
-            let predecessor = manifests.get(&predecessor_height).ok_or(
-                "retained Native AMX successor has no preceding manifest descriptor",
-            )?;
+            let predecessor = manifests
+                .get(&predecessor_height)
+                .ok_or("retained Native AMX successor has no preceding manifest descriptor")?;
             let (lane_id, dataspace_id, lane_incarnation, previous_height, previous_hash) =
                 if let Some(successor) = manifests.get(&successor_height) {
                     (
@@ -4840,9 +4845,9 @@ impl Kura {
                         successor.leaf.predecessor_descriptor_hash,
                     )
                 } else {
-                    let successor = receipts.get(&successor_height).ok_or(
-                        "retained Native AMX successor has neither manifest nor receipt",
-                    )?;
+                    let successor = receipts
+                        .get(&successor_height)
+                        .ok_or("retained Native AMX successor has neither manifest nor receipt")?;
                     let descriptor = &successor.participant_proposal.descriptor;
                     (
                         descriptor.lane_id,
@@ -20224,7 +20229,7 @@ impl Kura {
                         path.clone(),
                         "Native AMX evidence disappeared during bounded inventory",
                     )
-            })?;
+                })?;
             let len = metadata.file.len();
             if len == 0
                 || len > STRICT_INIT_MAX_BLOCK_BYTES
@@ -21147,11 +21152,17 @@ impl Kura {
             .copied()
             .chain(removal_heights.iter().copied())
             .collect::<BTreeSet<_>>();
-        if original_heights.iter().copied().collect::<Vec<_>>().windows(2).any(|pair| {
-            pair[0]
-                .checked_add(1)
-                .is_none_or(|successor| successor != pair[1])
-        }) {
+        if original_heights
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| {
+                pair[0]
+                    .checked_add(1)
+                    .is_none_or(|successor| successor != pair[1])
+            })
+        {
             return Err(Error::PruneIntentConflict(
                 "Native AMX evidence prune intent was derived from a punctured retained history"
                     .to_owned(),
@@ -25232,6 +25243,10 @@ struct AutonomousLaneBlockDurableRecord {
     view_state_path: PathBuf,
 }
 
+include!("kura/autonomous_reservation_types.rs");
+include!("kura/autonomous_reservation_inventory.rs");
+include!("kura/autonomous_reservation_classifier.rs");
+
 /// Known metadata format variants for lane-local block artifacts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockArtifactFormat {
@@ -26819,6 +26834,8 @@ impl Kura {
         }
         Ok((related_files, attempts_at_height, related_bytes))
     }
+
+    kura_autonomous_reservation_inventory_methods!();
 
     fn autonomous_lane_block_attempt_view_state_path_for_entry(
         entry: &LaneConfigEntry,
@@ -32502,38 +32519,7 @@ impl Kura {
         })
     }
 
-    /// Return whether one durable autonomous payload owns an exact queue
-    /// reservation identity.
-    ///
-    /// This is the restart reconciliation predicate: coordinates and an
-    /// entrypoint hash alone are insufficient because a stale routing plan,
-    /// recreated incarnation, or different provisional owner must be released.
-    pub(crate) fn autonomous_lane_payload_matches_reservation(
-        &self,
-        key: &crate::queue::LaneQueueReservationKeyV2,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> bool {
-        self.read_autonomous_lane_block_artifact(
-            key.lane_id,
-            key.lane_block_height,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .is_some_and(|artifact| {
-            let payload = artifact.executable_payload;
-            payload
-                .reservation_keys
-                .iter()
-                .zip(&payload.routing_plans)
-                .zip(&payload.entrypoint_hashes)
-                .any(|((bound_key, plan), entrypoint_hash)| {
-                    bound_key == key
-                        && plan.digest() == key.routing_plan_digest
-                        && Hash::from(key.entrypoint_hash) == *entrypoint_hash
-                })
-        })
-    }
+    kura_autonomous_reservation_classifier_methods!();
 
     /// Resolve the exact durable slot retirement owning a live reservation.
     ///
@@ -49338,7 +49324,9 @@ mod tests {
     include!("kura/tests/04_merge_log_and_associations.rs");
     include!("kura/tests/05_merge_resolution_and_eviction.rs");
     include!("kura/tests/06_eviction_and_autonomous_lanes.rs");
+    include!("kura/tests/07a_autonomous_reservation_reconciliation_support.rs");
     include!("kura/tests/07_autonomous_lanes_and_sidecars.rs");
+    include!("kura/tests/07b_autonomous_reservation_reconciliation_tests.rs");
     include!("kura/tests/08_lane_receipts_and_artifacts.rs");
     include!("kura/tests/09_lane_artifacts_and_fastpq.rs");
     include!("kura/tests/10_native_amx_and_roster.rs");

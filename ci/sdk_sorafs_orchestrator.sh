@@ -489,7 +489,7 @@ run_javascript_parity() {
   (
     cd "${sdk_root}"
     npm ci
-    npm run build:native
+    IROHA_JS_NATIVE_BUILD_PROFILE=release npm run build:native
   )
   python3 -I "${REPO_ROOT}/scripts/check_native_sdk_abi21_artifact.py" \
     record \

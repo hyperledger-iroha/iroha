@@ -439,151 +439,6 @@ def copy_acyclic_liveness_debt_topology_fixture(
     return formal_dir
 
 
-def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
-    """Copy only the config-v6 merge/pending projection and its live consumers."""
-
-    for relative in (
-        Path("crates/iroha_config/src/parameters/defaults.rs"),
-        Path("crates/iroha_config/src/parameters/actual.rs"),
-        Path("crates/iroha_config/src/parameters/user.rs"),
-        Path("crates/iroha_core/src/merge_sidecar.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-    ):
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT_DIR / relative, destination)
-    kura = tmp_path / "crates/iroha_core/src/kura.rs"
-    kura.write_text(
-        """
-pub fn new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits() {
-    let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(
-        sumeragi_limits,
-        &config.store_dir.resolve_relative_path(),
-    )?;
-}
-
-fn pending_merge_entry_paths_unlocked() {
-    if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
-        return Err(Self::invalid_pending_merge_entry_error(
-            directory,
-            "pending certified merge entry count exceeds the hard limit",
-        ));
-    }
-}
-
-fn pending_queue_plan_admission_paths_unlocked() {
-    if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
-        return Err(Self::invalid_pending_queue_plan_admission_error(
-            directory,
-            "pending QueuePlan admission certificate count exceeds the hard limit",
-        ));
-    }
-}
-
-fn validate_pending_merge_entries_on_startup() {
-    if !self
-        .pending_control_sidecar_limits
-        .combined_bytes_within_limit(merge_bytes, admission_bytes)
-    {
-        return Err(Self::invalid_pending_queue_plan_admission_error(
-            self.store_root.clone(),
-            "pending merge and QueuePlan admission sidecars exceed their shared hard byte limit",
-        ));
-    }
-}
-
-pub(crate) fn persist_pending_certified_merge_entry() {
-    if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
-        return Err(Self::invalid_pending_merge_entry_error(
-            directory,
-            "pending certified merge entry count exceeds the hard limit",
-        ));
-    }
-    if pending_bytes.checked_add(bytes.len()).is_none_or(|total| {
-        !self
-            .pending_control_sidecar_limits
-            .combined_bytes_within_limit(total, admission_bytes)
-    }) {
-        return Err(error);
-    }
-}
-
-pub fn persist_pending_queue_plan_admission_certificate() {
-    if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
-        return Err(Self::invalid_pending_queue_plan_admission_error(
-            directory,
-            "pending QueuePlan admission certificate count exceeds the hard limit",
-        ));
-    }
-    if admission_bytes
-        .checked_add(canonical_certificate_bytes.len())
-        .is_none_or(|total| {
-            !self
-                .pending_control_sidecar_limits
-                .combined_bytes_within_limit(merge_bytes, total)
-        })
-    {
-        return Err(error);
-    }
-}
-""",
-        encoding="utf-8",
-    )
-    daemon = tmp_path / "crates/irohad/src/main.rs"
-    daemon.parent.mkdir(parents=True, exist_ok=True)
-    daemon.write_text(
-        """
-fn production_startup() {
-    Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
-        &config.kura,
-        &config.nexus.lane_config,
-        &config.nexus.configured_lane_catalog,
-        &config.snapshot.bootstrap,
-        &config.sumeragi.limits,
-    );
-}
-""",
-        encoding="utf-8",
-    )
-    return tmp_path
-
-
-def merge_runtime_config_errors(repo_root: Path) -> list[str]:
-    """Run one mutation check in a fresh process so large Rust tokens are released."""
-
-    probe = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            """
-import importlib.util
-import json
-import sys
-from pathlib import Path
-
-spec = importlib.util.spec_from_file_location("merge_runtime_checker", sys.argv[1])
-assert spec is not None and spec.loader is not None
-module = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
-print(json.dumps(module._merge_runtime_config_production_source_fidelity_errors(
-    Path(sys.argv[2])
-)))
-""",
-            str(SCRIPT),
-            str(repo_root),
-        ],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    assert probe.returncode == 0, probe.stderr
-    errors = json.loads(probe.stdout)
-    assert isinstance(errors, list) and all(isinstance(error, str) for error in errors)
-    return errors
-
 
 def mutate_tla_operator(
     source: str,
@@ -14021,10 +13876,13 @@ def test_transport_hardening_production_source_is_bound() -> None:
         (
             "crates/irohad/src/main.rs",
             "certified_merge_sidecar_ingress_reply_route",
-            "| iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_)\n"
-            "        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => Some(reply_route),",
-            "| iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => Some(reply_route),\n"
-            "        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
+            ") -> iroha_p2p::network::NetworkReplyRoute {\n"
+            "    reply_route\n"
+            "}",
+            ") -> iroha_p2p::network::NetworkReplyRoute {\n"
+            "    let _ = reply_route;\n"
+            "    unreachable!()\n"
+            "}",
             "preserve the authenticated reply route for every certified sidecar message",
         ),
         (
@@ -15828,7 +15686,7 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
             "crates/iroha_core/src/torii_proxy.rs",
             "pub fn queue_plan_synced_request_id_from_chain_digest(",
             "    Hash::new(\n"
-            "        norito::to_bytes(&(\n"
+            "        norito::encode_canonical(&(\n"
             "            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,\n"
             "            chain_id_digest,\n"
             "            entrypoint_hash,\n"
@@ -38361,6 +38219,13 @@ def test_async_historical_recovery_rejects_constants_and_endpoint_theorems(
             "                 AsyncCurrentResponsiveVoters\n",
             "",
             "IndexedHistoricalRecoverySourceReady omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedHistoricalRecoverySourceReady",
+            "  /\\ server \\in joinedByContext[initialContext]\n",
+            "  /\\ server \\in joinedByContext[initialContext]\n"
+            "  /\\ server \\in source.qc.signers\n",
+            "IndexedHistoricalRecoverySourceReady contains prohibited successor/exact-recovery behavior",
         ),
         (
             "IndexedHistoricalRecoverySourceReady",

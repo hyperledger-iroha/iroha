@@ -487,6 +487,30 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
             diagnostics.nativeAmxParticipantApplications.first?.sourceCount,
             2
         )
+
+        var diagnosticsWithUnknownApplicationField = try XCTUnwrap(
+            expected as? [String: Any]
+        )
+        var applicationRows = try XCTUnwrap(
+            diagnosticsWithUnknownApplicationField[
+                "native_amx_participant_applications"
+            ] as? [[String: Any]]
+        )
+        var applicationRow = try XCTUnwrap(applicationRows.first)
+        applicationRow["unexpected_application_field"] = true
+        applicationRows[0] = applicationRow
+        diagnosticsWithUnknownApplicationField[
+            "native_amx_participant_applications"
+        ] = applicationRows
+        let diagnosticsWithUnknownApplicationFieldData = try JSONSerialization.data(
+            withJSONObject: diagnosticsWithUnknownApplicationField
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: diagnosticsWithUnknownApplicationFieldData
+            )
+        )
         try validateApplicationEvidenceFixture(document)
     }
 

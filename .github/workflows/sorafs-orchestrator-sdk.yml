@@ -61,6 +61,7 @@ jobs:
     env:
       CARGO_NET_OFFLINE: "false"
       CARGO_TERM_COLOR: never
+      IROHA_JS_NATIVE_BUILD_PROFILE: "release"
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -93,7 +94,7 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install Apple Rust targets
         run: |
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
           cargo fetch --locked
       - name: Prepare external Apple native artifact roots
         run: |

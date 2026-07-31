@@ -921,6 +921,7 @@ fn minimal_config_snapshot() {
                     moderation_orchestrator: None,
                     evidence_viewer: None,
                     reputation_runtime: None,
+                    reserve_transparency_runtime: None,
                     por_replay_archive: None,
                     hedging_billing_runtime: None,
                     provider_ingest_runtime: None,

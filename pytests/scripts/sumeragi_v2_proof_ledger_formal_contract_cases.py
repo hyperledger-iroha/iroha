@@ -1,5 +1,227 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
+KURA_PRODUCTION_COMPONENT_FILES = (
+    Path("crates/iroha_core/src/kura/startup_finality_support.rs"),
+    Path("crates/iroha_core/src/kura/bound_progress_and_retained_support.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_reservation_bounds.rs"),
+    Path("crates/iroha_core/src/kura/prune_commit_merge_support.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_reservation_types.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_reservation_inventory.rs"),
+    Path("crates/iroha_core/src/kura/autonomous_reservation_classifier.rs"),
+)
+REVIEWED_RUST_INCLUDE_MANIFESTS = {
+    Path("crates/iroha_core/src/kura.rs"): (
+        Path("kura/startup_finality_support.rs"),
+        Path("kura/bound_progress_and_retained_support.rs"),
+        Path("kura/autonomous_reservation_bounds.rs"),
+        Path("kura/prune_commit_merge_support.rs"),
+        Path("kura/autonomous_reservation_types.rs"),
+        Path("kura/autonomous_reservation_inventory.rs"),
+        Path("kura/autonomous_reservation_classifier.rs"),
+        Path("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs"),
+        Path("kura/tests/02_replacement_and_preflight.rs"),
+        Path("kura/tests/03_preflight_and_merge_entry.rs"),
+        Path("kura/tests/04_merge_log_and_associations.rs"),
+        Path("kura/tests/05_merge_resolution_and_eviction.rs"),
+        Path("kura/tests/06_eviction_and_autonomous_lanes.rs"),
+        Path("kura/tests/07a_autonomous_reservation_reconciliation_support.rs"),
+        Path("kura/tests/07_autonomous_lanes_and_sidecars.rs"),
+        Path("kura/tests/07b_autonomous_reservation_reconciliation_tests.rs"),
+        Path("kura/tests/08_lane_receipts_and_artifacts.rs"),
+        Path("kura/tests/09_lane_artifacts_and_fastpq.rs"),
+        Path("kura/tests/10_native_amx_and_roster.rs"),
+        Path("kura/tests/10b_native_amx_prepublication_transition.rs"),
+        Path("kura/tests/11_roster_and_progress_sidecars.rs"),
+        Path("kura/tests/12_sidecar_index_and_pruning.rs"),
+        Path("kura/tests/13_manifests_and_fsync.rs"),
+    ),
+    Path("crates/iroha_core/src/kura/lane_geometry.rs"): (
+        Path("lane_geometry/native_amx_retained_window_tests.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_worker.rs"): (
+        Path("tests/v2_worker_reply_route_cases.rs"),
+        Path("tests/v2_worker_backpressure_cases.rs"),
+        Path("tests/v2_worker_serve_unsealed_cases.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): tuple(
+        Path(f"tests/v2_runtime_unsealed_{index:02}.rs") for index in range(7)
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_runner.rs"): tuple(
+        Path(f"tests/v2_runner_unsealed_{index:02}.rs") for index in range(3)
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_apply.rs"): tuple(
+        Path(f"tests/v2_apply_unsealed_{index:02}.rs") for index in range(2)
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"): (
+        Path("tests/v2_core_reducer_primitive_projection.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_core/tests.rs"): (
+        Path("tests/v2_core_view_zero_parent_binding.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
+        Path("tests/v2_lane_work_observer_role.rs"),
+    ),
+}
+def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
+    """Copy only the config-v6 merge/pending projection and its live consumers."""
+
+    for relative in (
+        Path("crates/iroha_config/src/parameters/defaults.rs"),
+        Path("crates/iroha_config/src/parameters/actual.rs"),
+        Path("crates/iroha_config/src/parameters/user.rs"),
+        Path("crates/iroha_core/src/merge_sidecar.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+    kura = tmp_path / "crates/iroha_core/src/kura.rs"
+    kura.write_text(
+        """
+pub fn new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits() {
+    let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(
+        sumeragi_limits,
+        &config.store_dir.resolve_relative_path(),
+    )?;
+}
+
+fn pending_merge_entry_paths_unlocked() {
+    if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
+        return Err(Self::invalid_pending_merge_entry_error(
+            directory,
+            "pending certified merge entry count exceeds the hard limit",
+        ));
+    }
+}
+
+fn pending_queue_plan_admission_paths_unlocked() {
+    if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
+        return Err(Self::invalid_pending_queue_plan_admission_error(
+            directory,
+            "pending QueuePlan admission certificate count exceeds the hard limit",
+        ));
+    }
+}
+
+fn validate_pending_merge_entries_on_startup() {
+    if !self
+        .pending_control_sidecar_limits
+        .combined_bytes_within_limit(merge_bytes, admission_bytes)
+    {
+        return Err(Self::invalid_pending_queue_plan_admission_error(
+            self.store_root.clone(),
+            "pending merge and QueuePlan admission sidecars exceed their shared hard byte limit",
+        ));
+    }
+}
+
+pub(crate) fn persist_pending_certified_merge_entry() {
+    if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
+        return Err(Self::invalid_pending_merge_entry_error(
+            directory,
+            "pending certified merge entry count exceeds the hard limit",
+        ));
+    }
+    if pending_bytes.checked_add(bytes.len()).is_none_or(|total| {
+        !self
+            .pending_control_sidecar_limits
+            .combined_bytes_within_limit(total, admission_bytes)
+    }) {
+        return Err(error);
+    }
+}
+
+pub fn persist_pending_queue_plan_admission_certificate() {
+    if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
+        return Err(Self::invalid_pending_queue_plan_admission_error(
+            directory,
+            "pending QueuePlan admission certificate count exceeds the hard limit",
+        ));
+    }
+    if admission_bytes
+        .checked_add(canonical_certificate_bytes.len())
+        .is_none_or(|total| {
+            !self
+                .pending_control_sidecar_limits
+                .combined_bytes_within_limit(merge_bytes, total)
+        })
+    {
+        return Err(error);
+    }
+}
+
+include!("kura/startup_finality_support.rs");
+include!("kura/bound_progress_and_retained_support.rs");
+include!("kura/prune_commit_merge_support.rs");
+
+#[cfg(test)]
+mod tests {}
+""",
+        encoding="utf-8",
+    )
+    for relative in KURA_PRODUCTION_COMPONENT_FILES:
+        component = tmp_path / relative
+        component.parent.mkdir(parents=True, exist_ok=True)
+        component.write_text(
+            f"// isolated {component.name} fixture\n",
+            encoding="utf-8",
+        )
+    daemon = tmp_path / "crates/irohad/src/main.rs"
+    daemon.parent.mkdir(parents=True, exist_ok=True)
+    daemon.write_text(
+        """
+fn production_startup() {
+    Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+        &config.kura,
+        &config.nexus.lane_config,
+        &config.nexus.configured_lane_catalog,
+        &config.snapshot.bootstrap,
+        &config.sumeragi.limits,
+    );
+}
+""",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def merge_runtime_config_errors(repo_root: Path) -> list[str]:
+    """Run one mutation check in a fresh process so large Rust tokens are released."""
+
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("merge_runtime_checker", sys.argv[1])
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+print(json.dumps(module._merge_runtime_config_production_source_fidelity_errors(
+    Path(sys.argv[2])
+)))
+""",
+            str(SCRIPT),
+            str(repo_root),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    errors = json.loads(probe.stdout)
+    assert isinstance(errors, list) and all(isinstance(error, str) for error in errors)
+    return errors
+
+
 def test_ledger_is_canonical_json() -> None:
     module = load_checker()
     source = module.LEDGER_PATH.read_text(encoding="utf-8")
@@ -988,6 +1210,10 @@ def test_merge_runtime_config_v6_inventory_is_static_and_current() -> None:
     checker_source = SCRIPT.read_text(encoding="utf-8")
 
     assert tuple(
+        Path("crates/iroha_core/src") / relative
+        for relative in module._KURA_PRODUCTION_COMPONENT_FILES
+    ) == KURA_PRODUCTION_COMPONENT_FILES
+    assert tuple(
         projected_field
         for projected_field, *_rest in module.MERGE_RUNTIME_CONFIG_FIELDS
     ) == MERGE_RUNTIME_PROJECTED_FIELDS
@@ -1008,6 +1234,217 @@ def test_merge_runtime_config_v6_source_binding_accepts_repository() -> None:
     module = load_checker()
 
     assert module._merge_runtime_config_production_source_fidelity_errors() == []
+
+
+def test_reviewed_rust_include_manifests_are_static_and_current() -> None:
+    module = load_checker()
+    observed = {
+        Path(parent): tuple(Path(component) for component in components)
+        for parent, components in module._REVIEWED_RUST_INCLUDE_MANIFESTS.items()
+    }
+    assert observed == REVIEWED_RUST_INCLUDE_MANIFESTS
+    assert module._reviewed_rust_include_manifest_errors() == []
+
+
+@pytest.mark.parametrize("parent_relative", REVIEWED_RUST_INCLUDE_MANIFESTS)
+def test_each_reviewed_rust_include_manifest_fails_closed(
+    tmp_path: Path,
+    parent_relative: Path,
+) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    parent = repo_root / parent_relative
+    parent.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_DIR / parent_relative, parent)
+    components = REVIEWED_RUST_INCLUDE_MANIFESTS[parent_relative]
+    for component_relative in components:
+        destination = parent.parent / component_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            (ROOT_DIR / parent_relative).parent / component_relative,
+            destination,
+        )
+
+    relative = parent_relative.as_posix()
+    errors: list[str] = []
+    _path, expanded = module._read_reviewed_rust_source(
+        repo_root,
+        relative,
+        errors,
+        "negative-control split source",
+    )
+    assert errors == []
+    assert expanded
+
+    first_component = parent.parent / components[0]
+    canonical_component = first_component.read_text(encoding="utf-8")
+    first_component.unlink()
+    errors = []
+    module._read_reviewed_rust_source(
+        repo_root,
+        relative,
+        errors,
+        "negative-control split source",
+    )
+    assert any(
+        str(first_component) in error and "regular non-symlink file" in error
+        for error in errors
+    ), errors
+
+    substitute = first_component.with_name(
+        f"{first_component.stem}_symlink_substitute.rs"
+    )
+    substitute.write_text(canonical_component, encoding="utf-8")
+    first_component.symlink_to(substitute.name)
+    errors = []
+    module._read_reviewed_rust_source(
+        repo_root,
+        relative,
+        errors,
+        "negative-control split source",
+    )
+    assert any(
+        str(first_component) in error and "regular non-symlink file" in error
+        for error in errors
+    ), errors
+
+    first_component.unlink()
+    first_component.write_text(canonical_component, encoding="utf-8")
+    canonical_parent = parent.read_text(encoding="utf-8")
+    canonical_include = f'include!("{components[0].as_posix()}");'
+    substituted_include = 'include!("substituted_manifest_component.rs");'
+    assert canonical_parent.count(canonical_include) == 1
+    parent.write_text(
+        canonical_parent.replace(canonical_include, substituted_include, 1),
+        encoding="utf-8",
+    )
+    (parent.parent / "substituted_manifest_component.rs").write_text(
+        canonical_component,
+        encoding="utf-8",
+    )
+    errors = []
+    module._read_reviewed_rust_source(
+        repo_root,
+        relative,
+        errors,
+        "negative-control split source",
+    )
+    assert any("reviewed Rust include inventory must equal" in error for error in errors)
+
+    parent.write_text(
+        canonical_parent + '\ninclude!("extra_manifest_component.rs");\n',
+        encoding="utf-8",
+    )
+    (parent.parent / "extra_manifest_component.rs").write_text(
+        "// extra split source\n",
+        encoding="utf-8",
+    )
+    errors = []
+    module._read_reviewed_rust_source(
+        repo_root,
+        relative,
+        errors,
+        "negative-control split source",
+    )
+    assert any("reviewed Rust include inventory must equal" in error for error in errors)
+
+
+@pytest.mark.parametrize("component_relative", KURA_PRODUCTION_COMPONENT_FILES)
+def test_kura_production_inventory_rejects_missing_and_symlinked_components(
+    tmp_path: Path,
+    component_relative: Path,
+) -> None:
+    module = load_checker()
+    repo_root = copy_merge_runtime_config_fixture(tmp_path)
+    _path, _source, _components, errors = module._kura_production_source_inventory(
+        repo_root
+    )
+    assert errors == []
+
+    component = repo_root / component_relative
+    canonical = component.read_text(encoding="utf-8")
+    component.unlink()
+    _path, _source, _components, errors = module._kura_production_source_inventory(
+        repo_root
+    )
+    assert any(
+        str(component) in error and "regular non-symlink file" in error
+        for error in errors
+    ), errors
+
+    substitute = component.with_name(f"{component.stem}_substitute.rs")
+    substitute.write_text(canonical, encoding="utf-8")
+    component.symlink_to(substitute.name)
+    _path, _source, _components, errors = module._kura_production_source_inventory(
+        repo_root
+    )
+    assert any(
+        str(component) in error and "regular non-symlink file" in error
+        for error in errors
+    ), errors
+
+
+def test_kura_production_inventory_rejects_substituted_and_extra_includes(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    repo_root = copy_merge_runtime_config_fixture(tmp_path)
+    kura_path = repo_root / "crates/iroha_core/src/kura.rs"
+    canonical = kura_path.read_text(encoding="utf-8")
+    expected = 'include!("kura/startup_finality_support.rs");'
+    substituted = 'include!("kura/substituted_finality_support.rs");'
+    assert canonical.count(expected) == 1
+    kura_path.write_text(
+        canonical.replace(expected, substituted, 1),
+        encoding="utf-8",
+    )
+    extra = kura_path.parent / "kura/substituted_finality_support.rs"
+    extra.write_text("// substituted production component\n", encoding="utf-8")
+    _path, _source, _components, errors = module._kura_production_source_inventory(
+        repo_root
+    )
+    assert any(
+        "direct production include inventory must equal" in error for error in errors
+    ), errors
+
+    marker = "#[cfg(test)]\nmod tests {}"
+    assert canonical.count(marker) == 1
+    extra_include = 'include!("kura/extra_production_support.rs");\n\n'
+    kura_path.write_text(
+        canonical.replace(marker, extra_include + marker, 1),
+        encoding="utf-8",
+    )
+    (kura_path.parent / "kura/extra_production_support.rs").write_text(
+        "// extra production component\n",
+        encoding="utf-8",
+    )
+    _path, _source, _components, errors = module._kura_production_source_inventory(
+        repo_root
+    )
+    assert any(
+        "direct production include inventory must equal" in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize("component_relative", KURA_PRODUCTION_COMPONENT_FILES)
+def test_merge_runtime_rejects_retired_ttl_hidden_in_each_kura_component(
+    tmp_path: Path,
+    component_relative: Path,
+) -> None:
+    repo_root = copy_merge_runtime_config_fixture(tmp_path)
+    component = repo_root / component_relative
+    component.write_text(
+        component.read_text(encoding="utf-8")
+        + "\nconst MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL_MS: u64 = 1;\n",
+        encoding="utf-8",
+    )
+    errors = merge_runtime_config_errors(repo_root)
+    assert any(
+        str(component) in error
+        and "retired wall-clock sidecar gate TTL must remain absent from production"
+        in error
+        for error in errors
+    ), errors
 
 
 @pytest.mark.parametrize(

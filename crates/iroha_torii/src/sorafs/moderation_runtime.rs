@@ -63,20 +63,59 @@ const MODERATION_TRANSACTION_TTL_V1: Duration =
     Duration::from_millis(MODERATION_TRANSACTION_TTL_MS_V1);
 const MODERATION_TRANSACTION_PAYLOAD_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
 /// Fixed identity of the in-process V1 Torii strict-durable ingress.
-pub(crate) const TORII_MODERATION_STRICT_INGRESS_HANDLE_V1: &str =
+pub const TORII_MODERATION_STRICT_INGRESS_HANDLE_V1: &str =
     "torii.sorafs.moderation-strict-ingress.v1";
 /// Revision of the in-process V1 Torii strict-durable ingress policy.
-pub(crate) const TORII_MODERATION_STRICT_INGRESS_REVISION_V1: u64 = 1;
+pub const TORII_MODERATION_STRICT_INGRESS_REVISION_V1: u64 = 1;
 /// BLAKE3 digest of `sorafs.moderation.strict-ingress.torii.v1\0`.
-pub(crate) const TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1: [u8; 32] = [
+pub const TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1: [u8; 32] = [
     0xcc, 0x0c, 0xea, 0xc1, 0x8b, 0x93, 0xfa, 0x97, 0x05, 0xc0, 0xef, 0x86, 0xf6, 0x57, 0xa9, 0xed,
     0x94, 0xc5, 0xdd, 0x65, 0x31, 0x57, 0x84, 0x96, 0xa2, 0xd6, 0x4e, 0x8e, 0xc5, 0x21, 0x6d, 0x2e,
 ];
 
-fn torii_moderation_strict_ingress_qualification_v1() -> ModerationRuntimeProviderQualificationV1 {
+/// Return the exact public qualification of Torii's built-in V1 moderation ingress.
+#[must_use]
+pub const fn torii_moderation_strict_ingress_qualification_v1()
+-> ModerationRuntimeProviderQualificationV1 {
     ModerationRuntimeProviderQualificationV1::new(
         TORII_MODERATION_STRICT_INGRESS_REVISION_V1,
         TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1,
+    )
+}
+
+#[derive(Debug)]
+struct ToriiModerationStrictIngressBindingV1;
+
+impl ModerationRuntimeProviderV1 for ToriiModerationStrictIngressBindingV1 {
+    fn handle(&self) -> &str {
+        TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
+    {
+        Ok(torii_moderation_strict_ingress_qualification_v1())
+    }
+}
+
+/// Qualify configured public metadata against Torii's built-in V1 moderation ingress.
+///
+/// This preflight needs no queue, ledger state, credentials, or private key and
+/// can therefore run before Tokio and node-owned durable state are opened.
+///
+/// # Errors
+///
+/// Returns a payload-free qualification error when the configured handle is
+/// missing, substituted, test-marked, or its revision/policy digest is stale.
+pub fn qualify_torii_moderation_strict_ingress_binding_v1(
+    configured_handle: &str,
+    configured_qualification: ModerationRuntimeProviderQualificationV1,
+) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
+    qualify_moderation_runtime_provider_v1(
+        configured_handle,
+        configured_qualification,
+        &ToriiModerationStrictIngressBindingV1,
     )
 }
 
@@ -1664,6 +1703,54 @@ mod tests {
         ModerationRuntimeProviderQualificationV1::new(1, [0xA3; 32]);
     const TEST_NOTIFICATION_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
         ModerationRuntimeProviderQualificationV1::new(1, [0xA4; 32]);
+
+    #[test]
+    fn torii_strict_ingress_public_binding_preflight_is_exact() {
+        let exact = torii_moderation_strict_ingress_qualification_v1();
+        assert_eq!(
+            qualify_torii_moderation_strict_ingress_binding_v1(
+                TORII_MODERATION_STRICT_INGRESS_HANDLE_V1,
+                exact,
+            ),
+            Ok(())
+        );
+
+        for (handle, qualification, expected) in [
+            (
+                "",
+                exact,
+                ModerationRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle,
+            ),
+            (
+                "torii.sorafs.moderation-test-ingress.v1",
+                exact,
+                ModerationRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle,
+            ),
+            (
+                "torii.sorafs.moderation-strict-ingress.primary",
+                exact,
+                ModerationRuntimeProviderQualificationErrorV1::SubstitutedProvider,
+            ),
+            (
+                TORII_MODERATION_STRICT_INGRESS_HANDLE_V1,
+                ModerationRuntimeProviderQualificationV1::new(0, exact.policy_digest()),
+                ModerationRuntimeProviderQualificationErrorV1::InvalidConfiguredQualification,
+            ),
+            (
+                TORII_MODERATION_STRICT_INGRESS_HANDLE_V1,
+                ModerationRuntimeProviderQualificationV1::new(
+                    exact.revision() + 1,
+                    exact.policy_digest(),
+                ),
+                ModerationRuntimeProviderQualificationErrorV1::QualificationMismatch,
+            ),
+        ] {
+            assert_eq!(
+                qualify_torii_moderation_strict_ingress_binding_v1(handle, qualification),
+                Err(expected)
+            );
+        }
+    }
 
     #[test]
     fn local_strict_ingress_identity_is_implementation_derived() {

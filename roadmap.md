@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -398,7 +398,15 @@ accounts with bounded labels and an explicit reconciled-height readiness bit.
 The competing `sorafs_node` orderbook, checkpoint, config, mutation/event API,
 and pre-release snapshot wire are also deleted. The reserve/rent and orderbook
 lanes remain open for full source validation and reviewed distributed recovery
-evidence. Moderation GETs now consume only a fresh supervised finalized
+evidence. The standard daemon now has an opt-in, credential-free finalized
+reserve transparency scanner over the daemon-owned immutable archive. It
+requires the exact reputation query handle, verifies its restart cursor and
+every returned event against fresh committed projections, records through the
+durable idempotent source index before advancing its canonical checkpoint, and
+uses bounded pagination and exponential retry for normal archive lag. This
+closes the local reserve producer gap only; connecting every other finalized
+producer and collecting distributed transparency evidence remain open.
+Moderation GETs now consume only a fresh supervised finalized
 projection, and the signed receipt checkpoint/projection is the sole viewer
 audit authority; the retired local audit POSTs are authenticated `410 Gone`
 tombstones and have no scheduler. The retained checkpoint now exposes an
@@ -7196,7 +7204,13 @@ excluded from the first release.
   worker-owned finalized projection, while reconciliation runs outside request
   threads with supervised deadlines, non-overlap fencing, monotonic
   cursor/freshness/liveness checks, dead-letter readiness, and typed
-  payload-free startup failures.
+  payload-free startup failures. The standard daemon now also qualifies the
+  configured moderation strict-ingress handle, revision, and policy digest
+  against Torii's fixed public V1 binding during the common pre-Tokio catalog
+  projection; missing, substituted, stale, zero-qualified, or test-marked
+  metadata fails before broker or durable-state construction. This closes the
+  in-process ingress-binding gap without treating it as an external broker
+  provider.
   SFM-4b3 remains open under `V1-BLOCK-MODERATION-VIEWER-RUNTIME-01`: construct
   reference runtime HSM/KMS/WebAuthn, linearizable sealed-CAS checkpoint-store,
   immutable object-lock archive, and authenticated downstream providers;

@@ -1111,11 +1111,6 @@ impl IrohaRuntimeProviderBindingsV1 {
         let mut bindings = Vec::new();
         collect_configured_bindings(config, &mut bindings)?;
 
-        // Moderation strict ingress does not yet have a concrete
-        // `IrohaRuntimeDeps` slot. Its service-owned startup validator, rather
-        // than this handle registry, remains responsible for rejecting an
-        // enabled deployment until that exact runtime boundary exists.
-
         bindings.sort_unstable_by(|left, right| {
             left.slot
                 .cmp(&right.slot)
@@ -1391,11 +1386,11 @@ pub enum IrohaRuntimeProviderRegistryErrorV1 {
     MissingRegistry,
     /// The deployment registry could not be reached or initialized.
     Unavailable,
-    /// The registry resolved a different handle, revision, policy, or role.
+    /// A configured or resolved binding has a different handle, policy, or role.
     BindingMismatch,
-    /// The requested provider binding is stale or revoked.
+    /// A configured or resolved provider binding is stale or revoked.
     StaleOrRevoked,
-    /// A test/development provider was presented to a production launch.
+    /// A test/development binding was presented to a production launch.
     TestProviderRejected,
     /// One or more configured provider bindings had no resolved dependency.
     IncompleteResolution,
@@ -1411,15 +1406,9 @@ impl fmt::Display for IrohaRuntimeProviderRegistryErrorV1 {
                 "runtime-provider bindings are configured but no deployment registry was supplied"
             }
             Self::Unavailable => "deployment runtime-provider registry is unavailable",
-            Self::BindingMismatch => {
-                "deployment runtime-provider registry returned a substituted binding"
-            }
-            Self::StaleOrRevoked => {
-                "deployment runtime-provider registry returned a stale or revoked binding"
-            }
-            Self::TestProviderRejected => {
-                "deployment runtime-provider registry returned a test-marked provider"
-            }
+            Self::BindingMismatch => "runtime-provider binding is substituted",
+            Self::StaleOrRevoked => "runtime-provider binding is stale or revoked",
+            Self::TestProviderRejected => "runtime-provider binding is test-marked",
             Self::IncompleteResolution => {
                 "deployment runtime-provider registry returned an incomplete dependency set"
             }
@@ -4492,6 +4481,102 @@ mod tests {
             TomlSource::from_file(path).expect("read checked-in default daemon config"),
         )
         .expect("resolve checked-in default daemon config")
+    }
+
+    fn configure_moderation_runtime(config: &mut Config) {
+        let maintenance_key = KeyPair::try_from_seed(vec![0xC1; 32], Algorithm::Ed25519)
+            .expect("moderation maintenance key");
+        let strict_qualification = iroha_torii::sorafs::moderation_runtime::
+            torii_moderation_strict_ingress_qualification_v1();
+        config.torii.sorafs_storage.moderation_orchestrator = Some(
+            iroha_config::parameters::actual::SorafsModerationOrchestrator {
+                checkpoint_path: Path::new("/var/lib/iroha/sorafs/moderation.to").to_path_buf(),
+                checkpoint_store_handle: "sealed://sorafs/moderation/checkpoint-primary".to_owned(),
+                checkpoint_store_revision: 7,
+                checkpoint_store_policy_digest: [0xC7; 32],
+                maintenance_authority: iroha_data_model::account::AccountId::new(
+                    maintenance_key.public_key().clone(),
+                ),
+                transaction_signer_handle: "hsm://sorafs/moderation/signer-primary".to_owned(),
+                transaction_signer_revision: 8,
+                transaction_signer_policy_digest: [0xC8; 32],
+                strict_ingress_handle: iroha_torii::sorafs::moderation_runtime::
+                    TORII_MODERATION_STRICT_INGRESS_HANDLE_V1.to_owned(),
+                strict_ingress_revision: strict_qualification.revision(),
+                strict_ingress_policy_digest: strict_qualification.policy_digest(),
+                settlement_handoff_handle: "queue://sorafs/moderation/settlement-primary".to_owned(),
+                settlement_handoff_revision: 9,
+                settlement_handoff_policy_digest: [0xC9; 32],
+                publication_handoff_handle: "dag://sorafs/moderation/publication-primary".to_owned(),
+                publication_handoff_revision: 10,
+                publication_handoff_policy_digest: [0xCA; 32],
+                panel_notification_handle: "queue://sorafs/moderation/notification-primary".to_owned(),
+                panel_notification_revision: 11,
+                panel_notification_policy_digest: [0xCB; 32],
+                max_cases: 128,
+                max_events: 512,
+                max_outbox_entries: 128,
+                max_idempotency_records: 512,
+                max_handoffs: 128,
+                max_submit_attempts: 4,
+                checkpoint_max_bytes: Bytes(4 * 1024 * 1024),
+                worker_interval: Duration::from_secs(1),
+                maintenance_batch_limit: 64,
+            },
+        );
+    }
+
+    #[test]
+    fn moderation_strict_ingress_is_qualified_during_catalog_projection() {
+        let mut config = default_runtime_config();
+        configure_moderation_runtime(&mut config);
+
+        let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
+            .expect("qualify Torii strict ingress before broker projection");
+        assert!(bindings.iter().all(|binding| {
+            binding.handle()
+                != iroha_torii::sorafs::moderation_runtime::
+                    TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
+        }));
+    }
+
+    #[test]
+    fn moderation_strict_ingress_preflight_rejects_missing_substituted_stale_and_test_bindings() {
+        for (mutation, expected) in [
+            (0, IrohaRuntimeProviderRegistryErrorV1::BindingMismatch),
+            (1, IrohaRuntimeProviderRegistryErrorV1::BindingMismatch),
+            (2, IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked),
+            (3, IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked),
+            (4, IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected),
+        ] {
+            let mut config = default_runtime_config();
+            configure_moderation_runtime(&mut config);
+            let moderation = config
+                .torii
+                .sorafs_storage
+                .moderation_orchestrator
+                .as_mut()
+                .expect("configured moderation runtime");
+            match mutation {
+                0 => moderation.strict_ingress_handle.clear(),
+                1 => {
+                    moderation.strict_ingress_handle =
+                        "torii.sorafs.moderation-strict-ingress.secondary".to_owned();
+                }
+                2 => moderation.strict_ingress_revision += 1,
+                3 => moderation.strict_ingress_policy_digest = [0xD1; 32],
+                4 => {
+                    moderation.strict_ingress_handle =
+                        "torii.sorafs.moderation-test-ingress.v1".to_owned();
+                }
+                _ => unreachable!(),
+            }
+
+            assert!(matches!(
+                resolve_runtime_deps(&config, Some(&EmptyRegistry)),
+                Err(error) if error == expected
+            ));
+        }
     }
 
     fn configure_provider_ingest_runtime(config: &mut Config) {

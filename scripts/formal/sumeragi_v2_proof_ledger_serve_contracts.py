@@ -718,19 +718,19 @@ SERVE_LIFECYCLE_FORBIDDEN_OPERATOR_TOKENS.update(
 
 _SERVE_LIFECYCLE_REGRESSION_TEST_SHA256 = {
     "certified_serve_receiver_close_rolls_back_pending_capacity_replacement": (
-        "468d01287d92542ffe440414bdaf4313375ea37aafb34e6fa9ac5fe1800107b3"
+        "84b842c16236650617b87549fed2bb9e5749c37c10e1420c5106d9f43e27dae2"
     ),
     "certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement": (
-        "0b152887eee3cd1b7f556159e6222ce9598eeded46c1e4b427ebfd45b793db4d"
+        "b25a9bde54862c23946d9a0565fd35f62eb94ef8f0eb31bee1487470fb164e95"
     ),
     "certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement": (
-        "66c1018a861b7dc18f36b3d2e9fbbca9ed8cbb68be314f4fb35edf5d215d5d25"
+        "dc7fd3972ed40bfe639eb2602801003cdbc3a397ff3b8509ae5cc4404b537d2a"
     ),
     "certified_serve_terminal_replay_source_retains_retired_route_and_reconnects": (
-        "fcd7b536f2c8c37c759a4bc7594a4aeb96c85b673ad765551cf35fd9a0bee72a"
+        "0a7a8945f503aafa12ea6b32d59f170ff0d4ac5f5aef7eaab9137782f6aabf0c"
     ),
     "certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo": (
-        "f2287c813fb08f857814177a37dfbe19e7ad95047ab23ef1a3c5587d008b082a"
+        "90c1c4bbb4c2cfea2f277d0864825da1eada534e2d18b383e800fb73dacc4c26"
     ),
 }
 _SERVE_INGRESS_ORDINAL_STRUCT_SHA256 = {
@@ -752,7 +752,7 @@ _SERVE_INGRESS_ORDINAL_REGRESSION_TEST_SHA256 = {
         "d428ca8360f6fac1dae8e57e260980fe8fae39f0501adb255d03222a695c89c7"
     ),
     "restored_productive_retry_stays_behind_an_earlier_certified_request_carrier": (
-        "447627f22757f044e5cb8007715375b2bc46f7ddb23398469b02d90368250556"
+        "6324de9c1046d2aa2e5dba47cba2c0ef34ef176e0e361a0003b3a49c0c4b7851"
     ),
     "restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant": (
         "e2850b0677b5219e0960641d23b79a679c1fcc84faaaa7c83db0cfe79a3e6e3b"
@@ -763,7 +763,7 @@ _SERVE_INGRESS_GATE_IMPL_ITEM_SHA256 = {
         "96b2844effe8a496a06b247860b8790227f1e0c31a4468bff52eeb0631cbe10b"
     ),
     "bind_certified_serve_gate": (
-        "ed0997516f643a29a4da048b9983d26f2a8b64123888555b7bec50319efbda66"
+        "b6043f8898779ce68f584813ca53882ba232c0f2cad915c9c643f00b3ad1faca"
     ),
     "unbind_certified_serve_gate": (
         "16c1655f5a4fc1e1cfd65133e09a9dc336eed6cceb7470bd3bc83993d52ee034"
@@ -776,16 +776,16 @@ _SERVE_INGRESS_GATE_REGRESSION_TEST_SHA256 = {
 }
 _SERVE_INGRESS_GATE_WORKER_REGRESSION_TEST_SHA256 = {
     "fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers": (
-        "f330e8cbb207fd3872c81d79817209a35cf7acfc2f033cc32f8c1b37ec232f19"
+        "8830d0a705537df7599ad6815f8e41201655aaed5f399863cf9dcec7e6309bae"
     ),
     "fair_ingress_gate_overflow_closes_without_partial_admission": (
-        "820e286fc897de3e36b4463d707faee647de8db649554e8a48ce2efe48afc419"
+        "5a36f512c8c77a9c370a1343f5fc5ad5a7ab669faa1f1e992e851c5ddcab7e5f"
     ),
     "fair_ingress_rollover_retires_ticket_before_old_service_teardown": (
-        "16712f671a24fd8c0bc00543719eb8ac4b4022789274803292fb1f7219ed27c3"
+        "0c27de66d91cd2c0744cf962e673de7e54881838e12f4d920cbfeabeccbcf875"
     ),
     "selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle": (
-        "7d4298be7b35579fb36dd79bf8224325aa63e4ad084763e02c8978263fe4726f"
+        "39ee630ad3e6b080a70514ac7b72228a930453fd2b7765785af1425e5a615193"
     ),
 }
 _SERVICED_CANDIDATE_STORE_STRUCT_SHA256 = {
@@ -935,7 +935,7 @@ _SERVICED_CANDIDATE_PRODUCTION_STRUCT_SHA256 = {
 }
 _SERVICED_CANDIDATE_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9"
+        "e2b02f36f0f3111dc2946fa3cb608697a3e172140b9c14c37cdd1a83377302ac"
     ),
 }
 _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256 = {
@@ -1233,7 +1233,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "bfef5a8070c6c26f13509e97f0c744f856c68d454165657043195fe1b122b307"
+        "de691044aee8685ad220d02975d2f829e4b7796d18a73aadf1106a169b76217e"
     ),
 }
 _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
@@ -1370,7 +1370,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
 }
 _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {
     "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity": (
-        "a64e65c344cd7a423ff744f2e651356d0aae41e5878097c8df18af92e61cf66b"
+        "d02a7f409972d645e46479269a11297493023132831fd299f487b0b202df6294"
     ),
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {

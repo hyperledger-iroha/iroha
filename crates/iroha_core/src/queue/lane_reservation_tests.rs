@@ -719,7 +719,7 @@ fn ordered_release_barrier_is_nonselectable_idempotent_and_aba_safe() {
 }
 
 #[test]
-fn ordered_release_restarts_from_prepared_and_completed_boundaries() {
+fn ordered_release_restart_retains_barrier_until_explicit_evidence_gated_finalize() {
     for crash_after_completion in [false, true] {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let state = lane_reservation_test_state();
@@ -811,23 +811,27 @@ fn ordered_release_restarts_from_prepared_and_completed_boundaries() {
                 .replayed,
             2
         );
-        queue
-            .finalize_plan_journal_startup_recovery()
-            .expect("finish release recovery after atomic payload replay");
-        if crash_after_completion {
-            assert!(
-                queue.lane_reservation_release_barriers().is_empty(),
-                "completed release must restore FIFO and forget itself after payload replay"
-            );
-        } else {
-            assert_eq!(queue.queued_len(), 0);
-            assert_eq!(
-                queue
-                    .finalize_lane_reservation_release_barrier(&barrier)
-                    .expect("resume prepared release after restart"),
-                2
-            );
-        }
+        assert_eq!(
+            queue.lane_reservation_release_barriers(),
+            vec![barrier.clone()],
+            "journal installation and QueuePlan replay must not treat payload availability as external retirement proof"
+        );
+        assert_eq!(
+            queue.queued_len(),
+            0,
+            "both prepared and completed releases remain quarantined outside ordinary FIFO"
+        );
+
+        // Simulate the caller's stable Kura proof that every matching entrypoint claim is
+        // durably Released. Only this explicit evidence-gated transition may restore FIFO and
+        // forget the durable barrier.
+        assert_eq!(
+            queue
+                .finalize_lane_reservation_release_barrier(&barrier)
+                .expect("finalize release after simulated external retirement proof"),
+            if crash_after_completion { 0 } else { 2 }
+        );
+        assert!(queue.lane_reservation_release_barriers().is_empty());
         assert_eq!(queue.queued_len(), 2);
         assert!(queue.live_lane_reservations().is_empty());
     }
@@ -964,6 +968,299 @@ fn lane_reservation_is_durable_before_fifo_transfer_and_preserves_accounting() {
     let mut released = Vec::new();
     queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut released);
     assert_eq!(released[0].as_ref().hash(), hashes[0]);
+}
+
+#[test]
+fn restart_reconciliation_snapshot_is_fifo_group_complete_and_read_only() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    let reservation_path = install_globally_certified_test_reservation_journals(&queue, &dir);
+
+    let first_bindings = (0..2)
+        .map(|_| {
+            push_globally_bound_lane_reservation_candidate(
+                &queue,
+                &state,
+                &dir,
+                accepted_tx_by_someone(&time_source),
+            )
+        })
+        .collect::<Vec<_>>();
+    let key_for_scope = |binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+                         scope: LaneQueueReservationScopeV1| {
+        let routing_plan = binding
+            .routing_plan()
+            .expect("rebuild reservation fixture routing plan");
+        LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash: compatibility_queue_hash(binding.entrypoint_hash),
+            entrypoint_hash: binding.entrypoint_hash,
+            queue_plan_admission_binding_hash: binding.canonical_hash(),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: scope.lane_id,
+            dataspace_id: scope.dataspace_id,
+            lane_incarnation: scope.lane_incarnation,
+            proposal_height: scope.proposal_height,
+            lane_block_height: scope.lane_block_height,
+            lane_block_view: scope.lane_block_view,
+            reservation_owner_hash: scope.reservation_owner_hash,
+            proposal_identity_hash: scope.proposal_identity_hash,
+        }
+    };
+    let (first_scope, expected_first) = (0_u32..4096)
+        .find_map(|salt| {
+            let salt = salt.to_be_bytes();
+            let mut scope = lane_reservation_scope(
+                &state,
+                b"reconciliation-snapshot-first-owner",
+                b"reconciliation-snapshot-first-proposal",
+            );
+            scope.reservation_owner_hash =
+                Hash::new_from_chunks(&[b"reconciliation-snapshot-first-owner\0", &salt]);
+            scope.proposal_identity_hash =
+                Hash::new_from_chunks(&[b"reconciliation-snapshot-first-proposal\0", &salt]);
+            let expected = key_for_scope(&first_bindings[0], scope);
+            (expected.digest().as_ref()[0] >= 0x80).then_some((scope, expected))
+        })
+        .expect("find a deterministic first-group digest in the upper half of hash space");
+    let first_group = queue
+        .reserve_transactions_for_lane(&state, first_scope, nonzero!(2_usize))
+        .expect("reserve first reconciliation group");
+    let first_keys = first_group
+        .iter()
+        .map(|transaction| *transaction.key())
+        .collect::<Vec<_>>();
+    assert_eq!(first_keys[0], expected_first);
+
+    let second_bindings = (0..2)
+        .map(|_| {
+            push_globally_bound_lane_reservation_candidate(
+                &queue,
+                &state,
+                &dir,
+                accepted_tx_by_someone(&time_source),
+            )
+        })
+        .collect::<Vec<_>>();
+    let (second_scope, expected_second_first) = (0_u32..4096)
+        .find_map(|salt| {
+            let salt = salt.to_be_bytes();
+            let mut scope = lane_reservation_scope(
+                &state,
+                b"reconciliation-snapshot-second-owner",
+                b"reconciliation-snapshot-second-proposal",
+            );
+            scope.lane_block_height = 2;
+            scope.reservation_owner_hash =
+                Hash::new_from_chunks(&[b"reconciliation-snapshot-second-owner\0", &salt]);
+            scope.proposal_identity_hash =
+                Hash::new_from_chunks(&[b"reconciliation-snapshot-second-proposal\0", &salt]);
+            let expected = key_for_scope(&second_bindings[0], scope);
+            (expected.digest() < first_keys[0].digest()).then_some((scope, expected))
+        })
+        .expect("find a deterministic second-group identity below the first FIFO key digest");
+    let second_group = queue
+        .reserve_transactions_for_lane(&state, second_scope, nonzero!(2_usize))
+        .expect("reserve second reconciliation group");
+    let second_keys = second_group
+        .iter()
+        .map(|transaction| *transaction.key())
+        .collect::<Vec<_>>();
+    assert_eq!(second_keys[0], expected_second_first);
+
+    let fifo_keys = first_keys
+        .iter()
+        .chain(&second_keys)
+        .copied()
+        .collect::<Vec<_>>();
+    let mut digest_ordered_keys = fifo_keys.clone();
+    digest_ordered_keys.sort_by_key(LaneQueueReservationKeyV2::digest);
+    assert_ne!(
+        digest_ordered_keys, fifo_keys,
+        "fixture must distinguish digest order from original durable FIFO order"
+    );
+
+    let capture_store = || {
+        let store = queue.lane_reservations.lock();
+        let mut live = store.live_by_hash.values().cloned().collect::<Vec<_>>();
+        live.sort_by_key(|record| {
+            (
+                record.fifo_order.ordinal,
+                record.key.signed_transaction_hash,
+            )
+        });
+        (
+            live,
+            store.commit_barriers.clone(),
+            store.release_barriers.clone(),
+            store.completed_releases.clone(),
+            store.missing_payload_hashes.clone(),
+        )
+    };
+    let capture_fifo_index = || {
+        let mut fifo = queue
+            .fifo_order_by_hash
+            .iter()
+            .map(|entry| (*entry.key(), *entry.value()))
+            .collect::<Vec<_>>();
+        fifo.sort_by_key(|(hash, _)| *hash);
+        fifo
+    };
+    let capture_claims = || {
+        let mut claims = queue
+            .durable_plan_claims
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().durable_admission()))
+            .collect::<Vec<_>>();
+        claims.sort_by_key(|(hash, _)| *hash);
+        claims
+    };
+    let store_before = capture_store();
+    let fifo_index_before = capture_fifo_index();
+    let claims_before = capture_claims();
+    let live_before = queue.live_lane_reservations();
+    let journal_before = fs::read(&reservation_path).expect("read reservation journal before");
+    let active_before = queue.active_len();
+    let queued_before = queue.queued_len();
+
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture strict reconciliation snapshot");
+    assert_eq!(
+        snapshot
+            .ordered_records
+            .iter()
+            .map(|record| record.key)
+            .collect::<Vec<_>>(),
+        fifo_keys,
+        "snapshot records must follow durable FIFO rather than reservation digest order"
+    );
+    assert!(
+        snapshot
+            .ordered_records
+            .windows(2)
+            .all(|records| records[0].fifo_ordinal < records[1].fifo_ordinal)
+    );
+    assert_eq!(
+        snapshot.ordered_groups,
+        vec![
+            LaneQueueReservationReconciliationGroupV1 {
+                identity: LaneQueueReservationGroupIdentityV1::from_key(&first_keys[0]),
+                ordered_keys: first_keys,
+            },
+            LaneQueueReservationReconciliationGroupV1 {
+                identity: LaneQueueReservationGroupIdentityV1::from_key(&second_keys[0]),
+                ordered_keys: second_keys,
+            },
+        ],
+        "every exact proposal group must retain complete FIFO-ordered membership"
+    );
+    for record in &snapshot.ordered_records {
+        let expected_claim = claims_before
+            .iter()
+            .find_map(|(hash, claim)| {
+                (*hash == record.key.signed_transaction_hash).then_some(claim)
+            })
+            .expect("snapshot record has an indexed durable claim");
+        assert_eq!(&record.durable_admission, expected_claim);
+        assert_eq!(
+            record.group,
+            LaneQueueReservationGroupIdentityV1::from_key(&record.key)
+        );
+    }
+
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("repeat read-only reconciliation snapshot"),
+        snapshot
+    );
+    assert_eq!(capture_store(), store_before);
+    assert_eq!(capture_fifo_index(), fifo_index_before);
+    assert_eq!(capture_claims(), claims_before);
+    assert_eq!(queue.live_lane_reservations(), live_before);
+    assert_eq!(queue.active_len(), active_before);
+    assert_eq!(queue.queued_len(), queued_before);
+    assert_eq!(
+        fs::read(&reservation_path).expect("read reservation journal after"),
+        journal_before,
+        "snapshot observer must not append, compact, or rewrite durable ownership"
+    );
+
+    let claim_hash = fifo_keys[0].signed_transaction_hash;
+    let original_claim = queue
+        .durable_plan_claims
+        .remove(&claim_hash)
+        .expect("remove exact fixture claim")
+        .1;
+    assert!(matches!(
+        queue.lane_reservation_reconciliation_snapshot(),
+        Err(LaneQueueReservationError::ReconciliationMissingDurableClaim { hash })
+            if hash == claim_hash
+    ));
+    queue
+        .durable_plan_claims
+        .insert(claim_hash, original_claim.clone());
+
+    let mut mismatched_claim = original_claim.clone();
+    mismatched_claim.enqueue_timestamp_ms = mismatched_claim.enqueue_timestamp_ms.saturating_add(1);
+    queue
+        .durable_plan_claims
+        .insert(claim_hash, mismatched_claim);
+    assert!(matches!(
+        queue.lane_reservation_reconciliation_snapshot(),
+        Err(LaneQueueReservationError::ReconciliationDurableClaimMismatch { hash, .. })
+            if hash == claim_hash
+    ));
+    queue.durable_plan_claims.insert(claim_hash, original_claim);
+
+    let duplicate_hash = fifo_keys[1].signed_transaction_hash;
+    let (original_duplicate_record, original_duplicate_fifo, first_fifo) = {
+        let mut store = queue.lane_reservations.lock();
+        let first_fifo = store.live_by_hash[&claim_hash].fifo_order;
+        let duplicate_record = store.live_by_hash[&duplicate_hash].clone();
+        store
+            .live_by_hash
+            .get_mut(&duplicate_hash)
+            .expect("mutate duplicate-ordinal fixture")
+            .fifo_order = first_fifo;
+        let duplicate_fifo = queue
+            .fifo_order_by_hash
+            .insert(duplicate_hash, first_fifo)
+            .expect("duplicate fixture has an indexed FIFO identity");
+        (duplicate_record, duplicate_fifo, first_fifo)
+    };
+    match queue.lane_reservation_reconciliation_snapshot() {
+        Err(LaneQueueReservationError::ReconciliationDuplicateFifoOrdinal {
+            ordinal,
+            first_hash,
+            second_hash,
+        }) => {
+            assert_eq!(ordinal, first_fifo.ordinal);
+            assert_eq!(
+                BTreeSet::from([first_hash, second_hash]),
+                BTreeSet::from([claim_hash, duplicate_hash])
+            );
+        }
+        other => panic!("duplicate durable FIFO ordinal must fail typed: {other:?}"),
+    }
+    queue
+        .lane_reservations
+        .lock()
+        .live_by_hash
+        .insert(duplicate_hash, original_duplicate_record);
+    queue
+        .fifo_order_by_hash
+        .insert(duplicate_hash, original_duplicate_fifo);
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("restored strict reconciliation snapshot"),
+        snapshot
+    );
 }
 
 #[test]
@@ -1885,13 +2182,13 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
 
     #[derive(Clone, Copy, Debug)]
     enum StartupTerminalAppend {
-        ForgetCommitDuringStartup,
-        ForgetReleaseDuringStartup,
+        ForgetCommitAfterProof,
+        ForgetReleaseAfterProof,
     }
 
     for terminal in [
-        StartupTerminalAppend::ForgetCommitDuringStartup,
-        StartupTerminalAppend::ForgetReleaseDuringStartup,
+        StartupTerminalAppend::ForgetCommitAfterProof,
+        StartupTerminalAppend::ForgetReleaseAfterProof,
     ] {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let state = lane_reservation_test_state();
@@ -1906,8 +2203,8 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                 .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
                 .expect("install startup-terminal reservation journal");
             let transaction_count = match terminal {
-                StartupTerminalAppend::ForgetCommitDuringStartup => 1,
-                StartupTerminalAppend::ForgetReleaseDuringStartup => 2,
+                StartupTerminalAppend::ForgetCommitAfterProof => 1,
+                StartupTerminalAppend::ForgetReleaseAfterProof => 2,
             };
             for _ in 0..transaction_count {
                 push_globally_bound_lane_reservation_candidate(
@@ -1936,7 +2233,7 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                 format!("startup-terminal-retirement-{terminal:?}").as_bytes(),
             );
             match terminal {
-                StartupTerminalAppend::ForgetCommitDuringStartup => {
+                StartupTerminalAppend::ForgetCommitAfterProof => {
                     queue
                         .lane_reservation_journal
                         .lock()
@@ -1945,7 +2242,7 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                         .commit(keys[0])
                         .expect("persist commit before startup-boundary crash");
                 }
-                StartupTerminalAppend::ForgetReleaseDuringStartup => {
+                StartupTerminalAppend::ForgetReleaseAfterProof => {
                     queue
                         .prepare_lane_reservation_release_barrier(&barrier)
                         .expect("persist prepared startup release");
@@ -1972,12 +2269,27 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
             (keys, barrier)
         };
 
+        if matches!(terminal, StartupTerminalAppend::ForgetCommitAfterProof) {
+            let block_header =
+                ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
+                    .as_ref()
+                    .header();
+            let mut state_block = state.block(block_header);
+            state_block.transactions.insert_block(
+                HashSet::from([keys[0].signed_transaction_hash]),
+                nonzero!(1_usize),
+            );
+            state_block
+                .commit()
+                .expect("commit exact startup-terminal identity");
+        }
+
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let replay = queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("restore startup-terminal boundary before its plan journal");
         match terminal {
-            StartupTerminalAppend::ForgetCommitDuringStartup => {
+            StartupTerminalAppend::ForgetCommitAfterProof => {
                 assert_eq!(keys.len(), 1);
                 assert_eq!(replay.restored, 0);
                 assert_eq!(replay.commit_barriers, 1);
@@ -1989,7 +2301,7 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                     "restart must reconstruct the exact commit identity that still needs a plan tombstone"
                 );
             }
-            StartupTerminalAppend::ForgetReleaseDuringStartup => {
+            StartupTerminalAppend::ForgetReleaseAfterProof => {
                 assert_eq!(keys.len(), 2);
                 assert_eq!(replay.restored, 0);
                 assert_eq!(replay.commit_barriers, 0);
@@ -2025,6 +2337,24 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
         ));
         let pressure_rx = queue.backpressure_handle().subscribe();
         queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("install exact production plan journal without finalizing barriers");
+        queue
+            .replay_plan_journal(&state)
+            .expect("materialize exact payloads under durable quarantine");
+        match terminal {
+            StartupTerminalAppend::ForgetCommitAfterProof => assert_eq!(
+                queue.lane_reservation_commit_barriers(),
+                vec![keys[0]],
+                "install and replay must retain the unproven Commit barrier"
+            ),
+            StartupTerminalAppend::ForgetReleaseAfterProof => assert_eq!(
+                queue.lane_reservation_release_barriers(),
+                vec![barrier.clone()],
+                "install and replay must retain the unproven completed-release barrier"
+            ),
+        }
+        queue
             .lane_reservation_journal
             .lock()
             .as_mut()
@@ -2032,20 +2362,14 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
             .inject_next_append_fault(ReservationJournalAppendFault::SyncAfterFullWrite);
 
         let error = match terminal {
-            StartupTerminalAppend::ForgetCommitDuringStartup => queue
-                .install_plan_journal(&plan_path, 1024 * 1024, true)
-                .expect_err("ambiguous startup ForgetCommit must fail plan-journal install"),
-            StartupTerminalAppend::ForgetReleaseDuringStartup => {
-                queue
-                    .install_plan_journal(&plan_path, 1024 * 1024, true)
-                    .expect("release recovery installs the exact production plan journal");
-                queue
-                    .replay_plan_journal(&state)
-                    .expect("payload replay commits before release reconciliation");
-                queue.finalize_plan_journal_startup_recovery().expect_err(
-                    "ambiguous startup ForgetRelease must fail separate startup recovery",
-                )
-            }
+            StartupTerminalAppend::ForgetCommitAfterProof => queue
+                .commit_lane_reservation(&keys[0])
+                .map(|_| ())
+                .expect_err("ambiguous ForgetCommit must fail the explicit proof path"),
+            StartupTerminalAppend::ForgetReleaseAfterProof => queue
+                .finalize_lane_reservation_release_barrier(&barrier)
+                .map(|_| ())
+                .expect_err("ambiguous ForgetRelease must fail the explicit proof path"),
         };
         assert!(
             error.to_string().contains("lane queue reservation journal"),
@@ -2069,12 +2393,12 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
             "{terminal:?}: startup Forget ambiguity must block unrelated lane drain"
         );
         match terminal {
-            StartupTerminalAppend::ForgetCommitDuringStartup => assert_eq!(
+            StartupTerminalAppend::ForgetCommitAfterProof => assert_eq!(
                 queue.lane_reservation_commit_barriers(),
                 vec![keys[0]],
                 "ambiguous ForgetCommit must retain the exact affected identity"
             ),
-            StartupTerminalAppend::ForgetReleaseDuringStartup => {
+            StartupTerminalAppend::ForgetReleaseAfterProof => {
                 let store = queue.lane_reservations.lock();
                 assert_eq!(store.completed_releases.len(), 1);
                 assert_eq!(store.completed_releases[0].barrier, barrier);

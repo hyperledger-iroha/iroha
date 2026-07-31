@@ -657,7 +657,8 @@ let bridgeTargetPath = configuredArtifactDirectory == nil
 let package = Package(
     name: "IrohaSwift",
     platforms: [
-        .iOS(.v15)
+        .iOS(.v15),
+        .macOS(.v12)
     ],
     targets: [
         .binaryTarget(
@@ -677,15 +678,39 @@ SWIFT
 <dict>
   <key>AvailableLibraries</key>
   <array>
-    <dict><key>LibraryIdentifier</key><string>ios-arm64</string></dict>
-    <dict><key>LibraryIdentifier</key><string>ios-arm64_x86_64-simulator</string></dict>
-    <dict><key>LibraryIdentifier</key><string>macos-arm64</string></dict>
+    <dict>
+      <key>HeadersPath</key><string>Headers</string>
+      <key>LibraryIdentifier</key><string>ios-arm64</string>
+      <key>LibraryPath</key><string>libNoritoBridge.a</string>
+      <key>SupportedArchitectures</key>
+      <array><string>arm64</string></array>
+      <key>SupportedPlatform</key><string>ios</string>
+    </dict>
+    <dict>
+      <key>HeadersPath</key><string>Headers</string>
+      <key>LibraryIdentifier</key><string>ios-arm64_x86_64-simulator</string>
+      <key>LibraryPath</key><string>libNoritoBridge.a</string>
+      <key>SupportedArchitectures</key>
+      <array><string>arm64</string><string>x86_64</string></array>
+      <key>SupportedPlatform</key><string>ios</string>
+      <key>SupportedPlatformVariant</key><string>simulator</string>
+    </dict>
+    <dict>
+      <key>HeadersPath</key><string>Headers</string>
+      <key>LibraryIdentifier</key><string>macos-arm64_x86_64</string>
+      <key>LibraryPath</key><string>libNoritoBridge.a</string>
+      <key>SupportedArchitectures</key>
+      <array><string>arm64</string><string>x86_64</string></array>
+      <key>SupportedPlatform</key><string>macos</string>
+    </dict>
   </array>
+  <key>CFBundlePackageType</key><string>XFWK</string>
+  <key>XCFrameworkFormatVersion</key><string>1.0</string>
 </dict>
 </plist>
 PLIST
 
-  for slice in ios-arm64 ios-arm64_x86_64-simulator macos-arm64; do
+  for slice in ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64; do
     mkdir -p "$root/dist/NoritoBridge.xcframework/$slice/Headers"
     printf 'fake static library for %s\n' "$slice" >"$root/dist/NoritoBridge.xcframework/$slice/libNoritoBridge.a"
     printf 'void norito_%s(void);\n' "$slice" >"$root/dist/NoritoBridge.xcframework/$slice/Headers/NoritoBridge.h"
@@ -695,14 +720,14 @@ PLIST
 
   hash_a="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a" | awk '{print $1}')"
   hash_b="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64_x86_64-simulator/libNoritoBridge.a" | awk '{print $1}')"
-  hash_c="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/macos-arm64/libNoritoBridge.a" | awk '{print $1}')"
+  hash_c="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/macos-arm64_x86_64/libNoritoBridge.a" | awk '{print $1}')"
   local header_hash
   header_hash="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64/Headers/connect_norito_bridge.h" | awk '{print $1}')"
   cat >"$root/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift" <<SWIFT
 enum NoritoBridgeLoader {
     static let expectedVersion = "1.0.0"
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "$hash_c",
+        "macos-arm64_x86_64": "$hash_c",
         "ios-arm64": "$hash_a",
         "ios-arm64_x86_64-simulator": "$hash_b"
     ]
@@ -851,7 +876,7 @@ SWIFT
   "hashes": {
     "ios-arm64": "$hash_a",
     "ios-arm64_x86_64-simulator": "$hash_b",
-    "macos-arm64": "$hash_c"
+    "macos-arm64_x86_64": "$hash_c"
   }
 }
 JSON
@@ -1028,7 +1053,7 @@ make_apple_inspection_tools() {
   cat >"$tools/lipo" <<'SH'
 #!/usr/bin/env bash
 case "${*: -1}" in
-  *ios-arm64_x86_64-simulator*) printf 'arm64 x86_64\n' ;;
+  *ios-arm64_x86_64-simulator*|*macos-arm64_x86_64*) printf 'arm64 x86_64\n' ;;
   *) printf 'arm64\n' ;;
 esac
 SH
@@ -1835,6 +1860,28 @@ make_fixture "$missing_header"
 rm -f "$missing_header/dist/NoritoBridge.xcframework/ios-arm64_x86_64-simulator/Headers/NoritoBridge.h"
 run_expect_fail "$missing_header" "missing XCFramework slice header"
 
+non_universal_macos="$TMP_DIR/non-universal-macos"
+make_fixture "$non_universal_macos"
+"$TEST_PYTHON_BINARY" -I -S - \
+  "$non_universal_macos/dist/NoritoBridge.xcframework/Info.plist" <<'PY'
+from pathlib import Path
+import plistlib
+import sys
+
+
+path = Path(sys.argv[1])
+with path.open("rb") as handle:
+    payload = plistlib.load(handle)
+for library in payload["AvailableLibraries"]:
+    if library["LibraryIdentifier"] == "macos-arm64_x86_64":
+        library["SupportedArchitectures"] = ["arm64"]
+with path.open("wb") as handle:
+    plistlib.dump(payload, handle)
+PY
+run_expect_fail \
+  "$non_universal_macos" \
+  "NoritoBridge Info.plist does not declare the canonical universal Apple slices"
+
 missing_hash="$TMP_DIR/missing-hash"
 make_fixture "$missing_hash"
 cat >"$missing_hash/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" <<'JSON'
@@ -1844,7 +1891,7 @@ cat >"$missing_hash/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" <
   "cargo_features": [],
   "hashes": {
     "ios-arm64": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "macos-arm64": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    "macos-arm64_x86_64": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   }
 }
 JSON
@@ -1897,7 +1944,7 @@ run_expect_apple_forbidden_binary_fail \
 run_expect_apple_forbidden_binary_fail \
   "$extra_binary_symbol" \
   "connect_norito_set_chain_discriminant" \
-  "macos-arm64" \
+  "macos-arm64_x86_64" \
   "$inspection_tools"
 run_expect_apple_forbidden_binary_fail \
   "$extra_binary_symbol" \

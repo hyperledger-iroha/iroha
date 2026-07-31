@@ -1,5 +1,303 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+def _retired_sidecar_gate_ttl_source_errors(
+    path: Path,
+    source: str,
+    role: str,
+) -> list[str]:
+    """Reject any server-request gate TTL identifier in executable Rust."""
+
+    retired_ttl_tokens = sorted(
+        {
+            token
+            for token in rust_code_tokens(source)
+            if "ttl" in token.lower()
+            and all(
+                fragment in token.lower()
+                for fragment in ("server", "request", "gate")
+            )
+        }
+    )
+    if not retired_ttl_tokens:
+        return []
+    return [
+        f"{path}: retired wall-clock sidecar gate TTL must remain absent "
+        f"from production; found identifiers {retired_ttl_tokens} in the "
+        f"{role} seam"
+    ]
+
+
+_SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
+    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
+        "fc3c131df1f3511f80ce47720ab87043106239d332936f240348d3244550835e"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
+        "44a625963e2290fdfdf261aee070ecafbdfa7dae99bbaca4f22ff03484614615"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
+        "d7a187088a3bf4846d185c32702fa8668065b22fffe086a99108729d6d748691"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
+        "9fb4335289c39dae60b9a8299902e57a64d258070e61e331941c24201519c947"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_effects.rs": (
+        "0503ef2a64e9616d6d898c979885603592f1b8dee0a276dd65d70b527dc26814"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_runner.rs": (
+        "9841a26f9d0cbe07deec39a506cb1d6bac3135711c9146aab8b3c72cb3cdd13e"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_worker.rs": (
+        "e489155296fcb8ead84fce53280e54296342604ccd2a17376cbbc47f5ef9726f"
+    ),
+    "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
+        "6d492a52dd530130150a22eabec78375929d9431200ed06999d50490053a92a4"
+    ),
+}
+
+
+_KURA_PRODUCTION_COMPONENT_FILES = (
+    "kura/startup_finality_support.rs",
+    "kura/bound_progress_and_retained_support.rs",
+    "kura/autonomous_reservation_bounds.rs",
+    "kura/prune_commit_merge_support.rs",
+    "kura/autonomous_reservation_types.rs",
+    "kura/autonomous_reservation_inventory.rs",
+    "kura/autonomous_reservation_classifier.rs",
+)
+
+_REVIEWED_RUST_INCLUDE_MANIFESTS = {
+    "crates/iroha_core/src/kura.rs": (
+        *_KURA_PRODUCTION_COMPONENT_FILES,
+        "kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs",
+        "kura/tests/02_replacement_and_preflight.rs",
+        "kura/tests/03_preflight_and_merge_entry.rs",
+        "kura/tests/04_merge_log_and_associations.rs",
+        "kura/tests/05_merge_resolution_and_eviction.rs",
+        "kura/tests/06_eviction_and_autonomous_lanes.rs",
+        "kura/tests/07a_autonomous_reservation_reconciliation_support.rs",
+        "kura/tests/07_autonomous_lanes_and_sidecars.rs",
+        "kura/tests/07b_autonomous_reservation_reconciliation_tests.rs",
+        "kura/tests/08_lane_receipts_and_artifacts.rs",
+        "kura/tests/09_lane_artifacts_and_fastpq.rs",
+        "kura/tests/10_native_amx_and_roster.rs",
+        "kura/tests/10b_native_amx_prepublication_transition.rs",
+        "kura/tests/11_roster_and_progress_sidecars.rs",
+        "kura/tests/12_sidecar_index_and_pruning.rs",
+        "kura/tests/13_manifests_and_fsync.rs",
+    ),
+    "crates/iroha_core/src/kura/lane_geometry.rs": (
+        "lane_geometry/native_amx_retained_window_tests.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_worker.rs": (
+        "tests/v2_worker_reply_route_cases.rs",
+        "tests/v2_worker_backpressure_cases.rs",
+        "tests/v2_worker_serve_unsealed_cases.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_runtime.rs": (
+        "tests/v2_runtime_unsealed_00.rs",
+        "tests/v2_runtime_unsealed_01.rs",
+        "tests/v2_runtime_unsealed_02.rs",
+        "tests/v2_runtime_unsealed_03.rs",
+        "tests/v2_runtime_unsealed_04.rs",
+        "tests/v2_runtime_unsealed_05.rs",
+        "tests/v2_runtime_unsealed_06.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_runner.rs": (
+        "tests/v2_runner_unsealed_00.rs",
+        "tests/v2_runner_unsealed_01.rs",
+        "tests/v2_runner_unsealed_02.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_apply.rs": (
+        "tests/v2_apply_unsealed_00.rs",
+        "tests/v2_apply_unsealed_01.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
+        "tests/v2_core_reducer_primitive_projection.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/tests.rs": (
+        "tests/v2_core_view_zero_parent_binding.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_lane_work.rs": (
+        "tests/v2_lane_work_observer_role.rs",
+    ),
+}
+
+
+def _read_reviewed_rust_source(
+    repo_root: Path,
+    relative: str,
+    errors: list[str],
+    description: str,
+) -> tuple[Path, str]:
+    """Read one Rust source after authenticating and expanding its include closure."""
+
+    path = repo_root / relative
+    if not path.is_file() or path.is_symlink():
+        errors.append(f"{path}: {description} must be a regular non-symlink file")
+        return path, ""
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        errors.append(f"{path}: cannot read {description}: {error}")
+        return path, ""
+
+    manifest = _REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative)
+    if manifest is None:
+        return path, source
+
+    masked_source = mask_rust_comments(source)
+    include_invocations = tuple(
+        re.finditer(r"(?m)^[ \t]*include\s*!", masked_source)
+    )
+    include_pattern = re.compile(
+        r'(?m)^[ \t]*include\s*!\s*\(\s*"'
+        r'(?P<relative>[^"\n]+\.rs)"\s*\)\s*;[ \t]*(?:\n|$)'
+    )
+    observed = tuple(
+        match.group("relative") for match in include_pattern.finditer(masked_source)
+    )
+    if observed != manifest or len(include_invocations) != len(manifest):
+        errors.append(
+            f"{path}: reviewed Rust include inventory must equal {manifest!r}; "
+            f"found {observed!r} across {len(include_invocations)} include "
+            "invocation(s)"
+        )
+
+    component_sources: dict[str, str] = {}
+    for component_relative in manifest:
+        component_path = path.parent / component_relative
+        if not component_path.is_file() or component_path.is_symlink():
+            errors.append(
+                f"{component_path}: reviewed Rust include component for {path} "
+                "must be a regular non-symlink file"
+            )
+            component_source = ""
+        else:
+            try:
+                component_source = component_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                errors.append(
+                    f"{component_path}: cannot read reviewed Rust include "
+                    f"component for {path}: {error}"
+                )
+                component_source = ""
+        component_sources[component_relative] = component_source
+
+    def expand(match: re.Match[str]) -> str:
+        component_relative = match.group("relative")
+        component_source = component_sources.get(component_relative)
+        return match.group(0) if component_source is None else component_source
+
+    return path, include_pattern.sub(expand, source)
+
+
+def _reviewed_rust_include_manifest_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Fail closed unless every reviewed split Rust source has its exact closure."""
+
+    errors: list[str] = []
+    for relative in _REVIEWED_RUST_INCLUDE_MANIFESTS:
+        _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            "reviewed split Rust source",
+        )
+    return errors
+
+
+def _kura_production_source_inventory(
+    repo_root: Path = ROOT_DIR,
+) -> tuple[
+    Path,
+    str,
+    tuple[tuple[str, Path, str], ...],
+    list[str],
+]:
+    """Load the exact direct production include closure of ``kura.rs``."""
+
+    source_root = repo_root / "crates" / "iroha_core" / "src"
+    kura_path = source_root / "kura.rs"
+    errors: list[str] = []
+    if not kura_path.is_file() or kura_path.is_symlink():
+        errors.append(
+            f"{kura_path}: Kura production source inventory root must be a "
+            "regular file"
+        )
+        kura_source = ""
+    else:
+        try:
+            kura_source = kura_path.read_text(encoding="utf-8")
+        except OSError as error:
+            errors.append(
+                f"{kura_path}: cannot read Kura production source inventory "
+                f"root: {error}"
+            )
+            kura_source = ""
+
+    masked_source = mask_rust_comments(kura_source)
+    test_module_markers = tuple(
+        re.finditer(
+            r"(?m)^#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*\n"
+            r"mod\s+tests\s*\{",
+            masked_source,
+        )
+    )
+    if len(test_module_markers) != 1:
+        errors.append(
+            f"{kura_path}: Kura production source inventory must retain "
+            "exactly one terminal cfg(test) module boundary; found "
+            f"{len(test_module_markers)}"
+        )
+        production_source = masked_source
+    else:
+        production_source = masked_source[: test_module_markers[0].start()]
+
+    include_invocations = tuple(
+        re.finditer(r"(?m)^[ \t]*include\s*!", production_source)
+    )
+    include_pattern = re.compile(
+        r'(?m)^[ \t]*include\s*!\s*\(\s*"'
+        r'(?P<relative>kura/[^"\n]+\.rs)"\s*\)\s*;[ \t]*$'
+    )
+    observed_components = tuple(
+        match.group("relative")
+        for match in include_pattern.finditer(production_source)
+    )
+    if (
+        observed_components != _KURA_PRODUCTION_COMPONENT_FILES
+        or len(include_invocations) != len(_KURA_PRODUCTION_COMPONENT_FILES)
+    ):
+        errors.append(
+            f"{kura_path}: Kura direct production include inventory must equal "
+            f"{_KURA_PRODUCTION_COMPONENT_FILES!r}; found "
+            f"{observed_components!r} across {len(include_invocations)} "
+            "include invocation(s)"
+        )
+
+    components: list[tuple[str, Path, str]] = []
+    for relative in _KURA_PRODUCTION_COMPONENT_FILES:
+        path = source_root / relative
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: Kura production source inventory component must be "
+                "a regular non-symlink file"
+            )
+            source = ""
+        else:
+            try:
+                source = path.read_text(encoding="utf-8")
+            except OSError as error:
+                errors.append(
+                    f"{path}: cannot read Kura production source inventory "
+                    f"component: {error}"
+                )
+                source = ""
+        components.append((relative, path, source))
+    return kura_path, kura_source, tuple(components), errors
+
+
 # Exact token-stream digests for the nontrivial Verus projection theorems and
 # their concrete mutation witnesses. Unlike raw substrings, these bind the
 # declaration, contract, and proof body of one real, context-checked item while
@@ -67,13 +365,13 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
     ),
     "runtime_step": (
-        "5851f7e8fa8223c1de6ca54101426bca28c00c4e1d32c78762bd84c3b6e1767c"
+        "25956cf04532441fca915496116cc9c6913df8743292c857fd478a2ba7b07bcc"
     ),
     "runtime_step_recovery": (
-        "f3a91673b74b2b256c52ba84d82881bb2404b2726966b91049c11bc450965c5d"
+        "1e3243e36d27d9d0fb510048485350c2401d56ba02f1ef274b027c63e06847bd"
     ),
     "dispatch_one_adapter_deferred": (
-        "846b96585974bcb291e314e9ae144c2bda24d1f4f7291eb376252dad2ab4713e"
+        "20d4d698e8566e7df3ba96d0f6cc136ad87c05f10d95931b886aa174ae45b7b9"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
         "4a6ae3cd80c629e1ec63e32eadc6d6cfcb68a9ccc77a15997a4915931818279c"
@@ -103,7 +401,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "638d44eae201d3477a987e857d3c9318c7a525347cddb9d5bbce704d9bbc7985"
     ),
     "runtime_ingress_validate_exact": (
-        "f6b5867d05815113ca449e0bf4c29fbca5b4f706a71788e5584c00a1b4b89f9e"
+        "5076de66c0c2a3b01f31c65ff4ea3af8177e4bd372861d6e14585087fb6714d3"
     ),
     "runtime_ingress_matches_authenticated": (
         "e9d5c8bfa0cbdc71f42f9858ee00e73f663c2bed53f573c3e06a9144feaad5f8"
@@ -112,25 +410,25 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "0a9b6424c76b8d53a6e630431e3e9153d20e25d755abbe38384c5f59e9064553"
     ),
     "runtime_ingress_merge_downstream": (
-        "67f103ccdbc31a5d7527545b1ce023569c199de002ef9697d4ae525702cf8690"
+        "55f59286a356c0cd1c47b572db72660dcdedcc40f3946c2e3b62c7eb5c805e92"
     ),
     "runtime_driver_dispatch": (
-        "77f833ff3dbd893008febf65d5e9626f04d9b55b0260294b3d4a027382ca9cf3"
+        "a20f3f9675cacba345a174bba5fa8370f0f76225f8e3e040971c2d7f15800990"
     ),
     "runtime_driver_dispatch_deferred": (
-        "64777f8713b464364612f8662b48bcb494c1870a8776e4d10a18dcc70976ff60"
+        "f80c271a6766106b620e6b0dcbd7fb3a37db63fece634c09818ddb74498202d9"
     ),
     "reconcile_deferred_ingress_ownership": (
-        "0356614757c038665d820bcaa92474b6ec3d30ad0ee8e2c6652e0a88662ecbb6"
+        "fb8ac9defb961830528e67b3c05e92e7a72368c4c592f5594285f937cfb81f01"
     ),
     "accept_driver_dispatch": (
-        "2d2fe4b456bce5c808588e4c54cc637466de9f674dcb3f30df700a11f00c30b2"
+        "2862df8110e056352a64680616e131393c4eab44be5f9e091f43ccc23d6fab65"
     ),
     "enqueue_network_with_ingress_ownership": (
-        "708305b7037a4fae5e8d796ee08a80f46065ec2fe73ecc498a5e806c7efe33bc"
+        "db05791e686e2c8b4a84e09707c83b767f3bc7eef1da189060801cf86dfc5927"
     ),
     "can_admit_network_message_with_ingress_ownership": (
-        "20fdb8057db53f88bced2eef196421432d2db968f475af444ec08c65bb5c3f11"
+        "24903fdc43ff249788662132bdf1c260917a8243b260e67ba5e8224a013d361d"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
@@ -880,7 +1178,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "7e630c6be2466fe0980df81ea194e101b70e4abac9546a379ab9f24c8eb23861"
     ),
     "applied_height_reconstruction_covers": (
-        "528a462db4e8cd5f9f588c333517c07d79691a6770fa8a3bc5ea3e6fa7723e96"
+        "acd0c53df363cdc5301f6619ec69ac0a37bd1ae83ff2d337303574ce2510f4b2"
     ),
     "durable_exact_output_handoff_owner_pair": (
         "f848a53734e173e64122e3cf198d6e0adfea99909594e667c56a7e11ea271a84"
@@ -1146,7 +1444,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "8e684a41c6ed9799d6fdf7598d7accf8f175f38ff1388058568a6f8bc077c9ea",
     "V2LaneWorkAdapter::persist_anchored_sessions": "40f2ca1c93171337adae168019d2f28ca65acf838da2e9011f6e751ad775876f",
-    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "b716b4d92ddd3c4e80e6999bd7aee543701e2727bef70841c2bf89f38ff5a3f1",
+    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "6ea4db2fb530ea0ee56548f72c82a6df6370e3169ff1930e7a748f85d1ca3242",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
@@ -1166,7 +1464,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9",
+    "run_inner": "25c1449d2fbf1534632402d45122af8faa4fc6ee48352d8ccd0e637e49c03e71",
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
@@ -1196,7 +1494,7 @@ _RUNTIME_AFTER_GST_REQUIREMENT = (
 
 _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256 = {
     "V2IoCertifiedServeIngressReservation": (
-        "0d557912a3a40130e201547acf520ed5c9c4ec33e5dda93b52ab6bd79dfa0dcf"
+        "3691c0fd33c09e59c339ee7cb869b2bffd836cd4361bb2d2259c07e6013f18f8"
     ),
     "CertifiedServeProducerEpisode": (
         "e1e0bdfc4854c5553d5fbf70a67a153998be353b7e7016e890af3bbe9a76a67b"
@@ -1208,10 +1506,10 @@ _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256 = {
 
 _EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256 = {
     "barrier": (
-        "0fd794936441324fa30589c8b167829bd9653da162d7155717d01017e0084ad1"
+        "bce35afb422de5e3b0b7a2667bea940f9170f0ba95dfae03bbea01c36de5a9ad"
     ),
     "matches_barrier": (
-        "3e4b041edb19097dedb4907b8ac46217cac63bd6db20364af4e1fd7979f5c002"
+        "d4ba831e00f4262e51db685213bd83bbdac6edb12ebc691b9aaa62774880a3b8"
     ),
 }
 
@@ -1220,16 +1518,16 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "926626c686c14d453e18bf20dd7232e33383b26b814178e2d2b7e2c2beb161e3"
     ),
     "V2IoCommandQueue::reserve_serve_ingress": (
-        "879cf4ba9107a88226a572068e941693ffd3c2f69c8f1dce943c709cc1321693"
+        "6dd2360143c820a6fdd92dbac3c0d88b0e85651cfc93b1c931d28a7ab5af2457"
     ),
     "V2IoCommandQueue::try_begin_producer_episode": (
-        "918c8208cde905cc74c7146a81eca81a4f6df71c73ddab94b1728cea02c726c0"
+        "da3de6fd057d35073739151cff96230de08a2669e29720423d9b6b832693dbfc"
     ),
     "V2IoCommandQueue::suspend_materialized_serve_barrier_for_runtime_predecessor": (
         "af55e56ebf4bffef6b765e06aec105ede58a1be56f9612c310799fe67aef2ec1"
     ),
     "V2IoCommandQueue::serve_barrier": (
-        "dee6a2b1e77fa2dcf0293a601b25a21006eefd2d8557051d9be4beef33630003"
+        "1104236dd8cfd0ccec5ea0f3171b9d23c6dc1b0f257f0ec13ff6fe8685ad7d4e"
     ),
     "V2IoCommandQueue::claim_serve_runtime_episode": (
         "776649d85722700536fff55e1af781a66aa8694492c550ba3361255d516d0c2e"
@@ -1241,7 +1539,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "02d2bb266994d99ca4fdef5ec8d90fef193a969fe2136eb6e0f0a7f0ae47f0df"
     ),
     "V2IoCommandQueue::try_send_as": (
-        "4b09b1fb37cd30d067a58a3f9902ebb3f23d22af95e5f72b49bfccbb39a1587f"
+        "6c7a0afdfa074b745803704e6910671ab28099c9bc294c21c5fe67a55fd3905d"
     ),
     "ProductionV2Services::certified_serve_barrier": (
         "2daa1fafb0049a95cb78d01630aa55932539b3de9a0db99eb169c0e5e031f56d"
@@ -1310,10 +1608,10 @@ _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
         "51623ab6cf102b45554a8135cb4fbca35062b0d5db6bea99cbabba0eb2305d9f"
     ),
     "repeated_exact_serve_claims_close_all_older_sources_before_later_io": (
-        "7dd6f52990432a274101c3d3ef6f6295d6537a13553db2a405549dfef33457e8"
+        "e97bed021406e0a72e692d2ac6ed58e491a4826b5a9054f17ca8a64d95ef0968"
     ),
     "exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission": (
-        "ac73fa43251f1cbf99d71722f412cf2c6fda79c5b109d41af20cd762b3422d19"
+        "ebeeb9606074ce7e7d51aea4d55d54dabacd23435d639d81ac6f0a9849616e21"
     ),
     "worker_completion_is_retained_behind_a_full_runtime_fifo": (
         "4e807f3dd45e855a96923c803bd970dbc2a6684583b8dfa84aa6db788c5206c1"
@@ -1322,10 +1620,10 @@ _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
         "913796745fa6c589f20dd309da632c1dfb05f84aa963377b04ffa9a0556e21eb"
     ),
     "drained_exact_retransmission_gets_fresh_scheduler_ordinal": (
-        "f21eea2060d0b4f969dda5681df7ea0e208af2b0080aaa9fc23271cef72e1b56"
+        "6604f22a559d4217374ee443dc7d30641756b0025cdace2aa0fc65e7112f5cd4"
     ),
     "certified_serve_future_slot_blocks_control_and_consensus_replenishment": (
-        "d1ff8afcad02c99641e66021fd334b88f7f93eb8d3713dc346c08cff915d3342"
+        "4eb2da42d968642c6eaf184f0ddda6f726e4a7fe49d6b6c2499092ee3c97d075"
     ),
 }
 
@@ -1337,7 +1635,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256 = {
 
 _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
     "restored_productive_retry_freezes_the_current_physical_source_prefix": (
-        "3fa33cdfc0eb55bf7e025c57d340439fbe527c5cf1ba29b48e8779db5be8cd65"
+        "0717cee735d0b0a435bdcd502ca6e29c87a554a9f017cb7edbf1efb46ef33d20"
     ),
     "restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire": (
         "e994c3391ce2626972c26c57a37039f71573adb9d82bbcfa64619edb70640255"
@@ -1349,7 +1647,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "140325f2b05a0c93744b2fbd483e485d95f17a0c8ce08ac1bf41808047e306f4"
     ),
     "try_recv_if_at_checked": (
-        "f4769c2e4fd24483e1834c0143f4a316be7951b805ff3c41c60ed03486f748f4"
+        "24f0b8b8678c7ca64f3f46b2d214553be166e6a2bb2d8ec21f3de8968a35e7ef"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
@@ -1357,13 +1655,13 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9",
+    "run_inner": "25c1449d2fbf1534632402d45122af8faa4fc6ee48352d8ccd0e637e49c03e71",
     "advance_executor": "321df6c9713c5fb64fa6a0948dff6464afa3d08040e752ae0e19196b9badfb31",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
     ),
     "outer_ingress_turns": (
-        "1c08dc7293a6aacd522d211e8acd862cf8be0fb4926bb943b6464f4bd002e223"
+        "a5408a498d6ee0837e31c5fc1b152c043b3d2930eda580d750eaec4f2704ef18"
     ),
     "apply_bounded_sidecar_admissions": (
         "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad"
@@ -1531,7 +1829,7 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6"
     ),
     "ProductionV2Services::start": (
-        "b7b913d0a5dab195265fcd24da2e3ed7727e2cd5b00d3ff95bcffa4aeac227bf"
+        "2d10b4ff066780c14b2b94a0313850563a2b1eb4829c9f998936d570efc8de40"
     ),
     "ProductionV2Services::exact_target_geometry": (
         "978520459f9dd3c5459478e222418ffed2924445c40a79722c307f97e6d28871"
@@ -1682,10 +1980,10 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9"
+        "25c1449d2fbf1534632402d45122af8faa4fc6ee48352d8ccd0e637e49c03e71"
     ),
     "drain_v2_ingress": (
-        "5afe9ea25184f2f95aa5e150bc672c4d2aa70880a4a5021bf7f32f72d37bbfa1"
+        "3a5c93989a854e1ba6612ba4fc2e7962691644e460180bc5d26e8bae22f13158"
     ),
     "dispatch_lane_work_effects": (
         "7b7c0358e9fa35a05df7acd0c641b693b01b51926be2180ba02efde110ef774c"
@@ -1719,7 +2017,7 @@ _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
         "b9ad00e3d2ee76b202fa98f53cab9f7264c63a7d9a3050b0c3d57c0449cfb8f5"
     ),
     "user::Root::parse": (
-        "1d5fb2c92612461d995aea4b517d8d9945c5ed76f5b62721f56baa8275d8dd63"
+        "61526de01c92467504c7b92924b7fea8e13db44f81d385cd226ae644bfe11c7c"
     ),
     "worker::validate_shared_ownership_geometry": (
         "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"
@@ -1742,10 +2040,10 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "e65283e5924e1dfe938cb69289a35067a01d3835027ba65587a32f515ed90032"
     ),
     "ingress::merge_downstream_with_exact_routes": (
-        "f82878cb726f7549de739045c5d1525dc279461eba8266edf2c0705ae50458d7"
+        "9937dd446dc210e96e72e558afad2736ce42036951fc761c432c3c53d510cea2"
     ),
     "ingress::same_semantic_request": (
-        "4d965cdcd6431e615b207f488419c4dcb42d2324ea106a5e9264594bbf128476"
+        "b30874c2662dc448ae573d60fb9892310817975b35dde2bfe5d389d08ada7730"
     ),
     "ingress::matches_message": (
         "6dab8ef36de2046cada66b6aef1a4db08e458e0d43fc3862f794002192c58398"
@@ -1754,7 +2052,7 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "222fb8e00e39a211f73c88d8c7a41b83a82897c7428f70339aa38e40f78da719"
     ),
     "ingress::process_local_projection_hash": (
-        "e44ebc79f6a425630d9c8bb9a8a280e18bf77dcbe4f23c6ae500097e77bf6989"
+        "695a14164f614347818728fd5b67e421e881a5e2da02f513448ad7a54ab2a816"
     ),
     "ingress::matches_reply_routes": (
         "98580b7c9e69cc4c69cc32ec6212459e93fba573a335151fec476659d2772c2f"
@@ -1766,22 +2064,22 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "2be088efc3ff0460b06c0316f7b64062d864d22d8fce286a1474fd1e31af3c82"
     ),
     "ingress::validate_exact": (
-        "874d5c13377384cdf139cfccfac169fc5d57d0d57bc41268a357fec6c7843e8f"
+        "526d02c98338c0304ea246b5366e29951ed312a57e795c4a2db4433f06d1d66b"
     ),
     "effects::accept_payload_chunk_with_ingress_ownership": (
-        "6bc433297ce152cc25f8c67fe66d314f250806a7abf8408a11720cb0480165c8"
+        "04c48786b1db18841d32be400432570fcd268452506af9735c2dc5354a72e5db"
     ),
     "effects::accept_certified_body_response_with_ingress_ownership": (
-        "0f42039eb636c26adf431576ffb70a9cc59885f1bd19355c2a221d2fdbf59322"
+        "c251ceacf29130bde403f38b7002321317c70dde04764f499bae7cfb7b15b722"
     ),
     "worker::claimed_with_reply_routes_and_ingress_ownership": (
         "8c95a2604897a3dbf327d36721388bf466784f2203869d1fc6aead594ecd7e44"
     ),
     "worker::serve_certified_request_on_routes": (
-        "7a35d8d5e2cb80ebc789ca18ed502a6bfa945ac4445f45b55fc00eebca9ca41d"
+        "6cfa46d3647ba72ae53fa12585926eb6803ed38dff9d656894ba7e7693dc06ac"
     ),
     "worker::queue_commit_serve": (
-        "b11654626a16eca6c3c76b66012a23218599ae63d7134433872eb32ee7c9b843"
+        "73b2b40e5c2255d557c2e67ccdd58c3593381c5d713b4dd6315e48c350ff7dfb"
     ),
     "worker::io_handle_certified_serve_ingress_gate": (
         "87acd6865d179d3911a66692e063ece997fbf7669a81493b19d9f443e1291735"
@@ -1790,16 +2088,16 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "95906877d32686cc23249747ff5e31f8552d5abb237277f96fd4091da1a92d77"
     ),
     "worker::route_payload_chunk": (
-        "f633a311a20e8964a46d5f6a6542edbad3bcd052fced5038a65d9a471f2a557a"
+        "cabbad53c21b8b42e361f14c99a045a327c20e473ebb06e189ba82925871eef4"
     ),
     "worker::buffer_orphan_payload_chunk_inner": (
-        "df4b2555d8fda4e356299093d3fa1f41c58ad3c469fb2b4720cdb17da460849b"
+        "03c11a6a6438f3a0f7cf47cac8f5310b262fd684a9df7891ff906b7f2e0d7de8"
     ),
     "worker::replay_buffered_chunks": (
-        "145f9931fea75aed16111a55937abd9d0d821502314d970c4d57106ccceaf900"
+        "55be3d8d05cc8924f303cac80b89e5d56b8b6496694a9e94f742d17fbcb7a80f"
     ),
     "worker::deliver_payload_chunk": (
-        "6c218a4286b317b43f4fd68240328979714b1d831aae46f80108622c34e77052"
+        "f4341f1f806d10adab9e14b0c4b13c463fc7c6dae22bd7056863548d0912fb5b"
     ),
     "lane::accept_lane_message_owned": (
         "4c3b13ab1d0821d97604c8f9119ecc27d1c5be5c2a635b228027d35ed3adf96c"
@@ -2341,9 +2639,9 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "d19623cdc7ad56922f91c7a9c0d2513199ecafa4e6ad26ea2717073d561b41eb"
     ),
     "try_push_at": (
-        "5dc0c2bc91dfedf3972f1d7f13b45c0d8ce923d6e1ba25ea139b77f82285857b"
+        "83c9e853b1bab4a43df359ead4dab381471dc1c503edc1c61e5bc1a39155947f"
     ),
     "try_recv_if_at_checked": (
-        "f4769c2e4fd24483e1834c0143f4a316be7951b805ff3c41c60ed03486f748f4"
+        "24f0b8b8678c7ca64f3f46b2d214553be166e6a2bb2d8ec21f3de8968a35e7ef"
     ),
 }

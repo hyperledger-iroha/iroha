@@ -94,8 +94,9 @@ run_python312_clean() {
 }
 
 # Build a NoritoBridge.xcframework from the Rust connect_norito_bridge crate.
-# - Produces a static-library XCFramework for every Apple slice so Xcode links it
-#   without trying to embed/sign a framework inside simulator app bundles.
+# - Produces a static-library XCFramework with iOS device, universal iOS
+#   simulator, and universal macOS slices so Xcode links it without trying to
+#   embed/sign a framework inside simulator app bundles.
 # - Bridge packaging skips the broader Norito bindings sync gate because unrelated
 #   Kotlin/Java parity drift should not block rebuilding the Swift bridge artifact.
 # - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo.
@@ -633,11 +634,13 @@ CANONICAL_MANIFEST_RELATIVE_TARGET="${FRAMEWORK_NAME}.xcframework/${FRAMEWORK_NA
 DEVICE_TRIPLE="aarch64-apple-ios"
 SIM_ARM_TRIPLE="aarch64-apple-ios-sim"
 SIM_X64_TRIPLE="x86_64-apple-ios"
-MACOS_TRIPLE="aarch64-apple-darwin"
+MACOS_ARM_TRIPLE="aarch64-apple-darwin"
+MACOS_X64_TRIPLE="x86_64-apple-darwin"
 CARGO_BUILD_DIR_DEVICE="$CARGO_BUILD_DIR_BASE/$DEVICE_TRIPLE"
 CARGO_BUILD_DIR_SIM_ARM="$CARGO_BUILD_DIR_BASE/$SIM_ARM_TRIPLE"
 CARGO_BUILD_DIR_SIM_X64="$CARGO_BUILD_DIR_BASE/$SIM_X64_TRIPLE"
-CARGO_BUILD_DIR_MACOS="$CARGO_BUILD_DIR_BASE/$MACOS_TRIPLE"
+CARGO_BUILD_DIR_MACOS_ARM="$CARGO_BUILD_DIR_BASE/$MACOS_ARM_TRIPLE"
+CARGO_BUILD_DIR_MACOS_X64="$CARGO_BUILD_DIR_BASE/$MACOS_X64_TRIPLE"
 
 stage_cargo_library() {
   local cargo_target_dir="$1"
@@ -728,12 +731,13 @@ if [[ "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
   LIB_DEV="$CARGO_BUILD_DIR_DEVICE/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
   LIB_SIM_ARM="$CARGO_BUILD_DIR_SIM_ARM/$SIM_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
   LIB_SIM_X64="$CARGO_BUILD_DIR_SIM_X64/$SIM_X64_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
-  LIB_MAC="$CARGO_BUILD_DIR_MACOS/$MACOS_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
+  LIB_MAC_ARM="$CARGO_BUILD_DIR_MACOS_ARM/$MACOS_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
+  LIB_MAC_X64="$CARGO_BUILD_DIR_MACOS_X64/$MACOS_X64_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
 else
   echo "[+] Building Rust static libraries (release)" >&2
-  echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_TRIPLE" >&2
+  echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_ARM_TRIPLE, $MACOS_X64_TRIPLE" >&2
 
-  echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_TRIPLE)" >&2
+  echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_ARM_TRIPLE $MACOS_X64_TRIPLE)" >&2
 
   # Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
   # while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
@@ -759,17 +763,25 @@ else
   assert_bridge_source_seal "the x86_64 simulator build"
   LIB_SIM_X64=$(stage_cargo_library "$CARGO_BUILD_DIR_SIM_X64" "$SIM_X64_TRIPLE" "x86_64 simulator")
   run_hermetic_apple_cargo \
-    apple-macos "$CARGO_BUILD_DIR_MACOS" "$MACOSX_SDKROOT" \
+    apple-macos "$CARGO_BUILD_DIR_MACOS_ARM" "$MACOSX_SDKROOT" \
     build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-    --target "$MACOS_TRIPLE" \
+    --target "$MACOS_ARM_TRIPLE" \
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-  assert_bridge_source_seal "the macOS build"
-  LIB_MAC=$(stage_cargo_library "$CARGO_BUILD_DIR_MACOS" "$MACOS_TRIPLE" "macOS")
+  assert_bridge_source_seal "the arm64 macOS build"
+  LIB_MAC_ARM=$(stage_cargo_library "$CARGO_BUILD_DIR_MACOS_ARM" "$MACOS_ARM_TRIPLE" "arm64 macOS")
+  run_hermetic_apple_cargo \
+    apple-macos "$CARGO_BUILD_DIR_MACOS_X64" "$MACOSX_SDKROOT" \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    --target "$MACOS_X64_TRIPLE" \
+    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the x86_64 macOS build"
+  LIB_MAC_X64=$(stage_cargo_library "$CARGO_BUILD_DIR_MACOS_X64" "$MACOS_X64_TRIPLE" "x86_64 macOS")
 fi
 
 assert_bridge_source_seal "Apple slice staging"
 
-if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" || ! -f "$LIB_MAC" ]]; then
+if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" \
+    || ! -f "$LIB_MAC_ARM" || ! -f "$LIB_MAC_X64" ]]; then
   echo "[-] Missing built libraries. Did the cargo builds succeed?" >&2
   exit 1
 fi
@@ -802,6 +814,17 @@ env -i \
   DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
   "$LIPO_BINARY" -create -output "$SIM_UNI" "$LIB_SIM_ARM" "$LIB_SIM_X64"
 
+echo "[+] Creating macOS universal static library" >&2
+MAC_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-macos-universal.a"
+env -i \
+  HOME="$USER_HOME_DIR" \
+  PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
+  TMPDIR="$MOBILE_TMPDIR" \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+  "$LIPO_BINARY" -create -output "$MAC_UNI" "$LIB_MAC_ARM" "$LIB_MAC_X64"
+
 echo "[+] Staging XCFramework slices" >&2
 HEADERS_DEV="$STAGE_DIR/device-headers"
 HEADERS_SIM="$STAGE_DIR/simulator-headers"
@@ -812,19 +835,20 @@ LIB_MAC_STAGED="$STAGE_DIR/macos/${STATIC_LIB_NAME}"
 
 mkdir -p "$HEADERS_DEV" "$HEADERS_SIM" "$HEADERS_MAC" "$(dirname "$LIB_DEV_STAGED")" "$(dirname "$LIB_SIM_STAGED")" "$(dirname "$LIB_MAC_STAGED")"
 
-# Stage iOS static libraries. The normal production path moves the already
-# staged raw libraries and drops the two simulator inputs after `lipo`, keeping
-# only one copy of each final slice while xcodebuild packages the XCFramework.
+# Stage Apple static libraries. The normal production path moves the device and
+# universal libraries, then drops the architecture-specific inputs after
+# `lipo`, keeping only one copy of each final slice while xcodebuild packages
+# the XCFramework.
 if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" != "1" \
     && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" != "1" ]]; then
   mv "$LIB_DEV" "$LIB_DEV_STAGED"
   mv "$SIM_UNI" "$LIB_SIM_STAGED"
-  mv "$LIB_MAC" "$LIB_MAC_STAGED"
-  rm -f "$LIB_SIM_ARM" "$LIB_SIM_X64"
+  mv "$MAC_UNI" "$LIB_MAC_STAGED"
+  rm -f "$LIB_SIM_ARM" "$LIB_SIM_X64" "$LIB_MAC_ARM" "$LIB_MAC_X64"
 else
   cp "$LIB_DEV" "$LIB_DEV_STAGED"
   cp "$SIM_UNI" "$LIB_SIM_STAGED"
-  cp "$LIB_MAC" "$LIB_MAC_STAGED"
+  cp "$MAC_UNI" "$LIB_MAC_STAGED"
 fi
 
 # Copy headers for static-library slices. xcodebuild copies this directory as the
@@ -885,12 +909,13 @@ write_static_xcframework_info_plist() {
       <key>HeadersPath</key>
       <string>Headers</string>
       <key>LibraryIdentifier</key>
-      <string>macos-arm64</string>
+      <string>macos-arm64_x86_64</string>
       <key>LibraryPath</key>
       <string>${STATIC_LIB_NAME}</string>
       <key>SupportedArchitectures</key>
       <array>
         <string>arm64</string>
+        <string>x86_64</string>
       </array>
       <key>SupportedPlatform</key>
       <string>macos</string>
@@ -936,7 +961,7 @@ if ! env -i \
   rm -rf "$PUBLISH_XCFRAMEWORK/ios-arm64-simulator"
   copy_static_xcframework_slice "ios-arm64" "$LIB_DEV_STAGED" "$HEADERS_DEV"
   copy_static_xcframework_slice "ios-arm64_x86_64-simulator" "$LIB_SIM_STAGED" "$HEADERS_SIM"
-  copy_static_xcframework_slice "macos-arm64" "$LIB_MAC_STAGED" "$HEADERS_MAC"
+  copy_static_xcframework_slice "macos-arm64_x86_64" "$LIB_MAC_STAGED" "$HEADERS_MAC"
   write_static_xcframework_info_plist
 
   REQUIRED_OUTPUTS=(
@@ -947,9 +972,9 @@ if ! env -i \
     "$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/${STATIC_LIB_NAME}"
     "$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/Headers/NoritoBridge.h"
     "$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/Headers/connect_norito_bridge.h"
-    "$PUBLISH_XCFRAMEWORK/macos-arm64/${STATIC_LIB_NAME}"
-    "$PUBLISH_XCFRAMEWORK/macos-arm64/Headers/NoritoBridge.h"
-    "$PUBLISH_XCFRAMEWORK/macos-arm64/Headers/connect_norito_bridge.h"
+    "$PUBLISH_XCFRAMEWORK/macos-arm64_x86_64/${STATIC_LIB_NAME}"
+    "$PUBLISH_XCFRAMEWORK/macos-arm64_x86_64/Headers/NoritoBridge.h"
+    "$PUBLISH_XCFRAMEWORK/macos-arm64_x86_64/Headers/connect_norito_bridge.h"
   )
   for output in "${REQUIRED_OUTPUTS[@]}"; do
     if [[ ! -f "$output" ]]; then
@@ -968,7 +993,7 @@ fi
 
 IOS_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64/${STATIC_LIB_NAME}"
 SIM_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/${STATIC_LIB_NAME}"
-MAC_BIN="$PUBLISH_XCFRAMEWORK/macos-arm64/${STATIC_LIB_NAME}"
+MAC_BIN="$PUBLISH_XCFRAMEWORK/macos-arm64_x86_64/${STATIC_LIB_NAME}"
 if [[ ! -f "$IOS_BIN" || ! -f "$SIM_BIN" || ! -f "$MAC_BIN" ]]; then
   echo "[-] Missing XCFramework binaries needed to emit NoritoBridge.artifacts.json" >&2
   exit 1
@@ -1305,7 +1330,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   "hashes": {
     "ios-arm64": "$IOS_HASH",
     "ios-arm64_x86_64-simulator": "$SIM_HASH",
-    "macos-arm64": "$MAC_HASH"
+    "macos-arm64_x86_64": "$MAC_HASH"
   }
 }
 EOF
@@ -1329,7 +1354,7 @@ output_loader = Path(sys.argv[3])
 hashes = {
     "ios-arm64": sys.argv[4],
     "ios-arm64_x86_64-simulator": sys.argv[5],
-    "macos-arm64": sys.argv[6],
+    "macos-arm64_x86_64": sys.argv[6],
 }
 if any(len(value) != 64 or any(character not in "0123456789abcdef" for character in value) for value in hashes.values()):
     raise SystemExit("artifact builder produced a non-canonical slice digest")
@@ -1408,8 +1433,8 @@ expected_slices = {
         "platform": "ios",
         "variant": "simulator",
     },
-    "macos-arm64": {
-        "architectures": ["arm64"],
+    "macos-arm64_x86_64": {
+        "architectures": ["arm64", "x86_64"],
         "platform": "macos",
         "variant": None,
     },
@@ -1591,7 +1616,7 @@ libc = ctypes.CDLL(None, use_errno=True)
 SLICE_PATHS = {
     "ios-arm64": "libNoritoBridge.a",
     "ios-arm64_x86_64-simulator": "libNoritoBridge.a",
-    "macos-arm64": "libNoritoBridge.a",
+    "macos-arm64_x86_64": "libNoritoBridge.a",
 }
 
 

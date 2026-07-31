@@ -22972,6 +22972,203 @@ impl SorafsReputationRuntimeConfig {
     }
 }
 
+/// User policy for the restart-safe finalized reserve transparency scanner.
+///
+/// The only deployment binding is the same credential-free immutable query
+/// handle used by the committed reputation archive. No credentials or private
+/// signing material are accepted here.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsReserveTransparencyRuntimeConfig {
+    /// Enable finalized reserve-event ingestion into the transparency index.
+    #[config(default = "defaults::sorafs::storage::reserve_transparency_runtime::ENABLED")]
+    pub enabled: bool,
+    /// Private directory containing the canonical monotonic scanner cursor.
+    #[config(default = "defaults::sorafs::storage::reserve_transparency_runtime::state_dir()")]
+    pub state_dir: PathBuf,
+    /// Exact immutable finalized-query handle shared with reputation.
+    pub finalized_query_handle: Option<String>,
+    /// Normal scan cadence in milliseconds.
+    #[config(
+        default = "defaults::sorafs::storage::reserve_transparency_runtime::POLL_INTERVAL_MS"
+    )]
+    pub poll_interval_ms: u64,
+    /// Maximum bounded retry delay in milliseconds.
+    #[config(
+        default = "defaults::sorafs::storage::reserve_transparency_runtime::RETRY_MAX_INTERVAL_MS"
+    )]
+    pub retry_max_interval_ms: u64,
+    /// Maximum events requested from one exact-anchor reserve page.
+    #[config(default = "defaults::sorafs::storage::reserve_transparency_runtime::PAGE_ITEMS")]
+    pub page_items: u32,
+    /// Maximum exact-anchor pages consumed by one tick.
+    #[config(
+        default = "defaults::sorafs::storage::reserve_transparency_runtime::MAX_PAGES_PER_TICK"
+    )]
+    pub max_pages_per_tick: u32,
+    /// Maximum canonical scanner-checkpoint bytes.
+    #[config(
+        default = "defaults::sorafs::storage::reserve_transparency_runtime::CHECKPOINT_MAX_BYTES"
+    )]
+    pub checkpoint_max_bytes: Bytes<u64>,
+}
+
+impl Default for SorafsReserveTransparencyRuntimeConfig {
+    fn default() -> Self {
+        use defaults::sorafs::storage::reserve_transparency_runtime as runtime;
+
+        Self {
+            enabled: runtime::ENABLED,
+            state_dir: runtime::state_dir(),
+            finalized_query_handle: None,
+            poll_interval_ms: runtime::POLL_INTERVAL_MS,
+            retry_max_interval_ms: runtime::RETRY_MAX_INTERVAL_MS,
+            page_items: runtime::PAGE_ITEMS,
+            max_pages_per_tick: runtime::MAX_PAGES_PER_TICK,
+            checkpoint_max_bytes: runtime::CHECKPOINT_MAX_BYTES,
+        }
+    }
+}
+
+impl SorafsReserveTransparencyRuntimeConfig {
+    fn parse(
+        self,
+        storage_enabled: bool,
+        reputation_runtime: Option<&actual::SorafsReputationRuntime>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SorafsReserveTransparencyRuntime> {
+        const MIN_POLL_INTERVAL_MS: u64 = 100;
+        const MAX_POLL_INTERVAL_MS: u64 = 60_000;
+        const MAX_RETRY_INTERVAL_MS: u64 = 300_000;
+        const MAX_PAGE_ITEMS: u32 = 64;
+        const MAX_PAGES_PER_TICK: u32 = 4_096;
+        const MIN_CHECKPOINT_BYTES: u64 = 4 * 1024;
+        const MAX_CHECKPOINT_BYTES: u64 = 1024 * 1024;
+
+        let emit = |emitter: &mut Emitter<ParseError>, message: &str| {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.to_owned()));
+        };
+        let policy_is_default = self.state_dir
+            == defaults::sorafs::storage::reserve_transparency_runtime::state_dir()
+            && self.poll_interval_ms
+                == defaults::sorafs::storage::reserve_transparency_runtime::POLL_INTERVAL_MS
+            && self.retry_max_interval_ms
+                == defaults::sorafs::storage::reserve_transparency_runtime::RETRY_MAX_INTERVAL_MS
+            && self.page_items
+                == defaults::sorafs::storage::reserve_transparency_runtime::PAGE_ITEMS
+            && self.max_pages_per_tick
+                == defaults::sorafs::storage::reserve_transparency_runtime::MAX_PAGES_PER_TICK
+            && self.checkpoint_max_bytes.0
+                == defaults::sorafs::storage::reserve_transparency_runtime::CHECKPOINT_MAX_BYTES.0;
+        if !self.enabled {
+            if self.finalized_query_handle.is_some() || !policy_is_default {
+                emit(
+                    emitter,
+                    "sorafs.storage.reserve_transparency_runtime bindings and policy must be absent or default when disabled",
+                );
+            }
+            return None;
+        }
+        if !storage_enabled {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.enabled requires storage.enabled",
+            );
+        }
+        let Some(reputation_runtime) = reputation_runtime else {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.enabled requires the committed reputation runtime and immutable finalized archive",
+            );
+            return None;
+        };
+        let state_dir_valid = self.state_dir.is_absolute()
+            && self.state_dir.file_name().is_some()
+            && !self.state_dir.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            });
+        if !state_dir_valid {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.state_dir must be an absolute private directory without dot components",
+            );
+        }
+        let finalized_query_handle = match self.finalized_query_handle {
+            Some(handle) if is_production_runtime_handle(&handle) => {
+                if handle != reputation_runtime.finalized_query_handle {
+                    emit(
+                        emitter,
+                        "sorafs.storage.reserve_transparency_runtime.finalized_query_handle must exactly match reputation_runtime.finalized_query_handle",
+                    );
+                    None
+                } else {
+                    Some(handle)
+                }
+            }
+            Some(_) => {
+                emit(
+                    emitter,
+                    "sorafs.storage.reserve_transparency_runtime.finalized_query_handle must be a canonical credential-free production runtime handle",
+                );
+                None
+            }
+            None => {
+                emit(
+                    emitter,
+                    "sorafs.storage.reserve_transparency_runtime.finalized_query_handle is required when enabled",
+                );
+                None
+            }
+        };
+        if !(MIN_POLL_INTERVAL_MS..=MAX_POLL_INTERVAL_MS).contains(&self.poll_interval_ms) {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.poll_interval_ms must be within 100..=60000",
+            );
+        }
+        if self.retry_max_interval_ms < self.poll_interval_ms
+            || self.retry_max_interval_ms > MAX_RETRY_INTERVAL_MS
+        {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.retry_max_interval_ms must be at least poll_interval_ms and at most 300000",
+            );
+        }
+        if self.page_items == 0 || self.page_items > MAX_PAGE_ITEMS {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.page_items must be within 1..=64",
+            );
+        }
+        if self.max_pages_per_tick == 0 || self.max_pages_per_tick > MAX_PAGES_PER_TICK {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.max_pages_per_tick must be within 1..=4096",
+            );
+        }
+        if !(MIN_CHECKPOINT_BYTES..=MAX_CHECKPOINT_BYTES).contains(&self.checkpoint_max_bytes.0) {
+            emit(
+                emitter,
+                "sorafs.storage.reserve_transparency_runtime.checkpoint_max_bytes must be within 4096..=1048576",
+            );
+        }
+
+        state_dir_valid.then_some(())?;
+        let finalized_query_handle = finalized_query_handle?;
+        Some(actual::SorafsReserveTransparencyRuntime {
+            state_dir: self.state_dir,
+            finalized_query_handle,
+            poll_interval: Duration::from_millis(self.poll_interval_ms),
+            retry_max_interval: Duration::from_millis(self.retry_max_interval_ms),
+            page_items: self.page_items,
+            max_pages_per_tick: self.max_pages_per_tick,
+            checkpoint_max_bytes: self.checkpoint_max_bytes,
+        })
+    }
+}
+
 #[cfg(test)]
 mod sorafs_moderation_orchestrator_tests {
     use super::*;
@@ -23901,308 +24098,8 @@ mod sorafs_hedging_billing_runtime_config_tests {
 }
 
 #[cfg(test)]
-mod sorafs_reputation_runtime_config_tests {
-    use super::*;
-
-    fn publisher_public_key_hex() -> String {
-        let key = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519).expect("test keypair");
-        hex::encode(key.public_key().to_bytes().1)
-    }
-
-    fn absolute_state_dir() -> PathBuf {
-        #[cfg(target_os = "windows")]
-        {
-            PathBuf::from(r"C:\iroha\sorafs\reputation")
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            PathBuf::from("/var/lib/iroha/sorafs/reputation")
-        }
-    }
-
-    fn absolute_trust_policy_path() -> PathBuf {
-        #[cfg(target_os = "windows")]
-        {
-            PathBuf::from(r"C:\iroha\reputation-trust-policy.to")
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            PathBuf::from("/etc/iroha/reputation-trust-policy.to")
-        }
-    }
-
-    fn valid_config() -> SorafsReputationRuntimeConfig {
-        SorafsReputationRuntimeConfig {
-            enabled: true,
-            state_dir: absolute_state_dir(),
-            window_start_height: Some(10),
-            window_end_height: Some(20),
-            finalized_query_handle: Some("ledger.finalized.primary".to_owned()),
-            journal_checkpoint_provider_handle: Some(
-                "sealed.reputation.journal.primary".to_owned(),
-            ),
-            journal_checkpoint_provider_revision: Some(1),
-            journal_checkpoint_provider_policy_digest_hex: Some("60".repeat(32)),
-            journal_transaction_submitter_handle: Some("queue.reputation.journal".to_owned()),
-            journal_transaction_submitter_revision: Some(11),
-            journal_transaction_submitter_policy_digest_hex: Some("61".repeat(32)),
-            threshold_signer_handle: Some("hsm.reputation.threshold".to_owned()),
-            threshold_signer_revision: Some(12),
-            threshold_signer_policy_digest_hex: Some("62".repeat(32)),
-            governance_dag_handle: Some("governance.dag.publisher".to_owned()),
-            governance_dag_revision: Some(13),
-            governance_dag_policy_digest_hex: Some("63".repeat(32)),
-            governance_publisher_peer_id: Some("12D3KooWProductionPublisher".to_owned()),
-            governance_publisher_public_key_hex: Some(publisher_public_key_hex()),
-            ..SorafsReputationRuntimeConfig::default()
-        }
-    }
-
-    #[test]
-    fn disabled_default_is_inert() {
-        let mut emitter = Emitter::new();
-        assert!(
-            SorafsReputationRuntimeConfig::default()
-                .parse(false, None, &mut emitter)
-                .is_none()
-        );
-        assert!(emitter.into_result().is_ok());
-    }
-
-    #[test]
-    fn enabled_policy_parses_without_credentials() {
-        let mut emitter = Emitter::new();
-        let trust_policy_path = absolute_trust_policy_path();
-        let parsed = valid_config()
-            .parse(true, Some(trust_policy_path.as_path()), &mut emitter)
-            .expect("enabled runtime policy");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(parsed.window_start_height, 10);
-        assert_eq!(parsed.window_end_height, 20);
-        assert_eq!(parsed.page_items, 64);
-        assert_eq!(parsed.max_pages_per_batch, 4_096);
-        assert_eq!(parsed.poll_interval, Duration::from_secs(1));
-        assert_eq!(
-            parsed.finalized_archive_root,
-            absolute_state_dir().join(
-                defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_DIRECTORY_NAME
-            )
-        );
-        assert_eq!(
-            parsed.finalized_archive_max_record_bytes,
-            defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_RECORD_BYTES
-        );
-        assert_eq!(
-            parsed.finalized_archive_max_entries,
-            defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_ENTRIES
-        );
-        assert_eq!(
-            parsed.finalized_archive_max_total_bytes,
-            defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_TOTAL_BYTES
-        );
-        assert_eq!(
-            parsed.finalized_archive_max_kura_tip_lag_blocks,
-            defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_KURA_TIP_LAG_BLOCKS
-        );
-        assert!(parsed.finalized_archive_retention_authority.is_none());
-        assert_eq!(
-            parsed.journal_transaction_submitter_handle,
-            "queue.reputation.journal"
-        );
-        assert_eq!(
-            parsed.journal_checkpoint_provider_handle,
-            "sealed.reputation.journal.primary"
-        );
-        assert_eq!(parsed.journal_checkpoint_provider_revision, 1);
-        assert_eq!(parsed.journal_checkpoint_provider_policy_digest, [0x60; 32]);
-        assert_eq!(parsed.journal_transaction_submitter_revision, 11);
-        assert_eq!(
-            parsed.journal_transaction_submitter_policy_digest,
-            [0x61; 32]
-        );
-        assert_eq!(parsed.threshold_signer_revision, 12);
-        assert_eq!(parsed.threshold_signer_policy_digest, [0x62; 32]);
-        assert_eq!(parsed.governance_dag_revision, 13);
-        assert_eq!(parsed.governance_dag_policy_digest, [0x63; 32]);
-        assert_eq!(
-            parsed
-                .por_success_bps
-                .saturating_add(parsed.pdp_success_bps)
-                .saturating_add(parsed.potr_success_bps)
-                .saturating_add(parsed.latency_bps)
-                .saturating_add(parsed.dispute_bps)
-                .saturating_add(parsed.token_violation_bps)
-                .saturating_add(parsed.repair_breach_bps),
-            10_000
-        );
-    }
-
-    #[test]
-    fn enabled_policy_rejects_missing_or_nonproduction_dependencies() {
-        let mut config = valid_config();
-        config.finalized_query_handle = Some("null-query.test".to_owned());
-        config.journal_checkpoint_provider_handle = Some("mock-seal.test".to_owned());
-        config.journal_transaction_submitter_handle = Some("mock-submit.test".to_owned());
-        config.threshold_signer_handle = None;
-        config.state_dir = PathBuf::from("relative/reputation");
-        config.window_end_height = Some(9);
-        config.page_items = 65;
-        config.max_pages_per_batch = 516;
-        config.poll_interval_ms = 0;
-        config.repair_breach_bps = 999;
-
-        let mut emitter = Emitter::new();
-        assert!(config.parse(false, None, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn enabled_policy_rejects_omitted_zero_and_noncanonical_qualification_bindings() {
-        let trust_policy_path = absolute_trust_policy_path();
-        let mut omitted_revision = valid_config();
-        omitted_revision.journal_transaction_submitter_revision = None;
-        let mut omitted_checkpoint_revision = valid_config();
-        omitted_checkpoint_revision.journal_checkpoint_provider_revision = None;
-        let mut omitted_digest = valid_config();
-        omitted_digest.threshold_signer_policy_digest_hex = None;
-        let mut zero_revision = valid_config();
-        zero_revision.governance_dag_revision = Some(0);
-        let mut zero_digest = valid_config();
-        zero_digest.journal_transaction_submitter_policy_digest_hex = Some("00".repeat(32));
-        let mut uppercase_digest = valid_config();
-        uppercase_digest.threshold_signer_policy_digest_hex = Some("A2".repeat(32));
-        let mut short_digest = valid_config();
-        short_digest.governance_dag_policy_digest_hex = Some("63".repeat(31));
-
-        for config in [
-            omitted_revision,
-            omitted_checkpoint_revision,
-            omitted_digest,
-            zero_revision,
-            zero_digest,
-            uppercase_digest,
-            short_digest,
-        ] {
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(trust_policy_path.as_path()), &mut emitter)
-                    .is_none()
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn enabled_policy_rejects_invalid_finalized_archive_bounds_without_clamping() {
-        let mut zero_record = valid_config();
-        zero_record.finalized_archive_max_record_bytes = 0;
-        let mut zero_entries = valid_config();
-        zero_entries.finalized_archive_max_entries = 0;
-        let mut undersized_total = valid_config();
-        undersized_total.finalized_archive_max_record_bytes = 2;
-        undersized_total.finalized_archive_max_total_bytes = 1;
-        let mut allocation_overflow = valid_config();
-        allocation_overflow.finalized_archive_max_record_bytes = u64::MAX;
-        allocation_overflow.finalized_archive_max_total_bytes = u64::MAX;
-        let mut excessive_lag = valid_config();
-        excessive_lag.finalized_archive_max_kura_tip_lag_blocks =
-            defaults::sorafs::storage::reputation_runtime::FINALIZED_ARCHIVE_MAX_KURA_TIP_LAG_BLOCKS_LIMIT
-                + 1;
-        let trust_policy_path = absolute_trust_policy_path();
-
-        for config in [
-            zero_record,
-            zero_entries,
-            undersized_total,
-            allocation_overflow,
-            excessive_lag,
-        ] {
-            let mut emitter = Emitter::new();
-            assert!(
-                config
-                    .parse(true, Some(trust_policy_path.as_path()), &mut emitter)
-                    .is_none()
-            );
-            assert!(emitter.into_result().is_err());
-        }
-    }
-
-    #[test]
-    fn enabled_retention_requires_and_projects_exact_public_authority_binding() {
-        let mut config = valid_config();
-        config.finalized_archive_retention_enabled = true;
-        config.finalized_archive_retention_authority_handle =
-            Some("sealed.reputation.archive.primary".to_owned());
-        config.finalized_archive_retention_authority_revision = Some(7);
-        config.finalized_archive_retention_authority_policy_digest_hex = Some("51".repeat(32));
-        let trust_policy_path = absolute_trust_policy_path();
-        let mut emitter = Emitter::new();
-
-        let parsed = config
-            .parse(true, Some(trust_policy_path.as_path()), &mut emitter)
-            .expect("enabled retention authority");
-        assert!(emitter.into_result().is_ok());
-        let authority = parsed
-            .finalized_archive_retention_authority
-            .expect("project exact retention authority");
-        assert_eq!(authority.handle, "sealed.reputation.archive.primary");
-        assert_eq!(authority.revision, 7);
-        assert_eq!(authority.policy_digest, [0x51; 32]);
-    }
-
-    #[test]
-    fn retention_rejects_missing_test_marked_stale_or_noncanonical_bindings() {
-        let trust_policy_path = absolute_trust_policy_path();
-        let mut missing = valid_config();
-        missing.finalized_archive_retention_enabled = true;
-
-        let mut test_marked = valid_config();
-        test_marked.finalized_archive_retention_enabled = true;
-        test_marked.finalized_archive_retention_authority_handle =
-            Some("sealed.reputation.archive.test".to_owned());
-        test_marked.finalized_archive_retention_authority_revision = Some(1);
-        test_marked.finalized_archive_retention_authority_policy_digest_hex = Some("51".repeat(32));
-
-        let mut stale = valid_config();
-        stale.finalized_archive_retention_enabled = true;
-        stale.finalized_archive_retention_authority_handle =
-            Some("sealed.reputation.archive.primary".to_owned());
-        stale.finalized_archive_retention_authority_revision = Some(0);
-        stale.finalized_archive_retention_authority_policy_digest_hex = Some("00".repeat(32));
-
-        let mut dormant = valid_config();
-        dormant.finalized_archive_retention_authority_handle =
-            Some("sealed.reputation.archive.primary".to_owned());
-
-        for config in [missing, test_marked, stale, dormant] {
-            let mut emitter = Emitter::new();
-            let parsed = config.parse(true, Some(trust_policy_path.as_path()), &mut emitter);
-            let emitted_error = emitter.into_result().is_err();
-            assert!(parsed.is_none() || emitted_error);
-        }
-    }
-
-    #[test]
-    fn disabled_policy_rejects_stale_authority_claims() {
-        let mut config = SorafsReputationRuntimeConfig::default();
-        config.finalized_query_handle = Some("ledger.finalized.primary".to_owned());
-        let mut emitter = Emitter::new();
-        assert!(config.parse(false, None, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn disabled_policy_rejects_nondefault_finalized_archive_claims() {
-        let mut config = SorafsReputationRuntimeConfig::default();
-        config.finalized_archive_max_entries -= 1;
-        let mut emitter = Emitter::new();
-
-        assert!(config.parse(false, None, &mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-}
-
+#[path = "user/sorafs_reputation_runtime_config_tests.rs"]
+mod sorafs_reputation_runtime_config_tests;
 #[cfg(test)]
 mod sorafs_pop_credential_service_tests {
     use super::*;
@@ -24968,6 +24865,9 @@ pub struct SorafsStorage {
     /// Finalized-ledger reputation projector and external publication policy.
     #[config(nested)]
     pub reputation_runtime: SorafsReputationRuntimeConfig,
+    /// Restart-safe finalized reserve-event transparency scanner policy.
+    #[config(nested)]
+    pub reserve_transparency_runtime: SorafsReserveTransparencyRuntimeConfig,
     /// Authenticated immutable archive for compacted finalized PoR replay state.
     #[config(nested)]
     pub por_replay_archive: SorafsPorReplayArchiveConfig,
@@ -25056,6 +24956,7 @@ impl Default for SorafsStorage {
             moderation_orchestrator: SorafsModerationOrchestrator::default(),
             evidence_viewer: SorafsEvidenceViewerConfig::default(),
             reputation_runtime: SorafsReputationRuntimeConfig::default(),
+            reserve_transparency_runtime: SorafsReserveTransparencyRuntimeConfig::default(),
             por_replay_archive: SorafsPorReplayArchiveConfig::default(),
             hedging_billing_runtime: SorafsHedgingBillingRuntimeConfig::default(),
             provider_ingest_runtime: SorafsProviderIngestRuntimeConfig::default(),
@@ -25691,6 +25592,11 @@ impl SorafsStorage {
             self.reputation_trust_policy_path.as_deref(),
             emitter,
         );
+        let reserve_transparency_runtime = self.reserve_transparency_runtime.parse(
+            self.enabled,
+            reputation_runtime.as_ref(),
+            emitter,
+        );
         let por_replay_archive =
             self.por_replay_archive
                 .parse(self.enabled, reputation_runtime_enabled, emitter);
@@ -25732,6 +25638,7 @@ impl SorafsStorage {
             moderation_orchestrator,
             evidence_viewer,
             reputation_runtime,
+            reserve_transparency_runtime,
             por_replay_archive,
             hedging_billing_runtime,
             provider_ingest_runtime,

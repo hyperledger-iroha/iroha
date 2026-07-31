@@ -34,7 +34,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "IrohaSwift/Sources/IrohaSwift/Core.swift": "public struct Core {}\n",
             "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift": (
                 'let hashes = [\n'
-                '    "macos-arm64": "' + ("1" * 64) + '",\n'
+                '    "macos-arm64_x86_64": "' + ("1" * 64) + '",\n'
                 '    "ios-arm64": "' + ("2" * 64) + '",\n'
                 '    "ios-arm64_x86_64-simulator": "' + ("3" * 64) + '"\n'
                 ']\n'
@@ -196,9 +196,26 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             3,
         )
 
-    def test_apple_builder_uses_one_selected_lock_for_all_four_builds(self) -> None:
+    def test_apple_builder_uses_one_selected_lock_for_all_five_builds(self) -> None:
         builder = APPLE_BUILDER.read_text(encoding="utf-8")
-        self.assertEqual(builder.count("  run_hermetic_apple_cargo \\\n"), 4)
+        self.assertEqual(builder.count("  run_hermetic_apple_cargo \\\n"), 5)
+        self.assertEqual(
+            seal.APPLE_TARGETS,
+            (
+                "aarch64-apple-ios",
+                "aarch64-apple-ios-sim",
+                "x86_64-apple-ios",
+                "aarch64-apple-darwin",
+                "x86_64-apple-darwin",
+            ),
+        )
+        self.assertIn('MACOS_X64_TRIPLE="x86_64-apple-darwin"', builder)
+        self.assertIn(
+            '"$LIPO_BINARY" -create -output "$MAC_UNI" '
+            '"$LIB_MAC_ARM" "$LIB_MAC_X64"',
+            builder,
+        )
+        self.assertIn('"macos-arm64_x86_64"', builder)
         self.assertIn(
             '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
             builder,

@@ -424,7 +424,7 @@ def test_parity_fixture_snapshot_rejects_missing_inputs() -> None:
 
 
 def test_native_release_jobs_build_and_require_the_bridge() -> None:
-    """C# and both mobile jobs fail closed when the ABI-21 bridge is absent."""
+    """Native release jobs build optimized, fail-closed ABI-21 bridges."""
 
     csharp = read(".github/workflows/pr_csharp.yml")
     mobile = read(".github/workflows/mobile_sdk_artifacts.yml")
@@ -440,7 +440,12 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert "name: Build NoritoBridge XCFramework" in mobile
     assert "name: Build host SoraFS reference native bridge" in mobile
     parity_runner = read("ci/sdk_sorafs_orchestrator.sh")
-    assert "npm run build:native" in parity_runner
+    assert parity_runner.count("npm run build:native") == 1
+    assert parity_runner.count("IROHA_JS_NATIVE_BUILD_PROFILE=") == 1
+    assert (
+        "IROHA_JS_NATIVE_BUILD_PROFILE=release npm run build:native"
+        in parity_runner
+    )
     assert "test/cancelAssetLockV1.test.js" in parity_runner
     assert "test/sorafsAppealFinanceValidation.test.js" in parity_runner
     assert "swift test --filter SorafsOrchestratorParityTests" in parity_runner
@@ -448,9 +453,54 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert "swift test --filter SorafsReferenceValidatorsTests" in parity_runner
     assert "name: Build exact ABI-21 NoritoBridge XCFramework" in parity
     assert "check_mobile_sdk_artifacts.sh --apple-only" in parity
+    assert parity.count("IROHA_JS_NATIVE_BUILD_PROFILE:") == 1
+    assert 'IROHA_JS_NATIVE_BUILD_PROFILE: "release"' in parity
     assert 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"' in parity
     assert '"crates/iroha_js_host/**"' in parity
     assert "bash ci/sdk_sorafs_orchestrator.sh" in parity
+
+
+def test_swift_native_bridge_contract_requires_universal_macos_slice() -> None:
+    """Apple release lanes build and authenticate both macOS architectures."""
+
+    mobile = read(".github/workflows/mobile_sdk_artifacts.yml")
+    parity = read(".github/workflows/sorafs-orchestrator-sdk.yml")
+    for workflow in (mobile, parity):
+        assert (
+            "rustup target add aarch64-apple-ios aarch64-apple-ios-sim "
+            "x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin"
+            in workflow
+        )
+
+    builder = read("scripts/build_norito_xcframework.sh")
+    assert 'MACOS_ARM_TRIPLE="aarch64-apple-darwin"' in builder
+    assert 'MACOS_X64_TRIPLE="x86_64-apple-darwin"' in builder
+    assert (
+        '"$LIPO_BINARY" -create -output "$MAC_UNI" '
+        '"$LIB_MAC_ARM" "$LIB_MAC_X64"'
+        in builder
+    )
+    assert '"macos-arm64_x86_64"' in builder
+
+    checker = read("scripts/check_mobile_sdk_artifacts.sh")
+    assert (
+        "local slices=(ios-arm64 ios-arm64_x86_64-simulator "
+        "macos-arm64_x86_64)"
+        in checker
+    )
+    assert "ios-arm64_x86_64-simulator|macos-arm64_x86_64)" in checker
+    assert '"macos-arm64_x86_64": {' in checker
+    assert '"architectures": ["arm64", "x86_64"]' in checker
+    assert (
+        "NoritoBridge Info.plist does not declare the canonical universal "
+        "Apple slices"
+        in checker
+    )
+
+    loader = read("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift")
+    assert 'return "macos-arm64_x86_64"' in loader
+    assert '"macos-arm64_x86_64":' in loader
+    assert '"macos-arm64":' not in loader
 
 
 def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_skips() -> None:

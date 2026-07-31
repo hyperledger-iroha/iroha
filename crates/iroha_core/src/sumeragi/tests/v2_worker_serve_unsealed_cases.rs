@@ -293,7 +293,7 @@
 
     #[test]
     fn dormant_exact_head_reattaches_after_saturated_fair_prefix_and_drains_frozen_predecessor() {
-        let (mut service, keys) = fixture_with_block_payload();
+        let (service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let requests = [1_usize, 2, 3].map(|index| {
             authenticated_serve_request(

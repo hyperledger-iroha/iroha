@@ -1409,6 +1409,30 @@ pub mod sorafs {
                 PathBuf::from("./storage/sorafs/reputation")
             }
         }
+        /// Finalized reserve-event transparency scanner defaults.
+        pub mod reserve_transparency_runtime {
+            use std::path::PathBuf;
+
+            use iroha_config_base::util::Bytes;
+
+            /// The scanner is opt-in with the committed reputation archive.
+            pub const ENABLED: bool = false;
+            /// Normal exact-anchor scan cadence.
+            pub const POLL_INTERVAL_MS: u64 = 1_000;
+            /// Maximum bounded retry delay after transient unavailability.
+            pub const RETRY_MAX_INTERVAL_MS: u64 = 30_000;
+            /// Maximum reserve events requested from one immutable page.
+            pub const PAGE_ITEMS: u32 = 64;
+            /// Maximum immutable pages consumed by one scanner tick.
+            pub const MAX_PAGES_PER_TICK: u32 = 64;
+            /// Maximum canonical scanner checkpoint bytes.
+            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024);
+
+            /// Default private state root used only while the scanner is disabled.
+            pub fn state_dir() -> PathBuf {
+                PathBuf::from("./storage/sorafs/reserve-transparency")
+            }
+        }
         /// Finalized-ledger hedging/billing supervisor defaults.
         pub mod hedging_billing_runtime {
             use std::path::PathBuf;
