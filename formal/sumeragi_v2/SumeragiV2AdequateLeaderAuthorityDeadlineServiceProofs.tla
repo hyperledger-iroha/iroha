@@ -5050,12 +5050,13 @@ The lower action lemmas required to discharge the provider are intentionally
 listed at the proof boundary:
 
   * runner/due-mode selection:
-      `ExactDecisionTargetNeutralRankCellHasConcreteFairOwner`,
+      `HistoricalDiscoveryFixedClockBlockerCharacterization`,
+      `CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner`,
       `DueNodeServiceEnablesConcreteGateProgress`, and
       `ConcreteDueNodeServiceActionsResetDeadlineAboveFixedClock`;
   * deferred and selector preservation:
       `AdequateLeaderFixedIntermediateRouteCarrierCannotRechargeCut` and
-      `ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor`;
+      `ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock`;
   * I/O/ready service:
       `DueIoServiceEnablesConcreteLocalProgress`,
       `HistoricalDiscoveryServeFairActionLowersOccurrenceDebt`, and
@@ -5063,12 +5064,12 @@ listed at the proof boundary:
   * producer/parent-child handoff:
       `AdequateLeaderFixedExactParentDepartureCarriesLifecycleCut`,
       `AdequateLeaderFixedOwnedFinalRouteParentConsumesCumulativeDebt`,
-      `ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank`, and
+      `ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish`, and
       `AsyncCandidateProducerContinuationHandoffCandidatesThisStep`;
   * selected-action temporal occurrence:
       `ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness`,
-      `ExactDecisionTargetNeutralRankCellStepIsSafe`, and
-      `ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell`.
+      `ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame`,
+      and the local selected-owner step providers below.
 
 This is the same action shape as
 `SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs`: non-Tick actions
@@ -5261,9 +5262,7 @@ BY AsyncLiveSpecProjectsAsyncSpec,
    AdequateLeaderFixedRetainedSubjectReplacementRetryKeepsExactRoute,
    ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
-   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
-   ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank,
    ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness,
    ExactDecisionRequestIngressRankOrderingIsWellFounded,
    AsyncLiveProvidesAdequateLeaderWirePhysicalConvergence,
@@ -6263,11 +6262,7 @@ BY AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep,
    AsyncCandidateProducerSourceTransitionInstallsExactContinuation,
    AsyncCandidateProducerContinuationPreservedOrTerminal,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
-   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
-   ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank,
-   ExactDecisionTargetNeutralRankCellStepIsSafe,
-   ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell,
    ConcreteDueNodeServiceActionsResetDeadlineAboveFixedClock,
    DueIoServiceEnablesConcreteLocalProgress,
    HistoricalDiscoveryServeFairActionLowersOccurrenceDebt,
@@ -6823,11 +6818,13 @@ BY AdequateLeaderRetainedProducerSourceHasActualPacketWitness,
    AdequateLeaderRetainedProducerSameClockCannotRefreshPhysicalCut,
    ExactDecisionTargetNeutralSnapshotIsFinite,
    ExactDecisionTargetNeutralPacketDependencyRankForSnapshotInCarrier,
+   ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
-   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock,
+   ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
-   ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish,
-   ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish,
    HistoricalDiscoveryFixedClockBlockerCharacterization,
    HistoricalDiscoveryFixedClockLexStepStrictlyDescends,
    HistoricalDiscoveryRetainedPacketMinimumStepCases,
@@ -6838,6 +6835,12 @@ BY AdequateLeaderRetainedProducerSourceHasActualPacketWitness,
    HistoricalDiscoveryCandidateExitClassifiesOccurrenceDebt,
    HistoricalDiscoveryServeExitEitherLowersOrReplenishes,
    HistoricalDiscoveryServeFairActionLowersOccurrenceDebt,
+   CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner,
+   ExternalCandidateProducerContinuationSelectionIsReady,
+   LocalContinuationReadyEnablesFairResolution,
+   ConditionalTransportContinuationReadyEnablesFairService,
+   VolatileBodyContinuationReadyEnablesFairService,
+   CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends,
    AsyncTickEnabledHasConcreteSuccessor,
    OverdueResponsivePacketEnablesConcreteProgress,
    DueNodeServiceEnablesConcreteGateProgress,
@@ -7063,20 +7066,21 @@ THEOREM AdequateLeaderFixedGlobalBlockerFactsSupplyProviders ==
 BY HistoricalDiscoveryFixedClockBlockerCharacterization,
    ExactDecisionTargetNeutralSnapshotIsFinite,
    ExactDecisionTargetNeutralEpisodeRankIsInCarrier,
-   ExactDecisionTargetNeutralConcreteRankForSnapshotInCarrier,
+   ExactDecisionTargetNeutralActiveSnapshotConcreteRankIsInCarrier,
    ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
-   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralSnapshotPredecessorsDoNotReplenishAtFixedClock,
+   ExactDecisionTargetNeutralSnapshotRemainsActiveAtFixedClock,
    ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
-   ExactDecisionTargetNeutralServeOrdinalAdvanceLowersFrozenPacketRank,
-   ExactDecisionTargetNeutralProducerEpisodeStepIsDescentOrFrame,
-   ExactDecisionTargetNeutralRetainedEpisodesDoNotReplenish,
-   ExactDecisionTargetNeutralNonGoalEpisodeRankRemainsInCarrier,
-   ExactDecisionTargetNeutralRetainedEpisodeConsumptionLowersRank,
-   ExactDecisionTargetNeutralRankCellHasConcreteFairOwner,
-   ExactDecisionTargetNeutralRankCellStepIsSafe,
-   ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell,
+   ExactDecisionTargetNeutralSnapshotProducerEpisodeStepIsDescentOrFrame,
+   ExactDecisionTargetNeutralSnapshotProducerEpisodeDoesNotReplenish,
    ExactDecisionTargetNeutralProducerEpisodeBottomHasNoLowerRank,
-   ExactDecisionTargetNeutralProducerEpisodeBottomForcesStrictRankGoal,
+   CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner,
+   ExternalCandidateProducerContinuationSelectionIsReady,
+   LocalContinuationReadyEnablesFairResolution,
+   ConditionalTransportContinuationReadyEnablesFairService,
+   VolatileBodyContinuationReadyEnablesFairService,
+   CandidateProducerContinuationFrozenSourceFairResolutionStrictlyDescends,
+   AsyncTickEnabledHasConcreteSuccessor,
    OverdueResponsivePacketEnablesConcreteProgress,
    DueNodeServiceEnablesConcreteGateProgress,
    ConcreteDueNodeServiceActionsResetDeadlineAboveFixedClock,

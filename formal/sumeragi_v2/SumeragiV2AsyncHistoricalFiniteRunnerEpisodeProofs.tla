@@ -10,14 +10,15 @@ finite-runner theorem therefore cannot discharge their residuals: their fair
 owners are `PostGstRunHistoricalRecoveryNode` and
 `PostGstServiceHistoricalRecoveryIoWorker`.
 
-The outer rank is the same immutable shared-lifecycle structural rank used by
-the ordinary provider.  It freezes Candidate causal origins and exact Serve
-admissions at the target's local lifecycle ordinal, pays radix-four credit
-for causal successor fanout, and counts the frozen I/O/ingress prefixes plus
-the ingress occurrence itself.  In particular, `PopSelectedIngress` consumes
-an occurrence even when the reservation or tombstone remains downstream.
-The inner component is the existing Stage rank.  Replenishment and owner
-replacement are finite episode consumption, never progress.
+The outer rank is the same immutable logical/physical ingress episode used by
+the ordinary provider.  Its first stage prepays leader-wire and ordinary
+ingress-to-Candidate transfer, its structural component charges Candidate
+fanout and exact Serve prefixes, and its dependency tail retains the physical
+owner plus mode/capacity/runner/selector/lane/source path.  In particular,
+`PopSelectedIngress` consumes an occurrence before any replacement Candidate
+can replenish the inner budget.  The final component is the existing Stage
+rank.  Replenishment and owner replacement are finite episode consumption,
+never progress.
 ***************************************************************************)
 
 HistoricalRunnerEpisodeKinds ==
@@ -85,28 +86,25 @@ HistoricalRunnerEpisodeGoal(kind, candidate, position, baselineRank) ==
     [] OTHER -> FALSE
 
 HistoricalRunnerEpisodeRank(kind, candidate) ==
-  LET cutoffOrdinal == AsyncCandidateLifecycleOrdinal(candidate)
-  IN <<AsyncCausalEpisodeStructuralRank(
-          candidate.node, cutoffOrdinal),
+  <<AsyncProtectedCandidateIngressEpisodeRank(candidate),
        HistoricalRunnerEpisodeTailRank(kind, candidate)>>
 
 HistoricalRunnerEpisodeRankCarrier(kind) ==
-  AsyncCausalEpisodeStructuralRankCarrier
+  AsyncProtectedCandidateIngressEpisodeRankCarrier
     \X HistoricalRunnerEpisodeTailCarrier(kind)
 
 HistoricalRunnerEpisodeRankOrdering(kind) ==
   LexPairOrdering(
-    AsyncCausalEpisodeStructuralRankOrdering,
+    AsyncProtectedCandidateIngressEpisodeRankOrdering,
     HistoricalRunnerEpisodeTailOrdering(kind),
-    AsyncCausalEpisodeStructuralRankCarrier,
+    AsyncProtectedCandidateIngressEpisodeRankCarrier,
     HistoricalRunnerEpisodeTailCarrier(kind))
 
 HistoricalRunnerEpisodeFairOwnerKinds ==
   {"HistoricalRunner", "HistoricalIoWorker"}
 
 HistoricalRunnerEpisodeIoOwnerRequired(candidate) ==
-  AsyncCausalEpisodeIoOwnerRequired(
-    candidate.node, AsyncCandidateLifecycleOrdinal(candidate))
+  AsyncProtectedCandidateIoOwnerRequired(candidate)
 
 HistoricalRunnerEpisodeFairOwner(candidate) ==
   IF HistoricalRunnerEpisodeIoOwnerRequired(candidate)
@@ -173,9 +171,9 @@ PROOF
                  HistoricalRunnerEpisodeRankOrdering(kind),
                  HistoricalRunnerEpisodeRankCarrier(kind))
     <2>1. IsWellFoundedOn(
-            AsyncCausalEpisodeStructuralRankOrdering,
-            AsyncCausalEpisodeStructuralRankCarrier)
-      BY AsyncCausalEpisodeStructuralRankOrderingIsWellFounded
+            AsyncProtectedCandidateIngressEpisodeRankOrdering,
+            AsyncProtectedCandidateIngressEpisodeRankCarrier)
+      BY AsyncProtectedCandidateIngressEpisodeRankOrderingIsWellFounded
     <2>2. IsWellFoundedOn(
             HistoricalRunnerEpisodeTailOrdering(kind),
             HistoricalRunnerEpisodeTailCarrier(kind))
@@ -214,7 +212,7 @@ THEOREM HistoricalRunnerEpisodeResidualFacts ==
                   \in HistoricalRunnerEpisodeRankCarrier(kind)
              /\ HistoricalRunnerEpisodeFairOwner(candidate)
                   \in HistoricalRunnerEpisodeFairOwnerKinds
-BY AsyncCausalEpisodeStructuralRankIsFinite,
+BY AsyncProtectedCandidateIngressEpisodeRankIsFinite,
    ReadyRunAuxRankInCarrier, Stage4CapacityRankInCarrier,
    HistoricalTemporalStage4CarrierFacts, IsaT(1200)
    DEF HistoricalRunnerEpisodeKinds,
@@ -254,7 +252,7 @@ THEOREM HistoricalRunnerEpisodeStepIsGoalDescentOrFrame ==
                     kind, candidate, position, baselineRank)'
               /\ HistoricalRunnerEpisodeRank(kind, candidate)'
                    = HistoricalRunnerEpisodeRank(kind, candidate)
-BY AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
+BY AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame,
    AsyncCausalEpisodeIngressOwnerDepartureStrictlyDescends,
    HistoricalTemporalStage3SameRunnerAuxOutcome,
    HistoricalTemporalStage3OtherStepUnlessAuxDescent,
@@ -298,8 +296,8 @@ BY HistoricalRunnerEpisodeResidualFacts,
        HistoricalRunnerEpisodeFairOwnerKinds,
        HistoricalRunnerEpisodeFairAction,
        HistoricalRunnerEpisodeIoOwnerRequired,
-       AsyncCausalEpisodeIoOwnerRequired,
-       AsyncCausalEpisodeServeIngressIdentities,
+       AsyncProtectedCandidateIoOwnerRequired,
+       AsyncCandidateProducerContinuationFrozenServeIngressIdentities,
        CanResumeExactServeCapacity, AsyncServeJobQueued,
        AsyncServeLiveReservationOwned,
        AsyncIoQueueDepth, AsyncIoCapacity,
@@ -323,9 +321,9 @@ THEOREM HistoricalRunnerEpisodeSelectedActionConsumesCell ==
                  HistoricalRunnerEpisodeRank(kind, candidate)>>
                 \in HistoricalRunnerEpisodeRankOrdering(kind)
 BY HistoricalRunnerEpisodeStepIsGoalDescentOrFrame,
-   AsyncCausalEpisodeStructuralStepIsDescentOrFrame,
+   AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame,
    AsyncCausalEpisodeIngressOwnerDepartureStrictlyDescends,
-   AsyncCausalEpisodeSelectedServeOwnerGeometryIsComplete,
+   AsyncProtectedCandidateSelectedServeOwnerGeometryIsComplete,
    ServiceIoWorkerDropsQueueDepth,
    HistoricalTemporalStage3SameRunnerAuxOutcome,
    HistoricalTemporalStage4SameRunnerProducesOutcome,
@@ -344,7 +342,7 @@ BY HistoricalRunnerEpisodeStepIsGoalDescentOrFrame,
        HistoricalRunnerEpisodeFairAction,
        HistoricalRunnerEpisodeFairOwner,
        HistoricalRunnerEpisodeIoOwnerRequired,
-       AsyncCausalEpisodeIoOwnerRequired,
+       AsyncProtectedCandidateIoOwnerRequired,
        PostGstRunHistoricalRecoveryNode,
        PostGstServiceHistoricalRecoveryIoWorker,
        ServiceIoWorkerWork, LexPairOrdering, AsyncAllVars
@@ -363,8 +361,9 @@ THEOREM HistoricalRunnerEpisodeOwnerPersistsInRankCell ==
         => HistoricalRunnerEpisodeFairOwner(candidate)'
              = HistoricalRunnerEpisodeFairOwner(candidate)
 BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
+   AsyncProtectedCandidateTargetPhysicalCutPersists,
    AsyncCausalEpisodeFrozenOriginsCannotReplenish,
-   AsyncCausalEpisodeServeCutCannotReplenish,
+   CandidateProducerContinuationFrozenServeCutCannotReplenish,
    AsyncServeQueuedIdentityDepartureInstallsTombstone,
    AsyncServeTombstonedIdentityCannotRequeueAtGst,
    IsaT(1800)
@@ -373,11 +372,21 @@ BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
        HistoricalRunnerEpisodeRank,
        HistoricalRunnerEpisodeFairOwner,
        HistoricalRunnerEpisodeIoOwnerRequired,
-       AsyncCausalEpisodeIoOwnerRequired,
-       AsyncCausalEpisodeStructuralRank,
-       AsyncCausalEpisodeServeWorkBudget,
-       AsyncCausalEpisodeServeWorkTokens,
-       AsyncCausalEpisodeServeIngressIdentities,
+       AsyncProtectedCandidateIoOwnerRequired,
+       AsyncProtectedCandidateIngressEpisodeRank,
+       AsyncProtectedCandidateIngressEpisodeTailRank,
+       AsyncCausalEpisodeFrozenIngressBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageTokens,
+       AsyncCandidateProducerContinuationFrozenPrefixRank,
+       AsyncCandidateProducerContinuationFrozenProducerBudget,
+       AsyncCandidateProducerContinuationFrozenProducerTokens,
+       AsyncCandidateProducerContinuationFrozenCandidateTokens,
+       AsyncCandidateProducerContinuationFrozenCandidateOwners,
+       AsyncCandidateProducerContinuationFrozenStatusTokens,
+       AsyncCandidateProducerContinuationFrozenServeWorkBudget,
+       AsyncCandidateProducerContinuationFrozenServeWorkTokens,
+       AsyncCandidateProducerContinuationFrozenServeIngressIdentities,
        AsyncAllVars
 
 THEOREM HistoricalRunnerEpisodeOwnerUsesAsyncFairness ==

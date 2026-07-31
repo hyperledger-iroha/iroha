@@ -11669,8 +11669,8 @@ mod tests {
     #[test]
     fn archive_view_is_pure_and_scopes_custom_decode_state() {
         reset_decode_state();
-        let outer_frame = frame_bare_with_header_flags::<u8>(&[0x31], 0)
-            .expect("frame outer scalar payload");
+        let outer_frame =
+            frame_bare_with_header_flags::<u8>(&[0x31], 0).expect("frame outer scalar payload");
         let inner_flags = header_flags::COMPACT_LEN;
         let inner_frame = frame_bare_with_header_flags::<u8>(&[0x42], inner_flags)
             .expect("frame inner scalar payload");
@@ -11754,8 +11754,8 @@ mod tests {
         };
         assert_ne!(canonical, alternate, "fixture must distinguish layouts");
 
-        let frame = frame_bare_with_header_flags::<u8>(&[7], 0)
-            .expect("frame non-default-layout scalar");
+        let frame =
+            frame_bare_with_header_flags::<u8>(&[7], 0).expect("frame non-default-layout scalar");
         let _view = from_bytes_view(&frame).expect("construct pure archive view");
         assert!(!decode_flags_active());
         assert!(payload_ctx_state().is_none());

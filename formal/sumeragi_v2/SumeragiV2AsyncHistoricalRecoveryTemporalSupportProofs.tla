@@ -380,7 +380,7 @@ HistoricalTemporalStage3ServeEpisodeResidual(
   /\ AsyncProgressOwnershipInvariant
   /\ HistoricalTemporalStage3Pending(candidate, position)
   /\ ~HistoricalTemporalStage3AuxProgress(candidate, position, rank)
-  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+  /\ \/ /\ AsyncIngressSchedulerBarrierActive(candidate.node)
         /\ asyncRunnerPhase[candidate.node] = "Ingress"
      \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
           candidate.node)
@@ -872,7 +872,7 @@ HistoricalTemporalStage4ServeEpisodeResidual(
   /\ AsyncProgressOwnershipInvariant
   /\ HistoricalTemporalStage4Pending(candidate, position)
   /\ ~HistoricalTemporalStage4Progress(candidate, position, rank)
-  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+  /\ \/ /\ AsyncIngressSchedulerBarrierActive(candidate.node)
         /\ asyncRunnerPhase[candidate.node] = "Ingress"
      \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
           candidate.node)
@@ -2404,7 +2404,7 @@ HistoricalTemporalStage6NonCompletionServeEpisodeResidual(
   /\ HistoricalTemporalStage6Pending(candidate, position)
   /\ ~HistoricalTemporalStage6NonCompletionProgress(
        candidate, position, rank)
-  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+  /\ \/ /\ AsyncIngressSchedulerBarrierActive(candidate.node)
         /\ asyncRunnerPhase[candidate.node] = "Ingress"
      \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
           candidate.node)
@@ -5944,13 +5944,23 @@ HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn(
   /\ (AsyncLeaderWireEarliestPhysicalIngressRecord(node)).schedulerOrdinal
        < record.ordinal
 
+HistoricalCandidateProducerContinuationIngressCutOrdinaryOwnsTurn(
+    node, record) ==
+  /\ AsyncOrdinaryIngressOwnsSharedPhysicalTurn(node)
+  /\ (AsyncOrdinaryIngressEarliestPhysicalRecord(node)).physicalOrdinal
+       < record.physicalCut
+  /\ (AsyncOrdinaryIngressEarliestPhysicalRecord(node)).schedulerOrdinal
+       < record.ordinal
+
 HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds ==
   {"HistoricalRunner", "HistoricalIoWorker"}
 
 HistoricalCandidateProducerContinuationIngressCutFairOwner(
     node, record) ==
-  IF HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn(
-       node, record)
+  IF \/ HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn(
+          node, record)
+     \/ HistoricalCandidateProducerContinuationIngressCutOrdinaryOwnsTurn(
+          node, record)
   THEN "HistoricalRunner"
   ELSE IF AsyncCausalEpisodeIoOwnerRequired(node, record.ordinal)
        THEN "HistoricalIoWorker"
@@ -6003,6 +6013,8 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutClassifiesPhysicalOwner
          /\ AsyncEarliestIngressSchedulerOrdinal(node) < record.ordinal
          /\ \/ HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn(
                   node, record)
+            \/ HistoricalCandidateProducerContinuationIngressCutOrdinaryOwnsTurn(
+                 node, record)
             \/ /\ AsyncServeIngressOwnsSharedPhysicalTurn(node)
                /\ AsyncServeIngressAdmissionOrdinal(
                     node,
@@ -6016,13 +6028,16 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutClassifiesPhysicalOwner
                 HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds
 BY AsyncCandidateProducerContinuationOnlyPreCutIngressCanBlockRunnerTurn,
    AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn,
-   AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum,
+   AsyncStrongTypeProjectsControlServiceStateType,
+   AsyncCandidateProducerContinuationRunnerSelectionIsTwoStageLogicalMinimum,
    AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler,
+   AsyncSelectedOrdinaryPhysicalCarrierDefinesIngressScheduler,
    FS_CardinalityType, IsaT(1800)
    DEF HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
        HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
        HistoricalCandidateProducerContinuationAtStatus,
        HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn,
+       HistoricalCandidateProducerContinuationIngressCutOrdinaryOwnsTurn,
        HistoricalCandidateProducerContinuationIngressCutFairOwner,
        HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds,
        AsyncCandidateProducerContinuationRunnerResolutionRequired,
@@ -6032,7 +6047,8 @@ BY AsyncCandidateProducerContinuationOnlyPreCutIngressCanBlockRunnerTurn,
        AsyncIngressSchedulerBarrierActive,
        AsyncEarliestIngressSchedulerOrdinal,
        AsyncLeaderWireIngressOwnsSharedPhysicalTurn,
-       AsyncServeIngressOwnsSharedPhysicalTurn
+       AsyncServeIngressOwnsSharedPhysicalTurn,
+       AsyncOrdinaryIngressOwnsSharedPhysicalTurn
 
 THEOREM HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExits ==
   \A node \in ValidatorIds,
@@ -6103,7 +6119,7 @@ BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExi
    CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell,
    CandidateProducerContinuationFrozenPrefixStepCannotReplenish,
    CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight,
-   CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst,
+   CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge,
    AsyncCandidateProducerContinuationStatusIsMonotone,
    AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck,
    AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor,
@@ -6114,10 +6130,13 @@ BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExi
    AsyncSharedSchedulerHighWatermarkIsMonotone,
    AsyncIngressPhysicalHighWatermarkIsMonotone,
    CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,
+   CandidateProducerContinuationFrozenOrdinaryIngressChargeCannotAppearAtGst,
    CandidateProducerContinuationActionInertDormantHasZeroFrozenStage,
    CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,
+   CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix,
    CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame,
    CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage,
+   CandidateProducerContinuationPreCutOrdinaryIngressConsumesBarrierStage,
    AsyncCandidateProducerContinuationStepPreservesPhysicalCut,
    AsyncCandidateProducerContinuationPostCutIngressCannotBlockRunnerTurn,
    LeaderWireIngressDrainNeverInventsRuntimeOwner,
@@ -6138,10 +6157,16 @@ BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExi
        AsyncFrozenLeaderWireBarrierStageTokens,
        AsyncFrozenLeaderWireBarrierRemainingStage,
        AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenOrdinaryIngressBarrierRecords,
        AsyncFrozenLeaderWireBarrierTailRank,
        AsyncFrozenLeaderWireIngressDependencyRank,
        AsyncFrozenLeaderWireIngressRecords,
+       AsyncFrozenOrdinaryIngressRecords,
        AsyncFrozenLeaderWireSelectedIngressRecord,
+       AsyncFrozenOrdinarySelectedIngressCarrier,
+       AsyncFrozenIngressBarrierSelectsOrdinary,
+       AsyncFrozenIngressBarrierSelectedItem,
+       AsyncFrozenIngressBarrierSelectedPhysicalRank,
        AsyncFrozenLeaderWireIngressRank,
        AsyncFrozenLeaderWireIngressModeRank,
        AsyncFrozenLeaderWireIngressCapacityRank,
@@ -6156,10 +6181,18 @@ BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExi
        AsyncCandidateProducerContinuationFrozenProducerTokens,
        AsyncCandidateProducerContinuationFrozenCandidateTokens,
        AsyncCandidateProducerContinuationFrozenCandidateOwners,
+       AsyncCandidateProducerContinuationFrozenCausalCandidates,
+       AsyncCandidateProducerContinuationFrozenOrdinaryIngressCandidates,
+       AsyncCandidateProducerContinuationFrozenDormantLocalReplayCandidates,
        AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
        AsyncCandidateProducerContinuationFrozenStatusTokens,
        AsyncCandidateProducerContinuationFrozenRecords,
        AsyncCandidateProducerContinuationFrozenPredecessorOrigins,
+       AsyncCandidateProducerContinuationTargetPhysicalCut,
+       AsyncCandidateProducerContinuationFrozenServeIngressIdentities,
+       AsyncCandidateProducerContinuationFrozenServeWorkTokens,
+       AsyncCandidateProducerContinuationFrozenServeWorkBudget,
+       AsyncCandidateProducerContinuationFrozenServeReachDebt,
        AsyncCausalEpisodeServeWorkBudget,
        AsyncCausalEpisodeServeWorkTokens,
        AsyncCausalEpisodeServeOccurrenceTokens,
@@ -6302,21 +6335,26 @@ THEOREM HistoricalCandidateProducerContinuationIngressCutOwnerPersistsInCell ==
 BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExits,
    CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,
    CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,
+   CandidateProducerContinuationFrozenOrdinaryIngressChargeCannotAppearAtGst,
    CandidateProducerContinuationActionInertDormantHasZeroFrozenStage,
    CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,
+   CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix,
    AsyncCandidateProducerContinuationStepPreservesPhysicalCut,
    AsyncServeQueuedIdentityDepartureInstallsTombstone,
    AsyncServeTombstonedIdentityCannotRequeueAtGst,
    IsaT(2400)
    DEF HistoricalCandidateProducerContinuationIngressCutFairOwner,
        HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn,
+       HistoricalCandidateProducerContinuationIngressCutOrdinaryOwnsTurn,
        HistoricalCandidateProducerContinuationIngressCutEpisodeRank,
        AsyncCandidateProducerContinuationIngressBarrierRank,
        AsyncFrozenLeaderWireBarrierRank,
        AsyncFrozenLeaderWireBarrierStageBudget,
        AsyncFrozenLeaderWireBarrierStageTokens,
        AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenOrdinaryIngressBarrierRecords,
        AsyncFrozenLeaderWireIngressRecords,
+       AsyncFrozenOrdinaryIngressRecords,
        AsyncCausalEpisodeIoOwnerRequired,
        AsyncCausalEpisodeServeIngressIdentities,
        AsyncAllVars

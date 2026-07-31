@@ -124,8 +124,8 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     nexus::{
-        DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
-        LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision,
+        LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneId, LaneLifecycleParameterV1, LaneLifecyclePlan,
         LaneLifecycleStatusV1, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
     },
     nft::NftId,
@@ -1172,9 +1172,9 @@ fn py_exact_dict<'value, 'py>(
         .cast::<PyDict>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be a mapping")))?;
     for (key, _) in dict.iter() {
-        let key = key.extract::<String>().map_err(|_| {
-            PyTypeError::new_err(format!("{context} field names must be strings"))
-        })?;
+        let key = key
+            .extract::<String>()
+            .map_err(|_| PyTypeError::new_err(format!("{context} field names must be strings")))?;
         if !allowed_fields.contains(&key.as_str()) {
             return Err(PyValueError::new_err(format!(
                 "{context} contains unknown first-release field `{key}`"
@@ -1207,10 +1207,7 @@ fn py_exact_fixed_bytes<const N: usize>(
     fixed_array::<N>(&py_exact_bytes(value, context)?, context)
 }
 
-fn py_portable_verifier_id_field(
-    value: &Bound<'_, PyAny>,
-    context: &str,
-) -> PyResult<String> {
+fn py_portable_verifier_id_field(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
     let text = value
         .extract::<String>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be a string")))?;
@@ -1228,11 +1225,9 @@ fn py_exact_u16(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u16> {
             "{context} must be an unsigned 16-bit integer"
         )));
     }
-    value.extract::<u16>().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "{context} must be an unsigned 16-bit integer"
-        ))
-    })
+    value
+        .extract::<u16>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be an unsigned 16-bit integer")))
 }
 
 fn py_exact_u32(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u32> {
@@ -1241,11 +1236,9 @@ fn py_exact_u32(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u32> {
             "{context} must be an unsigned 32-bit integer"
         )));
     }
-    value.extract::<u32>().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "{context} must be an unsigned 32-bit integer"
-        ))
-    })
+    value
+        .extract::<u32>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be an unsigned 32-bit integer")))
 }
 
 fn parse_lane_privacy_proof_py(
@@ -1265,9 +1258,7 @@ fn parse_lane_privacy_proof_py(
     )?;
     let kind = py_required_dict_field(witness, "kind", &format!("{context}.witness"))?
         .extract::<String>()
-        .map_err(|_| {
-            PyTypeError::new_err(format!("{context}.witness.kind must be a string"))
-        })?;
+        .map_err(|_| PyTypeError::new_err(format!("{context}.witness.kind must be a string")))?;
     if kind != "merkle" {
         return Err(PyValueError::new_err(format!(
             "{context}.witness.kind must be exactly `merkle`"
@@ -8541,9 +8532,7 @@ mod tests {
                 .expect("proof bytes");
             proof.set_item("proof", proof_box).expect("proof box");
             let vk_ref = PyDict::new(py);
-            vk_ref
-                .set_item("backend", "halo2/ipa")
-                .expect("vk backend");
+            vk_ref.set_item("backend", "halo2/ipa").expect("vk backend");
             vk_ref
                 .set_item("name", "component_verify_v1")
                 .expect("vk name");
@@ -8553,10 +8542,7 @@ mod tests {
                 .expect("vk commitment");
             let expected_envelope_hash: [u8; 32] = Hash::new(b"proof").into();
             proof
-                .set_item(
-                    "envelope_hash",
-                    PyBytes::new(py, &expected_envelope_hash),
-                )
+                .set_item("envelope_hash", PyBytes::new(py, &expected_envelope_hash))
                 .expect("envelope hash");
 
             let instruction = Instruction::verify_proof(&instruction_type, proof.as_any())
@@ -13874,9 +13860,7 @@ impl TransactionBuilder {
             ));
         }
         if proof_bytes.is_empty() {
-            return Err(PyValueError::new_err(
-                "proof_bytes must be non-empty",
-            ));
+            return Err(PyValueError::new_err("proof_bytes must be non-empty"));
         }
         let maximum_proof_bytes = proof_box_max_proof_bytes_v1(proof_backend).ok_or_else(|| {
             PyValueError::new_err(

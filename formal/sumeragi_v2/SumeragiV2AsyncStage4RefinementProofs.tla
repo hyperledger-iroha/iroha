@@ -61,7 +61,7 @@ Stage4CapacityServeEpisodeResidual(candidate, position, rank) ==
   /\ AsyncProgressOwnershipInvariant
   /\ ProtectedStage4Pending(candidate, position)
   /\ ~Stage4CapacityProgress(candidate, position, rank)
-  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+  /\ \/ /\ AsyncIngressSchedulerBarrierActive(candidate.node)
         /\ asyncRunnerPhase[candidate.node] = "Ingress"
      \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
           candidate.node)
