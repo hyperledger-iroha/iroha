@@ -1,0 +1,29 @@
+{
+  "id": "nexus/nexus-elastic-lane",
+  "title": "Elastic lane provisioning (NX-7)",
+  "description": "Bootstrap workflow for creating Nexus lane manifests, catalog entries, and rollout evidence.",
+  "source": "@site/docs/nexus/nexus-elastic-lane.md",
+  "sourceDirName": "nexus",
+  "slug": "/nexus/nexus-elastic-lane",
+  "permalink": "/next/nexus/nexus-elastic-lane",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/nexus/nexus-elastic-lane.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "nexus-elastic-lane",
+    "title": "Elastic lane provisioning (NX-7)",
+    "sidebar_label": "Elastic Lane Provisioning",
+    "description": "Bootstrap workflow for creating Nexus lane manifests, catalog entries, and rollout evidence."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Default Lane Quickstart",
+    "permalink": "/next/nexus/nexus-default-lane-quickstart"
+  },
+  "next": {
+    "title": "Nexus fee model updates",
+    "permalink": "/next/nexus/nexus-fee-model"
+  }
+}

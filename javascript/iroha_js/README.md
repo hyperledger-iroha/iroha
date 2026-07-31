@@ -1,10 +1,10 @@
 # Iroha JS SDK
 
 `@iroha/iroha-js` is a JavaScript/TypeScript SDK for interacting
-with Hyperledger Iroha nodes from Node.js runtimes. The initial focus mirrors
-the Python helper coverage so developers can manage attachments, prover
-reports, Ed25519 signing, and Norito payloads as manifest builders and gRPC
-transports land in the maintained SDK surface.
+with Hyperledger Iroha nodes from Node.js runtimes. It provides Norito codecs,
+Ed25519 signing, transaction and instruction builders, Torii query and
+transaction clients, event streaming, and helpers for Connect, SoraFS, and DA
+workflows.
 
 TypeScript consumers can import the bundled `index.d.ts` definitions for the
 SDK surface.
@@ -688,7 +688,7 @@ configureCurveSupport({
 
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
 > single-format UX checklist captured in
-> [`docs/source/sns/address_display_guidelines.md`](../../docs/source/sns/address_display_guidelines.md):
+> [`specs/sns/address_display_guidelines.md`](../../specs/sns/address_display_guidelines.md):
 > i105 remains the copy/share target, aliases should be shown as
 > `name@dataspace` or `name@domain.dataspace`, and QR codes should always
 > encode the i105 value.
@@ -984,8 +984,8 @@ await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
 await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
 // Note: raw `getTransactionStatus` options support only
 // { allowShortHash, signal, scope }, where scope is the explicit diagnostic
-// choice "local" or "global" and defaults to "global". The pre-release "auto"
-// mode and cross-endpoint status fallback list are not part of the API.
+// choice "local" or "global" and defaults to "global". An "auto" mode and
+// cross-endpoint status fallback lists are not part of the API.
 // Polling helper options support only { signal, intervalMs, timeoutMs, maxAttempts,
 // failureStatuses, onStatus }. Success is fixed to exact canonical `Applied`;
 // every finality wait is global-only. State-resolved Applied succeeds,
@@ -1431,10 +1431,10 @@ console.log(Buffer.from(genericTx.hash).toString("hex"));
 console.log(Buffer.from(kaigiCreateTx.hash).toString("hex"));
 console.log(Buffer.from(kaigiJoinTx.hash).toString("hex"));
 
-// NOTE: Instruction coverage currently includes `Register` (domain/account/asset
-// definition), `Mint::Asset`, `Mint::TriggerRepetitions`, `Transfer`
-// variants for assets, asset definitions, domains, NFTs, and the Kaigi instruction
-// family (create/join/leave/end/usage/relay). See the roadmap for upcoming extensions.
+// The exported instruction builders cover register, mint/burn, transfer,
+// permission and key/value, trigger, governance, RWA, confidential-asset,
+// smart-contract deployment, and Kaigi families. `buildTransaction()` also
+// accepts canonical instruction payloads supplied as JSON strings or objects.
 ```
 
 ## Norito RPC client
@@ -2216,7 +2216,7 @@ structured payloads.
 
 Universal Account IDs (UAIDs) power the Nexus dataspace model. Torii exposes
 three read-only endpoints (documented in
-[`docs/source/torii/portfolio_api.md`](../../docs/source/torii/portfolio_api.md))
+[`specs/torii/portfolio_api.md`](../../specs/torii/portfolio_api.md))
 so SDKs can inspect aggregated balances, dataspace bindings, and the canonical
 capability manifests tracked by the Space Directory. The JS SDK surfaces typed
 helpers for all three surfaces:
@@ -2322,7 +2322,7 @@ The `SoranetPuzzleClient` helper talks to the optional
 `soranet-puzzle-service` microservice so SDK consumers can mint Argon2 tickets,
 inspect puzzle policy, and request ML-DSA admission tokens without reimplementing
 the HTTP transport. The client mirrors the JSON schema described in
-[`docs/source/soranet/puzzle_service_operations.md`](../../docs/source/soranet/puzzle_service_operations.md).
+[`specs/soranet/puzzle_service_operations.md`](../../specs/soranet/puzzle_service_operations.md).
 
 ```js
 import { SoranetPuzzleClient } from "@iroha/iroha-js";
@@ -2565,7 +2565,7 @@ how to wire `ISO_POLL_ATTEMPTS`, `ISO_POLL_INTERVAL_MS`, `ISO_MESSAGE_ID`, and
 
 The SDK exports `buildPacs008Message` and `buildPacs009Message` helpers that map
 structured inputs to standards-compliant XML while validating identifiers
-described in the [ISO field mapping guide](../../docs/source/finance/settlement_iso_mapping.md).
+described in the [ISO field mapping guide](../../specs/finance/settlement_iso_mapping.md).
 Pass the required identifiers (BIC, amount, purpose code, etc.) and the helpers
 emit deterministic XML payloads ready for submission via the Torii client. In
 addition to the length/character checks, IBAN inputs must pass the canonical
@@ -2601,7 +2601,7 @@ For advanced flows, supply optional `debtorAgent`/`creditorAgent` (additional BI
 and `debtor`/`creditor` party metadata (legal name, LEI, proprietary IDs with custom scheme
 codes). The builders insert those records as `DbtrAgt`/`CdtrAgt` and `Dbtr`/`Cdtr` elements so
 PvP/RFQ pipelines can mirror the ISO 20022 guidance in
-[`settlement_iso_mapping.md`](../../docs/source/finance/settlement_iso_mapping.md) without hand
+[`settlement_iso_mapping.md`](../../specs/finance/settlement_iso_mapping.md) without hand
 crafting XML. Both builders also accept optional debtor/creditor accounts, purpose codes, and
 structured supplementary JSON, making it trivial to carry Norito identifiers alongside the
 standard MT-style fields.
@@ -3268,7 +3268,7 @@ inherited from the client config; standalone calls can supply their own
 ### Connect error taxonomy
 
 `ConnectError`, `ConnectQueueError`, and `connectErrorFrom()` mirror the shared taxonomy
-documented in [`docs/source/connect_error_taxonomy.md`](../../docs/source/connect_error_taxonomy.md).
+documented in [`specs/connect_error_taxonomy.md`](../../specs/connect_error_taxonomy.md).
 Wrap every failure that bubbles up from the Connect transport (WebSocket, fetch, codecs, queue)
 before emitting telemetry so dashboards can rely on consistent `category`/`code` pairs:
 
@@ -3495,14 +3495,14 @@ console.log(`Connect enabled: ${features.connect?.enabled ?? false}`);
 
 ## Continuous Integration
 
-- See `docs/source/sdk/js/quickstart.md` for an expanded walkthrough covering key management, transaction assembly, Torii configuration, and CI tips.
+- See `specs/sdk/js/quickstart.md` for an expanded walkthrough covering key management, transaction assembly, Torii configuration, and CI tips.
 
 - Cache both `npm` and `cargo` directories so native bindings rebuild quickly across matrix runs.
 - Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the Node test suite so the JS-10 gate matches what the publish workflow executes.
 - Test the declared minimum Node 18 runtime plus the maintained even-numbered Node release lines alongside the `rust-toolchain.toml` version to minimise drift across environments.
 - Use `node --test` for quick smoke runs when native artifacts are already built (for example after `npm run build:native` in a cached workspace); keep `npm run lint:test` in CI to cover the full pipeline.
 - Layer any project-specific linting or formatting checks on top of `npm run lint:test` if your monorepo enforces stricter policies.
-- See `docs/source/examples/iroha_js_ci.md` for extended guidance and optional smoke-job templates.
+- See `specs/examples/iroha_js_ci.md` for extended guidance and optional smoke-job templates.
 
 ```yaml
 name: iroha-js-ci
@@ -4008,7 +4008,7 @@ await torii.governanceSubmitZkBallot({
 }, { signal: writeController.signal });
 
 // The JS SDK also exposes governanceSubmitZkBallotV1 / governanceSubmitZkBallotProofV1
-// for the BallotProof DTOs described in docs/source/governance_api.md.
+// for the BallotProof DTOs described in specs/governance_api.md.
 const validatorPublicKeyBytes = Buffer.alloc(48, 0xaa);
 const validatorProofBytes = Buffer.alloc(96, 0xbb);
 
@@ -4264,7 +4264,7 @@ rejected.
 
 ## Configuration
 
-- Publishing guidance and the release automation flow live under `docs/source/sdk/js/publishing.md`. GitHub releases tagged `js-v<semver>` automatically trigger the provenance-enabled publish workflow (with changelog/semver guards); for manual runs use `npm run check:changelog` (or rely on the `prepublishOnly` hook), then call `npm run release:update-docs -- --version <x.y.z> [--date YYYY-MM-DD] --note "summary"` to sync release notes into `CHANGELOG.md`, `status.md`, and `roadmap.md`.
+- Publishing guidance and the release automation flow live under `specs/sdk/js/publishing.md`. GitHub releases tagged `js-v<semver>` automatically trigger the provenance-enabled publish workflow (with changelog/semver guards); for manual runs use `npm run check:changelog` (or rely on the `prepublishOnly` hook), then call `npm run release:update-docs -- --version <x.y.z> [--date YYYY-MM-DD] --note "summary"` to sync release notes into `CHANGELOG.md`, `status.md`, and `roadmap.md`.
 
 - Release guardrails ship with `npm run release:matrix`, which executes the
   configured Node/OS targets (see
@@ -4276,7 +4276,7 @@ rejected.
   Prometheus textfile location and `--textfile-dir <dir>` (or set
   `JS_RELEASE_MATRIX_TEXTFILE_DIR`) to mirror the gauges into a node_exporter
   textfile directory so release dashboards can ingest the status automatically.
-  See `docs/source/sdk/js/publishing.md` for the full workflow.
+  See `specs/sdk/js/publishing.md` for the full workflow.
 
 - `ToriiClient` accepts `timeoutMs`, `maxRetries`, `backoffInitialMs`, `backoffMultiplier`, `maxBackoffMs`, `retryStatuses`, and `retryMethods`, mirroring the retry knobs exposed in `iroha_config`.
 - Attach `retryTelemetryHook` to capture deterministic per-attempt telemetry for dashboards and SLO drills; events include phase (`response`/`network`/`timeout`), attempt numbers, method/URL, status or error metadata, backoffMs, profile name when set, durationMs for the attempt, and timestampMs so logs can be correlated with Torii-side traces.
@@ -4321,12 +4321,3 @@ const torii = new ToriiClient(config?.torii?.address ?? "http://localhost:8080",
   timeoutMs: clientConfig.timeoutMs,
 });
 ```
-
-## Roadmap
-
-- Transaction signing pipelines and manifest helpers backed by `iroha_crypto`.
-- Full Torii transaction/query clients, streaming support, and developer
-  documentation with runnable samples.
-
-> **Status:** Preview-only. Expect frequent breaking changes until the roadmap
-> milestones in `roadmap.md` reach completion.

@@ -1,16 +1,16 @@
 # IrohaAndroid
 
 `IrohaAndroid` provides a native Android library that wraps Hyperledger Iroha
-capabilities for Kotlin/Java mobile applications. The library will expose
-key management (including secure-element backed keys), transaction building and
+capabilities for Kotlin/Java mobile applications. The library includes key
+management (including secure-element-backed keys), transaction building and
 signing, Norito serialization helpers, and networking clients for interacting
 with Iroha nodes.
 
-This snapshot covers the offline key management façade, Norito encoding backed
+The current API covers the offline key management façade, Norito encoding backed
 by the shared `norito-java` implementation, the Android Keystore/StrongBox
 backend (with cached attestations + explicit deterministic software providers), and
-network client abstractions. The generated instruction helpers now include
-the first dedicated RWA lot builder slice alongside NFT helpers:
+network client abstractions. The instruction helpers include RWA lot builders
+alongside NFT helpers:
 `RegisterRwaInstruction`, `TransferRwaInstruction`,
 `MergeRwasInstruction`, `RedeemRwaInstruction`,
 `FreezeRwaInstruction`, `UnfreezeRwaInstruction`,
@@ -318,7 +318,7 @@ System.out.println(formats.i105Warning);
 ```
 
 Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and
-network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`.
+network prefix stay aligned with `specs/sns/address_display_guidelines.md`.
 
 ## Kagemusha proof artifacts and device registration
 
@@ -861,19 +861,21 @@ Key evidence paths (also mirrored under `artifacts/android/reports/<version>`):
 
 Every publish invocation automatically runs the manifest/SBOM tasks so
 governance packets can attach the resulting JSON alongside the Maven repository
-snapshot. See `docs/source/sdk/android/publishing_plan.md` for the full release
+snapshot. See `specs/sdk/android/publishing_plan.md` for the full release
 checklist.
 
 ### Observability Hooks
 
 
-> **Note:** Instruction lists hydrate strongly typed builders for register,
-> transfer (asset/domain/asset-definition), mint/burn asset, and
-> grant/revoke permission and role instructions
-> and use key/value payloads for families that do not yet have Java
-> bindings.
-> Additional instruction variants will be added alongside upcoming code
-> generation work.
+> **Instruction APIs:** The Java SDK provides typed `InstructionTemplate`
+> builders for register, transfer, mint/burn, permission and role, trigger,
+> governance, RWA, confidential-asset, Kaigi, and other implemented instruction
+> families. `SetKeyValueInstruction` and `RemoveKeyValueInstruction` cover
+> domain, account, asset-definition, NFT, RWA, and trigger metadata;
+> `SetAssetKeyValueInstruction` and `RemoveAssetKeyValueInstruction` cover
+> concrete asset balances. `InstructionBox.fromWirePayload(...)` carries other
+> canonical Norito-framed instruction payloads without inventing a Java-side
+> schema.
 
 `ClientConfig` now exposes request-scoped instrumentation, static header support,
 and deterministic retry policies. Applications can attach `ClientObserver`
@@ -1062,7 +1064,7 @@ The deterministic seed/attempt mapping ensures reconnect telemetry stays aligned
 ### Connect error taxonomy
 
 `org.hyperledger.iroha.android.connect.error.ConnectError` mirrors the shared taxonomy
-(`docs/source/connect_error_taxonomy.md`) so Android apps emit the same `category`/`code`
+(`specs/connect_error_taxonomy.md`) so Android apps emit the same `category`/`code`
 pairs as the Swift and JavaScript SDKs. Wrap every transport, codec, or queue failure via
 `ConnectErrors.from(Throwable)` (or manually create a `ConnectError` using the builder)
 before forwarding attributes to OpenTelemetry:
@@ -1337,7 +1339,7 @@ active and no native library is loaded (avoiding security warnings in CI).
 Kotlin callers should use `CudaAcceleratorsKotlin.*OrNull` helpers to receive
 `Long?`/`LongArray?` outputs instead of `Optional` wrappers. See the CUDA
 operator guide for native setup and the manual smoke harness
-(`docs/source/sdk/android/gpu_operator_guide.md`), which exercises the JNI
+(`specs/sdk/android/gpu_operator_guide.md`), which exercises the JNI
 bridge on CUDA-capable devices when `IROHA_CUDA_SELFTEST=1` is set.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM
@@ -1433,17 +1435,6 @@ hashes and provenance metadata (including the asset-metadata and
 `SetParameter` parity vectors that exercise configuration and key/value
 instructions). Always commit the regenerated JSON, `.norito` payloads, and
 manifest together.
-
-## Roadmap
-
-- Harden the Android Keystore/StrongBox backend with device-matrix CI coverage,
-  alias rotation tooling, and production configuration wrappers surfaced through
-  `KeyGenParameters`.
-- Integrate Rust parity fixtures for transaction Norito schemas and extend the
-  data model beyond raw instruction blobs.
-- Expose transaction signing helpers that wrap Iroha manifests and Norito encoders.
-- Implement gRPC/HTTP networking clients with deterministic request handling.
-- Publish Gradle artifacts and sample applications.
 
 ## License
 

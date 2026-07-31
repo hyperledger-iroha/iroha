@@ -95,6 +95,17 @@ impl SoracloudRuntimeManager {
         self
     }
 
+    /// Attach the inert runtime-only HF credential boundary.
+    #[must_use]
+    pub(crate) fn with_hf_inference_credential_provider(
+        self,
+        _provider: Arc<
+            dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+        >,
+    ) -> Self {
+        self
+    }
+
     #[must_use]
     pub fn with_sorafs_node(self, _sorafs_node: sorafs_node::NodeHandle) -> Self {
         self

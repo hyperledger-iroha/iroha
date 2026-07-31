@@ -2341,7 +2341,6 @@ impl TransactionBuilder {
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedTransaction, TransactionSignatureError> {
         use iroha_crypto::PublicKey;
-
         let payload = self.payload;
 
         Self::validate_payload(&payload)?;
@@ -4395,7 +4394,6 @@ mod tests {
     #[test]
     fn signed_transaction_roundtrip_preserves_instruction_order() {
         use crate::parameter::{Parameter, system::SumeragiParameter};
-
         let chain: ChainId = "test-chain".parse().unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -5855,7 +5853,6 @@ mod norito_rpc_fixture_tests {
     fn compact_external_entrypoint_golden_matches_native_hash_and_rejects_alias_encodings() {
         use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
         use sha2::Digest as _;
-
         let fixture = compact_hash_fixture();
         let versioned = BASE64
             .decode(fixture["versioned.base64"].as_bytes())

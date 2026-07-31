@@ -1107,7 +1107,7 @@ fn read_credential_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, WorkerError> 
     let mut material = Zeroizing::new(Vec::with_capacity(
         usize::try_from(before.len()).map_err(|_| WorkerError::CredentialFileTooLarge)?,
     ));
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(MAX_CREDENTIAL_BYTES + 1)
         .read_to_end(&mut material)
         .map_err(|error| WorkerError::Io(error.kind()))?;
@@ -1154,7 +1154,7 @@ fn read_credential_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, WorkerError> 
         .map_err(|error| WorkerError::Io(error.kind()))?;
     if !same_file_snapshot(&after, &verified)
         || verified_bytes != material.len() as u64
-        || !constant_time_eq(&material_digest, &verified_digest)
+        || !constant_time_eq(&material_digest[..], &verified_digest[..])
     {
         material.zeroize();
         return Err(WorkerError::CredentialChangedDuringImport);

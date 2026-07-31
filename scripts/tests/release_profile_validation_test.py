@@ -28,47 +28,19 @@ RELEASE_MANIFEST_SIGNING_HELPER = (
     REPO_ROOT / "scripts" / "release_manifest_signing.py"
 )
 RELEASE_DOCUMENT_FAMILIES = (
-    REPO_ROOT / "docs" / "source" / "release_dual_track_automation_plan.md",
-    REPO_ROOT / "docs" / "source" / "release_dual_track_runbook.md",
-    REPO_ROOT / "docs" / "source" / "release_artifact_selection.md",
-    REPO_ROOT / "docs" / "source" / "sora_nexus_operator_onboarding.md",
-    REPO_ROOT
-    / "docs"
-    / "portal"
-    / "docs"
-    / "nexus"
-    / "nexus-operator-onboarding.md",
+    REPO_ROOT / "specs" / "release_dual_track_automation_plan.md",
+    REPO_ROOT / "specs" / "release_dual_track_runbook.md",
+    REPO_ROOT / "specs" / "release_artifact_selection.md",
+    REPO_ROOT / "specs" / "sora_nexus_operator_onboarding.md",
 )
 ADDITIONAL_ACTIVE_RELEASE_DOCUMENT_FAMILIES = (
-    REPO_ROOT / "docs" / "source" / "sorafs_reference_sdk_plan.md",
-    REPO_ROOT / "docs" / "source" / "sorafs_release_pipeline_plan.md",
+    REPO_ROOT / "specs" / "sorafs_reference_sdk_plan.md",
+    REPO_ROOT / "specs" / "sorafs_release_pipeline_plan.md",
 )
 ACTIVE_RELEASE_DOCUMENT_FAMILIES = (
     *RELEASE_DOCUMENT_FAMILIES,
     *ADDITIONAL_ACTIVE_RELEASE_DOCUMENT_FAMILIES,
 )
-RELEASE_DOCUMENT_LOCALES = {
-    "am",
-    "ar",
-    "az",
-    "ba",
-    "dz",
-    "es",
-    "fr",
-    "he",
-    "hy",
-    "ja",
-    "ka",
-    "kk",
-    "mn",
-    "my",
-    "pt",
-    "ru",
-    "ur",
-    "uz",
-    "zh-hans",
-    "zh-hant",
-}
 STALE_RELEASE_SIGNING_CLAIMS = (
     "--signing-key",
     "RELEASE_SIGNING_KEY",
@@ -97,28 +69,6 @@ def _heredoc_program(source: str, delimiter: str) -> str:
     marker = f"<<'{delimiter}'\n"
     assert marker in source
     return source.split(marker, 1)[1].split(f"\n{delimiter}", 1)[0]
-
-
-def _split_markdown_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    lines = text.splitlines()
-    if not lines or lines[0] != "---":
-        return {}, text
-    assert lines.count("---") == 2
-    end = lines.index("---", 1)
-    metadata: dict[str, str] = {}
-    for line in lines[1:end]:
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        metadata[key.strip()] = value.strip().strip('"').strip("'")
-    body = "\n".join(lines[end + 1 :]).lstrip("\n")
-    if text.endswith("\n"):
-        body += "\n"
-    return metadata, body
-
-
-def _localized_release_documents(canonical: Path) -> list[Path]:
-    return sorted(canonical.parent.glob(f"{canonical.stem}.*.md"))
 
 
 def _fake_tool(directory: Path, name: str) -> None:
@@ -1194,50 +1144,13 @@ def test_aggregate_manifest_signing_helper_is_strict_ed25519_only() -> None:
     assert "BEGIN PUBLIC KEY" not in source
 
 
-def test_release_signing_docs_are_schema_closed_and_mirrors_require_review() -> None:
-    for canonical in RELEASE_DOCUMENT_FAMILIES:
-        canonical_bytes = canonical.read_bytes()
-        canonical_text = canonical_bytes.decode("utf-8")
-        canonical_metadata, canonical_body = _split_markdown_frontmatter(
-            canonical_text
-        )
-        if canonical_metadata:
-            expected_body = canonical_body
-        else:
-            expected_body = canonical_text
-        expected_hash = hashlib.sha256(canonical_bytes).hexdigest()
-        mirrors = _localized_release_documents(canonical)
-        assert {
-            mirror.name.removeprefix(f"{canonical.stem}.").removesuffix(".md")
-            for mirror in mirrors
-        } == RELEASE_DOCUMENT_LOCALES
-        for mirror in mirrors:
-            mirror_text = mirror.read_text(encoding="utf-8")
-            metadata, body = _split_markdown_frontmatter(mirror_text)
-            assert metadata["source"] == canonical.relative_to(REPO_ROOT).as_posix()
-            assert metadata["status"] == "needs-review"
-            assert metadata["generator"] == "scripts/sync_docs_i18n.py"
-            assert re.fullmatch(r"[0-9a-f]{64}", metadata["source_hash"])
-            assert metadata["source_hash"] != expected_hash
-            assert re.fullmatch(
-                r"[0-9]{4}-[0-9]{2}-[0-9]{2}",
-                metadata["translation_last_reviewed"],
-            )
-            assert body == expected_body
-            if canonical_metadata:
-                for key in ("id", "title", "description"):
-                    assert metadata[key] == canonical_metadata[key]
-
-
 def test_release_signing_docs_reject_stale_rsa_and_private_key_claims() -> None:
     guarded_paths = [
         *RELEASE_SCRIPTS,
         RELEASE_MANIFEST_SIGNING_HELPER,
         REPO_ROOT / "scripts" / "run_release_pipeline.py",
+        *ACTIVE_RELEASE_DOCUMENT_FAMILIES,
     ]
-    for canonical in ACTIVE_RELEASE_DOCUMENT_FAMILIES:
-        guarded_paths.append(canonical)
-        guarded_paths.extend(_localized_release_documents(canonical))
     for path in guarded_paths:
         source = path.read_text(encoding="utf-8")
         for stale_claim in STALE_RELEASE_SIGNING_CLAIMS:
@@ -1334,24 +1247,22 @@ def test_release_signing_docs_bind_fingerprint_key_and_signature() -> None:
 
 
 def test_release_artifact_selection_documents_current_matrix_names() -> None:
-    canonical = REPO_ROOT / "docs" / "source" / "release_artifact_selection.md"
-    guarded_paths = [canonical, *_localized_release_documents(canonical)]
-    for path in guarded_paths:
-        source = path.read_text(encoding="utf-8")
-        for marker in (
-            "<profile>-<version>-<os>-<arch>.tar.zst",
-            "<profile>-<version>-<os>-<arch>-manifest.json",
-            "<profile>-<version>-linux-<arch>-image.oci.tar",
-            "explicit `linux/amd64` and `linux/arm64` platform matrix",
-            "Taira is intentionally not a",
-        ):
-            assert marker in source, f"{path}: missing {marker!r}"
-        for stale in (
-            "<profile>-<version>-<os>.tar.zst",
-            "<profile>-<version>-manifest.json",
-            "<profile>-<version>-<os>-image.tar",
-        ):
-            assert stale not in source, f"{path}: stale {stale!r}"
+    canonical = REPO_ROOT / "specs" / "release_artifact_selection.md"
+    source = canonical.read_text(encoding="utf-8")
+    for marker in (
+        "<profile>-<version>-<os>-<arch>.tar.zst",
+        "<profile>-<version>-<os>-<arch>-manifest.json",
+        "<profile>-<version>-linux-<arch>-image.oci.tar",
+        "explicit `linux/amd64` and `linux/arm64` platform matrix",
+        "Taira is intentionally not a",
+    ):
+        assert marker in source, f"{canonical}: missing {marker!r}"
+    for stale in (
+        "<profile>-<version>-<os>.tar.zst",
+        "<profile>-<version>-manifest.json",
+        "<profile>-<version>-<os>-image.tar",
+    ):
+        assert stale not in source, f"{canonical}: stale {stale!r}"
 
 
 def test_sorafs_release_gate_runs_generic_release_signing_guard() -> None:

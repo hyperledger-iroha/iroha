@@ -2695,6 +2695,7 @@ pub struct InstructionRegistry {
 
 #[derive(Clone, Copy)]
 struct RegistryEntry {
+    type_name: &'static str,
     ctor: InstructionConstructor,
     wire_id: &'static str,
     frame: fn(&[u8], u8) -> Result<Vec<u8>, norito::core::Error>,
@@ -2758,19 +2759,14 @@ impl InstructionRegistry {
         }
         let name = std::any::type_name::<T>();
         let entry = RegistryEntry {
+            type_name: name,
             ctor: ctor::<T>,
             wire_id: name,
             frame: frame::<T>,
             frame_write: frame_write::<T>,
             frame_len: frame_len::<T>,
         };
-        if let Some(previous) = self.entries.insert(name, entry)
-            && previous.wire_id != entry.wire_id
-        {
-            self.lookup.remove(previous.wire_id);
-        }
-        self.lookup.insert(name, entry);
-        self.lookup.insert(entry.wire_id, entry);
+        self.insert_entry(entry);
         self
     }
 
@@ -2824,19 +2820,14 @@ impl InstructionRegistry {
         }
         let name = std::any::type_name::<T>();
         let entry = RegistryEntry {
+            type_name: name,
             ctor: ctor::<T>,
             wire_id,
             frame: frame::<T>,
             frame_write: frame_write::<T>,
             frame_len: frame_len::<T>,
         };
-        if let Some(previous) = self.entries.insert(name, entry)
-            && previous.wire_id != entry.wire_id
-        {
-            self.lookup.remove(previous.wire_id);
-        }
-        self.lookup.insert(name, entry);
-        self.lookup.insert(wire_id, entry);
+        self.insert_entry(entry);
         self
     }
 
@@ -2893,19 +2884,14 @@ impl InstructionRegistry {
         }
         let name = std::any::type_name::<T>();
         let entry = RegistryEntry {
+            type_name: name,
             ctor: ctor::<T>,
             wire_id: name,
             frame: frame::<T>,
             frame_write: frame_write::<T>,
             frame_len: frame_len::<T>,
         };
-        if let Some(previous) = self.entries.insert(name, entry)
-            && previous.wire_id != entry.wire_id
-        {
-            self.lookup.remove(previous.wire_id);
-        }
-        self.lookup.insert(name, entry);
-        self.lookup.insert(entry.wire_id, entry);
+        self.insert_entry(entry);
         self
     }
 
@@ -2963,19 +2949,14 @@ impl InstructionRegistry {
         }
         let name = std::any::type_name::<T>();
         let entry = RegistryEntry {
+            type_name: name,
             ctor: ctor::<T>,
             wire_id,
             frame: frame::<T>,
             frame_write: frame_write::<T>,
             frame_len: frame_len::<T>,
         };
-        if let Some(previous) = self.entries.insert(name, entry)
-            && previous.wire_id != entry.wire_id
-        {
-            self.lookup.remove(previous.wire_id);
-        }
-        self.lookup.insert(name, entry);
-        self.lookup.insert(wire_id, entry);
+        self.insert_entry(entry);
         self
     }
 
@@ -3028,6 +3009,27 @@ impl InstructionRegistry {
         self.entries.get(type_name).map(|entry| entry.wire_id)
     }
 
+    fn insert_entry(&mut self, entry: RegistryEntry) {
+        for key in [entry.type_name, entry.wire_id] {
+            if let Some(previous) = self.lookup.get(key)
+                && previous.type_name != entry.type_name
+            {
+                panic!(
+                    "instruction registry key collision: `{key}` belongs to both `{}` and `{}`",
+                    previous.type_name, entry.type_name
+                );
+            }
+        }
+
+        if let Some(previous) = self.entries.insert(entry.type_name, entry)
+            && previous.wire_id != entry.wire_id
+        {
+            self.lookup.remove(previous.wire_id);
+        }
+        self.lookup.insert(entry.type_name, entry);
+        self.lookup.insert(entry.wire_id, entry);
+    }
+
     fn remap_wire_id<T>(mut self, wire_id: &'static str) -> Self
     where
         T: 'static,
@@ -3041,12 +3043,7 @@ impl InstructionRegistry {
             ..previous
         };
 
-        self.entries.insert(type_name, entry);
-        if previous.wire_id != type_name {
-            self.lookup.remove(previous.wire_id);
-        }
-        self.lookup.insert(type_name, entry);
-        self.lookup.insert(wire_id, entry);
+        self.insert_entry(entry);
         self
     }
 

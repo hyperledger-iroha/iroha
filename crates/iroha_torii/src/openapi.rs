@@ -22,6 +22,8 @@ use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 
 use crate::utils;
 
+mod sorafs_evidence;
+
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
 const SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION: &str = "x-iroha-soracloud-hf-deploy-contract";
 const SORACLOUD_HF_DEPLOY_CONTRACT_V1: &str = "cap-bound-local-signing-v1";
@@ -7186,7 +7188,7 @@ fn sorafs_paths() -> Map {
     let mut evidence_audit_operation = json_get_operation(
         "SoraFS",
         "Read signed evidence access receipts.",
-        "Return a bounded exact-cursor projection of canonical Norito, Ed25519-signed, globally sequenced and hash-chained payload-free receipts from one exact signed checkpoint. The only accepted genesis query wire is expected_checkpoint_digest_hex then limit, in that order. A continuation inserts after_sequence then after_receipt_digest_hex between those fields. Percent/plus aliases, reordered fields, duplicate or empty fields, omitted explicit limits, and non-canonical decimal or lowercase hexadecimal values are rejected. after_sequence and after_receipt_digest_hex must be supplied together and match the exact retained signed receipt; sequence-only or digest-only continuation is rejected. A checkpoint change returns 409 rather than silently repaginating. The response returns the signed checkpoint_anchor, digest-bound page_limit, predecessor and next_cursor exact pairs, canonical projection_norito_b64, projection_digest_hex, has_more, and receipts; it never emits a sequence-only continuation. X-Iroha canonical authentication and the explicit sorafs_evidence_auditor or sorafs_legal_reviewer role are required; operator role alone is insufficient.",
+        "Return a bounded exact-cursor projection of canonical Norito, Ed25519-signed, globally sequenced and hash-chained payload-free receipts from one exact signed checkpoint. The only accepted genesis query wire is expected_checkpoint_digest_hex then limit, in that order. A continuation inserts after_sequence then after_receipt_digest_hex between those fields. Percent/plus aliases, reordered fields, duplicate or empty fields, omitted explicit limits, and non-canonical decimal or lowercase hexadecimal values are rejected. after_sequence and after_receipt_digest_hex must be supplied together and match the exact retained signed receipt; sequence-only or digest-only continuation is rejected. A checkpoint change returns 409 rather than silently repaginating. The response returns the signed checkpoint_anchor with authoritative store generation/predecessor pins, its exact signed compaction_archive_head, digest-bound page_limit, predecessor and next_cursor exact pairs, canonical projection_norito_b64, projection_digest_hex, has_more, and receipts; it never emits a sequence-only continuation. X-Iroha canonical authentication and the explicit sorafs_evidence_auditor or sorafs_legal_reviewer role are required; operator role alone is insufficient.",
         "#/components/schemas/SorafsEvidenceAuditProjectionV1",
         evidence_audit_parameters,
     );
@@ -7201,7 +7203,7 @@ fn sorafs_paths() -> Map {
     evidence_audit_success.insert(
         "description".into(),
         Value::String(
-            "Exact signed-checkpoint projection with checkpoint_anchor, digest-bound page_limit, predecessor and next_cursor `(sequence, receipt_digest_hex)` pairs, projection_norito_b64, projection_digest_hex, has_more, and payload-free receipts. No sequence-only continuation is returned."
+            "Exact signed-checkpoint projection with checkpoint_anchor, signed compaction_archive_head, digest-bound page_limit, predecessor and next_cursor `(sequence, receipt_digest_hex)` pairs, projection_norito_b64, projection_digest_hex, has_more, and payload-free receipts. No sequence-only continuation is returned."
                 .to_owned(),
         ),
     );
@@ -18530,242 +18532,6 @@ fn subscription_schemas(schemas: &mut Map) {
     );
 }
 
-fn insert_sorafs_evidence_schemas(schemas: &mut Map) {
-    schemas.insert(
-        "SorafsEvidenceHex32V1".to_owned(),
-        norito::json!({
-            "type": "string",
-            "minLength": 64,
-            "maxLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "description": "Canonical lowercase 32-byte hexadecimal value without a prefix."
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceNonzeroHex32V1".to_owned(),
-        norito::json!({
-            "type": "string",
-            "minLength": 64,
-            "maxLength": 64,
-            "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
-            "description": "Canonical lowercase non-zero 32-byte hexadecimal value without a prefix."
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceSignatureHexV1".to_owned(),
-        norito::json!({
-            "type": "string",
-            "minLength": 128,
-            "maxLength": 128,
-            "pattern": "^[0-9a-f]{128}$",
-            "description": "Canonical lowercase 64-byte Ed25519 signature."
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceReceiptCursorV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["sequence", "receipt_digest_hex"],
-            "properties": {
-                "sequence": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "receipt_digest_hex": { "$ref": "#/components/schemas/SorafsEvidenceNonzeroHex32V1" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceSignedCheckpointAnchorV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "version",
-                "checkpoint_digest_hex",
-                "receipt_count",
-                "chain_head",
-                "signer_handle",
-                "signer_public_key_hex",
-                "signature_hex"
-            ],
-            "properties": {
-                "version": { "type": "integer", "format": "uint16", "enum": [1] },
-                "checkpoint_digest_hex": { "$ref": "#/components/schemas/SorafsEvidenceNonzeroHex32V1" },
-                "receipt_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "chain_head": {
-                    "oneOf": [
-                        { "$ref": "#/components/schemas/SorafsEvidenceReceiptCursorV1" },
-                        { "type": "null" }
-                    ],
-                    "description": "Null exactly when receipt_count is zero; otherwise sequence equals receipt_count."
-                },
-                "signer_handle": { "type": "string", "minLength": 1, "maxLength": 256 },
-                "signer_public_key_hex": { "$ref": "#/components/schemas/SorafsEvidenceNonzeroHex32V1" },
-                "signature_hex": { "$ref": "#/components/schemas/SorafsEvidenceSignatureHexV1" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceSignedReceiptV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "schema",
-                "receipt_norito_b64",
-                "sequence",
-                "kind",
-                "receipt_digest_hex",
-                "previous_receipt_digest_hex",
-                "issued_at_unix_ms",
-                "signer_handle",
-                "signer_public_key_hex",
-                "signature_hex"
-            ],
-            "properties": {
-                "schema": { "type": "string", "const": "sorafs.evidence.signed_receipt.v1" },
-                "receipt_norito_b64": { "type": "string", "minLength": 1 },
-                "sequence": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "kind": {
-                    "type": "string",
-                    "enum": [
-                        "challenge_issued",
-                        "session_issued",
-                        "manifest_accessed",
-                        "range_accessed",
-                        "interaction_recorded",
-                        "legal_hold_placed",
-                        "legal_hold_released",
-                        "retention_evaluated",
-                        "erasure_completed",
-                        "erasure_denied_legal_hold"
-                    ]
-                },
-                "receipt_digest_hex": { "$ref": "#/components/schemas/SorafsEvidenceNonzeroHex32V1" },
-                "previous_receipt_digest_hex": { "$ref": "#/components/schemas/SorafsEvidenceHex32V1" },
-                "issued_at_unix_ms": { "type": "integer", "format": "uint64", "minimum": 1 },
-                "signer_handle": { "type": "string", "minLength": 1, "maxLength": 256 },
-                "signer_public_key_hex": { "$ref": "#/components/schemas/SorafsEvidenceNonzeroHex32V1" },
-                "signature_hex": { "$ref": "#/components/schemas/SorafsEvidenceSignatureHexV1" }
-            }
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceAuditProjectionV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "schema",
-                "version",
-                "projection_norito_b64",
-                "checkpoint_anchor",
-                "predecessor",
-                "page_limit",
-                "has_more",
-                "next_cursor",
-                "projection_digest_hex",
-                "receipts"
-            ],
-            "properties": {
-                "schema": {
-                    "type": "string",
-                    "const": "sorafs.evidence.audit_transparency_projection.v1"
-                },
-                "version": { "type": "integer", "format": "uint16", "enum": [1] },
-                "projection_norito_b64": { "type": "string", "minLength": 1 },
-                "checkpoint_anchor": {
-                    "$ref": "#/components/schemas/SorafsEvidenceSignedCheckpointAnchorV1"
-                },
-                "predecessor": {
-                    "oneOf": [
-                        { "$ref": "#/components/schemas/SorafsEvidenceReceiptCursorV1" },
-                        { "type": "null" }
-                    ]
-                },
-                "page_limit": {
-                    "type": "integer",
-                    "format": "uint16",
-                    "minimum": 1,
-                    "maximum": 256
-                },
-                "has_more": { "type": "boolean" },
-                "next_cursor": {
-                    "oneOf": [
-                        { "$ref": "#/components/schemas/SorafsEvidenceReceiptCursorV1" },
-                        { "type": "null" }
-                    ]
-                },
-                "projection_digest_hex": { "$ref": "#/components/schemas/SorafsEvidenceHex32V1" },
-                "receipts": {
-                    "type": "array",
-                    "maxItems": 256,
-                    "items": { "$ref": "#/components/schemas/SorafsEvidenceSignedReceiptV1" }
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceAuditStatusV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-                "schema",
-                "status_norito_b64",
-                "challenge_count",
-                "session_count",
-                "receipt_count",
-                "active_legal_hold_count",
-                "retention_count",
-                "erasure_count",
-                "checkpoint_anchor"
-            ],
-            "properties": {
-                "schema": { "type": "string", "const": "sorafs.evidence.audit_status.v1" },
-                "status_norito_b64": { "type": "string", "minLength": 1 },
-                "challenge_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "session_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "receipt_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "active_legal_hold_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "retention_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "erasure_count": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "checkpoint_anchor": {
-                    "$ref": "#/components/schemas/SorafsEvidenceSignedCheckpointAnchorV1"
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "SorafsEvidenceApiErrorV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["schema", "error"],
-            "properties": {
-                "schema": { "type": "string", "const": "sorafs.evidence.error.v1" },
-                "error": {
-                    "type": "string",
-                    "enum": [
-                        "canonical_authentication_required",
-                        "explicit_evidence_auditor_or_legal_role_required",
-                        "invalid_query",
-                        "after_sequence",
-                        "after_receipt_digest_hex",
-                        "expected_checkpoint_digest_hex",
-                        "limit",
-                        "unexpected_query",
-                        "invalid_evidence_request",
-                        "evidence_checkpoint_changed",
-                        "evidence_resource_exhausted",
-                        "evidence_viewer_unavailable",
-                        "canonical_encoding_unavailable"
-                    ]
-                }
-            }
-        }),
-    );
-}
-
 fn insert_sorafs_pin_register_schemas(schemas: &mut Map) {
     schemas.insert(
         "SorafsPinRegisterResponseV1".to_owned(),
@@ -20755,7 +20521,7 @@ fn openapi_schemas() -> Map {
     );
     insert_vpn_schemas(&mut schemas);
     insert_sorafs_proof_stream_schemas(&mut schemas);
-    insert_sorafs_evidence_schemas(&mut schemas);
+    sorafs_evidence::insert_sorafs_evidence_schemas(&mut schemas);
     insert_sorafs_pin_register_schemas(&mut schemas);
     insert_sorafs_pin_manifest_readback_schemas(&mut schemas);
     insert_sorafs_replication_schemas(&mut schemas);

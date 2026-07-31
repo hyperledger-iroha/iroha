@@ -16,10 +16,10 @@ def read(relative: str) -> str:
 
 
 def test_hedging_plan_uses_the_current_bridge_abi() -> None:
-    plan = read("docs/source/sorafs_hedging_plan.md")
+    plan = read("specs/sorafs_hedging_plan.md")
     bridge = read("crates/connect_norito_bridge/src/lib.rs")
     header = read("crates/connect_norito_bridge/include/connect_norito_bridge.h")
-    privacy = read("crates/iroha_data_model/src/privacy.rs")
+    privacy = read("crates/iroha_data_model/src/privacy/protocol.rs")
 
     source_match = re.search(
         r"CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*"
@@ -43,7 +43,7 @@ def test_hedging_plan_uses_the_current_bridge_abi() -> None:
 
 
 def test_reference_sdk_plan_does_not_reopen_native_orderbook_work() -> None:
-    plan = read("docs/source/sorafs_reference_sdk_plan.md")
+    plan = read("specs/sorafs_reference_sdk_plan.md")
     normalized = " ".join(plan.split())
 
     assert (
@@ -76,8 +76,8 @@ def test_reference_sdk_plan_does_not_reopen_native_orderbook_work() -> None:
 
 
 def test_gateway_tls_docs_require_withdrawal_and_runtime_adapter_recovery() -> None:
-    handbook = read("docs/source/sorafs_gateway_deployment_handbook.md")
-    automation = read("docs/source/sorafs_gateway_tls_automation.md")
+    handbook = read("specs/sorafs_gateway_deployment_handbook.md")
+    automation = read("specs/sorafs_gateway_tls_automation.md")
     combined = f"{handbook}\n{automation}"
 
     assert "sorafs-gateway tls renew" not in combined
@@ -92,10 +92,10 @@ def test_gateway_tls_docs_require_withdrawal_and_runtime_adapter_recovery() -> N
 
 
 def test_stream_token_docs_use_the_runtime_signer_hard_cut() -> None:
-    protocol = read("docs/source/sorafs_node_client_protocol.md")
-    chunk_range = read("docs/source/sorafs_gateway_chunk_range.md")
-    handbook = read("docs/source/sorafs_gateway_deployment_handbook.md")
-    playbook = read("docs/source/sorafs_gateway_operator_playbook.md")
+    protocol = read("specs/sorafs_node_client_protocol.md")
+    chunk_range = read("specs/sorafs_gateway_chunk_range.md")
+    handbook = read("specs/sorafs_gateway_deployment_handbook.md")
+    playbook = read("specs/sorafs_gateway_operator_playbook.md")
     roadmap = read("roadmap.md")
     status = read("status.md")
     active = "\n".join((protocol, chunk_range, handbook, playbook, roadmap))
@@ -154,8 +154,8 @@ def test_roadmap_does_not_preserve_retired_gateway_policy_tooling() -> None:
 
 
 def test_future_dated_seaglass_reports_are_not_readiness_evidence() -> None:
-    reports_dir = REPO_ROOT / "docs/source/ministry/reports"
-    status = read("docs/source/ministry/red_team_status.md")
+    reports_dir = REPO_ROOT / "specs/ministry/reports"
+    status = read("specs/ministry/red_team_status.md")
     normalized_status = " ".join(status.split())
 
     assert not list(

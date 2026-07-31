@@ -53,6 +53,10 @@ test("browser crypto normalizes all algorithm labels but only signs Ed25519 loca
   }
   assert.equal(generateKeyPair({ seed: Buffer.alloc(32, 7) }).algorithm, "ed25519");
   assert.throws(
+    () => generateKeyPair({ seed: Buffer.alloc(16, 7) }),
+    /seed must be exactly 32 bytes/,
+  );
+  assert.throws(
     () => generateKeyPair({ algorithm: "ml-dsa", seed: Buffer.alloc(32, 7) }),
     /generateKeyPair\(ml-dsa\) is unavailable in browser-only crypto builds/,
   );
@@ -75,6 +79,15 @@ test("browser crypto exposes recovery phrase helpers in source and dist bundles"
       crypto.deriveEd25519SeedFromRecoveryPhrase(recovery.phrase),
       entropy,
       `${label} derives original Ed25519 seed`,
+    );
+    const shortEntropy = Buffer.alloc(16, 7);
+    const shortRecovery = crypto.entropyToRecoveryPhrase(shortEntropy);
+    assert.equal(
+      crypto
+        .deriveEd25519SeedFromRecoveryPhrase(shortRecovery.phrase)
+        .toString("hex"),
+      "d761d406af2a4a5a15f67c924378ed88d1f85c13f1a37fc7366f59789b3bcd65",
+      `${label} expands 12-word entropy deterministically`,
     );
     assert.throws(
       () => crypto.normalizeRecoveryPhrase(recovery.words.slice(0, 11).join(" ")),

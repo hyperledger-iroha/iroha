@@ -1,0 +1,28 @@
+{
+  "id": "sdks/recipes/python-ledger-flow",
+  "title": "Python ledger flow recipe",
+  "description": "Reproduce the register → mint → transfer flow against the dev network using `iroha-python`.",
+  "source": "@site/docs/sdks/recipes/python-ledger-flow.md",
+  "sourceDirName": "sdks/recipes",
+  "slug": "/sdks/recipes/python-ledger-flow",
+  "permalink": "/next/sdks/recipes/python-ledger-flow",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sdks/recipes/python-ledger-flow.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Python ledger flow recipe",
+    "description": "Reproduce the register → mint → transfer flow against the dev network using `iroha-python`.",
+    "slug": "/sdks/recipes/python-ledger-flow"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Rust ledger flow recipe",
+    "permalink": "/next/sdks/recipes/rust-ledger-flow"
+  },
+  "next": {
+    "title": "JavaScript ledger flow recipe",
+    "permalink": "/next/sdks/recipes/javascript-ledger-flow"
+  }
+}

@@ -8,10 +8,17 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT = (
-    Path(__file__).resolve().parents[1]
-    / "check_sorafs_gateway_compliance_rollout_evidence.py"
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
+TEST_DIR = Path(__file__).resolve().parent
+for import_root in (SCRIPT_DIR, TEST_DIR):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
+
+from sorafs_rollout_runner_test_support import (  # noqa: E402
+    write_topology_qualification as write_valid_topology_qualification,
 )
+
+SCRIPT = SCRIPT_DIR / "check_sorafs_gateway_compliance_rollout_evidence.py"
 SPEC = importlib.util.spec_from_file_location("gateway_compliance_gate", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -25,6 +32,8 @@ PREDECESSOR_DIGEST = "cd" * 32
 POLICY_DIGEST = "ef" * 32
 PUBLICATION_DIGEST = "12" * 32
 CONTROL_DIGEST = "34" * 32
+DEPLOYMENT_ID = "sorafs-gateway-release-42"
+ENVIRONMENT = "production"
 
 
 def base(schema: str) -> dict:
@@ -32,8 +41,8 @@ def base(schema: str) -> dict:
         "schema": schema,
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
-        "deployment_id": "sorafs-gateway-release-42",
-        "environment": "production",
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
         "evidence_scope": "production",
         "catalog_digest_hex": CATALOG_DIGEST,
@@ -351,9 +360,25 @@ def write_complete_evidence(root: Path) -> None:
     write_all(root)
 
 
+def write_topology_qualification(
+    root: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> Path:
+    """Write the exact non-promotable L1 topology bound to this lane fixture."""
+
+    return write_valid_topology_qualification(
+        root.parent / f"{root.name}-topology-qualification.json",
+        deployment_id=deployment_id,
+        environment=environment,
+    )
+
+
 def run_gate(root: Path, *extra: str) -> tuple[int, dict]:
     summary = root / "summary.json"
     summary.unlink(missing_ok=True)
+    topology = write_topology_qualification(root)
     code = MODULE.main(
         [
             "--evidence-dir",
@@ -362,6 +387,8 @@ def run_gate(root: Path, *extra: str) -> tuple[int, dict]:
             str(summary),
             "--now-unix",
             str(NOW),
+            "--topology-qualification-summary",
+            str(topology),
             *extra,
         ]
     )
@@ -410,6 +437,8 @@ def test_complete_canonical_evidence_is_ready(tmp_path: Path) -> None:
     code, summary = run_gate(tmp_path)
     assert code == 0
     assert summary["status"] == "ready"
+    assert summary["topology_qualification"]["deployment_id"] == DEPLOYMENT_ID
+    assert summary["topology_qualification"]["environment"] == ENVIRONMENT
     assert summary["valid_catalog_digests"] == [CATALOG_DIGEST]
     assert summary["valid_catalog_history_bindings"] == [
         {
@@ -421,6 +450,53 @@ def test_complete_canonical_evidence_is_ready(tmp_path: Path) -> None:
     ]
     assert "valid_bundle_digests" not in summary
     assert summary["recognized_artifact_count"] == len(BUILDERS)
+
+
+def test_topology_qualification_is_required(tmp_path: Path) -> None:
+    write_all(tmp_path)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 2
+    )
+
+
+def test_topology_qualification_must_match_lane_context(tmp_path: Path) -> None:
+    write_all(tmp_path)
+    summary = tmp_path / "summary.json"
+    topology = write_topology_qualification(
+        tmp_path,
+        deployment_id="sorafs-gateway-release-foreign",
+    )
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+                "--topology-qualification-summary",
+                str(topology),
+            ]
+        )
+        == 1
+    )
+    rendered = json.loads(summary.read_text(encoding="utf-8"))
+    assert rendered["status"] == "blocked"
+    assert (
+        "topology qualification deployment_id must match the reviewed lane context"
+        in rendered["errors"]
+    )
 
 
 def test_catalog_history_fields_are_fingerprinted_atomically(tmp_path: Path) -> None:
@@ -857,6 +933,7 @@ def test_legacy_schema_is_not_recognized(tmp_path: Path) -> None:
     payload["schema"] = "sorafs.gateway_compliance.feed_promotion_canary.v1"
     legacy = tmp_path / "legacy.json"
     summary_path = tmp_path / "summary.json"
+    topology = write_topology_qualification(tmp_path)
     write_json(legacy, payload)
     code = MODULE.main(
         [
@@ -866,6 +943,8 @@ def test_legacy_schema_is_not_recognized(tmp_path: Path) -> None:
             str(summary_path),
             "--now-unix",
             str(NOW),
+            "--topology-qualification-summary",
+            str(topology),
             "--require-kind",
             "catalog_promotion",
         ]

@@ -1,6 +1,6 @@
 # Norito Decoder
 
-These commands help you decode **Iroha 2** data types from binaries using the Norito codec.
+These commands help you decode **Iroha 3** data types from binaries using the Norito codec.
 
 > **Note:** The codec subcommands are gated behind the optional `codec` feature.
 > Run them via `cargo run -p iroha_kagami --features codec -- advanced codec <SUBCOMMAND>` or build the binary with that feature enabled.

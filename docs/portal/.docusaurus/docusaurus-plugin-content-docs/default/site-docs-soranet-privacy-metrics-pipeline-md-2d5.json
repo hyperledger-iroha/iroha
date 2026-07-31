@@ -1,0 +1,29 @@
+{
+  "id": "soranet/privacy-metrics-pipeline",
+  "title": "SoraNet Privacy Metrics Pipeline (SNNet-8)",
+  "description": "Privacy-preserving telemetry collection for SoraNet relays and orchestrators.",
+  "source": "@site/docs/soranet/privacy-metrics-pipeline.md",
+  "sourceDirName": "soranet",
+  "slug": "/soranet/privacy-metrics-pipeline",
+  "permalink": "/next/soranet/privacy-metrics-pipeline",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/soranet/privacy-metrics-pipeline.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "privacy-metrics-pipeline",
+    "title": "SoraNet Privacy Metrics Pipeline (SNNet-8)",
+    "sidebar_label": "Privacy Metrics Pipeline",
+    "description": "Privacy-preserving telemetry collection for SoraNet relays and orchestrators."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Puzzle Service Ops",
+    "permalink": "/next/soranet/puzzle-service-operations"
+  },
+  "next": {
+    "title": "PQ Primitives",
+    "permalink": "/next/soranet/pq-primitives"
+  }
+}

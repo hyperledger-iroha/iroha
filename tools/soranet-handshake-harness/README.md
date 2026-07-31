@@ -1,7 +1,7 @@
 # soranet-handshake-harness
 
 Work-in-progress harness for generating and validating SoraNet handshake
-fixtures (see `docs/source/soranet_handshake_harness.md`).
+fixtures (see `specs/soranet_handshake_harness.md`).
 
 ## Usage
 

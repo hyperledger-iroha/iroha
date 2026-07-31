@@ -6,9 +6,8 @@ set -euo pipefail
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
-readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|[0-9]+d) at \([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\)$'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly MODEL="SumeragiV2HistoricalDiscoveryOccurrenceRankMutation.tla"
 readonly MODULE="${MODEL%.tla}"
 readonly FIXED_CONFIG="historical_discovery_occurrence_rank_fixed.cfg"
@@ -18,6 +17,7 @@ readonly FIXED_SUCCESS_MARKER="Model checking completed. No error has been found
 readonly MUTANT_FIRST_MARKER="Error: Invariant RankNeverIncreases is violated."
 readonly RETAINED_NEGATIVE_CONTROL="INVARIANT LowerServiceStrictlyDescends"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if (($#)); then
   echo "usage: $0" >&2
@@ -112,18 +112,12 @@ run_tlc() {
     cat "$log" >&2
     exit 1
   }
-  [[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]] || {
-    echo "${label} did not emit exactly one TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
-  local last_nonblank
-  last_nonblank="$(awk 'NF { line = $0 } END { print line }' "$log")"
-  grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank" || {
-    echo "${label} did not end at the exact TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  else
+    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
   printf '%s\n' "$log"
 }
 
@@ -156,6 +150,16 @@ first_invariant_marker="$(
 }
 [[ "$(grep -Fxc "$MUTANT_FIRST_MARKER" "$mutant_log" || true)" == 1 ]] || {
   echo "plain-minimum-mutant did not emit exactly one ${MUTANT_FIRST_MARKER} marker" >&2
+  cat "$mutant_log" >&2
+  exit 1
+}
+mutant_primary_diagnostic_count="$(
+  grep -Ec \
+    "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+    "$mutant_log" || true
+)"
+[[ "$mutant_primary_diagnostic_count" -eq 1 ]] || {
+  echo "plain-minimum-mutant emitted ${mutant_primary_diagnostic_count} primary failure diagnostics" >&2
   cat "$mutant_log" >&2
   exit 1
 }

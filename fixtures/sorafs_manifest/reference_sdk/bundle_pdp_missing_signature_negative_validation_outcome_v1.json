@@ -4,7 +4,7 @@
   "category": "signature",
   "message": "fixture bundle payload validation failed",
   "action": "Fix the invalid payload named in the bundle outcome before rerunning cross-link validation.",
-  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "docs_url": "https://docs.iroha.tech/",
   "telemetry_tags": [
     "sorafs.reference.bundle",
     "sorafs.reference.code.SFS-BND-001"
@@ -20,7 +20,7 @@
     },
     {
       "key": "challenge_id_hex",
-      "value": "cf0fcb348631bfcd6f4c3cdf128ca59faa20d7b899baa2822b6dc968a6a4dab8"
+      "value": "83bca9f3d36245704bb1e56da832d07a1960372af70df4fccc942f8f08dcf8ca"
     },
     {
       "key": "manifest_digest_hex",

@@ -1,0 +1,29 @@
+{
+  "id": "soranet/transport",
+  "title": "SoraNet transport overview",
+  "description": "Handshake, salt rotation, and capability guidance for the SoraNet anonymity overlay.",
+  "source": "@site/docs/soranet/transport.md",
+  "sourceDirName": "soranet",
+  "slug": "/soranet/transport",
+  "permalink": "/next/soranet/transport",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/soranet/transport.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "transport",
+    "title": "SoraNet transport overview",
+    "sidebar_label": "Transport Overview",
+    "description": "Handshake, salt rotation, and capability guidance for the SoraNet anonymity overlay."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "threat-model",
+    "permalink": "/next/da/threat-model"
+  },
+  "next": {
+    "title": "Constant-Rate Profiles",
+    "permalink": "/next/soranet/constant-rate-profiles"
+  }
+}

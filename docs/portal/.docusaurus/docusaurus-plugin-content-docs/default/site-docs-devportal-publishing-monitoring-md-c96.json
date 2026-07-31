@@ -1,0 +1,29 @@
+{
+  "id": "devportal/publishing-monitoring",
+  "title": "SoraFS Publishing & Monitoring",
+  "description": "Capture the end-to-end monitoring flow for SoraFS portal releases so DOCS-3c has deterministic probes, telemetry, and evidence bundles.",
+  "source": "@site/docs/devportal/publishing-monitoring.md",
+  "sourceDirName": "devportal",
+  "slug": "/devportal/publishing-monitoring",
+  "permalink": "/next/devportal/publishing-monitoring",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/publishing-monitoring.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "publishing-monitoring",
+    "title": "SoraFS Publishing & Monitoring",
+    "sidebar_label": "Publishing & Monitoring",
+    "description": "Capture the end-to-end monitoring flow for SoraFS portal releases so DOCS-3c has deterministic probes, telemetry, and evidence bundles."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Observability",
+    "permalink": "/next/devportal/observability"
+  },
+  "next": {
+    "title": "Preview host exposure",
+    "permalink": "/next/devportal/preview-host-exposure"
+  }
+}

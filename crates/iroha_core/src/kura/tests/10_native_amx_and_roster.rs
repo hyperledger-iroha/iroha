@@ -99,11 +99,27 @@
         entry: &LaneConfigEntry,
         participant_heights: &[u64],
     ) -> Vec<NativeAmxParticipantApplicationReceiptArtifact> {
+        install_native_amx_evidence_fixture_heights_with_predecessor_drift(
+            kura,
+            entry,
+            participant_heights,
+            None,
+        )
+    }
+
+    fn install_native_amx_evidence_fixture_heights_with_predecessor_drift(
+        kura: &Kura,
+        entry: &LaneConfigEntry,
+        participant_heights: &[u64],
+        predecessor_drift_height: Option<u64>,
+    ) -> Vec<NativeAmxParticipantApplicationReceiptArtifact> {
         assert!(
             !participant_heights.is_empty()
                 && participant_heights.iter().all(|height| *height > 0)
-                && participant_heights.windows(2).all(|pair| pair[0] < pair[1]),
-            "Native AMX evidence fixture heights must be non-zero and strictly ordered"
+                && participant_heights
+                    .windows(2)
+                    .all(|pair| pair[0].checked_add(1) == Some(pair[1])),
+            "Native AMX evidence fixture heights must be a non-zero contiguous suffix"
         );
         let block = store_dummy_block_arcs(kura, 1)
             .into_iter()
@@ -113,7 +129,8 @@
         let executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("hash exact result-bearing application block wire");
-        let mut proposals = Vec::with_capacity(participant_heights.len());
+        let mut proposals: Vec<LaneBlockProposalV1> =
+            Vec::with_capacity(participant_heights.len());
         let mut settlements = Vec::with_capacity(participant_heights.len());
         let mut source_ids = Vec::with_capacity(participant_heights.len());
         let mut results = Vec::with_capacity(participant_heights.len());
@@ -128,6 +145,20 @@
             );
             let mut proposal = session.proposal;
             proposal.descriptor.proposal_height = application_block_height;
+            if let Some(predecessor) = proposals.last() {
+                proposal.descriptor.previous_lane_block_height =
+                    predecessor.descriptor.lane_block_height;
+                proposal.descriptor.previous_lane_block_descriptor_hash =
+                    Some(predecessor.descriptor.descriptor_hash);
+            }
+            if predecessor_drift_height == Some(participant_height) {
+                assert!(
+                    proposals.last().is_some(),
+                    "Native predecessor drift requires a retained predecessor"
+                );
+                proposal.descriptor.previous_lane_block_descriptor_hash =
+                    Some(Hash::new(b"authenticated retained Native predecessor drift"));
+            }
             proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
             proposal.proposal_hash = proposal.computed_proposal_hash();
             crate::lane_consensus::validate_lane_block_proposal(&proposal)
@@ -2452,3 +2483,781 @@
         );
     }
 
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn native_amx_publication_temp_recovery_is_phase_aware_and_manifest_bound() {
+        let temp_dir = TempDir::new().expect("phase-aware Native evidence Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("initialize phase-aware Native evidence Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("phase-aware Native evidence lane entry");
+        let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        let manifest_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+        let receipt_path =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+        let manifest_temp = manifest_path.with_extension("norito.tmp");
+        let receipt_temp = receipt_path.with_extension("norito.tmp");
+        let manifest_bytes = fs::read(&manifest_path).expect("read stable Native manifest");
+        let receipt_bytes = fs::read(&receipt_path).expect("read stable Native receipt");
+        fs::remove_file(&manifest_path).expect("remove stable Native manifest");
+        fs::remove_file(&receipt_path).expect("remove stable Native receipt");
+        fs::write(&manifest_temp, &manifest_bytes).expect("stage Native manifest temporary");
+        fs::write(&receipt_temp, &receipt_bytes).expect("stage Native receipt temporary");
+        std::fs::File::open(&manifest_temp)
+            .expect("open Native manifest temporary")
+            .sync_all()
+            .expect("sync Native manifest temporary");
+        std::fs::File::open(&receipt_temp)
+            .expect("open Native receipt temporary")
+            .sync_all()
+            .expect("sync Native receipt temporary");
+
+        let _prune_guard = kura.prune_lock.lock();
+        let _canonical_chain_guard = kura.canonical_chain_lock.lock();
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let _sidecar_guard = kura.sidecar_lock.lock();
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .expect("bind phase-aware Native evidence namespace");
+        kura.recover_native_amx_evidence_publication_temp_locked(
+            &entry,
+            &namespace,
+            NativeAmxEvidenceRecoveryPhase::ManifestPublication,
+        )
+        .expect("manifest phase recovers only the manifest temporary");
+        assert_eq!(
+            fs::read(&manifest_path).expect("read recovered Native manifest"),
+            manifest_bytes
+        );
+        assert!(!manifest_temp.exists());
+        assert!(
+            receipt_temp.exists() && !receipt_path.exists(),
+            "manifest phase must leave the receipt temporary unpublished"
+        );
+
+        kura.recover_native_amx_evidence_publication_temp_locked(
+            &entry,
+            &namespace,
+            NativeAmxEvidenceRecoveryPhase::ReceiptPublication,
+        )
+        .expect("receipt phase recovers the manifest-bound receipt temporary");
+        assert_eq!(
+            fs::read(&receipt_path).expect("read recovered Native receipt"),
+            receipt_bytes
+        );
+        assert!(!receipt_temp.exists());
+        drop(namespace);
+        drop(_sidecar_guard);
+        drop(_geometry_guard);
+        drop(_prune_guard);
+
+        let missing_manifest_dir =
+            TempDir::new().expect("missing-manifest Native evidence Kura directory");
+        let missing_manifest_config =
+            kura_config_for_dir(&missing_manifest_dir, BLOCKS_IN_MEMORY);
+        let (missing_manifest_kura, _) =
+            Kura::new(&missing_manifest_config, &RuntimeLaneConfig::default())
+                .expect("initialize missing-manifest Native evidence Kura");
+        let missing_manifest_entry = missing_manifest_kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("missing-manifest Native evidence lane entry");
+        let _receipt = install_native_amx_latest_index_evidence_fixture(
+            &missing_manifest_kura,
+            &missing_manifest_entry,
+        );
+        let missing_manifest_path = Kura::native_amx_application_manifest_path_for_entry(
+            &missing_manifest_entry,
+            &missing_manifest_kura.store_root,
+            1,
+        );
+        let missing_receipt_path = Kura::native_amx_participant_receipt_path_for_entry(
+            &missing_manifest_entry,
+            &missing_manifest_kura.store_root,
+            1,
+        );
+        let missing_receipt_temp = missing_receipt_path.with_extension("norito.tmp");
+        let missing_receipt_bytes =
+            fs::read(&missing_receipt_path).expect("read receipt for missing-manifest crash");
+        fs::remove_file(&missing_manifest_path).expect("remove exact stable manifest");
+        fs::remove_file(&missing_receipt_path).expect("remove exact stable receipt");
+        fs::write(&missing_receipt_temp, &missing_receipt_bytes)
+            .expect("stage residual receipt temporary");
+        std::fs::File::open(&missing_receipt_temp)
+            .expect("open residual receipt temporary")
+            .sync_all()
+            .expect("sync residual receipt temporary");
+        sync_dir(
+            missing_receipt_temp
+                .parent()
+                .expect("missing-manifest Native evidence directory"),
+        )
+        .expect("sync missing-manifest Native evidence directory");
+        let _prune_guard = missing_manifest_kura.prune_lock.lock();
+        let _canonical_chain_guard = missing_manifest_kura.canonical_chain_lock.lock();
+        let _geometry_guard = missing_manifest_kura.lane_geometry_lock.lock();
+        let _sidecar_guard = missing_manifest_kura.sidecar_lock.lock();
+        let namespace = missing_manifest_kura
+            .native_amx_evidence_namespace_for_entry(&missing_manifest_entry)
+            .expect("bind missing-manifest Native evidence namespace");
+        let before = fs::read(&missing_receipt_temp)
+            .expect("snapshot residual receipt temporary before startup recovery");
+        let error = missing_manifest_kura
+            .recover_native_amx_evidence_publication_temp_locked(
+                &missing_manifest_entry,
+                &namespace,
+                NativeAmxEvidenceRecoveryPhase::Startup,
+            )
+            .expect_err("startup must not promote a receipt temporary without its manifest");
+        assert!(
+            error.to_string().contains("stable manifest"),
+            "unexpected missing-manifest receipt recovery error: {error}"
+        );
+        assert_eq!(
+            fs::read(&missing_receipt_temp).expect("reread deferred receipt temporary"),
+            before
+        );
+        assert!(!missing_receipt_path.exists());
+    }
+
+    #[test]
+    fn native_amx_manifest_temp_requires_qc_authenticated_finality_before_promotion() {
+        let temp_dir = TempDir::new().expect("forged Native manifest temporary directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("initialize forged Native manifest temporary Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("forged Native manifest temporary lane entry");
+        let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        let manifest_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+        let manifest_temp = manifest_path.with_extension("norito.tmp");
+        let manifest_bytes = fs::read(&manifest_path).expect("read authenticated Native manifest");
+        let mut forged = norito::decode_canonical::<
+            NativeAmxParticipantApplicationManifestArtifactV1,
+        >(&manifest_bytes)
+        .expect("decode authenticated Native manifest");
+        forged.finality_artifact_hash = HashOf::from_untyped_unchecked(Hash::new(
+            b"forged Native manifest temporary finality",
+        ));
+        let forged_bytes = forged
+            .encode_framed()
+            .expect("encode structurally valid forged Native manifest");
+        fs::remove_file(&manifest_path).expect("remove stable Native manifest");
+        fs::write(&manifest_temp, &forged_bytes).expect("stage forged Native manifest temporary");
+        std::fs::File::open(&manifest_temp)
+            .expect("open forged Native manifest temporary")
+            .sync_all()
+            .expect("sync forged Native manifest temporary");
+        sync_dir(
+            manifest_temp
+                .parent()
+                .expect("forged Native manifest evidence directory"),
+        )
+        .expect("sync forged Native manifest evidence directory");
+
+        let _prune_guard = kura.prune_lock.lock();
+        let _canonical_chain_guard = kura.canonical_chain_lock.lock();
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let _sidecar_guard = kura.sidecar_lock.lock();
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .expect("bind forged Native manifest evidence namespace");
+        let error = kura
+            .recover_native_amx_evidence_publication_temp_locked(
+                &entry,
+                &namespace,
+                NativeAmxEvidenceRecoveryPhase::ManifestPublication,
+            )
+            .expect_err("a structurally valid manifest without matching finality must fail");
+        assert!(
+            error.to_string().contains("authenticated by available finality"),
+            "unexpected forged Native manifest temporary error: {error}"
+        );
+        assert_eq!(
+            fs::read(&manifest_temp).expect("reread forged Native manifest temporary"),
+            forged_bytes,
+            "failed authentication must retain the exact temporary for forensics"
+        );
+        assert!(
+            !manifest_path.exists(),
+            "unauthenticated Native manifest temporary must not be promoted"
+        );
+    }
+
+    #[test]
+    fn native_amx_receipt_temp_requires_manifest_finality_before_promotion() {
+        let temp_dir = TempDir::new().expect("unbacked Native receipt temporary directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("initialize unbacked Native receipt temporary Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("unbacked Native receipt temporary lane entry");
+        let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        let receipt_path =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+        let receipt_temp = receipt_path.with_extension("norito.tmp");
+        let receipt_bytes = fs::read(&receipt_path).expect("read authenticated Native receipt");
+        fs::remove_file(&receipt_path).expect("remove stable Native receipt");
+        fs::write(&receipt_temp, &receipt_bytes).expect("stage unbacked Native receipt temporary");
+        std::fs::File::open(&receipt_temp)
+            .expect("open unbacked Native receipt temporary")
+            .sync_all()
+            .expect("sync unbacked Native receipt temporary");
+        kura.remove_v2_finality_without_binding_for_tests(receipt.application_block_height)
+            .expect("remove finality backing the Native receipt temporary");
+        sync_dir(
+            receipt_temp
+                .parent()
+                .expect("unbacked Native receipt evidence directory"),
+        )
+        .expect("sync unbacked Native receipt evidence directory");
+
+        let _prune_guard = kura.prune_lock.lock();
+        let _canonical_chain_guard = kura.canonical_chain_lock.lock();
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let _sidecar_guard = kura.sidecar_lock.lock();
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .expect("bind unbacked Native receipt evidence namespace");
+        let error = kura
+            .recover_native_amx_evidence_publication_temp_locked(
+                &entry,
+                &namespace,
+                NativeAmxEvidenceRecoveryPhase::ReceiptPublication,
+            )
+            .expect_err("a receipt temporary without authenticated finality must fail");
+        assert!(
+            error.to_string().contains("authenticated by available finality"),
+            "unexpected unbacked Native receipt temporary error: {error}"
+        );
+        assert_eq!(
+            fs::read(&receipt_temp).expect("reread unbacked Native receipt temporary"),
+            receipt_bytes,
+            "failed authentication must retain the exact receipt temporary for forensics"
+        );
+        assert!(
+            !receipt_path.exists(),
+            "unbacked Native receipt temporary must not be promoted"
+        );
+    }
+
+    #[test]
+    fn native_amx_redundant_temp_is_not_deleted_before_finality_authentication() {
+        let temp_dir = TempDir::new().expect("redundant Native temporary directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("initialize redundant Native temporary Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("redundant Native temporary lane entry");
+        let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        let manifest_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+        let manifest_temp = manifest_path.with_extension("norito.tmp");
+        let manifest_bytes = fs::read(&manifest_path).expect("read stable Native manifest");
+        fs::write(&manifest_temp, &manifest_bytes).expect("stage redundant Native manifest temp");
+        std::fs::File::open(&manifest_temp)
+            .expect("open redundant Native manifest temp")
+            .sync_all()
+            .expect("sync redundant Native manifest temp");
+        kura.remove_v2_finality_without_binding_for_tests(receipt.application_block_height)
+            .expect("remove finality before redundant-temp recovery");
+        sync_dir(
+            manifest_temp
+                .parent()
+                .expect("redundant Native manifest evidence directory"),
+        )
+        .expect("sync redundant Native manifest evidence directory");
+
+        let _prune_guard = kura.prune_lock.lock();
+        let _canonical_chain_guard = kura.canonical_chain_lock.lock();
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let _sidecar_guard = kura.sidecar_lock.lock();
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .expect("bind redundant Native evidence namespace");
+        let error = kura
+            .recover_native_amx_evidence_publication_temp_locked(
+                &entry,
+                &namespace,
+                NativeAmxEvidenceRecoveryPhase::ManifestPublication,
+            )
+            .expect_err("redundant temporary cleanup must authenticate finality first");
+        assert!(
+            error.to_string().contains("authenticated by available finality"),
+            "unexpected redundant Native temporary error: {error}"
+        );
+        assert_eq!(
+            fs::read(&manifest_path).expect("reread stable Native manifest"),
+            manifest_bytes
+        );
+        assert_eq!(
+            fs::read(&manifest_temp).expect("reread redundant Native manifest temporary"),
+            manifest_bytes,
+            "unauthenticated redundant temporary must remain untouched"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn native_amx_all_manifest_barrier_does_not_promote_another_routes_receipt_temp() {
+        let block = crate::sumeragi::exec::result_bearing_native_manifest_block_for_tests();
+        let manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+                &block,
+            )
+            .expect("build multi-route Native application manifest");
+        assert!(
+            manifest.entries().len() > 1,
+            "multi-route Native barrier test requires at least two participants"
+        );
+        let finality_artifact_hash = HashOf::from_untyped_unchecked(Hash::new(
+            b"multi-route Native barrier finality placeholder",
+        ));
+        let mut artifacts = Vec::new();
+        for (index, manifest_entry) in manifest.entries().iter().enumerate() {
+            let leaf_index = u32::try_from(index).expect("multi-route leaf index fits u32");
+            let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
+                version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+                leaf: manifest_entry.leaf.clone(),
+                leaf_index,
+                proof: manifest
+                    .proof(leaf_index)
+                    .expect("multi-route Native manifest proof"),
+                manifest_root: manifest.root(),
+                manifest_leaf_count: manifest.count(),
+                finality_artifact_hash,
+            };
+            let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
+                manifest_entry,
+                HashOf::new(&manifest_artifact),
+                finality_artifact_hash,
+            );
+            artifacts.push((manifest_artifact, receipt));
+        }
+        let lane_count = artifacts
+            .iter()
+            .map(|(artifact, _)| artifact.leaf.lane_id.as_u32())
+            .max()
+            .expect("multi-route Native artifacts are non-empty")
+            .checked_add(1)
+            .and_then(NonZeroU32::new)
+            .expect("multi-route Native lane bound is non-zero");
+        let lanes = std::iter::once(ModelLaneConfig::default())
+            .chain(artifacts.iter().enumerate().map(|(index, (artifact, _))| {
+                ModelLaneConfig {
+                    id: artifact.leaf.lane_id,
+                    dataspace_id: artifact.leaf.dataspace_id,
+                    alias: format!("native-barrier-participant-{index}"),
+                    ..ModelLaneConfig::default()
+                }
+            }))
+            .collect::<Vec<_>>();
+        let catalog =
+            LaneCatalog::new(lane_count, lanes).expect("build multi-route Native barrier catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let temp_dir = TempDir::new().expect("multi-route Native barrier Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog)
+            .expect("initialize multi-route Native barrier Kura");
+        for (artifact, _) in &artifacts {
+            let entry = kura
+                .lane_storage_entry(artifact.leaf.lane_id)
+                .expect("multi-route Native barrier lane entry");
+            kura.install_lane_incarnation_marker_for_test(
+                &entry,
+                artifact.leaf.lane_incarnation,
+                0,
+            )
+            .expect("install multi-route Native barrier incarnation");
+        }
+
+        let (residual_manifest, residual_receipt) = artifacts
+            .last()
+            .expect("multi-route Native barrier residual route");
+        let residual_entry = kura
+            .lane_storage_entry(residual_manifest.leaf.lane_id)
+            .expect("residual Native barrier lane entry");
+        let residual_manifest_path = Kura::native_amx_application_manifest_path_for_entry(
+            &residual_entry,
+            &kura.store_root,
+            residual_manifest.leaf.participant_height,
+        );
+        let residual_receipt_path = Kura::native_amx_participant_receipt_path_for_entry(
+            &residual_entry,
+            &kura.store_root,
+            residual_manifest.leaf.participant_height,
+        );
+        let residual_receipt_temp = residual_receipt_path.with_extension("norito.tmp");
+        fs::write(
+            &residual_manifest_path,
+            residual_manifest
+                .encode_framed()
+                .expect("encode residual Native manifest"),
+        )
+        .expect("persist residual route manifest");
+        let residual_receipt_bytes = residual_receipt
+            .encode_framed()
+            .expect("encode residual Native receipt");
+        fs::write(&residual_receipt_temp, &residual_receipt_bytes)
+            .expect("stage residual route receipt temporary");
+        std::fs::File::open(&residual_receipt_temp)
+            .expect("open residual route receipt temporary")
+            .sync_all()
+            .expect("sync residual route receipt temporary");
+        sync_dir(
+            residual_manifest_path
+                .parent()
+                .expect("residual Native evidence directory"),
+        )
+        .expect("sync residual Native evidence directory");
+
+        let plan = NativeAmxParticipantApplicationEvidencePlan {
+            application_block_height: block.header().height().get(),
+            application_block_hash: block.hash(),
+            executed_block_wire_hash: manifest.executed_block_wire_hash(),
+            finality_artifact_hash,
+            manifest_root: manifest.root(),
+            manifest_leaf_count: manifest.count(),
+            artifacts,
+        };
+        let _prune_guard = kura.prune_lock.lock();
+        let error = kura
+            .read_back_native_amx_plan_manifests_under_publication_guard(&plan)
+            .expect_err("missing first-route manifest must stop the all-manifest barrier");
+        assert!(
+            error.to_string().contains("read-back is incomplete"),
+            "unexpected multi-route Native manifest barrier error: {error}"
+        );
+        assert_eq!(
+            fs::read(&residual_receipt_temp)
+                .expect("reread residual receipt temporary after failed barrier"),
+            residual_receipt_bytes
+        );
+        assert!(
+            !residual_receipt_path.exists(),
+            "failed all-manifest read-back must not promote another route's receipt temporary"
+        );
+    }
+
+    #[test]
+    fn native_amx_configured_shared_two_family_budget_accepts_exact_boundaries_only() {
+        let temp_dir = TempDir::new().expect("configured Native evidence budget directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let mut limits = SumeragiV2RuntimeLimits::default();
+        limits.pending_control_sidecar_bytes =
+            NonZeroUsize::new(V2_PENDING_CONTROL_SIDECAR_BYTES_MIN)
+                .expect("configured Native evidence byte minimum");
+        let (kura, _) = open_configured_kura_with_pending_limits(&config, &limits)
+            .expect("open Kura with configured Native evidence budget");
+        let shared_bytes = u64::try_from(V2_PENDING_CONTROL_SIDECAR_BYTES_MIN)
+            .expect("configured Native evidence budget fits u64");
+        assert_eq!(
+            kura.native_amx_participant_evidence_file_bytes(),
+            shared_bytes
+        );
+        assert_eq!(
+            kura.native_amx_participant_evidence_startup_bytes()
+                .expect("configured Native startup budget"),
+            shared_bytes
+                .checked_mul(2)
+                .expect("configured Native transient headroom fits u64")
+        );
+        let manifest_bytes = shared_bytes / 2;
+        let receipt_bytes = shared_bytes - manifest_bytes;
+        assert!(kura.native_amx_participant_evidence_pair_fits_stable_bytes(
+            usize::try_from(manifest_bytes).expect("manifest boundary fits usize"),
+            usize::try_from(receipt_bytes).expect("receipt boundary fits usize"),
+        ));
+        assert!(!kura.native_amx_participant_evidence_pair_fits_stable_bytes(
+            usize::try_from(manifest_bytes).expect("manifest boundary fits usize"),
+            usize::try_from(receipt_bytes + 1).expect("receipt overflow fits usize"),
+        ));
+        assert_eq!(
+            kura.native_amx_evidence_prune_intent_max_bytes(),
+            Kura::native_amx_evidence_prune_intent_max_bytes_for_retention(
+                config.roster_sidecar_retention,
+                V2_PENDING_CONTROL_SIDECAR_BYTES_MIN,
+            )
+            .expect("configured Native prune-intent budget")
+        );
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("configured Native evidence lane entry");
+        let manifest_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+        let receipt_path =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+        fs::File::create(&manifest_path)
+            .expect("create boundary Native manifest")
+            .set_len(manifest_bytes)
+            .expect("size boundary Native manifest");
+        fs::File::create(&receipt_path)
+            .expect("create boundary Native receipt")
+            .set_len(receipt_bytes)
+            .expect("size boundary Native receipt");
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let _sidecar_guard = kura.sidecar_lock.lock();
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .expect("bind configured Native evidence namespace");
+        kura.inventory_native_amx_evidence_files_locked(&namespace, false)
+            .expect("exact shared stable manifest/receipt boundary is admissible");
+        fs::File::options()
+            .write(true)
+            .open(&receipt_path)
+            .expect("open boundary Native receipt")
+            .set_len(receipt_bytes + 1)
+            .expect("grow combined stable evidence one byte past configured boundary");
+        let error = kura
+            .inventory_native_amx_evidence_files_locked(&namespace, false)
+            .expect_err("shared stable Native evidence aggregate overflow must fail");
+        assert!(
+            error.to_string().contains("shared aggregate byte bound"),
+            "unexpected configured Native evidence boundary error: {error}"
+        );
+        fs::File::options()
+            .write(true)
+            .open(&receipt_path)
+            .expect("restore boundary Native receipt")
+            .set_len(receipt_bytes)
+            .expect("restore exact stable Native boundary");
+
+        let transient_manifest = Kura::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &kura.store_root,
+            2,
+        )
+        .with_extension("norito.tmp");
+        let transient_receipt = Kura::native_amx_participant_receipt_path_for_entry(
+            &entry,
+            &kura.store_root,
+            2,
+        )
+        .with_extension("norito.tmp");
+        fs::File::create(&transient_manifest)
+            .expect("create transient Native manifest")
+            .set_len(manifest_bytes)
+            .expect("size transient Native manifest");
+        fs::File::create(&transient_receipt)
+            .expect("create transient Native receipt")
+            .set_len(receipt_bytes)
+            .expect("size transient Native receipt");
+        kura.inventory_native_amx_evidence_files_locked(&namespace, true)
+            .expect("one exact shared pair of transient headroom is admissible");
+        fs::File::options()
+            .write(true)
+            .open(&transient_receipt)
+            .expect("open transient Native receipt")
+            .set_len(receipt_bytes + 1)
+            .expect("grow transient pair one byte past its shared headroom");
+        let error = kura
+            .inventory_native_amx_evidence_files_locked(&namespace, true)
+            .expect_err("shared transient Native evidence aggregate overflow must fail");
+        assert!(
+            error.to_string().contains("shared aggregate byte bound"),
+            "unexpected configured Native transient boundary error: {error}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_change() {
+        let block = crate::sumeragi::exec::result_bearing_native_manifest_block_for_tests();
+        let manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+                &block,
+            )
+            .expect("build canonical Native application manifest");
+        let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
+            Hash::new(b"Native frontier token parent state"),
+            Hash::new(b"Native frontier token post state"),
+            Hash::new(b"Native frontier token ordinary writes"),
+            None,
+            0,
+            iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            manifest.root(),
+            manifest.count(),
+            manifest.executed_block_wire_hash(),
+        )
+        .expect("build Native frontier token execution commitment");
+        let roster = v2_finality_fixture_keys()
+            .iter()
+            .map(|keypair| ValidatorPower {
+                validator: PeerId::new(keypair.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let context = HeightContext {
+            chain_id: ChainId::from("native-frontier-token-test"),
+            protocol_version: PROTOCOL_VERSION,
+            height: block.header().height().get(),
+            epoch: 0,
+            epoch_end_height: block.header().height().get(),
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: DualQuorum::from_roster(&roster).expect("Native frontier token quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"Native frontier token AMX context"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0xA5; 32],
+        };
+        let subject = BlockSubject {
+            parent_block_hash: block.header().prev_block_hash(),
+            block_hash: block.hash(),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("hash Native frontier proposal wire"),
+        };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: block.header().height().get(),
+            view: block.header().view_change_index(),
+        };
+        let commit_qc = QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        };
+        let finality = V2FinalityArtifact::new(context, subject, commit_qc, Vec::new());
+        let finality_artifact_hash = HashOf::new(&finality);
+        let mut artifacts = Vec::new();
+        let mut identities = Vec::new();
+        for (index, entry) in manifest.entries().iter().enumerate() {
+            let leaf_index = u32::try_from(index).expect("Native frontier leaf index fits u32");
+            let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
+                version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+                leaf: entry.leaf.clone(),
+                leaf_index,
+                proof: manifest.proof(leaf_index).expect("Native frontier proof"),
+                manifest_root: manifest.root(),
+                manifest_leaf_count: manifest.count(),
+                finality_artifact_hash,
+            };
+            let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
+                entry,
+                HashOf::new(&manifest_artifact),
+                finality_artifact_hash,
+            );
+            identities.push(
+                NativeAmxParticipantApplicationPrepublicationIdentity::from_artifacts(
+                    &manifest_artifact,
+                    &receipt,
+                )
+                .expect("project Native frontier prepublication identity"),
+            );
+            artifacts.push((manifest_artifact, receipt));
+        }
+        let plan = NativeAmxParticipantApplicationEvidencePlan {
+            application_block_height: block.header().height().get(),
+            application_block_hash: block.hash(),
+            executed_block_wire_hash: manifest.executed_block_wire_hash(),
+            finality_artifact_hash,
+            manifest_root: manifest.root(),
+            manifest_leaf_count: manifest.count(),
+            artifacts,
+        };
+        let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(&plan, identities)
+            .expect("build Native frontier prepublication token");
+        let frontiers = manifest
+            .entries()
+            .iter()
+            .map(|entry| {
+                let leaf = &entry.leaf;
+                crate::state::AppliedNativeAmxParticipantFrontierMarker {
+                    version: 2,
+                    lane_id: leaf.lane_id,
+                    dataspace_id: leaf.dataspace_id,
+                    lane_incarnation: leaf.lane_incarnation,
+                    lane_block_height: leaf.participant_height,
+                    participant_view: leaf.participant_view,
+                    previous_lane_block_height: leaf.predecessor_height,
+                    previous_lane_block_descriptor_hash: leaf.predecessor_descriptor_hash,
+                    lane_block_descriptor_hash: leaf.descriptor_hash,
+                    participant_proposal_hash: leaf.proposal_hash,
+                    participant_settlement_hash: leaf.settlement_hash,
+                    application_block_height: leaf.application_block_height,
+                    application_block_hash: leaf.application_block_hash,
+                    source_count: u64::try_from(leaf.members.len())
+                        .expect("Native frontier source count fits u64"),
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(token.authenticates_state_frontiers(
+            &block, &manifest, &finality, &frontiers
+        ));
+
+        let mutations: [fn(&mut crate::state::AppliedNativeAmxParticipantFrontierMarker); 14] = [
+            |marker| marker.version ^= 1,
+            |marker| marker.lane_id = LaneId::new(marker.lane_id.as_u32().wrapping_add(1)),
+            |marker| {
+                marker.dataspace_id =
+                    DataSpaceId::new(marker.dataspace_id.as_u64().wrapping_add(1));
+            },
+            |marker| marker.lane_incarnation = Hash::new(b"frontier incarnation drift"),
+            |marker| marker.lane_block_height = marker.lane_block_height.saturating_add(1),
+            |marker| marker.participant_view = marker.participant_view.saturating_add(1),
+            |marker| {
+                marker.previous_lane_block_height =
+                    marker.previous_lane_block_height.saturating_add(1);
+            },
+            |marker| {
+                marker.previous_lane_block_descriptor_hash =
+                    Some(Hash::new(b"frontier predecessor drift"));
+            },
+            |marker| marker.lane_block_descriptor_hash = Hash::new(b"frontier descriptor drift"),
+            |marker| marker.participant_proposal_hash = Hash::new(b"frontier proposal drift"),
+            |marker| {
+                marker.participant_settlement_hash =
+                    HashOf::from_untyped_unchecked(Hash::new(b"frontier settlement drift"));
+            },
+            |marker| {
+                marker.application_block_height =
+                    marker.application_block_height.saturating_add(1);
+            },
+            |marker| {
+                marker.application_block_hash =
+                    HashOf::from_untyped_unchecked(Hash::new(b"frontier block drift"));
+            },
+            |marker| marker.source_count = marker.source_count.saturating_add(1),
+        ];
+        for mutate in mutations {
+            let mut drifted = frontiers.clone();
+            mutate(
+                drifted
+                    .first_mut()
+                    .expect("Native frontier fixture is non-empty"),
+            );
+            assert!(
+                !token.authenticates_state_frontiers(&block, &manifest, &finality, &drifted),
+                "every Native State frontier field must be exact"
+            );
+        }
+        assert!(
+            frontiers.len() > 1,
+            "Native frontier order test requires multiple participant routes"
+        );
+        let mut reordered = frontiers.clone();
+        reordered.swap(0, 1);
+        assert!(!token.authenticates_state_frontiers(
+            &block, &manifest, &finality, &reordered
+        ));
+    }

@@ -1,0 +1,26 @@
+{
+  "id": "sns/local-to-global-toolkit",
+  "title": "Local → Global Address Toolkit",
+  "description": "This page mirrors docs/source/sns/localtoglobaltoolkit.md",
+  "source": "@site/docs/sns/local-to-global-toolkit.md",
+  "sourceDirName": "sns",
+  "slug": "/sns/local-to-global-toolkit",
+  "permalink": "/next/sns/local-to-global-toolkit",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sns/local-to-global-toolkit.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Local → Global Address Toolkit"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "bulk-onboarding-toolkit",
+    "permalink": "/next/sns/bulk-onboarding-toolkit"
+  },
+  "next": {
+    "title": "EU DSA (Mar 2026)",
+    "permalink": "/next/sns/regulatory/regulatory-eu-dsa-2026-03"
+  }
+}

@@ -3,7 +3,7 @@
 Wrapper around `cargo xtask ministry-transparency sanitize`.
 
 This script keeps the command-line surface documented in
-`docs/source/ministry/transparency_plan.md` so release engineers can call a
+`specs/ministry/transparency_plan.md` so release engineers can call a
 single entry point when generating the DP-sanitised metrics + audit report.
 """
 

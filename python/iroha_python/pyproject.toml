@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "iroha-python"
 version = "0.0.1"
-description = "Python SDK for interacting with Hyperledger Iroha v2 nodes."
+description = "Python SDK for interacting with Hyperledger Iroha 3 nodes."
 readme = "README.md"
 authors = [{name = "Hyperledger Iroha Contributors"}]
 license = {text = "Apache-2.0"}
@@ -18,7 +18,6 @@ dependencies = [
 ]
 keywords = ["iroha", "sdk", "blockchain", "norito"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python",
@@ -52,6 +51,9 @@ exclude = [
   "src/**/*.so",
   "src/**/*.dylib",
   "src/**/*.pyd",
+  "src/**/__pycache__/**",
+  "src/**/*.pyc",
+  "src/**/*.pyo",
 ]
 include = [
   "src/iroha_python/examples/connect_app_metadata.json",

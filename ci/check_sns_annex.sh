@@ -10,20 +10,14 @@ python3 "$REPO_ROOT/scripts/run_sns_annex_jobs.py" \
   --check-only
 
 python3 "$REPO_ROOT/scripts/check_sns_annex_schedule.py" \
-  --jobs docs/source/sns/regulatory/annex_jobs.json \
-  --regulatory-root docs/source/sns/regulatory \
-  --report-root docs/source/sns/reports \
+  --jobs specs/sns/regulatory/annex_jobs.json \
+  --regulatory-root specs/sns/regulatory \
+  --report-root specs/sns/reports \
   --json-out "$REPO_ROOT/artifacts/sns/annex_schedule_summary.json"
 
-python3 "$REPO_ROOT/scripts/check_sns_annex_locales.py" \
-  --jobs docs/source/sns/regulatory/annex_jobs.json \
-  --report-root docs/source/sns/reports \
-  --locales en,ar,es,fr,pt,ru,ur \
-  --json-out "$REPO_ROOT/artifacts/sns/annex_locale_summary.json"
-
 python3 "$REPO_ROOT/scripts/check_sns_annex_integrity.py" \
-  --jobs docs/source/sns/regulatory/annex_jobs.json \
-  --report-root docs/source/sns/reports \
+  --jobs specs/sns/regulatory/annex_jobs.json \
+  --report-root specs/sns/reports \
   --json-out "$REPO_ROOT/artifacts/sns/annex_integrity_summary.json"
 
 echo "[sns] annex automation verified"

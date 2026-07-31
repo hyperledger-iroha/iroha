@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/chunker-conformance",
+  "title": "SoraFS Chunker Conformance Guide",
+  "description": "Requirements and workflows for preserving the deterministic SF1 chunker profile across fixtures and SDKs.",
+  "source": "@site/docs/sorafs/chunker-conformance.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/chunker-conformance",
+  "permalink": "/next/sorafs/chunker-conformance",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/chunker-conformance.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "chunker-conformance",
+    "title": "SoraFS Chunker Conformance Guide",
+    "sidebar_label": "Chunker Conformance",
+    "description": "Requirements and workflows for preserving the deterministic SF1 chunker profile across fixtures and SDKs."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Chunker Authoring Guide",
+    "permalink": "/next/sorafs/chunker-profile-authoring"
+  },
+  "next": {
+    "title": "Chunker Rollout Checklist",
+    "permalink": "/next/sorafs/chunker-registry-rollout-checklist"
+  }
+}

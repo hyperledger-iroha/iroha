@@ -1,0 +1,28 @@
+{
+  "id": "nexus/nexus-lane-model",
+  "title": "Nexus lane model",
+  "description": "Logical lane taxonomy, configuration geometry, and world-state merge rules for Sora Nexus.",
+  "source": "@site/docs/nexus/lane-model.md",
+  "sourceDirName": "nexus",
+  "slug": "/nexus/nexus-lane-model",
+  "permalink": "/next/nexus/nexus-lane-model",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/nexus/lane-model.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "nexus-lane-model",
+    "title": "Nexus lane model",
+    "description": "Logical lane taxonomy, configuration geometry, and world-state merge rules for Sora Nexus."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Sora Nexus technical specification",
+    "permalink": "/next/nexus/nexus-spec"
+  },
+  "next": {
+    "title": "Default Lane Quickstart",
+    "permalink": "/next/nexus/nexus-default-lane-quickstart"
+  }
+}

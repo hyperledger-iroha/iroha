@@ -16,7 +16,7 @@ else
 fi
 export JAVA_BIN
 
-readonly proof_ledger="docs/formal/sumeragi_v2/proof_coverage.json"
+readonly proof_ledger="formal/sumeragi_v2/proof_coverage.json"
 readonly proof_evidence="target/formal/sumeragi_v2/proof_evidence.json"
 readonly verus_evidence="target/formal/sumeragi_v2/verus_evidence.json"
 readonly cross_tool_evidence="target/formal/sumeragi_v2/cross_tool_evidence.json"
@@ -57,6 +57,7 @@ bash scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh
 bash scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh
 bash scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh
 bash scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh
+bash scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh
 bash scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh
 bash scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh
 bash scripts/formal/run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh

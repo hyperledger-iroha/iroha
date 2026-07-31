@@ -8,8 +8,8 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_DIR="${OUT_DIR:-${ROOT}/artifacts/android/telemetry}"
 JSON_OUT="${OUT_DIR}/override_events_summary_${STAMP}.json"
 MD_OUT="${OUT_DIR}/override_events_summary_${STAMP}.md"
-EVENTS="${EVENTS_PATH:-${ROOT}/docs/source/sdk/android/readiness/override_logs/override_events.ndjson}"
-LEDGER="${LEDGER_PATH:-${ROOT}/docs/source/sdk/android/telemetry_override_log.md}"
+EVENTS="${EVENTS_PATH:-${ROOT}/specs/sdk/android/readiness/override_logs/override_events.ndjson}"
+LEDGER="${LEDGER_PATH:-${ROOT}/specs/sdk/android/telemetry_override_log.md}"
 
 mkdir -p "${OUT_DIR}"
 

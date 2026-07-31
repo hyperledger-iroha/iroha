@@ -49,9 +49,10 @@ impl std::error::Error for PopRuntimeStartupError {
 /// Build the `PoP` runtime from public config and one deployment-owned registry.
 ///
 /// The Torii constructor validates the exact configured provider handle,
-/// revision, policy digest, resolved HSM identity, and wallet wrapping-key
-/// identity before opening durable service state. It also guards every
-/// resolved provider operation against qualification drift.
+/// revision, policy digest, resolved HSM identity, enrollment-recipient public
+/// key digest, and wallet wrapping-key identity before opening durable service
+/// state. It also guards every resolved provider operation against
+/// qualification drift.
 ///
 /// # Errors
 ///
@@ -95,12 +96,16 @@ mod tests {
         PopFinalizedTimeProviderErrorV1, PopFinalizedTimeProviderV1, PopFinalizedTimeSampleV1,
         PopIssuanceDraftProviderV1, PopPrivateMaterialProviderErrorV1, PopWalletWitnessProviderV1,
     };
-    use rand::rngs::OsRng;
+    use rand::{
+        SeedableRng as _,
+        rngs::{OsRng, StdRng},
+    };
     use sorafs_manifest::pop_credentials::PopMembershipWitnessV1;
     use sorafs_node::pop_credentials::{
         PopAuthenticatedPrincipalV1, PopCredentialApiActionV1, PopCredentialApiAuthenticator,
         PopFinalizedRegistryProjectionV1, PopFinalizedRegistryReader, PopIssuanceDraftV1,
         PopIssuerHsm, PopRegistryOperationV1, PopRegistrySubmitter, PopWalletKeyWrapper,
+        pop_enrollment_recipient_public_key_digest_v1,
     };
 
     use super::*;
@@ -312,7 +317,13 @@ mod tests {
             .expect("Ed25519 public key width")
     }
 
+    fn enrollment_recipient_key() -> HybridKeyPair {
+        let mut rng = StdRng::from_seed([0x31; 32]);
+        HybridKeyPair::generate(&mut rng).expect("deterministic enrollment recipient key")
+    }
+
     fn service_config(root: &Path) -> SorafsPopCredentialService {
+        let enrollment_recipient = enrollment_recipient_key();
         SorafsPopCredentialService {
             issuer_state_dir: root.join("issuer"),
             wallet_state_dir: root.join("wallet"),
@@ -321,6 +332,9 @@ mod tests {
             issuer_hsm_key_id: "pkcs11:pop/issuer:primary".to_owned(),
             issuer_public_key: ed25519_public_key(0x41),
             enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
+            enrollment_recipient_public_key_digest: pop_enrollment_recipient_public_key_digest_v1(
+                enrollment_recipient.public(),
+            ),
             wallet_wrapping_key_id: "kms:pop/wallet:primary".to_owned(),
             runtime_provider_registry_handle: "runtime:pop:providers:primary".to_owned(),
             runtime_provider_registry_revision: 7,
@@ -364,9 +378,8 @@ mod tests {
         stale_or_revoked: bool,
         drift_after_first_qualification: bool,
     ) -> Arc<TestProviderRegistry> {
+        let enrollment_recipient = enrollment_recipient_key();
         let mut rng = OsRng;
-        let enrollment_recipient =
-            HybridKeyPair::generate(&mut rng).expect("enrollment recipient key");
         let wallet_recipient = HybridKeyPair::generate(&mut rng).expect("wallet recipient key");
         Arc::new(TestProviderRegistry {
             handle: handle.into(),
@@ -484,6 +497,10 @@ mod tests {
         assert_eq!(
             observed.enrollment_recipient_key_id(),
             config.enrollment_recipient_key_id
+        );
+        assert_eq!(
+            observed.enrollment_recipient_public_key_digest(),
+            config.enrollment_recipient_public_key_digest
         );
         assert_eq!(
             observed.wallet_wrapping_key_id(),

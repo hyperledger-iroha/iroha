@@ -1,15 +1,22 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 
-import {
-  ToriiClient as DistToriiClient,
-  __sumeragiNativeAmxTestHelpers as distNativeAmxTestHelpers,
-} from "../dist/toriiClient.js";
 import {
   ToriiClient as SourceToriiClient,
   __sumeragiNativeAmxTestHelpers as sourceNativeAmxTestHelpers,
 } from "../src/toriiClient.js";
+
+const distToriiClientPath =
+  process.env.IROHA_JS_NATIVE_AMX_V2_PARITY_DIST_TORII_CLIENT;
+const distToriiClientUrl = distToriiClientPath
+  ? pathToFileURL(distToriiClientPath)
+  : new URL("../dist/toriiClient.js", import.meta.url);
+const {
+  ToriiClient: DistToriiClient,
+  __sumeragiNativeAmxTestHelpers: distNativeAmxTestHelpers,
+} = await import(distToriiClientUrl);
 
 const fixtureUrl = new URL(
   "../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json",

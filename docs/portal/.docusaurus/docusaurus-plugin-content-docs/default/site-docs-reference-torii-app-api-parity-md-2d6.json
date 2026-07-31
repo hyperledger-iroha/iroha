@@ -1,0 +1,19 @@
+{
+  "id": "reference/torii-app-api-parity",
+  "title": "Torii app API parity audit",
+  "description": "Mirror of the TORII-APP-1 review so SDK and platform teams can confirm public coverage.",
+  "source": "@site/docs/reference/torii-app-api-parity.md",
+  "sourceDirName": "reference",
+  "slug": "/reference/torii-app-api-parity",
+  "permalink": "/next/reference/torii-app-api-parity",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/reference/torii-app-api-parity.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "torii-app-api-parity",
+    "title": "Torii app API parity audit",
+    "description": "Mirror of the TORII-APP-1 review so SDK and platform teams can confirm public coverage."
+  }
+}

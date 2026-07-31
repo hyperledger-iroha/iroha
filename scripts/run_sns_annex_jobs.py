@@ -14,7 +14,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--jobs",
-        default="docs/source/sns/regulatory/annex_jobs.json",
+        default="specs/sns/regulatory/annex_jobs.json",
         help="Path to the JSON file describing annex jobs.",
     )
     parser.add_argument(
@@ -93,7 +93,7 @@ def sanitize_suffix_for_path(suffix: str) -> str:
 
 
 def job_output_path(suffix: str, cycle: str) -> Path:
-    return Path("docs/source/sns/reports") / sanitize_suffix_for_path(suffix) / f"{cycle}.md"
+    return Path("specs/sns/reports") / sanitize_suffix_for_path(suffix) / f"{cycle}.md"
 
 
 def job_dashboard_artifact_path(suffix: str, cycle: str, dashboard_path: Path) -> Path:
@@ -113,18 +113,7 @@ def job_regulatory_entry_path(job: Dict[str, Any]) -> Path:
     if not jurisdiction:
         raise ValueError("job requires `jurisdiction` or explicit `regulatory_entry`")
     cycle = job["cycle"]
-    return Path("docs/source/sns/regulatory") / jurisdiction / f"{cycle}.md"
-
-
-def job_portal_entry_path(job: Dict[str, Any]) -> Optional[Path]:
-    if "portal_entry" in job:
-        return Path(job["portal_entry"])
-    jurisdiction = job.get("jurisdiction")
-    cycle = job.get("cycle")
-    if not jurisdiction or not cycle:
-        return None
-    candidate = Path("docs/portal/docs/sns/regulatory") / f"{jurisdiction}-{cycle}.md"
-    return candidate if candidate.exists() else None
+    return Path("specs/sns/regulatory") / jurisdiction / f"{cycle}.md"
 
 
 def _normalize_suffix_filter(value: str) -> str:
@@ -192,9 +181,6 @@ def run_job(
 
     regulatory_entry = job_regulatory_entry_path(job)
     ensure_exists(regulatory_entry, "regulatory memo")
-    portal_entry = job_portal_entry_path(job)
-    if portal_entry is not None:
-        ensure_exists(portal_entry, "portal memo")
 
     command = list(runner) + [
         "--suffix",
@@ -210,8 +196,6 @@ def run_job(
         "--regulatory-entry",
         str(regulatory_entry),
     ]
-    if portal_entry is not None:
-        command += ["--portal-entry", str(portal_entry)]
     if verbose or dry_run:
         print(" ".join(shlex.quote(arg) for arg in command))
     if not dry_run:
@@ -340,13 +324,6 @@ def validate_job(
             file=sys.stderr,
         )
         return
-    portal_entry = job_portal_entry_path(job)
-    if portal_entry is not None and not portal_entry.exists():
-        print(
-            f"[sns-annex] skipping {suffix}/{cycle}: portal memo missing at {portal_entry}",
-            file=sys.stderr,
-        )
-        return
 
     marker_id = regulatory_marker_id(suffix, cycle)
     annex_path = _relative_to_root(output, base_dir)
@@ -354,8 +331,6 @@ def validate_job(
     digest = _sha256_file(artifact)
 
     _validate_annex_block(regulatory_entry, marker_id, annex_path, artifact_path, digest)
-    if portal_entry is not None:
-        _validate_annex_block(portal_entry, marker_id, annex_path, artifact_path, digest)
 
 
 def validate_jobs(

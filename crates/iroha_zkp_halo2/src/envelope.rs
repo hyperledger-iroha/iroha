@@ -2,7 +2,7 @@
 //!
 //! The envelope format is a thin binary header followed by flattened public
 //! inputs and the raw Halo2 transcript bytes. It mirrors the specification in
-//! `docs/source/confidential_assets.md`.
+//! `specs/confidential_assets.md`.
 
 use core::mem::size_of;
 

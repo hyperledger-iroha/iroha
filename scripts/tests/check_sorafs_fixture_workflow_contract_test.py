@@ -268,6 +268,7 @@ def test_fixture_workflow_covers_closed_reference_sdk_inputs() -> None:
     assert expected <= paths
     assert {
         "ci/check_sorafs_fixtures.sh",
+        "fixtures/sorafs_manifest/**",
         "scripts/check_sorafs_reference_sdk_fixtures.py",
         "scripts/tests/check_sorafs_fixture_workflow_contract_test.py",
         "scripts/tests/check_sorafs_reference_sdk_fixtures_test.py",
@@ -290,6 +291,14 @@ def test_reference_sdk_regeneration_is_closed_and_double_run_stable() -> None:
     """Both generators, the signed inventory, and all bytes are checked twice."""
 
     fixture_gate = read("ci/check_sorafs_fixtures.sh")
+    cargo_commands = [
+        line.strip()
+        for line in fixture_gate.splitlines()
+        if line.strip().startswith("cargo ")
+        or line.strip().startswith("NORITO_SKIP_BINDINGS_SYNC=1 cargo ")
+    ]
+    assert cargo_commands
+    assert all("--locked" in command for command in cargo_commands)
     assert (
         fixture_gate.count(
             "python3 scripts/check_sorafs_reference_sdk_fixtures.py"
@@ -298,12 +307,20 @@ def test_reference_sdk_regeneration_is_closed_and_double_run_stable() -> None:
     )
     assert "for fixture_regeneration_pass in 1 2; do" in fixture_gate
     assert "--bin cancel_asset_lock_fixtures" in fixture_gate
+    assert "--bin generate_pdp_fixtures" in fixture_gate
     assert "--bin generate_por_fixtures" in fixture_gate
     assert 'copy_manifest_tree "${pass_root}"' in fixture_gate
     assert 'verify_manifest_tree_paths "${pass_root}"' in fixture_gate
     assert '--output-dir "${pass_root}/appeal_finance"' in fixture_gate
+    assert '--output-dir "${pass_root}/pdp"' in fixture_gate
     assert '--output-dir "${pass_root}"' in fixture_gate
     assert '--inventory "${pass_root}/reference_sdk_validation_inventory_v1.json"' in fixture_gate
+    regeneration_loop = fixture_gate.split(
+        "for fixture_regeneration_pass in 1 2; do", maxsplit=1
+    )[1].split("\ndone\n", maxsplit=1)[0]
+    assert regeneration_loop.index("--bin generate_pdp_fixtures") < (
+        regeneration_loop.index("--bin generate_por_fixtures")
+    )
     assert '"git", "ls-files", "-z", "--", str(source_root)' in fixture_gate
     assert "if actual_paths != tracked_paths:" in fixture_gate
     assert "missing = sorted(tracked_paths - actual_paths)" in fixture_gate
@@ -334,6 +351,16 @@ def test_reference_sdk_regeneration_is_closed_and_double_run_stable() -> None:
     assert "git status --short --untracked-files=all -- fixtures/sorafs_manifest" not in fixture_gate
 
 
+def test_manifest_generator_enables_required_vrf_and_drand_crypto() -> None:
+    """The standalone locked generator must compile without feature unification."""
+
+    manifest = read("crates/sorafs_manifest/Cargo.toml")
+    assert (
+        'iroha_crypto = { workspace = true, default-features = false, '
+        'features = ["application", "bls"] }'
+    ) in manifest
+
+
 def test_por_fixture_generator_has_a_strict_isolated_output_root() -> None:
     """The aggregate generator cannot ambiguously redirect fixture writes."""
 
@@ -361,6 +388,30 @@ def test_por_fixture_generator_has_a_strict_isolated_output_root() -> None:
     assert "bound_output_never_follows_a_parent_substitution" in generator
     assert "output_dir_rejects_missing_duplicate_and_joined_values" in generator
     assert "output_dir_rejects_ambiguous_or_unbounded_paths" in generator
+
+
+def test_pdp_fixture_generator_has_a_strict_isolated_output_root() -> None:
+    """The PDP precursor cannot ambiguously redirect or alias fixture writes."""
+
+    generator = read(
+        "crates/sorafs_manifest/src/bin/generate_pdp_fixtures.rs"
+    )
+    assert "fn parse_args(" in generator
+    assert 'Some("--output-dir")' in generator
+    assert "`--output-dir` may be specified only once" in generator
+    assert "`--output-dir` requires a separate path argument" in generator
+    assert "`--output-dir` path must be valid UTF-8" in generator
+    assert "`--output-dir` path must not be ambiguous with an option" in generator
+    assert "Component::CurDir" in generator
+    assert "Component::ParentDir" in generator
+    assert "MAX_OUTPUT_PATH_BYTES" in generator
+    assert "MAX_OUTPUT_PATH_COMPONENTS" in generator
+    assert "`--output-dir` must name a bounded PDP fixture directory" in generator
+    assert "struct BoundOutputDirectory" in generator
+    assert "require_real_directory_ancestry" in generator
+    assert "same_directory_identity" in generator
+    assert "fn write_fixture_file(" in generator
+    assert "must have exactly one hard link" in generator
 
 
 def test_parity_fixture_snapshot_rejects_missing_inputs() -> None:

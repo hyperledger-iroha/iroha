@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/operations-playbook",
+  "title": "SoraFS Operations Playbook",
+  "description": "Incident response guides and chaos drill procedures for SoraFS operators.",
+  "source": "@site/docs/sorafs/operations-playbook.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/operations-playbook",
+  "permalink": "/next/sorafs/operations-playbook",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/operations-playbook.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "operations-playbook",
+    "title": "SoraFS Operations Playbook",
+    "sidebar_label": "Operations Playbook",
+    "description": "Incident response guides and chaos drill procedures for SoraFS operators."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Observability & SLOs",
+    "permalink": "/next/sorafs/observability-plan"
+  },
+  "next": {
+    "title": "Runbook Index",
+    "permalink": "/next/sorafs/runbooks-index"
+  }
+}

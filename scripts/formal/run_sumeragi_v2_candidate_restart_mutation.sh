@@ -4,8 +4,9 @@ set -euo pipefail
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
 else
@@ -50,11 +51,16 @@ run_green() {
   local module="$2"
   local config="$3"
   local log="$run_dir/${name}.log"
+  local status
+  set +e
   (
     cd "$FORMAL_DIR"
     "${common[@]}" -metadir "$run_dir/${name}" \
       -config "$config" "$module"
   ) >"$log" 2>&1
+  status=$?
+  set -e
+  sumeragi_v2_tlc_assert_fixed_success "$name" "$log" "$status"
   for marker in \
     "TLC2 Version 2.19" \
     "Model checking completed. No error has been found."; do
@@ -72,6 +78,8 @@ run_mutant() {
   local config="$3"
   local invariant="$4"
   local log="$run_dir/${name}.log"
+  local invariant_marker="Error: Invariant ${invariant} is violated."
+  local primary_diagnostic_count
   set +e
   (
     cd "$FORMAL_DIR"
@@ -85,15 +93,26 @@ run_mutant() {
     cat "$log" >&2
     exit 1
   }
-  for marker in \
-    "TLC2 Version 2.19" \
-    "Invariant ${invariant} is violated."; do
-    grep -Fq "$marker" "$log" || {
-      echo "${name} mutation missed expected marker: $marker" >&2
-      cat "$log" >&2
-      exit 1
-    }
-  done
+  sumeragi_v2_tlc_assert_nonzero_state_space "$name" "$log"
+  sumeragi_v2_tlc_assert_exact_line "$name" "$log" "$invariant_marker"
+  sumeragi_v2_tlc_assert_exact_line \
+    "$name" "$log" "Error: The behavior up to this point is:"
+  primary_diagnostic_count="$(
+    grep -Ec \
+      "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+      "$log" || true
+  )"
+  [[ "$primary_diagnostic_count" -eq 1 ]] || {
+    echo "${name} mutation emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+    cat "$log" >&2
+    exit 1
+  }
+  sumeragi_v2_tlc_assert_terminal "$name" "$log"
+  grep -Fq "TLC2 Version 2.19" "$log" || {
+    echo "${name} mutation missed the pinned TLC marker" >&2
+    cat "$log" >&2
+    exit 1
+  }
 }
 
 readonly IDENTITY_MODULE="SumeragiV2CandidateIdentityMutation.tla"

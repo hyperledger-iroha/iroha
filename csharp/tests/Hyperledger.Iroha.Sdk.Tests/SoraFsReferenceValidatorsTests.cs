@@ -1368,7 +1368,7 @@ public sealed class SoraFsReferenceValidatorsTests
             ["category"] = "validation",
             ["message"] = "governance DAG payload accepted",
             ["action"] = null,
-            ["docs_url"] = "docs/portal/docs/sorafs/reference-sdk/errors.md",
+            ["docs_url"] = "https://docs.iroha.tech/",
             ["telemetry_tags"] = new[] { "sorafs.reference.governance_dag" },
             ["context"] = Array.Empty<object>(),
             ["inputs"] = new object[]

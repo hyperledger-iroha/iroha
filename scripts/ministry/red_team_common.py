@@ -7,8 +7,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_TEMPLATE = Path("docs/source/ministry/reports/moderation_red_team_template.md")
-DEFAULT_REPORTS_DIR = Path("docs/source/ministry/reports")
+DEFAULT_TEMPLATE = Path("specs/ministry/reports/moderation_red_team_template.md")
+DEFAULT_REPORTS_DIR = Path("specs/ministry/reports")
 DEFAULT_ARTIFACTS_DIR = Path("artifacts/ministry/red-team")
 
 _SCENARIO_RE = re.compile(r"^(?P<date>\d{8})-(?P<slug>[a-z0-9][a-z0-9-]+)$")

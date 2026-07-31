@@ -51,18 +51,19 @@ use super::{
     LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
     LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact,
     LaneMergeApplicationFrontierV1, MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES,
-    MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES,
-    MergeLedgerCarrierRecord, NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
-    NativeAmxEvidenceKind, NativeAmxParticipantApplicationManifestArtifactV1,
+    MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MergeLedgerCarrierRecord,
+    NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE, NativeAmxEvidenceKind,
+    NativeAmxParticipantApplicationManifestArtifactV1,
     NativeAmxParticipantApplicationReceiptArtifact, RecoveredLaneBlockPayload, Result,
     STRICT_INIT_MAX_BLOCK_BYTES, create_dir_all_with_context, sync_dir,
 };
 #[cfg(test)]
 use super::{
-    AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX, NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX,
-    NATIVE_AMX_EVIDENCE_FILE_SUFFIX, NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS,
-    OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE, OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
-    SidecarIndexEntry, V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
+    AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX, DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES,
+    NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX, NATIVE_AMX_EVIDENCE_FILE_SUFFIX,
+    NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS, OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
+    OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE, SidecarIndexEntry,
+    V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
 };
 
 const JOURNAL_VERSION: u8 = 6;
@@ -108,8 +109,8 @@ const LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE: usize =
 /// multiplicity as corruption.
 ///
 /// Each route can retain five ordinary histories (autonomous payload, input,
-/// preflight, certificate, and application receipt), plus two independently
-/// byte-bounded Native evidence histories. Ordinary histories may also contain
+/// preflight, certificate, and application receipt), plus two Native evidence
+/// artifact families sharing one configured byte bound. Ordinary histories may also contain
 /// the globally bounded pending-merge depth beyond their terminal frontier.
 /// Startup recovery may admit one entry beyond the compact Native window, but
 /// retirement runs only after startup repair and therefore accepts exactly the
@@ -128,24 +129,23 @@ fn lane_retirement_aggregate_work_item_limit(
     route_count.checked_mul(regular_per_route.checked_add(native_per_route)?)
 }
 
-/// Return whether independently byte-pruned Native manifest and receipt
-/// windows still contain a complete receipt suffix.
+/// Return whether Native manifest and receipt windows are the same complete,
+/// contiguous retained suffix.
 ///
-/// Manifests are published before receipts and may be smaller, so the retained
-/// manifest window may legitimately include older history. Every retained
-/// receipt must still have its exact manifest, while a newer or interleaved
-/// manifest without a receipt is repair-pending and must block retirement.
+/// Publication may transiently leave one highest half-pair, but retirement
+/// and archive validation run only after repair and pair pruning. Neither path
+/// may accept family-skewed or punctured evidence.
 fn native_amx_retained_windows_are_complete(
     manifest_heights: &BTreeSet<u64>,
     receipt_heights: &BTreeSet<u64>,
 ) -> bool {
-    let Some(oldest_receipt_height) = receipt_heights.iter().next().copied() else {
-        return manifest_heights.is_empty();
-    };
-    receipt_heights.is_subset(manifest_heights)
+    manifest_heights == receipt_heights
         && manifest_heights
             .iter()
-            .all(|height| receipt_heights.contains(height) || *height < oldest_receipt_height)
+            .copied()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .all(|pair| pair[0].checked_add(1) == Some(pair[1]))
 }
 
 #[cfg(test)]
@@ -4537,8 +4537,7 @@ impl Kura {
         let payload_limit = usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES)?;
         let mut manifests = BTreeMap::new();
         let mut receipts = BTreeMap::new();
-        let mut manifest_bytes = 0_u64;
-        let mut receipt_bytes = 0_u64;
+        let mut evidence_bytes = 0_u64;
 
         for (raw_name, entry_snapshot) in artifact_snapshot {
             let path = lane_artifacts.join(raw_name);
@@ -4598,11 +4597,7 @@ impl Kura {
                         )
                     })?;
             let encoded_len = metadata.file.len();
-            let aggregate_bytes = match kind {
-                NativeAmxEvidenceKind::Manifest => &mut manifest_bytes,
-                NativeAmxEvidenceKind::Receipt => &mut receipt_bytes,
-            };
-            *aggregate_bytes = aggregate_bytes.checked_add(encoded_len).ok_or_else(|| {
+            evidence_bytes = evidence_bytes.checked_add(encoded_len).ok_or_else(|| {
                 Error::IO(
                     std::io::Error::new(
                         ErrorKind::InvalidData,
@@ -4611,11 +4606,13 @@ impl Kura {
                     path.clone(),
                 )
             })?;
-            if *aggregate_bytes > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES {
+            if evidence_bytes > self.native_amx_participant_evidence_file_bytes() {
                 return Err(Error::IO(
                     std::io::Error::new(
                         ErrorKind::InvalidData,
-                        format!("{context} Native AMX evidence exceeds its aggregate byte bound"),
+                        format!(
+                            "{context} Native AMX manifests and receipts exceed their shared aggregate byte bound"
+                        ),
                     ),
                     path,
                 ));
@@ -5357,6 +5354,26 @@ impl Kura {
                 .collect::<BTreeSet<_>>();
             count_work_items(&mut work_items_seen, native_manifest_heights.len())?;
             count_work_items(&mut work_items_seen, native_receipt_heights.len())?;
+            if !native_amx_retained_windows_are_complete(
+                &native_manifest_heights,
+                &native_receipt_heights,
+            ) {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement Native AMX manifest/receipt evidence is not an exact contiguous retained suffix",
+                ));
+            }
+            Self::validate_native_amx_retained_history_continuity(
+                &retained_native_manifests,
+                &retained_native_receipts,
+                false,
+            )
+            .map_err(|message| {
+                self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!("lane retirement Native AMX retained history is invalid: {message}"),
+                )
+            })?;
             for (lane_block_height, manifest) in retained_native_manifests {
                 if manifest.leaf.lane_id != entry.lane_id
                     || manifest.leaf.dataspace_id != entry.dataspace_id
@@ -5403,15 +5420,6 @@ impl Kura {
                         "lane retirement scan found a stale or duplicate Native AMX participant receipt identity",
                     ));
                 }
-            }
-            if !native_amx_retained_windows_are_complete(
-                &native_manifest_heights,
-                &native_receipt_heights,
-            ) {
-                return Err(self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "lane retirement Native AMX manifest/receipt evidence is not a complete retained suffix",
-                ));
             }
             let latest_native_receipt = self
                 .decode_native_amx_participant_receipt_latest_index(&entry, &native_receipt_latest)
@@ -8488,6 +8496,26 @@ impl Kura {
             .keys()
             .copied()
             .collect::<BTreeSet<_>>();
+        if !native_amx_retained_windows_are_complete(
+            &native_manifest_heights,
+            &native_receipt_heights,
+        ) {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "retired Native AMX manifest/receipt evidence is not an exact contiguous retained suffix",
+            ));
+        }
+        Self::validate_native_amx_retained_history_continuity(
+            &retained_native_manifests,
+            &retained_native_receipts,
+            false,
+        )
+        .map_err(|message| {
+            self.geometry_error_owned(
+                ErrorKind::InvalidData,
+                format!("retired Native AMX retained history is invalid: {message}"),
+            )
+        })?;
         let mut native_manifests = BTreeMap::new();
         for (lane_block_height, manifest) in retained_native_manifests {
             if manifest.leaf.lane_incarnation != binding.incarnation
@@ -8504,15 +8532,6 @@ impl Kura {
                     "retired Native AMX participant manifest has stale, duplicate, or unverifiable evidence",
                 ));
             }
-        }
-        if !native_amx_retained_windows_are_complete(
-            &native_manifest_heights,
-            &native_receipt_heights,
-        ) {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "retired Native AMX manifest/receipt evidence is not a complete retained suffix",
-            ));
         }
         let mut latest_native_receipt = None;
         for (lane_block_height, receipt) in retained_native_receipts {
@@ -13144,62 +13163,7 @@ mod tests {
     // This makes the net disk-reclamation assertion independent of small encoding-size changes.
     const GC_PAYLOAD_LEN: usize = 16 * 1024;
 
-    #[test]
-    fn native_amx_retained_windows_require_a_complete_receipt_suffix() {
-        assert!(native_amx_retained_windows_are_complete(
-            &BTreeSet::from([7, 8, 9, 10]),
-            &BTreeSet::from([9, 10]),
-        ));
-        assert!(!native_amx_retained_windows_are_complete(
-            &BTreeSet::from([7, 9, 10]),
-            &BTreeSet::from([8, 9, 10]),
-        ));
-        assert!(!native_amx_retained_windows_are_complete(
-            &BTreeSet::from([8, 9, 10, 11]),
-            &BTreeSet::from([9, 10]),
-        ));
-        assert!(!native_amx_retained_windows_are_complete(
-            &BTreeSet::from([8]),
-            &BTreeSet::new(),
-        ));
-        assert!(native_amx_retained_windows_are_complete(
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-        ));
-        assert_eq!(
-            Kura::parse_native_amx_evidence_path(Path::new(
-                "native_amx_manifest_v1_00000000000000000001.norito"
-            ))
-            .expect("parse canonical Native manifest filename"),
-            Some((NativeAmxEvidenceKind::Manifest, 1, false)),
-        );
-        assert_eq!(
-            Kura::parse_native_amx_evidence_path(Path::new(
-                "native_amx_receipt_v1_18446744073709551615.norito"
-            ))
-            .expect("parse canonical Native receipt filename"),
-            Some((NativeAmxEvidenceKind::Receipt, u64::MAX, false)),
-        );
-        for obsolete_or_non_canonical in [
-            "native_amx_manifest_v1_00000000000000000000.norito",
-            "native_amx_manifest_v1_1.norito",
-            "native_amx_receipt_v1_000000000000000000001.norito",
-            "native_amx_application_manifests.norito",
-            "native_amx_participant_receipts.index",
-        ] {
-            assert!(
-                Kura::parse_native_amx_evidence_path(Path::new(obsolete_or_non_canonical)).is_err(),
-                "{obsolete_or_non_canonical} must not enter the first-release evidence allowlist",
-            );
-        }
-        assert_eq!(
-            Kura::parse_native_amx_evidence_path(Path::new(
-                "native_amx_receipt_v1_00000000000000000001.norito.tmp"
-            ))
-            .expect("parse canonical Native receipt temp filename"),
-            Some((NativeAmxEvidenceKind::Receipt, 1, true)),
-        );
-    }
+    include!("lane_geometry/native_amx_retained_window_tests.rs");
 
     #[test]
     fn retirement_work_bound_scales_with_routes_and_configured_retention() {
@@ -20503,6 +20467,7 @@ mod tests {
         for corruption in [
             "malformed",
             "truncated",
+            "missing-receipt",
             "oversized",
             "oversized-artifact",
             "aggregate",
@@ -20522,6 +20487,10 @@ mod tests {
                     let mut bytes = fs::read(&fixture.receipt).expect("read Native receipt");
                     assert!(bytes.pop().is_some(), "receipt fixture is non-empty");
                     fs::write(&fixture.receipt, bytes).expect("truncate Native receipt");
+                }
+                "missing-receipt" => {
+                    fs::remove_file(&fixture.receipt)
+                        .expect("remove Native archive receipt half-pair");
                 }
                 "oversized" => {
                     let file = OpenOptions::new()
@@ -20545,7 +20514,7 @@ mod tests {
                         .open(&fixture.manifest)
                         .expect("open Native manifest for oversize corruption");
                     file.set_len(
-                        MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES
+                        DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES
                             .checked_add(1)
                             .expect("Native evidence limit can grow by one"),
                     )
@@ -20566,7 +20535,7 @@ mod tests {
                         .create_new(true)
                         .open(&second_manifest)
                         .expect("create a second Native manifest");
-                    file.set_len(MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES)
+                    file.set_len(DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES)
                         .expect("stage aggregate-bound Native manifest");
                 }
                 _ => unreachable!("enumerated corruption"),

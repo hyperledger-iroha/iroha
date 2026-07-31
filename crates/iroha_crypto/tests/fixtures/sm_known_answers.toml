@@ -1,5 +1,5 @@
 # Canonical SM2/SM3/SM4 known-answer tests transcribed from GM/T 0003 Annex D,
-# GM/T 0002/0004, GB/T 32905, and RFC 8998. See `docs/source/crypto/sm_vectors.md`
+# GM/T 0002/0004, GB/T 32905, and RFC 8998. See `specs/crypto/sm_vectors.md`
 # for verification notes and reproduction steps.
 
 [sm3.empty]

@@ -2681,7 +2681,6 @@ fn resolve_prepared_contract_view_entrypoint(
     selector: &str,
 ) -> Result<ResolvedContractEntrypoint, ValidationFail> {
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
     let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
         ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
     })?;
@@ -2751,7 +2750,6 @@ pub(crate) fn callable_contract_entrypoint_permission(
     selector: &str,
 ) -> Result<Option<String>, ValidationFail> {
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
     match descriptor.kind {
         EntryPointKind::Kotoage => Ok(descriptor.permission.clone()),
         EntryPointKind::View => Err(ValidationFail::NotPermitted(format!(
@@ -2775,7 +2773,6 @@ pub(crate) fn raw_contract_entrypoint_permission(
     selector: &str,
 ) -> Result<Option<String>, ValidationFail> {
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
     match descriptor.kind {
         EntryPointKind::Kotoage => Ok(descriptor.permission.clone()),
         EntryPointKind::View => Err(ValidationFail::NotPermitted(format!(
@@ -2798,7 +2795,6 @@ pub(crate) fn nested_contract_entrypoint_permission(
     selector: &str,
 ) -> Result<Option<String>, ValidationFail> {
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
-
     match descriptor.kind {
         EntryPointKind::Kotoage | EntryPointKind::View => Ok(descriptor.permission.clone()),
         EntryPointKind::Hajimari | EntryPointKind::Kaizen => {
@@ -5506,7 +5502,6 @@ impl Executor {
         trigger_context: Option<(&TriggerId, u64)>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
         use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
-
         let ResolvedContractInvocation {
             identity,
             contract_subject,
@@ -5885,7 +5880,6 @@ impl Executor {
         #[cfg(feature = "zk-preverify")]
         {
             use iroha_data_model::proof::{ProofAttachment, ProofAttachmentList};
-
             let namespace_hint = md
                 .get("contract_alias")
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
@@ -8853,7 +8847,6 @@ fn initial_trigger_authority(
     trigger_id: &iroha_data_model::trigger::TriggerId,
 ) -> Result<bool, ValidationFail> {
     use crate::smartcontracts::isi::triggers::set::SetReadOnly as _;
-
     state_transaction
         .world
         .triggers()
@@ -9584,7 +9577,6 @@ fn can_modify_asset_metadata_initial(
 
 fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBox) -> bool {
     use iroha_data_model::isi::{BurnBox, MintBox, RegisterBox, UnregisterBox};
-
     let any = instruction.as_any();
     macro_rules! is_any {
         ($($ty:ty),+ $(,)?) => {
@@ -9750,7 +9742,6 @@ fn validate_initial_native_instruction_authority(
     is_genesis: bool,
 ) -> Result<(), ValidationFail> {
     use iroha_data_model::isi::{BurnBox, MintBox, RegisterBox, UnregisterBox};
-
     let any = instruction.as_any();
     let deny = |message: &'static str| Err(ValidationFail::NotPermitted(message.to_owned()));
 

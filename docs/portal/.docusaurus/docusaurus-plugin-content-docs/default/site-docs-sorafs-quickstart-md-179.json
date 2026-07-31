@@ -1,0 +1,24 @@
+{
+  "id": "sorafs/quickstart",
+  "title": "SoraFS Quickstart",
+  "description": "This hands-on guide walks through the deterministic SF-1 chunker profile,",
+  "source": "@site/docs/sorafs/quickstart.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/quickstart",
+  "permalink": "/next/sorafs/quickstart",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/quickstart.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "index",
+    "permalink": "/next/norito/examples/"
+  },
+  "next": {
+    "title": "Developer Overview",
+    "permalink": "/next/sorafs/developer-index"
+  }
+}

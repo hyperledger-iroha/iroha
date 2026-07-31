@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = REPO_ROOT / "scripts" / "nexus" / "run_multilane_scaling_gate.py"
 SHELL_RUNNER = REPO_ROOT / "scripts" / "nexus" / "run_multilane_scaling_gate.sh"
 SHELL_CONTRACT = REPO_ROOT / "scripts" / "tests" / "multilane_scaling_gate_contract.sh"
-RUNBOOK = REPO_ROOT / "docs" / "source" / "sumeragi_v2_multilane_scaling_gate.md"
+RUNBOOK = REPO_ROOT / "specs" / "sumeragi_v2_multilane_scaling_gate.md"
 
 FAKE_TRIAL = r'''#!/usr/bin/env python3
 import json

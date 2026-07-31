@@ -1,11 +1,14 @@
 # Iroha Client
 
-This is the Iroha 2 client library crate. With it you can build your own client applications to communicate with peers in an Iroha 2 network via HTTP/WebSocket.
+This is the reusable client library for the first Hyperledger Iroha 3 release.
+Use it to build applications that communicate with Iroha peers over HTTP and
+WebSocket.
 
 This crate is the reusable Rust SDK surface. The `iroha` command-line binary is
 built from the separate [`iroha_cli`](../iroha_cli) crate.
 
-Follow the [Iroha 2 tutorial](https://docs.iroha.tech/guide/tutorials/rust.html) for instructions on how to set up, configure, and use the Iroha 2 client and client library.
+Follow the [Iroha 3 Rust tutorial](https://docs.iroha.tech/guide/tutorials/rust.html)
+for setup, configuration, and client examples.
 
 ## Features
 
@@ -14,13 +17,18 @@ Follow the [Iroha 2 tutorial](https://docs.iroha.tech/guide/tutorials/rust.html)
 
 ## Setup
 
-**Requirements:** a working [Rust toolchain](https://www.rust-lang.org/learn/get-started) (version 1.60), installed and configured.
+**Requirements:** install
+[Rust 1.93.1](https://www.rust-lang.org/learn/get-started), the toolchain pinned
+for this workspace in the repository-root `rust-toolchain.toml`.
 
 Add the following to the manifest file of your Rust project:
 
 ```toml
-iroha = { path = "path/to/iroha" }
+iroha = { git = "https://github.com/hyperledger-iroha/iroha.git", rev = "<IROHA_COMMIT>", package = "iroha" }
 ```
+
+Pin `<IROHA_COMMIT>` to the revision deployed by your network. For a local
+checkout, use `iroha = { path = "/path/to/iroha/crates/iroha" }`.
 
 ## Examples
 

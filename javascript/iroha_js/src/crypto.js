@@ -7,6 +7,7 @@ import {
 } from "@scure/bip39";
 import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 import {
+  createHash,
   createPrivateKey,
   createPublicKey,
   randomBytes,
@@ -362,7 +363,10 @@ export function recoveryPhraseToEntropy(phrase) {
 }
 
 export function deriveEd25519SeedFromRecoveryPhrase(phrase) {
-  return normalizeSeed(recoveryPhraseToEntropy(phrase));
+  const entropy = recoveryPhraseToEntropy(phrase);
+  return entropy.length === ED25519_SEED_LENGTH
+    ? entropy
+    : createHash("sha256").update(entropy).digest();
 }
 
 export function ed25519SeedToRecoveryPhrase(privateKey) {

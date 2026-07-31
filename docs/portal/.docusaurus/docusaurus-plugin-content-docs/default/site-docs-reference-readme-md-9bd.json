@@ -1,0 +1,27 @@
+{
+  "id": "reference/README",
+  "title": "Reference Index",
+  "description": "This section aggregates the “read it as a spec” material for Iroha. These pages stay stable even as",
+  "source": "@site/docs/reference/README.md",
+  "sourceDirName": "reference",
+  "slug": "/reference",
+  "permalink": "/next/reference",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/reference/README.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Reference Index",
+    "slug": "/reference"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Preview invite playbook",
+    "permalink": "/next/devportal/public-preview-invite"
+  },
+  "next": {
+    "title": "Norito Codec Reference",
+    "permalink": "/next/reference/norito-codec"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "nexus/nexus-overview",
+  "title": "Sora Nexus overview",
+  "description": "High-level summary of the Iroha 3 (Sora Nexus) architecture with pointers to the canonical mono-repo docs.",
+  "source": "@site/docs/nexus/overview.md",
+  "sourceDirName": "nexus",
+  "slug": "/nexus/nexus-overview",
+  "permalink": "/next/nexus/nexus-overview",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/nexus/overview.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "nexus-overview",
+    "title": "Sora Nexus overview",
+    "description": "High-level summary of the Iroha 3 (Sora Nexus) architecture with pointers to the canonical mono-repo docs."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "PQ Rollout Plan",
+    "permalink": "/next/soranet/pq-rollout-plan"
+  },
+  "next": {
+    "title": "Sora Nexus technical specification",
+    "permalink": "/next/nexus/nexus-spec"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "id": "devportal/preview-feedback/w1/preview-feedback-w1-log",
+  "title": "W1 feedback & telemetry log",
+  "description": "Aggregate roster, telemetry checkpoints, and reviewer notes for the first partner preview wave.",
+  "source": "@site/docs/devportal/preview-feedback/w1/log.md",
+  "sourceDirName": "devportal/preview-feedback/w1",
+  "slug": "/devportal/preview-feedback/w1/preview-feedback-w1-log",
+  "permalink": "/next/devportal/preview-feedback/w1/preview-feedback-w1-log",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/preview-feedback/w1/log.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "preview-feedback-w1-log",
+    "title": "W1 feedback & telemetry log",
+    "sidebar_label": "W1 feedback log",
+    "description": "Aggregate roster, telemetry checkpoints, and reviewer notes for the first partner preview wave."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "W1 plan",
+    "permalink": "/next/devportal/preview-feedback/w1/preview-feedback-w1-plan"
+  },
+  "next": {
+    "title": "W1 summary",
+    "permalink": "/next/devportal/preview-feedback/w1/preview-feedback-w1-summary"
+  }
+}

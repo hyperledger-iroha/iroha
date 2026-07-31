@@ -1,12 +1,12 @@
 # Overview
 
-This directory contains the `pytest` framework with test suites for the Iroha 2 Client CLI.
+This directory contains the `pytest` framework with test suites for the Iroha 3 Client CLI.
 
 For quick access to a topic that interests you, select one of the following:
 
 - [Overview](#overview)
 	- [Framework Structure](#framework-structure)
-	- [Iroha 2 Test Model](#iroha-2-test-model)
+	- [Iroha 3 Test Model](#iroha-3-test-model)
 		- [Configurations](#configurations)
 	- [Using Test Suites](#using-test-suites)
 		- [Custom Test Environment with Docker Compose](#custom-test-environment-with-docker-compose)
@@ -21,7 +21,7 @@ The framework is organized into the following directories:
 
 - `common`: Contains common constants and helpers used throughout the framework.
 - `models`: Contains the data model classes for accounts, assets, and domains.
-- `src`: Contains the source code for the Iroha 2 Client CLI tests, including the `iroha_cli.py` and related utilities.
+- `src`: Contains the source code for the Iroha 3 Client CLI tests, including the `iroha_cli.py` and related utilities.
 - `test`: Contains the test suite for the framework, organized into subdirectories for different test categories (`accounts`, `assets`, `atomicity`, `domains`, and `roles`).
 
 The framework also includes the following configuration files in its root directory:
@@ -31,9 +31,9 @@ The framework also includes the following configuration files in its root direct
 All tests are written with [Allure Report](https://allurereport.org/) in mind, and therefore require certain configuration prior to being executed.\
 For details, see [Running Tests](#running-tests) and [Viewing Test Reports](#viewing-test-reports).
 
-## Iroha 2 Test Model
+## Iroha 3 Test Model
 
-The Iroha 2 Test Model consists of several test categories that cover different aspects of the Iroha 2 blockchain platform.\
+The Iroha 3 Test Model consists of several test categories that cover different aspects of the Iroha 3 blockchain platform.\
 The test model has the following structure:
 
 - **Accounts**: Test cases for account-related operations.
@@ -172,7 +172,7 @@ The variables:
 
 - `IROHA_CLI_DIR` — Specifies a path to a directory containing the `iroha` binary and its `client.toml` configuration file.\
 	Set to `/iroha_cli`, by default.
-- `TORII_API_PORT_MIN`/`TORII_API_PORT_MAX` — This pair specifies the range of local ports through which the Iroha 2 peers are deployed. A randomly selected port from the specified range is used for each test.\
+- `TORII_API_PORT_MIN`/`TORII_API_PORT_MAX` — This pair specifies the range of local ports through which the Iroha 3 peers are deployed. A randomly selected port from the specified range is used for each test.\
 	Set to `8080` and `8083` respectively, by default.
 
 **Example**:

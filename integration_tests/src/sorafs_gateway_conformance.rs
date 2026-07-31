@@ -1,7 +1,7 @@
 //! Conformance harness for the `SoraFS` gateway trustless profile (SF-5a).
 //!
 //! This module spins up fixture-backed HTTP adapters and runs manifest and CAR
-//! verification flows described in `docs/source/sorafs_gateway_profile.md`.
+//! verification flows described in `specs/sorafs_gateway_profile.md`.
 //! Authenticated proof-stream coverage lives in Torii finalized-state tests, where
 //! finalized ledger state and its cursor are available as genuine trust inputs.
 

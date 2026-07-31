@@ -15,8 +15,8 @@ if ! command -v python3 >/dev/null 2>&1; then
 	exit 1
 fi
 
-JSON_PATH="docs/source/norito_json_inventory.json"
-MD_PATH="docs/source/norito_json_inventory.md"
+JSON_PATH="specs/norito_json_inventory.json"
+MD_PATH="specs/norito_json_inventory.md"
 ALLOWLIST_PATH="scripts/serde_allowlist.txt"
 
 if [[ ! -f "${ALLOWLIST_PATH}" ]]; then

@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import secrets
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,12 @@ from sorafs_response_args import (  # noqa: E402
     expand_response_args,
     positive_int_arg,
 )
+from sorafs_reference_sdk_supply_chain import (  # noqa: E402
+    DEFAULT_SOURCE_ARTIFACT_PATHS,
+    SupplyChainSourceResult,
+    validate_supply_chain_sources,
+)
+from sccp_release_common import verify_ed25519  # noqa: E402
 
 
 CANARY_KINDS = tuple(KIND_BY_NAME)
@@ -121,6 +128,47 @@ def validate_hex64(value: str | None, *, option: str, errors: list[str]) -> None
         errors.append(f"{option} must be exact lowercase 32-byte hex")
 
 
+def decode_ed25519_public_key(
+    value: str | None,
+    *,
+    option: str,
+    errors: list[str],
+) -> bytes | None:
+    """Decode one non-zero raw Ed25519 public key without echoing it."""
+
+    validate_hex64(value, option=option, errors=errors)
+    if not isinstance(value, str) or len(value) != HEX64_LEN:
+        return None
+    try:
+        public_key = bytes.fromhex(value)
+    except ValueError:
+        return None
+    if not any(public_key):
+        errors.append(f"{option} must not be the all-zero Ed25519 public key")
+        return None
+    return public_key
+
+
+def provenance_receipt_authenticator(
+    public_key: bytes,
+) -> tuple[str, Callable[[str, bytes, bytes], bool]]:
+    """Bind receipt authentication to one reviewed Ed25519 public key."""
+
+    fingerprint = hashlib.sha256(public_key).hexdigest()
+
+    def authenticate(
+        claimed_fingerprint: str,
+        message: bytes,
+        signature: bytes,
+    ) -> bool:
+        return secrets.compare_digest(
+            claimed_fingerprint,
+            fingerprint,
+        ) and verify_ed25519(public_key, signature, message)
+
+    return fingerprint, authenticate
+
+
 def validate_canonical_string(value: str | None, *, label: str, errors: list[str]) -> None:
     """Require a non-empty canonical string without control/format text."""
 
@@ -149,6 +197,91 @@ def require_kind_options(
     for option, value in required:
         if value is None:
             errors.append(f"{option} is required for {args.kind}")
+
+
+def validate_supply_chain_inputs(
+    args: argparse.Namespace,
+    errors: list[str],
+) -> None:
+    """Validate and retain the source-derived hard-cut supply-chain result."""
+
+    local_errors: list[str] = []
+    if args.target:
+        local_errors.append(
+            "--target is retired for supply_chain; targets are source-derived"
+        )
+    require_kind_options(
+        args,
+        local_errors,
+        (
+            ("--supply-chain-source-root", args.supply_chain_source_root),
+            (
+                "--provenance-certificate-identity",
+                args.provenance_certificate_identity,
+            ),
+            ("--provenance-oidc-issuer", args.provenance_oidc_issuer),
+            (
+                "--provenance-verification-public-key-hex",
+                args.provenance_verification_public_key_hex,
+            ),
+        ),
+    )
+    validate_canonical_string(
+        args.provenance_certificate_identity,
+        label="--provenance-certificate-identity",
+        errors=local_errors,
+    )
+    validate_canonical_string(
+        args.provenance_oidc_issuer,
+        label="--provenance-oidc-issuer",
+        errors=local_errors,
+    )
+    public_key = decode_ed25519_public_key(
+        args.provenance_verification_public_key_hex,
+        option="--provenance-verification-public-key-hex",
+        errors=local_errors,
+    )
+    if local_errors:
+        errors.extend(local_errors)
+        return
+    assert args.supply_chain_source_root is not None
+    assert args.provenance_certificate_identity is not None
+    assert args.provenance_oidc_issuer is not None
+    assert public_key is not None
+
+    fingerprint, authenticator = provenance_receipt_authenticator(public_key)
+    result, source_errors = validate_supply_chain_sources(
+        args.supply_chain_source_root,
+        expected_deployment_id=args.deployment_id,
+        expected_environment=args.environment,
+        expected_release_manifest_digest_hex=args.release_manifest_digest_hex,
+        expected_certificate_identity=args.provenance_certificate_identity,
+        expected_verification_key_fingerprint_hex=fingerprint,
+        verification_receipt_authenticator=authenticator,
+        now_unix=args.now_unix,
+        expected_oidc_issuer=args.provenance_oidc_issuer,
+        release_rehearsal_path=args.release_rehearsal_path,
+        sbom_index_path=args.sbom_index_path,
+        vulnerability_report_path=args.vulnerability_report_path,
+        provenance_bundle_path=args.provenance_bundle_path,
+    )
+    errors.extend(f"supply-chain source: {error}" for error in source_errors)
+    if result is None:
+        if not source_errors:
+            errors.append("supply-chain source did not return a validated result")
+        return
+    if not isinstance(result, SupplyChainSourceResult):
+        errors.append("supply-chain source returned an invalid result")
+        return
+    if args.generated_at_unix != result.generated_at_unix:
+        errors.append(
+            "--generated-at-unix must equal the oldest validated "
+            "supply-chain source timestamp"
+        )
+        return
+    args.supply_chain_source_result = result
+    args.provenance_verification_public_key = public_key
+    args.provenance_verification_key_fingerprint_hex = fingerprint
 
 
 def common_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -203,29 +336,37 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "supply_chain":
+        source_result = args.supply_chain_source_result
+        assert isinstance(source_result, SupplyChainSourceResult)
         payload.update(
             {
-                "target_count": len(args.targets),
+                "generated_at_unix": source_result.generated_at_unix,
+                "target_count": len(source_result.target_results),
                 "target_results": [
-                    {
-                        "target": target,
-                        "binary_smoke_passed": True,
-                        "deterministic_archive_replay_passed": True,
-                        "installation_verified": True,
-                        "rollback_verified": True,
-                        "yank_verified": True,
-                        "sbom_generated": True,
-                        "critical_vulnerability_count": 0,
-                        "high_vulnerability_count": 0,
-                        "oidc_identity_verified": True,
-                        "cosign_provenance_verified": True,
-                    }
-                    for target in args.targets
+                    target_result.to_dict()
+                    for target_result in source_result.target_results
                 ],
-                "release_manifest_digest_hex": args.release_manifest_digest_hex,
-                "sbom_index_digest_hex": args.sbom_index_digest_hex,
-                "vulnerability_report_digest_hex": args.vulnerability_report_digest_hex,
-                "provenance_bundle_digest_hex": args.provenance_bundle_digest_hex,
+                "source_artifacts": [
+                    artifact.to_dict()
+                    for artifact in source_result.source_artifacts
+                ],
+                "release_manifest_digest_hex": (
+                    source_result.release_manifest_digest_hex
+                ),
+                "sbom_index_digest_hex": source_result.sbom_index_digest_hex,
+                "vulnerability_report_digest_hex": (
+                    source_result.vulnerability_report_digest_hex
+                ),
+                "provenance_bundle_digest_hex": (
+                    source_result.provenance_bundle_digest_hex
+                ),
+                "provenance_certificate_identity": (
+                    args.provenance_certificate_identity
+                ),
+                "provenance_oidc_issuer": args.provenance_oidc_issuer,
+                "provenance_verification_key_fingerprint_hex": (
+                    args.provenance_verification_key_fingerprint_hex
+                ),
                 "raw_sboms_included": False,
                 "raw_vulnerability_reports_included": False,
                 "raw_provenance_included": False,
@@ -347,7 +488,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
 
-    if args.kind in {"release_archive", "supply_chain"}:
+    if args.kind == "release_archive":
         args.targets = validate_name_set(
             split_csv_values(args.target),
             allowed=REQUIRED_RELEASE_TARGETS,
@@ -361,16 +502,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
     elif args.kind == "supply_chain":
-        for option, value in (
-            ("--sbom-index-digest-hex", args.sbom_index_digest_hex),
-            (
-                "--vulnerability-report-digest-hex",
-                args.vulnerability_report_digest_hex,
-            ),
-            ("--provenance-bundle-digest-hex", args.provenance_bundle_digest_hex),
-        ):
-            require_kind_options(args, errors, ((option, value),))
-            validate_hex64(value, option=option, errors=errors)
+        validate_supply_chain_inputs(args, errors)
     elif args.kind == "downstream_bindings":
         args.packages = validate_name_set(
             split_csv_values(args.package),
@@ -427,6 +559,26 @@ def validation_options(args: argparse.Namespace) -> ValidationOptions:
         min_release_targets=DEFAULT_MIN_RELEASE_TARGETS,
         min_downstream_packages=DEFAULT_MIN_DOWNSTREAM_PACKAGES,
         max_smoke_duration_secs=DEFAULT_MAX_SMOKE_DURATION_SECS,
+        supply_chain_source_root=(
+            args.supply_chain_source_root
+            if args.kind == "supply_chain"
+            else None
+        ),
+        provenance_certificate_identity=(
+            args.provenance_certificate_identity
+            if args.kind == "supply_chain"
+            else None
+        ),
+        provenance_oidc_issuer=(
+            args.provenance_oidc_issuer
+            if args.kind == "supply_chain"
+            else None
+        ),
+        provenance_verification_public_key=(
+            args.provenance_verification_public_key
+            if args.kind == "supply_chain"
+            else None
+        ),
     )
 
 
@@ -508,9 +660,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--smoke-output-digest-hex")
     parser.add_argument("--header-digest-hex")
     parser.add_argument("--ffi-contract-digest-hex")
-    parser.add_argument("--sbom-index-digest-hex")
-    parser.add_argument("--vulnerability-report-digest-hex")
-    parser.add_argument("--provenance-bundle-digest-hex")
     parser.add_argument("--policy-digest-hex")
     parser.add_argument("--public-key-fingerprint-hex")
     parser.add_argument("--signature-algorithm", default="ed25519")
@@ -519,6 +668,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--target", action="append", default=[])
     parser.add_argument("--package", action="append", default=[])
     parser.add_argument("--smoke-duration-seconds", type=positive_int_arg, default=600)
+    parser.add_argument("--supply-chain-source-root", type=Path)
+    parser.add_argument(
+        "--release-rehearsal-path",
+        default=DEFAULT_SOURCE_ARTIFACT_PATHS["release_rehearsal"],
+        help="Exact relative v1 release-rehearsal source path.",
+    )
+    parser.add_argument(
+        "--sbom-index-path",
+        default=DEFAULT_SOURCE_ARTIFACT_PATHS["sbom_index"],
+        help="Exact relative v1 SBOM-index source path.",
+    )
+    parser.add_argument(
+        "--vulnerability-report-path",
+        default=DEFAULT_SOURCE_ARTIFACT_PATHS["vulnerability_report"],
+        help="Exact relative v1 vulnerability-report source path.",
+    )
+    parser.add_argument(
+        "--provenance-bundle-path",
+        default=DEFAULT_SOURCE_ARTIFACT_PATHS["provenance_bundle"],
+        help="Exact relative v1 provenance-bundle source path.",
+    )
+    parser.add_argument("--provenance-certificate-identity")
+    parser.add_argument("--provenance-oidc-issuer")
+    parser.add_argument("--provenance-verification-public-key-hex")
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

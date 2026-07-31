@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2026-07-19T21:06:43.273492Z",
+  "generated_at": "2026-07-30T20:27:13.504416Z",
   "entries": [
     {
       "type_name": "iroha_data_model::sns::NameControllerV1",

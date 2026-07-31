@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/chunker-registry",
+  "title": "SoraFS Chunker Profile Registry",
+  "description": "Profile IDs, parameters, and negotiation plan for the SoraFS chunker registry.",
+  "source": "@site/docs/sorafs/chunker-registry.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/chunker-registry",
+  "permalink": "/next/sorafs/chunker-registry",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/chunker-registry.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "chunker-registry",
+    "title": "SoraFS Chunker Profile Registry",
+    "sidebar_label": "Chunker Registry",
+    "description": "Profile IDs, parameters, and negotiation plan for the SoraFS chunker registry."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Priority Snapshot — March 2025 Archive",
+    "permalink": "/next/sorafs/priority-snapshot-2025-03"
+  },
+  "next": {
+    "title": "Chunker Registry Charter",
+    "permalink": "/next/sorafs/chunker-registry-charter"
+  }
+}

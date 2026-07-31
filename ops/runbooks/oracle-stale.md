@@ -10,7 +10,7 @@ summary: Response plan for `iroha_oracle_*` telemetry alerts so the NX-3 settlem
 - **Objective:** Detect and remediate stale or misconfigured oracle feeds so the settlement router never debits buffers with unverified data and the `/v1/sumeragi/status` commitments remain deterministic.
 - **Scenarios covered:** `iroha_oracle_staleness_seconds` or `iroha_oracle_twap_window_seconds` drifting, haircut tiers deviating from liquidity profiles, and router halts triggered by `ORACLE_STALE`.
 
-Use this runbook with `docs/settlement-router.md`, `docs/source/runbooks/nexus_lane_finality.md`, and the Grafana boards under `dashboards/grafana/nexus_lanes.json`.
+Use this runbook with `docs/settlement-router.md`, `specs/runbooks/nexus_lane_finality.md`, and the Grafana boards under `dashboards/grafana/nexus_lanes.json`.
 
 ## 2. Prerequisites & Inputs
 
@@ -20,7 +20,7 @@ Use this runbook with `docs/settlement-router.md`, `docs/source/runbooks/nexus_l
 | Alert rules | `dashboards/alerts/nexus_lane_rules.yml` | Pages on `ORACLE_STALE`, `TWAP_WINDOW_DRIFT`, or router halt events tied to oracle health. |
 | CLI/SDK status | `iroha_cli sumeragi status --format json`, `/v1/sumeragi/status` | Confirms lane settlement metadata and buffer state before/after remediation. |
 | Smoke helper | `scripts/nexus_lane_smoke.py` | `--max-oracle-staleness`, `--expected-oracle-twap`, and `--max-oracle-haircut-bps` enforce the same thresholds locally or in CI. |
-| Telemetry reference | `docs/source/telemetry.md` | Defines `iroha_oracle_*` semantics and alert tolerances. |
+| Telemetry reference | `specs/telemetry.md` | Defines `iroha_oracle_*` semantics and alert tolerances. |
 | Evidence log | `ops/drill-log.md` | Record every alert, intervention, rehearsal, and governance approval. |
 
 ## 3. Monitoring Surfaces
@@ -69,7 +69,7 @@ Use this runbook with `docs/settlement-router.md`, `docs/source/runbooks/nexus_l
 
 - Use `iroha_cli sumeragi status --format json` to locate the affected lane/dataspace and confirm whether `lane_settlement_commitments` are paused.
 - Inspect the oracle service logs (e.g., `kubectl logs deployment/nexus-oracle-payments` or `journalctl -u iroha-oracle@payments`) for vendor API failures, signature errors, or stalled timers.
-- Verify vendor-side health by querying the governance-approved price feed or checking the most recent TWAP snapshot referenced in `docs/source/nexus_settlement_faq.md`.
+- Verify vendor-side health by querying the governance-approved price feed or checking the most recent TWAP snapshot referenced in `specs/nexus_settlement_faq.md`.
 
 ### Step 3 — Recover or Fail Over
 

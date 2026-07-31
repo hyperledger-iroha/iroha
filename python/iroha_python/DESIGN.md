@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Purpose
 
-`iroha_python` provides a cohesive Python surface for Hyperledger Iroha v2
+`iroha_python` provides a cohesive Python surface for Hyperledger Iroha 3
 applications. The package bundles three pillars:
 
 - **Norito codec access** via the maintained `norito` pure-Python module.
@@ -62,4 +62,5 @@ workspace.
 - `cargo test --workspace` continues to validate the Rust crates, including
   `iroha_python_rs`.
 
-Release automation will publish a single `iroha-python` wheel/sdist to PyPI.
+The package metadata builds a single `iroha-python` wheel and source
+distribution through Maturin.

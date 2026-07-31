@@ -41,4 +41,4 @@ complete referenced payload, applies the deterministic provider template
 (`fixture-provider-{i}`), and writes refreshed JSON files under
 `multi_peer_parity_v1/`. Bare-array plans are retired and rejected. Rerun all
 parity suites after regeneration (`ci/sdk_sorafs_orchestrator.sh`) to capture
-the updated metrics in `docs/source/sorafs/reports/orchestrator_ga.md`.
+the updated metrics in `specs/sorafs/reports/orchestrator_ga.md`.

@@ -18,5 +18,5 @@ Iroha schema descriptors or a sample type changes.
 
 - Each generated binary must start with the `NRT0` header identifying a Norito archive.
 - Each JSON/binary pair must round-trip through its registered Iroha type. The
-  generated descriptor inventory in `docs/source/references/schema.json` must
+  generated descriptor inventory in `specs/references/schema.json` must
   be regenerated with `kagami advanced schema` and remain non-empty.

@@ -225,8 +225,8 @@ fi
 
 tmp_json="$(mktemp)"
 tmp_md="$(mktemp)"
-inventory_json="docs/source/agents/missing_docs_inventory.json"
-inventory_md="docs/source/agents/missing_docs_inventory.md"
+inventory_json="specs/agents/missing_docs_inventory.json"
+inventory_md="specs/agents/missing_docs_inventory.md"
 
 if python3 scripts/inventory_missing_docs.py --json "${tmp_json}" --md "${tmp_md}"; then
 	if ! diff -u "${inventory_json}" "${tmp_json}" >/dev/null 2>&1 || \

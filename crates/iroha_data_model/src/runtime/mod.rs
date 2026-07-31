@@ -1,5 +1,5 @@
 //! Runtime upgrade data model: manifests, records, and identifiers.
-//! See `docs/source/runtime_upgrades.md` for the canonical documentation.
+//! See `specs/runtime_upgrades.md` for the canonical documentation.
 //!
 //! Types here are used by instructions (ISIs) and events to coordinate
 //! deterministic activation of the fixed ABI v1 runtime without downtime.
@@ -273,7 +273,7 @@ impl core::fmt::Display for RuntimeUpgradeProvenanceError {
 /// Render the canonical markdown snippet documenting runtime-upgrade types.
 ///
 /// This string is consumed by a doc-sync test to keep
-/// `docs/source/runtime_upgrades.md` in sync with the data model.
+/// `specs/runtime_upgrades.md` in sync with the data model.
 #[must_use]
 pub fn render_runtime_upgrade_types_markdown_section() -> String {
     let mut out = String::new();

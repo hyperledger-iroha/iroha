@@ -1,5 +1,8 @@
 package org.hyperledger.iroha.android.client;
 
+import static org.hyperledger.iroha.android.client.HttpClientTransportSubmissionContractTests.compatibleCapabilitiesResponse;
+import static org.hyperledger.iroha.android.client.HttpClientTransportSubmissionContractTests.isCapabilitiesRequest;
+
 import java.net.URI;
 import java.net.URLEncoder;
 import java.math.BigInteger;
@@ -108,10 +111,8 @@ public final class HttpClientTransportTests {
     return Base64.getEncoder().encodeToString(signature);
   }
 
-
   public static void main(final String[] args) throws Exception {
     submitBuildsToriiRequest();
-    submitTransactionJsonBuildsJsonIngressRequest();
     submitPropagatesExecutorFailure();
     submitSkipsRetryWhenNetworkRetriesDisabled();
     submitRetriesOnServerError();
@@ -241,35 +242,12 @@ public final class HttpClientTransportTests {
     assert java.util.Arrays.equals(body, expected)
         : "Body must include Norito-encoded signed transaction";
 
-    assert observer.requestCount.get() == 1 : "Observer must see request";
-    assert observer.responseCount.get() == 1 : "Observer must see response";
+    assert observer.requestCount.get() == 2
+        : "Observer must see capability GET and submit POST";
+    assert observer.responseCount.get() == 2
+        : "Observer must see capability and submit responses";
     assert observer.failureCount.get() == 0 : "Observer must not see failure";
   }
-
-  private static void submitTransactionJsonBuildsJsonIngressRequest() {
-    final CapturingExecutor executor = new CapturingExecutor();
-    final ClientConfig config =
-        ClientConfig.builder()
-            .setBaseUri(URI.create("https://127.0.0.1:8080"))
-            .setWireFormatPreference(WireFormatPreference.JSON_PREFERRED)
-            .build();
-    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
-    final byte[] body = "{\"version\":1,\"content\":{}}".getBytes(StandardCharsets.UTF_8);
-
-    final ClientResponse response = transport.submitTransactionJson(body).join();
-
-    assert response.statusCode() == 202 : "Expected JSON submit to be accepted";
-    final TransportRequest request = executor.lastRequest;
-    assert "POST".equals(request.method()) : "JSON submit must use POST";
-    assert request.uri().toString().equals("https://127.0.0.1:8080/v1/pipeline/transactions")
-        : "JSON submit endpoint must target Torii pipeline route";
-    assert request.headers().get("Content-Type").contains("application/json")
-        : "JSON submit Content-Type must be application/json";
-    assert request.headers().get("Accept").contains(WireFormatPreference.JSON_PREFERRED.acceptHeader())
-        : "JSON submit Accept header must use configured wire preference";
-    assert java.util.Arrays.equals(body, request.body()) : "JSON submit body must be preserved";
-  }
-
 
   private static void submitPropagatesExecutorFailure() {
     final RuntimeException transportError = new RuntimeException("network down");
@@ -290,9 +268,12 @@ public final class HttpClientTransportTests {
       transport.submitTransaction(transaction).join();
     } catch (final RuntimeException ex) {
       threw = true;
-      final Throwable cause = ex.getCause();
-      assert ex == transportError || cause == transportError
-          : "Original runtime exception must propagate";
+      Throwable cause = ex;
+      while (cause != transportError && cause.getCause() != null) {
+        cause = cause.getCause();
+      }
+      assert cause == transportError
+          : "Capability probe failure must retain the original transport error";
     }
     assert threw : "Expected submit to rethrow executor error";
     assert observer.requestCount.get() == 1 : "Observer must see request";
@@ -347,8 +328,10 @@ public final class HttpClientTransportTests {
     final ClientResponse response = transport.submitTransaction(transaction).join();
     assert response.statusCode() == 202 : "Final attempt should succeed";
     assert executor.callCount == 2 : "Transport should retry once";
-    assert observer.requestCount.get() == 2 : "Observer should see both attempts";
-    assert observer.responseCount.get() == 1 : "Only the successful attempt reports a response";
+    assert observer.requestCount.get() == 4
+        : "Observer should see capability and submit requests for both attempts";
+    assert observer.responseCount.get() == 3
+        : "Observer should see both capabilities and the successful submit response";
     assert observer.failureCount.get() == 0 : "Retries on responses should not trigger failure callback";
     final String expectedHash = SignedTransactionHasher.hashHex(transaction);
     assert expectedHash.equals(response.hashHex().orElse(null))
@@ -3130,7 +3113,6 @@ public final class HttpClientTransportTests {
         executor,
         "VK register must reject u32 overflow proof limits");
   }
-
 
   private static void callContractRequestParsesResponse() {
     final String contractAddress =
@@ -6044,6 +6026,9 @@ public final class HttpClientTransportTests {
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       this.lastRequest = Objects.requireNonNull(request, "request");
+      if (isCapabilitiesRequest(request)) {
+        return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
+      }
       return CompletableFuture.completedFuture(
           new TransportResponse(202, new byte[0], "accepted", Map.of()));
     }
@@ -6086,6 +6071,9 @@ public final class HttpClientTransportTests {
 
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      if (isCapabilitiesRequest(request)) {
+        return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
+      }
       callCount++;
       if (callCount == 1) {
         return CompletableFuture.completedFuture(
@@ -6106,6 +6094,9 @@ public final class HttpClientTransportTests {
 
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      if (isCapabilitiesRequest(request)) {
+        return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
+      }
       final int position = index < responses.length ? index : responses.length - 1;
       index++;
       return CompletableFuture.completedFuture(responses[position]);
@@ -6117,6 +6108,9 @@ public final class HttpClientTransportTests {
 
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      if (isCapabilitiesRequest(request)) {
+        return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
+      }
       try {
         payloads.add(request.body());
       } catch (final Exception ex) {
@@ -6201,6 +6195,9 @@ public final class HttpClientTransportTests {
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       lastRequest = request;
+      if (isCapabilitiesRequest(request)) {
+        return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
+      }
       return CompletableFuture.completedFuture(response);
     }
 
@@ -6222,6 +6219,9 @@ public final class HttpClientTransportTests {
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       requests.add(request);
+      if (isCapabilitiesRequest(request)) {
+        return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
+      }
       final QueuedResponse response = responses.removeFirst();
       return CompletableFuture.completedFuture(
           new TransportResponse(

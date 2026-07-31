@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/multi-source-rollout",
+  "title": "Multi-Source Client Rollout & Blacklisting Runbook",
+  "description": "Operational checklist for staged multi-source rollouts and emergency provider blacklisting.",
+  "source": "@site/docs/sorafs/multi-source-rollout.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/multi-source-rollout",
+  "permalink": "/next/sorafs/multi-source-rollout",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/multi-source-rollout.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "multi-source-rollout",
+    "title": "Multi-Source Client Rollout & Blacklisting Runbook",
+    "sidebar_label": "Multi-Source Rollout Runbook",
+    "description": "Operational checklist for staged multi-source rollouts and emergency provider blacklisting."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "SoraFS Migration Ledger",
+    "permalink": "/next/sorafs/migration-ledger"
+  },
+  "next": {
+    "title": "provider-admission-policy",
+    "permalink": "/next/sorafs/provider-admission-policy"
+  }
+}

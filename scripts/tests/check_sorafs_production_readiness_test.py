@@ -33,6 +33,28 @@ GENERATED_AT = NOW_UNIX - 120
 SHA256 = "ab" * 32
 PREDECESSOR_CATALOG_SHA256 = "ac" * 32
 SNAPSHOT_ID = "cd" * 16
+REFERENCE_SDK_RELEASE_REHEARSAL_SHA256 = hashlib.sha256(
+    b"test-only-reference-sdk-release-rehearsal"
+).hexdigest()
+REFERENCE_SDK_SBOM_INDEX_SHA256 = hashlib.sha256(
+    b"test-only-reference-sdk-sbom-index"
+).hexdigest()
+REFERENCE_SDK_VULNERABILITY_REPORT_SHA256 = hashlib.sha256(
+    b"test-only-reference-sdk-vulnerability-report"
+).hexdigest()
+REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256 = hashlib.sha256(
+    b"test-only-reference-sdk-provenance-bundle"
+).hexdigest()
+REFERENCE_SDK_PROVENANCE_CERTIFICATE_IDENTITY = (
+    "https://github.com/hyperledger/iroha/"
+    ".github/workflows/sorafs-cli-release.yml@refs/heads/main"
+)
+REFERENCE_SDK_PROVENANCE_OIDC_ISSUER = (
+    "https://token.actions.githubusercontent.com"
+)
+REFERENCE_SDK_PROVENANCE_VERIFICATION_KEY_FINGERPRINT = hashlib.sha256(
+    b"test-only-reference-sdk-provenance-verification-key"
+).hexdigest()
 DEPLOYMENT_ID = "sorafs-mainnet-2026-06"
 ENVIRONMENT = "production"
 FOUNDATIONAL_RELEASE_SEQUENCE = 7
@@ -100,6 +122,57 @@ RESILIENCE_QUALIFICATION = build_resilience_binding(
     RESILIENCE_QUALIFICATION_SUMMARY,
     RESILIENCE_QUALIFICATION_SUMMARY_BYTES,
 )
+
+
+def reference_sdk_supply_chain_fingerprint() -> dict[str, object]:
+    """Return the source-bound SF-11 fingerprint used by aggregate fixtures."""
+
+    source_digests = (
+        REFERENCE_SDK_RELEASE_REHEARSAL_SHA256,
+        REFERENCE_SDK_SBOM_INDEX_SHA256,
+        REFERENCE_SDK_VULNERABILITY_REPORT_SHA256,
+        REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256,
+    )
+    source_paths = (
+        "release-rehearsal.json",
+        "sbom-index.json",
+        "vulnerability-report.json",
+        "provenance-bundle.json",
+    )
+    return {
+        "source_artifacts": [
+            {
+                "kind": kind,
+                "artifact_path": artifact_path,
+                "sha256": digest,
+            }
+            for kind, artifact_path, digest in zip(
+                MODULE.REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_KINDS,
+                source_paths,
+                source_digests,
+                strict=True,
+            )
+        ],
+        "provenance_certificate_identity": (
+            REFERENCE_SDK_PROVENANCE_CERTIFICATE_IDENTITY
+        ),
+        "provenance_oidc_issuer": REFERENCE_SDK_PROVENANCE_OIDC_ISSUER,
+        "provenance_verification_key_fingerprint_hex": (
+            REFERENCE_SDK_PROVENANCE_VERIFICATION_KEY_FINGERPRINT
+        ),
+    }
+
+
+def test_reference_sdk_supply_chain_inventory_contracts_are_schema_closed() -> None:
+    """Pin the structured source rows and reviewed public-provenance fields."""
+
+    assert MODULE.REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_FIELDS == frozenset(
+        {"kind", "artifact_path", "sha256"}
+    )
+    assert MODULE.REFERENCE_SDK_PUBLIC_PROVENANCE_FINGERPRINT_FIELDS == (
+        "provenance_certificate_identity",
+        "provenance_oidc_issuer",
+    )
 
 
 def ed25519_public_key_from_seed(seed: bytes) -> bytes:
@@ -235,6 +308,15 @@ def foundational_summary(
                     f"{prerequisite_id}:production-evidence".encode("ascii")
                 ).hexdigest(),
                 "evidence_generated_at_unix": generated_at_unix - 1,
+                "readiness_summary_sha256": [
+                    {
+                        "gate": gate_name,
+                        "sha256": lane_summary_sha256[gate_name],
+                    }
+                    for gate_name in MODULE.FOUNDATIONAL_PREREQUISITE_LANES[
+                        prerequisite_id
+                    ]
+                ],
             }
             for prerequisite_id in MODULE.FOUNDATIONAL_PREREQUISITE_IDS
         ],
@@ -308,12 +390,28 @@ def foundational_cli_args() -> list[str]:
     ]
 
 
-def topology_cli_args(
+def topology_only_cli_args(
     root: Path,
     deployment_id: str = DEPLOYMENT_ID,
     environment: str = ENVIRONMENT,
 ) -> list[str]:
-    """Return the mandatory exact qualification input for CLI cases."""
+    """Return the topology qualification accepted by individual lane checkers."""
+
+    topology_path = write_topology_qualification(root, deployment_id, environment)
+    return [
+        "--topology-qualification-summary",
+        str(topology_path),
+    ]
+
+
+def resilience_cli_args(
+    root: Path,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+    *,
+    generated_at_unix: int = GENERATED_AT,
+) -> list[str]:
+    """Return the aggregate-only resilience qualification arguments."""
 
     topology_path = write_topology_qualification(root, deployment_id, environment)
     topology_qualification, topology_errors = (
@@ -330,18 +428,36 @@ def topology_cli_args(
         deployment_id=deployment_id,
         environment=environment,
         topology_qualification=topology_qualification,
-        generated_at_unix=GENERATED_AT,
-        captured_at_unix=GENERATED_AT - 1,
+        generated_at_unix=generated_at_unix,
+        captured_at_unix=generated_at_unix - 1,
     )
     resilience_path = root / "l1-resilience-qualification.summary"
     resilience_path.write_bytes(render_resilience_summary(resilience_payload))
     return [
-        "--topology-qualification-summary",
-        str(topology_path),
         "--resilience-qualification-summary",
         str(resilience_path),
         "--resilience-qualification-signer-public-key-hex",
         RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
+    ]
+
+
+def topology_cli_args(
+    root: Path,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+    *,
+    generated_at_unix: int = GENERATED_AT,
+) -> list[str]:
+    """Return the complete topology and resilience input for aggregate cases."""
+
+    return [
+        *topology_only_cli_args(root, deployment_id, environment),
+        *resilience_cli_args(
+            root,
+            deployment_id,
+            environment,
+            generated_at_unix=generated_at_unix,
+        ),
     ]
 
 
@@ -757,6 +873,7 @@ def default_gate_metadata(
         add_hex_list(
             "valid_provenance_bundle_digests",
             "provenance_bundle_digest_hex",
+            REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256,
         )
         add_hex_list(
             "valid_release_key_fingerprints",
@@ -767,11 +884,16 @@ def default_gate_metadata(
             "valid_release_manifest_reference_digests",
             "release_manifest_digest_hex",
         )
-        add_hex_list("valid_sbom_index_digests", "sbom_index_digest_hex")
+        add_hex_list(
+            "valid_sbom_index_digests",
+            "sbom_index_digest_hex",
+            REFERENCE_SDK_SBOM_INDEX_SHA256,
+        )
         add_hex_list("valid_smoke_output_digests", "smoke_output_digest_hex")
         add_hex_list(
             "valid_vulnerability_report_digests",
             "vulnerability_report_digest_hex",
+            REFERENCE_SDK_VULNERABILITY_REPORT_SHA256,
         )
         fingerprints["signature_algorithm"] = "ed25519"
     elif gate_name == "repair":
@@ -935,6 +1057,15 @@ def gate_summary(
             artifact["fingerprint"].update(fingerprint_metadata)
     for artifact in payload["recognized_artifacts"]:
         artifact["fingerprint"].update(fingerprint_metadata)
+    if gate_name == "reference_sdk_release":
+        supply_chain_fingerprint = reference_sdk_supply_chain_fingerprint()
+        for artifact in payload["required"]["supply_chain"]["artifacts"]:
+            artifact["fingerprint"].update(copy.deepcopy(supply_chain_fingerprint))
+        for artifact in payload["recognized_artifacts"]:
+            if artifact.get("kind") == "supply_chain":
+                artifact["fingerprint"].update(
+                    copy.deepcopy(supply_chain_fingerprint)
+                )
     if raw_response:
         payload["response_body"] = "leaked"
     return payload
@@ -1305,6 +1436,13 @@ def write_complete_lane_fixture_summary(
     root: Path,
 ) -> tuple[dict, int]:
     fixture_module = load_lane_fixture_module(gate_name)
+    if gate_name == "reference_sdk_release":
+        # The source validator has its own end-to-end corpus. Dynamic imports
+        # do not activate the lane module's pytest autouse fixture, so install
+        # the same deterministic checker-layer stub explicitly here.
+        fixture_module.MODULE.validate_supply_chain_sources = (
+            fixture_module.deterministic_supply_chain_source_validation_stub
+        )
     evidence_root = root / gate_name
     evidence_root.mkdir()
     summary = root / f"{gate_name}.json"
@@ -1313,7 +1451,7 @@ def write_complete_lane_fixture_summary(
         written_evidence if isinstance(written_evidence, Path) else evidence_root
     )
     normalize_fixture_evidence_context(gate_evidence_root)
-    topology_args = topology_cli_args(root)
+    topology_args = topology_only_cli_args(root)
 
     if gate_name == "pop_credentials":
         exit_code = fixture_module.MODULE.main(
@@ -1347,6 +1485,22 @@ def write_complete_lane_fixture_summary(
             "provider-a",
             "--summary-out",
             str(summary),
+        )
+    elif gate_name == "reference_sdk_release":
+        # SF-11 requires an independently authenticated topology companion.
+        # Build its envelope from the same qualification bytes passed to the
+        # lane checker; appending the aggregate's summary-only argument would
+        # correctly fail because it has no matching signed companion here.
+        signed_topology = fixture_module.write_topology_qualification(
+            evidence_root,
+            deployment_id=DEPLOYMENT_ID,
+            environment=ENVIRONMENT,
+        )
+        exit_code = fixture_module.run_gate(
+            evidence_root,
+            "--summary-out",
+            str(summary),
+            topology=signed_topology,
         )
     elif gate_name == "gateway_compliance":
         exit_code = fixture_module.MODULE.main(
@@ -1610,798 +1764,18 @@ def test_declared_metadata_without_validator_fails_closed(
     assert f"{field} validator is not configured for `gateway_load`" in errors
 
 
-def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
-    write_all_gates(tmp_path)
-    summary = tmp_path / "summary.json"
-
-    assert run_gate(tmp_path, "--summary-out", str(summary)) == 0
-
-    payload = json.loads(summary.read_text(encoding="utf-8"))
-    assert payload["schema"] == MODULE.SUMMARY_SCHEMA
-    assert payload["status"] == "ready"
-    assert payload["recognized_summary_count"] == len(MODULE.DEFAULT_REQUIRED_GATES)
-    assert payload["deployment"] == {
-        "deployment_id": DEPLOYMENT_ID,
-        "environment": ENVIRONMENT,
-    }
-    assert payload["foundational_prerequisites"]["valid"] is True
-    assert payload["foundational_prerequisites"]["required_ids"] == list(
-        MODULE.FOUNDATIONAL_PREREQUISITE_IDS
-    )
-    assert payload["foundational_prerequisites"]["prerequisite_count"] == len(
-        MODULE.FOUNDATIONAL_PREREQUISITE_IDS
-    )
-    assert "signature" not in payload["foundational_prerequisites"]
-    assert payload["required"]["gateway_load"]["valid"] is True
-    assert payload["required"]["gateway_load"]["path"] == "gateway_load.json"
-    assert payload["required"]["gateway_load"]["thresholds"] == {
-        "max_evidence_bytes": 2_097_152,
-    }
-
-
-def test_aggregate_ready_requires_exact_canonical_ordered_17_gate_tuple() -> None:
-    assert (
-        MODULE.aggregate_summary_status([], MODULE.DEFAULT_REQUIRED_GATES)
-        == "ready"
-    )
-    assert (
-        MODULE.aggregate_summary_status([], MODULE.DEFAULT_REQUIRED_GATES[:-1])
-        == MODULE.NON_PROMOTABLE_STATUS
-    )
-    assert (
-        MODULE.aggregate_summary_status(
-            [],
-            tuple(reversed(MODULE.DEFAULT_REQUIRED_GATES)),
-        )
-        == MODULE.NON_PROMOTABLE_STATUS
-    )
-    assert (
-        MODULE.aggregate_summary_status(
-            ["canonical aggregate blocker"],
-            MODULE.DEFAULT_REQUIRED_GATES,
-        )
-        == "blocked"
-    )
-
-
-def test_complete_aggregate_without_topology_qualification_stays_blocked(
-    tmp_path: Path,
-) -> None:
-    """Configuration omission can never fall through to a ready aggregate."""
-
-    write_all_gates(tmp_path)
-    write_foundational_summary(tmp_path)
-    summary = tmp_path / "missing-topology-aggregate.json"
-    assert (
-        MODULE.main(
-            [
-                "--evidence-dir",
-                str(tmp_path),
-                "--now-unix",
-                str(NOW_UNIX),
-                "--deployment-id",
-                DEPLOYMENT_ID,
-                "--environment",
-                ENVIRONMENT,
-                *foundational_cli_args(),
-                "--summary-out",
-                str(summary),
-            ]
-        )
-        == 1
-    )
-    payload = json.loads(summary.read_text(encoding="utf-8"))
-    assert payload["status"] == "blocked"
-    assert payload["topology_qualification"] is None
-    assert "--topology-qualification-summary is required" in payload["errors"]
-
-
-def test_aggregate_rejects_lane_and_envelope_topology_substitution(
-    tmp_path: Path,
-) -> None:
-    """One changed topology digest blocks lane and signed-envelope paths."""
-
-    write_all_gates(tmp_path)
-    lane_path = tmp_path / "gateway_load.json"
-    lane = json.loads(lane_path.read_text(encoding="utf-8"))
-    lane["topology_qualification"]["manifest_sha256"] = hashlib.sha256(
-        b"foreign-lane-topology"
-    ).hexdigest()
-    write_json(lane_path, lane)
-    summary = tmp_path / "lane-mismatch-aggregate.json"
-    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
-    diagnostics = "\n".join(
-        json.loads(summary.read_text(encoding="utf-8"))["errors"]
-    )
-    assert "must match the reviewed topology" in diagnostics
-
-    summary.unlink()
-    write_gate(tmp_path, "gateway_load")
-    foundation = foundational_summary(
-        lane_summary_sha256=lane_summary_digests(tmp_path)
-    )
-    foundation["topology_qualification"]["manifest_sha256"] = hashlib.sha256(
-        b"foreign-envelope-topology"
-    ).hexdigest()
-    resign_foundational_summary(foundation)
-    write_foundational_summary(tmp_path, foundation)
-    summary = tmp_path / "envelope-mismatch-aggregate.json"
-    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
-    diagnostics = "\n".join(
-        json.loads(summary.read_text(encoding="utf-8"))["errors"]
-    )
-    assert "must match the reviewed topology" in diagnostics
-
-
-def test_full_aggregate_rejects_lane_summary_bytes_swapped_after_signing(
-    tmp_path: Path,
-) -> None:
-    """The HSM envelope must bind the exact reviewed lane summary byte set."""
-
-    write_all_gates(tmp_path)
-    write_foundational_summary(tmp_path)
-    gateway_summary_path = tmp_path / "gateway_load.json"
-    gateway_summary_path.write_bytes(gateway_summary_path.read_bytes() + b"\n")
-    summary_path = tmp_path / "aggregate.json"
-
-    assert run_gate(tmp_path, "--summary-out", str(summary_path)) == 1
-    result = json.loads(summary_path.read_text(encoding="utf-8"))
-    diagnostics = "\n".join(result["errors"])
-    assert result["status"] == "blocked"
-    assert result["recognized_summary_count"] == len(MODULE.DEFAULT_REQUIRED_GATES)
-    assert (
-        "foundational prerequisite lane summary binding for gateway_load does "
-        "not match the supplied readiness summary"
-        in diagnostics
-    )
-    assert result["foundational_prerequisites"]["valid"] is False
-
-
-def test_foundational_prerequisite_schema_inventories_are_closed() -> None:
-    assert MODULE.FOUNDATIONAL_PREREQUISITE_FIELDS == {
-        "schema",
-        "status",
-        "deployment",
-        "generated_at_unix",
-        "release_sequence",
-        "previous_envelope_sha256",
-        "topology_qualification",
-        "resilience_qualification",
-        "prerequisites",
-        "lane_summaries",
-        "signature",
-    }
-    assert MODULE.FOUNDATIONAL_PREREQUISITE_DEPLOYMENT_FIELDS == {
-        "deployment_id",
-        "environment",
-    }
-    assert MODULE.FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS == {
-        "algorithm",
-        "public_key_fingerprint_sha256",
-        "signature_hex",
-    }
-    assert MODULE.FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS == {
-        "gate",
-        "sha256",
-    }
-
-
-def test_foundational_prerequisites_reject_schema_set_freshness_and_context_attacks(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    """Exercise signed semantic attacks independently of signature forgery."""
-
-    def signed_mutation(mutator) -> dict:
-        payload = foundational_summary()
-        mutator(payload)
-        resign_foundational_summary(payload)
-        return payload
-
-    cases: list[tuple[str, dict, str]] = []
-
-    cases.append(
-        (
-            "missing-id",
-            signed_mutation(lambda payload: payload["prerequisites"].pop()),
-            "foundational prerequisites are missing required ids",
-        )
-    )
-
-    def add_unknown_id(payload: dict) -> None:
-        row = copy.deepcopy(payload["prerequisites"][-1])
-        row["id"] = "SF-99"
-        row["evidence_anchor_sha256"] = hashlib.sha256(b"SF-99").hexdigest()
-        payload["prerequisites"].append(row)
-
-    cases.append(
-        (
-            "extra-id",
-            signed_mutation(add_unknown_id),
-            "foundational prerequisites contain unknown ids",
-        )
-    )
-    cases.append(
-        (
-            "duplicate-id",
-            signed_mutation(
-                lambda payload: payload["prerequisites"][-1].__setitem__(
-                    "id", payload["prerequisites"][0]["id"]
-                )
-            ),
-            "foundational prerequisites must not contain duplicate ids",
-        )
-    )
-    cases.append(
-        (
-            "reordered-ids",
-            signed_mutation(lambda payload: payload["prerequisites"].reverse()),
-            "foundational prerequisites must match the exact required set and canonical order",
-        )
-    )
-    cases.append(
-        (
-            "duplicate-anchor",
-            signed_mutation(
-                lambda payload: payload["prerequisites"][1].__setitem__(
-                    "evidence_anchor_sha256",
-                    payload["prerequisites"][0]["evidence_anchor_sha256"],
-                )
-            ),
-            "foundational prerequisites must use unique evidence anchors",
-        )
-    )
-    cases.append(
-        (
-            "zero-anchor",
-            signed_mutation(
-                lambda payload: payload["prerequisites"][0].__setitem__(
-                    "evidence_anchor_sha256", "00" * 32
-                )
-            ),
-            "evidence_anchor_sha256 must not be zero",
-        )
-    )
-    cases.append(
-        (
-            "uppercase-anchor",
-            signed_mutation(
-                lambda payload: payload["prerequisites"][0].__setitem__(
-                    "evidence_anchor_sha256",
-                    payload["prerequisites"][0]["evidence_anchor_sha256"].upper(),
-                )
-            ),
-            "evidence_anchor_sha256 must be canonical lowercase SHA-256",
-        )
-    )
-    cases.append(
-        (
-            "failed-row",
-            signed_mutation(
-                lambda payload: payload["prerequisites"][0].__setitem__(
-                    "status", "failed"
-                )
-            ),
-            ".status must be `verified`",
-        )
-    )
-    cases.append(
-        (
-            "failed-envelope",
-            signed_mutation(lambda payload: payload.__setitem__("status", "failed")),
-            "foundational prerequisite status must be `verified`",
-        )
-    )
-    cases.append(
-        (
-            "stale-envelope",
-            signed_mutation(
-                lambda payload: payload.__setitem__(
-                    "generated_at_unix",
-                    NOW_UNIX - MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS - 1,
-                )
-            ),
-            "foundational prerequisite generated_at_unix exceeds max summary artifact age",
-        )
-    )
-    cases.append(
-        (
-            "future-envelope",
-            signed_mutation(
-                lambda payload: payload.__setitem__(
-                    "generated_at_unix", NOW_UNIX + 1
-                )
-            ),
-            "foundational prerequisite generated_at_unix must not be future",
-        )
-    )
-    cases.append(
-        (
-            "stale-evidence",
-            signed_mutation(
-                lambda payload: payload["prerequisites"][0].__setitem__(
-                    "evidence_generated_at_unix",
-                    NOW_UNIX - MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS - 1,
-                )
-            ),
-            "evidence_generated_at_unix exceeds max summary artifact age",
-        )
-    )
-    cases.append(
-        (
-            "future-evidence",
-            signed_mutation(
-                lambda payload: payload["prerequisites"][0].__setitem__(
-                    "evidence_generated_at_unix", NOW_UNIX + 1
-                )
-            ),
-            "evidence_generated_at_unix must not be future",
-        )
-    )
-    cases.append(
-        (
-            "post-envelope-evidence",
-            signed_mutation(
-                lambda payload: payload["prerequisites"][0].__setitem__(
-                    "evidence_generated_at_unix", GENERATED_AT + 1
-                )
-            ),
-            "evidence_generated_at_unix must not be later than the signed envelope",
-        )
-    )
-    cases.append(
-        (
-            "mixed-deployment",
-            signed_mutation(
-                lambda payload: payload["deployment"].__setitem__(
-                    "deployment_id", "sorafs-mainnet-2026-07"
-                )
-            ),
-            "foundational prerequisite deployment_id must match --deployment-id",
-        )
-    )
-    cases.append(
-        (
-            "mixed-environment",
-            signed_mutation(
-                lambda payload: payload["deployment"].__setitem__(
-                    "environment", "prod"
-                )
-            ),
-            "foundational prerequisite environment must match --environment",
-        )
-    )
-    cases.append(
-        (
-            "unicode-control-id",
-            signed_mutation(
-                lambda payload: payload["prerequisites"][2].__setitem__(
-                    "id", "SF-\u202e2"
-                )
-            ),
-            ".id must be a canonical string",
-        )
-    )
-    cases.append(
-        (
-            "unicode-homoglyph-id",
-            signed_mutation(
-                lambda payload: payload["prerequisites"][2].__setitem__(
-                    "id", "S\uff26-2"
-                )
-            ),
-            "foundational prerequisites contain unknown ids",
-        )
-    )
-    cases.append(
-        (
-            "boolean-sequence",
-            signed_mutation(
-                lambda payload: payload.__setitem__("release_sequence", True)
-            ),
-            "foundational prerequisite release_sequence must be an integer in 1..2^63-1",
-        )
-    )
-    cases.append(
-        (
-            "zero-predecessor-after-genesis",
-            signed_mutation(
-                lambda payload: payload.__setitem__(
-                    "previous_envelope_sha256", "00" * 32
-                )
-            ),
-            "foundational prerequisite sequence after 1 must use a non-zero predecessor",
-        )
-    )
-    cases.append(
-        (
-            "rollback-sequence",
-            signed_mutation(
-                lambda payload: payload.__setitem__(
-                    "release_sequence", FOUNDATIONAL_RELEASE_SEQUENCE - 1
-                )
-            ),
-            "release_sequence must match the operator-reviewed expected value",
-        )
-    )
-    cases.append(
-        (
-            "replay-wrong-predecessor",
-            signed_mutation(
-                lambda payload: payload.__setitem__(
-                    "previous_envelope_sha256", "22" * 32
-                )
-            ),
-            "previous_envelope_sha256 must match the operator-reviewed expected digest",
-        )
-    )
-    cases.append(
-        (
-            "wrong-algorithm",
-            signed_mutation(
-                lambda payload: payload["signature"].__setitem__(
-                    "algorithm", "ed25519ph"
-                )
-            ),
-            "signature algorithm must be `ed25519`",
-        )
-    )
-
-    secret_path = "../../runtime-only-private-key-material"
-
-    def add_path_payload(payload: dict) -> None:
-        payload["prerequisites"][0]["evidence_path"] = secret_path
-
-    cases.append(
-        (
-            "traversal-payload-field",
-            signed_mutation(add_path_payload),
-            "fields must match the schema-closed contract",
-        )
-    )
-
-    def add_raw_secret(payload: dict) -> None:
-        payload["raw_payload"] = "runtime-only-secret-payload"
-
-    cases.append(
-        (
-            "raw-secret-field",
-            signed_mutation(add_raw_secret),
-            "is not allowed",
-        )
-    )
-
-    for index, (name, payload, expected_error) in enumerate(cases):
-        exit_code, result = run_foundational_case(
-            tmp_path / f"foundation-semantic-{index:02d}-{name}",
-            payload,
-        )
-        assert exit_code == 1, name
-        diagnostics = "\n".join(result["errors"])
-        assert expected_error in diagnostics, name
-        assert result["status"] == "blocked", name
-        assert result["foundational_prerequisites"]["valid"] is False, name
-        assert "signature" not in result["foundational_prerequisites"], name
-        captured = capsys.readouterr()
-        rendered = diagnostics + captured.err + captured.out
-        assert secret_path not in rendered, name
-        assert "runtime-only-secret-payload" not in rendered, name
-
-
-def test_foundational_prerequisites_reject_signature_digest_and_trust_attacks(
-    tmp_path: Path,
-) -> None:
-    """Reject forgeries, self-selected signers, and non-canonical signatures."""
-
-    cases: list[tuple[str, dict, str]] = []
-
-    forged_signature = foundational_summary()
-    signature_hex = forged_signature["signature"]["signature_hex"]
-    forged_signature["signature"]["signature_hex"] = (
-        ("0" if signature_hex[0] != "0" else "1") + signature_hex[1:]
-    )
-    cases.append(
-        (
-            "forged-signature",
-            forged_signature,
-            "foundational prerequisite signature verification failed",
-        )
-    )
-
-    forged_digest = foundational_summary()
-    forged_digest["prerequisites"][0]["evidence_anchor_sha256"] = "33" * 32
-    cases.append(
-        (
-            "forged-digest",
-            forged_digest,
-            "foundational prerequisite signature verification failed",
-        )
-    )
-
-    malleable_signature = foundational_summary()
-    signature = bytes.fromhex(malleable_signature["signature"]["signature_hex"])
-    scalar = int.from_bytes(signature[32:], "little") + RELEASE_CRYPTO._ED_L  # noqa: SLF001
-    malleable_signature["signature"]["signature_hex"] = (
-        signature[:32] + scalar.to_bytes(32, "little")
-    ).hex()
-    cases.append(
-        (
-            "non-canonical-scalar",
-            malleable_signature,
-            "foundational prerequisite signature verification failed",
-        )
-    )
-
-    alternate_signer = foundational_summary()
-    resign_foundational_summary(alternate_signer, seed=bytes.fromhex("2f" * 32))
-    cases.append(
-        (
-            "self-selected-signer",
-            alternate_signer,
-            "signer fingerprint must match the operator-trusted key",
-        )
-    )
-
-    wrong_fingerprint = foundational_summary()
-    wrong_fingerprint["signature"]["public_key_fingerprint_sha256"] = "44" * 32
-    wrong_fingerprint["signature"]["signature_hex"] = "00" * 64
-    wrong_fingerprint["signature"]["signature_hex"] = ed25519_sign(
-        FOUNDATIONAL_SIGNING_SEED,
-        MODULE.foundational_signing_payload(wrong_fingerprint),
-    ).hex()
-    cases.append(
-        (
-            "forged-fingerprint",
-            wrong_fingerprint,
-            "signer fingerprint must match the operator-trusted key",
-        )
-    )
-
-    zero_signature = foundational_summary()
-    zero_signature["signature"]["signature_hex"] = "00" * 64
-    cases.append(
-        (
-            "zero-signature",
-            zero_signature,
-            "signature must be a non-zero canonical Ed25519 signature",
-        )
-    )
-
-    uppercase_signature = foundational_summary()
-    uppercase_signature["signature"]["signature_hex"] = uppercase_signature[
-        "signature"
-    ]["signature_hex"].upper()
-    cases.append(
-        (
-            "uppercase-signature",
-            uppercase_signature,
-            "signature must be a non-zero canonical Ed25519 signature",
-        )
-    )
-
-    for index, (name, payload, expected_error) in enumerate(cases):
-        exit_code, result = run_foundational_case(
-            tmp_path / f"foundation-signature-{index:02d}-{name}",
-            payload,
-        )
-        assert exit_code == 1, name
-        diagnostics = "\n".join(result["errors"])
-        assert expected_error in diagnostics, name
-        assert result["status"] == "blocked", name
-        assert result["foundational_prerequisites"]["valid"] is False, name
-
-
-def test_foundational_prerequisite_missing_duplicate_and_untrusted_inputs_block(
-    tmp_path: Path,
-) -> None:
-    missing_root = tmp_path / "missing-foundation"
-    missing_root.mkdir()
-    lane_path = write_json(
-        missing_root / "gateway_load.json",
-        gate_summary("gateway_load"),
-    )
-    missing_summary = missing_root / "aggregate.json"
-    assert (
-        MODULE.main(
-            [
-                "--evidence",
-                str(lane_path),
-                "--require-gate",
-                "gateway_load",
-                "--now-unix",
-                str(NOW_UNIX),
-                "--deployment-id",
-                DEPLOYMENT_ID,
-                "--environment",
-                ENVIRONMENT,
-                *topology_cli_args(missing_root),
-                *foundational_cli_args(),
-                "--summary-out",
-                str(missing_summary),
-            ]
-        )
-        == 1
-    )
-    missing = json.loads(missing_summary.read_text(encoding="utf-8"))
-    assert missing["foundational_prerequisites"] == {
-        "schema": MODULE.FOUNDATIONAL_PREREQUISITE_SCHEMA,
-        "present": False,
-        "valid": False,
-        "errors": ["missing required foundational prerequisite summary"],
-    }
-    assert missing["status"] == "blocked"
-
-    duplicate_root = tmp_path / "duplicate-foundation"
-    duplicate_root.mkdir()
-    write_gate(duplicate_root, "gateway_load")
-    write_json(
-        duplicate_root / "foundational_prerequisites_copy.json",
-        foundational_summary(),
-    )
-    duplicate_summary = duplicate_root / "aggregate.json"
-    assert (
-        run_gate(
-            duplicate_root,
-            "--require-gate",
-            "gateway_load",
-            "--summary-out",
-            str(duplicate_summary),
-        )
-        == 1
-    )
-    duplicate = json.loads(duplicate_summary.read_text(encoding="utf-8"))
-    assert "duplicate foundational prerequisite summary" in duplicate["errors"]
-    assert duplicate["foundational_prerequisites"]["valid"] is False
-
-    untrusted_root = tmp_path / "untrusted-foundation"
-    untrusted_root.mkdir()
-    write_gate(untrusted_root, "gateway_load")
-    write_foundational_summary(untrusted_root)
-    untrusted_summary = untrusted_root / "aggregate.json"
-    assert (
-        MODULE.main(
-            [
-                "--evidence-dir",
-                str(untrusted_root),
-                "--require-gate",
-                "gateway_load",
-                "--now-unix",
-                str(NOW_UNIX),
-                "--deployment-id",
-                DEPLOYMENT_ID,
-                "--environment",
-                ENVIRONMENT,
-                *topology_cli_args(untrusted_root),
-                "--summary-out",
-                str(untrusted_summary),
-            ]
-        )
-        == 1
-    )
-    untrusted = json.loads(untrusted_summary.read_text(encoding="utf-8"))
-    diagnostics = "\n".join(untrusted["errors"])
-    assert "operator-trusted Ed25519 public key" in diagnostics
-    assert "operator-reviewed expected value" in diagnostics
-    assert "operator-reviewed expected digest" in diagnostics
-
-
-def test_foundational_prerequisite_path_policy_rejects_symlink_and_traversal(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    root = tmp_path / "path-policy"
-    root.mkdir()
-    lane = write_json(root / "gateway_load.json", gate_summary("gateway_load"))
-    target = write_json(root / "foundation-target.json", foundational_summary())
-    symlink = root / "foundation-link.json"
-    symlink.symlink_to(target)
-
-    assert (
-        MODULE.main(
-            [
-                "--evidence",
-                str(lane),
-                "--evidence",
-                str(symlink),
-                "--require-gate",
-                "gateway_load",
-                "--now-unix",
-                str(NOW_UNIX),
-                "--deployment-id",
-                DEPLOYMENT_ID,
-                "--environment",
-                ENVIRONMENT,
-                *topology_cli_args(root),
-                *foundational_cli_args(),
-            ]
-        )
-        == 1
-    )
-    captured = capsys.readouterr()
-    assert "evidence file must not be a symlink" in captured.err
-    assert "foundation-target" not in captured.err
-
-    (root / "nested").mkdir()
-    traversal = root / "nested" / ".." / "foundation-target.json"
-    assert (
-        MODULE.main(
-            [
-                "--evidence",
-                str(lane),
-                "--evidence",
-                str(traversal),
-                "--require-gate",
-                "gateway_load",
-                "--now-unix",
-                str(NOW_UNIX),
-                "--deployment-id",
-                DEPLOYMENT_ID,
-                "--environment",
-                ENVIRONMENT,
-                *topology_cli_args(root),
-                *foundational_cli_args(),
-            ]
-        )
-        == 2
-    )
-    captured = capsys.readouterr()
-    assert "checker-rendered paths" in captured.err
-
-
-def test_foundational_prerequisite_cli_trust_values_fail_closed_without_echo(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    write_gate(tmp_path, "gateway_load")
-    malformed_values = (
-        (
-            "--foundational-prerequisite-signer-public-key-hex",
-            "private-key-runtime-only",
-            "must be exactly 32 bytes of lowercase hex",
-        ),
-        (
-            "--foundational-prerequisite-signer-public-key-hex",
-            "00" * 32,
-            "must not be the all-zero key",
-        ),
-        (
-            "--foundational-prerequisite-previous-envelope-sha256",
-            "SECRET-PREDECESSOR",
-            "must be canonical lowercase SHA-256",
-        ),
-        (
-            "--foundational-prerequisite-release-sequence",
-            str(1 << 63),
-            "must be in 1..2^63-1",
-        ),
-    )
-    for flag, value, expected_error in malformed_values:
-        assert (
-            MODULE.main(
-                [
-                    *topology_cli_args(tmp_path),
-                    "--evidence-dir",
-                    str(tmp_path),
-                    "--require-gate",
-                    "gateway_load",
-                    "--now-unix",
-                    str(NOW_UNIX),
-                    "--deployment-id",
-                    DEPLOYMENT_ID,
-                    "--environment",
-                    ENVIRONMENT,
-                    *topology_cli_args(tmp_path),
-                    *foundational_cli_args(),
-                    flag,
-                    value,
-                ]
-            )
-            == 2
-        )
-        captured = capsys.readouterr()
-        assert expected_error in captured.err
-        assert value not in captured.err
-        assert captured.out == ""
+_PRODUCTION_FOUNDATIONAL_CASES = Path(__file__).with_name(
+    "sorafs_production_foundational_cases.py"
+)
+exec(
+    compile(
+        _PRODUCTION_FOUNDATIONAL_CASES.read_bytes(),
+        str(_PRODUCTION_FOUNDATIONAL_CASES),
+        "exec",
+    ),
+    globals(),
+)
+del _PRODUCTION_FOUNDATIONAL_CASES
 
 
 def test_direct_checker_requires_explicit_deployment_context(tmp_path: Path) -> None:
@@ -2480,11 +1854,23 @@ def test_complete_lane_fixture_summaries_pass_full_aggregate_cli(
     fixture_root.mkdir()
     summary_root.mkdir()
     now_unix = write_normalized_complete_lane_summaries(fixture_root, summary_root)
+    qualification_args = topology_cli_args(
+        summary_root,
+        generated_at_unix=now_unix - 1,
+    )
+    resilience_path = summary_root / "l1-resilience-qualification.summary"
+    resilience_bytes = resilience_path.read_bytes()
+    resilience_qualification = build_resilience_binding(
+        MODULE,
+        json.loads(resilience_bytes),
+        resilience_bytes,
+    )
     write_foundational_summary(
         summary_root,
         foundational_summary(
             generated_at_unix=now_unix - 1,
             lane_summary_sha256=lane_summary_digests(summary_root),
+            resilience_qualification=resilience_qualification,
         ),
     )
     summary = tmp_path / "aggregate.json"
@@ -2500,7 +1886,7 @@ def test_complete_lane_fixture_summaries_pass_full_aggregate_cli(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
-                *topology_cli_args(summary_root),
+                *qualification_args,
                 *foundational_cli_args(),
                 "--summary-out",
                 str(summary),
@@ -2605,15 +1991,21 @@ def test_aggregate_summary_path_label_falls_back_when_identity_resolution_fails(
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
     write_gate(tmp_path, "gateway_load")
     write_foundational_summary(tmp_path)
+    qualification_args = topology_cli_args(tmp_path)
+    qualification_lines = [
+        f"{flag} {value}"
+        for flag, value in zip(
+            qualification_args[::2],
+            qualification_args[1::2],
+            strict=True,
+        )
+    ]
     args = tmp_path / "aggregate.args"
     args.write_text(
         "\n".join(
-                [
-                    (
-                        "--topology-qualification-summary "
-                        f"{write_topology_qualification(tmp_path)}"
-                    ),
-                    f"--evidence-dir {tmp_path}",
+            [
+                *qualification_lines,
+                f"--evidence-dir {tmp_path}",
                 "--require-gate gateway_load",
                 f"--now-unix {NOW_UNIX}",
                 f"--deployment-id {DEPLOYMENT_ID}",
@@ -3013,6 +2405,7 @@ def test_explicit_evidence_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3048,6 +2441,7 @@ def test_explicit_evidence_broken_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3088,6 +2482,7 @@ def test_evidence_dir_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3123,6 +2518,7 @@ def test_evidence_dir_broken_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3163,6 +2559,7 @@ def test_explicit_evidence_parent_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3200,6 +2597,7 @@ def test_explicit_evidence_broken_parent_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3241,6 +2639,7 @@ def test_evidence_dir_parent_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3278,6 +2677,7 @@ def test_evidence_dir_broken_parent_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3317,6 +2717,7 @@ def test_discovered_evidence_file_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3354,6 +2755,7 @@ def test_duplicate_explicit_evidence_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3390,6 +2792,7 @@ def test_explicit_and_directory_evidence_overlap_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3428,6 +2831,7 @@ def test_overlapping_evidence_dirs_fail_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3489,6 +2893,7 @@ def test_evidence_source_conflicts_fail_closed_from_config(
                         DEPLOYMENT_ID,
                         "--environment",
                         ENVIRONMENT,
+                        *topology_cli_args(root),
                     ]
                 )
                 == 1
@@ -3581,6 +2986,7 @@ def test_explicit_unrequired_gate_summary_fails(tmp_path: Path) -> None:
                 ENVIRONMENT,
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3726,6 +3132,7 @@ def test_duplicate_sensitive_json_key_load_error_does_not_echo(
                 ENVIRONMENT,
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5526,6 +4933,7 @@ def test_staging_environment_cannot_promote_production_readiness(tmp_path: Path)
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5559,6 +4967,7 @@ def test_unreviewed_deployment_id_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5598,6 +5007,7 @@ def test_staging_deployment_id_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5637,6 +5047,7 @@ def test_numbered_staging_deployment_id_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5676,6 +5087,7 @@ def test_compact_staging_deployment_id_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5715,6 +5127,7 @@ def test_joined_nonproduction_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5754,6 +5167,7 @@ def test_prerelease_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5793,6 +5207,7 @@ def test_tokenized_prerelease_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5832,6 +5247,7 @@ def test_preview_prerelease_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5871,6 +5287,7 @@ def test_canary_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5910,6 +5327,7 @@ def test_stg_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5949,6 +5367,7 @@ def test_poc_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5988,6 +5407,7 @@ def test_smoke_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6027,6 +5447,7 @@ def test_stress_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6066,6 +5487,7 @@ def test_shadow_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6105,6 +5527,7 @@ def test_cutover_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -8886,13 +8309,17 @@ def test_reference_sdk_release_policy_metadata_for_gate_passes(
     payload["valid_header_digests"] = [SHA256]
     payload["valid_package_index_digests"] = [SHA256]
     payload["valid_policy_digests"] = [SHA256]
-    payload["valid_provenance_bundle_digests"] = [SHA256]
+    payload["valid_provenance_bundle_digests"] = [
+        REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256
+    ]
     payload["valid_release_key_fingerprints"] = [SHA256]
     payload["valid_release_manifest_digests"] = [SHA256]
     payload["valid_release_manifest_reference_digests"] = [SHA256]
-    payload["valid_sbom_index_digests"] = [SHA256]
+    payload["valid_sbom_index_digests"] = [REFERENCE_SDK_SBOM_INDEX_SHA256]
     payload["valid_smoke_output_digests"] = [SHA256]
-    payload["valid_vulnerability_report_digests"] = [SHA256]
+    payload["valid_vulnerability_report_digests"] = [
+        REFERENCE_SDK_VULNERABILITY_REPORT_SHA256
+    ]
     add_fingerprint_metadata(
         payload,
         archive_index_digest_hex=SHA256,
@@ -8901,16 +8328,387 @@ def test_reference_sdk_release_policy_metadata_for_gate_passes(
         manifest_digest_hex=SHA256,
         package_index_digest_hex=SHA256,
         policy_digest_hex=SHA256,
-        provenance_bundle_digest_hex=SHA256,
+        provenance_bundle_digest_hex=REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256,
         public_key_fingerprint_hex=SHA256,
         release_manifest_digest_hex=SHA256,
-        sbom_index_digest_hex=SHA256,
+        sbom_index_digest_hex=REFERENCE_SDK_SBOM_INDEX_SHA256,
         smoke_output_digest_hex=SHA256,
-        vulnerability_report_digest_hex=SHA256,
+        vulnerability_report_digest_hex=(
+            REFERENCE_SDK_VULNERABILITY_REPORT_SHA256
+        ),
     )
     write_json(tmp_path / "reference_sdk_release.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "reference_sdk_release") == 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        REFERENCE_SDK_PROVENANCE_CERTIFICATE_IDENTITY,
+        REFERENCE_SDK_PROVENANCE_OIDC_ISSUER,
+    ),
+)
+def test_reference_sdk_public_provenance_urls_are_canonical(value: str) -> None:
+    assert MODULE.canonical_public_provenance_url(value) == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        None,
+        "",
+        "http://token.actions.githubusercontent.com",
+        "https://TOKEN.actions.githubusercontent.com",
+        "https://user@example.com/provenance",
+        "https://example.com/provenance?token=1",
+        "https://example.com/provenance#fragment",
+        "https:///missing-host",
+        "https://example.com/bad path",
+        "https://localhost/token",
+        "https://127.0.0.1/token",
+        "https://127.1/workflow",
+        "https://10.1/workflow",
+        "https://0x7f.0x0.0x0.0x1/workflow",
+        "https://[::1]/token",
+        "https://example.com:bad",
+        "https://example.com:",
+        "https://example.com/%74oken",
+        (
+            "https://example.com/"
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ."
+            "c2lnbmF0dXJlX3Rlc3Q"
+        ),
+        "https:\\\\example.com\\provenance",
+    ),
+)
+def test_reference_sdk_public_provenance_urls_reject_noncanonical_values(
+    value: object,
+) -> None:
+    assert MODULE.canonical_public_provenance_url(value) is None
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_error"),
+    (
+        ("missing", "source_artifacts must be an array"),
+        ("reordered", "kinds must match the exact canonical order"),
+        ("extra_field", "fields must match the exact source binding contract"),
+        ("path_escape", "artifact_path must be archive-relative and portable"),
+        ("duplicate_path", "source_artifacts paths must be unique"),
+        ("zero_digest", "source_artifacts[0].sha256 must not be zero"),
+        ("duplicate_digest", "source_artifacts SHA-256 digests must be unique"),
+        (
+            "sbom_mismatch",
+            "sbom_index source digest must match sbom_index_digest_hex",
+        ),
+        (
+            "vulnerability_mismatch",
+            "vulnerability_report source digest must match "
+            "vulnerability_report_digest_hex",
+        ),
+        (
+            "provenance_mismatch",
+            "provenance_bundle source digest must match "
+            "provenance_bundle_digest_hex",
+        ),
+    ),
+)
+def test_reference_sdk_supply_chain_source_fingerprint_fails_closed(
+    case: str,
+    expected_error: str,
+) -> None:
+    fingerprint = {
+        **reference_sdk_supply_chain_fingerprint(),
+        "sbom_index_digest_hex": REFERENCE_SDK_SBOM_INDEX_SHA256,
+        "vulnerability_report_digest_hex": (
+            REFERENCE_SDK_VULNERABILITY_REPORT_SHA256
+        ),
+        "provenance_bundle_digest_hex": REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256,
+    }
+    source_artifacts = fingerprint["source_artifacts"]
+    assert isinstance(source_artifacts, list)
+    if case == "missing":
+        fingerprint.pop("source_artifacts")
+    elif case == "reordered":
+        source_artifacts[0], source_artifacts[1] = (
+            source_artifacts[1],
+            source_artifacts[0],
+        )
+    elif case == "extra_field":
+        source_artifacts[0]["size_bytes"] = 1
+    elif case == "path_escape":
+        source_artifacts[0]["artifact_path"] = "../release-rehearsal.json"
+    elif case == "duplicate_path":
+        source_artifacts[1]["artifact_path"] = source_artifacts[0][
+            "artifact_path"
+        ]
+    elif case == "zero_digest":
+        source_artifacts[0]["sha256"] = "0" * 64
+    elif case == "duplicate_digest":
+        source_artifacts[1]["sha256"] = source_artifacts[0]["sha256"]
+    elif case == "sbom_mismatch":
+        fingerprint["sbom_index_digest_hex"] = "b1" * 32
+    elif case == "vulnerability_mismatch":
+        fingerprint["vulnerability_report_digest_hex"] = "b2" * 32
+    elif case == "provenance_mismatch":
+        fingerprint["provenance_bundle_digest_hex"] = "b3" * 32
+    else:  # pragma: no cover - parameter table is closed above
+        raise AssertionError(f"unhandled test case: {case}")
+
+    errors: list[str] = []
+    MODULE.validate_reference_sdk_supply_chain_fingerprint(
+        fingerprint,
+        errors,
+        path="reference_sdk_release supply_chain fingerprint[0]",
+    )
+
+    assert expected_error in "\n".join(errors)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    (
+        (
+            "provenance_certificate_identity",
+            "http://github.com/hyperledger/iroha",
+            "provenance_certificate_identity must be a canonical public "
+            "HTTPS identity",
+        ),
+        (
+            "provenance_oidc_issuer",
+            "https://user@token.actions.githubusercontent.com",
+            "provenance_oidc_issuer must be a canonical public HTTPS issuer",
+        ),
+        (
+            "provenance_verification_key_fingerprint_hex",
+            "0" * 64,
+            "provenance_verification_key_fingerprint_hex must not be zero",
+        ),
+    ),
+)
+def test_reference_sdk_supply_chain_trust_fingerprint_fails_closed(
+    field: str,
+    value: str,
+    expected_error: str,
+) -> None:
+    fingerprint = {
+        **reference_sdk_supply_chain_fingerprint(),
+        "sbom_index_digest_hex": REFERENCE_SDK_SBOM_INDEX_SHA256,
+        "vulnerability_report_digest_hex": (
+            REFERENCE_SDK_VULNERABILITY_REPORT_SHA256
+        ),
+        "provenance_bundle_digest_hex": REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256,
+    }
+    fingerprint[field] = value
+    errors: list[str] = []
+
+    MODULE.validate_reference_sdk_supply_chain_fingerprint(
+        fingerprint,
+        errors,
+        path="reference_sdk_release supply_chain fingerprint[0]",
+    )
+
+    assert expected_error in "\n".join(errors)
+
+
+def test_reference_sdk_public_provenance_mask_keeps_private_keys_rejected(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    secret_value = "runtime-only-reference-sdk-private-key-material"
+    add_fingerprint_metadata(
+        payload,
+        kind_name="supply_chain",
+        private_key=secret_value,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert ".fingerprint.<sensitive-key> must not be present" in errors
+    assert "private_key" not in errors
+    assert secret_value not in errors
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_error"),
+    (
+        (
+            "reordered_source",
+            "source_artifacts kinds must match the exact canonical order",
+        ),
+        (
+            "source_digest_mismatch",
+            "sbom_index source digest must match sbom_index_digest_hex",
+        ),
+        (
+            "private_host",
+            "provenance_certificate_identity must be a canonical public "
+            "HTTPS identity",
+        ),
+        (
+            "secret_bearing_url",
+            "must not contain secret-looking values",
+        ),
+    ),
+)
+def test_reference_sdk_supply_chain_fingerprint_negatives_reach_gate_validation(
+    tmp_path: Path,
+    case: str,
+    expected_error: str,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    secret_token = (
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ."
+        "c2lnbmF0dXJlX3Rlc3Q"
+    )
+    fingerprints = [
+        artifact["fingerprint"]
+        for artifact in payload["required"]["supply_chain"]["artifacts"]
+    ]
+    for fingerprint in fingerprints:
+        if case == "reordered_source":
+            source_artifacts = fingerprint["source_artifacts"]
+            source_artifacts[0], source_artifacts[1] = (
+                source_artifacts[1],
+                source_artifacts[0],
+            )
+        elif case == "source_digest_mismatch":
+            fingerprint["sbom_index_digest_hex"] = "b1" * 32
+        elif case == "private_host":
+            fingerprint["provenance_certificate_identity"] = (
+                "https://127.0.0.1/workflow"
+            )
+        elif case == "secret_bearing_url":
+            fingerprint["provenance_certificate_identity"] = (
+                f"https://example.com/{secret_token}"
+            )
+        else:  # pragma: no cover - parameter table is closed above
+            raise AssertionError(f"unhandled test case: {case}")
+
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert expected_error in errors
+    assert secret_token not in errors
+
+
+@pytest.mark.parametrize(
+    "legacy_host_url",
+    (
+        "https://127.1/workflow",
+        "https://10.1/workflow",
+        "https://0x7f.0x0.0x0.0x1/workflow",
+    ),
+)
+def test_reference_sdk_legacy_ipv4_hosts_block_full_seventeen_lane_promotion(
+    tmp_path: Path,
+    legacy_host_url: str,
+) -> None:
+    write_all_gates(tmp_path)
+    reference_summary = tmp_path / "reference_sdk_release.json"
+    payload = json.loads(reference_summary.read_text(encoding="utf-8"))
+    add_fingerprint_metadata(
+        payload,
+        kind_name="supply_chain",
+        provenance_certificate_identity=legacy_host_url,
+    )
+    write_json(reference_summary, payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert result["status"] == "blocked"
+    assert result["recognized_summary_count"] == 17
+    assert result["required"]["reference_sdk_release"]["valid"] is False
+    assert (
+        "provenance_certificate_identity must be a canonical public HTTPS "
+        "identity"
+    ) in errors
+    assert legacy_host_url not in errors
+
+
+def test_reference_sdk_supply_chain_artifacts_share_trust_and_digest_inventory(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    required_row = payload["required"]["supply_chain"]
+    second = copy.deepcopy(required_row["artifacts"][0])
+    second["path"] = "artifacts/reference_sdk_release/supply-chain-2.json"
+    second["sha256"] = "c1" * 32
+    fingerprint = second["fingerprint"]
+    second_source_digests = ("c2" * 32, "c3" * 32, "c4" * 32, "c5" * 32)
+    for source, digest in zip(
+        fingerprint["source_artifacts"],
+        second_source_digests,
+        strict=True,
+    ):
+        source["artifact_path"] = f"second/{source['artifact_path']}"
+        source["sha256"] = digest
+    fingerprint["sbom_index_digest_hex"] = second_source_digests[1]
+    fingerprint["vulnerability_report_digest_hex"] = second_source_digests[2]
+    fingerprint["provenance_bundle_digest_hex"] = second_source_digests[3]
+    fingerprint["provenance_certificate_identity"] = (
+        "https://github.com/hyperledger/iroha/"
+        ".github/workflows/other-release.yml@refs/heads/main"
+    )
+    fingerprint["provenance_oidc_issuer"] = "https://issuer.example.com"
+    fingerprint["provenance_verification_key_fingerprint_hex"] = "c6" * 32
+
+    required_row["artifacts"].append(second)
+    required_row["artifact_count"] = 2
+    recognized_second = copy.deepcopy(second)
+    recognized_second["kind"] = "supply_chain"
+    payload["recognized_artifacts"].append(recognized_second)
+    payload["evidence_file_count"] += 1
+    payload["recognized_artifact_count"] += 1
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reference_sdk_release supply-chain SBOM index fingerprints must match "
+        "valid_sbom_index_digests"
+    ) in errors
+    assert (
+        "reference_sdk_release supply-chain fingerprints must share one "
+        "operator provenance trust tuple"
+    ) in errors
 
 
 def test_reference_sdk_release_manifest_bound_artifacts_must_match_signed_manifest(
@@ -16654,6 +16452,9 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
         "AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS": (
             MODULE.AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS
         ),
+        "AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS": (
+            MODULE.AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS
+        ),
         "AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS": (
             MODULE.AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS
         ),
@@ -16751,6 +16552,7 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "previous_envelope_sha256",
             "signer_public_key_fingerprint_sha256",
             "evidence_anchor_sha256",
+            "prerequisite_readiness_summary_sha256",
             "lane_summary_sha256",
             "topology_qualification",
             "resilience_qualification",
@@ -16758,6 +16560,10 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "sha256",
             "errors",
         }
+    )
+    assert (
+        MODULE.AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS
+        == frozenset({"id", "readiness_summary_sha256"})
     )
     assert MODULE.RESILIENCE_QUALIFICATION_ARTIFACT_BINDING_FIELDS == frozenset(
         {"requirement", "artifact_path", "artifact_sha256", "captured_at_unix"}

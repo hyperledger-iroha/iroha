@@ -19,7 +19,7 @@ readonly APALACHE_LAUNCHER_SHA256="bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501
 readonly APALACHE_JAR_SHA256="1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a"
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"
 readonly RUNNER_CONTRACT_TEST="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_apalache_runner_contract.py"
 readonly INSTALL_ROOT="${APALACHE_INSTALL_ROOT:-${REPO_ROOT}/target/apalache/toolchains}"
@@ -219,8 +219,8 @@ run_positive \
   inflight-first-release-layout \
   "$INFLIGHT_FIRST_RELEASE_MODULE" \
   inflight_first_release_fixed.cfg \
-  10 \
-  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLPutBatchV4BeforeReservationV5, MLReservationV5BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReady, MLCrashPrefixLossFree, MLCommitAndReleaseRetainExactScope, MLExactlyOnceCarrierApplication, MLQueuePlanV4PutBatchBound4096"
+  18 \
+  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLSelectedQueuePlanV4ConjunctionBeforeReservationV5, MLReservationV5BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReadyAuthorization, MLReadyAuthorizationBeforeLocalSignature, MLLocalSignaturesBeforeDurableReadyQc, MLCrashDurableFactsRecoverable, MLVolatileSessionLostOnCrash, MLCommitAndReleaseRetainExactScope, MLLaneCommitBeforeAtomicWsvCarrierApplication, MLExactlyOnceCarrierApplication, MLPostCarrierCommitCleanupOrder, MLReleasePrefixesRecoverable, MLReleaseStageOrder, MLQueuePlanV4SelectedConjunctionBound4096"
 
 final_source_manifest_sha256="$(
   python3 -I -S "$CONTRACT_CHECKER" --print-source-manifest-sha256
@@ -263,7 +263,7 @@ evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
     "$(hash_file "${FORMAL_DIR}/${QUEUE_PLAN_ADMISSION_MODULE}.tla")" \
     "$(hash_file "${FORMAL_DIR}/multilane_queue_plan_admission_registry_fixed.cfg")" \
     "$(hash_file "${LOG_DIR}/queue-plan-admission-registry.check.log")"
-  printf 'result\tinflight-first-release-layout\t%s\t%s\t10\tNoError\t%s\t%s\t%s\n' \
+  printf 'result\tinflight-first-release-layout\t%s\t%s\t18\tNoError\t%s\t%s\t%s\n' \
     "$INFLIGHT_FIRST_RELEASE_MODULE" \
     "inflight_first_release_fixed.cfg" \
     "$(hash_file "${FORMAL_DIR}/${INFLIGHT_FIRST_RELEASE_MODULE}.tla")" \

@@ -18,12 +18,8 @@ on:
       - "ci/check_openapi_spec.sh"
       - "csharp/**"
       - "data_model/**"
-      - "docs/i18n/**"
-      - "docs/portal/package.json"
-      - "docs/portal/package-lock.json"
-      - "docs/portal/scripts/**"
-      - "docs/portal/static/openapi/**"
-      - "docs/source/sdk/android/generated/**"
+      - "artifacts/openapi/**"
+      - "specs/sdk/android/generated/**"
       - "fixtures/**"
       - "integration_tests/**"
       - "java/iroha_android/**"
@@ -59,12 +55,8 @@ on:
       - "ci/check_openapi_spec.sh"
       - "csharp/**"
       - "data_model/**"
-      - "docs/i18n/**"
-      - "docs/portal/package.json"
-      - "docs/portal/package-lock.json"
-      - "docs/portal/scripts/**"
-      - "docs/portal/static/openapi/**"
-      - "docs/source/sdk/android/generated/**"
+      - "artifacts/openapi/**"
+      - "specs/sdk/android/generated/**"
       - "fixtures/**"
       - "integration_tests/**"
       - "java/iroha_android/**"
@@ -94,7 +86,7 @@ concurrency:
 
 jobs:
   metadata:
-    name: OpenAPI metadata and portal tooling
+    name: OpenAPI metadata and release tooling
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -103,50 +95,43 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
-          cache-dependency-path: docs/portal/package-lock.json
+          cache-dependency-path: tools/openapi/package-lock.json
       - name: Provision the pinned ignored OpenAPI Cargo lock
-        run: node docs/portal/scripts/provision-openapi-cargo-lock.mjs
+        run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs
       - name: Verify Cargo lock provisioning keeps the checkout clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
-      - name: Install the deterministic portal dependency graph
-        working-directory: docs/portal
+      - name: Install the deterministic OpenAPI dependency graph
+        working-directory: tools/openapi
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify the lockfile is reproducible
-        working-directory: docs/portal
+        working-directory: tools/openapi
         run: |
           npm install --ignore-scripts --package-lock-only --no-audit --no-fund
           git diff --exit-code -- package-lock.json
-      - name: Audit the portal dependency graph
-        working-directory: docs/portal
+      - name: Audit the OpenAPI dependency graph
+        working-directory: tools/openapi
         run: npm audit --audit-level=low
       - name: Test OpenAPI artifact tooling
         run: >-
           node --test
-          docs/portal/scripts/__tests__/sync-openapi.test.mjs
-          docs/portal/scripts/__tests__/verify-openapi-versions.test.mjs
-          docs/portal/scripts/__tests__/check-openapi-signatures.test.mjs
-          docs/portal/scripts/__tests__/openapi-manifest-v2.test.mjs
-          docs/portal/scripts/__tests__/openapi-release-inputs.test.mjs
-          docs/portal/scripts/__tests__/openapi-release-contract.test.mjs
-          docs/portal/scripts/__tests__/openapi-safe-file.test.mjs
-          docs/portal/scripts/__tests__/provision-openapi-cargo-lock.test.mjs
-          docs/portal/scripts/__tests__/openapi-signature.test.mjs
+          tools/openapi/scripts/__tests__/sync-openapi.test.mjs
+          tools/openapi/scripts/__tests__/verify-openapi-versions.test.mjs
+          tools/openapi/scripts/__tests__/check-openapi-signatures.test.mjs
+          tools/openapi/scripts/__tests__/openapi-manifest-v2.test.mjs
+          tools/openapi/scripts/__tests__/openapi-release-inputs.test.mjs
+          tools/openapi/scripts/__tests__/openapi-release-contract.test.mjs
+          tools/openapi/scripts/__tests__/openapi-safe-file.test.mjs
+          tools/openapi/scripts/__tests__/provision-openapi-cargo-lock.test.mjs
+          tools/openapi/scripts/__tests__/openapi-signature.test.mjs
       - name: Verify unsigned development artifact metadata
         run: |
-          node docs/portal/scripts/verify-openapi-release-inputs.mjs
-          node docs/portal/scripts/verify-openapi-versions.mjs --allow-unsigned
-          node docs/portal/scripts/check-openapi-signatures.mjs \
-            --allow-unsigned=2025-q2 \
+          node tools/openapi/scripts/verify-openapi-release-inputs.mjs
+          node tools/openapi/scripts/verify-openapi-versions.mjs --allow-unsigned
+          node tools/openapi/scripts/check-openapi-signatures.mjs \
             --allow-unsigned=latest \
             --allow-unsigned=current
-      - name: Preserve the immutable 2025-q2 snapshot
-        run: >-
-          printf '%s  %s\n'
-          'fead7abd7a092d1acb9f9750ad09bcdb0da4c3e86f0f966478d7e7ba8045adc0'
-          'docs/portal/static/openapi/versions/2025-q2/torii.json'
-          | sha256sum --check --strict
 
   canonical-spec:
     name: Canonical Torii generator parity
@@ -166,9 +151,9 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: "22"
+          node-version: "24"
       - name: Provision the pinned ignored OpenAPI Cargo lock
-        run: node docs/portal/scripts/provision-openapi-cargo-lock.mjs
+        run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs
       - name: Verify Cargo lock provisioning keeps the checkout clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32

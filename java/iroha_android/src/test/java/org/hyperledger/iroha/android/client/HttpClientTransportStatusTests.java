@@ -907,6 +907,17 @@ public final class HttpClientTransportStatusTests {
 
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      if (request.uri().getPath().endsWith("/v1/node/capabilities")) {
+        return CompletableFuture.completedFuture(
+            new TransportResponse(
+                200,
+                ("{\"data_model_version\":4,"
+                        + "\"signed_transaction_schema_hash_hex\":"
+                        + "\"7ab5ff9c572efb316deac478f19209c5\"}")
+                    .getBytes(StandardCharsets.UTF_8),
+                "",
+                Map.of()));
+      }
       if ("POST".equals(request.method())) {
         final Map<String, List<String>> headers =
             submitHeaderHash == null

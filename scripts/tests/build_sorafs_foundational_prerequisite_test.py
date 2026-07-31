@@ -36,6 +36,9 @@ from sorafs_resilience_test_support import (  # noqa: E402
     resilience_summary as build_resilience_summary,
     write_resilience_summary,
 )
+from check_sorafs_production_readiness_test import (  # noqa: E402
+    gate_summary as complete_gate_summary,
+)
 
 
 NOW_UNIX = 1_800_900_000
@@ -189,6 +192,49 @@ def signer() -> tuple[bytes, bytes]:
     return seed, public_key_from_seed(seed)
 
 
+def readiness_summary_paths(
+    tmp_path: Path,
+    *,
+    evidence_at_unix: int = EVIDENCE_AT_UNIX,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> dict[str, Path]:
+    """Write one authoritative ready summary for every canonical lane."""
+
+    paths: dict[str, Path] = {}
+    for gate_name in CHECKER.DEFAULT_REQUIRED_GATES:
+        summary_path = tmp_path / (
+            "authoritative-" + gate_name.replace("_", "-") + "-summary.json"
+        )
+        if not summary_path.exists():
+            payload = (
+                gateway_load_summary(
+                    tmp_path,
+                    deployment_id=deployment_id,
+                    environment=environment,
+                    generated_at_unix=evidence_at_unix,
+                )
+                if gate_name == "gateway_load"
+                else complete_gate_summary(
+                    gate_name,
+                    generated_at_unix=evidence_at_unix,
+                    deployment_id=deployment_id,
+                    environment=environment,
+                )
+            )
+            payload["topology_qualification"] = topology_binding(
+                tmp_path,
+                deployment_id=deployment_id,
+                environment=environment,
+            )
+            summary_path.write_text(
+                json.dumps(payload, sort_keys=True),
+                encoding="utf-8",
+            )
+        paths[gate_name] = summary_path
+    return paths
+
+
 def prerequisite_specs(
     tmp_path: Path,
     *,
@@ -196,23 +242,18 @@ def prerequisite_specs(
     deployment_id: str = DEPLOYMENT_ID,
     environment: str = ENVIRONMENT,
 ) -> list[str]:
-    """Write exact prerequisite manifests and return ordered ID=PATH inputs."""
+    """Write exact mapped prerequisite manifests and return ID=PATH inputs."""
 
-    summary_path = tmp_path / "authoritative-gateway-load-summary.json"
-    if not summary_path.exists():
-        summary_path.write_text(
-            json.dumps(
-                gateway_load_summary(
-                    tmp_path,
-                    deployment_id=deployment_id,
-                    environment=environment,
-                    generated_at_unix=evidence_at_unix,
-                ),
-                sort_keys=True,
-            ),
-            encoding="utf-8",
-        )
-    summary_sha256 = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+    summary_paths = readiness_summary_paths(
+        tmp_path,
+        evidence_at_unix=evidence_at_unix,
+        deployment_id=deployment_id,
+        environment=environment,
+    )
+    summary_digests = {
+        gate_name: hashlib.sha256(summary_path.read_bytes()).hexdigest()
+        for gate_name, summary_path in summary_paths.items()
+    }
     values: list[str] = []
     for prerequisite_id in MODULE.FOUNDATIONAL_PREREQUISITE_IDS:
         package_path = tmp_path / (
@@ -233,17 +274,80 @@ def prerequisite_specs(
                     deployment_id=deployment_id,
                     environment=environment,
                 ),
-                "readiness_summary": {
-                    "gate": "gateway_load",
-                    "path": summary_path.name,
-                    "sha256": summary_sha256,
-                },
+                "readiness_summaries": [
+                    {
+                        "gate": gate_name,
+                        "path": summary_paths[gate_name].name,
+                        "sha256": summary_digests[gate_name],
+                    }
+                    for gate_name in MODULE.FOUNDATIONAL_PREREQUISITE_LANES[
+                        prerequisite_id
+                    ]
+                ],
                 "errors": [],
             }
             package_path.write_text(
                 json.dumps(package, sort_keys=True),
                 encoding="utf-8",
             )
+        values.append(f"{prerequisite_id}={package_path}")
+    return values
+
+
+def legacy_gateway_load_prerequisite_specs(
+    tmp_path: Path,
+    *,
+    evidence_at_unix: int = EVIDENCE_AT_UNIX,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> list[str]:
+    """Write the retired nine-times-gateway-load package set."""
+
+    summary_path = readiness_summary_paths(
+        tmp_path,
+        evidence_at_unix=evidence_at_unix,
+        deployment_id=deployment_id,
+        environment=environment,
+    )["gateway_load"]
+    summary_sha256 = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+    values: list[str] = []
+    for prerequisite_id in MODULE.FOUNDATIONAL_PREREQUISITE_IDS:
+        package_path = tmp_path / (
+            "legacy-prerequisite-"
+            + prerequisite_id.lower().replace("-", "_")
+            + ".json"
+        )
+        package_path.write_text(
+            json.dumps(
+                {
+                    "schema": (
+                        MODULE.FOUNDATIONAL_PREREQUISITE_EVIDENCE_PACKAGE_SCHEMA
+                    ),
+                    "prerequisite_id": prerequisite_id,
+                    "status": "verified",
+                    "deployment": {
+                        "deployment_id": deployment_id,
+                        "environment": environment,
+                    },
+                    "evidence_generated_at_unix": evidence_at_unix,
+                    "topology_qualification": topology_binding(
+                        tmp_path,
+                        deployment_id=deployment_id,
+                        environment=environment,
+                    ),
+                    "readiness_summaries": [
+                        {
+                            "gate": "gateway_load",
+                            "path": summary_path.name,
+                            "sha256": summary_sha256,
+                        }
+                    ],
+                    "errors": [],
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
         values.append(f"{prerequisite_id}={package_path}")
     return values
 
@@ -256,33 +360,12 @@ def lane_summary_paths(
 ) -> list[tuple[str, Path]]:
     """Create exact temporary lane-summary bytes for the signing fixture."""
 
-    rows: list[tuple[str, Path]] = []
-    for gate_name in CHECKER.DEFAULT_REQUIRED_GATES:
-        path = tmp_path / f"reviewed-{gate_name}.json"
-        if not path.exists():
-            payload = (
-                gateway_load_summary(
-                    tmp_path,
-                    deployment_id=deployment_id,
-                    environment=environment,
-                )
-                if gate_name == "gateway_load"
-                else {
-                    "schema": CHECKER.GATE_BY_NAME[gate_name].schema,
-                    "status": "ready",
-                    "topology_qualification": topology_binding(
-                        tmp_path,
-                        deployment_id=deployment_id,
-                        environment=environment,
-                    ),
-                }
-            )
-            path.write_text(
-                json.dumps(payload, sort_keys=True),
-                encoding="utf-8",
-            )
-        rows.append((gate_name, path))
-    return rows
+    paths = readiness_summary_paths(
+        tmp_path,
+        deployment_id=deployment_id,
+        environment=environment,
+    )
+    return [(gate_name, paths[gate_name]) for gate_name in CHECKER.DEFAULT_REQUIRED_GATES]
 
 
 def prepare_args(
@@ -603,6 +686,38 @@ def test_prepare_and_finalize_external_signer_roundtrip(
     assert [
         row["evidence_anchor_sha256"] for row in unsigned["prerequisites"]
     ] == expected_prerequisite_hashes
+    assert {
+        row["id"]: tuple(
+            summary["gate"] for summary in row["readiness_summary_sha256"]
+        )
+        for row in unsigned["prerequisites"]
+    } == {
+        "SFM-1": ("reputation",),
+        "SF-1": ("reference_sdk_release",),
+        "SF-2": ("pdp",),
+        "SF-2c": ("por", "potr"),
+        "SF-3": ("gateway_compliance",),
+        "SF-4": ("repair",),
+        "SF-5b": ("gateway_load",),
+        "SF-6": (
+            "appeal_finance",
+            "governance_dag",
+            "hedging_billing",
+            "orderbook",
+            "reserve_rent",
+        ),
+        "SF-8a": (
+            "ai_prescreen",
+            "moderation_panel",
+            "pop_credentials",
+            "transparency",
+        ),
+    } == MODULE.FOUNDATIONAL_PREREQUISITE_LANES
+    assert {
+        summary["gate"]
+        for row in unsigned["prerequisites"]
+        for summary in row["readiness_summary_sha256"]
+    } == set(CHECKER.DEFAULT_REQUIRED_GATES)
     assert [row["gate"] for row in unsigned["lane_summaries"]] == list(
         CHECKER.DEFAULT_REQUIRED_GATES
     )
@@ -890,7 +1005,7 @@ def test_finalized_envelope_is_accepted_by_direct_aggregate_gate(
         (tmp_path / "foundational-prerequisites.json").read_bytes()
     )
     (evidence_dir / "gateway-load.json").write_bytes(
-        (tmp_path / "reviewed-gateway_load.json").read_bytes(),
+        readiness_summary_paths(tmp_path)["gateway_load"].read_bytes(),
     )
     aggregate_out = tmp_path / "aggregate-summary.json"
     assert (
@@ -974,7 +1089,7 @@ def test_prepare_is_byte_deterministic_and_supports_reviewed_response_files(
         ),
         (
             "underlying_schema",
-            "readiness_summary schema must match its gate",
+            "schema must match its gate",
         ),
         ("path_swap", "prerequisite_id must match its ordered command-line id"),
         ("stale", "exceeds max summary artifact age"),
@@ -1021,7 +1136,9 @@ def test_prepare_rejects_invalid_prerequisite_evidence_packages(
         for spec in specs:
             package_path = Path(spec.partition("=")[2])
             package = json.loads(package_path.read_text(encoding="utf-8"))
-            package["readiness_summary"]["sha256"] = summary_sha256
+            for reference in package["readiness_summaries"]:
+                if reference["gate"] == "gateway_load":
+                    reference["sha256"] = summary_sha256
             package_path.write_text(
                 json.dumps(package, sort_keys=True),
                 encoding="utf-8",
@@ -1038,6 +1155,144 @@ def test_prepare_rejects_invalid_prerequisite_evidence_packages(
     assert MODULE.main(args) == 2
     captured = capsys.readouterr()
     assert expected in captured.err
+    assert not (tmp_path / "foundational-signing-payload.bin").exists()
+
+
+def test_prepare_rejects_legacy_gateway_load_for_all_nine_prerequisites(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+    capsys,
+) -> None:
+    """A valid gateway-load summary cannot stand in for unrelated foundations."""
+
+    _seed, public_key = signer
+    specs = legacy_gateway_load_prerequisite_specs(tmp_path)
+    assert MODULE.main(prepare_args(tmp_path, public_key, specs=specs)) == 2
+    diagnostics = capsys.readouterr().err
+    assert "must match the exact lanes for SFM-1: reputation" in diagnostics
+    assert "must match the exact lanes for SF-8a" in diagnostics
+    assert not (tmp_path / "foundational-signing-payload.bin").exists()
+
+
+def test_prepare_rejects_retired_singular_summary_field(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+    capsys,
+) -> None:
+    """The V1 hard cut rejects the retired singular compatibility shape."""
+
+    _seed, public_key = signer
+    specs = prerequisite_specs(tmp_path)
+    package_path = Path(specs[0].partition("=")[2])
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    package["readiness_summary"] = package.pop("readiness_summaries")[0]
+    package_path.write_text(json.dumps(package, sort_keys=True), encoding="utf-8")
+
+    assert MODULE.main(prepare_args(tmp_path, public_key, specs=specs)) == 2
+    diagnostics = capsys.readouterr().err
+    assert ".readiness_summary is not allowed" in diagnostics
+    assert "readiness_summaries must be an array" in diagnostics
+    assert not (tmp_path / "foundational-signing-payload.bin").exists()
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("missing", "are missing required gates"),
+        ("extra", "must contain exactly 5 entries for SF-6"),
+        ("duplicate", "must contain exactly 2 entries for SF-2c"),
+        ("reordered", "must match the exact lanes for SF-6"),
+        ("wrong_valid_gate", "contain gates outside the prerequisite mapping"),
+        ("digest_substitution", "digest does not match the exact file"),
+    ],
+)
+def test_prepare_rejects_mapped_multi_lane_package_attacks(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+    capsys,
+    case: str,
+    expected: str,
+) -> None:
+    """Reject structural and byte substitutions within grouped lane evidence."""
+
+    _seed, public_key = signer
+    specs = prerequisite_specs(tmp_path)
+    target_id = "SF-2c" if case in {"missing", "duplicate"} else "SF-6"
+    target_spec = next(spec for spec in specs if spec.startswith(f"{target_id}="))
+    package_path = Path(target_spec.partition("=")[2])
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    references = package["readiness_summaries"]
+    summary_paths = readiness_summary_paths(tmp_path)
+
+    if case == "missing":
+        references.pop()
+    elif case == "extra":
+        gateway_path = summary_paths["gateway_load"]
+        references.append(
+            {
+                "gate": "gateway_load",
+                "path": gateway_path.name,
+                "sha256": hashlib.sha256(gateway_path.read_bytes()).hexdigest(),
+            }
+        )
+    elif case == "duplicate":
+        references.append(dict(references[0]))
+    elif case == "reordered":
+        references.reverse()
+    elif case == "wrong_valid_gate":
+        gateway_path = summary_paths["gateway_load"]
+        references[0] = {
+            "gate": "gateway_load",
+            "path": gateway_path.name,
+            "sha256": hashlib.sha256(gateway_path.read_bytes()).hexdigest(),
+        }
+    else:
+        substitute_path = summary_paths["gateway_load"]
+        references[0]["sha256"] = hashlib.sha256(
+            substitute_path.read_bytes()
+        ).hexdigest()
+
+    package_path.write_text(json.dumps(package, sort_keys=True), encoding="utf-8")
+    assert MODULE.main(prepare_args(tmp_path, public_key, specs=specs)) == 2
+    assert expected in capsys.readouterr().err
+    assert not (tmp_path / "foundational-signing-payload.bin").exists()
+
+
+def test_prepare_rejects_wrong_reference_count_before_summary_io(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+    monkeypatch,
+    capsys,
+) -> None:
+    """A malformed reference count cannot amplify authoritative-summary reads."""
+
+    _seed, public_key = signer
+    specs = prerequisite_specs(tmp_path)
+    target_spec = next(spec for spec in specs if spec.startswith("SF-6="))
+    package_path = Path(target_spec.partition("=")[2])
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    package["readiness_summaries"].extend(
+        dict(package["readiness_summaries"][0]) for _ in range(64)
+    )
+    package_path.write_text(json.dumps(package, sort_keys=True), encoding="utf-8")
+
+    original_read = MODULE.read_bounded_regular_file
+    observed_labels: list[str] = []
+
+    def tracking_read(*args, **kwargs):
+        observed_labels.append(kwargs.get("label", ""))
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(MODULE, "read_bounded_regular_file", tracking_read)
+    assert MODULE.main(prepare_args(tmp_path, public_key, specs=specs)) == 2
+    diagnostics = capsys.readouterr().err
+    assert "must contain exactly 5 entries for SF-6" in diagnostics
+    assert not any(
+        label.startswith(
+            "--prerequisite[7] evidence package readiness_summaries["
+        )
+        for label in observed_labels
+    )
     assert not (tmp_path / "foundational-signing-payload.bin").exists()
 
 

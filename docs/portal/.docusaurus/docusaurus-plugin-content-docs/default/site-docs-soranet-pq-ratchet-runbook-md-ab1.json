@@ -1,0 +1,29 @@
+{
+  "id": "soranet/pq-ratchet-runbook",
+  "title": "SoraNet PQ Ratchet Fire Drill",
+  "description": "On-call rehearsal steps for promoting or demoting the staged PQ anonymity policy with deterministic telemetry validation.",
+  "source": "@site/docs/soranet/pq-ratchet-runbook.md",
+  "sourceDirName": "soranet",
+  "slug": "/soranet/pq-ratchet-runbook",
+  "permalink": "/next/soranet/pq-ratchet-runbook",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/soranet/pq-ratchet-runbook.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "pq-ratchet-runbook",
+    "title": "SoraNet PQ Ratchet Fire Drill",
+    "sidebar_label": "PQ Ratchet Runbook",
+    "description": "On-call rehearsal steps for promoting or demoting the staged PQ anonymity policy with deterministic telemetry validation."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "PQ Primitives",
+    "permalink": "/next/soranet/pq-primitives"
+  },
+  "next": {
+    "title": "PQ Rollout Plan",
+    "permalink": "/next/soranet/pq-rollout-plan"
+  }
+}

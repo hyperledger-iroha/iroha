@@ -125,6 +125,30 @@ impl Algorithm {
             Self::Sm2 => SM2,
         }
     }
+
+    /// Exact byte length of a canonical detached signature payload.
+    ///
+    /// Keeping this geometry with the feature-dependent enum prevents
+    /// downstream crates from matching variants whose presence can change
+    /// through Cargo feature unification.
+    pub const fn signature_payload_len(self) -> usize {
+        match self {
+            Self::Ed25519 | Self::Secp256k1 => 64,
+            Self::MlDsa => 3_309,
+            #[cfg(feature = "gost")]
+            Self::Gost3410_2012_256ParamSetA
+            | Self::Gost3410_2012_256ParamSetB
+            | Self::Gost3410_2012_256ParamSetC => 64,
+            #[cfg(feature = "gost")]
+            Self::Gost3410_2012_512ParamSetA | Self::Gost3410_2012_512ParamSetB => 128,
+            #[cfg(feature = "bls")]
+            Self::BlsNormal => 96,
+            #[cfg(feature = "bls")]
+            Self::BlsSmall => 48,
+            #[cfg(feature = "sm")]
+            Self::Sm2 => 64,
+        }
+    }
 }
 
 impl fmt::Display for Algorithm {
@@ -329,6 +353,46 @@ mod tests {
             assert_eq!(Algorithm::from_str(name).unwrap(), alg);
             assert_eq!(Algorithm::try_from(value).unwrap(), alg);
             assert_eq!(alg as u8, value);
+        }
+    }
+
+    #[test]
+    fn canonical_signature_payload_lengths_are_stable() {
+        assert_eq!(Algorithm::Ed25519.signature_payload_len(), 64);
+        assert_eq!(Algorithm::Secp256k1.signature_payload_len(), 64);
+        assert_eq!(Algorithm::MlDsa.signature_payload_len(), 3_309);
+
+        #[cfg(feature = "gost")]
+        {
+            assert_eq!(
+                Algorithm::Gost3410_2012_256ParamSetA.signature_payload_len(),
+                64
+            );
+            assert_eq!(
+                Algorithm::Gost3410_2012_256ParamSetB.signature_payload_len(),
+                64
+            );
+            assert_eq!(
+                Algorithm::Gost3410_2012_256ParamSetC.signature_payload_len(),
+                64
+            );
+            assert_eq!(
+                Algorithm::Gost3410_2012_512ParamSetA.signature_payload_len(),
+                128
+            );
+            assert_eq!(
+                Algorithm::Gost3410_2012_512ParamSetB.signature_payload_len(),
+                128
+            );
+        }
+        #[cfg(feature = "bls")]
+        {
+            assert_eq!(Algorithm::BlsNormal.signature_payload_len(), 96);
+            assert_eq!(Algorithm::BlsSmall.signature_payload_len(), 48);
+        }
+        #[cfg(feature = "sm")]
+        {
+            assert_eq!(Algorithm::Sm2.signature_payload_len(), 64);
         }
     }
 }

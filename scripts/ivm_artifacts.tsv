@@ -46,12 +46,6 @@ kotodama-standard	crates/kotodama_lang/src/samples/irohaswap.ko	demo/irohaswap.t
 kotodama-standard	demo/ivm_smoke.ko	demo/ivm_smoke.to
 kotodama-standard	demo/prediction_market.ko	demo/prediction_market.to
 kotodama-standard	examples/transfer/transfer.ko	demo/transfer.to
-kotodama-standard	docs/portal/static/norito-snippets/call-transfer-asset.ko	docs/portal/static/norito-snippets/call-transfer-asset.to
-kotodama-standard	docs/portal/static/norito-snippets/hajimari-entrypoint.ko	docs/portal/static/norito-snippets/hajimari-entrypoint.to
-kotodama-standard	docs/portal/static/norito-snippets/nft-flow.ko	docs/portal/static/norito-snippets/nft-flow.to
-kotodama-standard	docs/portal/static/norito-snippets/register-and-mint.ko	docs/portal/static/norito-snippets/register-and-mint.to
-kotodama-standard	docs/portal/static/norito-snippets/threshold-escrow.ko	docs/portal/static/norito-snippets/threshold-escrow.to
-kotodama-standard	docs/portal/static/norito-snippets/transfer-asset.ko	docs/portal/static/norito-snippets/transfer-asset.to
 kotodama-standard	examples/hello/hello.ko	examples/hello/hello.to
 kotodama-standard	examples/map/map.ko	examples/map/map.to
 kotodama-standard	examples/nft/nft.ko	examples/nft/nft.to

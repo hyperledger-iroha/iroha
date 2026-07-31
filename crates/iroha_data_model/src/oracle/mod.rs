@@ -1,7 +1,7 @@
 //! Oracle layer data model and scheduling helpers.
 //!
 //! This module defines the schemas and deterministic helpers required by the
-//! validator-operated oracle layer (see `docs/source/soracles.md`). The data
+//! validator-operated oracle layer (see `specs/soracles.md`). The data
 //! model covers feed configuration, signed observations, aggregated reports,
 //! and replay protection/gossip keys used to distribute oracle messages across
 //! validators.

@@ -254,7 +254,7 @@ public final class SorafsRegisterPinManifestBuilderTests {
 
   private static Map<String, Object> loadFixture() throws Exception {
     final String relative =
-        "docs/source/sdk/android/generated/fixtures/sorafs_register_pin_manifest_multi_peer_parity_v1.json";
+        "specs/sdk/android/generated/fixtures/sorafs_register_pin_manifest_multi_peer_parity_v1.json";
     Path path = null;
     final Path[] candidates =
         new Path[] {

@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/direct-mode-pack",
+  "title": "SoraFS Direct-Mode Fallback Pack (SNNet-5a)",
+  "description": "Required configuration, compliance checks, and rollout steps when operating SoraFS in direct Torii/QUIC mode during the SNNet-5a transition.",
+  "source": "@site/docs/sorafs/direct-mode-pack.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/direct-mode-pack",
+  "permalink": "/next/sorafs/direct-mode-pack",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/direct-mode-pack.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "direct-mode-pack",
+    "title": "SoraFS Direct-Mode Fallback Pack (SNNet-5a)",
+    "sidebar_label": "Direct-Mode Fallback Pack",
+    "description": "Required configuration, compliance checks, and rollout steps when operating SoraFS in direct Torii/QUIC mode during the SNNet-5a transition."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Deal Engine",
+    "permalink": "/next/sorafs/deal-engine"
+  },
+  "next": {
+    "title": "CI Recipes",
+    "permalink": "/next/sorafs/developer-ci"
+  }
+}

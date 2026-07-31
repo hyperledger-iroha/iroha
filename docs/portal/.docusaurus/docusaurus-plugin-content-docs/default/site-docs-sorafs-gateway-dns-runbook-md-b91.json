@@ -1,0 +1,24 @@
+{
+  "id": "sorafs/gateway-dns-runbook",
+  "title": "SoraFS Gateway & DNS Kickoff Runbook",
+  "description": "This portal copy mirrors the canonical runbook in",
+  "source": "@site/docs/sorafs/gateway-dns-runbook.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/gateway-dns-runbook",
+  "permalink": "/next/sorafs/gateway-dns-runbook",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/gateway-dns-runbook.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "Taikai Monitoring Dashboards",
+    "permalink": "/next/sorafs/taikai-monitoring-dashboards"
+  },
+  "next": {
+    "title": "SoraFS Migration Roadmap",
+    "permalink": "/next/sorafs/migration-roadmap"
+  }
+}

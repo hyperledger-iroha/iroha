@@ -20,7 +20,6 @@ BASH_3_ENTRYPOINTS = (
     REPO_ROOT / "scripts/run_full_tests.sh",
     REPO_ROOT / "check_pending_incentive_snapshots.sh",
     REPO_ROOT / "scripts/android_sbom_provenance.sh",
-    REPO_ROOT / "docs/portal/scripts/sorafs-pin-release.sh",
 )
 BASH_4_ONLY_PATTERNS = (
     re.compile(r"\bdeclare\s+-A\b"),
@@ -53,24 +52,6 @@ def test_entrypoint_avoids_bash_4_only_builtins_and_expansions(script: Path) -> 
 
     for pattern in BASH_4_ONLY_PATTERNS:
         assert pattern.search(source) is None, f"{script} contains {pattern.pattern}"
-
-
-def test_sorafs_pin_release_help_runs_on_stock_macos_bash() -> None:
-    result = subprocess.run(
-        [
-            "/bin/bash",
-            str(REPO_ROOT / "docs/portal/scripts/sorafs-pin-release.sh"),
-            "--help",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "Usage: sorafs-pin-release.sh" in result.stdout
-
 
 @pytest.mark.parametrize(
     "relay_args",
