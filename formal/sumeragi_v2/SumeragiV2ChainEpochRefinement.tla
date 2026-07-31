@@ -977,17 +977,19 @@ without waiting for its peers. Joined membership is monotone, so old instances
 remain available to RunHistoricalServer after validators advance.
 
 The nested tuple layout is exactly the production `AsyncAllVars` projection:
-the duplicated GST scalar, 49 Core components, 45 scheduler/transport
-components, five responsive-node recovery components, and the proof-only
-fixed-corridor receipt set.  The duplicated scalar is pinned to Core component
+the duplicated GST scalar, 49 Core components, 46 scheduler/transport
+components, five responsive-node recovery components, three monotone producer-
+journal components, and the proof-only fixed-corridor receipt set.  The
+duplicated scalar is pinned to Core component
 7; retaining that established semantic shape makes source drift explicit
 rather than silently normalizing the authoritative action tuple.  Immediately
 after the I/O queues, the scheduler tuple carries
-the two immutable Serve ordinal high-watermarks and the four admission,
-reservation, and tombstone stores.  The certified-response claim precedes the
-transport state; scheduler component 41 owns the receiver-local leader-wire
-lifecycle table, component 44 owns the fixed roster/class-bounded control-
-service slot table, and component 45 owns the internal irreversible service-
+the two immutable Serve ordinal high-watermarks and the ingress-admission,
+admission, reservation, tombstone, and retained-attempt stores.  The
+certified-response claim precedes the
+transport state; scheduler component 42 owns the receiver-local leader-wire
+lifecycle table, component 45 owns the fixed roster/class-bounded control-
+service slot table, and component 46 owns the internal irreversible service-
 activation record.  The final recovery component owns the exact historical-
 lock restart-authority projection. Shape predicates exclude unmodelled fields
 and make every instance projection extensional.
@@ -1004,8 +1006,11 @@ IndexedScheduler(initialContext, component) ==
 IndexedRecovery(initialContext, component) ==
   indexedAsyncState[initialContext][4][component]
 
+IndexedProducer(initialContext, component) ==
+  indexedAsyncState[initialContext][5][component]
+
 IndexedFixedCorridorDeadlines(initialContext) ==
-  indexedAsyncState[initialContext][5]
+  indexedAsyncState[initialContext][6]
 
 IndexedAsyncStateAt(initialContext) ==
   indexedAsyncState[initialContext]
@@ -1104,41 +1109,45 @@ IndexedAsync(initialContext) ==
        asyncServeAdmissions <- IndexedScheduler(initialContext, 14),
        asyncServeReservations <- IndexedScheduler(initialContext, 15),
        asyncServeTombstones <- IndexedScheduler(initialContext, 16),
-       asyncOutstandingWork <- IndexedScheduler(initialContext, 17),
-       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 18),
-       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 19),
-       asyncNextCompletionSource <- IndexedScheduler(initialContext, 20),
-       asyncIoControlAvailable <- IndexedScheduler(initialContext, 21),
-       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 22),
-       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 23),
-       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 24),
-       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 25),
-       asyncNextDeferredClass <- IndexedScheduler(initialContext, 26),
-       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 27),
-       asyncCausalQueues <- IndexedScheduler(initialContext, 28),
-       asyncOutstandingTags <- IndexedScheduler(initialContext, 29),
-       asyncNodeDeadlines <- IndexedScheduler(initialContext, 30),
-       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 31),
-       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 32),
-       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 33),
-       asyncSentItems <- IndexedScheduler(initialContext, 34),
-       asyncRetainedControl <- IndexedScheduler(initialContext, 35),
-       asyncActiveRequests <- IndexedScheduler(initialContext, 36),
-       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 37),
-       asyncTransport <- IndexedScheduler(initialContext, 38),
-       asyncIngressLanes <- IndexedScheduler(initialContext, 39),
-       asyncIngressReady <- IndexedScheduler(initialContext, 40),
-       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 41),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 42),
-       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 43),
-       asyncControlServiceState <- IndexedScheduler(initialContext, 44),
-       asyncServiceActivationState <- IndexedScheduler(initialContext, 45),
+       asyncServeAttempts <- IndexedScheduler(initialContext, 17),
+       asyncOutstandingWork <- IndexedScheduler(initialContext, 18),
+       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 19),
+       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 20),
+       asyncNextCompletionSource <- IndexedScheduler(initialContext, 21),
+       asyncIoControlAvailable <- IndexedScheduler(initialContext, 22),
+       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 23),
+       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 24),
+       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 25),
+       asyncDeferredHandoffs <- IndexedScheduler(initialContext, 26),
+       asyncNextDeferredClass <- IndexedScheduler(initialContext, 27),
+       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 28),
+       asyncCausalQueues <- IndexedScheduler(initialContext, 29),
+       asyncOutstandingTags <- IndexedScheduler(initialContext, 30),
+       asyncNodeDeadlines <- IndexedScheduler(initialContext, 31),
+       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 32),
+       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 33),
+       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 34),
+       asyncSentItems <- IndexedScheduler(initialContext, 35),
+       asyncRetainedControl <- IndexedScheduler(initialContext, 36),
+       asyncActiveRequests <- IndexedScheduler(initialContext, 37),
+       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 38),
+       asyncTransport <- IndexedScheduler(initialContext, 39),
+       asyncIngressLanes <- IndexedScheduler(initialContext, 40),
+       asyncIngressReady <- IndexedScheduler(initialContext, 41),
+       asyncLeaderWireLifecycles <- IndexedScheduler(initialContext, 42),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 43),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 44),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 45),
+       asyncServiceActivationState <- IndexedScheduler(initialContext, 46),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
        asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4),
        asyncHistoricalLockRestartAuthorities <-
          IndexedRecovery(initialContext, 5),
+       asyncProducerKnownObligations <- IndexedProducer(initialContext, 1),
+       asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
+       asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext)
 
@@ -1204,6 +1213,9 @@ VerificationScheduler(component) ==
 
 VerificationRecovery(component) ==
   IndexedRecovery(VerificationContext, component)
+
+VerificationProducer(component) ==
+  IndexedProducer(VerificationContext, component)
 
 VerificationFixedCorridorDeadlines ==
   IndexedFixedCorridorDeadlines(VerificationContext)
@@ -1276,40 +1288,44 @@ VerificationAsyncProof ==
        asyncServeAdmissions <- VerificationScheduler(14),
        asyncServeReservations <- VerificationScheduler(15),
        asyncServeTombstones <- VerificationScheduler(16),
-       asyncOutstandingWork <- VerificationScheduler(17),
-       asyncIoReadyCompletions <- VerificationScheduler(18),
-       asyncLocalReadyCompletions <- VerificationScheduler(19),
-       asyncNextCompletionSource <- VerificationScheduler(20),
-       asyncIoControlAvailable <- VerificationScheduler(21),
-       asyncDeferredCompletionQueues <- VerificationScheduler(22),
-       asyncDeferredProgressQueues <- VerificationScheduler(23),
-       asyncDeferredNormalQueues <- VerificationScheduler(24),
-       asyncDeferredHandoffs <- VerificationScheduler(25),
-       asyncNextDeferredClass <- VerificationScheduler(26),
-       asyncDeferredDrainOwed <- VerificationScheduler(27),
-       asyncCausalQueues <- VerificationScheduler(28),
-       asyncOutstandingTags <- VerificationScheduler(29),
-       asyncNodeDeadlines <- VerificationScheduler(30),
-       asyncRetransmitDeadlines <- VerificationScheduler(31),
-       asyncNodeServiceDeadlines <- VerificationScheduler(32),
-       asyncIoServiceDeadlines <- VerificationScheduler(33),
-       asyncSentItems <- VerificationScheduler(34),
-       asyncRetainedControl <- VerificationScheduler(35),
-       asyncActiveRequests <- VerificationScheduler(36),
-       asyncCertifiedResponseClaim <- VerificationScheduler(37),
-       asyncTransport <- VerificationScheduler(38),
-       asyncIngressLanes <- VerificationScheduler(39),
-       asyncIngressReady <- VerificationScheduler(40),
-       asyncLeaderWireLifecycles <- VerificationScheduler(41),
-       asyncHeldChunks <- VerificationScheduler(42),
-       asyncHistoricalRecoveryTargets <- VerificationScheduler(43),
-       asyncControlServiceState <- VerificationScheduler(44),
-       asyncServiceActivationState <- VerificationScheduler(45),
+       asyncServeAttempts <- VerificationScheduler(17),
+       asyncOutstandingWork <- VerificationScheduler(18),
+       asyncIoReadyCompletions <- VerificationScheduler(19),
+       asyncLocalReadyCompletions <- VerificationScheduler(20),
+       asyncNextCompletionSource <- VerificationScheduler(21),
+       asyncIoControlAvailable <- VerificationScheduler(22),
+       asyncDeferredCompletionQueues <- VerificationScheduler(23),
+       asyncDeferredProgressQueues <- VerificationScheduler(24),
+       asyncDeferredNormalQueues <- VerificationScheduler(25),
+       asyncDeferredHandoffs <- VerificationScheduler(26),
+       asyncNextDeferredClass <- VerificationScheduler(27),
+       asyncDeferredDrainOwed <- VerificationScheduler(28),
+       asyncCausalQueues <- VerificationScheduler(29),
+       asyncOutstandingTags <- VerificationScheduler(30),
+       asyncNodeDeadlines <- VerificationScheduler(31),
+       asyncRetransmitDeadlines <- VerificationScheduler(32),
+       asyncNodeServiceDeadlines <- VerificationScheduler(33),
+       asyncIoServiceDeadlines <- VerificationScheduler(34),
+       asyncSentItems <- VerificationScheduler(35),
+       asyncRetainedControl <- VerificationScheduler(36),
+       asyncActiveRequests <- VerificationScheduler(37),
+       asyncCertifiedResponseClaim <- VerificationScheduler(38),
+       asyncTransport <- VerificationScheduler(39),
+       asyncIngressLanes <- VerificationScheduler(40),
+       asyncIngressReady <- VerificationScheduler(41),
+       asyncLeaderWireLifecycles <- VerificationScheduler(42),
+       asyncHeldChunks <- VerificationScheduler(43),
+       asyncHistoricalRecoveryTargets <- VerificationScheduler(44),
+       asyncControlServiceState <- VerificationScheduler(45),
+       asyncServiceActivationState <- VerificationScheduler(46),
        asyncRecoveryPhase <- VerificationRecovery(1),
        asyncRecoveryNode <- VerificationRecovery(2),
        asyncRecoveryGeneration <- VerificationRecovery(3),
        asyncRecoveryReplayQueue <- VerificationRecovery(4),
        asyncHistoricalLockRestartAuthorities <- VerificationRecovery(5),
+       asyncProducerKnownObligations <- VerificationProducer(1),
+       asyncProducerConsumedEpisodes <- VerificationProducer(2),
+       asyncProducerOriginHistory <- VerificationProducer(3),
        asyncFixedCorridorDeadlines <- VerificationFixedCorridorDeadlines
 
 AdmissibleContextRecords ==
@@ -1319,16 +1335,18 @@ AdmissibleContextRecords ==
 IndexedAsyncStateShape ==
   /\ DOMAIN indexedAsyncState = AdmissibleContextRecords
   /\ \A initialContext \in AdmissibleContextRecords:
-       /\ Len(indexedAsyncState[initialContext]) = 5
-       /\ DOMAIN indexedAsyncState[initialContext] = 1..5
+       /\ Len(indexedAsyncState[initialContext]) = 6
+       /\ DOMAIN indexedAsyncState[initialContext] = 1..6
        /\ indexedAsyncState[initialContext][1]
             = indexedAsyncState[initialContext][2][7]
        /\ Len(indexedAsyncState[initialContext][2]) = 49
        /\ DOMAIN indexedAsyncState[initialContext][2] = 1..49
-       /\ Len(indexedAsyncState[initialContext][3]) = 45
-       /\ DOMAIN indexedAsyncState[initialContext][3] = 1..45
+       /\ Len(indexedAsyncState[initialContext][3]) = 46
+       /\ DOMAIN indexedAsyncState[initialContext][3] = 1..46
        /\ Len(indexedAsyncState[initialContext][4]) = 5
        /\ DOMAIN indexedAsyncState[initialContext][4] = 1..5
+       /\ Len(indexedAsyncState[initialContext][5]) = 3
+       /\ DOMAIN indexedAsyncState[initialContext][5] = 1..3
 
 JoinedByContextShape ==
   joinedByContext \in [AdmissibleContextRecords -> SUBSET ValidatorIds]
@@ -1530,7 +1548,7 @@ its own response and must be one of that QC's frozen signers; full-roster
 request fanout is broader than this response authority.  The exact body hash
 and signer identity bind the historical source. `OpenHistoricalRecovery`
 records that exact target in
-scheduler component 42. From then on the ordinary Async reducer persists the
+scheduler component 44. From then on the ordinary Async reducer persists the
 decision, recovers and stores the body, validates it, and appends the
 application to the same per-context `decisions` and `applied` sets used by
 ordinary consensus. There is no shadow receipt set, stage variable, or
@@ -1642,7 +1660,7 @@ IndexedJoinedNonRunnerStep(initialContext) ==
                ResolveCandidateProducerContinuation(node)
      \/ IndexedAsync(initialContext)!AsyncNetworkStep
      \/ IndexedAsync(initialContext)!AsyncFaultStep
-  /\ UNCHANGED IndexedScheduler(initialContext, 32)
+  /\ UNCHANGED IndexedScheduler(initialContext, 33)
 
 IndexedJoinedNonCrashStep(initialContext) ==
   /\ (IndexedJoinedRunnerStep(initialContext)
@@ -1656,11 +1674,12 @@ IndexedJoinedAsyncNext(initialContext) ==
              IndexedAsync(initialContext)!PreGstCrash(node))
   /\ IndexedAsync(initialContext)!
        AsyncHistoricalLockRestartAuthorityTransition
+  /\ IndexedAsync(initialContext)!AsyncProducerProjectionStep
   \* Service activation belongs only to the atomic successor-publication
-  \* actions below.  An ordinary joined-context step must retain component 45;
+  \* actions below.  An ordinary joined-context step must retain component 46;
   \* the unchanged arm of AsyncServiceActivationTransition then refines the
   \* exact standalone AsyncNext relation without activating an unjoined peer.
-  /\ UNCHANGED IndexedScheduler(initialContext, 45)
+  /\ UNCHANGED IndexedScheduler(initialContext, 46)
   /\ UNCHANGED <<IndexedCore(initialContext, 1),
                  IndexedCore(initialContext, 2)>>
   /\ [IndexedAsync(initialContext)!Next]_(
@@ -2806,7 +2825,7 @@ IndexedEveryInstanceStrongInvariant ==
 
 \* The scheduler-side service-activation pair is part of AsyncStrongType,
 \* not the Core-only StrongInductiveInvariant above.  Retain the complete
-\* typed Async boundary so component 45 and its paired deadlines can be
+\* typed Async boundary so component 46 and its paired deadlines can be
 \* preserved through both ordinary product steps and final join actions.
 IndexedEveryInstanceAsyncStrongTypeInvariant ==
   \A initialContext \in AdmissibleContextRecords:
@@ -2946,8 +2965,14 @@ THEOREM IndexedInstanceVariablesAreExact ==
          IndexedAsync(initialContext)!AsyncAllVars =
            IndexedAsyncStateAt(initialContext)
 BY Isa DEF IndexedAsyncStateShape, IndexedAsyncStateAt,
+           IndexedAsync!AsyncAllVars,
+           IndexedAsync!AsyncSchedulerVars,
+           IndexedAsync!AsyncRecoveryVars,
+           IndexedAsync!AsyncProducerVars,
+           IndexedAsync!vars,
            IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-           IndexedRecovery, IndexedFixedCorridorDeadlines
+           IndexedRecovery, IndexedProducer,
+           IndexedFixedCorridorDeadlines
 
 (***************************************************************************
 Exact indexed field-order pins.
@@ -2955,8 +2980,9 @@ Exact indexed field-order pins.
 Arity alone is insufficient at this boundary: an insertion in Core or the
 scheduler can leave every tuple well typed while shifting a later durable or
 fairness owner onto the wrong state component.  These extensional equalities
-pin the duplicated GST scalar, all 49 Core fields, all 45 scheduler fields,
-the five recovery fields, and the proof-only fixed-corridor receipt.
+pin the duplicated GST scalar, all 49 Core fields, all 46 scheduler fields,
+the five recovery fields, all three producer-journal fields, and the proof-only
+fixed-corridor receipt.
 ***************************************************************************)
 THEOREM IndexedDuplicatedGstProjectionIsExact ==
   IndexedAsyncStateShape
@@ -3022,7 +3048,7 @@ THEOREM IndexedFortyNineFieldCoreProjectionIsExact ==
              IndexedCore(initialContext, 49)>>
 BY DEF IndexedAsync!vars, IndexedCore
 
-THEOREM IndexedFortyFiveFieldSchedulerProjectionIsExact ==
+THEOREM IndexedFortySixFieldSchedulerProjectionIsExact ==
   IndexedAsyncStateShape
     => \A initialContext \in AdmissibleContextRecords:
          IndexedAsync(initialContext)!AsyncSchedulerVars =
@@ -3070,7 +3096,8 @@ THEOREM IndexedFortyFiveFieldSchedulerProjectionIsExact ==
              IndexedScheduler(initialContext, 42),
              IndexedScheduler(initialContext, 43),
              IndexedScheduler(initialContext, 44),
-             IndexedScheduler(initialContext, 45)>>
+             IndexedScheduler(initialContext, 45),
+             IndexedScheduler(initialContext, 46)>>
 BY DEF IndexedAsync!AsyncSchedulerVars, IndexedScheduler
 
 THEOREM IndexedFixedCorridorDeadlineProjectionIsExact ==
@@ -3079,6 +3106,36 @@ THEOREM IndexedFixedCorridorDeadlineProjectionIsExact ==
          IndexedAsync(initialContext)!asyncFixedCorridorDeadlines
            = IndexedFixedCorridorDeadlines(initialContext)
 BY DEF IndexedFixedCorridorDeadlines
+
+(***************************************************************************
+The producer journal is part of the authoritative transition state.  These
+equalities prevent indexed contexts from aliasing a hidden global journal and
+pin the known-obligation, consumed-episode, and origin-history order used by
+the finite producer ranks.
+***************************************************************************)
+THEOREM IndexedThreeFieldProducerProjectionIsExact ==
+  IndexedAsyncStateShape
+    => \A initialContext \in AdmissibleContextRecords:
+         /\ IndexedAsync(initialContext)!AsyncProducerVars =
+              indexedAsyncState[initialContext][5]
+         /\ indexedAsyncState[initialContext][5] =
+              <<IndexedProducer(initialContext, 1),
+                IndexedProducer(initialContext, 2),
+                IndexedProducer(initialContext, 3)>>
+BY Isa DEF IndexedAsyncStateShape,
+           IndexedAsync!AsyncProducerVars, IndexedProducer
+
+THEOREM VerificationThreeFieldProducerProjectionIsExact ==
+  IndexedAsyncStateShape
+    /\ VerificationContext \in AdmissibleContextRecords
+    => /\ VerificationAsyncProof!AsyncProducerVars =
+             indexedAsyncState[VerificationContext][5]
+       /\ indexedAsyncState[VerificationContext][5] =
+            <<VerificationProducer(1), VerificationProducer(2),
+              VerificationProducer(3)>>
+BY Isa DEF IndexedAsyncStateShape,
+           VerificationAsyncProof!AsyncProducerVars,
+           VerificationProducer, IndexedProducer
 
 THEOREM VerificationInstanceVariablesAreExact ==
   /\ IndexedAsyncStateShape
@@ -3090,27 +3147,31 @@ BY Isa
        VerificationAsyncProof!AsyncAllVars,
        VerificationAsyncProof!AsyncSchedulerVars,
        VerificationAsyncProof!AsyncRecoveryVars,
+       VerificationAsyncProof!AsyncProducerVars,
        VerificationAsyncProof!vars,
        VerificationCore, VerificationScheduler, VerificationRecovery,
+       VerificationProducer,
        VerificationFixedCorridorDeadlines,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
-       IndexedRecovery, IndexedFixedCorridorDeadlines
+       IndexedRecovery, IndexedProducer,
+       IndexedFixedCorridorDeadlines
 
 (***************************************************************************
-The six Serve lifecycle fields are pinned separately from the aggregate
+The seven Serve lifecycle fields are pinned separately from the aggregate
 scheduler tuple.  This prevents an arity-correct WITH clause from silently
-projecting old outstanding-work fields at indices 11..16 and thereby erasing
-the immutable admission ordinals, reservations, or terminal tombstones from
-the indexed liveness product.
+dropping the retained-attempt field at index 17, shifting every later owner,
+and thereby erasing immutable admission, tombstone, or retry-coalescing state
+from the indexed liveness product.
 ***************************************************************************)
-THEOREM IndexedSixFieldServeLifecycleProjectionIsExact ==
+THEOREM IndexedSevenFieldServeLifecycleProjectionIsExact ==
   IndexedAsyncStateShape
     => \A initialContext \in AdmissibleContextRecords:
          /\ IndexedAsync(initialContext)!AsyncServeLifecycleVars =
               <<IndexedScheduler(initialContext, 11),
                 IndexedScheduler(initialContext, 14),
                 IndexedScheduler(initialContext, 15),
-                IndexedScheduler(initialContext, 16)>>
+                IndexedScheduler(initialContext, 16),
+                IndexedScheduler(initialContext, 17)>>
          /\ IndexedAsync(initialContext)!AsyncServeIngressAdmissionVars =
               <<IndexedScheduler(initialContext, 12),
                 IndexedScheduler(initialContext, 13)>>
@@ -3119,12 +3180,13 @@ BY Isa DEF IndexedAsyncStateShape,
            IndexedAsync!AsyncServeIngressAdmissionVars,
            IndexedScheduler
 
-THEOREM VerificationSixFieldServeLifecycleProjectionIsExact ==
+THEOREM VerificationSevenFieldServeLifecycleProjectionIsExact ==
   /\ IndexedAsyncStateShape
   /\ VerificationContext \in AdmissibleContextRecords
   => /\ VerificationAsyncProof!AsyncServeLifecycleVars =
            <<VerificationScheduler(11), VerificationScheduler(14),
-             VerificationScheduler(15), VerificationScheduler(16)>>
+             VerificationScheduler(15), VerificationScheduler(16),
+             VerificationScheduler(17)>>
      /\ VerificationAsyncProof!AsyncServeIngressAdmissionVars =
            <<VerificationScheduler(12), VerificationScheduler(13)>>
 BY Isa DEF IndexedAsyncStateShape,
@@ -3134,21 +3196,21 @@ BY Isa DEF IndexedAsyncStateShape,
 
 (***************************************************************************
 The appended service-activation record is pinned independently.  This keeps
-all reviewed scheduler indices 1..44 stable while preventing an arity-correct
+all reviewed scheduler indices 1..45 stable while preventing an arity-correct
 instance from dropping or aliasing the irreversible restriction tombstone.
 ***************************************************************************)
 THEOREM IndexedServiceActivationProjectionIsExact ==
   IndexedAsyncStateShape
     => \A initialContext \in AdmissibleContextRecords:
-         IndexedAsync(initialContext)!AsyncSchedulerVars[45]
-           = IndexedScheduler(initialContext, 45)
+       IndexedAsync(initialContext)!AsyncSchedulerVars[46]
+           = IndexedScheduler(initialContext, 46)
 BY DEF IndexedAsync!AsyncSchedulerVars, IndexedScheduler
 
 THEOREM VerificationServiceActivationProjectionIsExact ==
   /\ IndexedAsyncStateShape
   /\ VerificationContext \in AdmissibleContextRecords
-  => VerificationAsyncProof!AsyncSchedulerVars[45]
-       = VerificationScheduler(45)
+  => VerificationAsyncProof!AsyncSchedulerVars[46]
+       = VerificationScheduler(46)
 BY DEF VerificationAsyncProof!AsyncSchedulerVars,
        VerificationScheduler, IndexedScheduler
 
@@ -3156,14 +3218,14 @@ THEOREM IndexedLeaderWireLifecycleProjectionIsExact ==
   IndexedAsyncStateShape
     => \A initialContext \in AdmissibleContextRecords:
          IndexedAsync(initialContext)!asyncLeaderWireLifecycles
-           = IndexedScheduler(initialContext, 41)
+           = IndexedScheduler(initialContext, 42)
 BY DEF IndexedScheduler
 
 THEOREM VerificationLeaderWireLifecycleProjectionIsExact ==
   /\ IndexedAsyncStateShape
   /\ VerificationContext \in AdmissibleContextRecords
   => VerificationAsyncProof!asyncLeaderWireLifecycles
-       = VerificationScheduler(41)
+       = VerificationScheduler(42)
 BY DEF VerificationScheduler, IndexedScheduler
 
 (***************************************************************************
@@ -3205,7 +3267,7 @@ THEOREM IndexedHistoricalRecoveryTargetProjectionIsExact ==
     => \A initialContext \in AdmissibleContextRecords:
          \A node \in ValidatorIds:
            IndexedAsync(initialContext)!HistoricalRecoveryTarget(node)
-             <=> node \in IndexedScheduler(initialContext, 43)
+             <=> node \in IndexedScheduler(initialContext, 44)
 BY DEF IndexedAsync!HistoricalRecoveryTarget
 
 THEOREM VerificationHistoricalRecoveryTargetProjectionIsExact ==
@@ -3213,7 +3275,7 @@ THEOREM VerificationHistoricalRecoveryTargetProjectionIsExact ==
     /\ VerificationContext \in AdmissibleContextRecords
     => \A node \in ValidatorIds:
          VerificationAsyncProof!HistoricalRecoveryTarget(node)
-           <=> node \in VerificationScheduler(43)
+           <=> node \in VerificationScheduler(44)
 BY DEF VerificationAsyncProof!HistoricalRecoveryTarget
 
 THEOREM IndexedInitProjectsEveryAsyncInit ==
@@ -3278,6 +3340,7 @@ BY Isa, JoinedRunnerIsExactAsyncWork,
    JoinedNonRunnerIsExactAsyncWork
    DEF IndexedJoinedAsyncNext, IndexedJoinedNonCrashStep,
        IndexedAsync!AsyncNext, IndexedAsync!AsyncNonCrashStep,
+       IndexedAsync!AsyncProducerProjectionStep,
        IndexedAsync!AsyncServiceActivationTransition,
        IndexedScheduler
 
@@ -3585,7 +3648,7 @@ BY Isa DEF IndexedChainNext, IndexedReceiptClassification,
 Final successor publication is an exact Async service-activation action.
 For the selected successor instance, use the production theorem which embeds
 both restriction and monotone rearm into AsyncNext.  Every other pre-created
-instance stutters extensionally.  This is the component-44 projection seam;
+instance stutters extensionally.  This is the component-46 projection seam;
 ordinary joined work is handled separately by JoinedAsyncStepRefinesExact.
 ***************************************************************************)
 THEOREM SuccessorActivationEnvironmentProjectsEveryAsyncStep ==
@@ -3843,7 +3906,7 @@ PROOF
 Atomic join/activation guard audit.
 
 The branch selector reads unprimed joined membership.  The same final action
-then primes both joinedByContext and scheduler component 45.  Consequently a
+then primes both joinedByContext and scheduler component 46.  Consequently a
 first join can only burn the restriction tombstone and install the singleton
 active owner, while a later join can only monotonically add and rearm that
 exact node.  Neither publication path can expose joined membership one step
@@ -3866,9 +3929,9 @@ THEOREM FirstSuccessorJoinAtomicallyRestrictsServiceActivation ==
              AsyncServiceActivationRestricted)'
        /\ (IndexedAsync(successorContext)!AsyncActiveServiceNodes)'
             = {node}
-       /\ indexedAsyncState'[successorContext][3][32][node]
-            = AsyncDeliveryBound
        /\ indexedAsyncState'[successorContext][3][33][node]
+            = AsyncDeliveryBound
+       /\ indexedAsyncState'[successorContext][3][34][node]
             = AsyncDeliveryBound
 BY Isa
    DEF SuccessorFinalPublicationAction,
@@ -3897,10 +3960,10 @@ THEOREM LaterSuccessorJoinAtomicallyRearmsServiceActivation ==
                 \cup {node}
        /\ node \in
             (IndexedAsync(successorContext)!AsyncActiveServiceNodes)'
-       /\ indexedAsyncState'[successorContext][3][32][node]
+       /\ indexedAsyncState'[successorContext][3][33][node]
             = IndexedScheduler(successorContext, 1)
                 + AsyncDeliveryBound
-       /\ indexedAsyncState'[successorContext][3][33][node]
+       /\ indexedAsyncState'[successorContext][3][34][node]
             = IndexedScheduler(successorContext, 1)
                 + AsyncDeliveryBound
 BY Isa
@@ -4917,7 +4980,7 @@ PROOF
 The standalone Async specification weakly fairly rearms every Responsive
 service owner.  In the indexed product, rearm is fused into the corresponding
 successor publication.  Once the activation premise has joined every
-Responsive node, component-44 coherence makes every standalone rearm action
+Responsive node, component-46 coherence makes every standalone rearm action
 permanently disabled, so those exact weak-fairness clauses hold vacuously.
 ***************************************************************************)
 IndexedResponsiveServiceActivationActionsDisabledAt(initialContext) ==

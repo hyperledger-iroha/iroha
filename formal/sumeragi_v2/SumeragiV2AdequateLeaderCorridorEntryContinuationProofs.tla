@@ -2578,7 +2578,14 @@ AdequateLeaderCompletedLocalProviderKernelProperty(specification) ==
   /\ AdequateLeaderFreshSelfLeaderDecisionProperty(specification)
   /\ AdequateLeaderTargetProofInvariantsProperty(specification)
   /\ AdequateLeaderTargetProducerTransportClosureProperty(specification)
+  /\ AdequateLeaderTargetRetainedProducerOccurrenceClosureProperty(
+       specification)
   /\ AdequateLeaderTargetProductiveEpisodeRankStepProperty(specification)
+
+AdequateLeaderRetainedProducerLocalSemanticKernelProperty(specification) ==
+  /\ AdequateLeaderLocalSemanticKernelProperty(specification)
+  /\ AdequateLeaderTargetRetainedProducerOccurrenceClosureProperty(
+       specification)
 
 THEOREM AdequateLeaderCompletedLocalProviderKernelSuppliesSemanticKernel ==
   \A specification:
@@ -2591,5 +2598,15 @@ BY AdequateLeaderLocalExposureAndProtectedServiceSupplyViewReach,
    DEF AdequateLeaderCompletedLocalProviderKernelProperty,
        AdequateLeaderLocalFixedCorridorKernelProperty,
        AdequateLeaderLocalSemanticKernelProperty
+
+THEOREM
+    AdequateLeaderCompletedLocalProviderKernelSuppliesRetainedProducerSemanticKernel ==
+  \A specification:
+    AdequateLeaderCompletedLocalProviderKernelProperty(specification)
+      => AdequateLeaderRetainedProducerLocalSemanticKernelProperty(
+           specification)
+BY AdequateLeaderCompletedLocalProviderKernelSuppliesSemanticKernel, Isa
+   DEF AdequateLeaderCompletedLocalProviderKernelProperty,
+       AdequateLeaderRetainedProducerLocalSemanticKernelProperty
 
 =============================================================================
