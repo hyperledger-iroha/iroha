@@ -483,11 +483,11 @@
     }
 
     #[test]
-    fn main_verifier_profile_is_closed_until_the_sole_manifest_is_pinned() {
-        assert!(matches!(
-            construct_zk_x509_main_verifier_profile_v1(),
-            Err(ZkX509StarkErrorV1::ProfileMismatch)
-        ));
+    fn main_verifier_profile_is_pinned_and_rejects_substitution() {
+        let mut profile =
+            construct_zk_x509_main_verifier_profile_v1().expect("release-pinned MAIN profile");
+        profile.compiled_profile_digest[0] ^= 1;
+        assert!(validate_zk_x509_main_verifier_profile_v1(profile).is_err());
     }
 
     #[test]
@@ -1143,7 +1143,7 @@
         let digest = der_public_digest_v1(&shape).expect("DER public digest");
         assert_eq!(
             hex::encode(digest),
-            "875e7462478f8f60b2f80f6e6d4cc8adce0288a14e6d0da9f2077bfe45b15554"
+            "b4837637f1bf0678fa78729a4fb2d9ae62da60c7768cf5bdf061abfe96a7443d"
         );
 
         let claims = ZkX509DerStarkTerminalClaimsV1 {
@@ -1669,7 +1669,7 @@
             "commit_masked_trace_polynomial_columns_v1",
             "der_composition_material_from_polynomials_v1",
             "evaluate_masked_trace_polynomial_columns_at_deep_v1",
-            "evaluate_der_composition_coefficients_at_deep_v1",
+            "evaluate_retained_composition_coefficients_at_deep_v1",
             "der_fri_bases_from_polynomials_v1",
             "replay_masked_trace_polynomial_columns_v1",
         ] {

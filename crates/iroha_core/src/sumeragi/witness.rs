@@ -26,7 +26,7 @@ use mv::storage::StorageReadOnly;
 
 use super::{
     consensus::{ExecKv, ExecWitness},
-    smt::KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG,
+    smt::{KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG},
 };
 use crate::state::{StateBlock, WorldReadOnly};
 
@@ -217,6 +217,14 @@ pub(crate) fn kagemusha_v4_topup_anchor_witness_key(operation_id: [u8; 32]) -> V
     out
 }
 
+/// Return the consensus-witness key for one Kagemusha V4 anchor drawdown balance.
+pub(crate) fn kagemusha_v4_topup_drawdown_witness_key(operation_id: [u8; 32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + operation_id.len());
+    out.push(KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG);
+    out.extend_from_slice(&operation_id);
+    out
+}
+
 fn bytes_from_json(j: &iroha_primitives::json::Json) -> Vec<u8> {
     j.get().as_bytes().to_vec()
 }
@@ -369,6 +377,31 @@ pub(crate) fn record_write_kagemusha_v4_topup_anchor(
     let key = kagemusha_v4_topup_anchor_witness_key(operation_id);
     with_active_slot(|witness| {
         witness.writes.insert(key, canonical_anchor_digest.to_vec());
+    });
+}
+
+/// Record the pre-state redeemed amount (or canonical absence) for one top-up anchor.
+pub(crate) fn record_read_kagemusha_v4_topup_drawdown(
+    operation_id: [u8; 32],
+    encoded_redeemed_atomic_units: Option<&[u8]>,
+) {
+    let key = kagemusha_v4_topup_drawdown_witness_key(operation_id);
+    let value = encoded_redeemed_atomic_units.map_or_else(Vec::new, ToOwned::to_owned);
+    with_active_slot(|witness| {
+        witness.reads.entry(key).or_insert(value);
+    });
+}
+
+/// Record the post-state redeemed amount for one top-up anchor.
+pub(crate) fn record_write_kagemusha_v4_topup_drawdown(
+    operation_id: [u8; 32],
+    redeemed_atomic_units: u128,
+) {
+    let key = kagemusha_v4_topup_drawdown_witness_key(operation_id);
+    with_active_slot(|witness| {
+        witness
+            .writes
+            .insert(key, redeemed_atomic_units.to_le_bytes().to_vec());
     });
 }
 
@@ -1282,6 +1315,27 @@ mod tests {
                 commitment.post_state_root,
             )
         );
+    }
+
+    #[test]
+    fn kagemusha_v4_drawdown_is_an_ordinary_exact_u128_witness_leaf() {
+        let _guard = exec_witness_guard();
+        start_block();
+        let operation_id = [0x65; 32];
+        record_read_kagemusha_v4_topup_drawdown(operation_id, Some(&11_u128.to_le_bytes()));
+        record_write_kagemusha_v4_topup_drawdown(operation_id, 29);
+        let witness = drain_exec_witness();
+
+        let expected_key = kagemusha_v4_topup_drawdown_witness_key(operation_id);
+        assert_eq!(expected_key.len(), 33);
+        assert_eq!(expected_key[0], KAGEMUSHA_V4_TOPUP_DRAWDOWN_WITNESS_KEY_TAG);
+        assert_eq!(&expected_key[1..], operation_id.as_slice());
+        assert_eq!(witness.reads.len(), 1);
+        assert_eq!(witness.reads[0].key, expected_key);
+        assert_eq!(witness.reads[0].value, 11_u128.to_le_bytes());
+        assert_eq!(witness.writes.len(), 1);
+        assert_eq!(witness.writes[0].key, expected_key);
+        assert_eq!(witness.writes[0].value, 29_u128.to_le_bytes());
     }
 
     #[test]

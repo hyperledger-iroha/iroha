@@ -1,0 +1,13 @@
+;
+; floating point number
+;
+float    = [sign] decimal [exponent]
+sign     = "+" / "-"
+decimal  = integer [dot [fraction]]
+           / dot fraction
+integer  = 1*%d48-57
+dot      = "."
+fraction = 1*%d48-57
+exponent = "e" [esign] exp
+esign    = "+" / "-"
+exp      = 1*%d48-57

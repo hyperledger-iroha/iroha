@@ -6,7 +6,10 @@
 //! Kura are the recovery source of truth; [`crate::state::State`] hydrates this
 //! projection from those DA commitment bundles during access or rewind.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Bound::{Excluded, Unbounded},
+};
 
 use iroha_data_model::{
     da::commitment::{
@@ -225,6 +228,30 @@ impl DaCommitmentStore {
         self.by_lane_epoch.values()
     }
 
+    /// Return commitments ordered by `(lane_id, epoch, sequence)` strictly after `cursor`.
+    ///
+    /// The ordered map seeks directly to the cursor in logarithmic time. Callers
+    /// should separately require [`Self::contains_query_key`] before accepting a
+    /// client-supplied cursor so removed or foreign keys fail closed.
+    pub fn all_sorted_after(
+        &self,
+        cursor: Option<DaCommitmentKey>,
+    ) -> impl Iterator<Item = &DaCommitmentWithLocation> {
+        let lower_bound = cursor.map_or(Unbounded, |key| {
+            Excluded((key.lane_id.as_u32(), key.epoch, key.sequence))
+        });
+        self.by_lane_epoch
+            .range((lower_bound, Unbounded))
+            .map(|(_, record)| record)
+    }
+
+    /// Return whether the active query index contains `key`.
+    #[must_use]
+    pub fn contains_query_key(&self, key: DaCommitmentKey) -> bool {
+        self.by_lane_epoch
+            .contains_key(&(key.lane_id.as_u32(), key.epoch, key.sequence))
+    }
+
     /// Number of currently queryable commitment records.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -268,10 +295,7 @@ mod tests {
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
-            commitment::{
-                DaCommitmentBundle, DaCommitmentLocation, DaProofScheme, KzgCommitment,
-                RetentionClass,
-            },
+            commitment::{DaCommitmentBundle, DaCommitmentLocation, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
         nexus::LaneId,
@@ -299,7 +323,6 @@ mod tests {
             ManifestDigest::new(manifest_hash),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([seq_u8; 32]),
-            Some(KzgCommitment::new([0x11; 48])),
             None,
             RetentionClass::default(),
             StorageTicketId::new(storage_ticket),
@@ -382,6 +405,38 @@ mod tests {
                 .map(|r| r.commitment.manifest_hash),
             Some(c.manifest_hash)
         );
+    }
+
+    #[test]
+    fn seeks_strictly_after_query_key() {
+        let mut store = DaCommitmentStore::default();
+        let records = [
+            sample_record(1, 1, 1),
+            sample_record(1, 2, 0),
+            sample_record(2, 1, 5),
+        ];
+        for (index, record) in records.iter().enumerate() {
+            assert!(store.insert(
+                record,
+                DaCommitmentLocation {
+                    block_height: 3,
+                    index_in_bundle: u32::try_from(index).expect("fixture index fits u32"),
+                },
+            ));
+        }
+
+        let cursor = DaCommitmentKey::from_record(&records[1]);
+        assert!(store.contains_query_key(cursor));
+        let remaining = store
+            .all_sorted_after(Some(cursor))
+            .map(|entry| DaCommitmentKey::from_record(&entry.commitment))
+            .collect::<Vec<_>>();
+        assert_eq!(remaining, vec![DaCommitmentKey::from_record(&records[2])]);
+        assert!(!store.contains_query_key(DaCommitmentKey {
+            lane_id: LaneId::new(9),
+            epoch: 9,
+            sequence: 9,
+        }));
     }
 
     #[test]

@@ -185,6 +185,33 @@ fn typed_core_query_page_payload(offset: i64, limit: i64) -> norito::json::Value
     .expect("serialize typed core-query page arguments")
 }
 
+async fn invoke_typed_core_query_page(
+    client: iroha::client::Client,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    entrypoint: &str,
+    offset: i64,
+    limit: i64,
+) -> Result<norito::json::Value> {
+    let contract_address = contract_address.clone();
+    let entrypoint = entrypoint.to_owned();
+    let payload = typed_core_query_page_payload(offset, limit);
+    let response = tokio::task::spawn_blocking(move || {
+        client.post_contract_view_json(
+            &iroha_test_samples::ALICE_ID,
+            Some(&contract_address),
+            None,
+            &entrypoint,
+            Some(&payload),
+            1_000_000,
+        )
+    })
+    .await??;
+    response
+        .get("result")
+        .cloned()
+        .ok_or_else(|| eyre!("contract view response is missing result: {response:?}"))
+}
+
 fn typed_query_page_parts(
     result: &norito::json::Value,
     view_name: &str,
@@ -1173,9 +1200,9 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 1i64)
                 // Contract views share the public contract-route limiter with
-                // deployments. This gate deliberately executes 15 views per
-                // peer in a tight sequence, so give the semantic test a
-                // deterministic budget instead of depending on token refill
+                // deployments. This gate deliberately walks every typed page
+                // on every peer in a tight sequence, so give the semantic test
+                // a deterministic budget instead of depending on token refill
                 // timing between otherwise single-pass page requests.
                 .write(["torii", "deploy_rate_per_origin_per_sec"], 10_000i64)
                 .write(["torii", "deploy_burst_per_origin"], 10_000i64);
@@ -1355,34 +1382,49 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         );
     }
 
-    let requests = [(0_i64, 3_i64), (3_i64, 3_i64), (0_i64, 64_i64)];
+    const CURSOR_PAGE_LIMIT: i64 = 3;
     let mut peer_results = Vec::with_capacity(network.peers().len());
     for peer in network.peers() {
         let mut family_pages = Vec::with_capacity(families.len());
-        for (entrypoint, _, _, _) in &families {
-            let mut pages = Vec::with_capacity(requests.len());
-            for &(offset, limit) in &requests {
-                let response = tokio::task::spawn_blocking({
-                    let client = peer.client();
-                    let contract_address = contract_address.clone();
-                    let entrypoint = *entrypoint;
-                    let payload = typed_core_query_page_payload(offset, limit);
-                    move || {
-                        client.post_contract_view_json(
-                            &iroha_test_samples::ALICE_ID,
-                            Some(&contract_address),
-                            None,
-                            entrypoint,
-                            Some(&payload),
-                            1_000_000,
-                        )
-                    }
-                })
-                .await??;
-                pages.push(response.get("result").cloned().ok_or_else(|| {
-                    eyre!("contract view response is missing result: {response:?}")
-                })?);
+        for (entrypoint, view_name, expected_ids, _) in &families {
+            let expected_cursor_pages = expected_ids
+                .len()
+                .div_ceil(usize::try_from(CURSOR_PAGE_LIMIT).expect("positive page limit"));
+            let mut pages = Vec::with_capacity(expected_cursor_pages + 1);
+            let mut offset = 0_i64;
+            loop {
+                if pages.len() >= expected_cursor_pages {
+                    return Err(eyre!(
+                        "{entrypoint} cursor walk did not terminate within \
+                         {expected_cursor_pages} pages"
+                    ));
+                }
+                let page = invoke_typed_core_query_page(
+                    peer.client(),
+                    &contract_address,
+                    entrypoint,
+                    offset,
+                    CURSOR_PAGE_LIMIT,
+                )
+                .await?;
+                let (_, next_offset) = typed_query_page_parts(&page, view_name)?;
+                pages.push(page);
+                let Some(next_offset) = next_offset else {
+                    break;
+                };
+                if next_offset <= offset {
+                    return Err(eyre!(
+                        "{entrypoint} cursor did not advance strictly: \
+                         current={offset}, next={next_offset}"
+                    ));
+                }
+                offset = next_offset;
             }
+
+            pages.push(
+                invoke_typed_core_query_page(peer.client(), &contract_address, entrypoint, 0, 64)
+                    .await?,
+            );
             family_pages.push(pages);
         }
         peer_results.push(family_pages);
@@ -1400,30 +1442,40 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         families.iter().enumerate()
     {
         let pages = &canonical_families[family_index];
-        let (first_ids, first_next) = typed_query_page_parts(&pages[0], view_name)?;
-        let (second_ids, second_next) = typed_query_page_parts(&pages[1], view_name)?;
-        let (all_ids, all_next) = typed_query_page_parts(&pages[2], view_name)?;
+        let (all_page, cursor_pages) = pages
+            .split_last()
+            .ok_or_else(|| eyre!("{entrypoint} returned no typed pages"))?;
+        let mut walked_ids = Vec::with_capacity(expected_ids.len());
+        let mut expected_offset = 0_usize;
+        for (page_index, page) in cursor_pages.iter().enumerate() {
+            let (page_ids, next_offset) = typed_query_page_parts(page, view_name)?;
+            let expected_end = expected_offset
+                .saturating_add(
+                    usize::try_from(CURSOR_PAGE_LIMIT).expect("positive cursor page limit"),
+                )
+                .min(expected_ids.len());
+            assert_eq!(
+                page_ids.as_slice(),
+                &expected_ids[expected_offset..expected_end],
+                "{entrypoint} cursor page {page_index} must preserve canonical ID order"
+            );
+            let expected_next = (expected_end < expected_ids.len())
+                .then(|| i64::try_from(expected_end).expect("fixture length fits in i64"));
+            assert_eq!(
+                next_offset, expected_next,
+                "{entrypoint} cursor page {page_index} must return its exact continuation"
+            );
+            assert_typed_query_projection(page, view_name, expected_fields)?;
+            walked_ids.extend(page_ids);
+            expected_offset = expected_end;
+        }
+        assert_eq!(
+            walked_ids.as_slice(),
+            expected_ids.as_slice(),
+            "{entrypoint} cursor walk must return every canonical ID exactly once"
+        );
 
-        assert_eq!(
-            first_ids.as_slice(),
-            &expected_ids[..3],
-            "{entrypoint} first page must preserve canonical ID order"
-        );
-        assert_eq!(
-            first_next,
-            Some(3),
-            "{entrypoint} first page must point at its exact continuation"
-        );
-        assert_eq!(
-            second_ids.as_slice(),
-            &expected_ids[3..6],
-            "{entrypoint} second page must preserve canonical ID order"
-        );
-        assert_eq!(
-            second_next,
-            (expected_ids.len() > 6).then_some(6),
-            "{entrypoint} next_offset must exist exactly when another canonical page exists"
-        );
+        let (all_ids, all_next) = typed_query_page_parts(all_page, view_name)?;
         assert_eq!(
             &all_ids, expected_ids,
             "{entrypoint} maximum bounded page must include the complete fixture"
@@ -1432,7 +1484,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             all_next, None,
             "{entrypoint} final bounded page must return Option::none"
         );
-        assert_typed_query_projection(&pages[2], view_name, expected_fields)?;
+        assert_typed_query_projection(all_page, view_name, expected_fields)?;
     }
 
     for (entrypoint, offset, limit) in [

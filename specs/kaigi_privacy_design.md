@@ -120,7 +120,7 @@ Stop the demo by pressing `Ctrl+C`; the trap in the script terminates `irohad` a
 
 Parameters:
 
-- `proof: ZkProof` (Norito bytes wrapper) – Groth16 proof attesting the caller knows `(account_id, domain_salt)` whose Poseidon hash equals the supplied `commitment`.
+- `proof: ZkProof` (Norito bytes wrapper) – Halo2/IPA proof attesting the caller knows `(account_id, domain_salt, nullifier_seed)` whose domain-separated Poseidon hashes equal the supplied `commitment` and `nullifier`.
 - `commitment: FixedBinary<32>`
 - `nullifier: FixedBinary<32>`
 - `relay_hint: Option<KaigiRelayHop>` – optional per-participant override for the next hop.
@@ -138,9 +138,11 @@ Transparent mode matches current logic.
 
 Private mode requires:
 
-1. Proof that the caller knows a commitment in `record.roster_commitments`.
-2. Nullifier update proving single-use leave.
-3. Remove commitment/nullifier entries. Auditing preserves tombstones for fixed retention windows to avoid structural leakage.
+Private leave is intentionally unavailable on-chain in the first-release
+`ZkRosterV1` profile. A participant disconnects from the local session, or the
+host ends the call. A future on-chain leave flow must use a dedicated circuit
+that proves Merkle membership in `record.roster_commitments`; the join circuit
+must not be reused for that purpose.
 
 ## `RecordKaigiUsage`
 
@@ -168,19 +170,23 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
 - Operators need to (1) register the roster verifier set through governance, and
   (2) set `zk.kaigi_roster_join_vk`, `zk.kaigi_roster_leave_vk`, and
   `zk.kaigi_usage_vk` in `iroha_config` so hosts can resolve them at runtime.
-  Until the keys are present, privacy joins, leaves, and usage calls fail
-  deterministically.
-- `crates/kaigi_zk` now ships Halo2 circuits for roster joins/leaves and usage
-  commitments alongside the reusable compressors (`commitment`, `nullifier`,
-  `usage`). The roster circuits expose the Merkle root (four little-endian
-  64-bit limbs) as additional public inputs so the host can crosscheck the proof
-  against the stored roster root before verification. Usage commitments are
+  Until the keys are present, privacy joins, host proof actions, and usage calls
+  fail deterministically.
+- `crates/kaigi_zk` now ships Halo2 circuits for roster joins and usage
+  commitments alongside the reusable, domain-separated Poseidon compressors
+  (`commitment`, `nullifier`, `usage`). The roster join circuit exposes the
+  pre-join Merkle root (four little-endian 64-bit limbs) as additional public
+  inputs so the host can crosscheck the proof against the stored roster root
+  before verification. Because a join creates a new leaf, this root is a
+  state/freshness binding rather than a membership claim. Usage commitments are
   enforced by `KaigiUsageCommitmentCircuit`, which ties `(duration, gas,
   segment)` to the on-ledger hash.
-- `Join` circuit inputs: `(commitment, nullifier, domain_salt)` and private
-  `(account_id)`. Public inputs include `commitment`, `nullifier`, and
-  four limbs of the Merkle root for the roster commitment tree (the roster
-  remains off-chain, but the root is bound into the transcript).
+- `Join` circuit private witnesses are `(account_id, domain_salt,
+  nullifier_seed)`. Public inputs are `commitment`, `nullifier`, and four limbs
+  of the Merkle root for the roster commitment tree (the roster remains
+  off-chain, but the root is bound into the transcript). Admission requires
+  exactly those six single-row columns and compares the first two values
+  byte-for-byte with the instruction artifacts before verification.
 - Determinism: we fix Poseidon parameters, circuit versions, and indexes in the
   registry. Any change bumps `KaigiPrivacyMode` to `ZkRosterV2` with matching
   tests/golden files.

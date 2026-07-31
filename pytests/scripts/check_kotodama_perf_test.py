@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
@@ -71,13 +73,31 @@ class KotodamaPerfGateTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def run_gate(self) -> int:
+        """Run sample checks with the provenance boundary mocked as satisfied."""
+
+        predecessor = self.root / "predecessor"
+        with mock.patch.object(
+            PERF, "validate_predecessor_provenance"
+        ) as validate:
+            result = PERF.main(
+                [
+                    "--criterion-dir",
+                    str(self.root),
+                    "--predecessor-root",
+                    str(predecessor),
+                ]
+            )
+        validate.assert_called_once_with(predecessor)
+        return result
+
     def test_gate_accepts_five_percent_and_rejects_more(self) -> None:
         populate(self.root, "base")
         populate(self.root, "new", 1.05)
-        self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 0)
+        self.assertEqual(self.run_gate(), 0)
 
         populate(self.root, "new", 1.051)
-        self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 1)
+        self.assertEqual(self.run_gate(), 1)
 
     def test_gate_fails_closed_on_missing_or_invalid_samples(self) -> None:
         populate(self.root, "base")
@@ -89,70 +109,170 @@ class KotodamaPerfGateTests(unittest.TestCase):
             / "estimates.json"
         )
         missing.unlink()
-        self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 1)
+        self.assertEqual(self.run_gate(), 1)
 
         write_estimate(missing, float("nan"))
-        self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 1)
+        self.assertEqual(self.run_gate(), 1)
 
-    def test_checked_in_baseline_roundtrip_and_coverage(self) -> None:
-        populate(self.root, "new")
-        baseline = self.root / "baseline.json"
-        self.assertEqual(
-            PERF.main(
-                [
-                    "--criterion-dir",
-                    str(self.root),
-                    "--write-baseline",
-                    str(baseline),
-                ]
-            ),
-            0,
-        )
-        self.assertEqual(
-            PERF.main(
-                ["--criterion-dir", str(self.root), "--baseline", str(baseline)]
-            ),
-            0,
-        )
-
-        payload = json.loads(baseline.read_text(encoding="utf-8"))
-        self.assertEqual(
-            set(payload["benchmarks"]), set(PERF.REGRESSION_BENCHMARKS)
-        )
-        self.assertTrue(
-            EXPECTED_CANDIDATE_ONLY_BENCHMARKS.isdisjoint(
-                payload["benchmarks"]
-            )
-        )
-        del payload["benchmarks"][PERF.REGRESSION_BENCHMARKS[0]]
-        baseline.write_text(json.dumps(payload), encoding="utf-8")
-        self.assertEqual(
-            PERF.main(
-                ["--criterion-dir", str(self.root), "--baseline", str(baseline)]
-            ),
-            1,
-        )
-
-        payload = {
-            "schema": PERF.SCHEMA,
-            "unit": "ns",
-            "benchmarks": {
-                name: 1_000.0 for name in PERF.REGRESSION_BENCHMARKS
-            },
-        }
-        payload["benchmarks"]["unreviewed_benchmark"] = 1_000.0
-        baseline.write_text(json.dumps(payload), encoding="utf-8")
-        self.assertEqual(
-            PERF.main(
-                ["--criterion-dir", str(self.root), "--baseline", str(baseline)]
-            ),
-            1,
-        )
+    def test_portable_and_self_baseline_cli_paths_are_rejected(self) -> None:
+        common = ["--predecessor-root", str(self.root / "predecessor")]
+        for option in ("--baseline", "--write-baseline"):
+            with self.subTest(option=option):
+                with (
+                    contextlib.redirect_stderr(io.StringIO()),
+                    self.assertRaises(SystemExit),
+                ):
+                    PERF.parse_args([*common, option, str(self.root / "baseline.json")])
+        self.assertFalse(hasattr(PERF, "read_baseline"))
+        self.assertFalse(hasattr(PERF, "write_baseline"))
 
     def test_threshold_cannot_be_loosened(self) -> None:
         comparisons = [PERF.Comparison("bench", 100.0, 100.0)]
         with self.assertRaisesRegex(PERF.GateError, "cannot be loosened"):
             PERF.enforce(comparisons, 0.051)
+
+    def test_gate_fails_before_comparison_without_authenticated_lock_provenance(
+        self,
+    ) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        self.assertIsNone(PERF.PREDECESSOR_CARGO_LOCK_SHA256)
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = PERF.main(
+                [
+                    "--criterion-dir",
+                    str(self.root),
+                    "--predecessor-root",
+                    str(self.root / "predecessor"),
+                ]
+            )
+        self.assertEqual(result, 1)
+        self.assertIn(
+            "authenticated predecessor Cargo.lock provenance is unavailable",
+            stderr.getvalue(),
+        )
+        self.assertNotIn("benchmark | baseline ns", stdout.getvalue())
+        self.assertNotIn("within the 5% V1 budget", stdout.getvalue())
+
+    def test_predecessor_provenance_rejects_identity_and_source_drift(
+        self,
+    ) -> None:
+        predecessor = self.root / "predecessor"
+        predecessor.mkdir()
+        lock = predecessor / "Cargo.lock"
+        lock.write_bytes(b"authenticated predecessor lock fixture\n")
+        lock_digest = hashlib.sha256(lock.read_bytes()).hexdigest()
+        candidates = (self.root / "candidate.rs",)
+
+        with mock.patch.object(
+            PERF, "PREDECESSOR_CARGO_LOCK_SHA256", "0" * 63
+        ):
+            with self.assertRaisesRegex(PERF.GateError, "lowercase 64-hex"):
+                PERF.validate_predecessor_provenance(predecessor, candidates)
+
+        with (
+            mock.patch.object(
+                PERF, "PREDECESSOR_CARGO_LOCK_SHA256", lock_digest
+            ),
+            mock.patch.object(PERF, "_git_head", return_value="f" * 40),
+        ):
+            with self.assertRaisesRegex(PERF.GateError, "revision mismatch"):
+                PERF.validate_predecessor_provenance(predecessor, candidates)
+
+        with (
+            mock.patch.object(
+                PERF, "PREDECESSOR_CARGO_LOCK_SHA256", lock_digest
+            ),
+            mock.patch.object(
+                PERF, "_git_head", return_value=PERF.PREDECESSOR_SHA
+            ),
+            mock.patch.object(
+                PERF,
+                "_require_git_paths_clean",
+                side_effect=PERF.GateError("source drift"),
+            ),
+        ):
+            with self.assertRaisesRegex(PERF.GateError, "source drift"):
+                PERF.validate_predecessor_provenance(predecessor, candidates)
+
+        with (
+            mock.patch.object(
+                PERF, "PREDECESSOR_CARGO_LOCK_SHA256", "1" * 64
+            ),
+            mock.patch.object(
+                PERF, "_git_head", return_value=PERF.PREDECESSOR_SHA
+            ),
+            mock.patch.object(PERF, "_require_git_paths_clean"),
+        ):
+            with self.assertRaisesRegex(PERF.GateError, "digest mismatch"):
+                PERF.validate_predecessor_provenance(predecessor, candidates)
+
+        inventory = mock.Mock()
+        with (
+            mock.patch.object(
+                PERF, "PREDECESSOR_CARGO_LOCK_SHA256", lock_digest
+            ),
+            mock.patch.object(
+                PERF, "_git_head", return_value=PERF.PREDECESSOR_SHA
+            ),
+            mock.patch.object(PERF, "_require_git_paths_clean") as clean,
+            mock.patch.object(
+                PERF, "validate_revision_inventories", inventory
+            ),
+        ):
+            PERF.validate_predecessor_provenance(predecessor, candidates)
+        clean.assert_called_once_with(predecessor.resolve(), ())
+        inventory.assert_called_once_with(
+            base_sources=tuple(
+                predecessor.resolve() / relative
+                for relative in PERF.BENCHMARK_SOURCE_PATHS
+            ),
+            candidate_sources=candidates,
+        )
+
+    def test_predecessor_provenance_rejects_missing_or_symlink_lock(self) -> None:
+        predecessor = self.root / "predecessor"
+        predecessor.mkdir()
+        expected = hashlib.sha256(b"lock").hexdigest()
+        shared_patches = (
+            mock.patch.object(
+                PERF, "PREDECESSOR_CARGO_LOCK_SHA256", expected
+            ),
+            mock.patch.object(
+                PERF, "_git_head", return_value=PERF.PREDECESSOR_SHA
+            ),
+            mock.patch.object(PERF, "_require_git_paths_clean"),
+        )
+        with (
+            shared_patches[0],
+            shared_patches[1],
+            shared_patches[2],
+        ):
+            with self.assertRaisesRegex(PERF.GateError, "regular, non-symlink"):
+                PERF.validate_predecessor_provenance(predecessor)
+
+        target = self.root / "archived.lock"
+        target.write_bytes(b"lock")
+        try:
+            (predecessor / "Cargo.lock").symlink_to(target)
+        except OSError as error:
+            self.skipTest(f"symlinks unavailable: {error}")
+        with (
+            mock.patch.object(
+                PERF, "PREDECESSOR_CARGO_LOCK_SHA256", expected
+            ),
+            mock.patch.object(
+                PERF, "_git_head", return_value=PERF.PREDECESSOR_SHA
+            ),
+            mock.patch.object(PERF, "_require_git_paths_clean"),
+        ):
+            with self.assertRaisesRegex(PERF.GateError, "regular, non-symlink"):
+                PERF.validate_predecessor_provenance(predecessor)
 
     def test_list_sugar_must_not_be_slower_than_the_manual_loop(self) -> None:
         samples = {
@@ -217,9 +337,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
                 sample = self.root / name / "new" / "estimates.json"
                 median = PERF.read_criterion_median(sample)
                 sample.unlink()
-                self.assertEqual(
-                    PERF.main(["--criterion-dir", str(self.root)]), 1
-                )
+                self.assertEqual(self.run_gate(), 1)
                 write_estimate(sample, median)
 
     def test_candidate_only_benchmark_source_and_policy_cannot_drift(self) -> None:
@@ -408,6 +526,40 @@ class KotodamaPerfGateTests(unittest.TestCase):
             with self.assertRaisesRegex(PERF.GateError, "coverage is incomplete"):
                 PERF.validate_benchmark_policy()
 
+    def test_typed_query_raw_entity_baseline_drift_is_not_comparable(
+        self,
+    ) -> None:
+        query_source = PERF.BENCHMARK_SOURCES[2]
+        original = query_source.read_text(encoding="utf-8")
+        suffix = "    });\n    (state, authority, raw_query_response_bytes)"
+        self.assertEqual(original.count(suffix), 1)
+        mutated = self.root / "inflated-raw-query-baseline.rs"
+        mutated.write_text(
+            original.replace(
+                suffix,
+                "    }).map(|bytes| bytes.saturating_add(1_000_000));\n"
+                "    (state, authority, raw_query_response_bytes)",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        candidate_sources = (
+            PERF.BENCHMARK_SOURCES[0],
+            PERF.BENCHMARK_SOURCES[1],
+            mutated,
+        )
+
+        # The candidate still has every required benchmark and timed closure;
+        # predecessor comparison must independently bind the raw-entity size
+        # baseline used by the projection assertion.
+        PERF.validate_benchmark_policy(candidate_sources)
+        with self.assertRaisesRegex(
+            PERF.GateError, "raw-entity baseline drift"
+        ):
+            PERF.validate_typed_query_raw_entity_contract(
+                (query_source,), (mutated,)
+            )
+
     def test_core_runtime_explicit_max_heap_preserves_predecessor_identity(
         self,
     ) -> None:
@@ -512,6 +664,11 @@ class KotodamaPerfGateTests(unittest.TestCase):
         )
         timed_body_policy.start()
         self.addCleanup(timed_body_policy.stop)
+        raw_entity_policy = mock.patch.object(
+            PERF, "_typed_query_raw_entity_contract", return_value="raw"
+        )
+        raw_entity_policy.start()
+        self.addCleanup(raw_entity_policy.stop)
         base = self.root / "base.rs"
         candidate = self.root / "candidate.rs"
 
@@ -637,28 +794,22 @@ class KotodamaPerfGateTests(unittest.TestCase):
         )
         for name in PERF.CANDIDATE_ONLY_BENCHMARKS:
             (self.root / name / "base" / "estimates.json").unlink()
-        self.assertEqual(PERF.main(["--criterion-dir", str(self.root)]), 0)
+        self.assertEqual(self.run_gate(), 0)
 
         for name in PERF.REGRESSION_BENCHMARKS:
             with self.subTest(name=name):
                 sample = self.root / name / "base" / "estimates.json"
                 baseline_median = PERF.read_criterion_median(sample)
                 sample.unlink()
-                self.assertEqual(
-                    PERF.main(["--criterion-dir", str(self.root)]), 1
-                )
+                self.assertEqual(self.run_gate(), 1)
                 write_estimate(sample, baseline_median)
 
-    def test_baseline_capture_and_comparison_are_mutually_exclusive(self) -> None:
-        with self.assertRaises(SystemExit):
-            PERF.parse_args(
-                [
-                    "--baseline",
-                    "baseline.json",
-                    "--write-baseline",
-                    "replacement.json",
-                ]
-            )
+    def test_predecessor_root_is_required(self) -> None:
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            PERF.parse_args([])
 
     def test_release_workflow_runs_the_complete_artifact_gate(self) -> None:
         workflow = (
@@ -734,25 +885,35 @@ class KotodamaPerfGateTests(unittest.TestCase):
             r"(?m)^\s*(?:cp|mv|rsync|install)\b[^\n]*"
             r"candidate/crates/ivm/benches/bench_kotodama\.rs",
         )
-        inventory_marker = (
-            "      - name: Require explicit revision benchmark inventories\n"
+        provenance_marker = (
+            "      - name: Require authenticated predecessor provenance\n"
         )
-        self.assertEqual(workflow.count(inventory_marker), 1)
-        inventory_step = workflow.split(inventory_marker, 1)[1].split(
+        self.assertEqual(workflow.count(provenance_marker), 1)
+        provenance_step = workflow.split(provenance_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        self.assertIn('policy["validate_revision_inventories"]', inventory_step)
         self.assertIn(
-            "baseline/crates/ivm/benches/bench_kotodama.rs", inventory_step
+            'policy["validate_predecessor_provenance"]', provenance_step
         )
         self.assertIn(
-            "candidate/crates/ivm/benches/bench_kotodama.rs", inventory_step
+            'policy["validate_revision_inventories"]', provenance_step
+        )
+        self.assertIn(
+            'predecessor_root=Path("baseline")', provenance_step
+        )
+        self.assertIn(
+            "baseline/crates/ivm/benches/bench_kotodama.rs",
+            provenance_step,
+        )
+        self.assertIn(
+            "candidate/crates/ivm/benches/bench_kotodama.rs",
+            provenance_step,
         )
 
         base_marker = "      - name: Measure base revision\n"
         self.assertEqual(workflow.count(base_marker), 1)
         self.assertLess(
-            workflow.index(inventory_marker), workflow.index(base_marker)
+            workflow.index(provenance_marker), workflow.index(base_marker)
         )
         self.assertLess(workflow.index(lock_marker), workflow.index(base_marker))
         base_step = workflow.split(base_marker, 1)[1].split(
@@ -787,6 +948,15 @@ class KotodamaPerfGateTests(unittest.TestCase):
         )
         self.assertIn("--bench queries -- typed_core_query_", candidate_step)
         self.assertNotIn("KOTODAMA_BASE_FILTER", workflow)
+
+        enforcement_marker = "      - name: Enforce five-percent ceiling\n"
+        self.assertEqual(workflow.count(enforcement_marker), 1)
+        enforcement_step = workflow.split(enforcement_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn("--predecessor-root ../baseline", enforcement_step)
+        self.assertNotIn("--baseline", enforcement_step)
+        self.assertNotIn("--write-baseline", enforcement_step)
 
         marker = "      - name: Enforce complete artifact release gate\n"
         self.assertEqual(workflow.count(marker), 1)

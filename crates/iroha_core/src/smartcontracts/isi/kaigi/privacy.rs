@@ -24,7 +24,8 @@ use iroha_data_model::{
 use iroha_schema::Ident;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use kaigi_zk::{
-    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_ROOT_LIMBS, roster_root_limb_values, scalar_from_hash,
+    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_ROOT_LIMBS, KAIGI_USAGE_BACKEND, roster_root_limb_values,
+    scalar_from_hash,
 };
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use mv::storage::StorageReadOnly;
@@ -198,10 +199,11 @@ pub fn verify_roster_join(
 pub fn verify_usage_commitment(
     state_transaction: &mut StateTransaction<'_, '_>,
     proof: Option<&[u8]>,
+    expected_commitment: &Hash,
 ) -> Result<(), Error> {
     #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
     {
-        let _ = state_transaction;
+        let _ = (state_transaction, expected_commitment);
         return verify_usage_stub(proof);
     }
 
@@ -211,6 +213,16 @@ pub fn verify_usage_commitment(
         if proof_bytes.is_empty() {
             return Err(privacy_error("privacy proof payload must be non-empty"));
         }
+        let envelope = decode_privacy_proof_envelope(proof_bytes)?;
+        if envelope.circuit_id != KAIGI_USAGE_BACKEND {
+            return Err(privacy_error(
+                "privacy usage proof must use the canonical Kaigi usage circuit",
+            ));
+        }
+        let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
+            .ok_or_else(|| privacy_error("failed to parse usage privacy proof instances"))?;
+        verify_usage_public_input(&instance_cols, expected_commitment)?;
+
         let vk_cfg = state_transaction.zk.kaigi_usage_vk.clone();
         return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi usage");
     }
@@ -526,11 +538,7 @@ fn verify_roster_public_inputs(
         ));
     }
 
-    verify_hash_public_input(
-        &instance_cols[0],
-        expected_commitment,
-        "commitment",
-    )?;
+    verify_hash_public_input(&instance_cols[0], expected_commitment, "commitment")?;
     verify_hash_public_input(&instance_cols[1], expected_nullifier, "nullifier")?;
 
     let expected_limbs = roster_root_limb_values(expected_root);
@@ -575,6 +583,19 @@ fn verify_hash_public_input(
 }
 
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
+fn verify_usage_public_input(
+    instance_cols: &[Vec<halo2_proofs::halo2curves::pasta::Fp>],
+    expected_commitment: &Hash,
+) -> Result<(), Error> {
+    if instance_cols.len() != 1 {
+        return Err(privacy_error(
+            "privacy usage proof must expose exactly one commitment public input",
+        ));
+    }
+    verify_hash_public_input(&instance_cols[0], expected_commitment, "usage commitment")
+}
+
+#[cfg(not(feature = "kaigi_privacy_mocks"))]
 fn scalar_le_u64(value: halo2_proofs::halo2curves::pasta::Fp) -> Option<u64> {
     use halo2_proofs::halo2curves::ff::PrimeField as _;
 
@@ -592,7 +613,8 @@ fn scalar_le_u64(value: halo2_proofs::halo2curves::pasta::Fp) -> Option<u64> {
 mod tests {
     use halo2_proofs::halo2curves::pasta::Fp;
     use kaigi_zk::{
-        compute_commitment_hash, compute_nullifier_hash, empty_roster_root_hash,
+        compute_commitment_hash, compute_nullifier_hash, compute_usage_commitment_hash,
+        empty_roster_root_hash,
     };
 
     use super::*;
@@ -609,52 +631,40 @@ mod tests {
         for limb in roster_root_limb_values(&root) {
             columns.push(vec![Fp::from(limb)]);
         }
-        assert!(
-            verify_roster_public_inputs(&columns, &root, &commitment, &nullifier).is_ok()
-        );
+        assert!(verify_roster_public_inputs(&columns, &root, &commitment, &nullifier).is_ok());
 
         let mut wrong_commitment = columns.clone();
         wrong_commitment[0][0] += Fp::from(1u64);
         assert!(
-            verify_roster_public_inputs(
-                &wrong_commitment,
-                &root,
-                &commitment,
-                &nullifier
-            )
-            .is_err()
+            verify_roster_public_inputs(&wrong_commitment, &root, &commitment, &nullifier).is_err()
         );
 
         let mut wrong_nullifier = columns.clone();
         wrong_nullifier[1][0] += Fp::from(1u64);
         assert!(
-            verify_roster_public_inputs(
-                &wrong_nullifier,
-                &root,
-                &commitment,
-                &nullifier
-            )
-            .is_err()
+            verify_roster_public_inputs(&wrong_nullifier, &root, &commitment, &nullifier).is_err()
         );
 
         let mut wrong_root = columns.clone();
         wrong_root[2][0] = Fp::from(999u64);
-        assert!(
-            verify_roster_public_inputs(&wrong_root, &root, &commitment, &nullifier)
-                .is_err()
-        );
+        assert!(verify_roster_public_inputs(&wrong_root, &root, &commitment, &nullifier).is_err());
 
         let mut extra_column = columns;
         extra_column.push(vec![Fp::from(0u64)]);
         assert!(
-            verify_roster_public_inputs(
-                &extra_column,
-                &root,
-                &commitment,
-                &nullifier
-            )
-            .is_err()
+            verify_roster_public_inputs(&extra_column, &root, &commitment, &nullifier).is_err()
         );
+    }
+
+    #[test]
+    fn usage_public_input_validation_binds_the_instruction_commitment() {
+        let commitment = compute_usage_commitment_hash(1_200, 345, 2);
+        let scalar = scalar_from_hash(&commitment).expect("canonical usage commitment");
+        assert!(verify_usage_public_input(&[vec![scalar]], &commitment).is_ok());
+
+        assert!(verify_usage_public_input(&[vec![scalar + Fp::from(1u64)]], &commitment).is_err());
+        let extra_column = [vec![scalar], vec![Fp::from(0u64)]];
+        assert!(verify_usage_public_input(&extra_column, &commitment).is_err());
     }
 
     #[test]

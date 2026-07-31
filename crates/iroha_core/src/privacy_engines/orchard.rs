@@ -14,12 +14,14 @@ use incrementalmerkletree::{Position, frontier::Frontier};
 use iroha_data_model::privacy::{PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1};
 use nonempty::NonEmpty;
 use orchard::{
-    Action, Anchor, Bundle, Proof,
+    Action, Address, Anchor, Bundle, Proof,
     builder::{Builder, BundleType, InProgress, Unauthorized},
     bundle::{Authorization, Authorized, BundleVersion, Flags},
     circuit::{OrchardCircuitVersion, ProvingKey, VerifyingKey},
     keys::{FullViewingKey, SpendAuthorizingKey},
-    note::{ExtractedNoteCommitment, Nullifier, TransmittedNoteCiphertext},
+    note::{
+        ExtractedNoteCommitment, NoteVersion, Nullifier, RandomSeed, Rho, TransmittedNoteCiphertext,
+    },
     primitives::redpallas::{self, Binding, SpendAuth},
     tree::MerkleHashOrchard,
     value::{NoteValue, ValueCommitment},
@@ -121,6 +123,99 @@ impl OrchardSpendProverInputV1 {
             merkle_path,
         }
     }
+
+    /// Parse one exact wallet note opening and its complete depth-32 path.
+    ///
+    /// The derived note commitment must reach `expected_anchor`. This keeps
+    /// raw upstream Orchard component parsing inside native Rust and makes a
+    /// partial path, malformed field element, wrong key/address, or stale
+    /// anchor unrepresentable as a prepared prover input.
+    pub fn from_wallet_parts_v1(
+        spending_key: [u8; 32],
+        recipient: [u8; 43],
+        value: u64,
+        rho: [u8; 32],
+        random_seed: [u8; 32],
+        leaf_position: u32,
+        authentication_path: [[u8; 32]; ORCHARD_TREE_DEPTH_V1 as usize],
+        expected_anchor: [u8; 32],
+    ) -> Result<Self, OrchardSpendInputErrorV1> {
+        let spending_key = Option::<SpendingKey>::from(SpendingKey::from_bytes(spending_key))
+            .ok_or(OrchardSpendInputErrorV1::SpendingKey)?;
+        let recipient = Option::<Address>::from(Address::from_raw_address_bytes(&recipient))
+            .ok_or(OrchardSpendInputErrorV1::Recipient)?;
+        if FullViewingKey::from(&spending_key)
+            .scope_for_address(&recipient)
+            .is_none()
+        {
+            return Err(OrchardSpendInputErrorV1::RecipientOwnership);
+        }
+        let rho =
+            Option::<Rho>::from(Rho::from_bytes(&rho)).ok_or(OrchardSpendInputErrorV1::Rho)?;
+        let random_seed = Option::<RandomSeed>::from(RandomSeed::from_bytes(random_seed, &rho))
+            .ok_or(OrchardSpendInputErrorV1::RandomSeed)?;
+        let note = Option::<Note>::from(Note::from_parts(
+            recipient,
+            NoteValue::from_raw(value),
+            rho,
+            random_seed,
+            NoteVersion::V2,
+        ))
+        .ok_or(OrchardSpendInputErrorV1::Note)?;
+        let path = authentication_path
+            .iter()
+            .enumerate()
+            .map(|(index, bytes)| {
+                Option::<MerkleHashOrchard>::from(MerkleHashOrchard::from_bytes(bytes))
+                    .ok_or(OrchardSpendInputErrorV1::AuthenticationPath { index })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_| OrchardSpendInputErrorV1::AuthenticationPathLength)?;
+        let merkle_path = MerklePath::from_parts(leaf_position, path);
+        let anchor = merkle_path
+            .root(ExtractedNoteCommitment::from(note.commitment()))
+            .to_bytes();
+        if anchor != expected_anchor {
+            return Err(OrchardSpendInputErrorV1::AnchorMismatch);
+        }
+        Ok(Self::new(spending_key, note, merkle_path))
+    }
+}
+
+/// Failure parsing one native Orchard wallet spend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum OrchardSpendInputErrorV1 {
+    /// The ZIP-32 Orchard spending key is not canonical.
+    #[error("Orchard spending key is invalid")]
+    SpendingKey,
+    /// The raw Orchard recipient address is not canonical.
+    #[error("Orchard recipient address is invalid")]
+    Recipient,
+    /// The note recipient is not controlled by the supplied spending key.
+    #[error("Orchard recipient is not controlled by the spending key")]
+    RecipientOwnership,
+    /// The note rho field is not canonical.
+    #[error("Orchard note rho is invalid")]
+    Rho,
+    /// The note random seed is not canonical for its rho.
+    #[error("Orchard note random seed is invalid")]
+    RandomSeed,
+    /// The supplied note components do not construct a valid V2 note.
+    #[error("Orchard note opening is invalid")]
+    Note,
+    /// One path sibling is not a canonical Orchard field element.
+    #[error("Orchard authentication path element {index} is invalid")]
+    AuthenticationPath {
+        /// Zero-based path level.
+        index: usize,
+    },
+    /// The authentication path does not have the exact depth-32 shape.
+    #[error("Orchard authentication path must contain exactly 32 elements")]
+    AuthenticationPathLength,
+    /// The note and path do not authenticate to the requested retained anchor.
+    #[error("Orchard authentication path does not reach the retained anchor")]
+    AnchorMismatch,
 }
 
 /// One wallet-controlled change output consumed by the native prover.
@@ -167,6 +262,41 @@ impl OrchardChangeProverInputV1 {
             memo,
         }
     }
+
+    /// Parse one exact wallet-controlled change opening.
+    ///
+    /// `internal_scope` selects the sole two ZIP-32 scopes without exposing
+    /// upstream Orchard key types across wallet-worker boundaries.
+    pub fn from_wallet_parts_v1(
+        spending_key: [u8; 32],
+        internal_scope: bool,
+        diversifier_index: u32,
+        value: u64,
+        memo: [u8; 512],
+    ) -> Result<Self, OrchardChangeInputErrorV1> {
+        let spending_key = Option::<SpendingKey>::from(SpendingKey::from_bytes(spending_key))
+            .ok_or(OrchardChangeInputErrorV1::SpendingKey)?;
+        let scope = if internal_scope {
+            Scope::Internal
+        } else {
+            Scope::External
+        };
+        Ok(Self::new(
+            spending_key,
+            scope,
+            diversifier_index,
+            value,
+            memo,
+        ))
+    }
+}
+
+/// Failure parsing one native Orchard wallet change output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum OrchardChangeInputErrorV1 {
+    /// The ZIP-32 Orchard spending key is not canonical.
+    #[error("Orchard change spending key is invalid")]
+    SpendingKey,
 }
 
 /// Complete public statement and canonical ORC1 authorization emitted by the prover.
@@ -1290,6 +1420,61 @@ pub(crate) mod tests {
             .expect("at least one deterministic Orchard spending key")
     }
 
+    struct WalletSpendPartsV1 {
+        spending_key: [u8; 32],
+        recipient: [u8; 43],
+        value: u64,
+        rho: [u8; 32],
+        random_seed: [u8; 32],
+        leaf_position: u32,
+        authentication_path: [[u8; 32]; ORCHARD_TREE_DEPTH_V1 as usize],
+        anchor: [u8; 32],
+    }
+
+    fn wallet_spend_parts(spending_key_seed: u8, recipient_key_seed: u8) -> WalletSpendPartsV1 {
+        let sender_spending_key = spending_key(spending_key_seed);
+        let recipient_key = spending_key(recipient_key_seed);
+        let recipient = FullViewingKey::from(&recipient_key).address_at(17_u32, Scope::External);
+        let recipient_bytes = recipient.to_raw_address_bytes();
+        let rho_bytes = [3; 32];
+        let rho =
+            Option::<Rho>::from(Rho::from_bytes(&rho_bytes)).expect("small canonical Orchard rho");
+        let random_seed_bytes = [4; 32];
+        let random_seed =
+            Option::<RandomSeed>::from(RandomSeed::from_bytes(random_seed_bytes, &rho))
+                .expect("deterministic valid Orchard random seed");
+        let value = 23;
+        let note = Option::<Note>::from(Note::from_parts(
+            recipient,
+            NoteValue::from_raw(value),
+            rho,
+            random_seed,
+            NoteVersion::V2,
+        ))
+        .expect("canonical Orchard wallet note");
+        let authentication_path = [[0; 32]; ORCHARD_TREE_DEPTH_V1 as usize];
+        let merkle_path = MerklePath::from_parts(
+            9,
+            authentication_path.map(|bytes| {
+                Option::<MerkleHashOrchard>::from(MerkleHashOrchard::from_bytes(&bytes))
+                    .expect("zero is a canonical Orchard path element")
+            }),
+        );
+        let anchor = merkle_path
+            .root(ExtractedNoteCommitment::from(note.commitment()))
+            .to_bytes();
+        WalletSpendPartsV1 {
+            spending_key: *sender_spending_key.to_bytes(),
+            recipient: recipient_bytes,
+            value,
+            rho: rho_bytes,
+            random_seed: random_seed_bytes,
+            leaf_position: 9,
+            authentication_path,
+            anchor,
+        }
+    }
+
     fn change_input(seed: u8, value: u64) -> OrchardChangeProverInputV1 {
         OrchardChangeProverInputV1::new(
             spending_key(seed),
@@ -1298,6 +1483,106 @@ pub(crate) mod tests {
             value,
             [seed; 512],
         )
+    }
+
+    #[test]
+    fn wallet_spend_constructor_binds_key_note_path_and_retained_anchor() {
+        let valid = wallet_spend_parts(0x31, 0x31);
+        OrchardSpendProverInputV1::from_wallet_parts_v1(
+            valid.spending_key,
+            valid.recipient,
+            valid.value,
+            valid.rho,
+            valid.random_seed,
+            valid.leaf_position,
+            valid.authentication_path,
+            valid.anchor,
+        )
+        .expect("complete wallet spend opens the retained anchor");
+
+        let wrong_owner = wallet_spend_parts(0x31, 0x32);
+        assert_eq!(
+            OrchardSpendProverInputV1::from_wallet_parts_v1(
+                wrong_owner.spending_key,
+                wrong_owner.recipient,
+                wrong_owner.value,
+                wrong_owner.rho,
+                wrong_owner.random_seed,
+                wrong_owner.leaf_position,
+                wrong_owner.authentication_path,
+                wrong_owner.anchor,
+            )
+            .expect_err("a foreign recipient must fail before proving"),
+            OrchardSpendInputErrorV1::RecipientOwnership
+        );
+
+        let stale = wallet_spend_parts(0x33, 0x33);
+        let mut stale_anchor = stale.anchor;
+        stale_anchor[0] ^= 1;
+        assert_eq!(
+            OrchardSpendProverInputV1::from_wallet_parts_v1(
+                stale.spending_key,
+                stale.recipient,
+                stale.value,
+                stale.rho,
+                stale.random_seed,
+                stale.leaf_position,
+                stale.authentication_path,
+                stale_anchor,
+            )
+            .expect_err("a stale retained anchor must fail"),
+            OrchardSpendInputErrorV1::AnchorMismatch
+        );
+
+        let malformed_path = wallet_spend_parts(0x34, 0x34);
+        let mut authentication_path = malformed_path.authentication_path;
+        authentication_path[7] = [u8::MAX; 32];
+        assert_eq!(
+            OrchardSpendProverInputV1::from_wallet_parts_v1(
+                malformed_path.spending_key,
+                malformed_path.recipient,
+                malformed_path.value,
+                malformed_path.rho,
+                malformed_path.random_seed,
+                malformed_path.leaf_position,
+                authentication_path,
+                malformed_path.anchor,
+            )
+            .expect_err("a noncanonical path element must fail"),
+            OrchardSpendInputErrorV1::AuthenticationPath { index: 7 }
+        );
+
+        let malformed_recipient = wallet_spend_parts(0x35, 0x35);
+        assert_eq!(
+            OrchardSpendProverInputV1::from_wallet_parts_v1(
+                malformed_recipient.spending_key,
+                [u8::MAX; 43],
+                malformed_recipient.value,
+                malformed_recipient.rho,
+                malformed_recipient.random_seed,
+                malformed_recipient.leaf_position,
+                malformed_recipient.authentication_path,
+                malformed_recipient.anchor,
+            )
+            .expect_err("a noncanonical recipient must fail"),
+            OrchardSpendInputErrorV1::Recipient
+        );
+
+        let malformed_rho = wallet_spend_parts(0x36, 0x36);
+        assert_eq!(
+            OrchardSpendProverInputV1::from_wallet_parts_v1(
+                malformed_rho.spending_key,
+                malformed_rho.recipient,
+                malformed_rho.value,
+                [u8::MAX; 32],
+                malformed_rho.random_seed,
+                malformed_rho.leaf_position,
+                malformed_rho.authentication_path,
+                malformed_rho.anchor,
+            )
+            .expect_err("a noncanonical rho must fail"),
+            OrchardSpendInputErrorV1::Rho
+        );
     }
 
     fn production_prover_fixture() -> &'static OrchardProvedBundleV1 {

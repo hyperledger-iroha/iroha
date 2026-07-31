@@ -2114,7 +2114,7 @@ fn policy_treasury_account_id(
 /// Derive the exact IVM durable-state path used for the consensus-owned fee-credit counter.
 pub(crate) fn validation_fee_credit_state_key_for_address(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
-) -> Name {
+) -> StatePath {
     validation_fee_credit_scoped_state_key_for_address(
         contract_address,
         VALIDATION_FEE_CREDIT_STATE_LEAF,
@@ -2123,7 +2123,7 @@ pub(crate) fn validation_fee_credit_state_key_for_address(
 
 fn validation_fee_credit_asset_state_key_for_address(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
-) -> Name {
+) -> StatePath {
     validation_fee_credit_scoped_state_key_for_address(
         contract_address,
         VALIDATION_FEE_CREDIT_ASSET_STATE_LEAF,
@@ -2133,15 +2133,15 @@ fn validation_fee_credit_asset_state_key_for_address(
 fn validation_fee_credit_scoped_state_key_for_address(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     leaf: &str,
-) -> Name {
+) -> StatePath {
     let digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
     format!("sc/{digest}/{leaf}")
         .parse()
-        .expect("validation-fee credit path must be a valid Name")
+        .expect("validation-fee credit path must be a valid StatePath")
 }
 
 /// Return whether a durable-state key is the reserved contract-visible fee-credit leaf.
-pub(crate) fn is_validation_fee_credit_state_key(key: &Name) -> bool {
+pub(crate) fn is_validation_fee_credit_state_key(key: &StatePath) -> bool {
     let Some(rest) = key.as_ref().strip_prefix("sc/") else {
         return false;
     };
@@ -2158,7 +2158,7 @@ pub(crate) fn is_validation_fee_credit_state_key(key: &Name) -> bool {
 fn validation_fee_credit_state_keys(
     state_transaction: &StateTransaction<'_, '_>,
     treasury: &AccountId,
-) -> Result<(Name, Name), ValidationFeeAdmissionError> {
+) -> Result<(StatePath, StatePath), ValidationFeeAdmissionError> {
     let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
         state_transaction,
         treasury,
@@ -3353,12 +3353,10 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::staking::ClaimPublicLaneRewards,
         iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
         iroha_data_model::isi::zk::RegisterZkAsset,
-        iroha_data_model::isi::zk::RegisterAssetHiddenZkPool,
         iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,
         iroha_data_model::isi::zk::CancelConfidentialPolicyTransition,
         iroha_data_model::isi::zk::Shield,
         iroha_data_model::isi::zk::ZkTransfer,
-        iroha_data_model::isi::zk::AssetHiddenZkTransfer,
         iroha_data_model::isi::zk::Unshield,
         iroha_data_model::isi::governance::CastZkBallot,
         iroha_data_model::isi::governance::CastPlainBallot,
@@ -6602,14 +6600,14 @@ mod tests {
                 .as_ref()
                 .ends_with("/AvailableValidationFeeCredit")
         );
-        let retired_key: Name = expected_credit_key
+        let retired_key: StatePath = expected_credit_key
             .as_ref()
             .replace(
                 "AvailableValidationFeeCredit",
                 "AvailableValidationFeeMinorUnits",
             )
             .parse()
-            .expect("retired credit path remains a syntactically valid name");
+            .expect("retired credit path remains a syntactically valid state path");
         assert!(
             !is_validation_fee_credit_state_key(&retired_key),
             "the first release must not reserve or decode the retired fixed-width leaf"
@@ -6863,7 +6861,7 @@ mod tests {
                 .smart_contract_state
                 .get(
                     &"ValidationFeeFinalLegRollbackSentinel"
-                        .parse::<Name>()
+                        .parse::<StatePath>()
                         .expect("rollback sentinel key")
                 )
                 .is_none(),

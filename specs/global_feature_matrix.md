@@ -59,7 +59,7 @@ Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially i
 | Envelope hash binding in CoreHost | ◉ | Verify envelope hashes bound through CoreHost and exposed via audit pulses. | status.md:250 |
 | Shielded root history gating | ◉ | Root snapshots threaded into CoreHost with bounded history and empty-root config. | status.md:303 |
 | ZK ballot execution & governance locks | ○ | Nullifier derivation, lock updates, verification toggles implemented; full proof lifecycle still maturing. | status.md:126-128; status.md:194-195 |
-| Proof attachment pre-verify & dedup | ◉ | Backend-tag sanity, deduplication, and proof records persisted pre-execution. | status.md:348; status.md:602 |
+| Proof attachment pre-verify & dedup | ◉ | Stateless, non-authoritative backend-tag checks and deduplication; ledger execution always performs guarded cryptographic verification before recording a result. | crates/iroha_core/src/state.rs; crates/iroha_core/src/smartcontracts/isi/world.rs |
 | ZK Torii proof fetch endpoint | ◉ | `/v1/zk/proof/{backend}/{hash}` exposes proof records (status, height, vk_ref/commitment). | status.md:94 |
 
 ## IVM & Kotodama Integration

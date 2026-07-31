@@ -12,6 +12,11 @@ from hashlib import blake2b, sha256
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+if __package__:
+    from .lane_registry_privacy import summarize_merkle_privacy_commitments
+else:
+    from lane_registry_privacy import summarize_merkle_privacy_commitments
+
 
 class VerificationError(RuntimeError):
     """Raised when bundle verification fails."""
@@ -24,7 +29,7 @@ class ManifestRecord:
     path: Path
     sha256_hex: str
     blake2b_hex: str
-    privacy_commitments: List[Dict[str, str]]
+    privacy_commitments: List[Dict[str, object]]
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -73,20 +78,11 @@ def compute_digests(path: Path) -> tuple[str, str]:
     return sha256(data).hexdigest(), blake2b(data, digest_size=32).hexdigest()
 
 
-def extract_privacy_commitments(manifest: Dict) -> List[Dict[str, str]]:
-    commits = []
-    for entry in manifest.get("privacy_commitments") or []:
-        cid = entry.get("id")
-        scheme = entry.get("scheme")
-        if cid is None or scheme is None:
-            continue
-        try:
-            cid_int = int(cid)
-        except (TypeError, ValueError):
-            continue
-        commits.append({"id": cid_int, "scheme": str(scheme)})
-    commits.sort(key=lambda item: item["id"])
-    return commits
+def extract_privacy_commitments(manifest: Dict) -> List[Dict[str, object]]:
+    try:
+        return summarize_merkle_privacy_commitments(manifest)
+    except ValueError as err:
+        raise VerificationError(str(err)) from err
 
 
 def load_summary(summary_path: Path) -> Dict:
@@ -204,7 +200,6 @@ def verify_archive(summary: Dict, base_dir: Path, strict: bool, deep: bool) -> N
             raise VerificationError(f"{bundle_path} is not a valid tar archive")
         with tarfile.open(bundle_path, "r:*") as tar:
             members = {member.name for member in tar.getmembers()}
-        expects = {"manifests", "cache"}
         if not any(name.startswith("manifests/") for name in members):
             raise VerificationError(f"{bundle_path} is missing manifests/ entries")
         if not any(name.startswith("cache/") for name in members):

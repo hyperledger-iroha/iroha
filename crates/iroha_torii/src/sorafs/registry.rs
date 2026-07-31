@@ -3,7 +3,7 @@
 //! Capacity registry helpers exposed via Torii.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     str::FromStr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -60,12 +60,31 @@ const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
 );
 
 /// Collect a snapshot of provider declarations and fee ledger entries.
-pub(crate) fn collect_snapshot(world: &WorldView<'_>) -> Result<CapacitySnapshot, RegistryError> {
-    let declarations = build_declarations(world.capacity_declarations().iter())?;
-    let fee_ledger = build_fee_ledger(world.capacity_fee_ledger().iter());
-    let credit_ledger = build_credit_ledger(world.provider_credit_ledger().iter());
-    let disputes = build_disputes(world.capacity_disputes().iter());
+pub(crate) fn collect_snapshot(
+    world: &WorldView<'_>,
+    limit: usize,
+) -> Result<CapacitySnapshot, RegistryError> {
+    let capacity_declarations = world.capacity_declarations();
+    let capacity_fee_ledger = world.capacity_fee_ledger();
+    let provider_credit_ledger = world.provider_credit_ledger();
+    let capacity_disputes = world.capacity_disputes();
+    let declaration_count = capacity_declarations.len();
+    let fee_ledger_count = capacity_fee_ledger.len();
+    let credit_ledger_count = provider_credit_ledger.len();
+    let dispute_count = capacity_disputes.len();
+
+    // Apply the response bound before decoding and projecting registry values. Capacity
+    // declarations can contain sizeable canonical payloads, so truncating after projection
+    // would let a small read request consume work proportional to the entire registry.
+    let declarations = build_declarations(capacity_declarations.iter().take(limit))?;
+    let fee_ledger = build_fee_ledger(capacity_fee_ledger.iter().take(limit));
+    let credit_ledger = build_credit_ledger(provider_credit_ledger.iter().take(limit));
+    let disputes = build_disputes(capacity_disputes.iter().take(limit));
     Ok(CapacitySnapshot {
+        declaration_count,
+        fee_ledger_count,
+        credit_ledger_count,
+        dispute_count,
         declarations,
         fee_ledger,
         credit_ledger,
@@ -76,6 +95,14 @@ pub(crate) fn collect_snapshot(world: &WorldView<'_>) -> Result<CapacitySnapshot
 /// Aggregated registry snapshot returned by both REST and gRPC facades.
 #[derive(Debug, Clone)]
 pub(crate) struct CapacitySnapshot {
+    /// Total declarations in the registry before applying the response limit.
+    pub(crate) declaration_count: usize,
+    /// Total fee ledger entries before applying the response limit.
+    pub(crate) fee_ledger_count: usize,
+    /// Total credit ledger entries before applying the response limit.
+    pub(crate) credit_ledger_count: usize,
+    /// Total disputes before applying the response limit.
+    pub(crate) dispute_count: usize,
     /// Provider capacity declarations.
     pub(crate) declarations: Vec<RegistryDeclaration>,
     /// Fee ledger entries per provider.
@@ -665,6 +692,9 @@ pub(crate) struct PinRegistrySnapshot {
     pub(crate) manifests: Vec<RegistryManifest>,
     pub(crate) aliases: Vec<RegistryAlias>,
     pub(crate) replication_orders: Vec<RegistryReplicationOrder>,
+    manifest_by_digest: HashMap<String, usize>,
+    alias_by_manifest_digest: HashMap<String, usize>,
+    successor_by_predecessor: HashMap<String, SuccessorIndex>,
 }
 
 /// Aggregated metrics extracted from a [`PinRegistrySnapshot`].
@@ -742,9 +772,28 @@ impl PinRegistryMetricsSummary {
 
 impl PinRegistrySnapshot {
     pub(crate) fn manifest_by_digest(&self, digest_hex: &str) -> Option<&RegistryManifest> {
-        self.manifests
-            .iter()
-            .find(|manifest| manifest.digest_hex == digest_hex)
+        self.manifest_by_digest
+            .get(digest_hex)
+            .and_then(|index| self.manifests.get(*index))
+    }
+
+    pub(crate) fn alias_by_manifest_digest(&self, digest_hex: &str) -> Option<&RegistryAlias> {
+        self.alias_by_manifest_digest
+            .get(digest_hex)
+            .and_then(|index| self.aliases.get(*index))
+    }
+
+    fn successor_selection(&self, predecessor_hex: &str) -> SuccessorSelection<'_> {
+        let Some(index) = self.successor_by_predecessor.get(predecessor_hex) else {
+            return SuccessorSelection {
+                best: None,
+                has_fork: false,
+            };
+        };
+        SuccessorSelection {
+            best: self.manifests.get(index.best),
+            has_fork: index.count > 1,
+        }
     }
 
     pub(crate) fn lineage_for(&self, digest_hex: &str) -> ManifestLineageSummary {
@@ -763,7 +812,7 @@ impl PinRegistrySnapshot {
         let mut visited = HashSet::new();
         visited.insert(digest_hex.to_owned());
 
-        let selection = select_successor(&self.manifests, digest_hex);
+        let selection = self.successor_selection(digest_hex);
         if selection.has_fork {
             anomalies.push("SuccessorForkResolved".to_string());
         }
@@ -801,7 +850,7 @@ impl PinRegistrySnapshot {
                 approved_successor = Some(lineage_successor_from(next));
             }
 
-            let next_selection = select_successor(&self.manifests, &next.digest_hex);
+            let next_selection = self.successor_selection(&next.digest_hex);
             if next_selection.has_fork {
                 anomalies.push("SuccessorForkResolved".to_string());
             }
@@ -993,6 +1042,35 @@ pub(crate) fn optional_rfc3339(unix: Option<u64>) -> Option<String> {
 struct SuccessorSelection<'a> {
     best: Option<&'a RegistryManifest>,
     has_fork: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SuccessorIndex {
+    best: usize,
+    count: usize,
+}
+
+fn successor_is_better(candidate: &RegistryManifest, current: &RegistryManifest) -> bool {
+    match (&candidate.status, &current.status) {
+        (
+            ManifestStatusProjection::Approved {
+                epoch: candidate_epoch,
+            },
+            ManifestStatusProjection::Approved {
+                epoch: current_epoch,
+            },
+        ) => {
+            candidate_epoch > current_epoch
+                || (candidate_epoch == current_epoch && candidate.digest_hex > current.digest_hex)
+        }
+        (ManifestStatusProjection::Approved { .. }, _) => true,
+        (_, ManifestStatusProjection::Approved { .. }) => false,
+        _ => {
+            candidate.submitted_epoch > current.submitted_epoch
+                || (candidate.submitted_epoch == current.submitted_epoch
+                    && candidate.digest_hex > current.digest_hex)
+        }
+    }
 }
 
 fn metadata_timestamp_hint(metadata: &Metadata, key: &str) -> Option<u64> {
@@ -1246,63 +1324,6 @@ pub(crate) fn lineage_to_json(lineage: &ManifestLineageSummary) -> Value {
     Value::Object(map)
 }
 
-fn select_successor<'a>(
-    manifests: &'a [RegistryManifest],
-    predecessor_hex: &str,
-) -> SuccessorSelection<'a> {
-    let mut approved_best: Option<&RegistryManifest> = None;
-    let mut approved_epoch: Option<u64> = None;
-    let mut pending_best: Option<&RegistryManifest> = None;
-    let mut pending_epoch: Option<u64> = None;
-    let mut total = 0usize;
-
-    for manifest in manifests
-        .iter()
-        .filter(|candidate| candidate.successor_of_hex.as_deref() == Some(predecessor_hex))
-    {
-        total = total.saturating_add(1);
-        match manifest.status {
-            ManifestStatusProjection::Approved { epoch } => {
-                let better = match approved_epoch {
-                    Some(best_epoch) if epoch > best_epoch => true,
-                    Some(best_epoch) if epoch == best_epoch => {
-                        manifest.digest_hex > approved_best.unwrap().digest_hex
-                    }
-                    Some(_) => false,
-                    None => true,
-                };
-                if better {
-                    approved_best = Some(manifest);
-                    approved_epoch = Some(epoch);
-                }
-            }
-            _ => {
-                let submitted = manifest.submitted_epoch;
-                let better = match pending_epoch {
-                    Some(best_epoch) if submitted > best_epoch => true,
-                    Some(best_epoch) if submitted == best_epoch => {
-                        manifest.digest_hex > pending_best.unwrap().digest_hex
-                    }
-                    Some(_) => false,
-                    None => true,
-                };
-                if better {
-                    pending_best = Some(manifest);
-                    pending_epoch = Some(submitted);
-                }
-            }
-        }
-    }
-
-    let best = approved_best.or(pending_best);
-    let has_fork = match best {
-        Some(_) => total.saturating_sub(1) > 0,
-        None => false,
-    };
-
-    SuccessorSelection { best, has_fork }
-}
-
 /// Errors raised while preparing pin registry projections.
 #[derive(Debug, Error)]
 pub(crate) enum PinRegistryError {
@@ -1359,10 +1380,44 @@ pub(crate) fn collect_pin_registry(
     }
     replication_orders.sort_by(|a, b| a.order_id_hex.cmp(&b.order_id_hex));
 
+    let manifest_by_digest = manifests
+        .iter()
+        .enumerate()
+        .map(|(index, manifest)| (manifest.digest_hex.clone(), index))
+        .collect();
+    let mut successor_by_predecessor = HashMap::<String, SuccessorIndex>::new();
+    for (index, manifest) in manifests.iter().enumerate() {
+        let Some(predecessor) = manifest.successor_of_hex.as_ref() else {
+            continue;
+        };
+        successor_by_predecessor
+            .entry(predecessor.clone())
+            .and_modify(|selection| {
+                selection.count = selection.count.saturating_add(1);
+                if successor_is_better(manifest, &manifests[selection.best]) {
+                    selection.best = index;
+                }
+            })
+            .or_insert(SuccessorIndex {
+                best: index,
+                count: 1,
+            });
+    }
+    let mut alias_by_manifest_digest = HashMap::new();
+    for (index, alias) in aliases.iter().enumerate() {
+        // Preserve the prior sorted-first behaviour when multiple aliases reference a manifest.
+        alias_by_manifest_digest
+            .entry(alias.manifest_digest_hex.clone())
+            .or_insert(index);
+    }
+
     Ok(PinRegistrySnapshot {
         manifests,
         aliases,
         replication_orders,
+        manifest_by_digest,
+        alias_by_manifest_digest,
+        successor_by_predecessor,
     })
 }
 

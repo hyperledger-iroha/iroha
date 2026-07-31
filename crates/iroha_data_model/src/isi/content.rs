@@ -13,7 +13,6 @@ isi! {
         pub expires_at_height: Option<u64>,
         /// Optional manifest describing cache/auth/placement metadata.
         #[norito(default)]
-        #[cfg_attr(feature = "json", norito(default))]
         #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
         pub manifest: Option<ContentBundleManifest>,
     }
@@ -22,7 +21,7 @@ isi! {
 impl crate::seal::Instruction for PublishContentBundle {}
 
 isi! {
-    /// Retire a previously published content bundle.
+    /// Retire a previously published content bundle as its original creator.
     pub struct RetireContentBundle {
         /// Identifier of the bundle to retire.
         pub bundle_id: ContentBundleId,

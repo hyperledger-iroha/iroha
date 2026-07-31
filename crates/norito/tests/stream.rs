@@ -107,7 +107,7 @@ fn stream_vec_collect_handles_alignment_padding() {
     let mut buf = Vec::new();
     serialize_into(&mut buf, &data, Compression::None).unwrap();
 
-    let align = std::mem::align_of::<norito::core::Archived<Vec<AlignedWord>>>();
+    let align = norito::core::archived_payload_align::<Vec<AlignedWord>>();
     let expected_padding = if align <= 1 {
         0
     } else {
@@ -188,7 +188,7 @@ fn stream_vec_iter_skips_alignment_padding() {
         .collect();
     let mut buf = Vec::new();
     serialize_into(&mut buf, &data, Compression::None).unwrap();
-    let align = std::mem::align_of::<norito::core::Archived<Vec<AlignedWord>>>();
+    let align = norito::core::archived_payload_align::<Vec<AlignedWord>>();
     let expected_padding = if align <= 1 {
         0
     } else {

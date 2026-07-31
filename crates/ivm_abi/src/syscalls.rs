@@ -81,39 +81,44 @@ pub const SYSCALL_NFT_BURN_ASSET: u32 = 0x28;
 
 /// Smart-contract durable state (key-value by path).
 ///
-/// Pointer-ABI arguments: paths use `&Name` TLV; values use `&NoritoBytes` TLV.
+/// Pointer-ABI arguments: paths use
+/// `&NoritoBytes(canonical Norito StatePath)` TLV; values use
+/// `&NoritoBytes` TLV.
 ///
-/// GET:  r10 = &Name path  -> On success, r10 = &NoritoBytes value in host-owned memory; if missing, r10 = 0.
-/// SET:  r10 = &Name path, r11 = &NoritoBytes value  -> stores value, returns 0.
-/// DEL:  r10 = &Name path  -> deletes value if present, returns 0.
+/// GET:  r10 = &NoritoBytes(StatePath)  -> On success, r10 = &NoritoBytes
+/// value in host-owned memory; if missing, r10 = 0.
+/// SET:  r10 = &NoritoBytes(StatePath), r11 = &NoritoBytes value  -> stores
+/// value, returns 0.
+/// DEL:  r10 = &NoritoBytes(StatePath)  -> deletes value if present, returns 0.
 pub const SYSCALL_STATE_GET: u32 = 0x50;
 pub const SYSCALL_STATE_SET: u32 = 0x51;
 pub const SYSCALL_STATE_DEL: u32 = 0x52;
 /// Enumerate durable-state keys under a prefix.
 ///
-/// Args: r10 = &Name prefix, r11 = offset, r12 = limit (0 returns an empty page;
-/// limits above [`STATE_KEYS_MAX_ITEMS`] are rejected)
-/// Ret:  r10 = &NoritoBytes(Vec<Name>), r11 = total matching keys, r12 = returned keys
+/// Args: r10 = &NoritoBytes(StatePath) prefix, r11 = offset, r12 = limit
+/// (0 returns an empty page; limits above [`STATE_KEYS_MAX_ITEMS`] are rejected)
+/// Ret:  r10 = &NoritoBytes(Vec<StatePath>), r11 = total matching keys,
+/// r12 = returned keys
 pub const SYSCALL_STATE_KEYS: u32 = 0x01_0030;
 /// Test whether a durable-state key is currently present.
 ///
-/// Args: r10 = &Name path
+/// Args: r10 = &NoritoBytes(StatePath)
 /// Ret:  r10 = 1 when present, 0 when absent
 pub const SYSCALL_STATE_HAS: u32 = 0x01_0031;
 /// Return the byte length of a durable-state value without copying the value.
 ///
-/// Args: r10 = &Name path
+/// Args: r10 = &NoritoBytes(StatePath)
 /// Ret:  r10 = value payload length, r11 = 1 when present, 0 when absent
 pub const SYSCALL_STATE_LEN: u32 = 0x01_0032;
 /// Count durable-state keys under a prefix without copying the key list.
 ///
-/// Args: r10 = &Name prefix
+/// Args: r10 = &NoritoBytes(StatePath)
 /// Ret:  r10 = total matching keys
 pub const SYSCALL_STATE_COUNT: u32 = 0x01_0033;
 /// Decode one canonical Kotodama `StateMap` key from a page returned by
 /// [`SYSCALL_STATE_KEYS`].
 ///
-/// Args: r10 = &NoritoBytes(Vec<Name>), r11 = &Name(base), r12 = index
+/// Args: r10 = &NoritoBytes(Vec<StatePath>), r11 = &Name(base), r12 = index
 /// Ret:  r10 = &NoritoBytes(canonical key), or 0 when index is out of range
 pub const SYSCALL_STATE_MAP_KEY_AT: u32 = 0x01_0034;
 /// Encode one compiler-flattened typed durable value.
@@ -129,15 +134,31 @@ pub const SYSCALL_STATE_VALUE_ENCODE: u32 = 0x01_0035;
 /// represented by `StateMap.get`'s outer `Option`, never by a typed value
 /// Ret: r10 = &Blob(pad:u8 then flattened u64 words)
 pub const SYSCALL_STATE_VALUE_DECODE: u32 = 0x01_0036;
+/// Convert one canonical nominal `Name` into a durable-state `StatePath`.
+///
+/// Args: r10 = &Name
+/// Ret:  r10 = &NoritoBytes(canonical Norito StatePath)
+pub const SYSCALL_STATE_PATH_FROM_NAME: u32 = 0x01_0037;
 /// Maximum number of entries returned by one V1 durable-state key page.
 pub const STATE_KEYS_MAX_ITEMS: u64 = 64;
-/// Maximum framed canonical Norito `Name` payload accepted inside a V1
-/// durable-state path TLV.
+/// Maximum UTF-8 byte length of a canonical V1 durable-state `StatePath`.
 ///
-/// The 16 KiB envelope accommodates the independently bounded 4 KiB UTF-8
-/// `StateMap` base, one separator, and the lowercase-hex expansion of a 4 KiB
-/// canonical key, including deterministic Norito framing overhead.
-pub const STATE_MAX_PATH_BYTES: usize = 16 * 1024;
+/// The 16 KiB path accommodates a canonical `Name` base of at most 255 UTF-8
+/// bytes, one separator, and the lowercase-hex expansion of a 4 KiB canonical
+/// key. Keep this synchronized with
+/// `iroha_data_model::state_path::MAX_STATE_PATH_BYTES`.
+pub const STATE_MAX_PATH_BYTES: usize = iroha_data_model::state_path::MAX_STATE_PATH_BYTES;
+/// Conservative maximum canonical Norito frame carried inside the
+/// `NoritoBytes` path TLV.
+///
+/// This separately ABI-binds transport framing so header-only gas quoting can
+/// reject oversized input without reducing the 16 KiB UTF-8 path ceiling.
+/// `StatePath` serializes as one length-prefixed string; the alignment slack
+/// keeps this bound conservative for every V1 layout flag set.
+pub const STATE_MAX_PATH_FRAME_BYTES: usize = STATE_MAX_PATH_BYTES
+    + norito::core::Header::SIZE
+    + (core::mem::align_of::<u64>() - 1)
+    + core::mem::size_of::<u64>();
 /// Maximum raw `NoritoBytes` payload stored under one V1 durable-state path.
 ///
 /// The bound leaves enough room beneath the one-million-cycle default for a
@@ -145,9 +166,15 @@ pub const STATE_MAX_PATH_BYTES: usize = 16 * 1024;
 pub const STATE_MAX_VALUE_BYTES: usize = 512 * 1024;
 /// Maximum raw canonical Norito key-payload bytes accepted by V1 `StateMap` paths.
 pub const STATE_MAP_MAX_KEY_BYTES: usize = 4 * 1024;
-/// Maximum framed canonical Norito `Name` payload used as a V1 `StateMap` base.
-pub const STATE_MAP_MAX_BASE_BYTES: usize = 4 * 1024;
-/// Maximum encoded `Vec<Name>` page accepted by `STATE_MAP_KEY_AT`.
+/// Maximum UTF-8 bytes in the canonical `Name` used as a V1 `StateMap` base.
+pub const STATE_MAP_MAX_BASE_BYTES: usize = iroha_data_model::name::MAX_NAME_BYTES;
+/// Conservative maximum canonical Norito `Name` frame accepted for a V1
+/// `StateMap` base.
+pub const STATE_MAP_MAX_BASE_FRAME_BYTES: usize = STATE_MAP_MAX_BASE_BYTES
+    + norito::core::Header::SIZE
+    + (core::mem::align_of::<u64>() - 1)
+    + core::mem::size_of::<u64>();
+/// Maximum encoded `Vec<StatePath>` page accepted by `STATE_MAP_KEY_AT`.
 pub const STATE_MAP_MAX_PAGE_BYTES: usize = 1024 * 1024;
 /// Decode a NoritoBytes value containing a signed decimal ASCII integer and return
 /// the value in `x10` as a 64-bit signed integer (two's complement).
@@ -211,7 +238,8 @@ pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT: u32 = 0x8B;
 pub const SYSCALL_JSON_SET_I64_DIRECT: u32 = 0x8C;
 /// Direct JSON account-id setter that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT: u32 = 0x8D;
-/// Direct path-key hashing helper that accepts validated TLVs from any allowed pointer region.
+/// Direct path-key helper returning `NoritoBytes(StatePath)` and accepting
+/// validated inputs from any allowed pointer region.
 pub const SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT: u32 = 0x8E;
 /// Direct schema-info helper that accepts validated TLVs from any allowed pointer region.
 pub const SYSCALL_SCHEMA_INFO_DIRECT: u32 = 0x8F;
@@ -234,7 +262,7 @@ pub const SYSCALL_ENCODE_INT: u32 = 0x55;
 /// [`STATE_MAP_MAX_KEY_BYTES`] are rejected.
 ///
 /// Args: r10 = &Name base, r11 = &NoritoBytes key
-/// Ret:  r10 = host-owned &Name
+/// Ret:  r10 = host-owned &NoritoBytes(canonical Norito StatePath)
 pub const SYSCALL_BUILD_PATH_KEY_NORITO: u32 = 0x56;
 /// JSON <-> NoritoBytes helpers (developer convenience):
 /// ENCODE_JSON: r10 = &Json -> r10 = &NoritoBytes (minified JSON bytes)
@@ -920,7 +948,10 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
     }
     if matches!(
         number,
-        SYSCALL_STATE_MAP_KEY_AT | SYSCALL_STATE_VALUE_ENCODE | SYSCALL_STATE_VALUE_DECODE
+        SYSCALL_STATE_MAP_KEY_AT
+            | SYSCALL_STATE_VALUE_ENCODE
+            | SYSCALL_STATE_VALUE_DECODE
+            | SYSCALL_STATE_PATH_FROM_NAME
     ) {
         return Some(SyscallAccess::None);
     }
@@ -1283,6 +1314,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_STATE_MAP_KEY_AT);
         v.push(SYSCALL_STATE_VALUE_ENCODE);
         v.push(SYSCALL_STATE_VALUE_DECODE);
+        v.push(SYSCALL_STATE_PATH_FROM_NAME);
         v.push(SYSCALL_BUILD_PATH_KEY_NORITO);
         v.push(SYSCALL_ENCODE_INT);
         v.push(SYSCALL_DECODE_INT);
@@ -1544,6 +1576,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_STATE_MAP_KEY_AT => "STATE_MAP_KEY_AT",
         SYSCALL_STATE_VALUE_ENCODE => "STATE_VALUE_ENCODE",
         SYSCALL_STATE_VALUE_DECODE => "STATE_VALUE_DECODE",
+        SYSCALL_STATE_PATH_FROM_NAME => "STATE_PATH_FROM_NAME",
         SYSCALL_DECODE_INT => "DECODE_INT",
         SYSCALL_ENCODE_INT => "ENCODE_INT",
         SYSCALL_BUILD_PATH_KEY_NORITO => "BUILD_PATH_KEY_NORITO",
@@ -2104,11 +2137,14 @@ struct AbiDurableStateSurface {
     dynamic_access_hint_validation: &'static str,
     keys_max_items: u64,
     max_path_bytes: u64,
+    max_path_frame_bytes: u64,
     max_value_bytes: u64,
     map_max_key_bytes: u64,
     map_max_base_bytes: u64,
+    map_max_base_frame_bytes: u64,
     map_max_page_bytes: u64,
     path_size_unit: &'static str,
+    path_transport: &'static str,
     value_storage: &'static str,
     ordering_version: u8,
     key_ordering: &'static str,
@@ -3155,6 +3191,10 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
         )?;
         state.u64("keys_max_items", surface.durable_state.keys_max_items)?;
         state.u64("max_path_bytes", surface.durable_state.max_path_bytes)?;
+        state.u64(
+            "max_path_frame_bytes",
+            surface.durable_state.max_path_frame_bytes,
+        )?;
         state.u64("max_value_bytes", surface.durable_state.max_value_bytes)?;
         state.u64("map_max_key_bytes", surface.durable_state.map_max_key_bytes)?;
         state.u64(
@@ -3162,10 +3202,15 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
             surface.durable_state.map_max_base_bytes,
         )?;
         state.u64(
+            "map_max_base_frame_bytes",
+            surface.durable_state.map_max_base_frame_bytes,
+        )?;
+        state.u64(
             "map_max_page_bytes",
             surface.durable_state.map_max_page_bytes,
         )?;
         state.text("path_size_unit", surface.durable_state.path_size_unit)?;
+        state.text("path_transport", surface.durable_state.path_transport)?;
         state.text("value_storage", surface.durable_state.value_storage)?;
         state.u8("ordering_version", surface.durable_state.ordering_version)?;
         state.text("key_ordering", surface.durable_state.key_ordering)?;
@@ -3810,7 +3855,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         reserved_transaction_metadata: "reject-presence-before-decode-in-order:contract_manifest,gov_contract_address,gov_manifest_approvers,contract_address,contract_alias,contract_entrypoint,contract_payload",
     };
     let durable_state = AbiDurableStateSurface {
-        semantics_version: 4,
+        semantics_version: 5,
         contract_interface_section_magic: crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC,
         contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1 fields in exact order:seiyaku_name,compiler_fingerprint,abi_hash[32],features_bitmap,access_set_hints,kotoba,entrypoints,states,error_codes);abi_hash=Iroha-Hash-v1(canonical-ABI-descriptor-for-declared-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1)-and-must-equal-runtime-descriptor-before-admission",
         contract_interface_schema_name: crate::metadata::CONTRACT_INTERFACE_SCHEMA_NAME_V1,
@@ -3840,24 +3885,29 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         keys_max_items: STATE_KEYS_MAX_ITEMS,
         max_path_bytes: u64::try_from(STATE_MAX_PATH_BYTES)
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        max_path_frame_bytes: u64::try_from(STATE_MAX_PATH_FRAME_BYTES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
         max_value_bytes: u64::try_from(STATE_MAX_VALUE_BYTES)
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
         map_max_key_bytes: u64::try_from(STATE_MAP_MAX_KEY_BYTES)
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
         map_max_base_bytes: u64::try_from(STATE_MAP_MAX_BASE_BYTES)
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        map_max_base_frame_bytes: u64::try_from(STATE_MAP_MAX_BASE_FRAME_BYTES)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
         map_max_page_bytes: u64::try_from(STATE_MAP_MAX_PAGE_BYTES)
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
-        path_size_unit: "framed canonical Norito Name payload bytes",
+        path_size_unit: "canonical StatePath UTF-8 bytes; canonical-Norito transport frame bounded separately",
+        path_transport: "STATE_GET,STATE_SET,STATE_DEL,STATE_KEYS,STATE_HAS,STATE_LEN,STATE_COUNT=&NoritoBytes(canonical-Norito-StatePath);STATE_PATH_FROM_NAME-input=&Name-and-output=&NoritoBytes(canonical-Norito-StatePath);BUILD_PATH_KEY_NORITO-input-base=&Name-and-output=&NoritoBytes(canonical-Norito-StatePath);STATE_KEYS-page=&NoritoBytes(canonical-Norito-Vec<StatePath>);STATE_MAP_KEY_AT-base=&Name",
         value_storage: "raw NoritoBytes payload; pointer boundary wraps exactly once",
         ordering_version: 1,
-        key_ordering: "canonical Name order; StateMap hex paths preserve canonical Norito key byte order",
+        key_ordering: "canonical StatePath order; StateMap lowercase-hex suffixes preserve canonical Norito key byte order",
         prefix_match: "key equals prefix or remaining suffix begins with slash",
         map_path_derivation_version: 1,
-        map_path_derivation: "base + slash + lowercase_hex(canonical_norito_key_payload)",
+        map_path_derivation: "canonical-Name-base(<=255-UTF8-bytes) + slash + lowercase_hex(canonical_norito_key_payload<=4096-bytes); result is canonical StatePath<=16384-UTF8-bytes",
         page_overflow: "reject before selected-page materialization",
         operation_path_rules_version: 1,
-        operation_path_rules: "CNTR-present:value-operations(STATE_GET,STATE_SET,STATE_DEL,STATE_HAS,STATE_LEN)=declared-non-map-base-or-canonical-StateMap-child-only;bare-StateMap-base-rejected;scan-operations(STATE_KEYS,STATE_COUNT)=same-declared-path-validation-with-bare-StateMap-base-allowed;CNTR-absent=all-durable-state-syscalls-rejected-by-generic-program-profile",
+        operation_path_rules: "canonical-StatePath-transport-only;CNTR-present:value-operations(STATE_GET,STATE_SET,STATE_DEL,STATE_HAS,STATE_LEN)=declared-non-map-base-or-canonical-StateMap-child-only;bare-StateMap-base-rejected;scan-operations(STATE_KEYS,STATE_COUNT)=same-declared-path-validation-with-bare-StateMap-base-allowed;CNTR-absent=all-durable-state-syscalls-rejected-by-generic-program-profile",
         state_value_validation_version: 1,
         state_value_validation: "CNTR-present:STATE_SET-before-mutation-and-present-STATE_GET-before-publication-reconstruct-exact-StateValueSchemaV1-from-declared-scalar-type-or-StateMap-value-type;schema-frame=canonical-Norito-Vec<u8>(KSV1+u16le-total-logical-node-count+flat-preorder-u8-node-and-kind-tags);record-frame=canonical-Norito-Vec<u8>(KRV1+schema-hash+root-u16le-atom-count+flat-active-only-u8-tagged-atom-stream);require-exact-schema_hash=iroha_crypto::Hash::new(KOTODAMA_STATE_VALUE_SCHEMA_V1\\0||exact-canonical-Norito-schema-frame);validate-exact-active-only-atom-stream,pointer-policy,pointer-type,pointer-envelope-hash,and-canonical-leaf-payload;CNTR-absent=unavailable",
         typed_value: typed_state_value_surface_v1()?,
@@ -3927,6 +3977,31 @@ pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durable_state_frame_bounds_cover_exact_text_maxima() {
+        let path: iroha_data_model::state_path::StatePath = "p"
+            .repeat(STATE_MAX_PATH_BYTES)
+            .parse()
+            .expect("maximum StatePath");
+        let path_frame = norito::to_bytes(&path).expect("encode maximum StatePath");
+        assert!(path_frame.len() <= STATE_MAX_PATH_FRAME_BYTES);
+
+        let base: iroha_data_model::name::Name = "b"
+            .repeat(STATE_MAP_MAX_BASE_BYTES)
+            .parse()
+            .expect("maximum Name");
+        let base_frame = norito::to_bytes(&base).expect("encode maximum Name");
+        assert!(base_frame.len() <= STATE_MAP_MAX_BASE_FRAME_BYTES);
+        assert_eq!(
+            STATE_MAX_PATH_BYTES,
+            iroha_data_model::state_path::MAX_STATE_PATH_BYTES
+        );
+        assert_eq!(
+            STATE_MAP_MAX_BASE_BYTES,
+            iroha_data_model::name::MAX_NAME_BYTES
+        );
+    }
 
     fn canonical_surface() -> AbiSurface {
         collect_abi_surface(crate::SyscallPolicy::AbiV1).expect("canonical ABI-v1 surface")
@@ -4349,7 +4424,7 @@ mod tests {
         };
 
         let state = canonical_surface().durable_state;
-        assert_eq!(state.semantics_version, 4);
+        assert_eq!(state.semantics_version, 5);
         assert_eq!(
             state.contract_interface_section_magic,
             crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC
@@ -4472,10 +4547,19 @@ mod tests {
         );
         assert_eq!(state.keys_max_items, STATE_KEYS_MAX_ITEMS);
         assert_eq!(state.max_path_bytes, STATE_MAX_PATH_BYTES as u64);
+        assert_eq!(
+            state.max_path_frame_bytes,
+            STATE_MAX_PATH_FRAME_BYTES as u64
+        );
         assert_eq!(state.max_value_bytes, STATE_MAX_VALUE_BYTES as u64);
         assert_eq!(state.map_max_key_bytes, STATE_MAP_MAX_KEY_BYTES as u64);
         assert_eq!(state.map_max_base_bytes, STATE_MAP_MAX_BASE_BYTES as u64);
+        assert_eq!(
+            state.map_max_base_frame_bytes,
+            STATE_MAP_MAX_BASE_FRAME_BYTES as u64
+        );
         assert_eq!(state.map_max_page_bytes, STATE_MAP_MAX_PAGE_BYTES as u64);
+        assert!(state.path_transport.contains("Vec<StatePath>"));
         assert_eq!(state.operation_path_rules_version, 1);
         assert!(
             state
@@ -4668,6 +4752,9 @@ mod tests {
         });
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.keys_max_items += 1);
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.max_path_bytes += 1);
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.max_path_frame_bytes += 1;
+        });
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.max_value_bytes += 1);
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.map_max_key_bytes += 1;
@@ -4676,10 +4763,16 @@ mod tests {
             changed.durable_state.map_max_base_bytes += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.map_max_base_frame_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.map_max_page_bytes += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.path_size_unit = "decoded UTF-8 bytes";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.path_transport = "&Name";
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.value_storage = "full pointer TLV envelope";

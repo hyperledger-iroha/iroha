@@ -20,8 +20,9 @@ Every global consensus message is bound to a `HeightContextId`. The hashed conte
 - chain and protocol identifiers;
 - height, epoch, and the previous height's CommitQC;
 - the ordered voting roster and every validator's voting power;
-- the complete Nexus/AMX consensus context and DA layout, including the canonical active-lane
-  lifecycle map of `(lane_id, incarnation, activation_height)` tuples sorted by lane id;
+- the complete Nexus/AMX consensus context, V1 process-local execution-policy identity, and DA
+  layout, including the canonical active-lane lifecycle map of
+  `(lane_id, incarnation, activation_height)` tuples sorted by lane id;
 - the epoch leader seed and quorum policy.
 
 The frozen voting roster is capped by protocol at 128 validators. This is not a local tuning knob:
@@ -51,6 +52,41 @@ deployment template whose final roster is not known carries the config-only proj
 genesis sign` stages the complete genesis transaction, including validator activation, then
 replaces the projection and consensus fingerprint with the exact staged values before it emits a
 signed block. A template is therefore not a deployable commitment by itself.
+
+Genesis also carries `sumeragi_v2.execution_policy_hash`. This is a separate, versioned identity
+for boot configuration which is read from `State` during transaction admission, transaction and
+trigger execution, block validation, replay, or snapshot recovery. Genesis signing derives it from
+the fully staged state; the hash is then part of every `HeightContextId`, peer admission capability,
+persisted finality artifact, and authenticated snapshot bootstrap. A node fails closed when its
+locally loaded policy differs from the signed or recovered identity. There is no default-value or
+legacy-field fallback.
+
+The V1 inventory is:
+
+| Policy family | Bound decision inputs |
+| --- | --- |
+| Pipeline | access prepass, overlay instruction/byte/chunk bounds, gas asset/rate routing, IVM cycle and decode bounds, quarantine count/cycle bounds, in-IVM query bounds, deterministic AMX budgets |
+| Cryptography | default hash, allowed signing algorithms and curve IDs, SM2 distinguished ID |
+| Oracle | history retention, reward/slash/bond economics, governance stage SLAs and thresholds, Twitter-binding identity and TTL/update guards |
+| Fraud admission | enablement, required risk band, whether missing evidence is permitted, authenticated attester identities |
+| Governance | ballot/tally keys, bonds and slashing, JDG and runtime-upgrade provenance, citizen/viral/SoraFS policy, voting thresholds, terms, committee sizes, and pipeline deadlines |
+| Content | bundle/file/path/retention/chunk limits, publishing allow-list, cache and immutability effects, authorization mode, DA stripe defaults |
+| Settlement | offline enablement and escrow policy/catalog, Kagemusha decoded bound and authenticated release-policy digest, deterministic router windows and guard rails |
+| Existing canonical sub-policies | Nexus plus loaded lane-manifest/compliance digests, ZK policy (including process-local SCCP admission/work limits) |
+
+Only result-preserving operational choices are excluded: worker and cache sizes, parallel/GPU
+backend selection, exact signature batching, prover thread count, tracing and telemetry, fraud
+service endpoints and transport timeouts, content gateway quotas/SLO/PoW, and filesystem paths.
+Chain-authoritative values such as the governed SCCP registry are also outside this immutable boot
+identity: they are committed through world state and the existing confidential-feature/block
+commitments, so legitimate on-chain evolution does not masquerade as local configuration drift.
+Quarantine consensus acceptance is bounded by cycles and gas and never branches on host elapsed
+time; there is no wall-clock validity-budget setting. Classification is also consensus-canonical:
+only the exact Norito JSON boolean `true` at the `quarantine` key in authenticated transaction
+metadata selects the lane, with no process-local classifier hook. Elapsed timings are observational
+telemetry only. Changing an excluded value may affect throughput or diagnostics, but it cannot
+change admission or ledger effects; if a future implementation makes one decision-affecting, it
+must first be promoted into a new canonical policy projection.
 
 The public Nexus sample remains intentionally non-deployable until an operator supplies the
 canonical Nexus XOR asset-definition ID. Generation fails closed without
@@ -388,6 +424,13 @@ Sumeragi view. Empty participant proposals remain invalid because they cannot pr
 sources the participant committee authorized. Unlike ordinary asynchronous lane completion, a
 carrier containing Native AMX work is admissible only after every participant leg supplies matching
 Prepare and Commit QCs for that exact finality object.
+
+Each Native AMX QC carries an ordered validator set and exactly one historical
+BLS proof of possession for every validator. The data model enforces this
+one-to-one alignment during construction and during both binary and JSON
+decoding, and exposes the material through read-only slices and paired
+iteration. Signature, proof length, ordering, committee authority, bitmap, and
+quorum checks remain admission-time semantic validation.
 
 Grouped participant application is atomic and bounded to 1–4,096 ordered,
 unique sources. The group must match the exact transaction count and timestamp,

@@ -1634,6 +1634,7 @@ mod tests {
                 quorum: wire_v2::DualQuorum::from_roster(&roster).expect("dual quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"v2-evidence-context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire_v2::DataAvailabilityLayout {
                     encoding: wire_v2::PayloadEncoding::Plain,
                     chunk_size_bytes: 32,

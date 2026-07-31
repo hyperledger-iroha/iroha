@@ -488,13 +488,19 @@ impl Actor {
                 "SoraNet PoW admission is mandatory in the first-release policy".to_string(),
             );
         }
-        if let Some(difficulty) = update.difficulty
-            && difficulty > iroha_crypto::soranet::puzzle::MAX_DIFFICULTY
-        {
-            return Err(format!(
-                "SoraNet PoW difficulty {difficulty} exceeds the supported maximum {}",
-                iroha_crypto::soranet::puzzle::MAX_DIFFICULTY
-            ));
+        if let Some(difficulty) = update.difficulty {
+            if difficulty == 0 {
+                return Err(
+                    "SoraNet PoW difficulty must be greater than zero in the first-release policy"
+                        .to_owned(),
+                );
+            }
+            if difficulty > iroha_crypto::soranet::puzzle::MAX_DIFFICULTY {
+                return Err(format!(
+                    "SoraNet PoW difficulty {difficulty} exceeds the supported maximum {}",
+                    iroha_crypto::soranet::puzzle::MAX_DIFFICULTY
+                ));
+            }
         }
         if let Some(puzzle_update) = &update.puzzle {
             if matches!(puzzle_update.enabled, Some(false)) {
@@ -667,6 +673,7 @@ mod tests {
         }
 
         let invalid = [
+            (update(Some(0), None, None, None), "difficulty"),
             (
                 update(
                     Some(iroha_crypto::soranet::puzzle::MAX_DIFFICULTY + 1),
@@ -1042,6 +1049,8 @@ mod tests {
                 },
                 iso_bridge: IsoBridge {
                     enabled: false,
+                    max_body_bytes:
+                        iroha_config::parameters::defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
                     dedupe_ttl_secs: 3600,
                     default_profile: iroha_config::parameters::defaults::torii::ISO_BRIDGE_DEFAULT_PROFILE
                         .to_owned(),
@@ -1319,8 +1328,6 @@ mod tests {
                     iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
                 quarantine_tx_max_cycles:
                     iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-                quarantine_tx_max_millis:
-                    iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
                 query_default_cursor_mode:
                     iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
                 query_max_fetch_size:

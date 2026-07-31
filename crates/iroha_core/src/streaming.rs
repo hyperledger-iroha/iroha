@@ -3254,7 +3254,7 @@ fn decode_snapshot_plaintext(
     if plaintext.len() < norito_core::Header::SIZE || !plaintext.starts_with(&norito_core::MAGIC) {
         return Err(StreamingSnapshotError::Codec(NoritoError::LengthMismatch));
     }
-    let align = std::mem::align_of::<norito_core::Archived<StreamingSnapshotFile>>();
+    let align = norito_core::archived_payload_align::<StreamingSnapshotFile>();
     let aligned = align_slice(plaintext, align, norito_core::Header::SIZE)?;
     norito_core::from_bytes_view(aligned.as_slice())
         .and_then(|view| {
@@ -6670,7 +6670,7 @@ mod tests {
             super::decode_snapshot_plaintext(&plaintext).expect("aligned decode succeeds");
         assert_eq!(decoded, file);
 
-        let align = std::mem::align_of::<norito_core::Archived<StreamingSnapshotFile>>();
+        let align = norito_core::archived_payload_align::<StreamingSnapshotFile>();
         assert!(align > 1, "expected archived snapshot alignment > 1");
         let mut envelope = vec![0u8; align - 1 + plaintext.len()];
         envelope[align - 1..align - 1 + plaintext.len()].copy_from_slice(&plaintext);

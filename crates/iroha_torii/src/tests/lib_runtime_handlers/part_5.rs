@@ -2660,6 +2660,7 @@
             quorum: DualQuorum::from_roster(&roster).expect("valid SCCP finality roster"),
             roster,
             nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -2818,4 +2819,3 @@
         };
         assert!(message.contains("retained destination binding"));
     }
-

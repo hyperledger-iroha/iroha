@@ -677,7 +677,7 @@ where
         .map_err(|_| gateway_compliance_worker_unavailable())?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        operation()
+        iroha_core::panic_hook::with_hook_suppressed(operation)
     })
     .await
     .map_err(|_| {
@@ -1731,5 +1731,15 @@ mod tests {
                 Some(&HeaderValue::from_static("private, no-store, max-age=0"))
             );
         }
+    }
+
+    #[tokio::test]
+    async fn blocking_worker_panic_is_contained_as_service_unavailable() {
+        let response = run_gateway_compliance_blocking(|| -> () {
+            panic!("synthetic request-owned worker panic");
+        })
+        .await
+        .expect_err("panicking worker must fail the request");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

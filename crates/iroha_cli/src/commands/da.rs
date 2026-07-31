@@ -15,7 +15,9 @@ use blake3::hash as blake3_hash;
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha::da::{
-    self, DaCommitmentProofRequest, DaIngestParams, DaPinIntentQueryRequest, DaRentLedgerPlan,
+    self, DaCommitmentListCursor, DaCommitmentListRequest, DaCommitmentProofRequest,
+    DaIngestParams, DaPinIntentListCursor, DaPinIntentListRequest, DaPinIntentQueryRequest,
+    DaRentLedgerPlan,
 };
 use iroha::data_model::{
     asset::AssetDefinitionId,
@@ -23,14 +25,13 @@ use iroha::data_model::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::DaIngestReceipt,
         manifest::DaManifestV1,
-        pin_intent::DaPinIntentWithLocation,
+        pin_intent::DaPinIntentProof,
         types::{
             BlobCodec, BlobDigest, DaRentLedgerProjection, DaRentPolicyV1, DaRentQuote,
             ErasureProfile, ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
         },
     },
     nexus::LaneId,
-    query::parameters::Pagination,
     sorafs::pin_registry::ManifestDigest,
 };
 use iroha_primitives::numeric::XorQuantity;
@@ -275,49 +276,66 @@ pub struct CommitmentQueryArgs {
     /// Optional list limit (`>0`).
     #[arg(long = "limit", value_name = "U64")]
     pub limit: Option<u64>,
-    /// Optional list offset.
-    #[arg(long = "offset", value_name = "U64", default_value_t = 0)]
-    pub offset: u64,
+    /// Path to a JSON cursor returned by a preceding list page.
+    #[arg(long = "cursor-json", value_name = "PATH")]
+    pub cursor_json: Option<PathBuf>,
 }
 
 impl CommitmentQueryArgs {
     fn run_list<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let request = self.to_request()?;
+        let request = self.to_list_request()?;
         let response = context.client_from_config().list_da_commitments(&request)?;
         let text = render_da_commitments_list_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
 
     fn run_prove<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let request = self.to_request()?;
+        let request = self.to_proof_request()?;
         let response = context.client_from_config().prove_da_commitment(&request)?;
         let text = render_da_commitment_prove_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
 
-    fn to_request(&self) -> Result<DaCommitmentProofRequest> {
-        let manifest_hash = self
-            .manifest_hash
-            .as_deref()
-            .map(|hash| parse_fixed_hex(hash, "manifest-hash").map(ManifestDigest::new))
-            .transpose()?;
+    fn to_list_request(&self) -> Result<DaCommitmentListRequest> {
+        if self.manifest_hash.is_some()
+            || self.lane_id.is_some()
+            || self.epoch.is_some()
+            || self.sequence.is_some()
+        {
+            return Err(eyre!(
+                "commitment selectors are only valid for `commitments-prove`"
+            ));
+        }
         let limit = self
             .limit
             .map(|value| {
                 NonZeroU64::new(value).ok_or_else(|| eyre!("--limit must be greater than zero"))
             })
             .transpose()?;
-        let pagination = if limit.is_some() || self.offset > 0 {
-            Some(Pagination::new(limit, self.offset))
-        } else {
-            None
-        };
+        let cursor = self
+            .cursor_json
+            .as_deref()
+            .map(|path| load_json_payload::<DaCommitmentListCursor>(path, "DA commitment cursor"))
+            .transpose()?;
+        Ok(DaCommitmentListRequest { limit, cursor })
+    }
+
+    fn to_proof_request(&self) -> Result<DaCommitmentProofRequest> {
+        if self.limit.is_some() || self.cursor_json.is_some() {
+            return Err(eyre!(
+                "--limit and --cursor-json are only valid for `commitments-list`"
+            ));
+        }
+        let manifest_hash = self
+            .manifest_hash
+            .as_deref()
+            .map(|hash| parse_fixed_hex(hash, "manifest-hash").map(ManifestDigest::new))
+            .transpose()?;
         Ok(DaCommitmentProofRequest {
             manifest_hash,
             lane_id: self.lane_id,
             epoch: self.epoch,
             sequence: self.sequence,
-            pagination,
         })
     }
 }
@@ -366,27 +384,58 @@ pub struct PinIntentQueryArgs {
     /// Optional list limit (`>0`).
     #[arg(long = "limit", value_name = "U64")]
     pub limit: Option<u64>,
-    /// Optional list offset.
-    #[arg(long = "offset", value_name = "U64", default_value_t = 0)]
-    pub offset: u64,
+    /// Path to a JSON cursor returned by a preceding list page.
+    #[arg(long = "cursor-json", value_name = "PATH")]
+    pub cursor_json: Option<PathBuf>,
 }
 
 impl PinIntentQueryArgs {
     fn run_list<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let request = self.to_request()?;
+        let request = self.to_list_request()?;
         let response = context.client_from_config().list_da_pin_intents(&request)?;
         let text = render_da_pin_intents_list_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
 
     fn run_prove<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let request = self.to_request()?;
+        let request = self.to_proof_request()?;
         let response = context.client_from_config().prove_da_pin_intent(&request)?;
         let text = render_da_pin_intent_prove_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
 
-    fn to_request(&self) -> Result<DaPinIntentQueryRequest> {
+    fn to_list_request(&self) -> Result<DaPinIntentListRequest> {
+        if self.manifest_hash.is_some()
+            || self.storage_ticket.is_some()
+            || self.alias.is_some()
+            || self.lane_id.is_some()
+            || self.epoch.is_some()
+            || self.sequence.is_some()
+        {
+            return Err(eyre!(
+                "pin-intent selectors are only valid for `pin-intents-prove`"
+            ));
+        }
+        let limit = self
+            .limit
+            .map(|value| {
+                NonZeroU64::new(value).ok_or_else(|| eyre!("--limit must be greater than zero"))
+            })
+            .transpose()?;
+        let cursor = self
+            .cursor_json
+            .as_deref()
+            .map(|path| load_json_payload::<DaPinIntentListCursor>(path, "DA pin-intent cursor"))
+            .transpose()?;
+        Ok(DaPinIntentListRequest { limit, cursor })
+    }
+
+    fn to_proof_request(&self) -> Result<DaPinIntentQueryRequest> {
+        if self.limit.is_some() || self.cursor_json.is_some() {
+            return Err(eyre!(
+                "--limit and --cursor-json are only valid for `pin-intents-list`"
+            ));
+        }
         let manifest_hash = self
             .manifest_hash
             .as_deref()
@@ -397,17 +446,6 @@ impl PinIntentQueryArgs {
             .as_deref()
             .map(|ticket| parse_fixed_hex(ticket, "storage-ticket").map(StorageTicketId::new))
             .transpose()?;
-        let limit = self
-            .limit
-            .map(|value| {
-                NonZeroU64::new(value).ok_or_else(|| eyre!("--limit must be greater than zero"))
-            })
-            .transpose()?;
-        let pagination = if limit.is_some() || self.offset > 0 {
-            Some(Pagination::new(limit, self.offset))
-        } else {
-            None
-        };
         Ok(DaPinIntentQueryRequest {
             manifest_hash,
             storage_ticket,
@@ -415,24 +453,26 @@ impl PinIntentQueryArgs {
             lane_id: self.lane_id,
             epoch: self.epoch,
             sequence: self.sequence,
-            pagination,
         })
     }
 }
 
 #[derive(Args, Debug)]
 pub struct PinIntentVerifyArgs {
-    /// Path to a JSON-encoded `DaPinIntentWithLocation`.
+    /// Path to a JSON-encoded `DaPinIntentProof`.
     #[arg(long = "proof-json", value_name = "PATH")]
     pub proof_json: PathBuf,
 }
 
 impl PinIntentVerifyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let proof =
-            load_json_payload::<DaPinIntentWithLocation>(&self.proof_json, "DA pin intent proof")?;
+        let proof = load_json_payload::<DaPinIntentProof>(&self.proof_json, "DA pin intent proof")?;
         let response = context.client_from_config().verify_da_pin_intent(&proof)?;
-        let text = render_da_verify_text("DA pin intent verification", response.valid, None);
+        let text = render_da_verify_text(
+            "DA pin intent verification",
+            response.valid,
+            response.error.as_deref(),
+        );
         print_with_optional_text(context, Some(text), &response)
     }
 }
@@ -1217,6 +1257,7 @@ fn render_da_commitments_list_text(response: &iroha::da::DaCommitmentListRespons
     );
     let _ = writeln!(out, "policy_count: {}", response.policies.policies.len());
     let _ = writeln!(out, "commitment_count: {}", response.commitments.len());
+    let _ = writeln!(out, "has_next_cursor: {}", response.next_cursor.is_some());
     out
 }
 
@@ -1242,14 +1283,15 @@ fn render_da_commitment_prove_text(
     out
 }
 
-fn render_da_pin_intents_list_text(response: &[DaPinIntentWithLocation]) -> String {
+fn render_da_pin_intents_list_text(response: &iroha::da::DaPinIntentListResponse) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "DA pin intents");
-    let _ = writeln!(out, "pin_intent_count: {}", response.len());
+    let _ = writeln!(out, "pin_intent_count: {}", response.intents.len());
+    let _ = writeln!(out, "has_next_cursor: {}", response.next_cursor.is_some());
     out
 }
 
-fn render_da_pin_intent_prove_text(response: &Option<DaPinIntentWithLocation>) -> String {
+fn render_da_pin_intent_prove_text(response: &Option<DaPinIntentProof>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "DA pin intent proof");
     match response {
@@ -1809,7 +1851,7 @@ mod tests {
     use super::*;
     use iroha::{
         config::{self, Config},
-        crypto::KeyPair,
+        crypto::{Hash, HashOf, KeyPair},
         data_model::{
             Metadata,
             prelude::{AccountId, ChainId},
@@ -1819,7 +1861,7 @@ mod tests {
     use iroha_data_model::da::{
         commitment::DaProofPolicyBundle,
         manifest::{ChunkCommitment, ChunkRole},
-        pin_intent::DaPinIntent,
+        pin_intent::{DaPinIntent, DaPinIntentBundle},
         types::{
             BlobClass, BlobDigest, DaRentQuote, ErasureProfile, ExtraMetadata, FecScheme,
             GovernanceTag, MetadataEntry, MetadataVisibility, RetentionPolicy, StorageTicketId,
@@ -2336,28 +2378,14 @@ mod tests {
             lane_id: Some(7),
             epoch: Some(9),
             sequence: Some(11),
-            limit: Some(3),
-            offset: 1,
+            limit: None,
+            cursor_json: None,
         };
-        let request = args.to_request().expect("request");
+        let request = args.to_proof_request().expect("request");
         assert_eq!(request.manifest_hash, Some(ManifestDigest::new([0x11; 32])));
         assert_eq!(request.lane_id, Some(7));
         assert_eq!(request.epoch, Some(9));
         assert_eq!(request.sequence, Some(11));
-        assert_eq!(
-            request
-                .pagination
-                .as_ref()
-                .and_then(|pagination| pagination.limit.map(NonZeroU64::get)),
-            Some(3)
-        );
-        assert_eq!(
-            request
-                .pagination
-                .as_ref()
-                .map(|pagination| pagination.offset),
-            Some(1)
-        );
     }
 
     #[test]
@@ -2368,9 +2396,9 @@ mod tests {
             epoch: None,
             sequence: None,
             limit: Some(0),
-            offset: 0,
+            cursor_json: None,
         };
-        let err = args.to_request().expect_err("expected failure");
+        let err = args.to_list_request().expect_err("expected failure");
         assert!(err.to_string().contains("--limit"));
     }
 
@@ -2383,10 +2411,10 @@ mod tests {
             lane_id: Some(4),
             epoch: Some(8),
             sequence: Some(12),
-            limit: Some(5),
-            offset: 2,
+            limit: None,
+            cursor_json: None,
         };
-        let request = args.to_request().expect("request");
+        let request = args.to_proof_request().expect("request");
         assert_eq!(request.manifest_hash, Some(ManifestDigest::new([0x22; 32])));
         assert_eq!(
             request.storage_ticket,
@@ -2396,20 +2424,6 @@ mod tests {
         assert_eq!(request.lane_id, Some(4));
         assert_eq!(request.epoch, Some(8));
         assert_eq!(request.sequence, Some(12));
-        assert_eq!(
-            request
-                .pagination
-                .as_ref()
-                .and_then(|pagination| pagination.limit.map(NonZeroU64::get)),
-            Some(5)
-        );
-        assert_eq!(
-            request
-                .pagination
-                .as_ref()
-                .map(|pagination| pagination.offset),
-            Some(2)
-        );
     }
 
     #[test]
@@ -2438,12 +2452,18 @@ mod tests {
             StorageTicketId::new([0x44; 32]),
             ManifestDigest::new([0x55; 32]),
         );
-        let proof = DaPinIntentWithLocation {
+        let proof = DaPinIntentProof {
             intent,
             location: iroha::data_model::da::commitment::DaCommitmentLocation {
                 block_height: 4,
                 index_in_bundle: 1,
             },
+            bundle_hash: HashOf::<DaPinIntentBundle>::from_untyped_unchecked(Hash::prehashed(
+                [0x66; Hash::LENGTH],
+            )),
+            bundle_len: 2,
+            root: Hash::prehashed([0x77; Hash::LENGTH]),
+            path: Vec::new(),
         };
         let tmp = NamedTempFile::new().expect("temp file");
         fs::write(
@@ -2451,7 +2471,7 @@ mod tests {
             norito::json::to_vec(&proof).expect("encode pin intent proof"),
         )
         .expect("write json payload");
-        let decoded: DaPinIntentWithLocation =
+        let decoded: DaPinIntentProof =
             load_json_payload(tmp.path(), "DA pin intent proof").expect("decode payload");
         assert_eq!(decoded, proof);
     }

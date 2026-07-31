@@ -15,10 +15,10 @@ use iroha_data_model::{
     isi::smart_contract_code::{
         ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
     },
-    name::Name,
     prelude::ValidationFail,
     smart_contract::manifest::{ContractManifest, EntryPointKind},
     smart_contract::{ContractAddress, ContractAlias},
+    state_path::StatePath,
 };
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
@@ -314,11 +314,11 @@ pub(crate) fn new_pending_contract_lifecycle(
 
 /// Return the reserved physical durable-state key for an instance lifecycle marker.
 #[must_use]
-pub(crate) fn contract_lifecycle_state_key(contract_address: &ContractAddress) -> Name {
+pub(crate) fn contract_lifecycle_state_key(contract_address: &ContractAddress) -> StatePath {
     let digest = hex::encode(Hash::new(contract_address.as_str().as_bytes()).as_ref());
     format!("{CONTRACT_LIFECYCLE_STATE_PREFIX}/{digest}")
         .parse()
-        .expect("contract lifecycle state key is a valid Name")
+        .expect("contract lifecycle state key is a valid StatePath")
 }
 
 /// Read and validate the pending lifecycle transition for `contract_address`.

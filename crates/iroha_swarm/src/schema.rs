@@ -30,11 +30,6 @@ fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
         "API_ADDRESS".into(),
         Value::String(env.api_address.to_string()),
     );
-    map.insert(
-        "GENESIS_PUBLIC_KEY".into(),
-        json::to_value(env.genesis_public_key).expect("serialize genesis public key"),
-    );
-
     if !env.trusted_peers.is_empty() {
         let peers: Vec<String> = env
             .trusted_peers
@@ -91,10 +86,6 @@ fn genesis_env_to_value(env: &GenesisEnv<'_>) -> norito::json::Value {
                 Value::String(format_peer_pop_args(&env.peer_pops)),
             );
         }
-        map.insert(
-            "GENESIS_PRIVATE_KEY".into(),
-            json::to_value(env.genesis_private_key).expect("serialize genesis private key"),
-        );
         map.insert("GENESIS".into(), Value::String(env.genesis.to_string()));
         let ids: Vec<String> = env
             .topology
@@ -155,7 +146,6 @@ mod json_value_tests {
     type SampleTopology = (
         peer::ExposedKeyPair,
         [u16; 2],
-        peer::ExposedKeyPair,
         iroha_data_model::ChainId,
         std::collections::BTreeSet<iroha_data_model::prelude::Peer>,
         std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
@@ -178,29 +168,19 @@ mod json_value_tests {
             other_ports[0],
             secondary_pair.0.clone(),
         ));
-        let genesis_pair = peer::generate_key_pair(Some(b"swarm-json-genesis"), b"genesis-json")
-            .expect("seeded genesis key generation should succeed");
         let mut trusted_pops = std::collections::BTreeMap::new();
         trusted_pops.insert(primary_pair.0.clone(), primary_pop);
         trusted_pops.insert(secondary_pair.0.clone(), secondary_pop);
-        (
-            primary_pair,
-            ports,
-            genesis_pair,
-            chain,
-            topology,
-            trusted_pops,
-        )
+        (primary_pair, ports, chain, topology, trusted_pops)
     }
 
     #[test]
     fn peer_env_to_value_matches_expected_fields() {
-        let (primary_pair, ports, genesis_pair, chain, topology, trusted_pops) = sample_topology();
+        let (primary_pair, ports, chain, topology, trusted_pops) = sample_topology();
         let env = PeerEnv::new(
             &primary_pair,
             ports,
             &chain,
-            &genesis_pair.0,
             &topology,
             trusted_pops.clone(),
         );
@@ -224,10 +204,6 @@ mod json_value_tests {
         expected.insert(
             "API_ADDRESS".into(),
             Value::String(env.api_address.to_string()),
-        );
-        expected.insert(
-            "GENESIS_PUBLIC_KEY".into(),
-            json::to_value(env.genesis_public_key).unwrap(),
         );
         if !env.trusted_peers.is_empty() {
             let peers: Vec<String> = env
@@ -263,12 +239,11 @@ mod json_value_tests {
 
     #[test]
     fn genesis_env_to_value_extends_peer_payload() {
-        let (primary_pair, ports, genesis_pair, chain, topology, trusted_pops) = sample_topology();
+        let (primary_pair, ports, chain, topology, trusted_pops) = sample_topology();
         let env = GenesisEnv::new(
             &primary_pair,
             ports,
             &chain,
-            (&genesis_pair.0, &genesis_pair.1),
             &topology,
             trusted_pops.clone(),
             None,
@@ -281,10 +256,6 @@ mod json_value_tests {
         let Value::Object(mut expected) = peer_env_to_value(&env.base) else {
             panic!("peer env must serialize to object");
         };
-        expected.insert(
-            "GENESIS_PRIVATE_KEY".into(),
-            json::to_value(env.genesis_private_key).unwrap(),
-        );
         expected.insert("GENESIS".into(), Value::String(env.genesis.to_string()));
         let ids: Vec<String> = env
             .topology
@@ -301,12 +272,11 @@ mod json_value_tests {
 
     #[test]
     fn genesis_env_includes_consensus_overrides() {
-        let (primary_pair, ports, genesis_pair, chain, topology, trusted_pops) = sample_topology();
+        let (primary_pair, ports, chain, topology, trusted_pops) = sample_topology();
         let env = GenesisEnv::new(
             &primary_pair,
             ports,
             &chain,
-            (&genesis_pair.0, &genesis_pair.1),
             &topology,
             trusted_pops.clone(),
             Some("npos"),
@@ -548,7 +518,6 @@ struct PeerEnv<'a> {
     p2p_public_address: iroha_primitives::addr::SocketAddr,
     p2p_address: iroha_primitives::addr::SocketAddr,
     api_address: iroha_primitives::addr::SocketAddr,
-    genesis_public_key: &'a iroha_crypto::PublicKey,
     trusted_peers: std::collections::BTreeSet<&'a iroha_data_model::peer::Peer>,
     trusted_peers_pop: std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
 }
@@ -558,7 +527,6 @@ impl<'a> PeerEnv<'a> {
         (public_key, private_key): &'a peer::ExposedKeyPair,
         [port_p2p, port_api]: [u16; 2],
         chain: &'a iroha_data_model::ChainId,
-        genesis_public_key: &'a iroha_crypto::PublicKey,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         trusted_peers_pop: std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
     ) -> Self {
@@ -575,7 +543,6 @@ impl<'a> PeerEnv<'a> {
             p2p_public_address,
             p2p_address: iroha_primitives::addr::socket_addr!(0.0.0.0:port_p2p),
             api_address: iroha_primitives::addr::socket_addr!(0.0.0.0:port_api),
-            genesis_public_key,
             trusted_peers: topology
                 .iter()
                 .filter(|&peer| peer.id().public_key() != public_key)
@@ -594,7 +561,6 @@ impl ComposeEnvironmentValue for PeerEnv<'_> {
 #[derive(Debug)]
 struct GenesisEnv<'a> {
     base: PeerEnv<'a>,
-    genesis_private_key: &'a iroha_crypto::ExposedPrivateKey,
     genesis: ContainerFile<'a>,
     topology: std::collections::BTreeSet<&'a iroha_data_model::peer::PeerId>,
     consensus_mode: Option<&'a str>,
@@ -609,7 +575,6 @@ impl<'a> GenesisEnv<'a> {
         key_pair: &'a peer::ExposedKeyPair,
         ports: [u16; 2],
         chain: &'a iroha_data_model::ChainId,
-        (genesis_public_key, genesis_private_key): peer::ExposedKeyRefPair<'a>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         trusted_peers_pop: std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
         consensus_mode: Option<&'a str>,
@@ -618,15 +583,7 @@ impl<'a> GenesisEnv<'a> {
         peer_pops: Vec<String>,
     ) -> Self {
         Self {
-            base: PeerEnv::new(
-                key_pair,
-                ports,
-                chain,
-                genesis_public_key,
-                topology,
-                trusted_peers_pop,
-            ),
-            genesis_private_key,
+            base: PeerEnv::new(key_pair, ports, chain, topology, trusted_peers_pop),
             genesis: CONTAINER_SIGNED_GENESIS,
             topology: topology
                 .iter()
@@ -702,6 +659,11 @@ const CONTAINER_CLIENT_CONFIG: ContainerFile = ContainerFile(CONTAINER_CONFIG_DI
 const CONTAINER_SIGNED_GENESIS: ContainerFile =
     ContainerFile(CONTAINER_TMP_DIR, GENESIS_SIGNED_NRT);
 
+const GENESIS_PUBLIC_KEY_SECRET: &str = "iroha_genesis_public_key";
+const GENESIS_PRIVATE_KEY_SECRET: &str = "iroha_genesis_private_key";
+const GENESIS_PUBLIC_KEY_FILE_SOURCE: &str = "${IROHA_GENESIS_PUBLIC_KEY_FILE:?set IROHA_GENESIS_PUBLIC_KEY_FILE to an owner-controlled genesis public-key file}";
+const GENESIS_PRIVATE_KEY_FILE_SOURCE: &str = "${IROHA_GENESIS_PRIVATE_KEY_FILE:?set IROHA_GENESIS_PRIVATE_KEY_FILE to an owner-held mode-0600 genesis private-key file}";
+
 #[derive(Copy, Clone, Debug)]
 struct ReadOnly;
 
@@ -733,7 +695,7 @@ impl Healthcheck {
         map.insert(
             "test".into(),
             Value::String(format!(
-                "test $(curl -s http://127.0.0.1:{}/status/blocks) -gt 0",
+                "test $$(curl -s http://127.0.0.1:{}/status/blocks) -gt 0",
                 self.port
             )),
         );
@@ -753,6 +715,42 @@ impl Healthcheck {
         Value::Object(map)
     }
 }
+
+fn secret_names(include_private: bool) -> Value {
+    let mut secrets = vec![Value::String(GENESIS_PUBLIC_KEY_SECRET.into())];
+    if include_private {
+        secrets.push(Value::String(GENESIS_PRIVATE_KEY_SECRET.into()));
+    }
+    Value::Array(secrets)
+}
+
+fn compose_secrets() -> Value {
+    let mut public = Map::new();
+    public.insert(
+        "file".into(),
+        Value::String(GENESIS_PUBLIC_KEY_FILE_SOURCE.into()),
+    );
+    let mut private = Map::new();
+    private.insert(
+        "file".into(),
+        Value::String(GENESIS_PRIVATE_KEY_FILE_SOURCE.into()),
+    );
+    let mut secrets = Map::new();
+    secrets.insert(GENESIS_PUBLIC_KEY_SECRET.into(), Value::Object(public));
+    secrets.insert(GENESIS_PRIVATE_KEY_SECRET.into(), Value::Object(private));
+    Value::Object(secrets)
+}
+
+const LOAD_GENESIS_PUBLIC_KEY_AND_RUN: &str = r#"/bin/sh -eu -c "
+    GENESIS_PUBLIC_KEY_FILE=/run/secrets/iroha_genesis_public_key && \\
+    test -s \"$$GENESIS_PUBLIC_KEY_FILE\" && \\
+    test \"$$(wc -l < \"$$GENESIS_PUBLIC_KEY_FILE\")\" -eq 1 && \\
+    test -z \"$$(tail -c 1 < \"$$GENESIS_PUBLIC_KEY_FILE\")\" && \\
+    IFS= read -r GENESIS_PUBLIC_KEY < \"$$GENESIS_PUBLIC_KEY_FILE\" && \\
+    test -n \"$$GENESIS_PUBLIC_KEY\" && \\
+    export GENESIS_PUBLIC_KEY && \\
+    exec irohad
+""#;
 
 /// Iroha peer service.
 #[derive(Debug)]
@@ -817,6 +815,11 @@ where
                     .collect(),
             ),
         );
+        map.insert(
+            "command".into(),
+            Value::String(LOAD_GENESIS_PUBLIC_KEY_AND_RUN.into()),
+        );
+        map.insert("secrets".into(), secret_names(false));
         map.insert("init".into(), norito::json::Value::Bool(true));
         if let Some(healthcheck) = self.healthcheck {
             map.insert("healthcheck".into(), healthcheck.into_value());
@@ -825,26 +828,44 @@ where
     }
 }
 
-const SIGN_AND_SUBMIT_GENESIS: &str = r#"/bin/sh -c "
-    EXECUTOR_RELATIVE_PATH=$(jq -r '.executor // empty' /config/genesis.json) && \\
-    if [ -n \"$$EXECUTOR_RELATIVE_PATH\" ]; then EXECUTOR_ABSOLUTE_PATH=$(realpath \"/config/$$EXECUTOR_RELATIVE_PATH\"); else EXECUTOR_ABSOLUTE_PATH=; fi && \\
-    IVM_DIR_RELATIVE_PATH=$(jq -r '.ivm_dir // empty' /config/genesis.json) && \\
-    if [ -n \"$$IVM_DIR_RELATIVE_PATH\" ]; then IVM_DIR_ABSOLUTE_PATH=$(realpath \"/config/$$IVM_DIR_RELATIVE_PATH\"); else IVM_DIR_ABSOLUTE_PATH=; fi && \\
+const SIGN_AND_SUBMIT_GENESIS: &str = r#"/bin/sh -eu -c "
+    GENESIS_PUBLIC_KEY_FILE=/run/secrets/iroha_genesis_public_key && \\
+    GENESIS_PRIVATE_KEY_SECRET_FILE=/run/secrets/iroha_genesis_private_key && \\
+    test -s \"$$GENESIS_PUBLIC_KEY_FILE\" && \\
+    test \"$$(wc -l < \"$$GENESIS_PUBLIC_KEY_FILE\")\" -eq 1 && \\
+    test -z \"$$(tail -c 1 < \"$$GENESIS_PUBLIC_KEY_FILE\")\" && \\
+    IFS= read -r GENESIS_PUBLIC_KEY < \"$$GENESIS_PUBLIC_KEY_FILE\" && \\
+    test -n \"$$GENESIS_PUBLIC_KEY\" && \\
+    export GENESIS_PUBLIC_KEY && \\
+    test -s \"$$GENESIS_PRIVATE_KEY_SECRET_FILE\" && \\
+    GENESIS_PRIVATE_KEY_FILE=$$(mktemp /tmp/iroha-genesis-private-key.XXXXXX) && \\
+    trap 'rm -f \"$$GENESIS_PRIVATE_KEY_FILE\"' 0 && \\
+    trap 'exit 129' HUP && \\
+    trap 'exit 130' INT && \\
+    trap 'exit 143' TERM && \\
+    cp \"$$GENESIS_PRIVATE_KEY_SECRET_FILE\" \"$$GENESIS_PRIVATE_KEY_FILE\" && \\
+    chmod 600 \"$$GENESIS_PRIVATE_KEY_FILE\" && \\
+    EXECUTOR_RELATIVE_PATH=$$(jq -r '.executor // empty' /config/genesis.json) && \\
+    if [ -n \"$$EXECUTOR_RELATIVE_PATH\" ]; then EXECUTOR_ABSOLUTE_PATH=$$(realpath \"/config/$$EXECUTOR_RELATIVE_PATH\"); else EXECUTOR_ABSOLUTE_PATH=; fi && \\
+    IVM_DIR_RELATIVE_PATH=$$(jq -r '.ivm_dir // empty' /config/genesis.json) && \\
+    if [ -n \"$$IVM_DIR_RELATIVE_PATH\" ]; then IVM_DIR_ABSOLUTE_PATH=$$(realpath \"/config/$$IVM_DIR_RELATIVE_PATH\"); else IVM_DIR_ABSOLUTE_PATH=; fi && \\
     jq \\
         --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
         --arg ivm_dir \"$$IVM_DIR_ABSOLUTE_PATH\" \\
-        'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end' /config/genesis.json \\
+        'if ($$executor|length)>0 then .executor = $$executor else del(.executor) end | if ($$ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end' /config/genesis.json \\
         >/tmp/genesis.json && \\
     kagami genesis sign /tmp/genesis.json \\
-        --public-key $$GENESIS_PUBLIC_KEY \\
-        --private-key $$GENESIS_PRIVATE_KEY \\
-        ${GENESIS_CONSENSUS_MODE:+--consensus-mode $$GENESIS_CONSENSUS_MODE} \\
-        ${GENESIS_NEXT_CONSENSUS_MODE:+--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE} \\
-        ${GENESIS_MODE_ACTIVATION_HEIGHT:+--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT} \\
+        --private-key-file \"$$GENESIS_PRIVATE_KEY_FILE\" \\
+        --expected-public-key \"$$GENESIS_PUBLIC_KEY\" \\
+        $${GENESIS_CONSENSUS_MODE:+--consensus-mode $$GENESIS_CONSENSUS_MODE} \\
+        $${GENESIS_NEXT_CONSENSUS_MODE:+--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE} \\
+        $${GENESIS_MODE_ACTIVATION_HEIGHT:+--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT} \\
         --topology \"$$TOPOLOGY\" \\
-        ${GENESIS_PEER_POPS:+$$GENESIS_PEER_POPS} \\
+        $${GENESIS_PEER_POPS:+$$GENESIS_PEER_POPS} \\
         --out-file $$GENESIS \\
     && \\
+    rm -f \"$$GENESIS_PRIVATE_KEY_FILE\" && \\
+    trap - 0 HUP INT TERM && \\
     exec irohad
 ""#;
 
@@ -880,6 +901,7 @@ where
             "command".into(),
             norito::json::Value::String(SIGN_AND_SUBMIT_GENESIS.into()),
         );
+        map.insert("secrets".into(), secret_names(true));
         map
     }
 }
@@ -913,7 +935,6 @@ impl<'a> BuildOrPull<'a> {
         volumes: Volumes<'a>,
         healthcheck: bool,
         chain: &'a iroha_data_model::ChainId,
-        (genesis_public_key, genesis_private_key): &'a peer::ExposedKeyPair,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         consensus_mode: Option<&'a str>,
@@ -928,7 +949,6 @@ impl<'a> BuildOrPull<'a> {
                 volumes,
                 healthcheck,
                 chain,
-                (genesis_public_key, genesis_private_key),
                 network,
                 topology,
                 trusted_peers_pop.clone(),
@@ -942,7 +962,6 @@ impl<'a> BuildOrPull<'a> {
                 volumes,
                 healthcheck,
                 chain,
-                genesis_public_key,
                 network,
                 topology,
                 &trusted_peers_pop,
@@ -956,7 +975,6 @@ impl<'a> BuildOrPull<'a> {
         volumes: Volumes<'a>,
         healthcheck: bool,
         chain: &'a iroha_data_model::ChainId,
-        (genesis_public_key, genesis_private_key): &'a peer::ExposedKeyPair,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         consensus_mode: Option<&'a str>,
@@ -971,7 +989,6 @@ impl<'a> BuildOrPull<'a> {
                 volumes,
                 healthcheck,
                 chain,
-                (genesis_public_key, genesis_private_key),
                 network,
                 topology,
                 trusted_peers_pop.clone(),
@@ -985,7 +1002,6 @@ impl<'a> BuildOrPull<'a> {
                 volumes,
                 healthcheck,
                 chain,
-                genesis_public_key,
                 network,
                 topology,
                 &trusted_peers_pop,
@@ -999,7 +1015,6 @@ impl<'a> BuildOrPull<'a> {
         volumes: Volumes<'a>,
         healthcheck: bool,
         chain: &'a iroha_data_model::ChainId,
-        (genesis_public_key, genesis_private_key): peer::ExposedKeyRefPair<'a>,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         trusted_peers_pop: std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
@@ -1015,7 +1030,6 @@ impl<'a> BuildOrPull<'a> {
                 key_pair,
                 *ports,
                 chain,
-                (genesis_public_key, genesis_private_key),
                 topology,
                 trusted_peers_pop,
                 consensus_mode,
@@ -1035,7 +1049,6 @@ impl<'a> BuildOrPull<'a> {
         volumes: Volumes<'a>,
         healthcheck: bool,
         chain: &'a iroha_data_model::ChainId,
-        genesis_public_key: &'a iroha_crypto::PublicKey,
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         trusted_peers_pop: &std::collections::BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
@@ -1052,7 +1065,6 @@ impl<'a> BuildOrPull<'a> {
                             key_pair,
                             *ports,
                             chain,
-                            genesis_public_key,
                             topology,
                             (*trusted_peers_pop).clone(),
                         ),
@@ -1115,7 +1127,6 @@ impl<'a> DockerCompose<'a> {
             healthcheck,
             config_dir,
             chain,
-            genesis_key_pair,
             network,
             topology,
             consensus_mode,
@@ -1146,7 +1157,6 @@ impl<'a> DockerCompose<'a> {
                         volumes,
                         *healthcheck,
                         chain,
-                        genesis_key_pair,
                         network,
                         topology,
                         consensus_mode.as_deref(),
@@ -1161,7 +1171,6 @@ impl<'a> DockerCompose<'a> {
                         volumes,
                         *healthcheck,
                         chain,
-                        genesis_key_pair,
                         network,
                         topology,
                         consensus_mode.as_deref(),
@@ -1176,6 +1185,7 @@ impl<'a> DockerCompose<'a> {
 
     fn into_value(self) -> norito::json::Value {
         let mut root = norito::json::Map::new();
+        root.insert("secrets".into(), compose_secrets());
         root.insert(
             "services".into(),
             norito::json::Value::Object(self.services.into_services_map()),
@@ -1239,20 +1249,22 @@ mod tests {
             .expect("random BLS key generation should succeed");
         let mut trusted_pops = BTreeMap::new();
         trusted_pops.insert(key_pair.0.clone(), pop);
-        let genesis_key_pair = peer::generate_key_pair(None, &[])
-            .expect("random genesis key generation should succeed");
+        let genesis_public_key = peer::generate_key_pair(None, &[])
+            .expect("random genesis key generation should succeed")
+            .0;
         let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
         let topology = [peer::peer("dummy", BASE_PORT_API, key_pair.0.clone())].into();
-        let env = PeerEnv::new(
-            &key_pair,
-            ports,
-            &chain,
-            &genesis_key_pair.0,
-            &topology,
-            trusted_pops,
+        let env = PeerEnv::new(&key_pair, ports, &chain, &topology, trusted_pops);
+        let mut value = peer_env_to_value(&env);
+        let Value::Object(ref mut map) = value else {
+            unreachable!("peer environment is an object");
+        };
+        map.insert(
+            "GENESIS_PUBLIC_KEY".into(),
+            Value::String(genesis_public_key.to_string()),
         );
-        let mock_env = iroha_config::base::env::MockEnv::from(env);
+        let mock_env = mock_env_from_value(value);
         let _ = iroha_config::base::read::ConfigReader::new()
             .with_env(mock_env.clone())
             .read_and_complete::<iroha_config::parameters::user::Root>()
@@ -1261,13 +1273,14 @@ mod tests {
     }
 
     #[test]
-    fn genesis_env_produces_exhaustive_config_sans_genesis_private_key_and_topology() {
+    fn genesis_env_produces_exhaustive_config_sans_topology() {
         let (key_pair, pop) = peer::generate_bls_key_pair(None, &[])
             .expect("random BLS key generation should succeed");
         let mut trusted_pops = BTreeMap::new();
         trusted_pops.insert(key_pair.0.clone(), pop);
-        let (genesis_public_key, genesis_private_key) = &peer::generate_key_pair(None, &[])
-            .expect("random genesis key generation should succeed");
+        let genesis_public_key = peer::generate_key_pair(None, &[])
+            .expect("random genesis key generation should succeed")
+            .0;
         let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
         let topology = [peer::peer("dummy", BASE_PORT_API, key_pair.0.clone())].into();
@@ -1275,7 +1288,6 @@ mod tests {
             &key_pair,
             ports,
             &chain,
-            (genesis_public_key, genesis_private_key),
             &topology,
             trusted_pops,
             None,
@@ -1283,17 +1295,22 @@ mod tests {
             None,
             Vec::new(),
         );
-        let mock_env = iroha_config::base::env::MockEnv::from(env);
+        let mut value = genesis_env_to_value(&env);
+        let Value::Object(ref mut map) = value else {
+            unreachable!("genesis environment is an object");
+        };
+        map.insert(
+            "GENESIS_PUBLIC_KEY".into(),
+            Value::String(genesis_public_key.to_string()),
+        );
+        let mock_env = mock_env_from_value(value);
         let _ = iroha_config::base::read::ConfigReader::new()
             .with_env(mock_env.clone())
             .read_and_complete::<iroha_config::parameters::user::Root>()
             .expect("config in env should be exhaustive");
         assert_eq!(
             mock_env.unvisited(),
-            ["GENESIS_PRIVATE_KEY", "TOPOLOGY"]
-                .into_iter()
-                .map(ToOwned::to_owned)
-                .collect()
+            ["TOPOLOGY"].into_iter().map(ToOwned::to_owned).collect()
         );
     }
 
@@ -1303,8 +1320,9 @@ mod tests {
             .expect("random BLS key generation should succeed");
         let mut trusted_pops = BTreeMap::new();
         trusted_pops.insert(key_pair.0.clone(), pop);
-        let (genesis_public_key, genesis_private_key) = &peer::generate_key_pair(None, &[])
-            .expect("random genesis key generation should succeed");
+        let genesis_public_key = peer::generate_key_pair(None, &[])
+            .expect("random genesis key generation should succeed")
+            .0;
         let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
         let topology = [peer::peer("dummy", BASE_PORT_API, key_pair.0.clone())].into();
@@ -1312,7 +1330,6 @@ mod tests {
             &key_pair,
             ports,
             &chain,
-            (genesis_public_key, genesis_private_key),
             &topology,
             trusted_pops,
             Some("npos"),
@@ -1320,7 +1337,15 @@ mod tests {
             Some(7),
             Vec::new(),
         );
-        let mock_env = iroha_config::base::env::MockEnv::from(env);
+        let mut value = genesis_env_to_value(&env);
+        let Value::Object(ref mut map) = value else {
+            unreachable!("genesis environment is an object");
+        };
+        map.insert(
+            "GENESIS_PUBLIC_KEY".into(),
+            Value::String(genesis_public_key.to_string()),
+        );
+        let mock_env = mock_env_from_value(value);
         let _ = iroha_config::base::read::ConfigReader::new()
             .with_env(mock_env.clone())
             .read_and_complete::<iroha_config::parameters::user::Root>()
@@ -1333,7 +1358,6 @@ mod tests {
                 "GENESIS_CONSENSUS_MODE",
                 "GENESIS_MODE_ACTIVATION_HEIGHT",
                 "GENESIS_NEXT_CONSENSUS_MODE",
-                "GENESIS_PRIVATE_KEY",
                 "TOPOLOGY"
             ]
             .into_iter()

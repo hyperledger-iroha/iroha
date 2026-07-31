@@ -15,6 +15,7 @@ import org.hyperledger.iroha.sdk.telemetry.*
 
 /** Configuration options for [IrohaClient] implementations. */
 class ClientConfig private constructor(builder: Builder) {
+    private val localSigningContext: LocalSigningContext? = builder.localSigningContext
     private val baseUri: URI = builder.baseUri
     private val sorafsGatewayUri: URI = builder.sorafsGatewayUri ?: builder.baseUri
     private val requestTimeout: Duration = builder.requestTimeout
@@ -47,6 +48,15 @@ class ClientConfig private constructor(builder: Builder) {
         crashTelemetryHandler = maybeInstallCrashTelemetryHandler(builder, instrumentedSink)
     }
 
+    /** Local context used to validate server-prepared drafts before signing, when configured. */
+    fun localSigningContext(): Optional<LocalSigningContext> =
+        Optional.ofNullable(localSigningContext)
+
+    internal fun requireLocalSigningContext(): LocalSigningContext =
+        checkNotNull(localSigningContext) {
+            "localSigningContext must be configured before requesting a signing draft"
+        }
+
     fun baseUri(): URI = baseUri
     /** Base URI used for SoraFS gateway requests. Defaults to [baseUri] when unset. */
     fun sorafsGatewayUri(): URI = sorafsGatewayUri
@@ -75,7 +85,7 @@ class ClientConfig private constructor(builder: Builder) {
 
     fun toBuilder(): Builder {
         val nonTelemetryObservers = observers.filter { it !is TelemetryObserver }
-        return Builder()
+        val builder = Builder()
             .setBaseUri(baseUri).setSorafsGatewayUri(sorafsGatewayUri).setRequestTimeout(requestTimeout)
             .setDefaultHeaders(defaultHeaders).setWireFormatPreference(wireFormatPreference)
             .setObservers(nonTelemetryObservers).setRetryPolicy(retryPolicy)
@@ -84,6 +94,8 @@ class ClientConfig private constructor(builder: Builder) {
             .setTelemetryExporterName(telemetryExporterName).setNetworkContextProvider(networkContextProvider)
             .setDeviceProfileProvider(deviceProfileProvider).setCrashTelemetryMetadataProvider(crashMetadataProvider)
             .setCrashTelemetryEnabled(crashTelemetryEnabled)
+        localSigningContext?.let(builder::setLocalSigningContext)
+        return builder
     }
 
     fun toNoritoRpcClient(executor: HttpTransportExecutor?): NoritoRpcClient {
@@ -115,6 +127,7 @@ class ClientConfig private constructor(builder: Builder) {
     }
 
     class Builder {
+        internal var localSigningContext: LocalSigningContext? = null
         internal var baseUri: URI = URI.create("http://localhost:8080")
         internal var sorafsGatewayUri: URI? = null
         internal var requestTimeout: Duration = Duration.ofSeconds(10)
@@ -133,6 +146,11 @@ class ClientConfig private constructor(builder: Builder) {
         internal var crashTelemetryEnabled: Boolean = false
         internal var crashMetadataProvider: MetadataProvider = CrashTelemetryHandler.defaultMetadataProvider()
 
+        /** Enables local draft signing with one immutable, caller-owned chain context. */
+        fun setLocalSigningContext(context: LocalSigningContext): Builder {
+            this.localSigningContext = context
+            return this
+        }
         fun setBaseUri(baseUri: URI): Builder { this.baseUri = baseUri; return this }
         fun setSorafsGatewayUri(sorafsGatewayUri: URI): Builder { this.sorafsGatewayUri = sorafsGatewayUri; return this }
         fun setRequestTimeout(requestTimeout: Duration?): Builder { if (requestTimeout != null && !requestTimeout.isNegative) this.requestTimeout = requestTimeout; return this }

@@ -4,7 +4,7 @@
 /// enforce canonical SEC1 form, curve membership, and non-identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[repr(transparent)]
-#[norito(transparent, decode_from_slice)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1529,7 +1529,6 @@ pub enum PrivacyPgcAccountPointV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct PrivacyPgcBootstrapProofBytesV1 {
     /// Exact native proof encoding.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
@@ -4177,4 +4176,3 @@ pub enum PrivacyCapabilitySnapshotValidationErrorV1 {
         source: PrivacyCapabilityRowValidationErrorV1,
     },
 }
-

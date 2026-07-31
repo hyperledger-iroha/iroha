@@ -460,7 +460,14 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         )
         XCTAssertEqual(
             firstLeg.participantSettlementHash,
-            "hash:48238EDD90CB56277753360B4815696675EFB7D883F2A7B5954C3578C329B8FD#C72C"
+            "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72"
+        )
+        let remoteLeg = try XCTUnwrap(
+            group.nativeAmxReceipts.first?.legs.dropFirst().first
+        )
+        XCTAssertEqual(
+            remoteLeg.participantSettlementHash,
+            "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452"
         )
         let firstValidator = try XCTUnwrap(
             firstLeg.participantProposal.descriptor.validatorSet.first

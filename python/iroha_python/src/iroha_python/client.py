@@ -6,6 +6,7 @@ import base64
 import binascii
 import copy
 import hashlib
+import hmac
 import json
 import logging
 import math
@@ -26,12 +27,14 @@ from typing import (
     Iterable,
     Iterator,
     List,
+    Literal,
     Mapping,
     MutableMapping,
     NewType,
     Optional,
     Sequence,
     Tuple,
+    TypedDict,
     Union,
 )
 from urllib.parse import quote, urlencode, urlparse, urlunparse
@@ -63,8 +66,6 @@ from iroha_torii_client.client import (
     OfflineLanePrivacyMerkleVariantJson,
     OfflineLanePrivacyMerkleWitnessJson,
     OfflineLanePrivacyProofJson,
-    OfflineLanePrivacySnarkVariantJson,
-    OfflineLanePrivacySnarkWitnessJson,
     OfflineLanePrivacyWitnessJson,
     OfflineMerkleProofJson,
     OfflineOperationKind,
@@ -184,7 +185,10 @@ from iroha_torii_client.native_amx import (
     validate_bls_normal_validator_set,
 )
 
-from ._privacy_backends import _require_production_verify_backend_label
+from ._privacy_backends import (
+    _require_production_verify_backend_label,
+    _verifier_backend_registry_tag_v1,
+)
 from .address import AccountAddress, AccountAddressError, normalize_i105_discriminant
 from .connect import ConnectSessionInfo
 from .dataspaces import (
@@ -362,9 +366,78 @@ def _normalize_optional_exact_string(value: Any, context: str) -> Optional[str]:
     return value
 
 
+class ZkVerifyingKeyTransactionDraft(TypedDict):
+    """Unsigned verifying-key registry transaction prepared by Torii."""
+
+    submitted: Literal[False]
+    transaction_payload_b64: str
+    signing_message_b64: str
+
+
+class AppApiTransactionDraft(TypedDict):
+    """Canonical unsigned transaction prepared by an app-facing Torii route."""
+
+    submitted: Literal[False]
+    transaction_payload_b64: str
+    signing_message_b64: str
+
+
+@dataclass(frozen=True)
+class LocalSigningContext:
+    """Immutable client-owned context for validating local-signing drafts."""
+
+    chain_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "chain_id",
+            _normalize_local_signing_context_chain(
+                self.chain_id,
+                "LocalSigningContext.chain_id",
+            ),
+        )
+
+
+_ZK_VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES = 16 * 1024 * 1024
+_ZK_VERIFYING_KEY_PRIVATE_KEY_FIELDS = frozenset(
+    {
+        "private_key",
+        "privateKey",
+        "private_key_hex",
+        "privateKeyHex",
+        "private_key_bytes",
+        "privateKeyBytes",
+        "private_key_seed",
+        "privateKeySeed",
+        "private_key_multihash",
+        "privateKeyMultihash",
+        "private_key_algorithm",
+        "privateKeyAlgorithm",
+    }
+)
+
+
+def _reject_zk_verifying_key_private_key_fields(
+    payload: Mapping[str, Any],
+    context: str,
+) -> None:
+    fields = sorted(
+        key
+        for key in payload
+        if isinstance(key, str) and key in _ZK_VERIFYING_KEY_PRIVATE_KEY_FIELDS
+    )
+    if fields:
+        raise ValueError(
+            f"{context} does not accept private-key fields ({', '.join(fields)}); "
+            "sign the returned transaction draft locally"
+        )
+
+
 def _normalize_zk_verifying_key_registration_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise TypeError("ZK verifying-key registration payload must be a mapping")
+    _reject_zk_verifying_key_private_key_fields(payload, "register_zk_verifying_key")
     body = dict(_json_safe_value(dict(payload)))
     _normalize_zk_verifying_key_submission_payload(
         body,
@@ -377,6 +450,7 @@ def _normalize_zk_verifying_key_registration_payload(payload: Mapping[str, Any])
 def _normalize_zk_verifying_key_update_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise TypeError("ZK verifying-key update payload must be a mapping")
+    _reject_zk_verifying_key_private_key_fields(payload, "update_zk_verifying_key")
     body = dict(_json_safe_value(dict(payload)))
     _normalize_zk_verifying_key_submission_payload(
         body,
@@ -402,10 +476,6 @@ def _normalize_zk_verifying_key_submission_payload(
     body["authority"] = _require_non_empty_string(
         body.get("authority"),
         f"{context}.authority",
-    )
-    body["private_key"] = _require_non_empty_string(
-        body.get("private_key"),
-        f"{context}.private_key",
     )
     version = _coerce_int(body.get("version"), f"{context}.version")
     if version is None:
@@ -464,6 +534,205 @@ def _normalize_zk_verifying_key_submission_payload(
             body["status"] = status
     _validate_zk_verifying_key_height_range(body, context)
     _validate_zk_verifying_key_material_and_commitment(body, context)
+
+
+def _normalize_zk_verifying_key_transaction_draft(
+    payload: Any,
+    context: str,
+    *,
+    expected_chain_id: str,
+    operation: str,
+    request: Mapping[str, Any],
+) -> ZkVerifyingKeyTransactionDraft:
+    record = _require_mapping(payload, context)
+    allowed_fields = {
+        "submitted",
+        "transaction_payload_b64",
+        "signing_message_b64",
+    }
+    unsupported_fields = sorted(
+        str(key) for key in record if key not in allowed_fields
+    )
+    if unsupported_fields:
+        raise ValueError(
+            f"{context} contains unsupported fields: {', '.join(unsupported_fields)}"
+    )
+    if record.get("submitted") is not False:
+        raise ValueError(f"{context}.submitted must be false")
+    transaction_payload_b64, transaction_payload = (
+        _decode_zk_verifying_key_draft_base64(
+            record.get("transaction_payload_b64"),
+            f"{context}.transaction_payload_b64",
+            max_bytes=_ZK_VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES,
+            limit_label="transaction payload",
+        )
+    )
+    signing_message_b64, signing_message = _decode_zk_verifying_key_draft_base64(
+        record.get("signing_message_b64"),
+        f"{context}.signing_message_b64",
+        exact_bytes=32,
+    )
+    expected_signing_message = bytearray(
+        hashlib.blake2b(transaction_payload, digest_size=32).digest()
+    )
+    expected_signing_message[-1] |= 1
+    if not hmac.compare_digest(signing_message, bytes(expected_signing_message)):
+        raise ValueError(
+            f"{context}.signing_message_b64 must equal the canonical Iroha "
+            "HashOf(transaction_payload_b64)"
+        )
+    decoded_instruction = _require_crypto().decode_zk_vk_transaction_payload(
+        transaction_payload,
+        expected_chain_id,
+        request["authority"],
+        operation,
+    )
+    expected_instruction = _expected_zk_verifying_key_instruction(request)
+    if decoded_instruction != expected_instruction:
+        raise ValueError(
+            f"{context}.transaction_payload_b64 does not contain the exact requested "
+            "verifying-key registry record"
+        )
+    return {
+        "submitted": False,
+        "transaction_payload_b64": transaction_payload_b64,
+        "signing_message_b64": signing_message_b64,
+    }
+
+
+def _normalize_app_api_transaction_draft(
+    payload: Any,
+    context: str,
+) -> AppApiTransactionDraft:
+    record = _require_mapping(payload, context)
+    allowed_fields = {
+        "submitted",
+        "transaction_payload_b64",
+        "signing_message_b64",
+    }
+    unsupported_fields = sorted(str(key) for key in record if key not in allowed_fields)
+    if unsupported_fields:
+        raise ValueError(
+            f"{context} contains unsupported fields: {', '.join(unsupported_fields)}"
+        )
+    if record.get("submitted") is not False:
+        raise ValueError(f"{context}.submitted must be false")
+    transaction_payload_b64, transaction_payload = (
+        _decode_zk_verifying_key_draft_base64(
+            record.get("transaction_payload_b64"),
+            f"{context}.transaction_payload_b64",
+            max_bytes=_ZK_VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES,
+            limit_label="transaction payload",
+        )
+    )
+    signing_message_b64, signing_message = _decode_zk_verifying_key_draft_base64(
+        record.get("signing_message_b64"),
+        f"{context}.signing_message_b64",
+        exact_bytes=32,
+    )
+    expected_message = bytearray(
+        hashlib.blake2b(transaction_payload, digest_size=32).digest()
+    )
+    expected_message[-1] |= 1
+    if not hmac.compare_digest(signing_message, bytes(expected_message)):
+        raise ValueError(
+            f"{context}.signing_message_b64 must equal the canonical Iroha "
+            "HashOf(transaction_payload_b64)"
+        )
+    return {
+        "submitted": False,
+        "transaction_payload_b64": transaction_payload_b64,
+        "signing_message_b64": signing_message_b64,
+    }
+
+
+def _expected_zk_verifying_key_instruction(
+    request: Mapping[str, Any],
+) -> Dict[str, Any]:
+    vk_bytes = (
+        None
+        if request.get("vk_bytes") is None
+        else base64.b64decode(request["vk_bytes"], validate=True)
+    )
+    commitment_hex = (
+        request["commitment_hex"]
+        if vk_bytes is None
+        else _zk_verifying_key_commitment_hex(request["backend"], vk_bytes)
+    )
+    backend_tag = _verifier_backend_registry_tag_v1(request["backend"])
+    if backend_tag is None:
+        raise ValueError("verifying-key request uses an unsupported backend")
+    return {
+        "id": {
+            "backend": request["backend"],
+            "name": request["name"],
+        },
+        "record": {
+            "version": request["version"],
+            "circuit_id": request["circuit_id"],
+            "owner_manifest_id": None,
+            "namespace": "core",
+            "backend": backend_tag,
+            "curve": request.get("curve", "unknown"),
+            "public_inputs_schema_hash": bytes.fromhex(
+                request["public_inputs_schema_hash_hex"]
+            ),
+            "commitment": bytes.fromhex(commitment_hex),
+            "vk_len": len(vk_bytes) if vk_bytes is not None else request["vk_len"],
+            "max_proof_bytes": request.get("max_proof_bytes", 0),
+            "gas_schedule_id": request.get("gas_schedule_id"),
+            "metadata_uri_cid": request.get("metadata_uri_cid"),
+            "vk_bytes_cid": request.get("vk_bytes_cid"),
+            "activation_height": request.get("activation_height"),
+            "withdraw_height": request.get("withdraw_height"),
+            "key": (
+                None
+                if vk_bytes is None
+                else {
+                    "backend": request["backend"],
+                    "bytes": vk_bytes,
+                }
+            ),
+            "status": request.get("status", "Active"),
+        },
+    }
+
+
+def _decode_zk_verifying_key_draft_base64(
+    value: Any,
+    context: str,
+    *,
+    max_bytes: Optional[int] = None,
+    exact_bytes: Optional[int] = None,
+    limit_label: str = "payload",
+) -> Tuple[str, bytes]:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be canonical padded base64")
+    if max_bytes is not None:
+        max_encoded_bytes = 4 * ((max_bytes + 2) // 3)
+        if len(value) > max_encoded_bytes:
+            raise ValueError(
+                f"{context} exceeds the {max_bytes}-byte {limit_label} limit"
+            )
+    if exact_bytes is not None:
+        exact_encoded_bytes = 4 * ((exact_bytes + 2) // 3)
+        if len(value) != exact_encoded_bytes:
+            raise ValueError(f"{context} must decode to exactly {exact_bytes} bytes")
+    if not value or value.strip() != value:
+        raise ValueError(f"{context} must be canonical padded base64")
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"{context} must be canonical padded base64") from exc
+    if not decoded or base64.b64encode(decoded).decode("ascii") != value:
+        raise ValueError(f"{context} must be canonical padded base64")
+    if max_bytes is not None and len(decoded) > max_bytes:
+        raise ValueError(
+            f"{context} exceeds the {max_bytes}-byte {limit_label} limit"
+        )
+    if exact_bytes is not None and len(decoded) != exact_bytes:
+        raise ValueError(f"{context} must decode to exactly {exact_bytes} bytes")
+    return value, decoded
 
 
 def _validate_zk_verifying_key_height_range(
@@ -568,6 +837,18 @@ def _zk_verifying_key_commitment_hex(backend: str, vk_bytes: bytes) -> str:
     return hashlib.sha256(preimage).hexdigest()
 
 
+def _normalize_local_signing_context_chain(value: Any, context: str) -> str:
+    chain_id = _require_exact_non_empty_string(value, context)
+    if (
+        len(chain_id.encode("utf-8")) > 128
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", chain_id) is None
+        or not chain_id[-1].isalnum()
+        or not chain_id[-1].isascii()
+    ):
+        raise ValueError(f"{context} must be a canonical Iroha ChainId")
+    return chain_id
+
+
 def _normalize_optional_zk_verifying_key_status(value: Any, context: str) -> Optional[str]:
     normalized = _normalize_optional_string(value, context)
     if normalized is None:
@@ -599,10 +880,9 @@ def _normalize_optional_u32_field(
 def _normalize_32_byte_hex(value: Any, context: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{context} must be a 32-byte hex string")
-    trimmed = value.strip().lower()
-    if trimmed.startswith("0x"):
-        trimmed = trimmed[2:].strip()
-    return _normalize_hex_string(trimmed, context, expected_length=64)
+    literal = _require_exact_non_empty_string(value, context)
+    normalized = literal[2:] if literal[:2].lower() == "0x" else literal
+    return _normalize_hex_string(normalized.lower(), context, expected_length=64)
 
 
 def _normalize_optional_int_field(value: Any, context: str) -> Optional[int]:
@@ -794,6 +1074,30 @@ def _normalize_canonical_account_id(
         raise ValueError(
             f"{context} must use canonical I105 account id form when not using an alias"
         )
+    return canonical
+
+
+def _normalize_exact_i105_account_id(
+    value: Any,
+    context: str,
+    *,
+    expected_discriminant: int = DEFAULT_I105_DISCRIMINANT,
+) -> str:
+    literal = _require_exact_non_empty_string(value, context)
+    if "@" in literal:
+        raise ValueError(f"{context} must be an exact canonical I105 account id")
+    try:
+        address = AccountAddress.parse_encoded(
+            literal,
+            expected_discriminant=expected_discriminant,
+        )
+    except AccountAddressError as exc:
+        raise ValueError(
+            f"{context} must be an exact canonical I105 account id"
+        ) from exc
+    canonical = address.to_i105(expected_discriminant)
+    if canonical != literal:
+        raise ValueError(f"{context} must be an exact canonical I105 account id")
     return canonical
 
 
@@ -1139,9 +1443,12 @@ def _normalize_authority_credentials(
 def _normalize_publish_space_directory_manifest_request(
     request: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    credentials = _normalize_authority_credentials(
-        request,
-        context="publish_space_directory_manifest",
+    _reject_zk_verifying_key_private_key_fields(
+        request, "publish_space_directory_manifest"
+    )
+    authority = _require_non_empty_string(
+        request.get("authority"),
+        "publish_space_directory_manifest.authority",
     )
     manifest_payload = request.get("manifest")
     if manifest_payload is None:
@@ -1150,7 +1457,7 @@ def _normalize_publish_space_directory_manifest_request(
         manifest_payload,
         context="publish_space_directory_manifest.manifest",
     )
-    payload: Dict[str, Any] = {**credentials, "manifest": manifest}
+    payload: Dict[str, Any] = {"authority": authority, "manifest": manifest}
     reason = request.get("reason")
     if reason is not None:
         if not isinstance(reason, str):
@@ -1162,9 +1469,12 @@ def _normalize_publish_space_directory_manifest_request(
 def _normalize_revoke_space_directory_manifest_request(
     request: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    credentials = _normalize_authority_credentials(
-        request,
-        context="revoke_space_directory_manifest",
+    _reject_zk_verifying_key_private_key_fields(
+        request, "revoke_space_directory_manifest"
+    )
+    authority = _require_non_empty_string(
+        request.get("authority"),
+        "revoke_space_directory_manifest.authority",
     )
     _reject_alias_keys(
         request,
@@ -1199,7 +1509,7 @@ def _normalize_revoke_space_directory_manifest_request(
         allow_zero=True,
     )
     payload: Dict[str, Any] = {
-        **credentials,
+        "authority": authority,
         "uaid": uaid,
         "dataspace": dataspace,
         "revoked_epoch": revoked_epoch,
@@ -11016,19 +11326,10 @@ class ToriiLaneMerkleCommitmentSnapshot:
 
 
 @dataclass(frozen=True)
-class ToriiLaneSnarkCommitmentSnapshot:
-    circuit_id: int
-    verifying_key_digest: str
-    statement_hash: str
-    proof_hash: str
-
-
-@dataclass(frozen=True)
 class ToriiLanePrivacyCommitmentSnapshot:
     id: int
-    scheme: str
-    merkle: Optional[ToriiLaneMerkleCommitmentSnapshot]
-    snark: Optional[ToriiLaneSnarkCommitmentSnapshot]
+    scheme: Literal["merkle"]
+    merkle: ToriiLaneMerkleCommitmentSnapshot
 
 
 @dataclass(frozen=True)
@@ -11132,54 +11433,27 @@ class ToriiStatusPayload:
                 entry_context = f"{context}[{idx}]"
                 commitment_id = _coerce_nested_int(item, "id", entry_context)
                 scheme = _coerce_string(item.get("scheme"), f"{entry_context}.scheme")
+                if scheme != "merkle":
+                    raise ValueError(f"{entry_context}.scheme must be 'merkle'")
                 merkle_payload = item.get("merkle")
-                snark_payload = item.get("snark")
-                merkle: Optional[ToriiLaneMerkleCommitmentSnapshot] = None
-                snark: Optional[ToriiLaneSnarkCommitmentSnapshot] = None
-                if scheme == "merkle":
-                    if not isinstance(merkle_payload, Mapping):
-                        raise TypeError(f"{entry_context}.merkle must be an object")
-                    merkle = ToriiLaneMerkleCommitmentSnapshot(
-                        root=_coerce_string(
-                            merkle_payload.get("root"),
-                            f"{entry_context}.merkle.root",
-                        ),
-                        max_depth=_coerce_nested_int(
-                            merkle_payload,
-                            "max_depth",
-                            f"{entry_context}.merkle",
-                        ),
-                    )
-                elif scheme == "snark":
-                    if not isinstance(snark_payload, Mapping):
-                        raise TypeError(f"{entry_context}.snark must be an object")
-                    snark = ToriiLaneSnarkCommitmentSnapshot(
-                        circuit_id=_coerce_nested_int(
-                            snark_payload,
-                            "circuit_id",
-                            f"{entry_context}.snark",
-                        ),
-                        verifying_key_digest=_coerce_string(
-                            snark_payload.get("verifying_key_digest"),
-                            f"{entry_context}.snark.verifying_key_digest",
-                        ),
-                        statement_hash=_coerce_string(
-                            snark_payload.get("statement_hash"),
-                            f"{entry_context}.snark.statement_hash",
-                        ),
-                        proof_hash=_coerce_string(
-                            snark_payload.get("proof_hash"),
-                            f"{entry_context}.snark.proof_hash",
-                        ),
-                    )
-                else:
-                    raise ValueError(f"{entry_context}.scheme must be 'merkle' or 'snark'")
+                if not isinstance(merkle_payload, Mapping):
+                    raise TypeError(f"{entry_context}.merkle must be an object")
+                merkle = ToriiLaneMerkleCommitmentSnapshot(
+                    root=_coerce_string(
+                        merkle_payload.get("root"),
+                        f"{entry_context}.merkle.root",
+                    ),
+                    max_depth=_coerce_nested_int(
+                        merkle_payload,
+                        "max_depth",
+                        f"{entry_context}.merkle",
+                    ),
+                )
                 commitments.append(
                     ToriiLanePrivacyCommitmentSnapshot(
                         id=commitment_id,
                         scheme=scheme,
                         merkle=merkle,
-                        snark=snark,
                     )
                 )
             return commitments
@@ -12336,6 +12610,7 @@ class ToriiClient(_BaseToriiClient):
         base_url: str,
         session: Optional[requests.Session] = None,
         *,
+        local_signing_context: Optional[LocalSigningContext] = None,
         auth_token: Optional[str] = None,
         api_token: Optional[str] = None,
         default_headers: Optional[Mapping[str, str]] = None,
@@ -12353,6 +12628,12 @@ class ToriiClient(_BaseToriiClient):
         sorafs_alias_logger: Optional[logging.Logger] = None,
     ) -> None:
         super().__init__(base_url, session=session)
+        if (
+            local_signing_context is not None
+            and not isinstance(local_signing_context, LocalSigningContext)
+        ):
+            raise TypeError("local_signing_context must be a LocalSigningContext")
+        self.__local_signing_context = local_signing_context
         self._chain_discriminant = normalize_i105_discriminant(
             DEFAULT_I105_DISCRIMINANT if chain_discriminant is None else chain_discriminant,
             "chain_discriminant",
@@ -12406,6 +12687,20 @@ class ToriiClient(_BaseToriiClient):
         self._last_sorafs_alias_evaluation: Optional[SorafsAliasEvaluation] = None
         self._data_model_validation = "unknown"
         self._data_model_actual: Optional[int] = None
+
+    @property
+    def local_signing_context(self) -> Optional[LocalSigningContext]:
+        """Immutable context used by APIs that return local-signing drafts."""
+
+        return self.__local_signing_context
+
+    def _require_local_signing_context(self, context: str) -> LocalSigningContext:
+        signing_context = self.__local_signing_context
+        if signing_context is None:
+            raise ValueError(
+                f"{context} requires immutable ToriiClient local_signing_context"
+            )
+        return signing_context
 
     def _normalize_canonical_account_id(self, value: Any, context: str) -> str:
         return _normalize_canonical_account_id(
@@ -15493,17 +15788,15 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         authority: str,
-        private_key: str,
         uaid: str,
         dataspace: int,
         manifest: Mapping[str, Any],
         reason: Optional[str] = None,
-    ) -> Optional[Any]:
-        """Publish a Space Directory manifest using dataspace-oriented keywords."""
+    ) -> AppApiTransactionDraft:
+        """Prepare a Space Directory publication draft using dataspace keywords."""
 
         request: Dict[str, Any] = {
             "authority": authority,
-            "private_key": private_key,
             "manifest": {
                 "uaid": uaid,
                 "dataspace": dataspace,
@@ -15518,17 +15811,15 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         authority: str,
-        private_key: str,
         uaid: str,
         dataspace: int,
         revoked_epoch: int,
         reason: Optional[str] = None,
-    ) -> Optional[Any]:
-        """Revoke a Space Directory manifest using dataspace-oriented keywords."""
+    ) -> AppApiTransactionDraft:
+        """Prepare a Space Directory revocation draft using dataspace keywords."""
 
         request: Dict[str, Any] = {
             "authority": authority,
-            "private_key": private_key,
             "uaid": uaid,
             "dataspace": dataspace,
             "revoked_epoch": revoked_epoch,
@@ -16487,8 +16778,8 @@ class ToriiClient(_BaseToriiClient):
     def publish_space_directory_manifest(
         self,
         request: Mapping[str, Any],
-    ) -> Optional[Any]:
-        """Publish or rotate a Space Directory manifest (`POST /v1/space-directory/manifests`)."""
+    ) -> AppApiTransactionDraft:
+        """Prepare a manifest-publication transaction for local signing."""
 
         payload = _normalize_publish_space_directory_manifest_request(request)
         response = self._request(
@@ -16497,14 +16788,20 @@ class ToriiClient(_BaseToriiClient):
             json_body=payload,
             headers={"Accept": "application/json"},
         )
-        self._expect_status(response, {202})
-        return self._maybe_json(response)
+        self._expect_status(response, {200})
+        body = self._maybe_json(response)
+        if body is None:
+            raise RuntimeError("Space Directory manifest publish response was empty")
+        return _normalize_app_api_transaction_draft(
+            body,
+            "Space Directory manifest publish response",
+        )
 
     def revoke_space_directory_manifest(
         self,
         request: Mapping[str, Any],
-    ) -> Optional[Any]:
-        """Revoke a Space Directory manifest (`POST /v1/space-directory/manifests/revoke`)."""
+    ) -> AppApiTransactionDraft:
+        """Prepare a manifest-revocation transaction for local signing."""
 
         payload = _normalize_revoke_space_directory_manifest_request(request)
         response = self._request(
@@ -16513,8 +16810,14 @@ class ToriiClient(_BaseToriiClient):
             json_body=payload,
             headers={"Accept": "application/json"},
         )
-        self._expect_status(response, {202})
-        return self._maybe_json(response)
+        self._expect_status(response, {200})
+        body = self._maybe_json(response)
+        if body is None:
+            raise RuntimeError("Space Directory manifest revoke response was empty")
+        return _normalize_app_api_transaction_draft(
+            body,
+            "Space Directory manifest revoke response",
+        )
 
     def _handle_sorafs_alias_warning(self, warning: SorafsAliasWarning) -> None:
         """Internal hook for alias-proof warnings."""
@@ -18105,46 +18408,6 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
-    def register_asset_hidden_zk_pool_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        pool_id: str,
-        storage_asset: str,
-        asset_set_root: Union[str, bytes, bytearray, memoryview],
-        vk_transfer: Union[str, Mapping[str, Any]],
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Register asset-hidden shielded pool verifier state."""
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.register_asset_hidden_zk_pool(
-            pool_id,
-            storage_asset,
-            asset_set_root=asset_set_root,
-            vk_transfer=vk_transfer,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
     def shield_asset_and_wait(
         self,
         *,
@@ -18270,48 +18533,6 @@ class ToriiClient(_BaseToriiClient):
             inputs=inputs,
             proof=proof,
             outputs=outputs,
-            root_hint=root_hint,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
-    def asset_hidden_zk_transfer_prepared_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        pool_id: str,
-        inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        outputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        proof: Mapping[str, Any],
-        root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Submit a prepared asset-hidden ZK transfer."""
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.asset_hidden_zk_transfer_prepared(
-            pool_id,
-            inputs=inputs,
-            outputs=outputs,
-            proof=proof,
             root_hint=root_hint,
         )
         return self._submit_transaction_draft_result(
@@ -18874,41 +19095,93 @@ class ToriiClient(_BaseToriiClient):
         self,
         payload: Mapping[str, Any],
     ) -> requests.Response:
-        """Submit a ZK verifying-key registration request and return the raw response."""
+        """Send the low-level unsigned registration-draft request."""
 
+        request = _normalize_zk_verifying_key_registration_payload(payload)
+        self._require_local_signing_context(
+            "submit_zk_verifying_key_registration"
+        )
         return self._request(
             "POST",
             "/v1/zk/vk/register",
-            json_body=_normalize_zk_verifying_key_registration_payload(payload),
+            json_body=request,
             timeout=60.0,
         )
 
-    def register_zk_verifying_key(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """Submit a ZK verifying-key registration request and decode the response."""
+    def register_zk_verifying_key(
+        self,
+        payload: Mapping[str, Any],
+    ) -> ZkVerifyingKeyTransactionDraft:
+        """Prepare a ZK verifying-key registration transaction for local signing."""
 
-        response = self.submit_zk_verifying_key_registration(payload)
-        self._expect_status(response, {200, 201, 202, 409})
-        return self._maybe_json(response)
+        request = _normalize_zk_verifying_key_registration_payload(payload)
+        request["authority"] = _normalize_exact_i105_account_id(
+            request["authority"],
+            "register_zk_verifying_key.authority",
+            expected_discriminant=self._chain_discriminant,
+        )
+        signing_context = self._require_local_signing_context(
+            "register_zk_verifying_key"
+        )
+        response = self._request(
+            "POST",
+            "/v1/zk/vk/register",
+            json_body=request,
+            timeout=60.0,
+        )
+        self._expect_status(response, {200})
+        return _normalize_zk_verifying_key_transaction_draft(
+            self._maybe_json(response),
+            "register_zk_verifying_key response",
+            expected_chain_id=signing_context.chain_id,
+            operation="register",
+            request=request,
+        )
 
     def submit_zk_verifying_key_update(
         self,
         payload: Mapping[str, Any],
     ) -> requests.Response:
-        """Submit a ZK verifying-key update request and return the raw response."""
+        """Send the low-level unsigned update-draft request."""
 
+        request = _normalize_zk_verifying_key_update_payload(payload)
+        self._require_local_signing_context("submit_zk_verifying_key_update")
         return self._request(
             "POST",
             "/v1/zk/vk/update",
-            json_body=_normalize_zk_verifying_key_update_payload(payload),
+            json_body=request,
             timeout=60.0,
         )
 
-    def update_zk_verifying_key(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """Submit a ZK verifying-key update request and decode the response."""
+    def update_zk_verifying_key(
+        self,
+        payload: Mapping[str, Any],
+    ) -> ZkVerifyingKeyTransactionDraft:
+        """Prepare a ZK verifying-key update transaction for local signing."""
 
-        response = self.submit_zk_verifying_key_update(payload)
-        self._expect_status(response, {200, 201, 202, 409})
-        return self._maybe_json(response)
+        request = _normalize_zk_verifying_key_update_payload(payload)
+        request["authority"] = _normalize_exact_i105_account_id(
+            request["authority"],
+            "update_zk_verifying_key.authority",
+            expected_discriminant=self._chain_discriminant,
+        )
+        signing_context = self._require_local_signing_context(
+            "update_zk_verifying_key"
+        )
+        response = self._request(
+            "POST",
+            "/v1/zk/vk/update",
+            json_body=request,
+            timeout=60.0,
+        )
+        self._expect_status(response, {200})
+        return _normalize_zk_verifying_key_transaction_draft(
+            self._maybe_json(response),
+            "update_zk_verifying_key response",
+            expected_chain_id=signing_context.chain_id,
+            operation="update",
+            request=request,
+        )
 
     def account_has_permission(
         self,
@@ -21888,6 +22161,7 @@ def create_torii_client(
     base_url: str,
     *,
     session: Optional[requests.Session] = None,
+    local_signing_context: Optional[LocalSigningContext] = None,
     auth_token: Optional[str] = None,
     api_token: Optional[str] = None,
     default_headers: Optional[Mapping[str, str]] = None,
@@ -21951,6 +22225,7 @@ def create_torii_client(
     return ToriiClient(
         base_url,
         session=session,
+        local_signing_context=local_signing_context,
         auth_token=auth_value,
         api_token=api_value,
         default_headers=header_merge,

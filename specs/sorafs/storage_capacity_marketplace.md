@@ -56,7 +56,7 @@ rollout checks required before hosted production settlement.
   as provider-signing authorities.
 - `CapacityTelemetryV1` expresses epoch snapshots (declared vs utilised GiB, replication counters, uptime/PoR percentages) that feed fee distribution. Bounds checks keep utilisation within declarations and percentages within 0 – 100 %.【crates/sorafs_manifest/src/capacity.rs:476】
 - Shared helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, lane/assignment/SLA validators) provide deterministic key validation and error reporting that CI and downstream tooling can reuse.【crates/sorafs_manifest/src/capacity.rs:230】
-- Torii's capacity registry projection reads the committed world-state snapshot at `/v1/sorafs/capacity/state`, combining provider declarations, fee and credit ledgers, and disputes behind deterministic Norito JSON; there is no separate `PinProviderRegistry` authority.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/routing.rs:33849】
+- Torii's capacity registry projection reads the committed world-state snapshot at `/v1/sorafs/capacity/state`, combining provider declarations, fee and credit ledgers, and disputes behind deterministic Norito JSON; there is no separate `PinProviderRegistry` authority. The projection uses the configured heavy-query admission budget and a panic-contained blocking worker. The optional `limit` is applied to every world-state collection before payload decoding and JSON projection, while the response reports each collection's total and returned counts plus a `truncated` flag. This keeps both runtime-worker occupancy and projection memory bounded by the requested page instead of the full registry.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/routing.rs:33849】
 - Validation coverage exercises canonical handle enforcement, duplicate detection, per-lane bounds, replication assignment guards, and telemetry range checks so regressions surface immediately in CI.【crates/sorafs_manifest/src/capacity.rs:792】
 - Operator tooling: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run --locked -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`.
 
@@ -83,6 +83,11 @@ rollout checks required before hosted production settlement.
     corresponding `RegisterCapacityDeclaration` instruction.【crates/iroha_torii/src/routing.rs:4390】【crates/iroha_torii/src/lib.rs:3175】
   - `POST /v1/sorafs/capacity/telemetry` records per-epoch utilisation snapshots through
     `RecordCapacityTelemetry`, enforcing sanity bounds before dispatch.【crates/iroha_torii/src/routing.rs:4744】【crates/iroha_torii/src/lib.rs:3248】
+- Capacity mutation quotas are charged to the verified transaction authority,
+  not to caller-selected provider fields. The authority must already exist in
+  the current world state, and Torii keeps a hard-bounded, inactive-pruned
+  quota-subject table so arbitrary signing keys cannot become an unbounded
+  memory-allocation primitive.
 - Telemetry payloads now include PDP/PoTR counters so governance can correlate proof failures with
   billing and enforcement. Submitters must provide `pdp_challenges`/`pdp_failures` and
   `potr_windows`/`potr_breaches`; Torii validates that failures never exceed the total window and

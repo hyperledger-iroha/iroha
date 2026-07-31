@@ -39,7 +39,7 @@
       "governance": "zk-governance",
       "settlement": "xor",
       "storage": "CommitmentOnly",
-      "proof_scheme": { "type": "KzgBls12_381", "value": null },
+      "proof_scheme": { "type": "MerkleSha256", "value": null },
       "metadata": {}
     }
   ],

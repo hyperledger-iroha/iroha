@@ -111,6 +111,24 @@ public final class TransactionFixtureManifestTests {
   }
 
   @Test
+  public void manifestLoaderRequiresPositiveIntegerTtl() {
+    final Map<String, Object> fixture = new LinkedHashMap<>();
+    fixture.put("time_to_live_ms", 100_000L);
+    assertEquals(
+        100_000L,
+        requirePositiveInteger(
+            fixture, "time_to_live_ms", "fixture.time_to_live_ms"));
+
+    fixture.remove("time_to_live_ms");
+    assertRejectsTtl(fixture, "missing TTL");
+    for (Object invalid :
+        Arrays.asList(null, 0L, -1L, true, false, 1.0d, "100000")) {
+      fixture.put("time_to_live_ms", invalid);
+      assertRejectsTtl(fixture, "invalid TTL: " + invalid);
+    }
+  }
+
+  @Test
   public void rejectDuplicateFixtureNames() throws Exception {
     final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
     final Map<String, Object> manifest = loadManifest(manifestPath);
@@ -288,7 +306,8 @@ public final class TransactionFixtureManifestTests {
     final String chain = requireString(map.get("chain"), name + ".chain");
     final String authority = requireString(map.get("authority"), name + ".authority");
     final long creationTimeMs = requireNumber(map.get("creation_time_ms"), name + ".creation_time_ms");
-    final Long ttl = optionalNumber(map.get("time_to_live_ms"));
+    final Long ttl =
+        requirePositiveInteger(map, "time_to_live_ms", name + ".time_to_live_ms");
     final Long nonce = optionalNumber(map.get("nonce"));
     final String payloadHash = requireString(map.get("payload_hash"), name + ".payload_hash");
     final String signedHash = requireString(map.get("signed_hash"), name + ".signed_hash");
@@ -1821,6 +1840,35 @@ public final class TransactionFixtureManifestTests {
       throw new IllegalStateException("Expected number or null");
     }
     return ((Number) value).longValue();
+  }
+
+  private static long requirePositiveInteger(
+      final Map<?, ?> map, final String key, final String field) {
+    if (!map.containsKey(key)) {
+      throw new IllegalStateException(field + " is required");
+    }
+    final Object value = map.get(key);
+    if (!(value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long)) {
+      throw new IllegalStateException(field + " must be an integer");
+    }
+    final long decoded = ((Number) value).longValue();
+    if (decoded <= 0) {
+      throw new IllegalStateException(field + " must be positive");
+    }
+    return decoded;
+  }
+
+  private static void assertRejectsTtl(
+      final Map<String, Object> fixture, final String context) {
+    try {
+      requirePositiveInteger(fixture, "time_to_live_ms", "fixture.time_to_live_ms");
+      fail(context + " must be rejected");
+    } catch (final IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("time_to_live_ms"));
+    }
   }
 
   private static byte[] hexToBytes(final String hex, final String field) {

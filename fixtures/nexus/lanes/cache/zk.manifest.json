@@ -22,7 +22,7 @@
       "id": 1,
       "scheme": "merkle",
       "merkle": {
-        "root": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "root": "0x175dd23c29dda55ead958e0b1db68811f2108aa9a6f8d2222bec59bd2aed3a09",
         "max_depth": 16
       }
     }

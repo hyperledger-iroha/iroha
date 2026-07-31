@@ -47,24 +47,27 @@ Accept: application/json | application/x-norito
 Returns a versioned `DaProofPolicyBundle` derived from the current lane catalog.
 The bundle advertises `version` (currently `1`), a `policy_hash` (hash of the
 ordered policy list), and `policies` entries carrying `lane_id`, `dataspace_id`,
-`alias`, and the enforced `proof_scheme` (`merkle_sha256` today; KZG lanes are
-rejected by ingest until KZG commitments are available). The block header now
-commits to the bundle via `da_proof_policies_hash`, so clients can pin the
-active policy set when verifying DA commitments or proofs. Fetch this endpoint
-before building proofs to ensure they match the lane’s policy and the current
-bundle hash. Commitment list/prove endpoints carry the same bundle so SDKs
-don’t need an extra round-trip to bind a proof to the active policy set.
+`alias`, and the enforced `proof_scheme` (`merkle_sha256` is the only V1
+variant; KZG requires a separately reviewed future protocol version and wire
+layout). Each block header
+commits to the policy sidecar used for that block via
+`da_proof_policies_hash`. This endpoint and the commitment list endpoint expose
+the node's active snapshot for discovery. The commitment prove endpoint instead
+returns the historical policy sidecar committed by the referenced block, so
+verification is bound to the signed block state and never to a mutable current
+Nexus configuration.
 
 ```
 GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 
-Returns a `DaProofPolicyBundle` carrying the ordered policy list plus a
-`policy_hash` so SDKs can pin the version used when a block was produced. The
-hash is computed over the Norito-encoded policy array and changes whenever a
-lane’s `proof_scheme` is updated, allowing clients to detect drift between
-cached proofs and the chain configuration.
+Returns the current `DaProofPolicyBundle`, carrying the ordered policy list plus
+a `policy_hash` so SDKs can detect changes to the active snapshot. The hash is
+computed over the Norito-encoded policy array and changes whenever a lane's
+`proof_scheme` is updated. Historical proof verification must use the sidecar
+returned with the proof and authenticated by that proof's signed block header,
+not this current snapshot.
 
 ## Proposed Norito Schema
 
@@ -200,9 +203,11 @@ payload, or metadata field invalidates the signature.
 2. Build Norito `DaManifestV1` (new struct) capturing chunk commitments (role/group_id),
    erasure layout (row and column parity counts plus `ipa_commitment`), retention policy,
    and metadata.
-3. Queue the canonical manifest bytes under `config.da_ingest.manifest_store_dir`
-   (Torii writes `manifest.encoded` files keyed by lane/epoch/sequence/ticket/fingerprint) so SoraFS
-   orchestration can ingest them and link the storage ticket to persisted data.
+3. Queue the canonical manifest and PDP bytes under the sharded ticket index
+   `config.da_ingest.manifest_store_dir/artifacts/<first-ticket-byte-hex>/<ticket-hex>/`
+   as `manifest.norito` and `pdp-commitment.norito`. The one-record-per-ticket
+   layout gives SoraFS orchestration a direct, unambiguous lookup without
+   scanning the shared spool.
 4. Publish pin intents via `sorafs_car::PinIntent` with governance tag + policy.
 5. Emit Norito event `DaIngestPublished` to notify observers (light clients,
    governance, analytics).
@@ -341,7 +346,8 @@ payload, or metadata field invalidates the signature.
   - `chunk_matrix.json` — ordered index/offset/length/digest/parity rows for doc/testing references.
   - `chunks/` — `chunk_{index:05}.bin` payload slices for both data and parity shards.
   - `payload.bin` — deterministic payload used by the parity-aware harness test.
-  - `commitment_bundle.{json,norito.hex}` — sample `DaCommitmentBundle` with a deterministic KZG commitment for docs/tests.
+  - `commitment_bundle.{json,norito.hex}` — sample Merkle-only
+    `DaCommitmentBundle` using the V1 wire layout.
 
   The harness refuses missing or truncated chunks, checks the final payload Blake3 hash against `blob_hash`,
   and emits a summary JSON blob (payload bytes, chunk count, storage ticket) so CI can assert reconstruction
@@ -398,6 +404,11 @@ All previously blocked ingest TODOs have been implemented and verified:
   into `config.da_ingest.manifest_store_dir` for SoraFS orchestration before issuing the receipt; the
   handler also attaches a `Sora-PDP-Commitment` header so clients can capture the encoded commitment
   immediately.【crates/iroha_torii/src/da/ingest.rs:220】
+- Client-supplied manifest bytes are admitted only through checked Norito decoding; malformed or
+  truncated payloads return `400 Bad Request`. Manifest retrieval resolves the exact sharded ticket
+  path above, so request cost is independent of the total number of spool artifacts. On Unix,
+  Torii creates the ticket-index directories with owner-only `0700` permissions and all new DA and
+  Taikai artifact files with `0600` permissions.
 - Replay admission has two independent bounds: per-window fingerprints and the configured global
   number of `(lane, epoch)` windows. Durable cursor advances use a checksummed append journal and a
   capacity-sized checkpoint interval, making persistence amortized O(1) per advance instead of
@@ -458,8 +469,9 @@ unchanged.
   chunking completes.【crates/iroha_data_model/src/da/manifest.rs:1】
 - `types.rs` provides shared aliases (`BlobDigest`, `RetentionPolicy`,
   `ErasureProfile`, etc.) and encodes the default policy values documented below.【crates/iroha_data_model/src/da/types.rs:240】
-- Manifest spool files land in `config.da_ingest.manifest_store_dir`, ready for the SoraFS orchestration
-  watcher to pull into storage admission.【crates/iroha_torii/src/da/ingest.rs:220】
+- Manifest and PDP spool files land in the sharded, storage-ticket-indexed
+  `config.da_ingest.manifest_store_dir/artifacts/` hierarchy, ready for direct
+  SoraFS orchestration lookup without a global directory scan.【crates/iroha_torii/src/da/ingest.rs:220】
 - Sumeragi enforces manifest availability when sealing or validating DA bundles:
   blocks fail validation if the spool is missing the manifest or the hash differs
   from the commitment.【crates/iroha_core/src/sumeragi/main_loop.rs:5335】【crates/iroha_core/src/sumeragi/main_loop.rs:14506】

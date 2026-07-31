@@ -20,7 +20,6 @@ use iroha_data_model::{
             SubmitSorafsOrderbookOrder,
         },
     },
-    name::Name,
     permission::Permission,
     query::{
         error::{FindError, QueryExecutionFail},
@@ -52,6 +51,7 @@ use iroha_data_model::{
         },
         reserve::ReserveLifecycleStage,
     },
+    state_path::StatePath,
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
@@ -289,54 +289,54 @@ fn require_permission(
     }
 }
 
-fn policy_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
-    KEY.get_or_init(|| Name::from_str(POLICY_STATE_KEY).expect("static state key is valid"))
+fn policy_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
+    KEY.get_or_init(|| StatePath::from_str(POLICY_STATE_KEY).expect("static state key is valid"))
 }
 
-fn status_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
-    KEY.get_or_init(|| Name::from_str(STATUS_STATE_KEY).expect("static state key is valid"))
+fn status_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
+    KEY.get_or_init(|| StatePath::from_str(STATUS_STATE_KEY).expect("static state key is valid"))
 }
 
-fn digest_key(prefix: &str, digest: [u8; 32]) -> Name {
-    Name::from_str(&format!("{prefix}{}", hex::encode(digest)))
+fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
+    StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static prefix plus lowercase hex is a valid state key")
 }
 
-fn order_key(order_id: [u8; 32]) -> Name {
+fn order_key(order_id: [u8; 32]) -> StatePath {
     digest_key(ORDER_STATE_KEY_PREFIX, order_id)
 }
 
-fn receipt_key(receipt_id: [u8; 32]) -> Name {
+fn receipt_key(receipt_id: [u8; 32]) -> StatePath {
     digest_key(RECEIPT_STATE_KEY_PREFIX, receipt_id)
 }
 
-fn receipt_index_key(channel_id: [u8; 32]) -> Name {
+fn receipt_index_key(channel_id: [u8; 32]) -> StatePath {
     digest_key(RECEIPT_INDEX_KEY_PREFIX, channel_id)
 }
 
-fn trade_key(trade_id: [u8; 32]) -> Name {
+fn trade_key(trade_id: [u8; 32]) -> StatePath {
     digest_key(TRADE_STATE_KEY_PREFIX, trade_id)
 }
 
-fn channel_key(channel_id: [u8; 32]) -> Name {
+fn channel_key(channel_id: [u8; 32]) -> StatePath {
     digest_key(CHANNEL_STATE_KEY_PREFIX, channel_id)
 }
 
-fn event_key(sequence: u64) -> Name {
-    Name::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
+fn event_key(sequence: u64) -> StatePath {
+    StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
 
-fn event_journal_head_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
+fn event_journal_head_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
-        Name::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
+        StatePath::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
     })
 }
 
-fn nonce_key(owner: &AccountId) -> Name {
+fn nonce_key(owner: &AccountId) -> StatePath {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NONCE_KEY_DOMAIN_V1);
     hasher.update(owner.to_string().as_bytes());
@@ -563,7 +563,7 @@ fn ensure_no_event_after_head(
     head: Option<OrderbookEventJournalHeadV1>,
 ) -> Result<(), InstructionExecutionError> {
     let prefix_start =
-        Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
+        StatePath::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
     let first_event_key = world
         .smart_contract_state()
         .range(prefix_start..)
@@ -588,7 +588,7 @@ fn ensure_no_event_after_head(
         }
     }
     let start = head.map_or_else(
-        || Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid"),
+        || StatePath::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid"),
         |head| event_key(head.last_sequence),
     );
     for (key, _) in world.smart_contract_state().range(start..) {
@@ -1305,7 +1305,7 @@ struct PlannedFill {
 fn load_active_orders(
     world: &impl WorldReadOnly,
 ) -> Result<Vec<WorkingLedgerOrder>, InstructionExecutionError> {
-    let start = Name::from_str(ORDER_STATE_KEY_PREFIX).expect("static state prefix is valid");
+    let start = StatePath::from_str(ORDER_STATE_KEY_PREFIX).expect("static state prefix is valid");
     let mut active = Vec::new();
     let mut sequences = BTreeSet::new();
     for (key, payload) in world.smart_contract_state().range(start..) {
@@ -2476,7 +2476,7 @@ impl Execute for MaintainSorafsOrderbook {
         }
 
         let channel_start =
-            Name::from_str(CHANNEL_STATE_KEY_PREFIX).expect("static state prefix is valid");
+            StatePath::from_str(CHANNEL_STATE_KEY_PREFIX).expect("static state prefix is valid");
         let mut expired_channels = Vec::new();
         if remaining_budget > 0 {
             for (key, payload) in state_transaction

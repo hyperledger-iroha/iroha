@@ -47,6 +47,7 @@ use iroha_data_model::{
     proof::VerifyingKeyId,
     smart_contract::ContractAddress,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
+    state_path::StatePath,
     transaction::{Executable, SignedTransaction, executable::ContractInvocation},
     zk::{
         BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
@@ -686,7 +687,6 @@ fn default_pipeline_config() -> iroha_config::parameters::actual::Pipeline {
         ivm_max_decoded_bytes: defaults::pipeline::IVM_MAX_DECODED_BYTES,
         quarantine_max_txs_per_block: defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
         quarantine_tx_max_cycles: defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-        quarantine_tx_max_millis: defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
         query_default_cursor_mode: QueryCursorMode::Ephemeral,
         query_max_fetch_size: defaults::pipeline::QUERY_MAX_FETCH_SIZE,
         query_stored_min_gas_units: defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
@@ -1223,8 +1223,9 @@ pub struct TxOverlay {
     lifecycle_completion: Option<OverlayLifecycleCompletion>,
     ivm_gas_used: Option<u64>,
     completed_axt: Vec<ivm::axt::HostAxtState>,
-    durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
-    durable_state_authorizations: BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
+    durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
+    durable_state_authorizations:
+        BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,
     source: TxOverlaySource,
     sccp_ivm_proved_execution_binding: Option<crate::state::SccpIvmProvedExecutionBindingV1>,
     byte_size: OnceLock<usize>,
@@ -1325,7 +1326,7 @@ impl VmAccessFence {
 pub(crate) struct DurableStateReadSnapshot {
     /// `None` means an invalid/unrepresentable host key forced a fail-closed
     /// fingerprint of the complete durable-state map.
-    prefixes: Option<Vec<Name>>,
+    prefixes: Option<Vec<StatePath>>,
     fingerprint: [u8; 32],
 }
 
@@ -1365,7 +1366,7 @@ impl DurableStateReadSnapshot {
 
         let mut prefixes = BTreeSet::new();
         for concrete_path in &access_log.durable_read_paths {
-            let Ok(concrete_path) = Name::from_str(concrete_path) else {
+            let Ok(concrete_path) = StatePath::from_str(concrete_path) else {
                 let fingerprint = durable_state_prefix_fingerprint(None, state_ro);
                 return Some(Self {
                     prefixes: None,
@@ -1393,7 +1394,7 @@ impl DurableStateReadSnapshot {
     }
 }
 
-fn durable_state_prefix_fingerprint<R>(prefixes: Option<&[Name]>, state_ro: &R) -> [u8; 32]
+fn durable_state_prefix_fingerprint<R>(prefixes: Option<&[StatePath]>, state_ro: &R) -> [u8; 32]
 where
     R: StateReadOnly,
 {
@@ -1428,12 +1429,12 @@ where
             hasher.update([0]);
         }
 
-        // Start directly at `prefix/`. Other valid names such as `prefix-`
+        // Start directly at `prefix/`. Other valid paths such as `prefix-`
         // can sort between `prefix` and `prefix/`; beginning at `prefix` and
         // breaking on the first non-match would therefore miss descendants.
         let descendant_prefix_raw = format!("{prefix_raw}/");
-        let descendant_prefix = Name::from_str(&descendant_prefix_raw)
-            .expect("a durable-state name with a slash suffix remains a valid Name");
+        let descendant_prefix = StatePath::from_str(&descendant_prefix_raw)
+            .expect("a durable-state path with a slash suffix remains a valid StatePath");
         for (path, value) in state.range(descendant_prefix..) {
             let path_raw: &str = path.as_ref();
             if !path_raw.starts_with(&descendant_prefix_raw) {
@@ -1548,7 +1549,7 @@ impl TxOverlay {
     pub fn from_ivm_execution(
         instrs: Vec<InstructionBox>,
         ivm_gas_used: u64,
-        durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+        durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
     ) -> Self {
         let durable_state_authorizations = durable_state_overlay
             .keys()
@@ -1575,9 +1576,9 @@ impl TxOverlay {
         execution_contexts: Vec<OverlayInstructionExecutionContext>,
         ivm_gas_used: u64,
         completed_axt: Vec<ivm::axt::HostAxtState>,
-        durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+        durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
         durable_state_authorizations: BTreeMap<
-            Name,
+            StatePath,
             Option<ContractEntrypointAuthorizationSnapshot>,
         >,
     ) -> Self {
@@ -1601,9 +1602,9 @@ impl TxOverlay {
         queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
         ivm_gas_used: u64,
         completed_axt: Vec<ivm::axt::HostAxtState>,
-        durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+        durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
         durable_state_authorizations: BTreeMap<
-            Name,
+            StatePath,
             Option<ContractEntrypointAuthorizationSnapshot>,
         >,
         source: TxOverlaySource,
@@ -1646,9 +1647,9 @@ impl TxOverlay {
         queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
         ivm_gas_used: u64,
         completed_axt: Vec<ivm::axt::HostAxtState>,
-        durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+        durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
         durable_state_authorizations: BTreeMap<
-            Name,
+            StatePath,
             Option<ContractEntrypointAuthorizationSnapshot>,
         >,
     ) -> Self {
@@ -1697,7 +1698,7 @@ impl TxOverlay {
     }
 
     /// Borrow the durable smart-contract state overlay accumulated during IVM execution.
-    pub fn durable_state_overlay(&self) -> &BTreeMap<Name, Option<Vec<u8>>> {
+    pub fn durable_state_overlay(&self) -> &BTreeMap<StatePath, Option<Vec<u8>>> {
         &self.durable_state_overlay
     }
 
@@ -1793,7 +1794,7 @@ impl TxOverlay {
         }
     }
 
-    fn durable_path_requires_authorization(path: &Name) -> bool {
+    fn durable_path_requires_authorization(path: &StatePath) -> bool {
         let path = path.as_ref();
         path.starts_with("sc/")
             || (path.starts_with(code::CONTRACT_LIFECYCLE_STATE_PREFIX)
@@ -2079,8 +2080,11 @@ fn tx_overlay_from_host_queued<R: StateReadOnly>(
     queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
     ivm_gas_used: u64,
     completed_axt: Vec<ivm::axt::HostAxtState>,
-    durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
-    durable_state_authorizations: BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
+    durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
+    durable_state_authorizations: BTreeMap<
+        StatePath,
+        Option<ContractEntrypointAuthorizationSnapshot>,
+    >,
 ) -> TxOverlay {
     let mut queued_instructions: Vec<_> = queued
         .iter()
@@ -3331,9 +3335,11 @@ where
 ///
 /// Applies per-transaction execution caps when running IVM bytecode to collect queued ISIs:
 /// - `max_cycles_cap`: if non-zero, caps VM cycles to `min(header.max_cycles, max_cycles_cap, upper_bound_cap)`.
-/// - `max_millis_cap`: if non-zero, rejects the overlay if VM execution exceeds the wall-clock budget.
 /// - `upper_bound_cap`: mandatory pipeline-wide upper bound on cycles.
-///   Build an overlay for a transaction under quarantine caps (cycles/millis and upper bound).
+///
+/// Host wall-clock time is intentionally not an admission input: peers with different hardware
+/// must accept or reject the same execution. Operators may still observe elapsed execution time
+/// through telemetry, while consensus resource enforcement remains cycle- and gas-bounded.
 ///
 /// # Errors
 /// Returns an error if the IVM header fails policy checks or running the VM fails.
@@ -3343,7 +3349,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
     accounts: Arc<Vec<AccountId>>,
     state_ro: &(impl StateReadOnly + QueryStateSource),
     max_cycles_cap: u64,
-    max_millis_cap: u64,
     upper_bound_cap: NonZeroU64,
     streaming_meta: StreamingOverlayMetadata,
     ivm_cache: &mut IvmCache,
@@ -3491,25 +3496,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             vm.set_max_cycles(eff);
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
-            #[cfg(feature = "telemetry")]
-            let t_start = std::time::Instant::now();
-            let res = run_vm_with_host(&mut vm, &mut host);
-            if max_millis_cap > 0 {
-                let elapsed_ms = {
-                    #[cfg(feature = "telemetry")]
-                    {
-                        t_start.elapsed().as_millis()
-                    }
-                    #[cfg(not(feature = "telemetry"))]
-                    {
-                        0
-                    }
-                };
-                if elapsed_ms > u128::from(max_millis_cap) {
-                    return Err(OverlayBuildError::IvmRun(ivm::VMError::ExceededMaxCycles));
-                }
-            }
-            res?;
+            run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let queued = host.drain_queued_instructions_with_contract_runtime_context(
                 contract_runtime_context.clone(),
@@ -3665,27 +3652,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             vm.set_max_cycles(eff);
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
-            // Run with a simple wall-clock budget check (post-hoc reject).
-            #[cfg(feature = "telemetry")]
-            let t_start = std::time::Instant::now();
-            let res = run_vm_with_host(&mut vm, &mut host);
-            // Check wall-clock budget
-            if max_millis_cap > 0 {
-                let elapsed_ms = {
-                    #[cfg(feature = "telemetry")]
-                    {
-                        t_start.elapsed().as_millis()
-                    }
-                    #[cfg(not(feature = "telemetry"))]
-                    {
-                        0
-                    }
-                };
-                if elapsed_ms > u128::from(max_millis_cap) {
-                    return Err(OverlayBuildError::IvmRun(ivm::VMError::ExceededMaxCycles));
-                }
-            }
-            res?;
+            run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let queued = host.drain_queued_instructions_with_contract_runtime_context(
                 contract_runtime_context.clone(),
@@ -4151,7 +4118,7 @@ mod tests_overlay_manifest {
         }
         assert!(block.world.smart_contract_state.get(&marker).is_none());
 
-        let forbidden_effect: Name = "must-not-apply".parse().expect("state key");
+        let forbidden_effect: StatePath = "must-not-apply".parse().expect("state key");
         let mut stale_writes = BTreeMap::new();
         stale_writes.insert(marker.clone(), None);
         stale_writes.insert(forbidden_effect.clone(), Some(vec![0xA5]));
@@ -4951,7 +4918,6 @@ seiyaku QuarantineArguments {
             Arc::clone(&accounts),
             &view,
             0,
-            0,
             upper_bound,
             StreamingOverlayMetadata::default(),
             &mut cache,
@@ -4971,7 +4937,6 @@ seiyaku QuarantineArguments {
             transaction,
             accounts,
             &view,
-            0,
             0,
             upper_bound,
             StreamingOverlayMetadata::default(),
@@ -5355,7 +5320,7 @@ seiyaku GuardedOverlayRebound {
             .expect("granted caller may prepare the protected call");
         let contract_state_digest =
             hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
-        let guarded_path: Name = format!("sc/{contract_state_digest}/guarded/write")
+        let guarded_path: StatePath = format!("sc/{contract_state_digest}/guarded/write")
             .parse()
             .expect("valid scoped contract state path");
         let queued_key: Name = "guarded_queued".parse().expect("valid metadata key");
@@ -5866,7 +5831,7 @@ seiyaku GuardedOverlayRebound {
         let metadata_key: Name = "nested_authorization_applied"
             .parse()
             .expect("metadata key");
-        let durable_path: Name = format!(
+        let durable_path: StatePath = format!(
             "sc/{}/nested",
             hex::encode(Hash::new(child_address.to_string().as_bytes()).as_ref())
         )
@@ -10639,8 +10604,11 @@ fn validate_ivm_proved_queued_authorization(
 
 pub(crate) fn validate_ivm_proved_durable_authorizations(
     world: &impl WorldReadOnly,
-    durable_state_overlay: &BTreeMap<Name, Option<Vec<u8>>>,
-    durable_state_authorizations: &BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
+    durable_state_overlay: &BTreeMap<StatePath, Option<Vec<u8>>>,
+    durable_state_authorizations: &BTreeMap<
+        StatePath,
+        Option<ContractEntrypointAuthorizationSnapshot>,
+    >,
     root_authorization: &ContractEntrypointAuthorizationSnapshot,
 ) -> Result<(), ValidationFail> {
     if durable_state_overlay.len() != durable_state_authorizations.len()
@@ -10805,9 +10773,9 @@ where
 pub(crate) struct IvmProvedReplay {
     pub(crate) queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
     pub(crate) completed_axt: Vec<ivm::axt::HostAxtState>,
-    pub(crate) durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+    pub(crate) durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
     pub(crate) durable_state_authorizations:
-        BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
+        BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,
     pub(crate) access_log: Option<ivm::host::AccessLog>,
     pub(crate) events_commitment: Hash,
     pub(crate) gas_used: u64,

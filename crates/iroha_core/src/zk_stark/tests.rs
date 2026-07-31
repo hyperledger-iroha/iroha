@@ -459,6 +459,66 @@
     }
 
     #[test]
+    fn generic_binding_air_reserves_governance_vote_role_aliases() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:reserved-governance-generic-air".to_owned(),
+        };
+
+        for canonical in [
+            crate::zk::GOVERNANCE_BALLOT_CIRCUIT_ID_V1,
+            crate::zk::GOVERNANCE_TALLY_CIRCUIT_ID_V1,
+        ] {
+            for circuit_id in [
+                canonical.to_owned(),
+                format!("stark/fri/sha256-goldilocks:{canonical}"),
+                format!("stark/fri/sha256-goldilocks/{canonical}"),
+                format!("stark/fri/poseidon2-goldilocks:{canonical}"),
+            ] {
+                let err = validate_generic_stark_air_circuit_id(&circuit_id)
+                    .expect_err("governance vote roles must be reserved from generic AIR");
+                assert!(
+                    err.contains("governance vote role"),
+                    "unexpected governance role rejection for {circuit_id}: {err}"
+                );
+
+                let air = StarkAirProofV1 {
+                    version: 1,
+                    circuit_id: circuit_id.clone(),
+                    public_digest: [0; 32],
+                    trace_root: [0; 32],
+                    composition_root: [0; 32],
+                    trace_width: STARK_BINDING_AIR_TRACE_WIDTH_V1,
+                    openings: Vec::new(),
+                };
+                assert!(
+                    !stark_air_context_matches_statement(
+                        &params,
+                        &air,
+                        1_usize << usize::from(params.n_log2),
+                        StarkAirVerificationContext::Binding,
+                    ),
+                    "generic verifier context must reject governance role {circuit_id}"
+                );
+            }
+        }
+
+        assert!(
+            validate_generic_stark_air_circuit_id(
+                "stark/fri/sha256-goldilocks:vote-ballot-near-miss"
+            )
+            .is_ok(),
+            "reservation must match complete semantic role ids"
+        );
+    }
+
+    #[test]
     fn generic_air_circuit_classifier_reserves_every_soracloud_fhe_relation_alias() {
         use iroha_data_model::soracloud::{
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,

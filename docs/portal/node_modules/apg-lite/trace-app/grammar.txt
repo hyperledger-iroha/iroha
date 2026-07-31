@@ -1,0 +1,9 @@
+; It is known that the language the language L = {a^nb^nc^n | n >= 1} is not context free.
+; However, with the use of the look ahead operators we can construct a grammar
+; that accepts those phrases and only those phrases.
+S = &(AB !b) *a BC !c
+AB = a [AB] b
+BC = b [BC] c
+a = %s"a"
+b = %s"b"
+c = %s"c"

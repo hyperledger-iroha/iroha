@@ -6,7 +6,7 @@ final class KagemushaQRStreamTests: XCTestCase {
         let samples: [(String, Int, Int)] = [
             ("receive-offer", 12_363, 63),
             ("acknowledgement", 471, 4),
-            ("payment-v4-peer-hop-1", 11_854, 60),
+            ("payment-v4-peer-hop-1", 11_887, 60),
         ]
         let options = KagemushaQRStreamOptions.standard
         for (label, archiveBytes, expectedFrames) in samples {

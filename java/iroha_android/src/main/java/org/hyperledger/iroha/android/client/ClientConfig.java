@@ -29,6 +29,7 @@ import org.hyperledger.iroha.android.telemetry.TelemetrySink;
 
 /** Configuration options for {@link IrohaClient} implementations. */
 public final class ClientConfig {
+  private final LocalSigningContext localSigningContext;
   private final URI baseUri;
   private final URI sorafsGatewayUri;
   private final Duration requestTimeout;
@@ -49,6 +50,7 @@ public final class ClientConfig {
   private final CrashTelemetryHandler crashTelemetryHandler;
 
   private ClientConfig(final Builder builder) {
+    this.localSigningContext = builder.localSigningContext;
     this.baseUri = builder.baseUri;
     this.sorafsGatewayUri =
         builder.sorafsGatewayUri != null ? builder.sorafsGatewayUri : builder.baseUri;
@@ -88,6 +90,19 @@ public final class ClientConfig {
     this.crashTelemetryHandler = maybeInstallCrashTelemetryHandler(builder, instrumentedSink);
   }
 
+  /** Returns the local context used to validate server-prepared drafts before signing. */
+  public Optional<LocalSigningContext> localSigningContext() {
+    return Optional.ofNullable(localSigningContext);
+  }
+
+  LocalSigningContext requireLocalSigningContext() {
+    if (localSigningContext == null) {
+      throw new IllegalStateException(
+          "localSigningContext must be configured before requesting a signing draft");
+    }
+    return localSigningContext;
+  }
+
   public URI baseUri() {
     return baseUri;
   }
@@ -108,7 +123,7 @@ public final class ClientConfig {
         nonTelemetryObservers.add(observer);
       }
     }
-    return new Builder()
+    final Builder builder = new Builder()
         .setBaseUri(baseUri)
         .setSorafsGatewayUri(sorafsGatewayUri)
         .setRequestTimeout(requestTimeout)
@@ -126,6 +141,10 @@ public final class ClientConfig {
         .setDeviceProfileProvider(deviceProfileProvider)
         .setCrashTelemetryMetadataProvider(crashMetadataProvider)
         .setCrashTelemetryEnabled(crashTelemetryEnabled);
+    if (localSigningContext != null) {
+      builder.setLocalSigningContext(localSigningContext);
+    }
+    return builder;
   }
 
   public static Builder builder() {
@@ -287,6 +306,7 @@ public final class ClientConfig {
   }
 
   public static final class Builder {
+    private LocalSigningContext localSigningContext;
     private URI baseUri = URI.create("http://localhost:8080");
     private URI sorafsGatewayUri;
     private Duration requestTimeout = Duration.ofSeconds(10);
@@ -306,6 +326,12 @@ public final class ClientConfig {
     private boolean crashTelemetryEnabled;
     private CrashTelemetryHandler.MetadataProvider crashMetadataProvider =
         CrashTelemetryHandler.defaultMetadataProvider();
+
+    /** Enables local draft signing with one immutable, caller-owned chain context. */
+    public Builder setLocalSigningContext(final LocalSigningContext context) {
+      this.localSigningContext = Objects.requireNonNull(context, "localSigningContext");
+      return this;
+    }
 
     public Builder setBaseUri(final URI baseUri) {
       this.baseUri = Objects.requireNonNull(baseUri, "baseUri");

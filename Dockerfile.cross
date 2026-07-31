@@ -94,7 +94,7 @@ RUN --mount=type=cache,target=/app/target <<EOF
       | jq -r 'if .workspace_metadata and .workspace_metadata.docker_bins then .workspace_metadata.docker_bins[] else empty end')"
   fi
   if [ -z "${bins}" ]; then
-    bins="iroha irohad kagami"
+    bins="iroha irohad kagami attachment_sanitizer"
   fi
   for bin in ${bins}; do
     bin_path="./target/${target_triple}/${PROFILE}/${bin}"
@@ -111,8 +111,8 @@ FROM ${IROHA_CROSS_RUNTIME_IMAGE}
 
 COPY --from=xx-build /app/bins/* /usr/local/bin/
 
-# NOTE: jq & curl to support output `kagami swarm`
-RUN apk add jq curl \
+# NOTE: jq & curl support `kagami swarm`; bubblewrap isolates attachment parsing.
+RUN apk add jq curl bubblewrap \
   && adduser --disabled-password --gecos '' iroha \
   && mkdir -p /data/iroha /config/iroha \
   && chown -R iroha /data/iroha /config/iroha

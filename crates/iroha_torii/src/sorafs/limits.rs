@@ -7,8 +7,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dashmap::{DashMap, mapref::entry::Entry};
+use dashmap::DashMap;
 use iroha_logger::warn;
+use parking_lot::Mutex;
+
+const MAX_QUOTA_SUBJECTS: usize = 4_096;
 
 /// Categories of SoraFS operations subject to quotas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,7 +87,13 @@ impl fmt::Display for QuotaExceeded {
 struct ActionLimiter {
     window: Duration,
     max_events: u32,
-    buckets: DashMap<[u8; 32], VecDeque<Instant>>,
+    buckets: DashMap<[u8; 32], SubjectWindow>,
+    bucket_admission: Mutex<()>,
+}
+
+struct SubjectWindow {
+    events: VecDeque<Instant>,
+    last_seen: Instant,
 }
 
 impl ActionLimiter {
@@ -96,33 +105,81 @@ impl ActionLimiter {
             window,
             max_events,
             buckets: DashMap::new(),
+            bucket_admission: Mutex::new(()),
         })
     }
 
-    fn allow(&self, provider: &[u8; 32]) -> bool {
+    fn allow(&self, subject: &[u8; 32]) -> bool {
         let now = Instant::now();
-        match self.buckets.entry(*provider) {
-            Entry::Occupied(mut entry) => {
-                let deque = entry.get_mut();
-                while let Some(&front) = deque.front() {
-                    if now.duration_since(front) > self.window {
-                        deque.pop_front();
-                    } else {
-                        break;
-                    }
-                }
-                if deque.len() as u32 >= self.max_events {
-                    return false;
-                }
-                deque.push_back(now);
-            }
-            Entry::Vacant(entry) => {
-                let mut deque = VecDeque::with_capacity(self.max_events.min(16) as usize);
-                deque.push_back(now);
-                entry.insert(deque);
+        if let Some(mut window) = self.buckets.get_mut(subject) {
+            return self.consume(&mut window, now);
+        }
+
+        // Serialize only first-seen subjects so the memory ceiling remains exact under
+        // concurrent requests without putting established authorities behind one lock.
+        let _admission = self.bucket_admission.lock();
+        if let Some(mut window) = self.buckets.get_mut(subject) {
+            return self.consume(&mut window, now);
+        }
+        self.prune_inactive(now);
+        if self.buckets.len() >= MAX_QUOTA_SUBJECTS {
+            // Subjects are verified registered authorities, so admission cannot be inflated by
+            // rotating a payload field. Replacing the least-recently-seen authority preserves
+            // availability without allowing the accounting map to grow.
+            let oldest = self
+                .buckets
+                .iter()
+                .min_by_key(|entry| entry.value().last_seen)
+                .map(|entry| *entry.key());
+            if let Some(oldest) = oldest {
+                self.buckets.remove(&oldest);
             }
         }
+
+        let mut events = VecDeque::with_capacity(self.max_events.min(16) as usize);
+        events.push_back(now);
+        self.buckets.insert(
+            *subject,
+            SubjectWindow {
+                events,
+                last_seen: now,
+            },
+        );
         true
+    }
+
+    fn consume(&self, window: &mut SubjectWindow, now: Instant) -> bool {
+        window.last_seen = now;
+        while let Some(&front) = window.events.front() {
+            if now.saturating_duration_since(front) > self.window {
+                window.events.pop_front();
+            } else {
+                break;
+            }
+        }
+        if window.events.len() as u32 >= self.max_events {
+            return false;
+        }
+        window.events.push_back(now);
+        true
+    }
+
+    fn prune_inactive(&self, now: Instant) {
+        let inactive = self
+            .buckets
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .value()
+                    .events
+                    .back()
+                    .is_none_or(|event| now.saturating_duration_since(*event) > self.window)
+                    .then_some(*entry.key())
+            })
+            .collect::<Vec<_>>();
+        for subject in inactive {
+            self.buckets.remove(&subject);
+        }
     }
 }
 
@@ -236,23 +293,23 @@ impl SorafsQuotaEnforcer {
         Self::from_config(&SorafsQuotaConfig::unlimited())
     }
 
-    /// Attempt to consume a quota unit for the specified action/provider.
+    /// Attempt to consume a quota unit for the specified action and authenticated subject.
     ///
     /// Returns `Ok(())` when the request is permitted, or [`QuotaExceeded`] when throttled.
     ///
     /// # Errors
     ///
     /// Returns [`QuotaExceeded`] when the relevant limiter rejects the action.
-    pub fn enforce(&self, action: SorafsAction, provider: &[u8; 32]) -> Result<(), QuotaExceeded> {
+    pub fn enforce(&self, action: SorafsAction, subject: &[u8; 32]) -> Result<(), QuotaExceeded> {
         let Some(limiter) = self.limiter(action) else {
             return Ok(());
         };
-        if limiter.allow(provider) {
+        if limiter.allow(subject) {
             Ok(())
         } else {
             warn!(
                 action = %action,
-                provider_id = %hex::encode(provider),
+                quota_subject = %hex::encode(subject),
                 "SoraFS quota exceeded"
             );
             Err(QuotaExceeded::new(
@@ -343,5 +400,16 @@ mod tests {
             error.to_string(),
             "SoraFS por_submission quota exceeded: maximum 17 events per 90s"
         );
+    }
+
+    #[test]
+    fn quota_subject_state_is_hard_bounded() {
+        let limiter = ActionLimiter::new(Duration::from_mins(1), 1).unwrap();
+        for index in 0..MAX_QUOTA_SUBJECTS + 128 {
+            let mut subject = [0_u8; 32];
+            subject[..8].copy_from_slice(&(index as u64).to_be_bytes());
+            assert!(limiter.allow(&subject));
+        }
+        assert_eq!(limiter.buckets.len(), MAX_QUOTA_SUBJECTS);
     }
 }

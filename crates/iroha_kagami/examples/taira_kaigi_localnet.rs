@@ -1,15 +1,15 @@
 //! Build and sign a Taira localnet genesis overlay that seeds Kaigi relay metadata.
 
-use std::{fs, path::PathBuf, str::FromStr};
+use std::{fs, io::Read as _, path::PathBuf, str::FromStr};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use color_eyre::{
     Result,
     eyre::{WrapErr, ensure},
 };
 use iroha_config::{base::toml::TomlSource, parameters::actual};
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::{
     account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionId, AssetId},
@@ -29,11 +29,16 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_genesis::RawGenesisTransaction;
 use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
+use zeroize::Zeroizing;
 
 const LOCALNET_GENESIS_SEED_SUFFIX: &[u8] = b"genesis";
 
 #[derive(Parser, Debug)]
+#[command(group(
+    ArgGroup::new("genesis_signer")
+        .required(true)
+        .args(["seed", "genesis_private_key_file"])
+))]
 struct Args {
     /// Base genesis JSON manifest to overlay.
     #[arg(long)]
@@ -46,11 +51,11 @@ struct Args {
     out_file: PathBuf,
     /// Base seed passed to `kagami localnet --seed`; the helper derives the genesis key from
     /// `<seed> + "genesis"` to match Kagami localnet output.
-    #[arg(long, conflicts_with = "genesis_private_key")]
+    #[arg(long, conflicts_with = "genesis_private_key_file")]
     seed: Option<String>,
-    /// Explicit genesis private key hex. Use this when the localnet seed is unavailable.
+    /// Owner-held mode-0600 file containing one canonical genesis private-key record.
     #[arg(long, conflicts_with = "seed")]
-    genesis_private_key: Option<String>,
+    genesis_private_key_file: Option<PathBuf>,
     /// Expected genesis public key from the peer config. The helper aborts if the derived signer
     /// does not match, which prevents writing an unusable signed genesis.
     #[arg(long)]
@@ -348,32 +353,99 @@ fn append_bootstrap_authority_overlay(
 }
 
 fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> Result<KeyPair> {
-    base_seed.map_or_else(
-        || {
-            Ok(KeyPair::from(
-                REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
-            ))
-        },
-        |seed| {
-            KeyPair::try_from_seed(
-                seed.bytes()
-                    .chain(LOCALNET_GENESIS_SEED_SUFFIX.iter().copied())
-                    .collect::<Vec<_>>(),
-                Algorithm::default(),
-            )
-            .wrap_err("failed to derive localnet genesis key pair from seed")
-        },
+    let seed = base_seed.ok_or_else(|| {
+        color_eyre::eyre::eyre!(
+            "genesis signing requires --seed or --genesis-private-key-file; no built-in signer exists"
+        )
+    })?;
+    KeyPair::try_from_seed(
+        seed.bytes()
+            .chain(LOCALNET_GENESIS_SEED_SUFFIX.iter().copied())
+            .collect::<Vec<_>>(),
+        Algorithm::default(),
+    )
+    .wrap_err("failed to derive localnet genesis key pair from seed")
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+fn load_genesis_private_key_file(path: &std::path::Path) -> Result<KeyPair> {
+    use std::{fs::File, os::unix::fs::MetadataExt as _};
+
+    use rustix::fs::{Mode, OFlags, open};
+
+    let fd = open(
+        path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)
+    .wrap_err_with(|| format!("open genesis private-key file {}", path.display()))?;
+    let file = File::from(fd);
+    let metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("inspect genesis private-key file {}", path.display()))?;
+    ensure!(
+        metadata.is_file()
+            && metadata.uid() == rustix::process::geteuid().as_raw()
+            && metadata.mode() & 0o777 == 0o600
+            && metadata.nlink() == 1,
+        "genesis private-key file must be an owner-held, non-symlinked, single-link mode-0600 regular file"
+    );
+    ensure!(
+        metadata.len() <= 4096,
+        "genesis private-key file exceeds the 4096-byte safety limit"
+    );
+
+    let capacity =
+        usize::try_from(metadata.len()).expect("the 4096-byte file bound always fits usize");
+    let mut raw = Zeroizing::new(Vec::with_capacity(capacity));
+    file.take(4097)
+        .read_to_end(&mut raw)
+        .wrap_err("read genesis private-key file")?;
+    ensure!(
+        raw.len() <= 4096,
+        "genesis private-key file grew beyond the 4096-byte safety limit while reading"
+    );
+    let text =
+        std::str::from_utf8(raw.as_slice()).wrap_err("genesis private-key file is not UTF-8")?;
+    let canonical = text.strip_suffix('\n').ok_or_else(|| {
+        color_eyre::eyre::eyre!(
+            "genesis private-key file must contain one canonical key and a final newline"
+        )
+    })?;
+    ensure!(
+        !canonical.is_empty()
+            && !canonical.chars().any(char::is_whitespace)
+            && format!("{canonical}\n").as_bytes() == raw.as_slice(),
+        "genesis private-key file is not one canonical key record"
+    );
+    let exposed = ExposedPrivateKey::from_str(canonical)
+        .wrap_err("decode canonical genesis private-key file")?;
+    ensure!(
+        exposed.to_string() == canonical && exposed.0.algorithm() == Algorithm::default(),
+        "genesis private-key file encoding or algorithm is not canonical"
+    );
+    KeyPair::from_private_key(exposed.0).wrap_err("derive genesis key pair from private-key file")
+}
+
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
+fn load_genesis_private_key_file(_path: &std::path::Path) -> Result<KeyPair> {
+    color_eyre::eyre::bail!(
+        "owner-only genesis private-key files require a supported Unix platform"
     )
 }
 
 fn load_genesis_key_pair(args: &Args) -> Result<KeyPair> {
-    match (&args.genesis_private_key, &args.seed) {
-        (Some(hex), None) => {
-            let private_key = PrivateKey::from_str(hex)
-                .or_else(|_| PrivateKey::from_hex(Algorithm::default(), hex))
-                .wrap_err("failed to parse explicit genesis private key")?;
-            Ok(KeyPair::from(private_key))
-        }
+    match (&args.genesis_private_key_file, &args.seed) {
+        (Some(path), None) => load_genesis_private_key_file(path),
         (None, seed) => derive_localnet_genesis_key_pair(seed.as_deref()),
         (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
     }
@@ -430,7 +502,7 @@ fn ensure_expected_genesis_public_key(
         .wrap_err("failed to parse expected genesis public key")?;
     ensure!(
         *key_pair.public_key() == expected,
-        "derived genesis public key {} does not match expected {}; pass the same `--seed` used for `kagami localnet --seed`, or pass `--genesis-private-key` explicitly",
+        "derived genesis public key {} does not match expected {}; pass the same `--seed` used for `kagami localnet --seed`, or pass `--genesis-private-key-file` explicitly",
         key_pair.public_key(),
         expected
     );
@@ -513,7 +585,6 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use iroha_genesis::GenesisBuilder;
-    use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
 
     #[test]
     fn relay_spec_parses_expected_fields() {
@@ -846,12 +917,49 @@ mod tests {
         assert_eq!(derived.public_key(), expected.public_key());
     }
 
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
-    fn missing_seed_uses_builtin_localnet_genesis_key() {
-        let derived = derive_localnet_genesis_key_pair(None).expect("builtin genesis key");
+    fn genesis_private_key_file_requires_owner_only_canonical_custody() {
+        use std::{
+            fs::{self, OpenOptions},
+            io::Write as _,
+            os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+        };
+
+        let sandbox = tempfile::tempdir().expect("create signer custody sandbox");
+        let path = sandbox.path().join("genesis.private_key");
+        let expected =
+            KeyPair::try_from_seed([23_u8; 32], Algorithm::default()).expect("derive signer");
+        let exposed = ExposedPrivateKey(expected.private_key().clone());
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .expect("create owner-only signer file");
+        writeln!(file, "{exposed}").expect("write canonical signer record");
+        drop(file);
+
+        let loaded = load_genesis_private_key_file(&path).expect("load owner-only signer file");
+        assert_eq!(loaded.public_key(), expected.public_key());
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("weaken fixture permissions");
+        let error = load_genesis_private_key_file(&path)
+            .expect_err("group/world-readable signer file must fail closed");
+        assert!(error.to_string().contains("mode-0600"));
+    }
+
+    #[test]
+    fn missing_seed_has_no_builtin_genesis_signer() {
+        let error = derive_localnet_genesis_key_pair(None)
+            .expect_err("missing genesis custody must fail closed");
         assert_eq!(
-            derived.public_key(),
-            REAL_GENESIS_ACCOUNT_KEYPAIR.public_key()
+            error.to_string(),
+            "genesis signing requires --seed or --genesis-private-key-file; no built-in signer exists"
         );
     }
 }

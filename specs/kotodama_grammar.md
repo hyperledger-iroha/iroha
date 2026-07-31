@@ -716,10 +716,17 @@ values and unsupported leaves are compile errors. V1 map keys may be `int`,
 `decimal`, `quantity`, `bool`, `string`, `bytes`, or a typed Iroha identifier;
 aggregate, `Json`, optional, result, secret, and nested-map keys are rejected.
 Numeric keys are canonicalized before hashing and ordering, so equivalent
-decimal spellings cannot create distinct keys. Physical V1 key paths use
-reversible lowercase hexadecimal canonical-Norito bytes, so path order is
-canonical key-byte order without hash-collision ambiguity. Keys and map bases
-are capped at 4 KiB, and iteration pages are canonical and limited to 64 items.
+decimal spellings cannot create distinct keys. Durable paths are the distinct
+nominal `StatePath` storage type, transported to IVM state syscalls as canonical
+Norito bytes rather than as `Name` pointers. Physical V1 map paths retain the
+form `Name-base/<reversible lowercase hexadecimal canonical-Norito key bytes>`,
+so path order is canonical key-byte order without hash-collision ambiguity.
+Map keys are capped at 4 KiB, map bases retain the 255-byte `Name` bound,
+complete paths are capped at 16 KiB, and iteration pages are canonical
+`Vec<StatePath>` values limited to 64 items. The source helper
+`base.path(key)` therefore returns `bytes` containing a framed `StatePath`;
+passing a `Name` directly to `state::get`, `set`, `delete`, `keys`, `has`,
+`len`, or `count` is a type error.
 
 Compiler-derived access metadata is advisory until independently verified from bytecode. Unknown, dynamic, incomplete, or transitively unresolved access forces conservative scheduler serialization.
 

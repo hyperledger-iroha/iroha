@@ -10,6 +10,15 @@ The control plane remains authoritative. Torii serves status and mutation
 routes directly from committed world state plus the embedded Soracloud runtime
 manager; the CLI does not keep a shadow control-plane mirror.
 
+Soracloud's provenance-bearing mutation bodies use strict request schemas.
+They do not contain `authority` or `private_key` fields, and JSON admission
+rejects either field before constructing a request object, including inside
+app-level nested service bundles. Clients authenticate the HTTP request with
+`X-Iroha-Account` plus the canonical signature, timestamp, and nonce headers,
+or with `X-Iroha-Witness`. The mutation provenance signer must be one of the
+verified request signers. Torii then returns an unsigned instruction skeleton;
+account private keys stay in the client wallet.
+
 ## Runtime Scope
 
 - Use `HttpService + Inrou` for collector-heavy, SSE, cache-backed, or
@@ -31,6 +40,10 @@ manager; the CLI does not keep a shadow control-plane mirror.
 - Config and secret materialization is still authoritative. Deploy, upgrade,
   and rollback fail closed when required config/secret bindings are missing or
   inconsistent with the active manifests.
+- Runtime health-report and generated-HF reconciliation cooldown histories
+  expire with their cooldown window and have a hard process-wide entry bound.
+  Identity churn cannot grow either tracker without limit; a full live window
+  fails closed until an entry expires.
 - The current local workflow validates both planes together with
   `iroha soracloud app plan`, resolves manifest-adjacent workspace
   scripts with `iroha soracloud app dev` and
@@ -335,10 +348,19 @@ cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/in
 PortableVm stays unprivileged and requires only native-ISA QEMU, `qemu-img`,
 and `tar`. Shared non-root lease volumes are attached as persistent block
 devices that the guest formats and mounts on first boot; the mutable root disk
-is a `qcow2` overlay over the verified base root image. The Firecracker/KVM
-path keeps the Linux host prerequisites for tap networking and the NFS
-transport adapter, and installs tap-scoped host-input and forward rules so
-`Isolated` policy fails closed even on permissive hosts:
+is a `qcow2` overlay over the verified base root image. PortableVm bootstrap
+uses no host metadata listener: QEMU exposes the three NoCloud documents
+(`meta-data`, `network-config`, and `user-data`) through a read-only `cidata`
+VVFAT device, while the application archive is a separate read-only raw virtio
+block device. The host verifies the archive's exact byte length and hash before
+launch, and the guest reads exactly that authenticated length and verifies the
+same hash before extraction. Authoritative `service_secrets` remain in their
+dedicated encrypted/materialized secret boundary and are never projected into
+the NoCloud seed or effective environment.
+
+The Firecracker/KVM path keeps the Linux host prerequisites for tap networking
+and the NFS transport adapter, and installs tap-scoped host-input and forward
+rules so `Isolated` policy fails closed even on permissive hosts:
 
 - host OS is Linux
 - the caller is root
@@ -421,6 +443,9 @@ restore or the initial authoritative reconciliation fails.
 
 Focused validation now covers both shared-storage transports:
 
+- `portable_vm_bundle_block_stage_verifies_and_pads_before_replacement`
+- `portable_vm_cloud_init_seed_contains_only_nocloud_documents`
+- `portable_vm_qemu_args_attach_seed_and_bundle_read_only_without_url`
 - `build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay`
 - `ensure_inrou_portable_lease_disks_create_reusable_raw_images`
 - `ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file`

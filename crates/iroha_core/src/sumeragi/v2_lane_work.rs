@@ -842,6 +842,9 @@ pub(crate) enum V2LaneWorkError {
     /// Committed Nexus/AMX projection differs from the frozen context.
     #[error("committed Nexus/AMX context does not match the frozen height context")]
     NexusContextMismatch,
+    /// Committed process-local execution policy differs from the frozen context.
+    #[error("committed execution policy does not match the frozen height context")]
+    ExecutionPolicyMismatch,
     /// Committed State is neither immediately before nor exactly at this context height.
     #[error("committed State height is incompatible with the frozen height context")]
     StateHeightMismatch,
@@ -2037,6 +2040,12 @@ impl V2LaneWorkAdapter {
         }
         if is_pre_apply && !pre_apply_context_matches {
             return Err(V2LaneWorkError::NexusContextMismatch);
+        }
+        if !is_fresh_genesis_pre_apply
+            && !super::v2_recovery::committed_execution_policy_hash(state.as_ref())
+                .is_ok_and(|hash| hash == context.execution_policy_hash)
+        {
+            return Err(V2LaneWorkError::ExecutionPolicyMismatch);
         }
         let committed_merge_epoch = state
             .merge_ledger()
@@ -13704,6 +13713,10 @@ pub(super) mod tests {
             nexus_amx_context_hash: super::super::v2_recovery::committed_nexus_amx_context_hash(
                 state.as_ref(),
             ),
+            execution_policy_hash: super::super::v2_recovery::committed_execution_policy_hash(
+                state.as_ref(),
+            )
+            .expect("derive lane-work execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,

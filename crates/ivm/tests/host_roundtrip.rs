@@ -20,6 +20,12 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 
+fn state_path_tlv(path: &str) -> Vec<u8> {
+    let path: iroha_data_model::state_path::StatePath = path.parse().expect("canonical state path");
+    let payload = norito::to_bytes(&path).expect("encode state path");
+    make_tlv(PointerType::NoritoBytes, &payload)
+}
+
 fn bytes_state_value(value: &[u8]) -> Vec<u8> {
     let schema = state_value::StateValueSchemaV1 {
         nodes: vec![state_value::StateValueNodeV1::Leaf(
@@ -90,7 +96,7 @@ fn host_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
 
-    let path_tlv = make_tlv(PointerType::Name, b"roundtrip_key");
+    let path_tlv = state_path_tlv("roundtrip_key");
     let value = bytes_state_value(&[0xA5, 0x5A, 0x01]);
     let value_tlv = make_tlv(PointerType::NoritoBytes, &value);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");

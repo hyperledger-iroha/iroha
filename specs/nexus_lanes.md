@@ -135,6 +135,14 @@ LaneConfigEntry {
   catalog + geometry + dataspace agreement before accepting lane-scoped state.
   Missing dataspaces are reported separately from invalid validator rosters so
   operators can distinguish catalog drift from quorum shortages.
+- Verified lane relay registration additionally shares the runtime relay
+  finality verifier: it derives the canonical `3f+1` committee from the exact
+  transaction snapshot, requires commit quorum, and verifies the aggregate BLS
+  signature and proofs of possession. It then verifies the FastPQ proof and its
+  effect claim over the exact relay envelope before writing contract-visible
+  state. The submitting account is only a transporter; a missing or forged QC,
+  substituted settlement, or metadata-only FastPQ claim is rejected regardless
+  of transaction authority.
 - `FindLaneRelayEnvelopeByRef` and runtime relay-cache hydration read verified
   relay records through the canonical `LaneRelayEnvelopeRef::relay_state_key()`
   and reject decoded records whose embedded `relay_ref` does not exactly match
@@ -617,8 +625,10 @@ LaneConfigEntry {
   pending transaction unrouteable, the queue rejects it and clears stale routing
   caches plus TEU backlog accounting instead of proposing it with retired-lane
   metadata.
-- Merge-candidate synthesis also rechecks cached lane relays against the active
-  Nexus lane catalog. Relays for lanes that no longer exist, or for
+- Merge-candidate synthesis requires the exact cached envelope to have a
+  committed, revalidated FastPQ effect record and also rechecks it against the
+  active Nexus lane catalog. Structural gossip metadata alone is progress data,
+  never merge authority. Relays for lanes that no longer exist, or for
   lane/dataspace bindings that no longer match or no longer have a dataspace
   catalog entry, are ignored even if stale cache state survived outside the
   normal lifecycle pruning path.

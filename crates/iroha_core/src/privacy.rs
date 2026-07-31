@@ -331,7 +331,14 @@ pub fn validate_privacy_lifecycle_transition_v1(
     }
     effective_privacy_lifecycle_v1(current.lifecycle, current_height)
         .validate_transition_to(&next)
-        .map_err(PrivacyRegistryError::InvalidLifecycleTransition)
+        .map_err(PrivacyRegistryError::InvalidLifecycleTransition)?;
+    if next.is_active() {
+        let mut successor = *current;
+        successor.lifecycle = next;
+        validate_compiled_privacy_activation_v1(&successor)
+            .map_err(PrivacyRegistryError::CompiledProfile)?;
+    }
+    Ok(())
 }
 
 fn lifecycle_effective_height(lifecycle: PrivacyProtocolLifecycleV1) -> u64 {
@@ -672,7 +679,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::privacy_profiles::compiled_privacy_profile_v1;
+    use crate::privacy_profiles::{
+        compiled_privacy_profile_v1, compiled_zk_x509_profile_material_v1,
+    };
 
     const PROPOSAL_HEIGHT: u64 = 1_000;
     const ACTIVATION_HEIGHT: u64 = PROPOSAL_HEIGHT + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1;
@@ -882,6 +891,38 @@ mod tests {
             ),
             Err(PrivacyRegistryError::TransitionHeightMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn unavailable_compiled_engine_cannot_resume_through_lifecycle_transition() {
+        let suspended_at_height = ACTIVATION_HEIGHT + 1;
+        let transition_height = suspended_at_height + 1;
+        let record = compiled_zk_x509_profile_material_v1()
+            .expect("release-candidate X509 profile material")
+            .activation_record(PrivacyProtocolLifecycleV1::Suspended(
+                PrivacySuspendedLifecycleV1 {
+                    proposed_at_height: PROPOSAL_HEIGHT,
+                    activated_at_height: ACTIVATION_HEIGHT,
+                    state_since_height: suspended_at_height,
+                },
+            ));
+        let resume = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: PROPOSAL_HEIGHT,
+            activated_at_height: ACTIVATION_HEIGHT,
+            state_since_height: transition_height,
+        });
+        assert!(matches!(
+            validate_privacy_lifecycle_transition_v1(&record, resume, transition_height),
+            Err(PrivacyRegistryError::CompiledProfile(_))
+        ));
+
+        let retire = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
+            proposed_at_height: PROPOSAL_HEIGHT,
+            activated_at_height: Some(ACTIVATION_HEIGHT),
+            state_since_height: transition_height,
+        });
+        validate_privacy_lifecycle_transition_v1(&record, retire, transition_height)
+            .expect("fail-closed retirement remains available for an unavailable engine");
     }
 
     #[test]

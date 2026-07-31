@@ -22,7 +22,8 @@ use thiserror::Error;
 
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub(crate) const GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
-const GOLDILOCKS_MODULUS_U128_V1: u128 = GOLDILOCKS_MODULUS_V1 as u128;
+/// `2^64 - p = 2^32 - 1`, used for division-free canonical reduction.
+const GOLDILOCKS_EPSILON_V1: u64 = 0xffff_ffff;
 /// Canonical generator used for every compiled domain and coset.
 pub(crate) const GOLDILOCKS_GENERATOR_V1: u64 = 7;
 /// Two-adicity of the Goldilocks multiplicative group.
@@ -107,8 +108,35 @@ impl GoldilocksFieldV1 {
     }
 
     /// Reduce a 128-bit value modulo the Goldilocks prime.
+    ///
+    /// For `p = 2^64 - 2^32 + 1`, `2^64 = 2^32 - 1 (mod p)`.
+    /// Splitting the high limb once more at bit 32 yields
+    ///
+    /// `lo + hi * 2^64 = lo - hi_hi + hi_lo * (2^32 - 1) (mod p)`.
+    ///
+    /// The two overflow corrections replace an implicit `2^64` with the
+    /// congruent `2^32 - 1`; the final value needs at most one subtraction.
+    /// This is exact for every `u128`, not only products of canonical residues.
     pub(crate) fn reduce(value: u128) -> Self {
-        Self((value % GOLDILOCKS_MODULUS_U128_V1) as u64)
+        let low = value as u64;
+        let high = (value >> 64) as u64;
+        let high_high = high >> 32;
+        let high_low = high & GOLDILOCKS_EPSILON_V1;
+
+        let (reduced_low, borrowed) = low.overflowing_sub(high_high);
+        let reduced_low = if borrowed {
+            reduced_low.wrapping_sub(GOLDILOCKS_EPSILON_V1)
+        } else {
+            reduced_low
+        };
+        let folded_high = high_low * GOLDILOCKS_EPSILON_V1;
+        let (reduced, carried) = reduced_low.overflowing_add(folded_high);
+        let reduced = if carried {
+            reduced.wrapping_add(GOLDILOCKS_EPSILON_V1)
+        } else {
+            reduced
+        };
+        Self(Self::canonicalize_once_v1(reduced))
     }
 
     /// Canonical residue as a `u64`.
@@ -118,7 +146,16 @@ impl GoldilocksFieldV1 {
 
     /// Field addition.
     pub(crate) fn add(self, rhs: Self) -> Self {
-        Self::reduce(u128::from(self.0) + u128::from(rhs.0))
+        debug_assert!(self.0 < GOLDILOCKS_MODULUS_V1);
+        debug_assert!(rhs.0 < GOLDILOCKS_MODULUS_V1);
+        let (sum, carried) = self.0.overflowing_add(rhs.0);
+        let sum = if carried {
+            // The wrapped sum omitted one `2^64`, which is epsilon modulo p.
+            sum.wrapping_add(GOLDILOCKS_EPSILON_V1)
+        } else {
+            sum
+        };
+        Self(Self::canonicalize_once_v1(sum))
     }
 
     /// Field subtraction.
@@ -132,7 +169,17 @@ impl GoldilocksFieldV1 {
 
     /// Field multiplication.
     pub(crate) fn mul(self, rhs: Self) -> Self {
+        debug_assert!(self.0 < GOLDILOCKS_MODULUS_V1);
+        debug_assert!(rhs.0 < GOLDILOCKS_MODULUS_V1);
         Self::reduce(u128::from(self.0) * u128::from(rhs.0))
+    }
+
+    fn canonicalize_once_v1(value: u64) -> u64 {
+        if value >= GOLDILOCKS_MODULUS_V1 {
+            value - GOLDILOCKS_MODULUS_V1
+        } else {
+            value
+        }
     }
 
     /// Exponentiation by repeated squaring.
@@ -1690,6 +1737,93 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn division_free_goldilocks_arithmetic_matches_u128_reference() {
+        let modulus = u128::from(GOLDILOCKS_MODULUS_V1);
+        let boundary_values = [
+            0,
+            1,
+            u128::from(GOLDILOCKS_EPSILON_V1 - 1),
+            u128::from(GOLDILOCKS_EPSILON_V1),
+            u128::from(GOLDILOCKS_EPSILON_V1 + 1),
+            modulus - 1,
+            modulus,
+            modulus + 1,
+            u128::from(u64::MAX),
+            u128::from(u64::MAX) + 1,
+            (1_u128 << 96) - 1,
+            1_u128 << 96,
+            (1_u128 << 127) - 1,
+            1_u128 << 127,
+            u128::MAX - 1,
+            u128::MAX,
+        ];
+        for value in boundary_values {
+            let reduced = GoldilocksFieldV1::reduce(value);
+            assert_eq!(u128::from(reduced.0), value % modulus, "value={value}");
+            assert!(reduced.0 < GOLDILOCKS_MODULUS_V1);
+        }
+
+        let boundary_residues = [
+            0,
+            1,
+            2,
+            GOLDILOCKS_EPSILON_V1 - 1,
+            GOLDILOCKS_EPSILON_V1,
+            GOLDILOCKS_EPSILON_V1 + 1,
+            GOLDILOCKS_MODULUS_V1 / 2,
+            GOLDILOCKS_MODULUS_V1 - GOLDILOCKS_EPSILON_V1,
+            GOLDILOCKS_MODULUS_V1 - 2,
+            GOLDILOCKS_MODULUS_V1 - 1,
+        ];
+        for left in boundary_residues {
+            for right in boundary_residues {
+                let left_field = GoldilocksFieldV1(left);
+                let right_field = GoldilocksFieldV1(right);
+                let sum = left_field.add(right_field);
+                let product = left_field.mul(right_field);
+                assert_eq!(
+                    u128::from(sum.0),
+                    (u128::from(left) + u128::from(right)) % modulus,
+                    "left={left}, right={right}"
+                );
+                assert_eq!(
+                    u128::from(product.0),
+                    (u128::from(left) * u128::from(right)) % modulus,
+                    "left={left}, right={right}"
+                );
+                assert!(sum.0 < GOLDILOCKS_MODULUS_V1);
+                assert!(product.0 < GOLDILOCKS_MODULUS_V1);
+            }
+        }
+
+        let mut rng = StdRng::from_seed([0x6D; 32]);
+        for sample in 0..200_000 {
+            let value = (u128::from(rng.next_u64()) << 64) | u128::from(rng.next_u64());
+            let reduced = GoldilocksFieldV1::reduce(value);
+            assert_eq!(
+                u128::from(reduced.0),
+                value % modulus,
+                "arbitrary reduction sample {sample}"
+            );
+
+            let left = rng.next_u64() % GOLDILOCKS_MODULUS_V1;
+            let right = rng.next_u64() % GOLDILOCKS_MODULUS_V1;
+            let sum = GoldilocksFieldV1(left).add(GoldilocksFieldV1(right));
+            let product = GoldilocksFieldV1(left).mul(GoldilocksFieldV1(right));
+            assert_eq!(
+                u128::from(sum.0),
+                (u128::from(left) + u128::from(right)) % modulus,
+                "random addition sample {sample}"
+            );
+            assert_eq!(
+                u128::from(product.0),
+                (u128::from(left) * u128::from(right)) % modulus,
+                "random multiplication sample {sample}"
+            );
         }
     }
 

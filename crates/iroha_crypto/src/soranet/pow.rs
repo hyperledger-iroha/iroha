@@ -3,6 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt, fs, io,
+    io::Write as _,
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -18,6 +19,8 @@ use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
+use super::replay_lock::ExclusiveLedgerLock;
+
 /// Domain separator used when deriving `PoW` challenges.
 pub const CHALLENGE_DOMAIN: &[u8] = b"soranet.pow.challenge.v1";
 /// Domain separator used when hashing `PoW` solutions.
@@ -26,14 +29,30 @@ pub const SOLUTION_DOMAIN: &[u8] = b"soranet.pow.solution.v1";
 pub const SIGNING_DOMAIN: &[u8; 28] = b"soranet.pow.signed_ticket.v1";
 /// Domain separator used when hashing revocation fingerprints.
 pub const REVOCATION_DOMAIN: &[u8] = b"soranet.pow.revocation.v1";
+/// Domain separator used to bind admission credentials to an exact client hello.
+pub const ADMISSION_TRANSCRIPT_DOMAIN: &[u8] = b"soranet.pow.admission_transcript.v1";
 
 /// Length of the serialized `PoW` ticket payload.
 pub const TICKET_LEN: usize = 74;
-const SIGNED_TICKET_PAYLOAD_BASE_LEN: usize = SIGNING_DOMAIN.len() + TICKET_LEN + 32;
-const SIGNED_TICKET_PAYLOAD_MAX_LEN: usize = SIGNED_TICKET_PAYLOAD_BASE_LEN + 32;
+const SIGNED_TICKET_PAYLOAD_LEN: usize = SIGNING_DOMAIN.len() + TICKET_LEN + 32 + 32;
 /// Slack tolerated when validating the remaining TTL to account for second-level truncation.
 const TTL_GRACE: Duration = Duration::from_secs(1);
 const BINDING_FIELD_LEN: usize = 32;
+
+/// Derive the mandatory admission transcript commitment for a serialized
+/// client hello.
+///
+/// The exact length and bytes are committed so an admission credential cannot
+/// be moved to a different handshake, even when optional hello fields differ.
+#[must_use]
+pub fn derive_admission_transcript(client_hello: &[u8]) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(ADMISSION_TRANSCRIPT_DOMAIN);
+    let length = u64::try_from(client_hello.len()).unwrap_or(u64::MAX);
+    hasher.update(&length.to_be_bytes());
+    hasher.update(client_hello);
+    *hasher.finalize().as_bytes()
+}
 
 /// Hashcash-style ticket attached to `SoraNet` circuit establishment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -160,28 +179,28 @@ fn read_ticket_field<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result
 ///
 /// Signed tickets act as reusable tokens or "fast passes" for clients, binding
 /// the proof-of-work (or a difficulty-0 grant) to a specific relay and session
-/// context. The signature covers the ticket bytes, the relay ID, and an optional
-/// transcript hash to prevent replay across different sessions or relays.
+/// context. The signature covers the ticket bytes, the relay ID, and the
+/// mandatory transcript hash to prevent replay across different sessions or
+/// relays.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct SignedTicket {
     /// The underlying `PoW` ticket.
     pub ticket: Ticket,
     /// The relay identifier (32 bytes) that signed this ticket.
     pub relay_id: [u8; 32],
-    /// Optional transcript hash binding the ticket to a specific session.
-    pub transcript_hash: Option<[u8; 32]>,
+    /// Transcript hash binding the ticket to a specific session.
+    pub transcript_hash: [u8; 32],
     /// ML-DSA-44 signature over `(ticket || relay_id || transcript_hash)`.
     pub signature: Vec<u8>,
 }
 
 struct SignedTicketPayload {
-    bytes: [u8; SIGNED_TICKET_PAYLOAD_MAX_LEN],
-    len: usize,
+    bytes: [u8; SIGNED_TICKET_PAYLOAD_LEN],
 }
 
 impl SignedTicketPayload {
     fn as_slice(&self) -> &[u8] {
-        &self.bytes[..self.len]
+        &self.bytes
     }
 }
 
@@ -193,7 +212,7 @@ impl SignedTicket {
     pub fn sign(
         ticket: Ticket,
         relay_id: &[u8; 32],
-        transcript_hash: Option<&[u8; 32]>,
+        transcript_hash: &[u8; 32],
         secret_key: &[u8],
     ) -> Result<Self, Error> {
         Self::validate_ticket_format(&ticket)?;
@@ -208,7 +227,7 @@ impl SignedTicket {
         Ok(Self {
             ticket,
             relay_id: *relay_id,
-            transcript_hash: transcript_hash.copied(),
+            transcript_hash: *transcript_hash,
             signature: signature.as_bytes().to_vec(),
         })
     }
@@ -244,8 +263,7 @@ impl SignedTicket {
         MlDsaSuite::MlDsa44
             .validate_public_key(public_key)
             .map_err(|err| Error::PostQuantum(err.to_string()))?;
-        let payload =
-            Self::build_payload(&self.ticket, &self.relay_id, self.transcript_hash.as_ref());
+        let payload = Self::build_payload(&self.ticket, &self.relay_id, &self.transcript_hash);
         verify_mldsa(
             MlDsaSuite::MlDsa44,
             public_key,
@@ -276,28 +294,21 @@ impl SignedTicket {
     fn build_payload(
         ticket: &Ticket,
         relay_id: &[u8; 32],
-        transcript_hash: Option<&[u8; 32]>,
+        transcript_hash: &[u8; 32],
     ) -> SignedTicketPayload {
         let mut payload = SignedTicketPayload {
-            bytes: [0u8; SIGNED_TICKET_PAYLOAD_MAX_LEN],
-            len: 0,
+            bytes: [0u8; SIGNED_TICKET_PAYLOAD_LEN],
         };
+        let mut offset = 0;
 
-        payload.bytes[payload.len..payload.len + SIGNING_DOMAIN.len()]
-            .copy_from_slice(SIGNING_DOMAIN);
-        payload.len += SIGNING_DOMAIN.len();
-        payload.bytes[payload.len..payload.len + TICKET_LEN].copy_from_slice(&ticket.to_bytes());
-        payload.len += TICKET_LEN;
-        payload.bytes[payload.len..payload.len + relay_id.len()].copy_from_slice(relay_id);
-        payload.len += relay_id.len();
-        if let Some(hash) = transcript_hash {
-            payload.bytes[payload.len..payload.len + hash.len()].copy_from_slice(hash);
-            payload.len += hash.len();
-        }
-        debug_assert!(matches!(
-            payload.len,
-            SIGNED_TICKET_PAYLOAD_BASE_LEN | SIGNED_TICKET_PAYLOAD_MAX_LEN
-        ));
+        payload.bytes[offset..offset + SIGNING_DOMAIN.len()].copy_from_slice(SIGNING_DOMAIN);
+        offset += SIGNING_DOMAIN.len();
+        payload.bytes[offset..offset + TICKET_LEN].copy_from_slice(&ticket.to_bytes());
+        offset += TICKET_LEN;
+        payload.bytes[offset..offset + relay_id.len()].copy_from_slice(relay_id);
+        offset += relay_id.len();
+        payload.bytes[offset..offset + transcript_hash.len()].copy_from_slice(transcript_hash);
+        debug_assert_eq!(offset + transcript_hash.len(), SIGNED_TICKET_PAYLOAD_LEN);
         payload
     }
 
@@ -324,7 +335,7 @@ impl SignedTicket {
 /// Limits applied to the revocation store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TicketRevocationStoreLimits {
-    /// Maximum number of fingerprints to retain.
+    /// Maximum number of active fingerprints to retain before failing closed.
     pub max_entries: usize,
     /// Maximum TTL allowed for a revoked ticket relative to insertion time.
     pub max_ttl: Duration,
@@ -361,32 +372,26 @@ pub enum TicketRevocationInsertStatus {
     Expired,
     /// Ticket TTL exceeded configured maximum.
     TtlExceeded,
-    /// Store could not make room for a new entry.
+    /// Store is full of active entries and rejected the new entry.
     Capacity,
 }
 
-/// Outcome of an insertion attempt, including any evicted entry.
+/// Outcome of an insertion attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TicketRevocationInsertOutcome {
     /// Final status.
     pub status: TicketRevocationInsertStatus,
-    /// Optional fingerprint evicted to make space.
-    pub evicted: Option<[u8; 32]>,
 }
 
 impl TicketRevocationInsertOutcome {
-    const fn accepted(evicted: Option<[u8; 32]>) -> Self {
+    const fn accepted() -> Self {
         Self {
             status: TicketRevocationInsertStatus::Accepted,
-            evicted,
         }
     }
 
     const fn rejected(status: TicketRevocationInsertStatus) -> Self {
-        Self {
-            status,
-            evicted: None,
-        }
+        Self { status }
     }
 }
 
@@ -430,12 +435,17 @@ struct TicketRevocationSnapshotEntry {
     expires_at_secs: u64,
 }
 
-/// Persistent store for revoked ticket signatures.
+/// Persistent store for revoked or consumed ticket fingerprints.
+///
+/// Active entries are never evicted to admit newer entries: once the store is
+/// full, insertion fails closed until an entry expires. Persistent instances
+/// hold an exclusive sidecar lock so two processes cannot fork replay history.
 #[derive(Debug)]
 pub struct TicketRevocationStore {
     limits: TicketRevocationStoreLimits,
     records: HashMap<[u8; 32], RevokedTicketRecord>,
     path: Option<PathBuf>,
+    _ledger_lock: Option<ExclusiveLedgerLock>,
 }
 
 impl TicketRevocationStore {
@@ -450,6 +460,7 @@ impl TicketRevocationStore {
             limits: TicketRevocationStoreLimits::new(limits.max_entries, limits.max_ttl)?,
             records: HashMap::new(),
             path: None,
+            _ledger_lock: None,
         })
     }
 
@@ -463,10 +474,15 @@ impl TicketRevocationStore {
         limits: TicketRevocationStoreLimits,
         now: SystemTime,
     ) -> Result<Self, TicketRevocationStoreError> {
+        let limits = TicketRevocationStoreLimits::new(limits.max_entries, limits.max_ttl)?;
+        let path = path.into();
+        let ledger_lock = ExclusiveLedgerLock::acquire(&path)
+            .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         let mut store = Self {
-            limits: TicketRevocationStoreLimits::new(limits.max_entries, limits.max_ttl)?,
+            limits,
             records: HashMap::new(),
-            path: Some(path.into()),
+            path: Some(path),
+            _ledger_lock: Some(ledger_lock),
         };
         store.load_from_disk(now)?;
         Ok(store)
@@ -624,20 +640,19 @@ impl TicketRevocationStore {
             ));
         }
 
-        let mut evicted = None;
         if self.records.len() >= self.limits.max_entries {
-            evicted = self.evict_oldest();
-            if evicted.is_none() && self.records.len() >= self.limits.max_entries {
-                return Ok(TicketRevocationInsertOutcome::rejected(
-                    TicketRevocationInsertStatus::Capacity,
-                ));
-            }
+            // An unexpired consumption record is a security invariant, not a
+            // cache entry. Forgetting one to admit a newer ticket would make
+            // the forgotten ticket replayable for the rest of its lifetime.
+            return Ok(TicketRevocationInsertOutcome::rejected(
+                TicketRevocationInsertStatus::Capacity,
+            ));
         }
 
         self.records
             .insert(fingerprint, RevokedTicketRecord { expires_at });
         self.persist()?;
-        Ok(TicketRevocationInsertOutcome::accepted(evicted))
+        Ok(TicketRevocationInsertOutcome::accepted())
     }
 
     fn is_revoked_fingerprint(&self, fingerprint: &[u8; 32], now: SystemTime) -> bool {
@@ -646,34 +661,28 @@ impl TicketRevocationStore {
             .is_some_and(|record| !is_expired(record.expires_at, now))
     }
 
-    fn evict_oldest(&mut self) -> Option<[u8; 32]> {
-        let oldest = self
-            .records
-            .iter()
-            .min_by_key(|(_, record)| record.expires_at)
-            .map(|(id, _)| *id);
-        if let Some(id) = oldest {
-            self.records.remove(&id);
-            return Some(id);
-        }
-        None
-    }
-
     fn load_from_disk(&mut self, now: SystemTime) -> Result<(), TicketRevocationStoreError> {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent)
                 .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         }
         let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+            // Materialise the empty ledger immediately so startup validates
+            // that replay state is actually durable before serving clients.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return self.persist(),
             Err(err) => return Err(TicketRevocationStoreError::Io(err.to_string())),
         };
         if bytes.is_empty() {
-            return Ok(());
+            return Err(TicketRevocationStoreError::Parse(
+                "revocation snapshot is empty".to_owned(),
+            ));
         }
         let snapshot: TicketRevocationSnapshot = decode_from_bytes(&bytes)
             .map_err(|err| TicketRevocationStoreError::Parse(err.to_string()))?;
@@ -692,17 +701,21 @@ impl TicketRevocationStore {
                         entry.expires_at_secs
                     ))
                 })?;
-            if is_expired(expires_at, now) || exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+            if is_expired(expires_at, now) {
                 continue;
+            }
+            if exceeds_ttl(expires_at, now, self.limits.max_ttl) {
+                return Err(TicketRevocationStoreError::Parse(format!(
+                    "active revocation expiry exceeds configured max_ttl of {:?}",
+                    self.limits.max_ttl
+                )));
             }
             self.records
                 .insert(entry.fingerprint, RevokedTicketRecord { expires_at });
-            while self.records.len() > self.limits.max_entries {
-                if self.evict_oldest().is_none() {
-                    return Err(TicketRevocationStoreError::Parse(
-                        "revocation snapshot exceeds capacity".to_owned(),
-                    ));
-                }
+            if self.records.len() > self.limits.max_entries {
+                return Err(TicketRevocationStoreError::Parse(
+                    "revocation snapshot exceeds capacity".to_owned(),
+                ));
             }
         }
         self.persist()
@@ -712,12 +725,19 @@ impl TicketRevocationStore {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent)
                 .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         }
         let mut entries: Vec<_> = self.records.iter().collect();
-        entries.sort_by_key(|(_, record)| record.expires_at);
+        entries.sort_by(|(left_fingerprint, left), (right_fingerprint, right)| {
+            left.expires_at
+                .cmp(&right.expires_at)
+                .then_with(|| left_fingerprint.cmp(right_fingerprint))
+        });
         let snapshot = TicketRevocationSnapshot {
             entries: entries
                 .into_iter()
@@ -733,8 +753,23 @@ impl TicketRevocationStore {
         let buf =
             to_bytes(&snapshot).map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         let tmp_path = path.with_extension("tmp");
-        fs::write(&tmp_path, buf).map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
-        fs::rename(&tmp_path, path).map_err(|err| TicketRevocationStoreError::Io(err.to_string()))
+        let mut tmp = fs::File::create(&tmp_path)
+            .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
+        tmp.write_all(&buf)
+            .and_then(|()| tmp.sync_all())
+            .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
+        fs::rename(&tmp_path, path)
+            .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
+        #[cfg(unix)]
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
+        }
+        Ok(())
     }
 }
 
@@ -769,8 +804,8 @@ pub struct ChallengeBinding<'a> {
     pub descriptor_commit: &'a [u8],
     /// Relay identifier bound into the challenge.
     pub relay_id: &'a [u8],
-    /// Optional transcript hash to distinguish resumed circuits.
-    pub transcript_hash: Option<&'a [u8]>,
+    /// Transcript hash binding the ticket to this admission attempt.
+    pub transcript_hash: &'a [u8; 32],
 }
 
 impl<'a> ChallengeBinding<'a> {
@@ -779,7 +814,7 @@ impl<'a> ChallengeBinding<'a> {
     pub fn new(
         descriptor_commit: &'a [u8],
         relay_id: &'a [u8],
-        transcript_hash: Option<&'a [u8]>,
+        transcript_hash: &'a [u8; 32],
     ) -> Self {
         Self {
             descriptor_commit,
@@ -1054,13 +1089,8 @@ pub fn verify_signed_ticket_at(
     if signed_ticket.relay_id != *binding.relay_id {
         return Err(Error::RelayMismatch);
     }
-    match (
-        signed_ticket.transcript_hash.as_ref(),
-        binding.transcript_hash,
-    ) {
-        (None, None) => {}
-        (Some(ticket), Some(binding_hash)) if ticket == binding_hash => {}
-        _ => return Err(Error::TranscriptMismatch),
+    if signed_ticket.transcript_hash != *binding.transcript_hash {
+        return Err(Error::TranscriptMismatch);
     }
 
     validate_ticket_policy_at(&signed_ticket.ticket, params, now)?;
@@ -1239,14 +1269,6 @@ fn validate_binding(binding: &ChallengeBinding<'_>) -> Result<(), String> {
             binding.relay_id.len()
         ));
     }
-    if let Some(transcript_hash) = binding.transcript_hash
-        && transcript_hash.len() != BINDING_FIELD_LEN
-    {
-        return Err(format!(
-            "transcript_hash must be {BINDING_FIELD_LEN} bytes, got {}",
-            transcript_hash.len()
-        ));
-    }
     Ok(())
 }
 
@@ -1259,9 +1281,7 @@ fn derive_challenge(
     hasher.update(CHALLENGE_DOMAIN);
     hasher.update(binding.descriptor_commit);
     hasher.update(binding.relay_id);
-    if let Some(transcript) = binding.transcript_hash {
-        hasher.update(transcript);
-    }
+    hasher.update(binding.transcript_hash);
     hasher.update(&client_nonce);
     hasher.update(&expires_at.to_be_bytes());
     hasher.finalize()
@@ -1377,17 +1397,18 @@ mod tests {
 
     const RELAY_A: [u8; 32] = [0xCC; 32];
     const RELAY_B: [u8; 32] = [0xDD; 32];
+    const TRANSCRIPT: [u8; 32] = [0xEE; 32];
 
     fn params() -> Parameters {
         Parameters::new(5, Duration::from_secs(600), Duration::from_secs(30))
     }
 
     fn binding(descriptor: &[u8; 32]) -> ChallengeBinding<'_> {
-        ChallengeBinding::new(descriptor, &RELAY_A, None)
+        ChallengeBinding::new(descriptor, &RELAY_A, &TRANSCRIPT)
     }
 
     fn other_binding(descriptor: &[u8; 32]) -> ChallengeBinding<'_> {
-        ChallengeBinding::new(descriptor, &RELAY_B, None)
+        ChallengeBinding::new(descriptor, &RELAY_B, &TRANSCRIPT)
     }
 
     struct FailingTryRng;
@@ -1452,7 +1473,7 @@ mod tests {
                 solution: [0u8; 32],
             },
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![signature_byte; MlDsaSuite::MlDsa44.signature_len()],
         }
     }
@@ -1485,55 +1506,71 @@ mod tests {
     }
 
     #[test]
-    fn transcript_hashes_match_legacy_contiguous_layout() {
+    fn admission_transcript_commits_to_exact_client_hello() {
+        let client_hello = b"\x01soranet-client-hello\x01resume-binding-a";
+        let transcript = derive_admission_transcript(client_hello);
+
+        let mut expected = Hasher::new();
+        expected.update(ADMISSION_TRANSCRIPT_DOMAIN);
+        let length = u64::try_from(client_hello.len()).expect("test hello length fits in u64");
+        expected.update(&length.to_be_bytes());
+        expected.update(client_hello);
+        assert_eq!(transcript, *expected.finalize().as_bytes());
+        assert_eq!(transcript, derive_admission_transcript(client_hello));
+
+        let mut substituted = client_hello.to_vec();
+        *substituted.last_mut().expect("non-empty client hello") ^= 1;
+        assert_ne!(transcript, derive_admission_transcript(&substituted));
+        assert_ne!(transcript, derive_admission_transcript(&[]));
+    }
+
+    #[test]
+    fn challenge_hashes_match_canonical_contiguous_layout() {
         let descriptor = [0x11; 32];
         let relay = [0x22; 32];
         let transcript = [0x33; 32];
         let client_nonce = [0x44; 32];
         let expires_at = 1_700_000_123_u64;
 
-        for transcript_hash in [None, Some(transcript.as_slice())] {
-            let binding = ChallengeBinding::new(&descriptor, &relay, transcript_hash);
-            let mut legacy = Vec::with_capacity(
-                CHALLENGE_DOMAIN.len()
-                    + descriptor.len()
-                    + relay.len()
-                    + transcript_hash.map_or(0, <[u8]>::len)
-                    + client_nonce.len()
-                    + 8,
-            );
-            legacy.extend_from_slice(CHALLENGE_DOMAIN);
-            legacy.extend_from_slice(&descriptor);
-            legacy.extend_from_slice(&relay);
-            if let Some(transcript_hash) = transcript_hash {
-                legacy.extend_from_slice(transcript_hash);
-            }
-            legacy.extend_from_slice(&client_nonce);
-            legacy.extend_from_slice(&expires_at.to_be_bytes());
+        let binding = ChallengeBinding::new(&descriptor, &relay, &transcript);
+        let mut expected_challenge = Vec::with_capacity(
+            CHALLENGE_DOMAIN.len()
+                + descriptor.len()
+                + relay.len()
+                + transcript.len()
+                + client_nonce.len()
+                + 8,
+        );
+        expected_challenge.extend_from_slice(CHALLENGE_DOMAIN);
+        expected_challenge.extend_from_slice(&descriptor);
+        expected_challenge.extend_from_slice(&relay);
+        expected_challenge.extend_from_slice(&transcript);
+        expected_challenge.extend_from_slice(&client_nonce);
+        expected_challenge.extend_from_slice(&expires_at.to_be_bytes());
 
-            assert_eq!(
-                derive_challenge(&binding, client_nonce, expires_at),
-                blake3::hash(&legacy)
-            );
-        }
+        assert_eq!(
+            derive_challenge(&binding, client_nonce, expires_at),
+            blake3::hash(&expected_challenge)
+        );
 
         let challenge = blake3::hash(b"challenge");
         let solution = [0x55; 32];
-        let mut legacy_solution =
+        let mut expected_solution =
             Vec::with_capacity(SOLUTION_DOMAIN.len() + challenge.as_bytes().len() + solution.len());
-        legacy_solution.extend_from_slice(SOLUTION_DOMAIN);
-        legacy_solution.extend_from_slice(challenge.as_bytes());
-        legacy_solution.extend_from_slice(&solution);
+        expected_solution.extend_from_slice(SOLUTION_DOMAIN);
+        expected_solution.extend_from_slice(challenge.as_bytes());
+        expected_solution.extend_from_slice(&solution);
         assert_eq!(
             derive_solution_digest(&challenge, &solution),
-            blake3::hash(&legacy_solution)
+            blake3::hash(&expected_solution)
         );
 
         let signature = vec![0x66; 97];
-        let mut legacy_revocation = Vec::with_capacity(REVOCATION_DOMAIN.len() + signature.len());
-        legacy_revocation.extend_from_slice(REVOCATION_DOMAIN);
-        legacy_revocation.extend_from_slice(&signature);
-        let expected_revocation: [u8; 32] = blake3::hash(&legacy_revocation).into();
+        let mut expected_revocation_input =
+            Vec::with_capacity(REVOCATION_DOMAIN.len() + signature.len());
+        expected_revocation_input.extend_from_slice(REVOCATION_DOMAIN);
+        expected_revocation_input.extend_from_slice(&signature);
+        let expected_revocation: [u8; 32] = blake3::hash(&expected_revocation_input).into();
         assert_eq!(
             compute_revocation_fingerprint(&signature),
             expected_revocation
@@ -1684,7 +1721,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![0xAA; MlDsaSuite::MlDsa44.signature_len()],
         };
         assert!(signed.checked_expires_at().is_none());
@@ -1728,7 +1765,7 @@ mod tests {
                 solution: [0xBB; 32],
             },
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: Vec::new(),
         };
 
@@ -1834,7 +1871,7 @@ mod tests {
             solution: [0xBB; 32],
         };
         let short_descriptor = [0x11; 31];
-        let binding = ChallengeBinding::new(&short_descriptor, &RELAY_A, None);
+        let binding = ChallengeBinding::new(&short_descriptor, &RELAY_A, &TRANSCRIPT);
 
         let err = verify_at(
             &ticket,
@@ -1853,7 +1890,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![0xAA; MlDsaSuite::MlDsa44.signature_len()],
         };
         let err = verify_signed_ticket_at(
@@ -1878,7 +1915,7 @@ mod tests {
         let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
         let descriptor = [0x22; 32];
         let short_relay = [0x33; 31];
-        let binding = ChallengeBinding::new(&descriptor, &short_relay, None);
+        let binding = ChallengeBinding::new(&descriptor, &short_relay, &TRANSCRIPT);
         let mut rng = rand::rngs::StdRng::from_seed([0x44; 32]);
 
         let err = mint_ticket(&params, &binding, Duration::from_secs(120), &mut rng)
@@ -1988,8 +2025,8 @@ mod tests {
         let relay_id = [0x33; 32];
         let transcript = [0x44; 32];
 
-        let signed = SignedTicket::sign(ticket, &relay_id, Some(&transcript), kp.secret_key())
-            .expect("sign");
+        let signed =
+            SignedTicket::sign(ticket, &relay_id, &transcript, kp.secret_key()).expect("sign");
 
         signed.verify(kp.public_key()).expect("verify");
 
@@ -2009,7 +2046,7 @@ mod tests {
     }
 
     #[test]
-    fn signed_ticket_payload_matches_legacy_contiguous_layout() {
+    fn signed_ticket_payload_matches_canonical_contiguous_layout() {
         let ticket = Ticket {
             version: Ticket::VERSION,
             difficulty: 7,
@@ -2020,27 +2057,16 @@ mod tests {
         let relay_id = [0x33; 32];
         let transcript = [0x44; 32];
 
-        for transcript_hash in [None, Some(&transcript)] {
-            let payload = SignedTicket::build_payload(&ticket, &relay_id, transcript_hash);
-            let mut legacy =
-                Vec::with_capacity(SIGNING_DOMAIN.len() + TICKET_LEN + relay_id.len() + 32);
-            legacy.extend_from_slice(SIGNING_DOMAIN);
-            legacy.extend_from_slice(&ticket.to_bytes());
-            legacy.extend_from_slice(&relay_id);
-            if let Some(hash) = transcript_hash {
-                legacy.extend_from_slice(hash);
-            }
+        let payload = SignedTicket::build_payload(&ticket, &relay_id, &transcript);
+        let mut expected =
+            Vec::with_capacity(SIGNING_DOMAIN.len() + TICKET_LEN + relay_id.len() + 32);
+        expected.extend_from_slice(SIGNING_DOMAIN);
+        expected.extend_from_slice(&ticket.to_bytes());
+        expected.extend_from_slice(&relay_id);
+        expected.extend_from_slice(&transcript);
 
-            assert_eq!(payload.as_slice(), legacy.as_slice());
-            assert_eq!(
-                payload.as_slice().len(),
-                if transcript_hash.is_some() {
-                    SIGNED_TICKET_PAYLOAD_MAX_LEN
-                } else {
-                    SIGNED_TICKET_PAYLOAD_BASE_LEN
-                }
-            );
-        }
+        assert_eq!(payload.as_slice(), expected.as_slice());
+        assert_eq!(payload.as_slice().len(), SIGNED_TICKET_PAYLOAD_LEN);
     }
 
     #[test]
@@ -2055,13 +2081,42 @@ mod tests {
             client_nonce: [0xAA; 32],
             solution: [0xBB; 32],
         };
-        let signed =
-            SignedTicket::sign(ticket, &RELAY_A, None, kp.secret_key()).expect("sign ticket");
+        let signed = SignedTicket::sign(ticket, &RELAY_A, &TRANSCRIPT, kp.secret_key())
+            .expect("sign ticket");
         let encoded = signed.encode();
         let decoded = SignedTicket::decode(&encoded).expect("decode");
         assert_eq!(decoded, signed);
 
         let err = SignedTicket::decode(&[]).expect_err("empty payload should fail");
+        assert!(matches!(err, Error::Malformed(_)));
+    }
+
+    #[test]
+    fn signed_ticket_decode_rejects_payload_without_transcript() {
+        #[derive(NoritoSerialize)]
+        struct SignedTicketWithoutTranscript {
+            ticket: Ticket,
+            relay_id: [u8; 32],
+            transcript_hash: Option<[u8; 32]>,
+            signature: Vec<u8>,
+        }
+
+        let payload = SignedTicketWithoutTranscript {
+            ticket: Ticket {
+                version: Ticket::VERSION,
+                difficulty: 1,
+                expires_at: 1_700_000_600,
+                client_nonce: [0x11; 32],
+                solution: [0x22; 32],
+            },
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: vec![0x33; MlDsaSuite::MlDsa44.signature_len()],
+        };
+        let encoded = encode_adaptive(&payload);
+
+        let err = SignedTicket::decode(&encoded)
+            .expect_err("first-release signed tickets require a transcript field");
         assert!(matches!(err, Error::Malformed(_)));
     }
 
@@ -2077,7 +2132,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![0x11],
         };
         let encoded = signed.encode();
@@ -2097,7 +2152,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len() + 1],
         };
         let encoded = signed.encode();
@@ -2124,7 +2179,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![0u8; MlDsaSuite::MlDsa44.signature_len()],
         };
         let encoded = signed.encode();
@@ -2147,7 +2202,7 @@ mod tests {
                 solution: [0xBB; 32],
             },
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: Vec::new(),
         };
         let encoded = signed.encode();
@@ -2168,7 +2223,7 @@ mod tests {
                 solution: [0xBB; 32],
             },
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: Vec::new(),
         };
 
@@ -2190,7 +2245,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len() - 1],
         };
 
@@ -2218,7 +2273,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![0u8; MlDsaSuite::MlDsa44.signature_len()],
         };
 
@@ -2243,7 +2298,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: Vec::new(),
         };
 
@@ -2263,7 +2318,7 @@ mod tests {
             solution: [0xBB; 32],
         };
 
-        let err = SignedTicket::sign(ticket, &RELAY_A, None, &[])
+        let err = SignedTicket::sign(ticket, &RELAY_A, &TRANSCRIPT, &[])
             .expect_err("unsupported version must fail before secret-key validation");
         assert!(matches!(err, Error::UnsupportedVersion(_)));
     }
@@ -2278,7 +2333,7 @@ mod tests {
             solution: [0xBB; 32],
         };
 
-        let err = SignedTicket::sign(ticket, &RELAY_A, None, &[])
+        let err = SignedTicket::sign(ticket, &RELAY_A, &TRANSCRIPT, &[])
             .expect_err("unrepresentable expiry must fail before secret-key validation");
         assert!(matches!(err, Error::ExpiryTimestampOverflow(u64::MAX)));
     }
@@ -2293,7 +2348,7 @@ mod tests {
             solution: [0xBB; 32],
         };
 
-        let err = SignedTicket::sign(ticket, &RELAY_A, None, &[])
+        let err = SignedTicket::sign(ticket, &RELAY_A, &TRANSCRIPT, &[])
             .expect_err("invalid secret key length must fail before signing");
         match err {
             Error::Signing(message) => {
@@ -2317,7 +2372,7 @@ mod tests {
         };
         let secret_key = vec![0u8; MlDsaSuite::MlDsa44.secret_key_len()];
 
-        let err = SignedTicket::sign(ticket, &RELAY_A, None, &secret_key)
+        let err = SignedTicket::sign(ticket, &RELAY_A, &TRANSCRIPT, &secret_key)
             .expect_err("all-zero secret key must fail before signing");
         match err {
             Error::Signing(message) => {
@@ -2339,7 +2394,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len()],
         };
 
@@ -2369,7 +2424,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len()],
         };
         let all_zero_public_key = vec![0u8; MlDsaSuite::MlDsa44.public_key_len()];
@@ -2398,7 +2453,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: Vec::new(),
         };
         let descriptor = [0xCC; 32];
@@ -2429,12 +2484,12 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: Some([0x11; 32]),
+            transcript_hash: [0x11; 32],
             signature: Vec::new(),
         };
         let descriptor = [0xCC; 32];
         let expected_transcript = [0x22; 32];
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, Some(&expected_transcript));
+        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &expected_transcript);
 
         let err = verify_signed_ticket_at(
             &signed,
@@ -2461,11 +2516,11 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: Vec::new(),
         };
         let descriptor = [0xCC; 32];
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, None);
+        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &TRANSCRIPT);
 
         let err = verify_signed_ticket_at(
             &signed,
@@ -2493,11 +2548,11 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: Vec::new(),
         };
         let descriptor = [0xCC; 32];
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, None);
+        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &TRANSCRIPT);
 
         let err = verify_signed_ticket_at(&signed, &[], &binding, &params, None, now)
             .expect_err("expired ticket must fail before signature or key preflight");
@@ -2544,8 +2599,8 @@ mod tests {
         let descriptor = [0xAC; 32];
         let transcript_a = [0x01; 32];
         let transcript_b = [0x02; 32];
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, Some(&transcript_a));
-        let mismatched = ChallengeBinding::new(&descriptor, &RELAY_A, Some(&transcript_b));
+        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &transcript_a);
+        let mismatched = ChallengeBinding::new(&descriptor, &RELAY_A, &transcript_b);
 
         let mut observed_failure = false;
         for _ in 0..64 {
@@ -2564,7 +2619,25 @@ mod tests {
     }
 
     #[test]
-    fn revocation_store_persists_and_evicts_oldest() {
+    fn revocation_store_materializes_empty_ledger_on_load() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("nested/revocations.norito");
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
+
+        let store = TicketRevocationStore::load(&path, limits, now).expect("create ledger");
+        assert_eq!(store.len(now), 0);
+        assert!(
+            std::fs::metadata(&path).expect("ledger metadata").len() > 0,
+            "startup must materialize a parseable durable snapshot"
+        );
+        drop(store);
+        let reloaded = TicketRevocationStore::load(&path, limits, now).expect("reload ledger");
+        assert_eq!(reloaded.len(now), 0);
+    }
+
+    #[test]
+    fn revocation_store_fails_closed_without_evicting_active_records() {
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("revocations.norito");
@@ -2580,16 +2653,17 @@ mod tests {
         let outcome_b = store.revoke_ticket(&ticket_b, now).expect("insert b");
         assert_eq!(outcome_b.status, TicketRevocationInsertStatus::Accepted);
         let outcome_c = store.revoke_ticket(&ticket_c, now).expect("insert c");
-        assert_eq!(outcome_c.status, TicketRevocationInsertStatus::Accepted);
         assert_eq!(
-            outcome_c.evicted,
-            Some(ticket_a.revocation_fingerprint()),
-            "oldest ticket should be evicted when capacity is reached"
+            outcome_c.status,
+            TicketRevocationInsertStatus::Capacity,
+            "a full store must reject new consumption records"
         );
-        assert!(store.is_ticket_revoked(&ticket_c, now));
-        assert!(!store.is_ticket_revoked(&ticket_a, now));
+        assert!(store.is_ticket_revoked(&ticket_a, now));
+        assert!(store.is_ticket_revoked(&ticket_b, now));
+        assert!(!store.is_ticket_revoked(&ticket_c, now));
 
         let reload_now = UNIX_EPOCH + Duration::from_secs(1_250);
+        drop(store);
         let reloaded =
             TicketRevocationStore::load(&path, limits, reload_now).expect("reload from disk");
         assert_eq!(
@@ -2600,7 +2674,7 @@ mod tests {
     }
 
     #[test]
-    fn revocation_store_load_enforces_capacity_by_evicting_oldest() {
+    fn revocation_store_load_rejects_over_capacity_snapshot() {
         let now = UNIX_EPOCH + Duration::from_secs(2_000);
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("revocations.norito");
@@ -2626,12 +2700,49 @@ mod tests {
             ],
         );
 
-        let store = TicketRevocationStore::load(&path, limits, now).expect("load capped snapshot");
-        let active = store.active_fingerprints(now);
-        assert_eq!(active.len(), 2);
-        assert!(!active.contains(&old));
-        assert!(active.contains(&middle));
-        assert!(active.contains(&newest));
+        let err =
+            TicketRevocationStore::load(&path, limits, now).expect_err("snapshot must fail closed");
+        assert_eq!(
+            err,
+            TicketRevocationStoreError::Parse("revocation snapshot exceeds capacity".to_owned())
+        );
+    }
+
+    #[test]
+    fn revocation_store_load_rejects_empty_snapshot() {
+        let now = UNIX_EPOCH + Duration::from_secs(2_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("revocations.norito");
+        fs::write(&path, b"").expect("write empty snapshot");
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
+
+        let err =
+            TicketRevocationStore::load(&path, limits, now).expect_err("snapshot must fail closed");
+        assert_eq!(
+            err,
+            TicketRevocationStoreError::Parse("revocation snapshot is empty".to_owned())
+        );
+    }
+
+    #[test]
+    fn revocation_store_load_rejects_active_entry_beyond_ttl() {
+        let now = UNIX_EPOCH + Duration::from_secs(2_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("revocations.norito");
+        write_revocation_snapshot(
+            &path,
+            vec![TicketRevocationSnapshotEntry {
+                fingerprint: [0x31; 32],
+                expires_at_secs: 2_120,
+            }],
+        );
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(60)).expect("limits");
+
+        let err =
+            TicketRevocationStore::load(&path, limits, now).expect_err("snapshot must fail closed");
+        assert!(
+            matches!(err, TicketRevocationStoreError::Parse(message) if message.contains("max_ttl"))
+        );
     }
 
     #[test]
@@ -2724,7 +2835,7 @@ mod tests {
         let signed = SignedTicket {
             ticket,
             relay_id: RELAY_A,
-            transcript_hash: None,
+            transcript_hash: TRANSCRIPT,
             signature: vec![0xAA; MlDsaSuite::MlDsa44.signature_len()],
         };
 
@@ -2773,6 +2884,7 @@ mod tests {
         assert!(store.is_ticket_revoked(&long, later));
         assert!(!store.is_ticket_revoked(&short, later));
 
+        drop(store);
         let reloaded =
             TicketRevocationStore::load(&path, limits, later).expect("reload after purge");
         assert_eq!(reloaded.len(later), 1);
@@ -2870,6 +2982,7 @@ mod tests {
         matches!(err, Error::Replay);
 
         let later = now + Duration::from_secs(30);
+        drop(store);
         let mut reloaded =
             TicketRevocationStore::load(&path, limits, later).expect("reload revocations");
         let err =
@@ -2879,7 +2992,7 @@ mod tests {
     }
 
     #[test]
-    fn revocation_store_accepts_new_ticket_after_eviction() {
+    fn revocation_store_capacity_never_makes_consumed_ticket_replayable() {
         let now = UNIX_EPOCH + Duration::from_secs(8_000);
         let limits = TicketRevocationStoreLimits::new(1, Duration::from_secs(300)).expect("limits");
         let mut store = TicketRevocationStore::in_memory(limits).expect("store");
@@ -2901,20 +3014,24 @@ mod tests {
 
         verify_with_revocations_at(&ticket_a, &binding, &params, Some(&mut store), now)
             .expect("accept ticket a");
-        verify_with_revocations_at(&ticket_b, &binding, &params, Some(&mut store), now)
-            .expect("accept ticket b and evict a");
+        let capacity_err =
+            verify_with_revocations_at(&ticket_b, &binding, &params, Some(&mut store), now)
+                .expect_err("full replay store must reject ticket b");
+        assert!(matches!(capacity_err, Error::RevocationStore(_)));
 
         assert!(
-            store.is_ticket_payload_revoked(&ticket_b, now),
-            "newest ticket should remain"
+            store.is_ticket_payload_revoked(&ticket_a, now),
+            "accepted ticket must remain consumed"
         );
         assert!(
-            !store.is_ticket_payload_revoked(&ticket_a, now),
-            "evicted ticket should be allowed again"
+            !store.is_ticket_payload_revoked(&ticket_b, now),
+            "rejected ticket must not displace active consumption state"
         );
 
-        verify_with_revocations_at(&ticket_a, &binding, &params, Some(&mut store), now)
-            .expect("evicted ticket should insert again");
+        let replay_err =
+            verify_with_revocations_at(&ticket_a, &binding, &params, Some(&mut store), now)
+                .expect_err("ticket a must remain a replay");
+        assert!(matches!(replay_err, Error::Replay));
     }
 
     #[test]
@@ -2938,9 +3055,9 @@ mod tests {
             client_nonce: [0u8; 32],
             solution: [0u8; 32],
         };
-        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, None);
+        let binding = ChallengeBinding::new(&descriptor, &RELAY_A, &TRANSCRIPT);
         let signed =
-            SignedTicket::sign(ticket, &RELAY_A, None, keypair.secret_key()).expect("sign");
+            SignedTicket::sign(ticket, &RELAY_A, &TRANSCRIPT, keypair.secret_key()).expect("sign");
 
         verify_signed_ticket_at(
             &signed,
@@ -2964,6 +3081,7 @@ mod tests {
         assert!(matches!(err, Error::Replay));
 
         let later = now + Duration::from_secs(30);
+        drop(store);
         let mut reloaded =
             TicketRevocationStore::load(&path, limits, later).expect("reload from disk");
         let err = verify_signed_ticket_at(
@@ -2976,6 +3094,25 @@ mod tests {
         )
         .expect_err("replay should persist across reload");
         assert!(matches!(err, Error::Replay));
+    }
+
+    #[test]
+    fn revocation_store_rejects_concurrent_ledger_owner() {
+        let now = UNIX_EPOCH + Duration::from_secs(60_000);
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(120)).expect("limits");
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("single_owner.norito");
+        let owner = TicketRevocationStore::load(&path, limits, now).expect("first owner");
+
+        let error = TicketRevocationStore::load(&path, limits, now)
+            .expect_err("a second ledger owner must fail closed");
+        assert!(
+            matches!(&error, TicketRevocationStoreError::Io(message) if message.contains("exclusive replay-ledger lock")),
+            "unexpected concurrent-owner error: {error:?}"
+        );
+
+        drop(owner);
+        TicketRevocationStore::load(&path, limits, now).expect("lock released with owner");
     }
 
     #[test]
@@ -2995,8 +3132,8 @@ mod tests {
             solution: [0u8; 32],
         };
         let signed =
-            SignedTicket::sign(ticket, &RELAY_A, None, keypair.secret_key()).expect("sign");
-        let mismatched = ChallengeBinding::new(&descriptor, &RELAY_B, None);
+            SignedTicket::sign(ticket, &RELAY_A, &TRANSCRIPT, keypair.secret_key()).expect("sign");
+        let mismatched = ChallengeBinding::new(&descriptor, &RELAY_B, &TRANSCRIPT);
 
         let err = verify_signed_ticket_at(
             &signed,

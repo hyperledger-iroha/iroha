@@ -16,6 +16,15 @@ struct Dual {
 #[derive(norito::derive::Encode, norito::derive::Decode)]
 struct TupleDual(String, String);
 
+#[derive(Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+struct EnumField(u32);
+
+#[derive(Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+enum DerivedTupleEnum {
+    Pair(EnumField, u32),
+    Boundary(EnumField, #[norito(skip)] ()),
+}
+
 #[test]
 fn derive_decode_rejects_overlong_field() {
     // Craft a payload where the field length claims more bytes than are available.
@@ -67,4 +76,38 @@ fn tuple_decode_rejects_truncated_second_field() {
         Err(err) => panic!("unexpected decode error: {err:?}"),
         Ok(_) => panic!("expected decode failure for tuple second field"),
     }
+}
+
+#[test]
+fn derived_multi_field_tuple_enum_canonical_roundtrips() {
+    let value = DerivedTupleEnum::Pair(EnumField(0x1122_3344), 0x5566_7788);
+    let frame = norito::encode_canonical(&value).expect("encode canonical tuple enum");
+    let decoded: DerivedTupleEnum =
+        norito::decode_canonical(&frame).expect("decode canonical tuple enum");
+
+    assert_eq!(decoded, value);
+}
+
+#[test]
+fn derived_tuple_enum_rejects_understated_first_field_length() {
+    let value = DerivedTupleEnum::Boundary(EnumField(0x1122_3344), ());
+    let frame = norito::encode_canonical(&value).expect("encode canonical tuple enum");
+    let view = norito::core::from_bytes_view(&frame).expect("inspect canonical frame");
+    let flags = view.flags();
+    let mut payload = view.as_bytes().to_vec();
+
+    let first_field_prefix = 4;
+    let (declared, prefix_len) =
+        norito::core::read_len_from_slice_with_flags(&payload[first_field_prefix..], flags)
+            .expect("read first field length");
+    assert_eq!(declared, 4);
+    assert_eq!(prefix_len, 1);
+    payload[first_field_prefix] = u8::try_from(declared - 1).expect("shortened field length");
+
+    let forged = norito::core::frame_bare_with_header_flags::<DerivedTupleEnum>(&payload, flags)
+        .expect("frame corrupted tuple enum");
+    assert!(matches!(
+        norito::decode_canonical::<DerivedTupleEnum>(&forged),
+        Err(Error::LengthMismatch)
+    ));
 }

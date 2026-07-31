@@ -19,14 +19,20 @@ use std::{
 #[cfg(target_os = "linux")]
 use std::{ffi::CStr, os::fd::FromRawFd};
 
-use blake3::hash as blake3_hash;
+use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use clap::{Parser, Subcommand};
 use hex::FromHexError;
 use iroha_crypto::{
     Algorithm, KeyPair, Signature,
-    soranet::handshake::{
-        DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-        RuntimeParams, build_client_hello, client_handle_relay_hello,
+    soranet::{
+        handshake::{
+            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
+            RuntimeParams, SessionSecrets, build_client_hello, client_handle_relay_hello,
+        },
+        record::{
+            RecordEndpoint, RecordLayer, RecordReader, RecordStreamContext, RecordStreamKind,
+            RecordWriter,
+        },
     },
 };
 use iroha_data_model::soranet::vpn::{
@@ -44,8 +50,8 @@ use norito::{
     json::{self, Map as JsonMap, Number as JsonNumber, Value as JsonValue},
 };
 use quinn::{
-    self, ClientConfig, ConnectError, Connection, ConnectionError, Endpoint, IdleTimeout,
-    ReadExactError, RecvStream, SendStream, TransportConfig, VarInt,
+    self, ClientConfig, ConnectError, Connection, ConnectionError, Dir, Endpoint, IdleTimeout,
+    ReadExactError, RecvStream, SendStream, Side, StreamId, TransportConfig, VarInt,
     crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
 };
 use rand::{SeedableRng, rngs::StdRng};
@@ -87,6 +93,18 @@ const LINUX_IFF_TUN: nix::libc::c_short = 0x0001;
 const LINUX_IFF_NO_PI: nix::libc::c_short = 0x1000;
 #[cfg(target_os = "linux")]
 const LINUX_TUNSETIFF: nix::libc::c_ulong = 0x4004_54ca;
+
+fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
+    let initiator = match stream_id.initiator() {
+        Side::Client => RecordEndpoint::Client,
+        Side::Server => RecordEndpoint::Relay,
+    };
+    let kind = match stream_id.dir() {
+        Dir::Bi => RecordStreamKind::Bidirectional,
+        Dir::Uni => RecordStreamKind::Unidirectional,
+    };
+    RecordStreamContext::new(initiator, kind, stream_id.index())
+}
 
 fn default_usage_voucher_interval_ms() -> u64 {
     DEFAULT_USAGE_VOUCHER_INTERVAL_MS
@@ -500,7 +518,7 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
     state.applied_network = None;
     persist_state(&state)?;
 
-    let (endpoint, connection) = match connect_and_handshake(&payload).await {
+    let (endpoint, connection, record_layer) = match connect_and_handshake(&payload).await {
         Ok(result) => result,
         Err(error) => {
             update_terminal_state(
@@ -549,6 +567,24 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
             return Err(failure);
         }
     };
+    let record_stream = match record_layer.stream(record_stream_context(send.id())) {
+        Ok(stream) => stream,
+        Err(error) => {
+            let failure = ControllerError::Handshake(error.to_string());
+            connection.close(0u32.into(), failure.to_string().as_bytes());
+            endpoint.close(0u32.into(), failure.to_string().as_bytes());
+            endpoint.wait_idle().await;
+            update_terminal_state(
+                false,
+                false,
+                Some(pid),
+                payload.session_id.as_str(),
+                payload.relay_endpoint.as_str(),
+                failure.to_string(),
+            )?;
+            return Err(failure);
+        }
+    };
 
     let prepared = match prepare_tunnel(&payload) {
         Ok(prepared) => prepared,
@@ -581,10 +617,12 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
     let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
     let voucher_signer = UsageVoucherSigner::from_payload(&payload)?;
     let voucher_counters = UsageVoucherCounters::default();
+    let mut protected_send = RecordWriter::new(&mut send, record_stream.sealer);
+    let mut protected_recv = RecordReader::new(&mut recv, record_stream.opener);
     let shutdown = tunnel_packet_loop(
         Arc::clone(&prepared.device),
-        &mut send,
-        &mut recv,
+        &mut protected_send,
+        &mut protected_recv,
         TunnelTrafficConfig {
             circuit_id,
             flow_label,
@@ -614,7 +652,9 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
         }
     };
 
-    let _ = send.finish();
+    let _ = protected_send.shutdown().await;
+    drop(protected_send);
+    drop(protected_recv);
     connection.close(0u32.into(), message.as_bytes());
     endpoint.close(0u32.into(), message.as_bytes());
     endpoint.wait_idle().await;
@@ -631,7 +671,7 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
 
 async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), ControllerError> {
     let pid = std::process::id();
-    let (endpoint, connection) = connect_and_handshake(&payload).await?;
+    let (endpoint, connection, record_layer) = connect_and_handshake(&payload).await?;
     let (mut send, mut recv) = match timeout(CONNECT_TIMEOUT, connection.open_bi()).await {
         Ok(Ok(streams)) => streams,
         Ok(Err(error)) => {
@@ -650,6 +690,9 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
             return Err(failure);
         }
     };
+    let record_stream = record_layer
+        .stream(record_stream_context(send.id()))
+        .map_err(|error| ControllerError::Handshake(error.to_string()))?;
 
     update_terminal_state(
         true,
@@ -669,9 +712,11 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
     let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
     let voucher_signer = UsageVoucherSigner::from_payload(&payload)?;
     let voucher_counters = UsageVoucherCounters::default();
+    let mut protected_send = RecordWriter::new(&mut send, record_stream.sealer);
+    let mut protected_recv = RecordReader::new(&mut recv, record_stream.opener);
     let shutdown = packet_engine_loop(
-        &mut send,
-        &mut recv,
+        &mut protected_send,
+        &mut protected_recv,
         circuit_id,
         flow_label,
         payload.padding_budget_ms,
@@ -684,7 +729,9 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
         Err(error) => (false, error.to_string()),
     };
 
-    let _ = send.finish();
+    let _ = protected_send.shutdown().await;
+    drop(protected_send);
+    drop(protected_recv);
     connection.close(0u32.into(), message.as_bytes());
     endpoint.close(0u32.into(), message.as_bytes());
     endpoint.wait_idle().await;
@@ -706,7 +753,7 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
 
 async fn connect_and_handshake(
     payload: &ConnectPayload,
-) -> Result<(Endpoint, Connection), ControllerError> {
+) -> Result<(Endpoint, Connection, Arc<RecordLayer>), ControllerError> {
     let helper_ticket = decode_hex(payload.helper_ticket_hex.as_str())?;
     let relay = parse_multiaddr(payload.relay_endpoint.as_str())?;
     let relay_addr = resolve_multiaddr_socket_addr(&relay)
@@ -753,8 +800,10 @@ async fn connect_and_handshake(
         }
     };
 
-    perform_helper_handshake(&connection, helper_ticket).await?;
-    Ok((endpoint, connection))
+    let session = perform_helper_handshake(&connection, helper_ticket).await?;
+    let record_layer = RecordLayer::new(&session.session_key, RecordEndpoint::Client)
+        .map_err(|error| ControllerError::Handshake(error.to_string()))?;
+    Ok((endpoint, connection, Arc::new(record_layer)))
 }
 
 async fn resolve_multiaddr_socket_addr(
@@ -772,17 +821,7 @@ async fn resolve_multiaddr_socket_addr(
 }
 
 fn build_client_config(relay_tls_spki_sha256: [u8; 32]) -> Result<ClientConfig, ControllerError> {
-    let verifier: Arc<dyn ServerCertVerifier> = Arc::new(PinnedSpkiVerifier {
-        relay_tls_spki_sha256,
-    });
-    let mut tls_config = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(verifier)
-        .with_no_client_auth();
-    let tls_config = Arc::new({
-        tls_config.enable_early_data = true;
-        tls_config
-    });
+    let tls_config = Arc::new(build_tls_client_config(relay_tls_spki_sha256));
     let crypto = QuinnRustlsClientConfig::try_from(tls_config)
         .map_err(|error| ControllerError::State(format!("TLS client config error: {error}")))?;
     let mut client_config = ClientConfig::new(Arc::new(crypto));
@@ -798,10 +837,24 @@ fn build_client_config(relay_tls_spki_sha256: [u8; 32]) -> Result<ClientConfig, 
     Ok(client_config)
 }
 
+fn build_tls_client_config(relay_tls_spki_sha256: [u8; 32]) -> rustls::ClientConfig {
+    let verifier: Arc<dyn ServerCertVerifier> = Arc::new(PinnedSpkiVerifier {
+        relay_tls_spki_sha256,
+    });
+    let mut tls_config = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    // Helper authentication runs after QUIC setup. Keep replayable 0-RTT data
+    // disabled so no future stream path can bypass that ordering.
+    tls_config.enable_early_data = false;
+    tls_config
+}
+
 async fn perform_helper_handshake(
     connection: &Connection,
     helper_ticket: Vec<u8>,
-) -> Result<(), ControllerError> {
+) -> Result<SessionSecrets, ControllerError> {
     let (mut send, mut recv) = match timeout(CONNECT_TIMEOUT, connection.open_bi()).await {
         Ok(Ok(streams)) => streams,
         Ok(Err(error)) => return Err(ControllerError::Connection(error)),
@@ -814,13 +867,14 @@ async fn perform_helper_handshake(
 
     write_handshake_frame(&mut send, &helper_ticket).await?;
 
+    let admission_binding = helper_ticket_handshake_binding(&helper_ticket);
     let params = RuntimeParams {
         descriptor_commit: &DEFAULT_DESCRIPTOR_COMMIT,
         client_capabilities: &DEFAULT_CLIENT_CAPABILITIES,
         relay_capabilities: &DEFAULT_RELAY_CAPABILITIES,
         kem_id: 1,
         sig_id: 1,
-        resume_hash: None,
+        resume_hash: Some(&admission_binding),
     };
     let mut rng = StdRng::from_os_rng();
     let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -829,14 +883,21 @@ async fn perform_helper_handshake(
     write_handshake_frame(&mut send, &client_hello).await?;
 
     let relay_hello = read_handshake_frame(&mut recv).await?;
-    let (client_finish, _session) =
+    let (client_finish, session) =
         client_handle_relay_hello(client_state, &relay_hello, &key_pair, &params, &mut rng)
             .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     if let Some(frame) = client_finish {
         write_handshake_frame(&mut send, &frame).await?;
     }
     send.finish()?;
-    Ok(())
+    Ok(session)
+}
+
+fn helper_ticket_handshake_binding(helper_ticket: &[u8]) -> [u8; 32] {
+    let mut hasher = Blake3Hasher::new();
+    hasher.update(b"iroha.soranet.vpn.helper-handshake-binding.v1");
+    hasher.update(helper_ticket);
+    *hasher.finalize().as_bytes()
 }
 
 async fn read_handshake_frame(recv: &mut RecvStream) -> Result<Vec<u8>, ControllerError> {
@@ -920,14 +981,18 @@ fn cleanup_tunnel(prepared: PreparedTunnel) -> Result<(), ControllerError> {
     Ok(())
 }
 
-async fn tunnel_packet_loop(
+async fn tunnel_packet_loop<W, R>(
     device: Arc<LinuxTunDevice>,
-    send: &mut SendStream,
-    recv: &mut RecvStream,
+    send: &mut W,
+    recv: &mut R,
     traffic: TunnelTrafficConfig,
     voucher_signer: Option<UsageVoucherSigner>,
     voucher_counters: UsageVoucherCounters,
-) -> Result<TunnelShutdown, ControllerError> {
+) -> Result<TunnelShutdown, ControllerError>
+where
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
     let upstream = tun_to_vpn_loop(
@@ -967,15 +1032,19 @@ async fn tunnel_packet_loop(
     }
 }
 
-async fn packet_engine_loop(
-    send: &mut SendStream,
-    recv: &mut RecvStream,
+async fn packet_engine_loop<W, R>(
+    send: &mut W,
+    recv: &mut R,
     circuit_id: [u8; 16],
     flow_label: VpnFlowLabelV1,
     padding_budget_ms: u16,
     voucher_signer: Option<UsageVoucherSigner>,
     voucher_counters: UsageVoucherCounters,
-) -> Result<TunnelShutdown, ControllerError> {
+) -> Result<TunnelShutdown, ControllerError>
+where
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
     let mut sigterm = signal(SignalKind::terminate()).map_err(|error| {
         ControllerError::State(format!(
             "failed to register packet engine SIGTERM handler: {error}"
@@ -1024,13 +1093,16 @@ async fn packet_engine_loop(
     }
 }
 
-async fn tun_to_vpn_loop(
+async fn tun_to_vpn_loop<W>(
     device: Arc<LinuxTunDevice>,
-    send: &mut SendStream,
+    send: &mut W,
     traffic: TunnelTrafficConfig,
     mut voucher_signer: Option<UsageVoucherSigner>,
     voucher_counters: UsageVoucherCounters,
-) -> Result<(), ControllerError> {
+) -> Result<(), ControllerError>
+where
+    W: AsyncWrite + Unpin,
+{
     let TunnelTrafficConfig {
         circuit_id,
         flow_label,
@@ -1105,14 +1177,17 @@ async fn tun_to_vpn_loop(
     }
 }
 
-async fn packet_engine_to_vpn_loop(
-    send: &mut SendStream,
+async fn packet_engine_to_vpn_loop<W>(
+    send: &mut W,
     circuit_id: [u8; 16],
     flow_label: VpnFlowLabelV1,
     padding_budget_ms: u16,
     mut voucher_signer: Option<UsageVoucherSigner>,
     voucher_counters: UsageVoucherCounters,
-) -> Result<(), ControllerError> {
+) -> Result<(), ControllerError>
+where
+    W: AsyncWrite + Unpin,
+{
     let mut reader = tokio_io::stdin();
     let mut sequence = 0u64;
     if let Some(signer) = voucher_signer.as_mut() {
@@ -1148,7 +1223,7 @@ async fn packet_engine_to_vpn_loop(
                 )
                 .await?;
             }
-            send.finish()?;
+            send.shutdown().await?;
             return Ok(());
         };
         voucher_counters.add_egress(packet.len() as u64);
@@ -1190,17 +1265,45 @@ async fn packet_engine_to_vpn_loop(
     }
 }
 
-async fn vpn_to_tun_loop(
+async fn read_exact_or_eof<R>(reader: &mut R, buffer: &mut [u8]) -> io::Result<bool>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut received = 0;
+    while received < buffer.len() {
+        let read = reader.read(&mut buffer[received..]).await?;
+        if read == 0 {
+            return if received == 0 {
+                Ok(false)
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!(
+                        "stream ended after {received} of {} expected bytes",
+                        buffer.len()
+                    ),
+                ))
+            };
+        }
+        received += read;
+    }
+    Ok(true)
+}
+
+async fn vpn_to_tun_loop<R>(
     device: Arc<LinuxTunDevice>,
-    recv: &mut RecvStream,
+    recv: &mut R,
     voucher_counters: UsageVoucherCounters,
-) -> Result<(), ControllerError> {
+) -> Result<(), ControllerError>
+where
+    R: AsyncRead + Unpin,
+{
     let mut decoder = PacketStreamDecoder::default();
     let mut frame = [0u8; VPN_CELL_LEN];
 
     loop {
-        match recv.read_exact(&mut frame).await {
-            Ok(()) => {
+        match read_exact_or_eof(recv, &mut frame).await {
+            Ok(true) => {
                 let cell = VpnPaddedCellV1::parse_bytes_with_flow_label_bits(
                     &frame,
                     VpnFlowLabelV1::MAX_BITS,
@@ -1214,13 +1317,8 @@ async fn vpn_to_tun_loop(
                     add_traffic_bytes(packet.len() as u64, 0)?;
                 }
             }
-            Err(ReadExactError::FinishedEarly(0)) => return Ok(()),
-            Err(ReadExactError::FinishedEarly(_)) => {
-                return Err(ControllerError::State(
-                    "relay tunnel closed mid-frame".to_owned(),
-                ));
-            }
-            Err(ReadExactError::ReadError(error)) => {
+            Ok(false) => return Ok(()),
+            Err(error) => {
                 return Err(ControllerError::State(format!(
                     "relay read failed: {error}"
                 )));
@@ -1229,17 +1327,20 @@ async fn vpn_to_tun_loop(
     }
 }
 
-async fn vpn_to_packet_engine_loop(
-    recv: &mut RecvStream,
+async fn vpn_to_packet_engine_loop<R>(
+    recv: &mut R,
     voucher_counters: UsageVoucherCounters,
-) -> Result<(), ControllerError> {
+) -> Result<(), ControllerError>
+where
+    R: AsyncRead + Unpin,
+{
     let mut decoder = PacketStreamDecoder::default();
     let mut frame = [0u8; VPN_CELL_LEN];
     let mut writer = tokio_io::stdout();
 
     loop {
-        match recv.read_exact(&mut frame).await {
-            Ok(()) => {
+        match read_exact_or_eof(recv, &mut frame).await {
+            Ok(true) => {
                 let cell = VpnPaddedCellV1::parse_bytes_with_flow_label_bits(
                     &frame,
                     VpnFlowLabelV1::MAX_BITS,
@@ -1259,13 +1360,8 @@ async fn vpn_to_packet_engine_loop(
                     add_traffic_bytes(packet.len() as u64, 0)?;
                 }
             }
-            Err(ReadExactError::FinishedEarly(0)) => return Ok(()),
-            Err(ReadExactError::FinishedEarly(_)) => {
-                return Err(ControllerError::State(
-                    "relay tunnel closed mid-frame".to_owned(),
-                ));
-            }
-            Err(ReadExactError::ReadError(error)) => {
+            Ok(false) => return Ok(()),
+            Err(error) => {
                 return Err(ControllerError::State(format!(
                     "relay read failed: {error}"
                 )));
@@ -1354,15 +1450,18 @@ impl UsageVoucherSigner {
     }
 }
 
-async fn send_usage_voucher_control_cell(
-    send: &mut SendStream,
+async fn send_usage_voucher_control_cell<W>(
+    send: &mut W,
     circuit_id: [u8; 16],
     flow_label: VpnFlowLabelV1,
     padding_budget_ms: u16,
     counters: &UsageVoucherCounters,
     signer: &mut UsageVoucherSigner,
     sequence: &mut u64,
-) -> Result<(), ControllerError> {
+) -> Result<(), ControllerError>
+where
+    W: AsyncWrite + Unpin,
+{
     let envelope = signer.build_envelope(counters)?;
     let encoded = envelope.encode();
     let mut payload = Vec::with_capacity(
@@ -2877,6 +2976,27 @@ mod tests {
     fn decode_hex_accepts_prefixed_values() {
         let decoded = decode_hex("0x0A0b").expect("hex");
         assert_eq!(decoded, vec![0x0A, 0x0B]);
+    }
+
+    #[test]
+    fn helper_ticket_handshake_binding_is_nonzero_and_credential_bound() {
+        let first = helper_ticket_handshake_binding(b"first helper ticket");
+        let second = helper_ticket_handshake_binding(b"second helper ticket");
+        assert_ne!(first, [0; 32]);
+        assert_ne!(first, second);
+        assert_eq!(
+            first,
+            helper_ticket_handshake_binding(b"first helper ticket")
+        );
+    }
+
+    #[test]
+    fn packet_engine_quic_disables_tls_early_data() {
+        let tls_config = build_tls_client_config([0x55; 32]);
+        assert!(
+            !tls_config.enable_early_data,
+            "helper authentication must complete before application data"
+        );
     }
 
     #[test]

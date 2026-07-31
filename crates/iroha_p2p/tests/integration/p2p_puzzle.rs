@@ -256,7 +256,7 @@ async fn matching_required_puzzle_parameters_connect() {
         let (network, child) = NetworkHandle::<EmptyMsg>::start(
             key_pair.clone(),
             config(address.clone(), handshake.clone()),
-            Some(chain.clone()),
+            chain.clone(),
             None,
             None,
             shutdown.clone(),
@@ -322,7 +322,7 @@ async fn puzzle_mismatch_rejects_handshake() {
     let started1 = NetworkHandle::<EmptyMsg>::start(
         kp1.clone(),
         config(addr1.clone(), handshake_entry),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -335,7 +335,7 @@ async fn puzzle_mismatch_rejects_handshake() {
     let started2 = NetworkHandle::<EmptyMsg>::start(
         kp2.clone(),
         config(addr2.clone(), handshake_exit),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),

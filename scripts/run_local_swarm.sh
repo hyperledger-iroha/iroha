@@ -4,8 +4,8 @@ set -euo pipefail
 # Bare-metal 4-node swarm (no Docker). Run from repo root.
 
 BASE="${BASE:-/tmp/iroha-bare}"
-GEN_PUB_OVERRIDE="${GEN_PUB_OVERRIDE:-}"
-GENESIS_PRIVATE_KEY="${GENESIS_PRIVATE_KEY:-82B3BDE54AEBECA4146257DA0DE8D59D8E46D5FE34887DCD8072866792FCB3AD}"
+GENESIS_PUBLIC_KEY_FILE="${GENESIS_PUBLIC_KEY_FILE:-}"
+GENESIS_PRIVATE_KEY_FILE="${GENESIS_PRIVATE_KEY_FILE:-}"
 
 PKS=(
   "ea01308A230D5DA9DE92163DDE5F662CD859985ADC53040D9BFE1FA4A091CA7E1D8E88914535FC790CACC077DCC2F2D06FE106"
@@ -238,24 +238,54 @@ IROHAD=target/release/irohad
 IROHA=target/release/iroha
 KAGAMI=target/release/kagami
 
+if [[ -n "$GENESIS_PUBLIC_KEY_FILE" || -n "$GENESIS_PRIVATE_KEY_FILE" ]]; then
+  if [[ -z "$GENESIS_PUBLIC_KEY_FILE" || -z "$GENESIS_PRIVATE_KEY_FILE" ]]; then
+    echo "Set both GENESIS_PUBLIC_KEY_FILE and GENESIS_PRIVATE_KEY_FILE, or neither." >&2
+    exit 1
+  fi
+  [[ -s "$GENESIS_PUBLIC_KEY_FILE" ]] || {
+    echo "Genesis public-key file is missing or empty: $GENESIS_PUBLIC_KEY_FILE" >&2
+    exit 1
+  }
+  [[ -s "$GENESIS_PRIVATE_KEY_FILE" ]] || {
+    echo "Genesis private-key file is missing or empty: $GENESIS_PRIVATE_KEY_FILE" >&2
+    exit 1
+  }
+else
+  GENESIS_KEY_DIR="$BASE/genesis-key-custody"
+  GENESIS_PUBLIC_KEY_FILE="$GENESIS_KEY_DIR/public.key"
+  GENESIS_PRIVATE_KEY_FILE="$GENESIS_KEY_DIR/private.key"
+  if [[ -e "$GENESIS_KEY_DIR" ]]; then
+    echo "Refusing to overwrite existing genesis key custody under $BASE." >&2
+    echo "Remove the old local swarm directory or supply both key-file variables explicitly." >&2
+    exit 1
+  fi
+  $KAGAMI keys --out-dir "$GENESIS_KEY_DIR" > "$BASE/genesis-key-custody.log"
+fi
+
+if [[ "$(wc -l < "$GENESIS_PUBLIC_KEY_FILE" | tr -d ' ')" -ne 1 ]] \
+  || [[ -n "$(tail -c 1 < "$GENESIS_PUBLIC_KEY_FILE")" ]]; then
+  echo "Genesis public-key file must contain exactly one newline-terminated record." >&2
+  exit 1
+fi
+GEN_PUB="$(cat "$GENESIS_PUBLIC_KEY_FILE")"
+[[ -n "$GEN_PUB" ]] || {
+  echo "Genesis public-key file is empty." >&2
+  exit 1
+}
+
 echo "[1/6] Generate genesis"
-$KAGAMI genesis generate --ivm-dir . --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4 default > "$BASE/genesis.json"
+$KAGAMI genesis generate --ivm-dir . --genesis-public-key "$GEN_PUB" default > "$BASE/genesis.json"
 
 echo "[2/6] Inject topology"
 inject_topology
 
 echo "[3/6] Sign genesis"
-GEN_LOG=$(
-  $KAGAMI genesis sign "$BASE/genesis.json" \
-    -o "$BASE/genesis.signed.nrt" \
-    --private-key "$GENESIS_PRIVATE_KEY" \
-    2>&1 | tee "$BASE/gen.sign.log"
-)
-GEN_PUB=${GEN_PUB_OVERRIDE:-$(echo "$GEN_LOG" | awk '/Genesis public key:/ {print $4; exit}')}
-if [ -z "$GEN_PUB" ]; then
-  echo "Failed to capture genesis public key; check $BASE/gen.sign.log" >&2
-  exit 1
-fi
+$KAGAMI genesis sign "$BASE/genesis.json" \
+  -o "$BASE/genesis.signed.nrt" \
+  --private-key-file "$GENESIS_PRIVATE_KEY_FILE" \
+  --expected-public-key "$GEN_PUB" \
+  2>&1 | tee "$BASE/gen.sign.log"
 echo "Genesis public key: $GEN_PUB"
 
 trusted_peers_literal() {

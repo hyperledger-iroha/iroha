@@ -97,6 +97,13 @@ For public writer-profile deployments, treat user-supplied `authority` /
 store deployment credentials in repo config, plugin manifests, or
 documentation examples tied to real secrets.
 
+Route output is untrusted data. Torii reparses JSON route bodies into a Norito
+JSON value before placing them under `structuredContent`; malformed JSON and
+non-JSON UTF-8 bodies are represented as escaped JSON strings. Success
+`content[].text` is derived only from the HTTP status and never includes route
+body, metadata, role, trigger, or permission text. MCP clients must likewise
+treat `structuredContent` as data rather than instructions.
+
 ## Protocol Behavior
 - `jsonrpc` is required and must be the string `"2.0"`.
 - Missing, non-string, or different `jsonrpc` values are rejected as `invalid_request`.
@@ -240,7 +247,11 @@ Those names are curated for live account, asset, contract, governance, and
 transaction workflows and are substantially easier for an agent to use than the
 lower-level catalog-projected `torii.*` tools.
 
-Streaming/internal paths are intentionally excluded from MCP tool generation (for example SSE/WS stream routes and `/v1/mcp` itself).
+Streaming/internal paths are intentionally excluded from MCP tool generation
+(for example SSE/WS stream routes and `/v1/mcp` itself). In addition to the
+route-catalog decision, generated tools reject OpenAPI operations whose
+response contract advertises `text/event-stream` or HTTP `101`, so streaming
+exclusion does not depend on a path suffix.
 
 Do not hardcode the full tool catalog in clients.
 Use `initialize` + `tools/list` for runtime discovery.
@@ -314,8 +325,8 @@ For route-dispatched tools, `structuredContent` typically contains:
 - `body`: decoded response body
 
 Body decoding rules:
-- JSON content-types are decoded as JSON.
-- UTF-8 bodies are returned as strings.
+- JSON content-types are reparsed into a typed Norito JSON value.
+- Malformed JSON and other UTF-8 bodies are returned as escaped strings.
 - Non-UTF8 bodies are base64-encoded strings.
 
 If `structuredContent.status >= 400`, `isError` is set to `true` and `structuredContent.error_code` is added.

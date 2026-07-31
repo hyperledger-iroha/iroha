@@ -21,7 +21,7 @@ use iroha_crypto::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
     },
 };
-use iroha_data_model::prelude::Peer;
+use iroha_data_model::prelude::{ChainId, Peer};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::test_logger;
 use iroha_p2p::{
@@ -285,7 +285,9 @@ fn connect_topology(
 #[allow(clippy::too_many_lines)]
 async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
     test_logger();
-    let chain_id = None;
+    let chain_id = "test-chain"
+        .parse::<ChainId>()
+        .expect("static test chain id is canonical");
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
     let kp_a = KeyPair::random();
@@ -387,7 +389,9 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn trust_gossip_enabled_reaches_both_peers() {
     test_logger();
-    let chain_id = None;
+    let chain_id = "test-chain"
+        .parse::<ChainId>()
+        .expect("static test chain id is canonical");
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
     let kp_a = KeyPair::random();

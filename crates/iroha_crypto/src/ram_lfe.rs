@@ -2379,6 +2379,17 @@ mod tests {
     }
 
     #[test]
+    fn programmed_public_parameters_reject_malformed_archive_without_panicking() {
+        let err = decode_bfv_programmed_public_parameters(&[0xFF, 0x00, 0x7F])
+            .expect_err("malformed programmed-BFV parameters must fail closed");
+
+        assert!(
+            matches!(err, RamLfeError::TranscriptEncoding(_)),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn programmed_public_parameters_reject_profile_and_verifier_metadata_abuse() {
         let secret = b"resolver-secret";

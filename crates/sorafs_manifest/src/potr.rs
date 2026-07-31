@@ -251,8 +251,12 @@ impl PotrReceiptV1 {
         Ok(payload)
     }
 
-    /// Validates invariants required for a PoTR receipt.
-    pub fn validate(&self) -> Result<(), PotrReceiptValidationError> {
+    /// Validate the canonical receipt fields before signatures are attached.
+    ///
+    /// This is the signing-boundary validator: signers should call it before
+    /// accepting an unsigned payload so malformed status, latency, timestamp,
+    /// range, or identifier combinations never receive an attestation.
+    pub fn validate_unsigned(&self) -> Result<(), PotrReceiptValidationError> {
         if self.version != POTR_RECEIPT_VERSION_V1 {
             return Err(PotrReceiptValidationError::UnsupportedVersion {
                 found: self.version,
@@ -331,6 +335,12 @@ impl PotrReceiptV1 {
         {
             return Err(PotrReceiptValidationError::NoteTooLong);
         }
+        Ok(())
+    }
+
+    /// Validates invariants required for a final signed PoTR receipt.
+    pub fn validate(&self) -> Result<(), PotrReceiptValidationError> {
+        self.validate_unsigned()?;
         let gateway_signature = self
             .gateway_signature
             .as_ref()
@@ -685,6 +695,20 @@ mod tests {
     fn receipt_validates() {
         let receipt = base_receipt();
         assert_eq!(receipt.validate(), Ok(()));
+    }
+
+    #[test]
+    fn unsigned_receipt_validation_checks_semantics_without_signatures() {
+        let mut receipt = unsigned_receipt();
+        assert_eq!(receipt.validate_unsigned(), Ok(()));
+        receipt.status = PotrStatus::MissedDeadline;
+        assert_eq!(
+            receipt.validate_unsigned(),
+            Err(PotrReceiptValidationError::MissedDeadlineWithoutBreach {
+                latency_ms: receipt.latency_ms,
+                deadline_ms: receipt.deadline_ms,
+            })
+        );
     }
 
     #[test]

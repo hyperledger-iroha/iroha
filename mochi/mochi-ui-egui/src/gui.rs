@@ -13749,7 +13749,10 @@ mod tests {
             "storage".into(),
             TomlValue::String("commitment_only".into()),
         );
-        lane.insert("proof_scheme".into(), TomlValue::String("kzg".into()));
+        lane.insert(
+            "proof_scheme".into(),
+            TomlValue::String("merkle_sha256".into()),
+        );
         lane.insert("governance".into(), TomlValue::String("parliament".into()));
         let mut metadata = TomlTable::new();
         metadata.insert("tier".into(), TomlValue::String("gold".into()));
@@ -13772,7 +13775,7 @@ mod tests {
         assert_eq!(metadata.dataspace_id, DataSpaceId::new(0));
         assert_eq!(metadata.visibility, LaneVisibility::Restricted);
         assert_eq!(metadata.storage, LaneStorageProfile::CommitmentOnly);
-        assert_eq!(metadata.proof_scheme, DaProofScheme::KzgBls12_381);
+        assert_eq!(metadata.proof_scheme, DaProofScheme::MerkleSha256);
         assert_eq!(metadata.governance.as_deref(), Some("parliament"));
         assert_eq!(
             metadata.metadata.get("tier").map(String::as_str),

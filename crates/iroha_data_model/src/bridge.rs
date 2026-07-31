@@ -1466,6 +1466,7 @@ mod tests {
             quorum: DualQuorum::from_roster(&roster).expect("valid powered roster"),
             roster,
             nexus_amx_context_hash: Hash::new(b"bridge v2 test nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,
@@ -1604,6 +1605,7 @@ mod tests {
             quorum,
             roster,
             nexus_amx_context_hash: Hash::new(b"bridge v2 successor nexus context"),
+            execution_policy_hash: parent_artifact.height_context.execution_policy_hash,
             da_layout: parent_artifact.height_context.da_layout,
             leader_seed,
         };

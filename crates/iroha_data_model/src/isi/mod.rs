@@ -407,11 +407,6 @@ impl From<crate::isi::zk::RegisterZkAsset> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::zk::RegisterAssetHiddenZkPool> for InstructionBox {
-    fn from(i: crate::isi::zk::RegisterAssetHiddenZkPool) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
 impl From<crate::isi::zk::ScheduleConfidentialPolicyTransition> for InstructionBox {
     fn from(i: crate::isi::zk::ScheduleConfidentialPolicyTransition) -> Self {
         InstructionBox(Box::new(i))
@@ -429,11 +424,6 @@ impl From<crate::isi::zk::Shield> for InstructionBox {
 }
 impl From<crate::isi::zk::ZkTransfer> for InstructionBox {
     fn from(i: crate::isi::zk::ZkTransfer) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::AssetHiddenZkTransfer> for InstructionBox {
-    fn from(i: crate::isi::zk::AssetHiddenZkTransfer) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -2129,7 +2119,7 @@ fn tuple_field_len_with_flags(elem_len: usize, flags: u8) -> Option<usize> {
 }
 
 fn framed_instruction_payload_len_for<T>(payload_len: usize) -> Option<usize> {
-    let align = core::mem::align_of::<norito::core::Archived<T>>();
+    let align = norito::core::archived_payload_align::<T>();
     let padding = if align <= 1 {
         0
     } else {
@@ -4358,10 +4348,8 @@ pub mod prelude {
         settlement::{
             DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSettlementDetails,
             PvpIsi, SetFxCorridorPolicy, SettleFxCorridor, SettlementAtomicity,
-            SettlementExecutionOrder, SettlementFailureRecord, SettlementInstructionBox,
-            SettlementKind, SettlementLedger, SettlementLedgerEntry, SettlementLeg,
-            SettlementLegRole, SettlementLegSnapshot, SettlementOutcomeRecord, SettlementPlan,
-            SettlementSuccessRecord,
+            SettlementExecutionOrder, SettlementInstructionBox, SettlementKind, SettlementLeg,
+            SettlementLegRole, SettlementLegSnapshot, SettlementPlan, SettlementReceipt,
         },
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         soracloud::{

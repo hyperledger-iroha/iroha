@@ -1595,6 +1595,7 @@ mod byte_lifecycle_tests {
             roster,
             VotingMode::Permissioned,
             Digest::repeat(0x52),
+            Digest::repeat(0x55),
             Digest::repeat(0x53),
             Digest::repeat(0x54),
         )

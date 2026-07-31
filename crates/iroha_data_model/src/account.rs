@@ -316,7 +316,7 @@ impl ParsedAccountId {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[repr(transparent)]
-#[norito(transparent, decode_from_slice)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -426,7 +426,6 @@ pub type AccountEntry<'world> = Ref<'world, AccountId, AccountValue>;
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct AccountDetails {
     /// Arbitrary metadata attached to the account.
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     pub metadata: Metadata,
     /// Stable alias referenced by rekey records.
     #[norito(default)]

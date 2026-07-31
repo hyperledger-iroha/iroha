@@ -30,7 +30,6 @@ pub enum PrivacyActivationStatementLimitsError {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct PrivacyProofBytesV1 {
     /// Exact native proof encoding.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
@@ -1606,7 +1605,6 @@ mod exact12_fixture {
         epoch: u64,
         crl_der_seed: u8,
         this_update_unix_seconds: u64,
-        _revoked_root_seed: u8,
         previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
         lifecycle: PrivacyZkX509RecordLifecycleV1,
     ) -> PrivacyZkX509CrlRecordV1 {
@@ -2449,4 +2447,3 @@ mod exact12_fixture {
         Ok(output.into_bytes())
     }
 }
-

@@ -222,7 +222,7 @@ Alternative:
   `CanTransferAsset` grants from the subscriber. Use only if needed.
 
 ## Torii API Surface
-- `POST /v1/subscriptions/plans` - register plan (AssetDefinition metadata).
+- `POST /v1/subscriptions/plans` - build an unsigned plan-registration transaction.
 - `GET /v1/subscriptions/plans` - list plans by provider.
 - `POST /v1/subscriptions` - build an unsigned subscription-creation draft.
 - `GET /v1/subscriptions` - list subscriptions with optional filters.
@@ -231,22 +231,27 @@ Alternative:
 - `POST /v1/subscriptions/{subscription_id}/resume` - build an unsigned resume draft.
 - `POST /v1/subscriptions/{subscription_id}/cancel` - build an unsigned cancellation draft.
 - `POST /v1/subscriptions/{subscription_id}/keep` - build an unsigned keep-active draft.
-- `POST /v1/subscriptions/{subscription_id}/usage` - record usage (by-call trigger).
+- `POST /v1/subscriptions/{subscription_id}/usage` - build an unsigned usage transaction.
 - `POST /v1/subscriptions/{subscription_id}/charge-now` - build an unsigned charge-now draft.
 
 ### POST /v1/subscriptions/plans
-Registers a plan on an asset definition. `authority` must match `plan.provider`.
+Validates and prepares a plan-registration transaction. `authority` must match
+`plan.provider`; Torii never receives a private key and does not submit the draft.
 ```json
 {
   "authority": "<i105-account-id>",
-  "private_key": "<hex>",
   "plan_id": "aws_compute#subscriptions",
   "plan": { "provider": "<i105-account-id>", "billing": { "...": "..." }, "pricing": { "...": "..." } }
 }
 ```
 Response:
 ```json
-{ "ok": true, "plan_id": "aws_compute#subscriptions", "tx_hash_hex": "<hex>" }
+{
+  "submitted": false,
+  "plan_id": "aws_compute#subscriptions",
+  "transaction_payload_b64": "<canonical padded-base64 TransactionPayload>",
+  "signing_message_b64": "<padded-base64 HashOf<TransactionPayload>>"
+}
 ```
 
 ### GET /v1/subscriptions/plans
@@ -407,13 +412,15 @@ only for `cancel`. Draft generation never signs, queues, or commits these instru
 ```json
 {
   "authority": "<i105-account-id>",
-  "private_key": "<hex>",
   "unit_key": "compute_ms",
   "delta": "3600000",
   "usage_trigger_id": "optional"
 }
 ```
-Executes the usage trigger with `SubscriptionUsageDelta`. `delta` must be non-negative.
+Prepares an `ExecuteTrigger` transaction carrying `SubscriptionUsageDelta`.
+`delta` must be non-negative. The response is an unsigned draft with
+`submitted: false`, `subscription_id`, `transaction_payload_b64`, and
+`signing_message_b64`; the caller validates, signs, and submits it locally.
 
 ### POST /v1/subscriptions/{subscription_id}/charge-now
 ```json

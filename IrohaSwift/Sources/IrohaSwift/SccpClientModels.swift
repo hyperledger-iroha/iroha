@@ -394,7 +394,7 @@ enum SccpSubmitValidation {
             }
         }
         var metadataCursor = SccpCompactTransactionCursor(metadata)
-        guard try metadataCursor.takeLength("metadata.count") == 0,
+        guard try metadataCursor.takeUInt64("metadata.count") == 0,
               metadataCursor.isFinished else {
             throw SccpV1Error.invalid(
                 "SCCP transaction metadata must be empty; fee selection belongs in fee_payment"
@@ -464,6 +464,20 @@ enum SccpSubmitValidation {
             throw SccpV1Error.invalid("SCCP transaction fee_payment contains trailing bytes")
         }
         return binding
+    }
+
+    /// Validates the canonical compact `FeePaymentIntent` shared by transaction payloads.
+    static func requireCanonicalTransactionFeePayment(_ payload: Data) throws {
+        _ = try requireCanonicalSccpFeePayment(payload)
+    }
+
+    /// Requires the exact empty compact metadata encoding used when a request has no metadata.
+    static func requireEmptyTransactionMetadata(_ payload: Data) throws {
+        var metadata = SccpCompactTransactionCursor(payload)
+        guard try metadata.takeUInt64("metadata.count") == 0,
+              metadata.isFinished else {
+            throw SccpV1Error.invalid("transaction metadata must use the exact empty encoding")
+        }
     }
 
     private static func requireCanonicalChargeLimits(_ payload: Data) throws {

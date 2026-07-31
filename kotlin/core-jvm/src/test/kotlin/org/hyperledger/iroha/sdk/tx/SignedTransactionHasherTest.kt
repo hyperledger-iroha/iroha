@@ -115,6 +115,8 @@ class SignedTransactionHasherTest {
     @Test
     fun `canonical external entrypoint matches native rust golden`() {
         val fixture = loadCompactHashFixture()
+        assertEquals("2", fixture.getProperty("schema.version"))
+        assertEquals("transfer_asset", fixture.getProperty("source.fixture"))
         val versioned = decodeCanonicalBase64(
             fixture.getProperty("versioned.base64"),
             "versioned.base64",
@@ -266,9 +268,7 @@ class SignedTransactionHasherTest {
     private fun parseCompactHashFixture(contents: String): Properties {
         val expectedKeys = setOf(
             "schema.version",
-            "source.tag",
-            "source.commit",
-            "reference",
+            "source.fixture",
             "versioned.bytes",
             "versioned.sha256",
             "bare.bytes",

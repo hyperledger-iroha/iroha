@@ -39,7 +39,6 @@ use crate::{
     ffi_type(opaque)
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct TaikaiEventId(pub Name);
 
 impl TaikaiEventId {
@@ -74,7 +73,6 @@ impl fmt::Display for TaikaiEventId {
     ffi_type(opaque)
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct TaikaiStreamId(pub Name);
 
 impl TaikaiStreamId {
@@ -109,7 +107,6 @@ impl fmt::Display for TaikaiStreamId {
     ffi_type(opaque)
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct TaikaiRenditionId(pub Name);
 
 impl TaikaiRenditionId {
@@ -149,7 +146,6 @@ pub type TaikaiAliasBinding = ManifestAliasBinding;
     ffi_type(opaque)
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct SegmentTimestamp(pub u64);
 
 impl SegmentTimestamp {
@@ -180,7 +176,6 @@ impl SegmentTimestamp {
     ffi_type(opaque)
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct SegmentDuration(pub u32);
 
 impl SegmentDuration {

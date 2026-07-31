@@ -18,7 +18,7 @@ use std::{
 use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
-use iroha_data_model::prelude::Name;
+use iroha_data_model::prelude::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{
     core::NoritoSerialize,
@@ -2751,8 +2751,7 @@ mod measured_bytes_impls {
         metadata::Metadata,
         name::Name,
         nexus::{
-            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacySnarkWitness,
-            LanePrivacyWitness, UniversalAccountId,
+            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, UniversalAccountId,
         },
         nft::NftData,
         peer::PeerId,
@@ -3863,8 +3862,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.vk_transfer.measured_bytes_extra());
             total = total.saturating_add(self.vk_unshield.measured_bytes_extra());
             total = total.saturating_add(self.vk_shield.measured_bytes_extra());
-            total = total.saturating_add(self.asset_hidden_pool_id.measured_bytes_extra());
-            total = total.saturating_add(self.asset_hidden_asset_set_root.measured_bytes_extra());
             total = total.saturating_add(self.frontier_checkpoints.measured_bytes_extra());
             total = total.saturating_add(self.tree.measured_bytes_extra());
             total
@@ -4247,23 +4244,11 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for LanePrivacySnarkWitness {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<LanePrivacySnarkWitness>();
-            total = total.saturating_add(self.public_inputs.measured_bytes_extra());
-            total = total.saturating_add(self.proof.measured_bytes_extra());
-            total
-        }
-    }
-
     impl MeasuredBytes for LanePrivacyWitness {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<LanePrivacyWitness>();
             match self {
                 LanePrivacyWitness::Merkle(witness) => {
-                    total = total.saturating_add(witness.measured_bytes_extra());
-                }
-                LanePrivacyWitness::Snark(witness) => {
                     total = total.saturating_add(witness.measured_bytes_extra());
                 }
             }
@@ -4765,7 +4750,7 @@ pub(crate) enum TieredKeyHandle {
     ContractInstance(iroha_data_model::smart_contract::ContractAddress),
     ContractSubjectBinding(iroha_data_model::smart_contract::ContractAddress),
     ContractAliasBinding(iroha_data_model::smart_contract::ContractAddress),
-    SmartContractState(Name),
+    SmartContractState(StatePath),
     ZkAsset(iroha_data_model::asset::AssetDefinitionId),
     Election(String),
     MinistryAgendaProposal(String),

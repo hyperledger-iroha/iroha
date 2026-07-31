@@ -384,6 +384,9 @@ fn enforce_cdn_policy(
     }
 
     let region = ctx.region().and_then(normalized_label);
+    if region.is_none() && (!policy.allow_regions.is_empty() || !policy.deny_regions.is_empty()) {
+        return Some(PolicyViolation::CdnGeofenceDenied { region: None });
+    }
     if let Some(region_label) = &region {
         if policy
             .deny_regions
@@ -441,12 +444,9 @@ fn enforce_cdn_policy(
     }
 
     if let (Some(limiter), Some(ceiling)) = (limiter, policy.rate_ceiling_rps) {
-        let key = ctx
-            .canonical_host()
-            .map(str::to_ascii_lowercase)
-            .filter(|host| !host.is_empty())
-            .unwrap_or_else(|| "global".to_string());
-        let fingerprint = ClientFingerprint::from_identifier(&format!("cdn|{key}"));
+        // This is a policy-wide edge ceiling. A request-controlled Host value must not create
+        // a fresh bucket and bypass the configured budget.
+        let fingerprint = ClientFingerprint::from_identifier("cdn|global");
         if let Err(error) = limiter.check(&fingerprint, ctx.monotonic_now()) {
             let retry_after = match error {
                 RateLimitError::Limited { retry_after } => Some(retry_after),
@@ -887,6 +887,20 @@ mod tests {
     }
 
     #[test]
+    fn cdn_policy_fails_closed_without_authoritative_region_metadata() {
+        let client = ClientFingerprint::from_identifier("client");
+        let policy = policy_with_cdn(GarCdnPolicyV1 {
+            deny_regions: vec!["US".to_string()],
+            ..GarCdnPolicyV1::default()
+        });
+        let decision = policy.evaluate(&base_context(&client));
+        assert!(matches!(
+            decision,
+            PolicyDecision::Deny(PolicyViolation::CdnGeofenceDenied { region: None })
+        ));
+    }
+
+    #[test]
     fn cdn_policy_enforces_ttl_override() {
         let client = ClientFingerprint::from_identifier("client");
         let policy = policy_with_cdn(GarCdnPolicyV1 {
@@ -925,7 +939,8 @@ mod tests {
         });
         let ctx = base_context(&client).with_canonical_host("cdn.example");
         assert!(matches!(policy.evaluate(&ctx), PolicyDecision::Allow));
-        let denied = policy.evaluate(&ctx);
+        let rotated_host = base_context(&client).with_canonical_host("attacker.example");
+        let denied = policy.evaluate(&rotated_host);
         assert!(matches!(
             denied,
             PolicyDecision::Deny(PolicyViolation::CdnRateCeilingExceeded { .. })

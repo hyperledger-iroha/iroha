@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(npm test)",
+      "Bash(gh issue view:*)",
+      "Bash(npx mocha:*)",
+      "Bash(gh issue comment:*)",
+      "Bash(gh issue close:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

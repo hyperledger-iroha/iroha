@@ -329,9 +329,11 @@ trim empty `reason` strings for `DeactivateContractInstance`/`RemoveSmartContrac
 enforce governance permissions before queuing the instruction.
 
 Durable state
-- 0x50 STATE_GET — Args: `r10=&Name(path)` → `ptr (&NoritoBytes)` or `0` — Gas: G_state_get + bytes
-- 0x51 STATE_SET — Args: `r10=&Name(path), r11=&NoritoBytes(value)` → 0 — Gas: G_state_set + bytes
-- 0x52 STATE_DEL — Args: `r10=&Name(path)` → 0 — Gas: G_state_del
+- 0x50 STATE_GET — Args: `r10=&NoritoBytes(StatePath)` → `ptr (&NoritoBytes)` or `0` — Gas: G_state_get + bytes
+- 0x51 STATE_SET — Args: `r10=&NoritoBytes(StatePath), r11=&NoritoBytes(value)` → 0 — Gas: G_state_set + bytes
+- 0x52 STATE_DEL — Args: `r10=&NoritoBytes(StatePath)` → 0 — Gas: G_state_del
+- State paths are a distinct nominal storage-path type transported inside
+  `NoritoBytes`; a `Name` TLV is not an alternate path carrier.
 - Deployed-contract execution scopes every path to `sc/<contract-address-hash>/`.
   Scoped operations never read, enumerate, overwrite, or delete unscoped keys.
   Generic programs have no authenticated contract namespace, so every durable
@@ -374,20 +376,23 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010211 ACCOUNT_RECOVERY_APPROVE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
 - 0x010212 ACCOUNT_RECOVERY_CANCEL — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
 - 0x010213 ACCOUNT_RECOVERY_FINALIZE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
-- 0x010030 STATE_KEYS — Args: `r10=&Name(prefix), r11=offset, r12=limit` (`0..=64`, where `0` returns an empty page) → `ptr (&NoritoBytes(Vec<Name>))`, `r11=total`, `r12=count` — Gas: G_state_keys + count + bytes
+- 0x010030 STATE_KEYS — Args: `r10=&NoritoBytes(StatePath prefix), r11=offset, r12=limit` (`0..=64`, where `0` returns an empty page) → `ptr (&NoritoBytes(Vec<StatePath>))`, `r11=total`, `r12=count` — Gas: G_state_keys + count + bytes
   - Enumerates durable-state keys in canonical sorted order. With CNTR metadata, the prefix must resolve to a declared path; a bare `StateMap` base is accepted here and by `STATE_COUNT`, but rejected by value operations. In contract-runtime scope, internal storage prefixes are stripped before return, and staged tombstones are applied before pagination. The ledger host seeks directly to the scoped ordered prefix and does not materialize unrelated global keys; its `count` gas component conservatively includes every textual-prefix candidate examined across persisted state and the transaction overlay. Limits above 64 are rejected by every host.
-- 0x010031 STATE_HAS — Args: `r10=&Name(path)` → `r10=present` — Gas: G_state_has
+- 0x010031 STATE_HAS — Args: `r10=&NoritoBytes(StatePath)` → `r10=present` — Gas: G_state_has
   - Tests durable-state key presence with the same scoped overlay, base-state, and tombstone resolution as `STATE_GET`.
-- 0x010032 STATE_LEN — Args: `r10=&Name(path)` → `r10=len`, `r11=found` — Gas: G_state_len + bytes
+- 0x010032 STATE_LEN — Args: `r10=&NoritoBytes(StatePath)` → `r10=len`, `r11=found` — Gas: G_state_len + bytes
   - Returns the `NoritoBytes` payload length for present values, excluding the TLV envelope. Missing values return `len=0, found=0`.
-- 0x010033 STATE_COUNT — Args: `r10=&Name(prefix)` → `r10=total` — Gas: G_state_count + count
+- 0x010033 STATE_COUNT — Args: `r10=&NoritoBytes(StatePath prefix)` → `r10=total` — Gas: G_state_count + count
   - Counts durable-state keys with the same canonical sorted prefix matching, scope stripping, overlay, and tombstone resolution as `STATE_KEYS`, without cloning or returning the key list. The ledger host charges for every ordered-range candidate examined, including candidates rejected by path-segment matching and overlay tombstones.
-- 0x010034 STATE_MAP_KEY_AT — Args: `r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index` → `ptr (&NoritoBytes(canonical key))` or `0` — Gas: G_path + bytes
+- 0x010034 STATE_MAP_KEY_AT — Args: `r10=&NoritoBytes(Vec<StatePath>), r11=&Name(base), r12=index` → `ptr (&NoritoBytes(canonical key))` or `0` — Gas: G_path + bytes
   - Compiler-internal decoder for bounded `StateMap` iteration. It accepts at most 64 paths in a 1 MiB page, requires an exact `base/<lowercase hex>` child, binds the recovered key to the base's CNTR-declared nominal key type, and rejects missing schemas, type confusion, malformed, non-canonical, or over-4-KiB keys.
 - 0x010035 STATE_VALUE_ENCODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count` → `ptr (&NoritoBytes(StateValueRecordV1))` — Gas: G_state_value + schema + words + pointers + output
   - Compiler-internal encoder for one canonical typed durable value. The schema is validated, active pointer leaves must carry canonical payloads of their declared ABI types, inactive `Option`/`Result` branches must be all-zero/null, and the stored record is bound to the exact schema by a domain-separated hash. A source-level `bytes` leaf may arrive transiently as `Blob` or `NoritoBytes`; the encoder copies its payload into the single canonical persisted `Blob` envelope. Stored records using `NoritoBytes` for that leaf remain invalid.
 - 0x010036 STATE_VALUE_DECODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1)` → `ptr (&Blob(pad:u8 then [u64; word_count]))` — Gas: G_state_value + schema + record + pointers + output
   - Compiler-internal decoder for scalars, structs, tuples, `Option`, and `Result`. Missing map entries are handled by the caller's outer `Option`; a zero record pointer, non-canonical inactive branch, malformed typed leaf, or different schema hash is rejected.
+- 0x010037 STATE_PATH_FROM_NAME — Args: `r10=&Name` → `ptr (&NoritoBytes(StatePath))` — Gas: G_path + bytes
+  - Compiler-internal conversion for durable-state helper parameters. It does
+    not make `Name` a valid carrier for any state operation.
 
 Canonical instruction bridge
 - `EXECUTE_INSTRUCTION` accepts only a pointer-ABI `NoritoBytes` payload containing the canonical
@@ -469,9 +474,9 @@ Hardware / Proofs
 
 VRF
 - 0x66 VRF_VERIFY — Args: `r10=&NoritoBytes(VrfVerifyRequest{variant:u8, pk:bytes, proof:bytes, chain_id:bytes, input:bytes})`, canonical frame at most 65,536 bytes → Return: `r10=ptr (&Blob(32-byte output))`, `r11=status:u64` — Gas: `64 + 250,000 × examined_items + 5 × canonical_request_bytes`
-  - Status codes: `0=ok`, `1=type_mismatch`, `2=decode_error`, `3=unknown_variant`, `4=bad_pk`, `5=bad_proof`, `6=verify_fail`.
+  - Status codes: `0=ok`, `1=type_mismatch`, `2=decode_error`, `3=unknown_variant`, `4=bad_pk`, `5=bad_proof`, `6=verify_fail`, `8=missing_or_mismatched_host_chain`.
   - Canonical-decode failures examine zero items. Every decoded request whose chain, variant, key, proof, or pairing validation begins examines one item. Output encoding/allocation failures trap after charging that item.
-  - When the host is configured with a chain_id, requests with a different `chain_id` are rejected with `r11=8 (chain_mismatch)`.
+  - The host must provide its chain identity. An absent host chain or a request claiming a different `chain_id` is rejected with `r11=8`; the guest claim is never used as fallback consensus context.
   - Proof: BLS signature over `Hash("iroha:vrf:v1:input|" || chain_id || "|" || input)` using VRF-specific DSTs:
     - G2 hash: `"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1"`
     - G1 hash: `"BLS12381G1_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1"`
@@ -483,7 +488,7 @@ VRF
 - 0x67 VRF_VERIFY_BATCH — Args: `r10=&NoritoBytes(VrfVerifyBatchRequest{items: [VrfVerifyRequest]})`, 1 through 16 items, canonical frame at most 65,536 bytes → Return: `r10=ptr (&NoritoBytes(Vec<[u8;32]>))`, `r11=status:u64`, `r12=fail_index?:u64` — Gas: `64 + 250,000 × examined_items + 5 × canonical_request_bytes`
   - Verifies each item; on success returns a Norito-encoded vector of 32‑byte outputs (order preserved). On failure, returns `r10=0`, `r11` = error code, `r12` = index (0‑based) of the first failing item.
   - Empty and over-16 batches fail with `r11=9 (batch_bound)` and `r12=u64::MAX` before backend or response-allocation work. Canonical-decode and batch-bound failures examine zero items. The VM reserves 16 items, then deterministically refunds every unexamined item, including the tail after the first failing item.
-  - If the host is configured with a chain_id, all items must match it; otherwise batch fails with `r11=8 (chain_mismatch)` and `r12` set to the first offending index.
+  - The host must provide its chain identity and every item must match it. An absent host chain or mismatch fails with `r11=8` and `r12` set to the first affected index.
 
 - 0x7E VRF_EPOCH_SEED — Args: `r10=&NoritoBytes(VrfEpochSeedRequest{epoch:u64, fallback_to_latest:bool})` → Return: `r10=ptr (&NoritoBytes(VrfEpochSeedResponse{found:bool, epoch:u64, seed:[u8;32]}))`, `r11=status:u64` — Gas: G_vote_get + bytes
   - Reads a world-snapshot VRF epoch seed for governance/sortition use in smart contracts.
@@ -491,9 +496,10 @@ VRF
   - Status codes: `0=ok`, `1=type_mismatch`, `2=decode_error`, `3=oom`.
 
 Host gating & chain binding
-- When a host `chain_id` is configured, requests must match it. Otherwise:
-  - Single: `r11=8 (chain_mismatch)` and `r10=0`.
-  - Batch: `r11=8`, `r12` set to the first offending index, and `r10=0`.
+- A host-owned `chain_id` is mandatory for VRF verification. Missing host
+  context and guest/host mismatches both fail closed:
+  - Single: `r11=8` and `r10=0`.
+  - Batch: `r11=8`, `r12` set to the first affected index, and `r10=0`.
 - Output derivation uses domain separation and canonical encodings as described above; outputs are deterministic across hardware.
 
 Notes
@@ -567,12 +573,12 @@ node enforces that policy unconditionally.
 | 0x45 | REGISTER_SMART_CONTRACT_CODE | r10=&NoritoBytes(RegisterSmartContractCode) | u64=0 | asset:gas/G_contract_admin@ivm.core/v2 + bytes |
 | 0x46 | REGISTER_SMART_CONTRACT_BYTES | r10=&NoritoBytes(RegisterSmartContractBytes) | u64=0 | asset:gas/G_contract_admin@ivm.core/v2 + bytes |
 | 0x47 | ACTIVATE_CONTRACT_INSTANCE | r10=&NoritoBytes(ActivateContractInstance) | u64=0 | asset:gas/G_contract_admin@ivm.core/v2 + bytes |
-| 0x50 | STATE_GET | r10=&Name | r10=ptr (&NoritoBytes) or 0 | asset:gas/G_state_get@ivm.core/v2 + bytes |
-| 0x51 | STATE_SET | r10=&Name, r11=&NoritoBytes | u64=0 | asset:gas/G_state_set@ivm.core/v2 + bytes |
-| 0x52 | STATE_DEL | r10=&Name | u64=0 | asset:gas/G_state_del@ivm.core/v2 |
+| 0x50 | STATE_GET | r10=&NoritoBytes(StatePath) | r10=ptr (&NoritoBytes) or 0 | asset:gas/G_state_get@ivm.core/v2 + canonical path frame bytes + returned value bytes |
+| 0x51 | STATE_SET | r10=&NoritoBytes(StatePath), r11=&NoritoBytes | u64=0 | asset:gas/G_state_set@ivm.core/v2 + canonical path frame bytes + value bytes |
+| 0x52 | STATE_DEL | r10=&NoritoBytes(StatePath) | u64=0 | asset:gas/G_state_del@ivm.core/v2 + canonical path frame bytes |
 | 0x53 | DECODE_INT | r10=&NoritoBytes(Norito-framed i64) | r10=i64 | asset:gas/G_numeric@ivm.core/v2 + bytes |
 | 0x55 | ENCODE_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Norito-framed i64)) | asset:gas/G_numeric@ivm.core/v2 + bytes |
-| 0x56 | BUILD_PATH_KEY_NORITO | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&Name) | asset:gas/G_path@ivm.core/v2 + bytes |
+| 0x56 | BUILD_PATH_KEY_NORITO | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&NoritoBytes(StatePath)) | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x57 | JSON_ENCODE | r10=&Json | ptr (&NoritoBytes) | asset:gas/G_json_encode@ivm.core/v2 + bytes |
 | 0x58 | JSON_DECODE | r10=&NoritoBytes(JSON bytes) | ptr (&Json) | asset:gas/G_json_decode@ivm.core/v2 + bytes |
 | 0x59 | SCHEMA_ENCODE | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | asset:gas/G_schema@ivm.core/v2 + bytes |
@@ -610,7 +616,7 @@ node enforces that policy unconditionally.
 | 0x8B | JSON_GET_ASSET_DEFINITION_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<AssetDefinitionId> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x8C | JSON_SET_I64_DIRECT | r10=&Json(any validated region), r11=&Name(key), r12=value:i64 | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
 | 0x8D | JSON_SET_ACCOUNT_ID_DIRECT | r10=&Json(any validated region), r11=&Name(key), r12=&AccountId | r10=&Json | asset:gas/G_json@ivm.core/v2 + encoded bytes |
-| 0x8E | BUILD_PATH_KEY_NORITO_DIRECT | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&Name) | asset:gas/G_path@ivm.core/v2 + bytes |
+| 0x8E | BUILD_PATH_KEY_NORITO_DIRECT | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&NoritoBytes(StatePath)) | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x8F | SCHEMA_INFO_DIRECT | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | asset:gas/G_schema@ivm.core/v2 + bytes |
 | 0x90 | SM3_HASH | r10=&Blob(message) | r10=ptr (&Blob(digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
 | 0x91 | SM2_VERIFY | r10=&Blob(msg), r11=&Blob(sig), r12=&Blob(pubkey), r13=&Blob(distid)? | u64=0/1 | asset:gas/G_verify@ivm.core/v2 + bytes |
@@ -694,13 +700,14 @@ node enforces that policy unconditionally.
 | 0x10027 | SYSVAR_CONTRACT_SUBJECT | - | r10=ptr (&AccountId(contract subject)) | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10028 | NORMALIZE_NORITO_BYTES | r10=&Blob or &NoritoBytes (validated public TLV) | r10=&NoritoBytes(same payload) | asset:gas/G_pointer@ivm.core/v2 + bytes |
 | 0x10029 | CALL_CONTRACT_QUANTITY2 | r10=&Blob(contract_address), r11=&Blob(literal entrypoint), r12=&Quantity(amount_in), r13=&Quantity(min_out) | r10=ptr (&Quantity) | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
-| 0x10030 | STATE_KEYS | r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64) | r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64 | asset:gas/G_state_keys@ivm.core/v2 + count + bytes |
-| 0x10031 | STATE_HAS | r10=&Name(path) | r10=present:u64 | asset:gas/G_state_has@ivm.core/v2 |
-| 0x10032 | STATE_LEN | r10=&Name(path) | r10=len:u64, r11=found:u64 | asset:gas/G_state_len@ivm.core/v2 + bytes |
-| 0x10033 | STATE_COUNT | r10=&Name(prefix) | r10=total:u64 | asset:gas/G_state_count@ivm.core/v2 + count |
-| 0x10034 | STATE_MAP_KEY_AT | r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index:u64 | r10=ptr (&NoritoBytes(canonical key)) or 0 | asset:gas/G_path@ivm.core/v2 + bytes |
+| 0x10030 | STATE_KEYS | r10=&NoritoBytes(StatePath prefix), r11=offset:u64, r12=limit:u64 (0..=64) | r10=ptr (&NoritoBytes(Vec<StatePath>)), r11=total:u64, r12=count:u64 | asset:gas/G_state_keys@ivm.core/v2 + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes + canonical response frame bytes |
+| 0x10031 | STATE_HAS | r10=&NoritoBytes(StatePath) | r10=present:u64 | asset:gas/G_state_has@ivm.core/v2 + canonical path frame bytes |
+| 0x10032 | STATE_LEN | r10=&NoritoBytes(StatePath) | r10=len:u64, r11=found:u64 | asset:gas/G_state_len@ivm.core/v2 + canonical path frame bytes |
+| 0x10033 | STATE_COUNT | r10=&NoritoBytes(StatePath prefix) | r10=total:u64 | asset:gas/G_state_count@ivm.core/v2 + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes |
+| 0x10034 | STATE_MAP_KEY_AT | r10=&NoritoBytes(Vec<StatePath>), r11=&Name(base), r12=index:u64 | r10=ptr (&NoritoBytes(canonical key)) or 0 | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x10035 | STATE_VALUE_ENCODE | r10=&NoritoBytes(StateValueSchemaV1), r11=&[u64], r12=word_count:u64 | r10=ptr (&NoritoBytes(StateValueRecordV1)) | asset:gas/G_state_value@ivm.core/v2 + schema + words + pointers + output |
 | 0x10036 | STATE_VALUE_DECODE | r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_state_value@ivm.core/v2 + schema + record + pointers + output |
+| 0x10037 | STATE_PATH_FROM_NAME | r10=&Name | r10=ptr (&NoritoBytes(StatePath)) | asset:gas/G_path@ivm.core/v2 + bytes |
 | 0x1004E | JSON_BUILD | r10=&NoritoBytes(JsonConstructionSchemaV1), r11=word_table, r12=word_count | r10=&Json | asset:gas/G_json_build@ivm.core/v2 + schema bytes + source bytes + words + collection elements + encoded bytes |
 | 0x10100 | INT_FROM_I64 | r10=value:i64 | r10=&Int, r11=status:0 | asset:gas/G_numeric_staged@ivm.core/v2 |
 | 0x10101 | INT_FROM_U64 | r10=value:u64 | r10=&Int, r11=status:0 | asset:gas/G_numeric_staged@ivm.core/v2 |
@@ -810,8 +817,8 @@ node enforces that policy unconditionally.
 Codec helpers
 - 0x53 DECODE_INT — Args: `r10=&NoritoBytes(Norito-framed i64)` → Return: `r10=i64` — Gas: G_numeric + bytes
 - 0x55 ENCODE_INT — Args: `r10=value:i64` → Return: `ptr (&NoritoBytes(Norito-framed i64))` — Gas: G_numeric + bytes
-- 0x56 BUILD_PATH_KEY_NORITO — Args: `r10=&Name(base), r11=&NoritoBytes(key)` → Return: `ptr (&Name)` — Gas: G_path + bytes
-  - Compiler-internal schema-bound helper. The base must name exactly one CNTR-declared `StateMap`; the key must be the unique canonical encoding of that map's nominal key type. It produces `base/<lowercase hex of canonical key bytes>`, rejects missing schemas, type confusion, malformed/noncanonical frames, and keys larger than 4 KiB. The exact suffix is reversible and lexicographic path order equals unsigned canonical-byte order.
+- 0x56 BUILD_PATH_KEY_NORITO — Args: `r10=&Name(base), r11=&NoritoBytes(key)` → Return: `ptr (&NoritoBytes(StatePath))` — Gas: G_path + bytes
+  - Compiler-internal schema-bound helper. The base must name exactly one CNTR-declared `StateMap`; the key must be the unique canonical encoding of that map's nominal key type. It produces the distinct nominal storage path `base/<lowercase hex of canonical key bytes>`, rejects missing schemas, type confusion, malformed/noncanonical frames, and keys larger than 4 KiB. The exact suffix is reversible and lexicographic path order equals unsigned canonical-byte order.
 - 0x57 JSON_ENCODE — Args: `r10=&Json` → Return: `ptr (&NoritoBytes(Json))` — Gas: G_json_encode + bytes
 - 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(Json)` → Return: `ptr (&Json)` — Gas: G_json_decode + bytes
 - JSON_DECODE rejects already-typed `Json` and raw/framed `Blob` carriers; callers use JSON_ENCODE/JSON_DECODE for the canonical typed conversion pair.

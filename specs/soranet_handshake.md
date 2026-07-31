@@ -104,7 +104,31 @@ sequence.
      ∥ pq_inputs, context=transcript_hash)`. Until PQ inputs are mandatory the
      relay must reject mismatched TLVs when the client advertised capabilities
      the relay cannot fulfill.
-5. **Circuit confirmation**
+5. **Application record keys**
+   - QUIC/TLS remains the outer transport, but application bytes after the
+     handshake MUST use the `SNR1` ChaCha20-Poly1305 record layer derived from
+     `K`. HKDF separates client-to-relay from relay-to-client keys and separates
+     every QUIC stream by initiator, directionality, and stream index.
+   - The authenticated 16-byte header is
+     `"SNR1" || sequence:u64be || plaintext_len:u32be`. Sequences are contiguous
+     from zero, plaintext is limited to 64 KiB per record, and receivers fail
+     closed before releasing plaintext on any framing, order, or tag error.
+     The 32-byte key is
+     `HKDF-SHA-256(salt="iroha.soranet.record.hkdf-sha256.v1", IKM=K)`
+     expanded with
+     `"iroha.soranet.record.chacha20poly1305.key.v1" || direction:u8 ||
+     initiator:u8 || stream_kind:u8 || stream_index:u64be`. Direction uses
+     `0=client-to-relay, 1=relay-to-client`; initiator uses
+     `0=QUIC-client, 1=QUIC-server`; stream kind uses
+     `0=bidirectional, 1=unidirectional`; stream index is the QUIC stream number
+     with its two type bits removed. The nonce is
+     `0x00000000 || sequence:u64be`.
+     This inner layer is mandatory: TLS alone must not replace it because TLS
+     does not consume the negotiated hybrid secret.
+   - Relay QUIC endpoints reject TLS 0-RTT and first-release clients must not
+     offer it. Authentication, replay-ledger admission, and hybrid key
+     derivation therefore finish before any application stream is processed.
+6. **Circuit confirmation**
    - Relay issues a circuit confirmation record containing entry ticket ID,
      salt epoch, and retry token. Client caches this for inclusion in
      subsequent middle/exit hops.
@@ -135,7 +159,9 @@ Relay admission now layers adaptive defenses on top of the base PoW check:
 - **Adaptive difficulty.** Each entry relay tracks PoW failures and clean handshakes in
   a sliding window. Repeated invalid tickets automatically raise the difficulty (up
   to `pow.adaptive.max_difficulty`), while healthy traffic allows the relay to relax
-  back toward the configured minimum. Operators can monitor the live requirement via
+  back toward the configured minimum. Both adaptive bounds must remain inside the
+  first-release `1..=32` corridor; a zero floor or oversized ceiling is rejected at
+  startup. Operators can monitor the live requirement via
   the `soranet_handshake_pow_difficulty{mode=…}` Prometheus gauge.
 - **Per-hop quotas.** Handshake bursts per remote IP and per descriptor commit are capped
   (`pow.quotas`), with optional hop-specific overrides exposed via `pow.quotas_per_mode` so
@@ -166,7 +192,10 @@ population.
 ### Argon2 Puzzle Service (SNNet-6a)
 
 SNNet-16D the Argon2 path ships as mandatory first-release admission policy:
-`pow.required` is always true and the puzzle gate remains enabled. Startup
+`pow.required` is always true, the puzzle gate remains enabled, and the
+first-release default difficulty is `6`. Difficulty zero is rejected because
+it would make the relay pay the Argon2 verification cost without requiring
+client work. Startup
 configuration normalizes to that policy, and live `/v1/config` updates reject
 attempts to disable PoW or clear the puzzle gate. The relay verifies the incoming
 ticket by hashing the client solution against the descriptor commitment with
@@ -217,9 +246,13 @@ of which policy a relay enforces.
   proxy remediation hook so local QUIC proxies automatically shift to
   metadata-only mode and recover once downgrade noise subsides (SNNet-16E).
 - **Proxy remediation feed.** The relay admin service exposes `/policy/proxy-toggle`
-  alongside `/privacy/events`. The NDJSON feed publishes only downgrade failures;
-  orchestrators poll it and feed `DowngradeRemediator`, which flips local proxies
-  to metadata-only until downgrade volume falls below the configured threshold.
+  alongside `/privacy/events`. The admin listener is loopback-only and every
+  route except `/healthz` requires the bearer token loaded from
+  `admin_auth_token_path`; remote consumers must use a separately authenticated
+  and encrypted local proxy. The NDJSON feed publishes only downgrade failures;
+  orchestrators poll it and feed `DowngradeRemediator`, which flips local
+  proxies to metadata-only until downgrade volume falls below the configured
+  threshold.
 
 Clients must update their puzzle minting loop to iterate over 32-byte solutions until
 the Argon2 digest satisfies the advertised difficulty. The sample harness in
@@ -229,15 +262,20 @@ For operators that want external issuance, the `soranet-puzzle-service` binary (
 `tools/soranet-puzzle-service/`) exposes a minimal HTTP API backed by a relay JSON
 configuration. The service loads `handshake.descriptor_commit_hex` **and** the relay
 identity (from `handshake.identity_private_key_hex` or the descriptor manifest), binding
-every minted puzzle ticket to the relay identifier + supplied transcript hash so tickets
-cannot be replayed against other relays. It derives the puzzle parameters from
+every minted puzzle ticket to the relay identifier plus the mandatory admission
+transcript commitment so tickets cannot be moved to another relay or client
+hello. The commitment is
+`BLAKE3("soranet.pow.admission_transcript.v1" || u64be(len(ClientHello)) || ClientHello)`;
+clients must build the final client hello before minting and must send those
+exact bytes after the ticket. It derives the puzzle parameters from
 `pow.*`/`pow.puzzle.*` and offers two endpoints:
 
 - `GET /v1/puzzle/config` — returns the active difficulty, timing bounds, and puzzle cost
   factors so clients can size their workloads.
-- `POST /v1/puzzle/mint` — mints a fresh ticket and returns a base64 payload. Callers may
-  supply `{ "ttl_secs": <override> }` and `transcript_hash_hex` to bind the ticket to a
-  resume hash; the service clamps TTL overrides to the configured policy.
+- `POST /v1/puzzle/mint` — mints a fresh ticket and returns a base64 payload.
+  Callers must supply the 32-byte admission commitment as
+  `transcript_hash_hex`; they may also provide `{ "ttl_secs": <override> }`.
+  The service clamps TTL overrides to the configured policy.
 - `GET /v1/token/config` — surfaces the ML-DSA admission-token policy (suite, TTL bounds,
   issuer fingerprint, relay identifier, and active revocations) when `pow.token.enabled = true`.
 - `POST /v1/token/mint` — returns a base64 admission token bound to the supplied
@@ -255,8 +293,8 @@ with GREASE TLVs to resist traffic analysis.
 ### Admission Tokens
 
 Relays can bypass the puzzle gate for trusted clients by provisioning ML-DSA-44
-admission tokens. Tokens bind to a relay identifier, the negotiated resume
-transcript hash, and carry an issuance/expiry window constrained by
+admission tokens. Tokens bind to a relay identifier and the exact client-hello
+admission commitment described above, and carry an issuance/expiry window constrained by
 `pow.token.max_ttl_secs` and `pow.token.clock_skew_secs`. Verification rejects
 tokens whose revocation digest appears in either inline configuration or the
 external revocation list loaded from disk.
@@ -268,7 +306,7 @@ external revocation list loaded from disk.
     --issuer-public-hex "$(cat issuer_mldsa_public.hex)" \
     --issuer-secret-hex "$(cat issuer_mldsa_secret.hex)" \
     --relay-id-hex "$RELAY_ID_HEX" \
-    --transcript-hash-hex "$RESUME_HASH_HEX" \
+    --transcript-hash-hex "$ADMISSION_TRANSCRIPT_HEX" \
     --ttl-secs 300 \
     --format json
   ```
@@ -280,7 +318,7 @@ external revocation list loaded from disk.
 
 - **Inspection.** `soranet_admission_token inspect --token <base64|hex>` (or
   `--input <path>`) decodes a frame, verifies its signature against the issuer
-  fingerprint, and prints the bound relay/resume hash to help operators audit
+  fingerprint, and prints the bound relay/admission transcript to help operators audit
   cached credentials.
 
 - **Revocation.** Maintain a Norito JSON array of token identifiers (each a
@@ -301,31 +339,40 @@ external revocation list loaded from disk.
   in `pow.token.revocation_list_hex`, while `pow.token.revocation_list_path`
   points to the JSON document maintained by the CLI. Both sources are loaded at
   startup and deduplicated before `DoSControls` enforce the revocation set.
+  `pow.token.replay_store_path` is the mandatory durable ledger of consumed
+  tokens, bounded by `pow.token.replay_store_capacity`; active records are never
+  evicted, and unreadable, malformed, or exhausted stores fail closed. A relay
+  identity must have exactly one authoritative replay ledger. Do not run cloned
+  active replicas with the same identity and independent stores.
 
-Every token is scoped to a single relay and resume hash: clients must refresh
-credentials whenever the descriptor commitment rotates or a new transcript hash
-is negotiated. When `pow.token.enabled = false` the relay falls back to the
+Every token is scoped to a single relay and exact client hello: clients must
+mint a new credential whenever the serialized hello changes. When
+`pow.token.enabled = false` the relay falls back to the
 puzzle gate, preserving the default onboarding flow. Token-authenticated
 sessions still emit downgrade telemetry and compliance log entries so operations
 retain a full audit trail.
 
 ### PoW replay guard
 
+- The relay reads and structurally parses the bounded client hello, derives its
+  admission commitment, and verifies/consumes the ticket before invoking the
+  handshake engine or performing any relay-side ML-KEM operation.
 - The relay/node loads a bounded Norito revocation store on startup using
-  `pow.revocation_store_capacity`, `pow.revocation_max_ttl_secs`, and
+  `pow.revocation_store_capacity`, `pow.revocation_store_ttl_secs`, and
   `pow.revocation_store_path`. Each verified PoW or puzzle ticket is inserted
   into the store; replays return `pow::Error::Replay` and the handshake fails.
 - The store is pruned on load and can be purged in-process via the
-  `purge_expired_revocations` helper or by replacing the Norito snapshot on
-  disk. Capacity/TTL validation or an unreadable path raises a
+  `purge_expired_revocations` helper. Active records are never evicted to make
+  room: exhausted capacity rejects new handshakes until records expire.
+  Capacity/TTL validation or an unreadable path raises a
   `HandshakeSoranet` error during startup, so operators will see explicit
   failures rather than silently disabling replay protection.
-- Telemetry: `soranet_pow_revocation_store_total{reason}` increments whenever the
-  relay falls back to the in-memory replay cache (e.g., missing/invalid snapshot)
-  so dashboards can alert on misconfigured paths or permissions.
-- Snapshots are compact Norito lists of fingerprints only; deleting the file
-  resets the replay guard (useful for lab environments) but should be avoided
-  in production where deterministic replay blocking is required.
+- Telemetry: `soranet_pow_revocation_store_total{reason}` increments when
+  consumption fails (for example, exhausted capacity or an unwritable
+  snapshot), so dashboards can alert on misconfigured paths and permissions.
+- Snapshots are compact Norito lists of fingerprints. Do not replace or delete
+  an active snapshot: doing so discards single-use history that must survive
+  restarts.
 
 ### Relay descriptor manifest
 
@@ -359,12 +406,12 @@ Relays can also ingest the signed directory artefacts directly via the
 `RelayCertificateBundleV2` (`bundle_path`) alongside the governance issuer
 keys (`issuer_ed25519_hex`, `issuer_mldsa_hex`) causes the daemon to verify the
 dual signatures, adopt the certified descriptor commitment, and cache the
-handshake suite/KEM policy advertised in the bundle. The `validation_phase`
-parameter mirrors directory rollout gates (`phase1_allow_single`,
-`phase2_prefer_dual`, `phase3_require_dual`). Startup fails if the local
-Ed25519 identity or ML-KEM public key diverge from the certificate, ensuring
-the manifest secrets, relay identity, and certificate snapshot remain in lock
-step.
+handshake suite/KEM policy advertised in the bundle. The first release has no
+certificate rollout-phase setting: both the Ed25519 witness signature and the
+ML-DSA-65 signature are mandatory, and omitting the ML-DSA issuer key fails
+configuration validation. Startup also fails if the local Ed25519 identity or
+ML-KEM public key diverge from the certificate, ensuring the manifest secrets,
+relay identity, and certificate snapshot remain in lock step.
 
 ## Salt Announcement Schema
 
@@ -826,7 +873,7 @@ interactive media latency remains minimal.
 ### Torii CLI helpers
 
 - `iroha app sorafs handshake show` fetches `/v1/config` and prints the live descriptor commit, capability vectors, negotiated suite identifiers, resume hash, and PoW admission window. Operators can diff this output against the directory bundle before rotating relays.
-- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-required --pow-difficulty <u8> ...` submits a partial update via `/v1/config`. The command can rotate descriptors, capabilities, resume hashes, PoW timing/cost parameters, and SM matching back to the mandatory strict policy; it does not expose flags that make PoW optional, disable the Argon2 puzzle, or allow SM/OpenSSL preview mismatches. Argon2 updates are accepted only within the fixed first-release corridor (`memory_kib` 4096–131072, `time_cost` 1–8, `lanes` 1–16, difficulty 0–32). `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs. These settings remain local to the node: Iroha does not accept or gossip runtime handshake-policy updates over P2P.
+- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-required --pow-difficulty <u8> ...` submits a partial update via `/v1/config`. The command can rotate descriptors, capabilities, resume hashes, PoW timing/cost parameters, and SM matching back to the mandatory strict policy; it does not expose flags that make PoW optional, disable the Argon2 puzzle, or allow SM/OpenSSL preview mismatches. Argon2 updates are accepted only within the fixed first-release corridor (`memory_kib` 4096–131072, `time_cost` 1–8, `lanes` 1–16, difficulty 1–32). `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs. These settings remain local to the node: Iroha does not accept or gossip runtime handshake-policy updates over P2P.
 
 ## Open Design Items
 

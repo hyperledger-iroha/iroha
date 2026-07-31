@@ -4,7 +4,6 @@
 use std::{
     cell::Cell,
     collections::BinaryHeap,
-    mem,
     num::NonZeroU64,
     ops::ControlFlow,
     sync::{Arc, Mutex, Weak},
@@ -27,7 +26,7 @@ use iroha_data_model::{
     },
 };
 use mv::storage::StorageReadOnly as _;
-use norito::core::{Archived, Header, NoritoSerialize};
+use norito::core::{Header, NoritoSerialize};
 
 use crate::{
     prelude::ValidSingularQuery,
@@ -371,7 +370,7 @@ fn bounded_bare_encoded_len<T: NoritoSerialize>(value: &T, limit: u64) -> Result
 
 fn bounded_framed_encoded_len<T: NoritoSerialize>(value: &T, limit: u64) -> Result<u64, Error> {
     let header = u64::try_from(Header::SIZE).unwrap_or(u64::MAX);
-    let align = mem::align_of::<Archived<T>>();
+    let align = norito::core::archived_payload_align::<T>();
     let padding = if align <= 1 {
         0
     } else {

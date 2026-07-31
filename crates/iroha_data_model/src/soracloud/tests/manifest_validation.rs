@@ -388,6 +388,7 @@
     fn deployment_bundle_validate_accepts_inrou_http_service() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.entrypoint = "/app/bin/service".to_string();
         container.inrou = Some(sample_inrou_manifest());
         container.capabilities.network = SoraNetworkPolicyV1::Open;
         let container_hash = Hash::new(Encode::encode(&container));
@@ -415,6 +416,7 @@
     fn deployment_bundle_validate_accepts_replicated_inrou_http_service() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.entrypoint = "/app/bin/service".to_string();
         container.inrou = Some(sample_inrou_manifest());
         container.capabilities.network =
             SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
@@ -994,6 +996,7 @@
     fn deployment_bundle_validate_rejects_http_service_without_shared_lease_volume() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.entrypoint = "/app/bin/service".to_string();
         container.inrou = Some(sample_inrou_manifest());
         container.capabilities.network =
             SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
@@ -1037,6 +1040,7 @@
     fn deployment_bundle_validate_accepts_http_service_with_confidential_shared_lease() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.entrypoint = "/app/bin/service".to_string();
         container.inrou = Some(sample_inrou_manifest());
         container.capabilities.network =
             SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
@@ -1104,6 +1108,7 @@
     fn deployment_bundle_validate_rejects_unknown_http_service_quota_class() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.entrypoint = "/app/bin/service".to_string();
         container.inrou = Some(sample_inrou_manifest());
         container.capabilities.network = SoraNetworkPolicyV1::Open;
         let container_hash = Hash::new(Encode::encode(&container));
@@ -1138,6 +1143,7 @@
     fn deployment_bundle_validate_rejects_http_service_resources_over_quota_class_cap() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.entrypoint = "/app/bin/service".to_string();
         container.inrou = Some(sample_inrou_manifest());
         container.capabilities.network = SoraNetworkPolicyV1::Open;
         container.resources.cpu_millis = NonZeroU32::new(5_000).expect("nonzero");
@@ -2420,4 +2426,3 @@
             }
         ));
     }
-

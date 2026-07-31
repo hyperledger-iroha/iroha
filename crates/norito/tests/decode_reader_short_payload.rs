@@ -3,7 +3,7 @@
 use std::io::Cursor;
 
 use iroha_schema::IntoSchema;
-use norito::{Archived, NoritoDeserialize, NoritoSerialize};
+use norito::{NoritoDeserialize, NoritoSerialize};
 
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct LargePayload {
@@ -22,7 +22,7 @@ enum ShortPayloadEnum {
 fn decode_from_reader_handles_short_payload() {
     let value = ShortPayloadEnum::Unit;
     let bytes = norito::to_bytes(&value).expect("encode");
-    let archived_size = std::mem::size_of::<Archived<ShortPayloadEnum>>();
+    let archived_size = norito::core::archived_payload_size::<ShortPayloadEnum>();
     let length_offset = 4 + 1 + 1 + 16 + 1;
     let length_bytes: [u8; 8] = bytes[length_offset..length_offset + 8]
         .try_into()

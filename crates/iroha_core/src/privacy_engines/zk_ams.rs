@@ -95,6 +95,8 @@ pub const ZK_AMS_RING_SIZES_V1: [usize; 3] = [16, 32, 64];
 /// The fixed fields occupy 45 bytes and each canonical `[u8; 32]` response
 /// occupies 65 bytes in this wire profile: `45 + 64 * 65 = 4_205`.
 pub const MAX_ZK_AMS_LSAG_PROOF_BYTES_V1: usize = 4_205;
+/// Closed cumulative allocation ceiling for one bounded LSAG wire decode.
+pub const ZK_AMS_LSAG_DECODE_ALLOCATION_BYTES_V1: usize = 32 * 1024;
 /// Hard cap checked before holder-possession proof decoding.
 pub const MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1: usize = 256;
 /// Hard cap checked before the composed batch proof is decoded.
@@ -682,7 +684,7 @@ fn zk_ams_lsag_decode_limits(ring_size: usize, payload_len: usize) -> norito::De
         ring_size,
         payload_len,
         ring_size,
-        MAX_ZK_AMS_LSAG_PROOF_BYTES_V1.saturating_mul(4),
+        ZK_AMS_LSAG_DECODE_ALLOCATION_BYTES_V1,
         8,
     )
 }
@@ -2379,6 +2381,37 @@ mod tests {
                 proof
             );
         }
+    }
+
+    #[test]
+    fn maximum_lsag_requires_the_first_release_decode_allocation_budget() {
+        const RETIRED_UNDERSIZED_BUDGET_BYTES_V1: usize = 4 * 4_205;
+        let size = ZK_AMS_MAX_RING_SIZE_V1;
+        let (_ring, _key_image, proof) = sign_fixture(size, size / 2);
+        assert_eq!(RETIRED_UNDERSIZED_BUDGET_BYTES_V1, 16_820);
+        assert_eq!(ZK_AMS_LSAG_DECODE_ALLOCATION_BYTES_V1, 32 * 1024);
+        let decoded = norito::codec::decode_exact_from_slice_with_limits::<ZkAmsLsagProofWireV1>(
+            &proof,
+            zk_ams_lsag_decode_limits(size, proof.len()),
+        )
+        .expect("maximum-ring LSAG must decode under the governed budget");
+        assert_eq!(decoded.responses.len(), size);
+
+        let retired_limits = norito::DecodeLimits::new(
+            size,
+            proof.len(),
+            size,
+            RETIRED_UNDERSIZED_BUDGET_BYTES_V1,
+            8,
+        );
+        assert!(
+            norito::codec::decode_exact_from_slice_with_limits::<ZkAmsLsagProofWireV1>(
+                &proof,
+                retired_limits,
+            )
+            .is_err(),
+            "the retired allocation budget unexpectedly admits the maximum canonical LSAG"
+        );
     }
 
     #[test]

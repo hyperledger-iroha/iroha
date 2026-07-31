@@ -692,6 +692,32 @@ mod tests {
     }
 
     #[test]
+    fn load_guard_entry_rejects_pre_release_validation_phase() {
+        let mut fixture = snapshot_fixture();
+        let bytes = fs::read(fixture.config.snapshot_path()).expect("snapshot contents");
+        let mut snapshot =
+            GuardDirectorySnapshotV2::inspect_bytes(&bytes).expect("snapshot decodes");
+        snapshot.validation_phase =
+            encode_validation_phase(CertificateValidationPhase::Phase2PreferDual);
+        let bytes = snapshot.to_bytes().expect("snapshot encodes");
+        fs::write(fixture.config.snapshot_path(), &bytes).expect("rewrite snapshot");
+        fixture.config.expected_snapshot_digest_hex = hex_encode(compute_snapshot_digest(&bytes));
+
+        let err = load_guard_entry_at(
+            &fixture.config,
+            &fixture.relay_id,
+            &fixture.descriptor_commit,
+            fixture.at_unix,
+        )
+        .expect_err("authenticated guard loading must require phase 3 dual signatures");
+        assert!(
+            matches!(&err, GuardDirectoryError::SnapshotAuthentication { .. }),
+            "unexpected guard loading error: {err:?}"
+        );
+        assert!(err.to_string().contains("phase 3 dual signatures"));
+    }
+
+    #[test]
     fn persist_guard_pinning_proof_serializes_metadata() {
         use std::{fs, time::Duration};
 
@@ -868,7 +894,9 @@ mod tests {
             published_at_unix: 1_734_000_000,
             valid_after_unix: 1_734_000_000,
             valid_until_unix: 1_734_086_400,
-            validation_phase: encode_validation_phase(CertificateValidationPhase::Phase2PreferDual),
+            validation_phase: encode_validation_phase(
+                CertificateValidationPhase::Phase3RequireDual,
+            ),
             issuers: vec![GuardDirectoryIssuerV1 {
                 fingerprint: issuer_fingerprint,
                 ed25519_public: issuer_public,

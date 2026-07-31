@@ -39,7 +39,6 @@ use iroha_core::{
     EventsSender,
     iso_bridge::reference_data::{
         DatasetSnapshot, ReferenceDataError, ReferenceDataSnapshots, SnapshotState,
-        ValidationOutcome,
     },
     kiso::KisoHandle,
     kura::Kura,
@@ -845,13 +844,10 @@ fn ensure_dataset_loaded<T>(
 
 fn ensure_reference(
     label: &str,
-    outcome: Result<ValidationOutcome, ReferenceDataError>,
+    outcome: Result<(), ReferenceDataError>,
 ) -> Result<(), Box<dyn Error>> {
     match outcome {
-        Ok(ValidationOutcome::Enforced) => Ok(()),
-        Ok(ValidationOutcome::Skipped) => {
-            Err(format!("{label} validation skipped because dataset was unavailable").into())
-        }
+        Ok(()) => Ok(()),
         Err(err) => Err(format!("{label} validation failed: {err}").into()),
     }
 }

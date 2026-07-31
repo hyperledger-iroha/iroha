@@ -223,7 +223,12 @@ impl<B: IpaBackend> Params<B> {
                 .map(B::Group::from_bytes)
                 .collect::<Result<Vec<_>, _>>()?;
         let u = B::Group::from_bytes(&w.u)?;
-        Self::from_generators(n, g, h, u)
+        let supplied = Self::from_generators(n, g, h, u)?;
+        let canonical = Self::new(n)?;
+        if supplied.g != canonical.g || supplied.h != canonical.h || supplied.u != canonical.u {
+            return Err(Error::UnknownParams);
+        }
+        Ok(canonical)
     }
 }
 
@@ -231,28 +236,16 @@ pub(crate) fn params_from_wire_backend<B>(w: &IpaParams) -> Result<Arc<Params<B>
 where
     B: IpaBackend + 'static,
 {
-    Params::<B>::validate_wire_header(w)?;
-    let advertised_fp = w.fingerprint();
-    if let Some(existing) = PARAMS_REGISTRY.lookup::<B>(&advertised_fp) {
+    // The first-release IPA has one transparent parameter set per
+    // (curve, n), derived by `Params::new`. Parsing and exact comparison happen
+    // before the cache lookup so caller-chosen generator relations can never
+    // enter the verifier.
+    let params = Arc::new(Params::<B>::from_wire(w)?);
+    let fingerprint = params.fingerprint();
+    if let Some(existing) = PARAMS_REGISTRY.lookup::<B>(&fingerprint) {
         return Ok(existing);
     }
-
-    // Parse generator set directly from the wire payload so callers can supply
-    // pre-generated structured references (e.g., larger SRS snapshots) instead
-    // of relying on the deterministic DST derivation.  The decoded parameter
-    // set is cached under its fingerprint to amortise future decodes.
-    let params = Arc::new(Params::<B>::from_wire(w)?);
-    let fp = params.fingerprint();
-    Ok(PARAMS_REGISTRY.insert::<B>(fp, params))
-}
-
-pub(crate) fn register_params_from_wire<B>(w: &IpaParams) -> Result<Arc<Params<B>>, Error>
-where
-    B: IpaBackend + 'static,
-{
-    let params = Arc::new(Params::<B>::from_wire(w)?);
-    let fp = params.fingerprint();
-    Ok(PARAMS_REGISTRY.insert::<B>(fp, params))
+    Ok(PARAMS_REGISTRY.insert::<B>(fingerprint, params))
 }
 
 type ParamsKey = (ZkCurveId, [u8; 32]);

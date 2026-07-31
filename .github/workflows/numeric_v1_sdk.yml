@@ -46,14 +46,84 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Build the published distribution
         run: npm run build:dist
-      - name: Verify source, browser, builder, and packaged numeric paths
-        run: node --test test/numericV1*.test.js test/instructionBuilders.test.js
+      - name: Verify pure source numeric paths
+        run: node --test test/numericV1.test.js
+      - name: Verify pure browser numeric paths
+        run: >-
+          node --test
+          --test-name-pattern="encodeQuantityNoritoValue enforces the nominal Quantity boundary|root entrypoints expose every declared typed Norito value encoder"
+          test/norito.test.js
+      - name: Verify pure quantity builder boundaries
+        run: >-
+          node --test
+          --test-name-pattern="smart-contract manifest type declarations reject retired numeric names|CastPlainBallot pure-JS Norito codec preserves strict fractional Quantity|buildShieldInstruction enforces strict canonical Quantity inputs|buildUnshieldInstruction enforces strict canonical Quantity inputs"
+          test/instructionBuilders.test.js
+      - name: Verify packaged quantity boundaries
+        run: >-
+          node --test
+          --test-name-pattern="package dist quantity builders reject numbers and noncanonical strings"
+          test/package_dist.test.js
       - name: Verify exact dynamic-access manifest policies
         run: >-
           node --test
           --test-name-pattern="dynamic-access|dynamic access|compiler manifest boundary rejects unknown"
           test/kotodamaCompiler.test.js
           test/toriiClient.test.js
+
+  javascript-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: javascript/iroha_js
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          toolchain: 1.93.1-x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+          shared-key: numeric-v1-sdk-js-native
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Provision the authenticated external Cargo lock
+        working-directory: ${{ github.workspace }}
+        run: >-
+          env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH
+          ci/privacy_sdk_cargo_lockfile.sh provision-ci
+          "${GITHUB_WORKSPACE}"
+          "${RUNNER_TEMP}/iroha-numeric-v1-sdk-cargo"
+          "${GITHUB_ENV}"
+          "${GITHUB_PATH}"
+          "${HOME}/.cargo/bin/rustup"
+          "1.93.1-x86_64-unknown-linux-gnu"
+      - name: Verify Cargo lock isolation
+        working-directory: ${{ github.workspace }}
+        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"
+      - name: Prime locked Cargo dependencies for the sealed offline build
+        working-directory: ${{ github.workspace }}
+        env:
+          CARGO_NET_OFFLINE: "false"
+        run: cargo fetch --locked
+      - name: Build and publish the authenticated V3 native binding
+        run: >-
+          env
+          PATH="${IROHA_PRIVACY_REAL_CARGO%/cargo}:${PATH}"
+          npm run build:native
+      - name: Verify native numeric builders and compiler bridge
+        run: >-
+          node --test
+          test/instructionBuilders.test.js
+          test/kotodamaCompiler.native.test.js
+      - name: Verify final Cargo lock isolation
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"
 
   kotlin:
     runs-on: ubuntu-latest

@@ -264,49 +264,49 @@ gas = "G_contract_admin + bytes"
 
 [[syscall]]
 number = "0x50"
-args = "r10=&Name"
+args = "r10=&NoritoBytes(StatePath)"
 ret = "r10=ptr (&NoritoBytes) or 0"
-gas = "G_state_get + bytes"
+gas = "G_state_get + canonical path frame bytes + returned value bytes"
 
 [[syscall]]
 number = "0x51"
-args = "r10=&Name, r11=&NoritoBytes"
+args = "r10=&NoritoBytes(StatePath), r11=&NoritoBytes"
 ret = "u64=0"
-gas = "G_state_set + bytes"
+gas = "G_state_set + canonical path frame bytes + value bytes"
 
 [[syscall]]
 number = "0x52"
-args = "r10=&Name"
+args = "r10=&NoritoBytes(StatePath)"
 ret = "u64=0"
-gas = "G_state_del"
+gas = "G_state_del + canonical path frame bytes"
 
 [[syscall]]
 number = "0x010030"
-args = "r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64)"
-ret = "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64"
-gas = "G_state_keys + count + bytes"
+args = "r10=&NoritoBytes(StatePath prefix), r11=offset:u64, r12=limit:u64 (0..=64)"
+ret = "r10=ptr (&NoritoBytes(Vec<StatePath>)), r11=total:u64, r12=count:u64"
+gas = "G_state_keys + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes + canonical response frame bytes"
 
 [[syscall]]
 number = "0x010031"
-args = "r10=&Name(path)"
+args = "r10=&NoritoBytes(StatePath)"
 ret = "r10=present:u64"
-gas = "G_state_has"
+gas = "G_state_has + canonical path frame bytes"
 
 [[syscall]]
 number = "0x010032"
-args = "r10=&Name(path)"
+args = "r10=&NoritoBytes(StatePath)"
 ret = "r10=len:u64, r11=found:u64"
-gas = "G_state_len + bytes"
+gas = "G_state_len + canonical path frame bytes"
 
 [[syscall]]
 number = "0x010033"
-args = "r10=&Name(prefix)"
+args = "r10=&NoritoBytes(StatePath prefix)"
 ret = "r10=total:u64"
-gas = "G_state_count + count"
+gas = "G_state_count + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes"
 
 [[syscall]]
 number = "0x010034"
-args = "r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index:u64"
+args = "r10=&NoritoBytes(Vec<StatePath>), r11=&Name(base), r12=index:u64"
 ret = "r10=ptr (&NoritoBytes(canonical key)) or 0"
 gas = "G_path + bytes"
 
@@ -323,6 +323,12 @@ ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))"
 gas = "G_state_value + schema + record + pointers + output"
 
 [[syscall]]
+number = "0x010037"
+args = "r10=&Name"
+ret = "r10=ptr (&NoritoBytes(StatePath))"
+gas = "G_path + bytes"
+
+[[syscall]]
 number = "0x53"
 args = "r10=&NoritoBytes(Norito-framed i64)"
 ret = "r10=i64"
@@ -337,7 +343,7 @@ gas = "G_numeric + bytes"
 [[syscall]]
 number = "0x56"
 args = "r10=&Name(base), r11=&NoritoBytes(key)"
-ret = "r10=ptr (&Name)"
+ret = "r10=ptr (&NoritoBytes(StatePath))"
 gas = "G_path + bytes"
 
 [[syscall]]
@@ -573,7 +579,7 @@ gas = "G_json + encoded bytes"
 [[syscall]]
 number = "0x8E"
 args = "r10=&Name(base), r11=&NoritoBytes(key)"
-ret = "r10=ptr (&Name)"
+ret = "r10=ptr (&NoritoBytes(StatePath))"
 gas = "G_path + bytes"
 
 [[syscall]]

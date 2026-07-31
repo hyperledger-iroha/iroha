@@ -44,6 +44,7 @@ Common tasks:
   kagami wizard --profile nexus
   kagami localnet --out-dir ./localnet
   kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml
+  kagami keys --out-dir ./key-custody
   kagami keys --algorithm bls_normal --pop --json
   kagami advanced markdown-help
 
@@ -229,6 +230,7 @@ Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `-j`, `--json` — Output the key-pair in JSON format
 * `--json-mh-prefixed` — Use algorithm-prefixed multihash strings in JSON (e.g., "ml-dsa:...")
 * `-c`, `--compact` — Output the key-pair without additional text
+* `--out-dir <DIR>` — Write the key pair into a new owner-only custody directory. The directory must not contain any existing entries. Files are written as `public.key` and `private.key`; `--pop` also writes `pop.hex`. The private key never passes through standard output
 * `--pop` — Also output a BLS Proof-of-Possession (PoP) for this key (BLS-normal only). Printed as hex in JSON or plain hex in compact mode
 
 
@@ -263,9 +265,12 @@ Sign the genesis block
 ###### **Options:**
 
 * `-o`, `--out-file <PATH>` — Path to signed genesis output file in Norito format (stdout by default)
+* `--bound-manifest-out <PATH>` — Persist the exact config-bound genesis manifest used to build the signed block. May point to `GENESIS_FILE` to replace the input only after binding succeeds
 * `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`
 * `--peer-pop <PEER_POPS>` — Embed one or more PoPs into the same transaction as `--topology`. Repeatable flag: `--peer-pop <public_key=pop_hex>`
 * `--private-key <HEX>` — Private key hex (multihash payload, not prefixed) that matches the genesis public key
+* `--private-key-file <PATH>` — Owner-held mode-0600 file containing one canonical private-key multihash
+* `--expected-public-key <PUBLIC_KEY>` — Public key that the selected private key must derive. Use this when the verifier key is distributed separately from the owner-held signing key, such as through container secrets
 * `--seed-hex <HEX>` — A 32-byte secret genesis key-generation seed encoded as 64 hexadecimal characters. This is a testing convenience. Production operators should prefer an owner-held private-key file
 * `--algorithm <ALGORITHM>` — Algorithm of the genesis key (must match the genesis public key)
 

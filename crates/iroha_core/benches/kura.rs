@@ -127,6 +127,7 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
             quorum: DualQuorum::from_roster(&roster).expect("eviction-benchmark quorum"),
             roster: roster.clone(),
             nexus_amx_context_hash: Hash::new(b"eviction bench nexus context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1024,

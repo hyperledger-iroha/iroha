@@ -443,12 +443,10 @@ define_instruction_handlers! {
     dispatch_instruction::<verifying_keys::RegisterVerifyingKey>,
     dispatch_instruction::<verifying_keys::UpdateVerifyingKey>,
     dispatch_instruction::<zk::RegisterZkAsset>,
-    dispatch_instruction::<zk::RegisterAssetHiddenZkPool>,
     dispatch_instruction::<zk::ScheduleConfidentialPolicyTransition>,
     dispatch_instruction::<zk::CancelConfidentialPolicyTransition>,
     dispatch_instruction::<zk::Shield>,
     dispatch_instruction::<zk::ZkTransfer>,
-    dispatch_instruction::<zk::AssetHiddenZkTransfer>,
     dispatch_instruction::<zk::Unshield>,
     dispatch_instruction::<zk::CreateElection>,
     dispatch_instruction::<zk::SubmitBallot>,
@@ -1340,7 +1338,7 @@ mod tests {
         }))
     }
 
-    fn relay_state_key_for_test(envelope: &LaneRelayEnvelope) -> Name {
+    fn relay_state_key_for_test(envelope: &LaneRelayEnvelope) -> StatePath {
         envelope
             .relay_ref()
             .relay_state_key()
@@ -2981,6 +2979,65 @@ mod tests {
             ) if message.contains("business-effect promotion is disabled")
                 && message.contains("finalized, QC-anchored settlement ledger entry")
         ));
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_missing_final_qc_before_state_write() -> Result<()>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-missing-final-qc",
+            state_transaction.block_height() + 10,
+        );
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let state_key = relay_state_key_for_test(&envelope);
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+            effect_proof_blob: None,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("a structurally valid proof without a final QC must not write relay state");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("lane relay finality authentication failed")
+                && message.contains("QC missing")
+        ));
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&state_key)
+                .is_none(),
+            "missing finality must leave the canonical relay key absent"
+        );
         Ok(())
     }
 

@@ -81,8 +81,7 @@ use super::{
     v2_worker::{
         CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServeNegativeOutcome,
         CertifiedServePrepareError, ExactFanoutOwnership, ProductionV2Services,
-        V2CleanupSupervisor,
-        durable_exact_output_handoff_owner_pair,
+        V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
     },
 };
 use crate::{
@@ -1560,7 +1559,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             executor.current_tag().view(),
                             output_guard.as_ref(),
                             kura.as_ref(),
-                            &context_store,
                             &common_config.key_pair,
                             block_sync_server
                                 .as_mut()
@@ -1574,7 +1572,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             &mut lane_work,
                             output_guard.as_ref(),
                             kura.as_ref(),
-                            &context_store,
                             &common_config.key_pair,
                             block_sync_server
                                 .as_mut()
@@ -1679,7 +1676,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &mut lane_work,
                     output_guard.as_ref(),
                     kura.as_ref(),
-                    &context_store,
                     &common_config.key_pair,
                     block_sync_server
                         .as_mut()
@@ -1747,7 +1743,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     executor.current_tag().view(),
                     output_guard.as_ref(),
                     kura.as_ref(),
-                    &context_store,
                     &common_config.key_pair,
                     block_sync_server
                         .as_mut()
@@ -2556,7 +2551,6 @@ fn drain_v2_ingress(
     lane_work: &mut V2LaneWorkAdapter,
     output_guard: &ConsensusOutputGuard,
     kura: &Kura,
-    context_store: &super::v2_context_store::V2ContextStore,
     local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
     block_sync: &mut V2BlockSyncDiscovery,
@@ -2687,23 +2681,22 @@ fn drain_v2_ingress(
                     ));
                     return true;
                 }
-                let authenticated = match executor
-                    .authenticate_certified_body_request(request.clone(), sender)
-                {
-                    Ok(authenticated) => authenticated,
-                    Err(error) => {
-                        prepared_serve = Some(
-                            match services.stage_certified_serve_rejection(
-                                HashOf::new(request),
-                                CertifiedServeNegativeOutcome::InvalidCertificate,
-                            ) {
-                                Ok(()) => PreparedCertifiedServe::Rejected(error.to_string()),
-                                Err(reason) => PreparedCertifiedServe::Service(reason),
-                            },
-                        );
-                        return true;
-                    }
-                };
+                let authenticated =
+                    match executor.authenticate_certified_body_request(request.clone(), sender) {
+                        Ok(authenticated) => authenticated,
+                        Err(error) => {
+                            prepared_serve = Some(
+                                match services.stage_certified_serve_rejection(
+                                    HashOf::new(request),
+                                    CertifiedServeNegativeOutcome::InvalidCertificate,
+                                ) {
+                                    Ok(()) => PreparedCertifiedServe::Rejected(error.to_string()),
+                                    Err(reason) => PreparedCertifiedServe::Service(reason),
+                                },
+                            );
+                            return true;
+                        }
+                    };
                 if superseded_by_decision {
                     let decided = terminal_subject.expect(
                         "Decision supersession requires the durable exact terminal subject",
@@ -2923,13 +2916,8 @@ fn drain_v2_ingress(
                     match serve_block_sync_while_guarded(
                         output_guard,
                         || {
-                            block_sync_server.serve_historical_body(
-                                kura,
-                                context_store,
-                                request,
-                                &sender,
-                                local_key,
-                            )
+                            block_sync_server
+                                .serve_historical_body(kura, request, &sender, local_key)
                         },
                         |response, permit| {
                             services.post_durable_history_response_on_reply_routes_with_permit(
@@ -3121,7 +3109,6 @@ fn drain_decided_lane_recovery_ingress(
     active_view: wire::View,
     output_guard: &ConsensusOutputGuard,
     kura: &Kura,
-    context_store: &super::v2_context_store::V2ContextStore,
     local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
 ) -> Result<(), V2RunnerError> {
@@ -3187,30 +3174,27 @@ fn drain_decided_lane_recovery_ingress(
                 ));
                 return true;
             }
-            let authenticated = match executor
-                .authenticate_certified_body_request(request.clone(), sender)
-            {
-                Ok(authenticated) => authenticated,
-                Err(error) => {
-                    prepared_serve = Some(
-                        match services.stage_certified_serve_rejection(
-                            HashOf::new(request),
-                            CertifiedServeNegativeOutcome::InvalidCertificate,
-                        ) {
-                            Ok(()) => PreparedCertifiedServe::Rejected(error.to_string()),
-                            Err(reason) => PreparedCertifiedServe::Service(reason),
-                        },
-                    );
-                    return true;
-                }
-            };
+            let authenticated =
+                match executor.authenticate_certified_body_request(request.clone(), sender) {
+                    Ok(authenticated) => authenticated,
+                    Err(error) => {
+                        prepared_serve = Some(
+                            match services.stage_certified_serve_rejection(
+                                HashOf::new(request),
+                                CertifiedServeNegativeOutcome::InvalidCertificate,
+                            ) {
+                                Ok(()) => PreparedCertifiedServe::Rejected(error.to_string()),
+                                Err(reason) => PreparedCertifiedServe::Service(reason),
+                            },
+                        );
+                        return true;
+                    }
+                };
             if request.subject != decided_subject {
                 prepared_serve = Some(
                     match services.stage_certified_serve_rejection(
                         authenticated.request_hash(),
-                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(
-                            decided_subject,
-                        ),
+                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
                     ) {
                         Ok(()) => PreparedCertifiedServe::Rejected(
                             "terminal recovery Serve request was superseded by durable Decision"
@@ -3287,15 +3271,13 @@ fn drain_decided_lane_recovery_ingress(
                 || !ingress_ownership.matches_semantic_origin(inbound.sender())
             {
                 return Err(V2RunnerError::Service(
-                    "discarded terminal-recovery ingress carried altered fair ownership"
-                        .to_owned(),
+                    "discarded terminal-recovery ingress carried altered fair ownership".to_owned(),
                 ));
             }
             receiver
                 .bind_leader_wire_runtime_ownership(&mut ingress_ownership)
                 .map_err(V2RunnerError::Service)?;
-            let (message, sender, reply_routes) =
-                inbound.into_message_sender_and_reply_routes();
+            let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
             if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
                 return Err(V2RunnerError::Service(
                     "discarded terminal-recovery ingress changed its authenticated reply routes"
@@ -3323,15 +3305,7 @@ fn drain_decided_lane_recovery_ingress(
                 let response_peer = sender.clone();
                 match serve_block_sync_while_guarded(
                     output_guard,
-                    || {
-                        block_sync_server.serve_historical_body(
-                            kura,
-                            context_store,
-                            request,
-                            &sender,
-                            local_key,
-                        )
-                    },
+                    || block_sync_server.serve_historical_body(kura, request, &sender, local_key),
                     |response, permit| {
                         services.post_durable_history_response_on_reply_routes_with_permit(
                             response_peer,
@@ -4718,6 +4692,7 @@ mod tests {
                 quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"runner-test-nexus-amx"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,

@@ -22,7 +22,7 @@ use iroha_core::{
     state::{State, World},
     sumeragi::{VotingBlock, network_topology::Topology},
 };
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
 use iroha_data_model::{
     account::address::{AccountAddress, ChainDiscriminantGuard},
     asset::AssetDefinitionAlias,
@@ -76,6 +76,12 @@ pub struct Args {
         value_name = "PATH"
     )]
     private_key_file: Option<PathBuf>,
+    /// Public key that the selected private key must derive.
+    ///
+    /// Use this when the verifier key is distributed separately from the
+    /// owner-held signing key, such as through container secrets.
+    #[clap(long, value_name = "PUBLIC_KEY")]
+    expected_public_key: Option<PublicKey>,
     /// A 32-byte secret genesis key-generation seed encoded as 64 hexadecimal characters.
     ///
     /// This is a testing convenience. Production operators should prefer an
@@ -388,7 +394,7 @@ fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre
     })?;
     actual::Root::from_toml_source(source).map_err(|err| {
         eyre!(
-            "failed to parse peer config at {}: {err}",
+            "failed to parse peer config at {}: {err:?}",
             config_path.display()
         )
     })
@@ -419,14 +425,15 @@ fn bind_and_sign_staged_sumeragi_v2_context(
     confidential_policy_hash: [u8; 32],
 ) -> Result<(RawGenesisTransaction, GenesisBlock), color_eyre::eyre::Error> {
     let mut parameters = genesis.sumeragi_v2_context_parameters();
-    parameters.nexus_amx_context_hash = staged_sumeragi_v2_context_hash(
+    let (nexus_amx_context_hash, execution_policy_hash) = staged_sumeragi_v2_context_hashes(
         &genesis,
         genesis_key_pair,
         config,
         da_proof_policies.as_ref(),
         confidential_policy_hash,
-    )?
-    .into();
+    )?;
+    parameters.nexus_amx_context_hash = nexus_amx_context_hash.into();
+    parameters.execution_policy_hash = execution_policy_hash.into();
 
     let bound_manifest = genesis
         .with_sumeragi_v2_context_parameters(parameters)
@@ -442,20 +449,21 @@ fn bind_and_sign_staged_sumeragi_v2_context(
 }
 
 /// Stage a raw genesis transaction and return its exact Nexus/AMX consensus
-/// commitment without committing state or touching persistent node storage.
-fn staged_sumeragi_v2_context_hash(
+/// and execution-policy commitments without committing state or touching
+/// persistent node storage.
+fn staged_sumeragi_v2_context_hashes(
     genesis: &RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
     config: Option<&actual::Root>,
     da_proof_policies: Option<&DaProofPolicyBundle>,
     confidential_policy_hash: [u8; 32],
-) -> Result<iroha_crypto::Hash, color_eyre::eyre::Error> {
+) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("kagami-genesis-staging".to_owned())
             .stack_size(16 * 1024 * 1024)
             .spawn_scoped(scope, move || {
-                staged_sumeragi_v2_context_hash_on_bounded_stack(
+                staged_sumeragi_v2_context_hashes_on_bounded_stack(
                     genesis,
                     genesis_key_pair,
                     config,
@@ -469,13 +477,13 @@ fn staged_sumeragi_v2_context_hash(
     })
 }
 
-fn staged_sumeragi_v2_context_hash_on_bounded_stack(
+fn staged_sumeragi_v2_context_hashes_on_bounded_stack(
     genesis: &RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
     config: Option<&actual::Root>,
     da_proof_policies: Option<&DaProofPolicyBundle>,
     confidential_policy_hash: [u8; 32],
-) -> Result<iroha_crypto::Hash, color_eyre::eyre::Error> {
+) -> Result<(iroha_crypto::Hash, iroha_crypto::Hash), color_eyre::eyre::Error> {
     // This worker is a new thread, so it does not inherit the caller's
     // thread-local I105 discriminant.
     let _chain_discriminant = staged_genesis_chain_discriminant(genesis);
@@ -518,12 +526,13 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
         .map_err(|error| eyre!("initialize isolated Kura for staged genesis: {error}"))?,
         None => Kura::blank_kura_for_testing(),
     };
-    let mut state = State::new_with_chain_for_testing(
+    let mut state = State::try_new_with_chain(
         world,
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
         genesis.chain_id().clone(),
-    );
+    )
+    .map_err(|error| eyre!("initialize isolated State for staged genesis: {error}"))?;
     configure_staged_genesis_state(&mut state, genesis, config)?;
     install_staged_nexus_policies(&mut state, genesis, config)?;
 
@@ -564,9 +573,12 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
             )
         }
     })?;
-    let hash = iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
+    let nexus_amx_context_hash =
+        iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
+    let execution_policy_hash = iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
+        .map_err(|error| eyre!("derive staged genesis execution policy: {error}"))?;
     drop(staged);
-    Ok(hash)
+    Ok((nexus_amx_context_hash, execution_policy_hash))
 }
 
 fn staged_genesis_chain_discriminant(genesis: &RawGenesisTransaction) -> ChainDiscriminantGuard {
@@ -660,6 +672,19 @@ fn configure_staged_genesis_state(
 ) -> Result<(), color_eyre::eyre::Error> {
     if let Some(config) = config {
         state.set_pipeline(staged_genesis_pipeline(config.pipeline.clone()));
+        state.set_oracle(config.oracle.clone());
+        state.set_fraud_monitoring(config.fraud_monitoring.clone());
+        state.set_gov(config.gov.clone());
+        state.content = config.content.clone();
+        state.set_settlement(config.settlement.clone());
+        state.set_kagemusha_release_catalog(
+            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
+                &config.settlement.offline,
+            )
+            .map_err(|error| {
+                eyre!("invalid Kagemusha release catalog for staged genesis: {error}")
+            })?,
+        );
         state
             .set_zk(config.zk.clone())
             .map_err(|error| eyre!("invalid ZK config for staged genesis: {error}"))?;
@@ -814,6 +839,7 @@ impl<T: Write> RunArgs<T> for Args {
             self.seed.as_deref(),
             self.algorithm,
         )?;
+        ensure_expected_public_key(&genesis_key_pair, self.expected_public_key.as_ref())?;
         let da_proof_policies = resolve_da_proof_policies(self.config.as_deref())?;
         let confidential_policy_hash = resolve_confidential_policy_hash(self.config.as_deref())?;
         let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
@@ -943,6 +969,20 @@ fn load_genesis_key(
         )),
         _ => unreachable!("clap enforces key-source conflicts"),
     }
+}
+
+fn ensure_expected_public_key(
+    key_pair: &KeyPair,
+    expected_public_key: Option<&PublicKey>,
+) -> Result<(), color_eyre::eyre::Error> {
+    if let Some(expected_public_key) = expected_public_key
+        && key_pair.public_key() != expected_public_key
+    {
+        return Err(eyre!(
+            "genesis signing key does not match --expected-public-key"
+        ));
+    }
+    Ok(())
 }
 
 fn load_genesis_key_file(
@@ -1125,11 +1165,12 @@ mod tests {
             return config;
         }
 
-        // Some archived/generated examples carry obsolete or runtime-secret
-        // fields outside consensus. Reparse only the two tables consumed by
-        // the v2 commitment, while retaining the source chain/discriminant,
-        // through the production config parser. No Nexus or Pipeline value is
-        // synthesized or decoded by this test helper.
+        // Some deployment templates deliberately contain unresolved
+        // runtime-secret bindings outside this projection. Reparse only the
+        // Nexus and Pipeline tables consumed by the Nexus/AMX commitment,
+        // while retaining the source chain/discriminant, through the
+        // production config parser. No Nexus or Pipeline value is synthesized
+        // or decoded by this test helper.
         let source = fs::read_to_string(path).expect("read checked-in config");
         let header = || {
             source
@@ -1244,17 +1285,45 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         genesis_path: &str,
         config_path: &str,
     ) -> ConsensusHandshakeMetaTest {
+        sign_checked_in_profile_with_optional_config(root, genesis_path, Some(config_path))
+    }
+
+    fn sign_checked_in_profile_with_optional_config(
+        root: &std::path::Path,
+        genesis_path: &str,
+        config_path: Option<&str>,
+    ) -> ConsensusHandshakeMetaTest {
+        const SAMPLE_GENESIS_PRIVATE_KEY: &str =
+            "82B3BDE54AEBECA4146257DA0DE8D59D8E46D5FE34887DCD8072866792FCB3AD";
+        const DEV_GENESIS_SEED: &str =
+            "435e15ae8cca7d8ce54313e1ed60b98bd3be7832bbaa6e33b358068b61f6ea97";
+        const NEXUS_GENESIS_SEED: &str =
+            "ac74a176f589853d5a7488ae8c04caee8b99b408a98c1d2971b3d525e9f0e91c";
+        let (private_key, seed) = match genesis_path {
+            "defaults/kagami/iroha3-dev/genesis.json" => (None, Some(DEV_GENESIS_SEED.to_owned())),
+            "defaults/kagami/iroha3-nexus/genesis.json" => {
+                (None, Some(NEXUS_GENESIS_SEED.to_owned()))
+            }
+            "defaults/genesis.json"
+            | "defaults/kagami/iroha3-taira/genesis.json"
+            | "defaults/nexus/genesis.json"
+            | "configs/soranexus/nexus/genesis.json" => {
+                (Some(SAMPLE_GENESIS_PRIVATE_KEY.to_owned()), None)
+            }
+            _ => (Some(test_private_key_hex()), None),
+        };
         let args = Args {
             genesis_file: root.join(genesis_path),
             out_file: None,
             bound_manifest_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key: Some(test_private_key_hex()),
+            private_key,
             private_key_file: None,
-            seed: None,
+            expected_public_key: None,
+            seed,
             algorithm: Algorithm::Ed25519,
-            config: Some(root.join(config_path)),
+            config: config_path.map(|path| root.join(path)),
             consensus_mode: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -1282,8 +1351,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             let manifest = RawGenesisTransaction::from_path(root.join(path))
                 .unwrap_or_else(|error| panic!("checked-in {path} must parse: {error:#}"));
             assert_eq!(manifest.wire_protocol_version(), 3, "{path}");
+            ensure_npos_parameters(&manifest).unwrap_or_else(|error| {
+                panic!("checked-in {path} has invalid NPoS policy: {error}")
+            });
             let context = manifest.sumeragi_v2_context_parameters();
             assert_ne!(context.nexus_amx_context_hash, [0; 32], "{path}");
+            assert_ne!(context.execution_policy_hash, [0; 32], "{path}");
             let refreshed = manifest.clone().with_consensus_meta();
             assert_eq!(
                 manifest.consensus_fingerprint(),
@@ -1294,7 +1367,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
-    fn checked_in_unsigned_templates_use_canonical_config_projection() {
+    fn checked_in_unsigned_templates_use_canonical_nexus_amx_projection() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let fixtures = [
             (
@@ -1344,6 +1417,31 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
+    fn checked_in_taira_source_template_requires_runtime_signer_rendering() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = root.join("configs/soranexus/taira/config.toml");
+        let source = fs::read_to_string(&path).expect("read Taira deployment template");
+        assert!(source.contains("production_mode = true"));
+        for placeholder in [
+            "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE",
+            "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_AUTHORITY",
+            "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_ALGORITHM",
+            "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_PUBLIC_KEY_HEX",
+            "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_REVISION",
+            "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_POLICY_DIGEST_HEX",
+        ] {
+            assert!(
+                source.contains(placeholder),
+                "Taira source template must retain explicit `{placeholder}`"
+            );
+        }
+        assert!(
+            load_peer_config(&path).is_err(),
+            "unrendered Taira production template must not be runnable"
+        );
+    }
+
+    #[test]
     fn checked_in_profile_commitments_match_production_signing() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let fixtures = [
@@ -1378,20 +1476,37 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[ignore = "read-only maintainer utility for refreshing generated profile commitments"]
     fn print_checked_in_profile_commitments() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        // The operator-facing Taira template pins a deliberately undistributed genesis key, so
+        // it can only be rebound by the deployment signer that owns that key.
         for (genesis_path, config_path) in [
+            ("defaults/genesis.json", None),
             (
                 "defaults/kagami/iroha3-dev/genesis.json",
-                "defaults/kagami/iroha3-dev/config.toml",
+                Some("defaults/kagami/iroha3-dev/config.toml"),
+            ),
+            (
+                "defaults/kagami/iroha3-nexus/genesis.json",
+                Some("defaults/kagami/iroha3-nexus/config.toml"),
             ),
             (
                 "defaults/kagami/iroha3-taira/genesis.json",
-                "defaults/kagami/iroha3-taira/config.toml",
+                Some("defaults/kagami/iroha3-taira/config.toml"),
+            ),
+            (
+                "defaults/nexus/genesis.json",
+                Some("defaults/nexus/config.toml"),
+            ),
+            (
+                "configs/soranexus/nexus/genesis.json",
+                Some("configs/soranexus/nexus/config.toml"),
             ),
         ] {
-            let signed = sign_checked_in_profile(&root, genesis_path, config_path);
+            let signed =
+                sign_checked_in_profile_with_optional_config(&root, genesis_path, config_path);
             eprintln!(
-                "{genesis_path}: {} {}",
+                "{genesis_path}: {} {} {}",
                 hex::encode(signed.sumeragi_v2.nexus_amx_context_hash),
+                hex::encode(signed.sumeragi_v2.execution_policy_hash),
                 signed.consensus_fingerprint
             );
         }
@@ -1440,6 +1555,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 peer_pops: Vec::new(),
                 private_key: Some(test_private_key_hex()),
                 private_key_file: None,
+                expected_public_key: None,
                 seed: None,
                 algorithm: Algorithm::Ed25519,
                 config: None,
@@ -1467,6 +1583,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1490,6 +1607,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 peer_pops: Vec::new(),
                 private_key: Some(test_private_key_hex()),
                 private_key_file: None,
+                expected_public_key: None,
                 seed: None,
                 algorithm: Algorithm::Ed25519,
                 config: None,
@@ -1533,6 +1651,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec!["pk=00".to_string()],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1563,6 +1682,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![dup.clone(), dup],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1612,6 +1732,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1713,6 +1834,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}={topology_pop}", topology_peer.public_key())],
             private_key: None,
             private_key_file: None,
+            expected_public_key: None,
             seed: Some(seed),
             algorithm: Algorithm::Ed25519,
             config: Some(config_path),
@@ -1790,6 +1912,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1820,6 +1943,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1850,6 +1974,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1884,6 +2009,23 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
+    fn expected_public_key_must_match_selected_private_key() {
+        let selected =
+            KeyPair::try_from_seed([7_u8; 32], Algorithm::Ed25519).expect("selected fixture key");
+        let different =
+            KeyPair::try_from_seed([8_u8; 32], Algorithm::Ed25519).expect("different fixture key");
+
+        ensure_expected_public_key(&selected, Some(selected.public_key()))
+            .expect("matching public key must be accepted");
+        let error = ensure_expected_public_key(&selected, Some(different.public_key()))
+            .expect_err("mismatched public key must be rejected");
+        assert!(
+            error.to_string().contains("--expected-public-key"),
+            "mismatch error should identify the failed invariant: {error:#}"
+        );
+    }
+
+    #[test]
     fn run_returns_err_on_invalid_topology_json() {
         let args = Args {
             genesis_file: npos_genesis_file(),
@@ -1893,6 +2035,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1915,6 +2058,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: None,
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1936,6 +2080,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1962,6 +2107,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1998,6 +2144,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             )],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2047,6 +2194,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}=01", new_peer.public_key())],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2126,6 +2274,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![],
             private_key: None,
             private_key_file: None,
+            expected_public_key: None,
             seed: Some(seed),
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2234,6 +2383,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![],
             private_key: Some(hex::encode(genesis_private_key_bytes)),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(config_path),
@@ -2378,6 +2528,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(private_key_hex),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2495,6 +2646,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_stake_asset_id("xor#universal")),
@@ -2555,6 +2707,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}={}", peer.public_key(), hex::encode(peer_pop))],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2620,6 +2773,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2652,6 +2806,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_stake_asset_id(
@@ -2687,6 +2842,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2719,6 +2875,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_validator_modes(
@@ -2769,6 +2926,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2815,6 +2973,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2841,6 +3000,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2870,6 +3030,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_config_path()),
@@ -2903,6 +3064,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
+            expected_public_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,

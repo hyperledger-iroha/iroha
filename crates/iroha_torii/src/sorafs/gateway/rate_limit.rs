@@ -6,8 +6,11 @@ use std::{
 };
 
 use blake3::Hasher;
-use dashmap::{DashMap, mapref::entry::Entry};
+use dashmap::DashMap;
+use parking_lot::Mutex;
 use thiserror::Error;
+
+const MAX_CLIENT_BUCKETS: usize = 4_096;
 
 /// Fingerprint derived from client connection metadata (e.g., IP address).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -91,6 +94,7 @@ pub enum RateLimitError {
 struct ClientWindow {
     events: VecDeque<Instant>,
     ban_until: Option<Instant>,
+    last_seen: Option<Instant>,
 }
 
 /// Rolling-window rate limiter keyed by [`ClientFingerprint`].
@@ -98,6 +102,7 @@ struct ClientWindow {
 pub struct GatewayRateLimiter {
     config: GatewayRateLimitConfig,
     buckets: DashMap<ClientFingerprint, ClientWindow>,
+    bucket_admission: Mutex<()>,
 }
 
 impl GatewayRateLimiter {
@@ -107,6 +112,7 @@ impl GatewayRateLimiter {
         Self {
             config,
             buckets: DashMap::new(),
+            bucket_admission: Mutex::new(()),
         }
     }
 
@@ -126,58 +132,104 @@ impl GatewayRateLimiter {
             return Ok(());
         };
 
-        match self.buckets.entry(client.clone()) {
-            Entry::Occupied(mut entry) => {
-                let window = entry.get_mut();
-                if let Some(ban_until) = window.ban_until {
-                    if ban_until > now {
-                        let retry_after = ban_until.saturating_duration_since(now);
-                        return Err(RateLimitError::Banned {
-                            retry_after: Some(retry_after),
-                        });
-                    }
-                    window.ban_until = None;
-                }
+        if let Some(mut window) = self.buckets.get_mut(client) {
+            return self.check_window(&mut window, now, max_requests);
+        }
 
-                while let Some(&front) = window.events.front() {
-                    if now.duration_since(front) > self.config.window {
-                        window.events.pop_front();
-                    } else {
-                        break;
-                    }
-                }
-
-                if window.events.len() as u32 >= max_requests {
-                    let retry_after = window
-                        .events
-                        .front()
-                        .map(|oldest| {
-                            self.config
-                                .window
-                                .saturating_sub(now.duration_since(*oldest))
-                        })
-                        .unwrap_or_else(|| self.config.window);
-
-                    if let Some(ban_duration) = self.config.ban_duration {
-                        window.ban_until = Some(now + ban_duration);
-                        return Err(RateLimitError::Banned {
-                            retry_after: Some(ban_duration),
-                        });
-                    }
-
-                    return Err(RateLimitError::Limited { retry_after });
-                }
-
-                window.events.push_back(now);
-            }
-            Entry::Vacant(entry) => {
-                let mut window = ClientWindow::default();
-                window.events.push_back(now);
-                entry.insert(window);
+        // Only first-seen fingerprints enter this critical section. It makes the hard bucket
+        // bound race-free without serializing normal requests from known clients.
+        let _admission = self.bucket_admission.lock();
+        if let Some(mut window) = self.buckets.get_mut(client) {
+            return self.check_window(&mut window, now, max_requests);
+        }
+        self.prune_inactive(now);
+        if self.buckets.len() >= MAX_CLIENT_BUCKETS {
+            // Preserve availability under high-cardinality ingress: after inactive state has
+            // been reclaimed, replace the least-recently-seen subject rather than turning the
+            // memory ceiling into a gateway-wide lockout. The fingerprint is transport-derived,
+            // so a caller cannot rotate an opaque header to force this path.
+            let oldest = self
+                .buckets
+                .iter()
+                .min_by_key(|entry| entry.value().last_seen)
+                .map(|entry| *entry.key());
+            if let Some(oldest) = oldest {
+                self.buckets.remove(&oldest);
             }
         }
 
+        let mut window = ClientWindow::default();
+        window.events.push_back(now);
+        window.last_seen = Some(now);
+        self.buckets.insert(*client, window);
         Ok(())
+    }
+
+    fn check_window(
+        &self,
+        window: &mut ClientWindow,
+        now: Instant,
+        max_requests: u32,
+    ) -> Result<(), RateLimitError> {
+        window.last_seen = Some(now);
+        if let Some(ban_until) = window.ban_until {
+            if ban_until > now {
+                let retry_after = ban_until.saturating_duration_since(now);
+                return Err(RateLimitError::Banned {
+                    retry_after: Some(retry_after),
+                });
+            }
+            window.ban_until = None;
+        }
+
+        while let Some(&front) = window.events.front() {
+            if now.saturating_duration_since(front) > self.config.window {
+                window.events.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if window.events.len() as u32 >= max_requests {
+            let retry_after = window
+                .events
+                .front()
+                .map(|oldest| {
+                    self.config
+                        .window
+                        .saturating_sub(now.saturating_duration_since(*oldest))
+                })
+                .unwrap_or_else(|| self.config.window);
+
+            if let Some(ban_duration) = self.config.ban_duration {
+                window.ban_until = Some(now + ban_duration);
+                return Err(RateLimitError::Banned {
+                    retry_after: Some(ban_duration),
+                });
+            }
+
+            return Err(RateLimitError::Limited { retry_after });
+        }
+
+        window.events.push_back(now);
+        Ok(())
+    }
+
+    fn prune_inactive(&self, now: Instant) {
+        let inactive = self
+            .buckets
+            .iter()
+            .filter_map(|entry| {
+                let ban_active = entry.ban_until.is_some_and(|until| until > now);
+                let event_active = entry.events.back().is_some_and(|event| {
+                    now.saturating_duration_since(*event) <= self.config.window
+                });
+                (!ban_active && !event_active).then_some(*entry.key())
+            })
+            .collect::<Vec<_>>();
+        for fingerprint in inactive {
+            self.buckets.remove(&fingerprint);
+        }
     }
 }
 
@@ -226,5 +278,20 @@ mod tests {
             .check(&client, now + Duration::from_millis(100))
             .expect_err("expected ban");
         assert!(matches!(err, RateLimitError::Banned { .. }));
+    }
+
+    #[test]
+    fn rate_limiter_bounds_first_seen_client_state() {
+        let limiter = GatewayRateLimiter::new(GatewayRateLimitConfig {
+            max_requests: Some(1),
+            window: Duration::from_secs(60),
+            ban_duration: None,
+        });
+        let now = Instant::now();
+        for index in 0..MAX_CLIENT_BUCKETS + 128 {
+            let client = ClientFingerprint::from_identifier(&format!("client-{index}"));
+            assert!(limiter.check(&client, now).is_ok());
+        }
+        assert_eq!(limiter.buckets.len(), MAX_CLIENT_BUCKETS);
     }
 }

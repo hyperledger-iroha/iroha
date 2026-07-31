@@ -28,7 +28,6 @@ mod model {
 
     /// Error which indicates max instruction count was reached
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(feature = "json", norito(transparent))]
     #[repr(transparent)]
     // SAFETY: `TransactionLimitError` has no trap representation in `String`
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
@@ -51,7 +50,6 @@ mod model {
     /// Transaction was rejected because execution of IVM bytecode failed
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[display("Failed to execute IVM bytecode: {reason}")]
-    #[cfg_attr(feature = "json", norito(transparent))]
     #[repr(transparent)]
     // SAFETY: `IvmExecutionFail` has no trap representation in `String`
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]

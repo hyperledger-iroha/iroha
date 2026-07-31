@@ -32,6 +32,7 @@ public final class ClientConfigManifestLoaderTests {
       tests.rejectsMalformedPresentNumericAndBooleanFields();
       tests.rejectsOutOfDomainNumericValuesInsteadOfUsingDefaults();
       tests.preservesIntegerAndBooleanStringCompatibility();
+      tests.rejectsGenesisPrivacyFingerprintsAsClientProofPolicyAtAnyDepth();
       System.out.println("[IrohaAndroid] ClientConfigManifestLoaderTests passed.");
     } finally {
       tests.cleanup();
@@ -51,6 +52,14 @@ public final class ClientConfigManifestLoaderTests {
     final ClientConfig config = loaded.clientConfig();
 
     assertEquals(URI.create("https://torii.example"), config.baseUri(), "base URI mismatch");
+    assertEquals(
+        "test-chain",
+        config.localSigningContext().get().chainId(),
+        "local signing chain mismatch");
+    assertEquals(
+        "test-chain",
+        config.toBuilder().build().localSigningContext().get().chainId(),
+        "toBuilder must preserve the local signing context");
     assertEquals(Duration.ofMillis(7_000), config.requestTimeout(), "timeout mismatch");
     assertEquals("IrohaAndroidTests/1.0", config.defaultHeaders().get("User-Agent"), "header missing");
     assertTrue(config.retryPolicy().allowsRetry(2), "retry should allow attempt 2");
@@ -302,6 +311,42 @@ public final class ClientConfigManifestLoaderTests {
     assertFalse(config.retryPolicy().shouldRetryError(1), "network retry should be disabled");
   }
 
+  private void rejectsGenesisPrivacyFingerprintsAsClientProofPolicyAtAnyDepth()
+      throws Exception {
+    final String[] nonAuthoritative = {
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"confidential_features\":{\"zk_policy_hash\":\"00\"}"),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"genesis\":{\"zk_policy_hash\":\"00\"}"),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"genesis\":{\"confidentialFeatures\":{}}"),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"client\":{\"privacy\":{\"zkPolicyHash\":\"00\"}}")
+    };
+
+    for (int i = 0; i < nonAuthoritative.length; i++) {
+      final Path manifest = tempDir.resolve("non_authoritative_privacy_policy_" + i + ".json");
+      Files.writeString(manifest, nonAuthoritative[i], StandardCharsets.UTF_8);
+      try {
+        ClientConfigManifestLoader.load(manifest);
+        throw new AssertionError("expected genesis privacy fingerprint to be rejected");
+      } catch (final IllegalStateException expected) {
+        assertTrue(
+            expected.getMessage() != null
+                && expected.getMessage().contains("/v1/privacy/capabilities"),
+            "error should direct callers to committed privacy capabilities");
+      }
+    }
+  }
+
   private void assertRejected(final String fileName, final String json) throws Exception {
     final Path manifest = tempDir.resolve(fileName);
     Files.writeString(manifest, json, StandardCharsets.UTF_8);
@@ -322,6 +367,7 @@ public final class ClientConfigManifestLoaderTests {
     final StringBuilder builder =
         new StringBuilder()
             .append("{\n")
+            .append("  \"chain_id\": \"test-chain\",\n")
             .append("  \"torii\": {\n")
             .append("    \"base_uri\": \"")
             .append(baseUri)

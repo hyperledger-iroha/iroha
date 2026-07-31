@@ -1,7 +1,6 @@
 use std::{fs, num::NonZeroU32, time::Duration};
 
 use iroha_config::parameters::actual::SoranetPuzzle as ConfigPuzzle;
-use rand::{SeedableRng, rngs::StdRng};
 use tempfile::tempdir;
 
 use super::*;
@@ -82,7 +81,7 @@ fn runtime_from_handshake_rejects_invalid_revocation_limits() {
 }
 
 #[test]
-fn runtime_from_handshake_falls_back_on_corrupt_revocation_snapshot() {
+fn runtime_from_handshake_fails_closed_on_corrupt_revocation_snapshot() {
     let mut handshake = ActualSoranetHandshake::default();
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("revocations.norito");
@@ -91,20 +90,29 @@ fn runtime_from_handshake_falls_back_on_corrupt_revocation_snapshot() {
     handshake.pow.difficulty = 1;
     handshake.pow.revocation_store_path = path.to_string_lossy().into_owned().into();
 
-    let runtime = runtime_from_handshake(handshake).expect("runtime should fall back");
-    let mut rng = StdRng::from_seed([0x44; 32]);
-    let minted = runtime
-        .mint_challenge_ticket(&mut rng)
-        .expect("mint ticket")
-        .expect("ticket present");
-    let ticket = minted.ticket.expect("ticket bytes");
+    let err = runtime_from_handshake(handshake)
+        .expect_err("corrupt persistent replay state must fail startup");
+    assert!(
+        matches!(
+            err,
+            Error::HandshakeSoranet(ref message)
+                if message.contains("failed to load soranet revocation store")
+        ),
+        "unexpected error: {err:?}"
+    );
+}
 
-    runtime
-        .verify_challenge_ticket(&ticket)
-        .expect("first verify succeeds");
-    assert_eq!(runtime.active_revocations(), 1);
-    let err = runtime
-        .verify_challenge_ticket(&ticket)
-        .expect_err("replay should be rejected via fallback store");
-    assert!(matches!(err, crate::peer::ChallengeVerifyError::Replay));
+#[test]
+fn disabled_test_admission_uses_only_in_memory_replay_state() {
+    let mut handshake = ActualSoranetHandshake::default();
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("intentionally-unused-revocations.norito");
+    fs::write(&path, b"corrupt snapshot").expect("write corrupt revocation file");
+    handshake.pow.required = false;
+    handshake.pow.revocation_store_path = path.to_string_lossy().into_owned().into();
+
+    let runtime =
+        runtime_from_handshake(handshake).expect("test-local disabled admission is in-memory");
+    assert!(!runtime.pow_required());
+    assert_eq!(runtime.active_revocations(), 0);
 }

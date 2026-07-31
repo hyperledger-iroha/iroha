@@ -47,6 +47,9 @@ const CANONICAL_MANIFEST: &str = "fixtures/norito_rpc/transaction_fixtures.manif
 const SCHEMA_HASH_MANIFEST: &str = "fixtures/norito_rpc/schema_hashes.json";
 const SCHEMA_HASH_MANIFEST_BASENAME: &str = "schema_hashes.json";
 const MANIFEST_BASENAME: &str = "transaction_fixtures.manifest.json";
+const COMPACT_HASH_VECTOR_BASENAME: &str = "iroha_compact_hash_vector.properties";
+const COMPACT_HASH_VECTOR_SOURCE: &str = "transfer_asset";
+const SIGNED_TRANSACTION_V1: u8 = 1;
 const SDK_MANIFESTS: &[(&str, &str, bool)] = &[
     (
         "python",
@@ -183,7 +186,6 @@ struct ResolvedFixtureOptions {
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct SchemaHashManifest {
     version: u32,
-    generated_at: String,
     entries: Vec<SchemaHashEntry>,
 }
 
@@ -194,12 +196,8 @@ impl SchemaHashManifest {
     }
 
     fn new_current() -> Self {
-        let timestamp = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .expect("timestamp format must succeed");
         Self {
             version: 1,
-            generated_at: timestamp,
             entries: schema_targets()
                 .into_iter()
                 .map(|target| SchemaHashEntry {
@@ -270,10 +268,6 @@ fn verify_schema_hash_manifest(manifest: &SchemaHashManifest) -> Result<()> {
             manifest.version
         );
     }
-    if OffsetDateTime::parse(&manifest.generated_at, &Rfc3339).is_err() {
-        bail!("schema hash manifest has invalid generated_at timestamp");
-    }
-
     let expected = schema_targets();
     if expected.len() != manifest.entries.len() {
         bail!(
@@ -376,6 +370,11 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
                 .expect("manifest file should have parent directory"),
         ))
         .context("canonical manifest validation failed")?;
+    let compact_hash_vector_path = canonical_path
+        .parent()
+        .expect("manifest file should have parent directory")
+        .join(COMPACT_HASH_VECTOR_BASENAME);
+    verify_compact_hash_vector(&compact_hash_vector_path, &canonical.fixtures)?;
 
     let mut sdk_manifests = Vec::new();
     for (label, rel_path, enforce_parity) in SDK_MANIFESTS {
@@ -461,6 +460,7 @@ pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     };
 
     let selected = filter_fixtures(&generated, desired_names.as_deref())?;
+    let compact_hash_vector = render_compact_hash_vector(&selected)?;
     sync_norito_files(&selected, temp_dir.path(), &resolved.output_dir)?;
     let filtered_manifest = Manifest {
         fixtures: selected.clone(),
@@ -474,6 +474,9 @@ pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     let schema_path = resolved.output_dir.join(SCHEMA_HASH_MANIFEST_BASENAME);
     write_schema_hash_manifest(&schema_path)
         .with_context(|| format!("failed to generate {}", schema_path.display()))?;
+    let compact_hash_vector_path = resolved.output_dir.join(COMPACT_HASH_VECTOR_BASENAME);
+    fs::write(&compact_hash_vector_path, compact_hash_vector)
+        .with_context(|| format!("failed to generate {}", compact_hash_vector_path.display()))?;
 
     println!(
         "norito-rpc fixtures regenerated: {} entries written to {}",
@@ -518,7 +521,7 @@ fn generate_fixture_artifacts(
     )
     .context("failed to write generated fixture manifest")?;
 
-    // Keep the Android/Swift/Python `transaction_payloads.json` source hints in sync.
+    // Refresh the selected source file's generated hints.
     let updated_payloads = build_payload_fixtures_json(&raw_fixtures, &fixtures)?;
     let payloads_json = json::to_json_pretty(&updated_payloads)?;
     fs::write(&resolved.fixtures_json, format!("{payloads_json}\n"))
@@ -544,7 +547,7 @@ struct RawPayloadFixture {
     chain_hint: Option<String>,
     authority_hint: Option<String>,
     creation_time_ms_hint: Option<u64>,
-    ttl_ms_hint: Option<u64>,
+    ttl_ms_hint: u64,
     nonce_hint: Option<u32>,
 }
 
@@ -554,7 +557,7 @@ struct RawPayload {
     authority: String,
     creation_time_ms: u64,
     executable: RawExecutable,
-    ttl_ms: Option<u64>,
+    ttl_ms: u64,
     nonce: Option<u32>,
     fee_payment: FeePaymentIntent,
     metadata: Vec<(Name, Json)>,
@@ -590,7 +593,7 @@ struct PayloadSummary {
     chain: String,
     authority: String,
     creation_time_ms: u64,
-    ttl_ms: Option<u64>,
+    ttl_ms: u64,
     nonce: Option<u32>,
     payload_base64: String,
     signed_base64: String,
@@ -637,13 +640,11 @@ impl RawPayloadFixture {
                 self.payload.creation_time_ms
             );
         }
-        if let Some(ttl_hint) = self.ttl_ms_hint
-            && Some(ttl_hint) != self.payload.ttl_ms
-        {
+        if self.ttl_ms_hint != self.payload.ttl_ms {
             bail!(
-                "fixture '{}' time_to_live_ms mismatch: expected {}, got {:?}",
+                "fixture '{}' time_to_live_ms mismatch: expected {}, got {}",
                 self.name,
-                ttl_hint,
+                self.ttl_ms_hint,
                 self.payload.ttl_ms
             );
         }
@@ -669,6 +670,26 @@ impl RawPayloadFixture {
             )
         })?;
         let payload_value = signed.payload().clone();
+        let actual_ttl = payload_value.time_to_live().ok_or_else(|| {
+            eyre!(
+                "fixture '{}' is missing time_to_live_ms after construction",
+                self.name
+            )
+        })?;
+        let actual_ttl_ms = u64::try_from(actual_ttl.as_millis()).map_err(|_| {
+            eyre!(
+                "fixture '{}' time_to_live_ms exceeds u64 after construction",
+                self.name
+            )
+        })?;
+        if actual_ttl_ms != self.payload.ttl_ms {
+            bail!(
+                "fixture '{}' time_to_live_ms changed during construction: expected {}, got {}",
+                self.name,
+                self.payload.ttl_ms,
+                actual_ttl_ms
+            );
+        }
         let payload_bytes = payload_value.encode();
         let payload_base64 = BASE64.encode(&payload_bytes);
         if check_encoded
@@ -696,7 +717,7 @@ impl RawPayloadFixture {
                 chain: self.payload.chain.clone(),
                 authority: payload_value.authority().to_string(),
                 creation_time_ms: self.payload.creation_time_ms,
-                ttl_ms: self.payload.ttl_ms,
+                ttl_ms: actual_ttl_ms,
                 nonce: self.payload.nonce,
                 payload_base64,
                 signed_base64,
@@ -716,9 +737,7 @@ impl RawPayload {
 
         let mut builder = TransactionBuilder::new(chain_id, authority, self.fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
-        if let Some(ttl) = self.ttl_ms {
-            builder.set_ttl(Duration::from_millis(ttl));
-        }
+        builder.set_ttl(Duration::from_millis(self.ttl_ms));
         if let Some(nonce) = self.nonce {
             let nz = NonZeroU32::new(nonce).ok_or_else(|| eyre!("nonce must be > 0"))?;
             builder.set_nonce(nz);
@@ -824,7 +843,8 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
         .and_then(Value::as_str)
         .map(str::to_owned);
     let creation_time_ms_hint = obj.get("creation_time_ms").and_then(Value::as_u64);
-    let ttl_ms_hint = obj.get("time_to_live_ms").and_then(Value::as_u64);
+    let ttl_ms_hint = expect_nonzero_u64(obj, "time_to_live_ms")
+        .with_context(|| format!("invalid top-level lifetime for fixture '{name}'"))?;
     let nonce_hint = obj.get("nonce").and_then(Value::as_u64).map(|n| n as u32);
 
     Ok(RawPayloadFixture {
@@ -851,7 +871,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         .get("executable")
         .ok_or_else(|| eyre!("missing executable"))?;
     let executable = parse_executable(executable_value)?;
-    let ttl_ms = parse_optional_u64(obj, "time_to_live_ms")?;
+    let ttl_ms = expect_nonzero_u64(obj, "time_to_live_ms")?;
     let nonce = parse_optional_u32(obj, "nonce")?;
     let fee_payment = obj
         .get("fee_payment")
@@ -1001,13 +1021,6 @@ fn parse_account_id(value: &str) -> Result<AccountId> {
         .with_context(|| format!("account id '{value}' must be a canonical I105-encoded literal"))
 }
 
-fn optional_u64_value(value: Option<u64>) -> Value {
-    match value {
-        Some(v) => Value::Number(Number::U64(v)),
-        None => Value::Null,
-    }
-}
-
 fn optional_u32_value(value: Option<u32>) -> Value {
     match value {
         Some(v) => Value::Number(Number::U64(v as u64)),
@@ -1047,7 +1060,7 @@ fn build_payload_fixtures_json(
         );
         entry.insert(
             "time_to_live_ms".to_owned(),
-            optional_u64_value(fixture.summary.ttl_ms),
+            Value::Number(Number::U64(fixture.summary.ttl_ms)),
         );
         entry.insert(
             "nonce".to_owned(),
@@ -1205,15 +1218,12 @@ fn expect_u64(obj: &Map, key: &str) -> Result<u64> {
         .ok_or_else(|| eyre!("missing '{key}' integer"))
 }
 
-fn parse_optional_u64(obj: &Map, key: &str) -> Result<Option<u64>> {
-    match obj.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(number)) => number
-            .as_u64()
-            .ok_or_else(|| eyre!("'{key}' must be an integer or null"))
-            .map(Some),
-        Some(other) => bail!("'{key}' must be an integer or null, got {other:?}"),
+fn expect_nonzero_u64(obj: &Map, key: &str) -> Result<u64> {
+    let value = expect_u64(obj, key)?;
+    if value == 0 {
+        bail!("'{key}' must be greater than zero");
     }
+    Ok(value)
 }
 
 fn parse_optional_u32(obj: &Map, key: &str) -> Result<Option<u32>> {
@@ -1462,8 +1472,7 @@ struct FixtureEntry {
     signed_hash: String,
     #[norito(default)]
     nonce: Option<u32>,
-    #[norito(default)]
-    time_to_live_ms: Option<u64>,
+    time_to_live_ms: u64,
 }
 
 impl FixtureEntry {
@@ -1500,13 +1509,52 @@ impl FixtureEntry {
                 signed_bytes.len()
             );
         }
-        let signed_hash = signed_transaction_entrypoint_hash_hex(&signed_bytes)?;
+        let signed = decode_canonical_signed_transaction(&signed_bytes)?;
+        let signed_hash = hex_encode(signed.hash_as_entrypoint().as_ref());
         if signed_hash != self.signed_hash {
             bail!(
                 "fixture '{}' signed hash mismatch (manifest={}, computed={})",
                 self.name,
                 self.signed_hash,
                 signed_hash
+            );
+        }
+        if signed.payload().encode() != payload_bytes {
+            bail!(
+                "fixture '{}' signed payload differs from the canonical payload bytes",
+                self.name
+            );
+        }
+
+        let actual_creation_time_ms =
+            u64::try_from(signed.creation_time().as_millis()).map_err(|_| {
+                eyre!(
+                    "fixture '{}' creation_time_ms exceeds u64 in signed payload",
+                    self.name
+                )
+            })?;
+        let actual_ttl_ms = signed
+            .time_to_live()
+            .map(|ttl| u64::try_from(ttl.as_millis()))
+            .transpose()
+            .map_err(|_| {
+                eyre!(
+                    "fixture '{}' time_to_live_ms exceeds u64 in signed payload",
+                    self.name
+                )
+            })?;
+        let actual_nonce = signed.nonce().map(NonZeroU32::get);
+        let actual_authority = signed.authority().to_string();
+        let actual_chain = signed.chain().to_string();
+        if actual_authority != self.authority
+            || actual_chain != self.chain
+            || actual_creation_time_ms != self.creation_time_ms
+            || actual_ttl_ms != Some(self.time_to_live_ms)
+            || actual_nonce != self.nonce
+        {
+            bail!(
+                "fixture '{}' manifest summary differs from signed payload",
+                self.name
             );
         }
 
@@ -1541,6 +1589,13 @@ fn blake2b256_hex(bytes: &[u8]) -> String {
 fn signed_transaction_entrypoint_hash_hex(
     canonical_bare_signed_transaction: &[u8],
 ) -> Result<String> {
+    let signed = decode_canonical_signed_transaction(canonical_bare_signed_transaction)?;
+    Ok(hex_encode(signed.hash_as_entrypoint().as_ref()))
+}
+
+fn decode_canonical_signed_transaction(
+    canonical_bare_signed_transaction: &[u8],
+) -> Result<SignedTransaction> {
     let (signed, used) = SignedTransaction::decode_from_slice(canonical_bare_signed_transaction)
         .map_err(|err| eyre!("invalid canonical SignedTransaction bytes: {err}"))?;
     if used != canonical_bare_signed_transaction.len()
@@ -1548,7 +1603,100 @@ fn signed_transaction_entrypoint_hash_hex(
     {
         bail!("SignedTransaction bytes are not exact canonical bare encoding");
     }
-    Ok(hex_encode(signed.hash_as_entrypoint().as_ref()))
+    Ok(signed)
+}
+
+fn render_compact_hash_vector(fixtures: &[FixtureEntry]) -> Result<String> {
+    let source = fixtures
+        .iter()
+        .find(|fixture| fixture.name == COMPACT_HASH_VECTOR_SOURCE)
+        .ok_or_else(|| {
+            eyre!(
+                "compact hash vector source fixture '{}' is missing from the selected manifest",
+                COMPACT_HASH_VECTOR_SOURCE
+            )
+        })?;
+    source
+        .validate(None)
+        .context("compact hash vector source fixture failed validation")?;
+
+    let bare = BASE64
+        .decode(&source.signed_base64)
+        .context("compact hash vector signed bytes are not valid base64")?;
+    if BASE64.encode(&bare) != source.signed_base64 {
+        bail!("compact hash vector signed bytes are not canonical base64");
+    }
+    let signed = decode_canonical_signed_transaction(&bare)?;
+    let payload = signed.payload().encode();
+    let mut canonical = 0_u32.to_le_bytes().to_vec();
+    norito::core::write_len_to_vec(&mut canonical, payload.len() as u64);
+    let prefix_len = canonical.len();
+    canonical.extend_from_slice(&payload);
+    let prefix = &canonical[..prefix_len];
+    let (discriminant, compact_length) = prefix
+        .split_at_checked(core::mem::size_of::<u32>())
+        .ok_or_else(|| eyre!("compact entrypoint prefix is missing its discriminant"))?;
+    if discriminant != 0_u32.to_le_bytes() {
+        bail!("compact hash vector source is not the External transaction entrypoint");
+    }
+    if compact_length.is_empty() {
+        bail!("compact entrypoint prefix is missing its canonical length");
+    }
+    if compact_length.len() != 2 {
+        bail!(
+            "compact hash vector source must exercise a two-byte length, got {} bytes",
+            compact_length.len()
+        );
+    }
+    let canonical_hash = blake2b256_hex(&canonical);
+    if canonical_hash != source.signed_hash {
+        bail!("compact hash vector does not match the manifest signed hash");
+    }
+    let payload_hash = blake2b256_hex(&payload);
+    if payload_hash != source.payload_hash {
+        bail!("compact hash vector payload does not match the manifest payload hash");
+    }
+
+    let mut versioned = Vec::with_capacity(1 + bare.len());
+    versioned.push(SIGNED_TRANSACTION_V1);
+    versioned.extend_from_slice(&bare);
+
+    Ok(format!(
+        concat!(
+            "schema.version=2\n",
+            "source.fixture={source_fixture}\n",
+            "versioned.bytes={versioned_bytes}\n",
+            "versioned.sha256={versioned_sha256}\n",
+            "bare.bytes={bare_bytes}\n",
+            "compact.length.hex={compact_length}\n",
+            "canonical.prefix.hex={canonical_prefix}\n",
+            "canonical.hash={canonical_hash}\n",
+            "payload.prehash={payload_prehash}\n",
+            "versioned.base64={versioned_base64}\n",
+        ),
+        source_fixture = source.name,
+        versioned_bytes = versioned.len(),
+        versioned_sha256 = hex_encode(Sha256::digest(&versioned)),
+        bare_bytes = bare.len(),
+        compact_length = hex_encode(compact_length),
+        canonical_prefix = hex_encode(prefix),
+        canonical_hash = canonical_hash,
+        payload_prehash = payload_hash,
+        versioned_base64 = BASE64.encode(versioned),
+    ))
+}
+
+fn verify_compact_hash_vector(path: &Path, fixtures: &[FixtureEntry]) -> Result<()> {
+    let expected = render_compact_hash_vector(fixtures)?;
+    let actual = fs::read_to_string(path)
+        .with_context(|| format!("failed to read compact hash vector {}", path.display()))?;
+    if actual != expected {
+        bail!(
+            "compact hash vector {} is stale; regenerate Norito RPC fixtures",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1564,7 +1712,7 @@ struct FixtureComparable<'a> {
     payload_hash: &'a str,
     signed_hash: &'a str,
     nonce: Option<u32>,
-    time_to_live_ms: Option<u64>,
+    time_to_live_ms: u64,
 }
 
 impl<'a> FixtureComparable<'a> {
@@ -1614,7 +1762,7 @@ mod tests {
             payload_hash: format!("payload-{name}"),
             signed_hash: format!("signed-{name}"),
             nonce: None,
-            time_to_live_ms: None,
+            time_to_live_ms: 1,
         }
     }
 
@@ -1709,6 +1857,74 @@ mod tests {
             signed_transaction_entrypoint_hash_hex(&signed_bytes)
                 .expect("hash canonical signed transaction"),
             blake2b256_hex(&signed_bytes)
+        );
+    }
+
+    #[test]
+    fn compact_hash_vector_is_descriptor_owned_and_deterministic() {
+        let root = workspace_root();
+        let manifest =
+            Manifest::load(&root.join(CANONICAL_MANIFEST)).expect("canonical manifest loads");
+        let first = render_compact_hash_vector(&manifest.fixtures).expect("render compact vector");
+        let second = render_compact_hash_vector(&manifest.fixtures).expect("render compact vector");
+        assert_eq!(
+            first, second,
+            "compact vector rendering must be deterministic"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                root.join("fixtures/norito_rpc")
+                    .join(COMPACT_HASH_VECTOR_BASENAME)
+            )
+            .expect("read checked-in compact vector"),
+            first,
+            "checked-in compact vector must be generated from the canonical manifest"
+        );
+
+        let properties: BTreeMap<_, _> = first
+            .lines()
+            .map(|line| line.split_once('=').expect("generated property"))
+            .collect();
+        assert_eq!(properties["schema.version"], "2");
+        assert_eq!(properties["source.fixture"], COMPACT_HASH_VECTOR_SOURCE);
+        assert_eq!(
+            properties["versioned.bytes"]
+                .parse::<usize>()
+                .expect("versioned byte count"),
+            properties["bare.bytes"]
+                .parse::<usize>()
+                .expect("bare byte count")
+                + 1
+        );
+        assert_eq!(
+            properties["canonical.prefix.hex"],
+            format!("00000000{}", properties["compact.length.hex"])
+        );
+        assert_eq!(properties["versioned.bytes"], "592");
+        assert_eq!(
+            properties["versioned.sha256"],
+            "8c7bd16c4f5bbbbeb67aa0a0e3b2d82e4a2a0f08d2bdc7e48aff6ed8d806b255"
+        );
+        assert_eq!(properties["bare.bytes"], "591");
+        assert_eq!(properties["compact.length.hex"], "bf03");
+        assert_eq!(properties["canonical.prefix.hex"], "00000000bf03");
+        assert_eq!(
+            properties["canonical.hash"],
+            "9e4fca2b657ecf1d9c206badf2b2b7511c1cfbc749a778ce792eb31a13ac9927"
+        );
+        assert_eq!(
+            properties["payload.prehash"],
+            "ea55e9ccd91a2a4910245a7747b856af27b2262f4278b8c0efd3166603612d71"
+        );
+    }
+
+    #[test]
+    fn compact_hash_vector_requires_the_canonical_source_fixture() {
+        let error = render_compact_hash_vector(&sample_manifest().fixtures)
+            .expect_err("missing canonical source fixture must fail closed");
+        assert!(
+            error.to_string().contains(COMPACT_HASH_VECTOR_SOURCE),
+            "error must identify the missing source fixture: {error}"
         );
     }
 
@@ -1905,6 +2121,19 @@ mod tests {
     }
 
     #[test]
+    fn schema_manifest_generation_is_deterministic() {
+        let first =
+            json::to_json_pretty(&SchemaHashManifest::new_current()).expect("serialize manifest");
+        let second =
+            json::to_json_pretty(&SchemaHashManifest::new_current()).expect("serialize manifest");
+        assert_eq!(first, second);
+        assert!(
+            !first.contains("generated_at"),
+            "checked-in schema manifests must not contain wall-clock state"
+        );
+    }
+
+    #[test]
     fn schema_hash_hex_round_trip() {
         let target_binding = schema_targets();
         let target = target_binding.first().expect("at least one schema target");
@@ -1946,7 +2175,7 @@ mod tests {
                 authority: account_id.to_string(),
                 creation_time_ms: 1_735_000_000_000,
                 executable: RawExecutable::Instructions(Vec::new()),
-                ttl_ms: Some(60_000),
+                ttl_ms: 60_000,
                 nonce: Some(1),
                 fee_payment: FeePaymentIntent::authority(Vec::new(), None),
                 metadata: Vec::new(),
@@ -1956,7 +2185,7 @@ mod tests {
             chain_hint: None,
             authority_hint: None,
             creation_time_ms_hint: None,
-            ttl_ms_hint: None,
+            ttl_ms_hint: 60_000,
             nonce_hint: None,
         };
 
@@ -1979,7 +2208,7 @@ mod tests {
             authority: String::new(),
             creation_time_ms: 0,
             executable: RawExecutable::Instructions(Vec::new()),
-            ttl_ms: None,
+            ttl_ms: 1,
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Vec::new(),
@@ -1993,6 +2222,57 @@ mod tests {
             error.to_string().contains("invalid canonical chain id ''"),
             "unexpected chain id error: {error}"
         );
+    }
+
+    #[test]
+    fn payload_ttl_is_required_and_nonzero() {
+        for value in [None, Some(Value::Null), Some(Value::from(0_u64))] {
+            let mut object = Map::new();
+            if let Some(value) = value {
+                object.insert("time_to_live_ms".to_owned(), value);
+            }
+            let error = expect_nonzero_u64(&object, "time_to_live_ms")
+                .expect_err("missing, null, and zero lifetimes must be rejected");
+            assert!(
+                error.to_string().contains("time_to_live_ms"),
+                "unexpected lifetime error: {error}"
+            );
+        }
+
+        let mut object = Map::new();
+        object.insert("time_to_live_ms".to_owned(), Value::from(100_000_u64));
+        assert_eq!(
+            expect_nonzero_u64(&object, "time_to_live_ms").expect("positive lifetime"),
+            100_000
+        );
+    }
+
+    #[test]
+    fn fixture_manifest_requires_explicit_ttl() {
+        let manifest = Manifest {
+            fixtures: vec![fixture("required-ttl")],
+        };
+        let encoded = json::to_json_pretty(&manifest).expect("serialize fixture manifest");
+        let base: Value = json::from_str(&encoded).expect("parse fixture manifest value");
+
+        for replacement in [None, Some(Value::Null)] {
+            let mut candidate = base.clone();
+            let entry = candidate
+                .as_object_mut()
+                .and_then(|object| object.get_mut("fixtures"))
+                .and_then(Value::as_array_mut)
+                .and_then(|fixtures| fixtures.first_mut())
+                .and_then(Value::as_object_mut)
+                .expect("fixture manifest entry");
+            if let Some(value) = replacement {
+                entry.insert("time_to_live_ms".to_owned(), value);
+            } else {
+                entry.remove("time_to_live_ms");
+            }
+
+            json::from_value::<Manifest>(candidate)
+                .expect_err("missing and null fixture lifetimes must be rejected");
+        }
     }
 
     #[test]
@@ -2058,6 +2338,34 @@ mod tests {
         assert!(
             err.to_string().contains("custom_payload.norito"),
             "error should mention missing encoded file name: {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_validation_rejects_ttl_summary_drift() {
+        let root = workspace_root();
+        let canonical_path = root.join(CANONICAL_MANIFEST);
+        let canonical = Manifest::load(&canonical_path).expect("canonical manifest loads");
+        let mut entry = canonical
+            .fixtures
+            .first()
+            .expect("at least one fixture in canonical manifest")
+            .clone();
+        entry.time_to_live_ms = entry
+            .time_to_live_ms
+            .checked_add(1)
+            .expect("fixture lifetime can be incremented");
+
+        let error = Manifest {
+            fixtures: vec![entry],
+        }
+        .validate(None)
+        .expect_err("manifest lifetime drift must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("manifest summary differs from signed payload"),
+            "unexpected lifetime drift error: {error}"
         );
     }
 }

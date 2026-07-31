@@ -5,7 +5,7 @@ use std::{
 };
 
 use norito::{
-    Archived, NoritoSerialize,
+    NoritoSerialize,
     codec::encode_with_header_flags,
     core::Header,
     crc64_fallback, decode_from_bytes,
@@ -859,7 +859,7 @@ fn write_segment_bundles(
     header_bytes.extend_from_slice(&header.length.to_le_bytes());
     header_bytes.extend_from_slice(&header.checksum.to_le_bytes());
     header_bytes.push(header.flags);
-    let align = std::mem::align_of::<Archived<Vec<SegmentBundle>>>();
+    let align = norito::core::archived_payload_align::<Vec<SegmentBundle>>();
     let padding = if align <= 1 {
         0
     } else {

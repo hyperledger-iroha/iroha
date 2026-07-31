@@ -1,4 +1,4 @@
-//! Attachment sanitizer subprocess entrypoint for tests and tooling.
+//! Dedicated, OS-sandboxed attachment sanitizer subprocess entrypoint.
 
 fn main() {
     if let Some(exit_code) = iroha_torii::zk_attachments::sanitizer_process_exit_code_from_env() {

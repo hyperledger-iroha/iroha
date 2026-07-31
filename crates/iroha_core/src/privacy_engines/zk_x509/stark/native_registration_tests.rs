@@ -202,7 +202,7 @@
             })
             .collect::<Vec<_>>();
         assert_eq!(
-            evaluate_der_composition_coefficients_at_deep_v1(
+            evaluate_retained_composition_coefficients_at_deep_v1(
                 &composition_coefficients,
                 deep_point,
             )
@@ -212,9 +212,10 @@
         let mut missing_chunk = composition_coefficients.clone();
         missing_chunk[0].pop();
         assert!(
-            evaluate_der_composition_coefficients_at_deep_v1(&missing_chunk, deep_point).is_err()
+            evaluate_retained_composition_coefficients_at_deep_v1(&missing_chunk, deep_point)
+                .is_err()
         );
-        assert!(evaluate_der_composition_coefficients_at_deep_v1(&[], deep_point).is_err());
+        assert!(evaluate_retained_composition_coefficients_at_deep_v1(&[], deep_point).is_err());
         let mixes = (0..SECURITY_LANES)
             .map(|lane| FriMixV1 {
                 base: (0..base_coefficients.len())
@@ -1657,4 +1658,59 @@
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn retained_registration_plans_are_exact_for_all_49_and_reject_degree_domain_attacks() {
+        let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
+        assert_eq!(
+            layout.registered_segments.len(),
+            FULL_PROFILE_LOGICAL_REGISTRATIONS_V1
+        );
+        let mut group_counts = [0_usize; FULL_PROFILE_TRACE_GROUPS_V1];
+        for registration in layout.registered_segments.iter().copied() {
+            let segment = registration.segment;
+            let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2)
+                .expect("canonical registration plan");
+            let trace_rows = 1_usize << segment.trace_log2;
+            let independently_derived_degree = usize::from(segment.constraint_degree)
+                .checked_mul(trace_rows + MASK_DEGREE)
+                .and_then(|degree| degree.checked_sub(trace_rows))
+                .expect("release dimensions fit usize");
+            let independently_derived_rows = independently_derived_degree
+                .checked_add(1)
+                .and_then(usize::checked_next_power_of_two)
+                .expect("release quotient domain");
+            assert_eq!(plan.maximum_quotient_degree, independently_derived_degree);
+            assert_eq!(plan.quotient_coset_rows, independently_derived_rows);
+            assert_eq!(
+                plan.quotient_coset_log2,
+                u8::try_from(independently_derived_rows.ilog2()).expect("small release log")
+            );
+            assert_eq!(
+                plan.quotient_next_stride,
+                independently_derived_rows / trace_rows
+            );
+            assert!(plan.maximum_quotient_degree < plan.quotient_coset_rows);
+            assert!(plan.quotient_coset_log2 <= layout.common_lde_log2);
+            group_counts[registration.trace_group] += 1;
+
+            let mut low_degree = segment;
+            low_degree.constraint_degree = 1;
+            assert!(matches!(
+                registered_retained_prover_plan_v1(low_degree, layout.common_lde_log2),
+                Err(ZkX509StarkErrorV1::ProfileMismatch)
+            ));
+            let mut excessive_degree = segment;
+            excessive_degree.constraint_degree = ZK_X509_MAX_CONSTRAINT_DEGREE_V1 + 1;
+            assert!(matches!(
+                registered_retained_prover_plan_v1(excessive_degree, layout.common_lde_log2),
+                Err(ZkX509StarkErrorV1::ProfileMismatch)
+            ));
+            assert!(matches!(
+                registered_retained_prover_plan_v1(segment, segment.lde_log2.saturating_sub(1),),
+                Err(ZkX509StarkErrorV1::ProfileMismatch)
+            ));
+        }
+        assert_eq!(group_counts, [11, 5, 1, 10, 1, 21]);
     }

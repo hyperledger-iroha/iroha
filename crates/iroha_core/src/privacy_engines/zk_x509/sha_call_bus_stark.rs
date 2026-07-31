@@ -3400,6 +3400,12 @@ pub(crate) const ZK_X509_SHA_CALL_BUS_COLLISION_NUMERATOR_V1: u64 =
 /// Exact algebraic collision-bound numerator for each word-memory equality.
 pub(crate) const ZK_X509_SHA_WORD_MEMORY_COLLISION_NUMERATOR_V1: u64 =
     ZK_X509_SHA_MAX_MEMORY_ROWS_V1 as u64;
+/// Exact algebraic collision-bound numerator for the three-lane base-fold bus.
+pub(crate) const ZK_X509_SHA_BASE_FOLD_COLLISION_NUMERATOR_V1: u64 = 440;
+/// Independent challenge lanes used by each SHA word/call equality.
+pub(crate) const ZK_X509_SHA_COLLISION_LANES_V1: u8 = 4;
+/// Independent challenge lanes used by the SHA base-fold equality.
+pub(crate) const ZK_X509_SHA_BASE_FOLD_COLLISION_LANES_V1: u8 = 3;
 
 /// Return the exact release union bound in floating-point diagnostic form.
 ///
@@ -3419,7 +3425,8 @@ fn algebraic_security_bits_v1() -> (f64, f64, f64) {
     let call =
         (f64::from(ZK_X509_SHA_CALL_BUS_COLLISION_NUMERATOR_V1 as u32) / denominator).powi(4);
     let bus_union = 2.0 * memory + call;
-    let base_fold = (440.0 / denominator).powi(3);
+    let base_fold = (ZK_X509_SHA_BASE_FOLD_COLLISION_NUMERATOR_V1 as f64 / denominator)
+        .powi(i32::from(ZK_X509_SHA_BASE_FOLD_COLLISION_LANES_V1));
     (
         -bus_union.log2(),
         -call.log2(),

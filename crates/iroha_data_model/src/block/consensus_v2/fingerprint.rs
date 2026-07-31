@@ -164,6 +164,19 @@ mod tests {
     }
 
     #[test]
+    fn signed_execution_policy_mismatch_changes_live_fingerprint() {
+        let chain = ChainId::from("fingerprint-execution-policy-mismatch");
+        let baseline = permissioned_params();
+        let mut changed = baseline.clone();
+        changed.v2_context.execution_policy_hash[0] ^= 1;
+
+        assert_ne!(
+            compute(&chain, &baseline).unwrap(),
+            compute(&chain, &changed).unwrap(),
+        );
+    }
+
+    #[test]
     fn npos_election_input_changes_live_fingerprint() {
         let chain = ChainId::from("fingerprint-npos-election");
         let baseline = npos_params();
@@ -204,6 +217,15 @@ mod tests {
         params.v2_context.da_layout.chunk_size_bytes = 0;
         let error = compute(&ChainId::from("invalid-da-layout"), &params)
             .expect_err("zero DA chunk size must fail closed");
+        assert!(error.contains("invalid Sumeragi v2 genesis context"));
+    }
+
+    #[test]
+    fn zero_execution_policy_context_is_rejected_before_hashing() {
+        let mut params = permissioned_params();
+        params.v2_context.execution_policy_hash = [0; 32];
+        let error = compute(&ChainId::from("invalid-execution-policy"), &params)
+            .expect_err("zero execution-policy hash must fail closed");
         assert!(error.contains("invalid Sumeragi v2 genesis context"));
     }
 

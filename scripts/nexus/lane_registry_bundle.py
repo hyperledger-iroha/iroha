@@ -12,6 +12,11 @@ from hashlib import blake2b, sha256
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+if __package__:
+    from .lane_registry_privacy import summarize_merkle_privacy_commitments
+else:
+    from lane_registry_privacy import summarize_merkle_privacy_commitments
+
 
 @dataclass(frozen=True)
 class ModuleEntry:
@@ -137,20 +142,8 @@ def compute_digests(payload: bytes) -> Tuple[str, str]:
     return sha256(payload).hexdigest(), blake2b(payload, digest_size=32).hexdigest()
 
 
-def summarize_privacy_commitments(manifest: Dict) -> List[Dict[str, str]]:
-    commits = []
-    for entry in manifest.get("privacy_commitments") or []:
-        cid = entry.get("id")
-        scheme = entry.get("scheme")
-        if cid is None or scheme is None:
-            continue
-        try:
-            cid_int = int(cid)
-        except (TypeError, ValueError):
-            continue
-        commits.append({"id": cid_int, "scheme": str(scheme)})
-    commits.sort(key=lambda item: item["id"])
-    return commits
+def summarize_privacy_commitments(manifest: Dict) -> List[Dict[str, object]]:
+    return summarize_merkle_privacy_commitments(manifest)
 
 
 def write_manifest(manifest_path: Path, manifests_dir: Path, force: bool) -> Dict:
@@ -158,11 +151,14 @@ def write_manifest(manifest_path: Path, manifests_dir: Path, force: bool) -> Dic
     alias = data.get("lane")
     if not isinstance(alias, str) or not alias.strip():
         raise ValueError(f"manifest {manifest_path} is missing a `lane` field")
+    privacy_commitments = summarize_privacy_commitments(data)
     slug = slugify_alias(alias)
     dest = manifests_dir / f"{slug}.manifest.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and not force:
-        raise FileExistsError(f"{dest} already exists (rerun with --force to overwrite)")
+        raise FileExistsError(
+            f"{dest} already exists (rerun with --force to overwrite)"
+        )
     serialized = json.dumps(data, indent=2, sort_keys=True)
     dest.write_text(serialized + "\n", encoding="utf-8")
     payload = dest.read_bytes()
@@ -174,7 +170,7 @@ def write_manifest(manifest_path: Path, manifests_dir: Path, force: bool) -> Dic
         "path": str(dest),
         "sha256": sha_hex,
         "blake2b": blake_hex,
-        "privacy_commitments": summarize_privacy_commitments(data),
+        "privacy_commitments": privacy_commitments,
     }
 
 

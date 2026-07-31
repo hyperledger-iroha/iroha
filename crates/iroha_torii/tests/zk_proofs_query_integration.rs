@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
+use base64::Engine as _;
 use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,
@@ -14,8 +15,10 @@ use iroha_core::{
 use iroha_data_model::{
     Registrable,
     proof::{ProofId, ProofRecord, ProofStatus, VerifyingKeyId},
+    query::{QueryRequest, prelude::SingularQueryBox, proof::prelude::FindProofRecordById},
 };
 use iroha_torii::QueryOptions;
+use iroha_version::codec::EncodeVersioned as _;
 use mv::storage::StorageReadOnly;
 use norito::json;
 use tower::ServiceExt as _;
@@ -112,13 +115,17 @@ async fn proofs_query_find_by_id_returns_norito() {
         }),
     );
 
-    let private_key = iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()).to_string();
-    let dto = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.to_string()),
-        iroha_torii::json_entry("private_key", private_key),
-        iroha_torii::json_entry("backend", backend),
-        iroha_torii::json_entry("hash_hex", hex::encode(proof_hash)),
-    ]);
+    let signed_query =
+        QueryRequest::Singular(SingularQueryBox::FindProofRecordById(FindProofRecordById {
+            id: proof_id.clone(),
+        }))
+        .with_authority(authority)
+        .try_sign(&key_pair)
+        .expect("sign proof query locally");
+    let dto = iroha_torii::json_object(vec![iroha_torii::json_entry(
+        "signed_query_b64",
+        base64::engine::general_purpose::STANDARD.encode(signed_query.encode_versioned()),
+    )]);
     let body = json::to_vec(&dto).unwrap();
     let request = http::Request::builder()
         .method("POST")

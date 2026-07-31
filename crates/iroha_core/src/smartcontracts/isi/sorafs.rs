@@ -54,6 +54,7 @@ use iroha_data_model::{
             XOR_QUANTITY_SCALE, checked_mul_div_round_u128,
         },
     },
+    state_path::StatePath,
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_primitives::{
@@ -3651,9 +3652,11 @@ fn corrupt_repair_state(message: impl Into<String>) -> InstructionExecutionError
     InstructionExecutionError::InvariantViolation(message.into().into())
 }
 
-fn repair_status_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
-    KEY.get_or_init(|| Name::from_str(REPAIR_STATUS_STATE_KEY_V1).expect("static key is valid"))
+fn repair_status_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
+    KEY.get_or_init(|| {
+        StatePath::from_str(REPAIR_STATUS_STATE_KEY_V1).expect("static key is valid")
+    })
 }
 
 fn repair_ticket_digest(ticket_id: &str) -> [u8; 32] {
@@ -3668,36 +3671,36 @@ fn repair_ticket_digest(ticket_id: &str) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-fn repair_digest_key(prefix: &str, digest: [u8; 32]) -> Name {
-    Name::from_str(&format!("{prefix}{}", hex::encode(digest)))
+fn repair_digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
+    StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static prefix plus lowercase hex is a valid state key")
 }
 
-fn repair_task_key(ticket_id: &str) -> Name {
+fn repair_task_key(ticket_id: &str) -> StatePath {
     repair_digest_key(
         REPAIR_TASK_STATE_KEY_PREFIX_V1,
         repair_ticket_digest(ticket_id),
     )
 }
 
-fn repair_source_key(source_identity: [u8; 32]) -> Name {
+fn repair_source_key(source_identity: [u8; 32]) -> StatePath {
     repair_digest_key(
         REPAIR_SOURCE_STATE_KEY_PREFIX_V1,
         sorafs_repair_task_id_v1(source_identity),
     )
 }
 
-fn repair_event_key(sequence: u64) -> Name {
-    Name::from_str(&format!(
+fn repair_event_key(sequence: u64) -> StatePath {
+    StatePath::from_str(&format!(
         "{REPAIR_EVENT_STATE_KEY_PREFIX_V1}{sequence:016x}"
     ))
     .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
 
-fn repair_event_journal_head_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
+fn repair_event_journal_head_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
-        Name::from_str(REPAIR_EVENT_JOURNAL_HEAD_STATE_KEY_V1)
+        StatePath::from_str(REPAIR_EVENT_JOURNAL_HEAD_STATE_KEY_V1)
             .expect("static repair event journal head key is valid")
     })
 }
@@ -3916,7 +3919,7 @@ fn repair_namespace_has_key(
     world: &impl crate::state::WorldReadOnly,
     prefix: &str,
 ) -> Result<bool, InstructionExecutionError> {
-    let start = Name::from_str(prefix).map_err(|error| {
+    let start = StatePath::from_str(prefix).map_err(|error| {
         corrupt_repair_state(format!(
             "repair state namespace prefix `{prefix}` is invalid: {error}"
         ))
@@ -4276,8 +4279,8 @@ fn ensure_no_repair_event_after_head(
     world: &impl crate::state::WorldReadOnly,
     head: Option<RepairEventJournalHeadV1>,
 ) -> Result<(), InstructionExecutionError> {
-    let prefix_start =
-        Name::from_str(REPAIR_EVENT_STATE_KEY_PREFIX_V1).expect("static event prefix is valid");
+    let prefix_start = StatePath::from_str(REPAIR_EVENT_STATE_KEY_PREFIX_V1)
+        .expect("static event prefix is valid");
     let first_event_key = world
         .smart_contract_state()
         .range(prefix_start..)
@@ -4302,7 +4305,10 @@ fn ensure_no_repair_event_after_head(
         }
     }
     let start = head.map_or_else(
-        || Name::from_str(REPAIR_EVENT_STATE_KEY_PREFIX_V1).expect("static event prefix is valid"),
+        || {
+            StatePath::from_str(REPAIR_EVENT_STATE_KEY_PREFIX_V1)
+                .expect("static event prefix is valid")
+        },
         |head| repair_event_key(head.last_sequence),
     );
     for (key, _) in world.smart_contract_state().range(start..) {

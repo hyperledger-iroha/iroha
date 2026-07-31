@@ -35,7 +35,7 @@ use iroha_p2p::{
         genesis_reply_waiters_per_source,
         message::{SubscriberRoute, Topic},
     },
-    peer::message::PeerMessage,
+    peer::message::{PeerMessage, PeerMessageRetentionGuard},
 };
 use iroha_primitives::addr::SocketAddr;
 use norito::codec::Encode as _;
@@ -379,8 +379,8 @@ pub struct GenesisBootstrapper<N: GenesisNetwork = IrohaNetwork> {
 
 struct ResponderState {
     payload: Option<GenesisPayload>,
-    last_response: HashMap<PeerId, LastGenesisResponse>,
-    last_response_order: VecDeque<PeerId>,
+    last_response_by_source: HashMap<PeerId, LastGenesisResponse>,
+    response_source_order: VecDeque<PeerId>,
 }
 
 struct LastGenesisResponse {
@@ -403,6 +403,9 @@ struct ResponderCtx<'a> {
 struct InboundResponse {
     peer: Peer,
     response: GenesisResponse,
+    // Runtime messages retain the P2P process/source byte lease while queued.
+    // Synthetic unit-test responses have no transport lease.
+    _retention: Option<PeerMessageRetentionGuard>,
 }
 
 struct PreflightOutcome {
@@ -699,8 +702,8 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
             trusted: Arc::new(Mutex::new(HashSet::new())),
             responder: Arc::new(Mutex::new(ResponderState {
                 payload: None,
-                last_response: HashMap::new(),
-                last_response_order: VecDeque::new(),
+                last_response_by_source: HashMap::new(),
+                response_source_order: VecDeque::new(),
             })),
             pending: Arc::new(Mutex::new(HashMap::new())),
             response_queue_cap,
@@ -721,13 +724,18 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
     }
 
     /// Spawn a listener that handles inbound genesis requests/responses.
-    pub async fn spawn_listener(&self) {
+    ///
+    /// Returns `None` when a listener already owns this bootstrapper. The
+    /// returned task must be supervised: any exit means the subscription or
+    /// its authenticated reply path is no longer available.
+    #[must_use]
+    pub async fn spawn_listener(&self) -> Option<tokio::task::JoinHandle<()>> {
         let Some(listener_permit) = GenesisProducerPermit::try_acquire(&self.listener_active)
         else {
             iroha_logger::warn!(
                 "genesis bootstrap listener is already active; refusing to multiply its bounded reply producer"
             );
-            return;
+            return None;
         };
         let (mut sender, mut rx) = mpsc::channel(self.network.subscriber_queue_cap().get());
         let filter = genesis_message_filter();
@@ -750,7 +758,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
         let pending = Arc::clone(&self.pending);
         let network = self.network.clone();
         let retry_period = self.retry_interval.max(Duration::from_millis(1));
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             let _listener_permit = listener_permit;
             let mut pending_replies = PendingGenesisReplies::new(reply_queue_cap, max_bytes);
             let mut retry_tick = time::interval(retry_period);
@@ -789,7 +797,9 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                     continue;
                 };
                 let reply_route = network.reply_route(&msg);
-                match msg.payload {
+                let (peer, authenticated_source, payload, _payload_bytes, message_retention) =
+                    msg.into_parts();
+                match payload {
                     NetworkMessage::GenesisRequest(request) => {
                         let trusted_guard = trusted
                             .lock()
@@ -798,7 +808,8 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                             .lock()
                             .expect("responder mutex poisoned")
                             .prepare_response(
-                                &msg.peer,
+                                &peer,
+                                &authenticated_source,
                                 request.as_ref(),
                                 &ResponderCtx {
                                     chain_id: &chain_id,
@@ -814,7 +825,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                         if let Some(response) = response {
                             if let Some(err) = response.error {
                                 debug!(
-                                    %msg.peer,
+                                    %peer,
                                     ?err,
                                     request_id = response.request_id,
                                     "denying genesis request"
@@ -822,12 +833,12 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                             }
                             let post = Post {
                                 data: NetworkMessage::GenesisResponse(Box::new(response)),
-                                peer_id: msg.peer.id().clone(),
+                                peer_id: peer.id().clone(),
                                 priority: Priority::High,
                             };
                             let Some(reply_route) = reply_route else {
                                 iroha_logger::debug!(
-                                    peer = %msg.peer,
+                                    %peer,
                                     "dropping genesis response without authenticated reply route"
                                 );
                                 continue;
@@ -836,7 +847,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                                 &network,
                                 &mut pending_replies,
                                 PendingGenesisReplyPost {
-                                    encoded_bytes: u64::try_from(post.data.encode().len())
+                                    encoded_bytes: u64::try_from(post.data.encoded_len())
                                         .unwrap_or(u64::MAX),
                                     message: post,
                                     ticket: None,
@@ -852,19 +863,20 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                         if let Some(sender) = guard.get(&response.request_id) {
                             if let Ok(permit) = sender.try_reserve() {
                                 permit.send(InboundResponse {
-                                    peer: msg.peer.clone(),
-                                    response: response.as_ref().clone(),
+                                    peer,
+                                    response: *response,
+                                    _retention: Some(message_retention),
                                 });
                             } else {
                                 iroha_logger::debug!(
-                                    %msg.peer,
+                                    %peer,
                                     request_id = response.request_id,
                                     "bounded genesis response queue could not admit a duplicate; requester retransmission remains active"
                                 );
                             }
                         } else {
                             debug!(
-                                %msg.peer,
+                                %peer,
                                 request_id = response.request_id,
                                 "received genesis response for unknown request"
                             );
@@ -873,7 +885,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                     _ => {}
                 }
             }
-        });
+        }))
     }
 
     /// Record a validated genesis payload so future requests can be served.
@@ -1066,8 +1078,13 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                         continue;
                     }
                 };
+                let InboundResponse {
+                    response,
+                    _retention,
+                    ..
+                } = inbound;
                 match validate_payload_response(
-                    &inbound.response,
+                    response,
                     &self.chain_id,
                     &self.expected_pubkey,
                     preflight.pin.as_hash(),
@@ -1122,6 +1139,7 @@ impl ResponderState {
     fn prepare_response(
         &mut self,
         peer: &Peer,
+        authenticated_source: &PeerId,
         request: &GenesisRequest,
         ctx: &ResponderCtx<'_>,
     ) -> Option<GenesisResponse> {
@@ -1130,7 +1148,7 @@ impl ResponderState {
         } else if !ctx.trusted_fallback.is_empty() {
             ctx.trusted_fallback.contains(peer.id())
         } else {
-            true
+            false
         };
         if !allowed {
             return Some(error_response(
@@ -1153,23 +1171,25 @@ impl ResponderState {
             // request registered and retransmits it until its deadline, so losing the first
             // response cannot poison that request. Binding the exemption to the full request hash
             // prevents same-id/different-body reuse from bypassing the throttle. The one-record-
-            // per-peer cache contains no genesis bytes and is retained only for the active
-            // throttle window, so it cannot become historical unbounded state.
-            while let Some(oldest_peer) = self.last_response_order.front() {
+            // per-source cache contains no genesis bytes and is retained only for the active
+            // throttle window, so it cannot become historical unbounded state. The semantic
+            // origin remains the authorization identity, while rate ownership follows the
+            // immutable authenticated transport source even when a trusted relay rewrites it.
+            while let Some(oldest_source) = self.response_source_order.front() {
                 let expired = self
-                    .last_response
-                    .get(oldest_peer)
+                    .last_response_by_source
+                    .get(oldest_source)
                     .is_none_or(|last| now.saturating_duration_since(last.at) >= ctx.throttle);
                 if !expired {
                     break;
                 }
-                let oldest_peer = self
-                    .last_response_order
+                let oldest_source = self
+                    .response_source_order
                     .pop_front()
                     .expect("front entry exists");
-                self.last_response.remove(&oldest_peer);
+                self.last_response_by_source.remove(&oldest_source);
             }
-            if let Some(last) = self.last_response.get(peer.id()) {
+            if let Some(last) = self.last_response_by_source.get(authenticated_source) {
                 if last.request_id != request.request_id || last.request_hash != request_hash {
                     return Some(error_response(
                         ctx.chain_id.clone(),
@@ -1178,26 +1198,27 @@ impl ResponderState {
                     ));
                 }
             } else {
-                while self.last_response.len() >= ctx.response_history_cap {
-                    let oldest_peer = self
-                        .last_response_order
+                while self.last_response_by_source.len() >= ctx.response_history_cap {
+                    let oldest_source = self
+                        .response_source_order
                         .pop_front()
                         .expect("bounded response history order mirrors its map");
-                    self.last_response.remove(&oldest_peer);
+                    self.last_response_by_source.remove(&oldest_source);
                 }
-                self.last_response.insert(
-                    peer.id().clone(),
+                self.last_response_by_source.insert(
+                    authenticated_source.clone(),
                     LastGenesisResponse {
                         at: now,
                         request_id: request.request_id,
                         request_hash,
                     },
                 );
-                self.last_response_order.push_back(peer.id().clone());
+                self.response_source_order
+                    .push_back(authenticated_source.clone());
             }
         } else {
-            self.last_response.clear();
-            self.last_response_order.clear();
+            self.last_response_by_source.clear();
+            self.response_source_order.clear();
         }
 
         let Some(payload) = self.payload.clone() else {
@@ -1362,7 +1383,7 @@ fn validate_preflight_response(
 }
 
 fn validate_payload_response(
-    response: &GenesisResponse,
+    mut response: GenesisResponse,
     chain_id: &ChainId,
     expected_pubkey: &PublicKey,
     expected_hash: &HashOf<BlockHeader>,
@@ -1414,7 +1435,7 @@ fn validate_payload_response(
             advertised: Some(advertised_pubkey.clone()),
         });
     }
-    let Some(payload) = response.payload.clone() else {
+    let Some(payload) = response.payload.take() else {
         return Ok(None);
     };
     if (payload.len() as u64) > max_bytes {
@@ -1922,8 +1943,14 @@ mod tests {
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id);
         let clone = bootstrapper.clone();
 
-        bootstrapper.spawn_listener().await;
-        clone.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("first listener starts");
+        assert!(
+            clone.spawn_listener().await.is_none(),
+            "a clone must not multiply the active listener"
+        );
 
         assert_eq!(
             network
@@ -1931,6 +1958,41 @@ mod tests {
                 .load(std::sync::atomic::Ordering::SeqCst),
             1,
             "all clones must share one listener and one bounded reply scheduler"
+        );
+    }
+
+    #[tokio::test]
+    async fn listener_subscription_exit_is_observable_to_its_supervisor() {
+        let network = MockNetwork::default();
+        let signer = checked_genesis_bootstrap_key_fixture();
+        let cfg = GenesisConfig {
+            public_key: signer.public_key().clone(),
+            file: None,
+            manifest_json: None,
+            expected_hash: None,
+            bootstrap_allowlist: Vec::new(),
+            bootstrap_max_bytes: 1_048_576,
+            bootstrap_response_throttle: Duration::ZERO,
+            bootstrap_request_timeout: Duration::from_secs(1),
+            bootstrap_retry_interval: Duration::from_millis(10),
+            bootstrap_max_attempts: 1,
+            bootstrap_enabled: true,
+        };
+        let bootstrapper =
+            GenesisBootstrapper::new(&cfg, network.clone(), ChainId::from("listener-exit"));
+        let listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
+
+        network.sender.lock().expect("sender mutex").take();
+        time::timeout(Duration::from_secs(1), listener)
+            .await
+            .expect("closed subscription terminates the listener")
+            .expect("listener exits without panicking");
+        assert!(
+            !bootstrapper.listener_active.load(Ordering::Acquire),
+            "listener ownership is released after the supervised task exits"
         );
     }
 
@@ -2066,7 +2128,10 @@ mod tests {
             bootstrap_enabled: true,
         };
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
-        bootstrapper.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
         bootstrapper.set_payload(&block).await.expect("payload set");
         network.backpressure_next_posts(1);
 
@@ -2128,7 +2193,10 @@ mod tests {
         };
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
         let mut inbound = bootstrapper.register_request(99).await;
-        bootstrapper.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
         bootstrapper.set_payload(&block).await.expect("payload set");
         network.block_reply_peer(blocked.id().clone());
 
@@ -2226,6 +2294,7 @@ mod tests {
                     .try_send(InboundResponse {
                         peer: peer.clone(),
                         response: response.clone(),
+                        _retention: None,
                     })
                     .is_ok()
             );
@@ -2235,6 +2304,7 @@ mod tests {
                 .try_send(InboundResponse {
                     peer: peer.clone(),
                     response: response.clone(),
+                    _retention: None,
                 })
                 .is_err(),
             "one item beyond the configured queue cap must fail closed"
@@ -2242,8 +2312,85 @@ mod tests {
 
         assert!(receiver.recv().await.is_some());
         assert!(
-            sender.try_send(InboundResponse { peer, response }).is_ok(),
+            sender
+                .try_send(InboundResponse {
+                    peer,
+                    response,
+                    _retention: None,
+                })
+                .is_ok(),
             "service must release one exact queue slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn listener_moves_response_payload_into_bounded_queue_without_cloning() {
+        let network = MockNetwork::default();
+        let chain_id = ChainId::from("chain-response-byte-ownership");
+        let kp = checked_genesis_bootstrap_key_fixture();
+        let peer = sample_peer();
+        let cfg = GenesisConfig {
+            public_key: kp.public_key().clone(),
+            file: None,
+            manifest_json: None,
+            expected_hash: None,
+            bootstrap_allowlist: vec![peer.id().clone()],
+            bootstrap_max_bytes: 1_048_576,
+            bootstrap_response_throttle: Duration::ZERO,
+            bootstrap_request_timeout: Duration::from_secs(1),
+            bootstrap_retry_interval: Duration::from_millis(10),
+            bootstrap_max_attempts: 1,
+            bootstrap_enabled: true,
+        };
+        let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
+        let mut receiver = bootstrapper.register_request(56).await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
+        let sender = network
+            .sender
+            .lock()
+            .expect("sender")
+            .clone()
+            .expect("listener registered");
+        let payload = vec![0xA5; 4096];
+        let payload_ptr = payload.as_ptr();
+        let response = GenesisResponse {
+            chain_id,
+            request_id: 56,
+            public_key: Some(kp.public_key().clone()),
+            hash: None,
+            size_hint: Some(u64::try_from(payload.len()).expect("fixture length")),
+            payload: Some(payload),
+            error: None,
+        };
+
+        sender
+            .send(PeerMessage::new(
+                peer,
+                NetworkMessage::GenesisResponse(Box::new(response)),
+                4096,
+            ))
+            .await
+            .expect("send response");
+        let queued = time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .expect("listener services response")
+            .expect("registered response is queued");
+        assert!(
+            queued._retention.is_some(),
+            "the queue entry must own the message's transport retention guard"
+        );
+        assert_eq!(
+            queued
+                .response
+                .payload
+                .as_ref()
+                .expect("fixture payload")
+                .as_ptr(),
+            payload_ptr,
+            "the listener must transfer the decoded payload allocation instead of cloning it"
         );
     }
 
@@ -2252,12 +2399,16 @@ mod tests {
         let network = MockNetwork::default();
         let chain_id = ChainId::from("chain-bounded-responder-history");
         let kp = checked_genesis_bootstrap_key_fixture();
+        let history_cap = network.subscriber_queue_cap().get();
+        let peers = (0..(history_cap + 3))
+            .map(|_| sample_peer())
+            .collect::<Vec<_>>();
         let cfg = GenesisConfig {
             public_key: kp.public_key().clone(),
             file: None,
             manifest_json: None,
             expected_hash: None,
-            bootstrap_allowlist: Vec::new(),
+            bootstrap_allowlist: peers.iter().map(|peer| peer.id().clone()).collect(),
             bootstrap_max_bytes: 1_048_576,
             bootstrap_response_throttle: Duration::from_secs(3_600),
             bootstrap_request_timeout: Duration::from_secs(1),
@@ -2266,17 +2417,18 @@ mod tests {
             bootstrap_enabled: true,
         };
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
-        bootstrapper.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
         let sender = network
             .sender
             .lock()
             .expect("sender")
             .clone()
             .expect("listener registered");
-        let history_cap = bootstrapper.response_queue_cap.get();
         let mut peer_ids = Vec::new();
-        for request_id in 0..(history_cap + 3) {
-            let peer = sample_peer();
+        for (request_id, peer) in peers.into_iter().enumerate() {
             peer_ids.push(peer.id().clone());
             sender
                 .send(PeerMessage::new(
@@ -2296,12 +2448,12 @@ mod tests {
         wait_for_posts(&network, history_cap + 3).await;
 
         let responder = bootstrapper.responder.lock().expect("responder");
-        assert_eq!(responder.last_response.len(), history_cap);
-        assert_eq!(responder.last_response_order.len(), history_cap);
-        assert!(!responder.last_response.contains_key(&peer_ids[0]));
+        assert_eq!(responder.last_response_by_source.len(), history_cap);
+        assert_eq!(responder.response_source_order.len(), history_cap);
+        assert!(!responder.last_response_by_source.contains_key(&peer_ids[0]));
         assert!(
             responder
-                .last_response
+                .last_response_by_source
                 .contains_key(peer_ids.last().expect("at least one churn fixture peer"))
         );
     }
@@ -2444,13 +2596,47 @@ mod tests {
             error: Some(GenesisResponseError::RateLimited),
         };
         let result = validate_payload_response(
-            &response,
+            response,
             &ChainId::from("chain"),
             kp.public_key(),
             &expected_hash,
             1024,
         );
         assert!(matches!(result, Ok(None)));
+    }
+
+    #[test]
+    fn payload_validation_reuses_the_transport_payload_allocation() {
+        let chain_id = ChainId::from("chain-payload-allocation");
+        let kp = checked_genesis_bootstrap_key_fixture();
+        let payload = GenesisPayload::from_block(&sample_block(&chain_id, &kp), kp.public_key())
+            .expect("valid fixture payload");
+        let payload_ptr = payload.bytes.as_ptr();
+        let payload_len = u64::try_from(payload.bytes.len()).expect("fixture size");
+        let expected_hash = payload.hash.clone();
+        let response = full_response(
+            chain_id.clone(),
+            5,
+            payload.signer,
+            payload.hash,
+            payload_len,
+            payload.bytes,
+        );
+
+        let (_, validated_bytes) = validate_payload_response(
+            response,
+            &chain_id,
+            kp.public_key(),
+            &expected_hash,
+            1 << 20,
+        )
+        .expect("valid response")
+        .expect("response includes a payload");
+        assert_eq!(
+            validated_bytes.as_ptr(),
+            payload_ptr,
+            "payload validation must consume the transport allocation instead of cloning it"
+        );
     }
 
     #[tokio::test]
@@ -2474,7 +2660,10 @@ mod tests {
         };
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
         bootstrapper.seed_topology(&[]);
-        bootstrapper.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
 
         let request = GenesisRequest {
             request_id: 7,
@@ -2504,6 +2693,103 @@ mod tests {
         }
     }
 
+    #[test]
+    fn responder_fails_closed_without_an_authorization_policy() {
+        let chain_id = ChainId::from("test-chain");
+        let kp = checked_genesis_bootstrap_key_fixture();
+        let peer = sample_peer();
+        let request = GenesisRequest {
+            request_id: 7,
+            chain_id: chain_id.clone(),
+            expected_hash: None,
+            expected_pubkey: None,
+            kind: GenesisRequestKind::Preflight,
+        };
+        let allowlist = HashSet::new();
+        let trusted_fallback = HashSet::new();
+        let mut responder = ResponderState {
+            payload: None,
+            last_response_by_source: HashMap::new(),
+            response_source_order: VecDeque::new(),
+        };
+
+        let response = responder
+            .prepare_response(
+                &peer,
+                peer.id(),
+                &request,
+                &ResponderCtx {
+                    chain_id: &chain_id,
+                    allowlist: &allowlist,
+                    trusted_fallback: &trusted_fallback,
+                    expected_pubkey: kp.public_key(),
+                    expected_hash: None,
+                    max_bytes: 1024,
+                    throttle: Duration::ZERO,
+                    response_history_cap: 8,
+                },
+            )
+            .expect("an unauthorized request receives an explicit denial");
+
+        assert_eq!(response.error, Some(GenesisResponseError::NotAllowed));
+    }
+
+    #[test]
+    fn responder_throttle_is_owned_by_authenticated_transport_source() {
+        let chain_id = ChainId::from("relay-chain");
+        let kp = checked_genesis_bootstrap_key_fixture();
+        let block = sample_block(&chain_id, &kp);
+        let origin_a = sample_peer();
+        let origin_b = sample_peer();
+        let authenticated_relay = sample_peer();
+        let allowlist = HashSet::from([origin_a.id().clone(), origin_b.id().clone()]);
+        let trusted_fallback = HashSet::new();
+        let ctx = ResponderCtx {
+            chain_id: &chain_id,
+            allowlist: &allowlist,
+            trusted_fallback: &trusted_fallback,
+            expected_pubkey: kp.public_key(),
+            expected_hash: None,
+            max_bytes: 1_048_576,
+            throttle: Duration::from_secs(60),
+            response_history_cap: 8,
+        };
+        let mut responder = ResponderState {
+            payload: Some(
+                GenesisPayload::from_block(&block, kp.public_key()).expect("valid genesis payload"),
+            ),
+            last_response_by_source: HashMap::new(),
+            response_source_order: VecDeque::new(),
+        };
+        let request_a = GenesisRequest {
+            request_id: 1,
+            chain_id: chain_id.clone(),
+            expected_hash: None,
+            expected_pubkey: None,
+            kind: GenesisRequestKind::Preflight,
+        };
+        let request_b = GenesisRequest {
+            request_id: 2,
+            ..request_a.clone()
+        };
+
+        let first = responder
+            .prepare_response(&origin_a, authenticated_relay.id(), &request_a, &ctx)
+            .expect("first request receives a response");
+        let second = responder
+            .prepare_response(&origin_b, authenticated_relay.id(), &request_b, &ctx)
+            .expect("second request receives a response");
+
+        assert_eq!(first.error, None);
+        assert_eq!(second.error, Some(GenesisResponseError::RateLimited));
+        assert_eq!(responder.last_response_by_source.len(), 1);
+        assert!(
+            responder
+                .last_response_by_source
+                .contains_key(authenticated_relay.id())
+        );
+    }
+
     #[tokio::test]
     async fn responder_rate_limits_peer_requests() {
         let network = MockNetwork::default();
@@ -2526,7 +2812,10 @@ mod tests {
         };
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
         bootstrapper.seed_topology(&[]);
-        bootstrapper.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
         bootstrapper.set_payload(&block).await.expect("payload set");
 
         let sender = network.sender.lock().expect("sender").clone();
@@ -2588,7 +2877,10 @@ mod tests {
         };
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
         bootstrapper.seed_topology(&[]);
-        bootstrapper.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
         bootstrapper.set_payload(&block).await.expect("payload set");
 
         let request = GenesisRequest {
@@ -2647,7 +2939,10 @@ mod tests {
         };
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
         bootstrapper.seed_topology(&[]);
-        bootstrapper.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
         bootstrapper.set_payload(&block).await.expect("payload set");
 
         let genesis_account = AccountId::new(kp.public_key().clone());
@@ -2775,7 +3070,10 @@ mod tests {
             bootstrap_enabled: true,
         };
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id);
-        bootstrapper.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
 
         let request = GenesisRequest {
             request_id: 9,
@@ -2830,7 +3128,10 @@ mod tests {
             bootstrap_enabled: true,
         };
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
-        bootstrapper.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
         bootstrapper.set_payload(&block).await.expect("payload set");
 
         let bad_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([1u8; 32]));
@@ -2886,7 +3187,10 @@ mod tests {
             bootstrap_enabled: true,
         };
         let bootstrapper = GenesisBootstrapper::new(&cfg, network.clone(), chain_id.clone());
-        bootstrapper.spawn_listener().await;
+        let _listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("listener starts");
         bootstrapper.set_payload(&block).await.expect("payload set");
 
         for _ in 0..2 {
