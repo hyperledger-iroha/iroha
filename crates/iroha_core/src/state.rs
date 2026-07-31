@@ -11703,6 +11703,39 @@ pub struct StateTransaction<'block, 'state> {
     pub zk_commitments_in_tx: u32,
     /// Native anonymous escrow ISI nesting depth for shielded transfer execution.
     pub(crate) native_anonymous_escrow_transfer_depth: u32,
+    /// Ordered successful top-level instructions preceding a governed offline
+    /// asset bootstrap enactment in this transaction.
+    pub(crate) offline_asset_bootstrap_prefix: Vec<InstructionBox>,
+    /// True after a governed offline asset bootstrap has completed.
+    ///
+    /// The executor rejects every later instruction so the signed Parliament
+    /// manifest commits the complete transaction rather than an arbitrary prefix.
+    pub(crate) offline_asset_bootstrap_finalized: bool,
+    /// True when this transaction has executed effects that cannot be represented
+    /// by the ordered [`InstructionBox`] prefix commitment.
+    ///
+    /// Governed offline bootstrap is deliberately restricted to a plain
+    /// instruction transaction. A contract invocation may expand into effects
+    /// that are not present in the signed prefix, so enactment fails closed once
+    /// such an invocation has started.
+    pub(crate) offline_asset_bootstrap_unbound_effects: bool,
+    /// Nesting depth of native instruction dispatch in this transaction.
+    ///
+    /// A directly signed top-level instruction enters at depth zero and runs
+    /// its native handler at depth one. Trigger-, contract-, and other
+    /// recursively emitted instructions necessarily enter above depth zero.
+    pub(crate) offline_asset_bootstrap_execution_depth: u32,
+    /// Authority of the currently executing directly signed plain-instruction
+    /// batch, when one exists.
+    ///
+    /// Mixed executable batches, proved overlays, triggers, and contracts do
+    /// not install this scope. The governed offline bootstrap therefore cannot
+    /// be smuggled through an executable that is not the exact signed
+    /// instruction sequence committed by its manifest.
+    pub(crate) offline_asset_bootstrap_direct_signed_authority: Option<AccountId>,
+    /// Narrow internal authorization used while a governed offline bootstrap
+    /// registers its certificate-bound asset definition.
+    pub(crate) offline_asset_registration_authorized: bool,
     /// Implicit accounts created so far within this transaction.
     pub implicit_account_creations_in_tx: u32,
     /// Implicit accounts already accumulated in the block before this transaction began.
@@ -11814,6 +11847,37 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
     #[inline]
     pub fn world_mut_for_testing(&mut self) -> &mut WorldTransaction<'block, 'state> {
         &mut self.world
+    }
+
+    /// Bind the dataspace and call-hash context used by direct, secret-free
+    /// semantic execution in dependent test tooling.
+    ///
+    /// Signed transaction execution installs both fields automatically. This
+    /// test-only adapter keeps direct instruction simulation equivalent without
+    /// inventing an operator private key.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn bind_execution_context_for_testing(
+        &mut self,
+        dataspace_id: Option<DataSpaceId>,
+        tx_call_hash: Option<Hash>,
+    ) {
+        self.current_dataspace_id = dataspace_id;
+        self.world.current_dataspace_id = dataspace_id;
+        self.tx_call_hash = tx_call_hash;
+    }
+
+    /// Bind or clear the directly signed plain-instruction authority used by
+    /// secret-free semantic execution in dependent test tooling.
+    ///
+    /// Production transaction execution derives this scope from the verified
+    /// [`SignedTransaction`](iroha_data_model::transaction::SignedTransaction);
+    /// callers cannot provide it through an instruction payload.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn bind_direct_signed_instruction_authority_for_testing(
+        &mut self,
+        authority: Option<AccountId>,
+    ) {
+        self.offline_asset_bootstrap_direct_signed_authority = authority;
     }
 
     /// Exposes the cached block hashes for this transaction scope.
@@ -20370,6 +20434,11 @@ pub trait WorldReadOnly {
 
     /// ZK shielded ledger state (read-only) per asset definition.
     fn zk_assets(&self) -> &impl StorageReadOnly<AssetDefinitionId, ZkAssetState>;
+    /// Return whether the exact asset definition has a registered ZK policy.
+    #[inline]
+    fn contains_zk_asset(&self, asset_id: &AssetDefinitionId) -> bool {
+        self.zk_assets().get(asset_id).is_some()
+    }
     /// Anonymous elections state (read-only) keyed by election id.
     fn elections(&self) -> &impl StorageReadOnly<String, ElectionState>;
     /// Registered citizens keyed by account id (read-only).
@@ -28047,8 +28116,30 @@ impl State {
     #[must_use]
     pub fn new_with_pre_genesis_nexus_for_testing(
         world: World,
+        nexus: iroha_config::parameters::actual::Nexus,
+        query_handle: LiveQueryStoreHandle,
+    ) -> Self {
+        Self::new_with_pre_genesis_nexus_and_chain_for_testing(
+            world,
+            nexus,
+            query_handle,
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+        )
+    }
+
+    /// Create an isolated State at the supplied pre-genesis Nexus geometry and
+    /// exact chain identifier.
+    ///
+    /// This is the explicit-chain counterpart to
+    /// [`Self::new_with_pre_genesis_nexus_for_testing`]. It exists for
+    /// secret-free deployment semantic tooling that must not substitute a test
+    /// chain or fabricate a signing key.
+    #[must_use]
+    pub fn new_with_pre_genesis_nexus_and_chain_for_testing(
+        world: World,
         mut nexus: iroha_config::parameters::actual::Nexus,
         query_handle: LiveQueryStoreHandle,
+        chain_id: iroha_data_model::ChainId,
     ) -> Self {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
@@ -28058,7 +28149,7 @@ impl State {
             world,
             kura,
             query_handle,
-            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            chain_id,
             #[cfg(feature = "telemetry")]
             <_>::default(),
         )
@@ -48308,6 +48399,12 @@ impl<'state> StateBlock<'state> {
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
             native_anonymous_escrow_transfer_depth: 0,
+            offline_asset_bootstrap_prefix: Vec::new(),
+            offline_asset_bootstrap_finalized: false,
+            offline_asset_bootstrap_unbound_effects: false,
+            offline_asset_bootstrap_execution_depth: 0,
+            offline_asset_bootstrap_direct_signed_authority: None,
+            offline_asset_registration_authorized: false,
             implicit_account_creations_in_tx: 0,
             implicit_account_creations_in_block_so_far,
             implicit_account_creations_in_block: &mut self.implicit_account_creations_in_block,
@@ -51437,6 +51534,7 @@ impl<'state> StateBlock<'state> {
         let block = block.as_ref();
 
         for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
+            let entrypoint_hash = entrypoint.hash();
             let tx = match entrypoint {
                 TransactionEntrypoint::External(tx) => tx,
                 TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
@@ -51448,6 +51546,21 @@ impl<'state> StateBlock<'state> {
                 // Execute each transaction in its own transactional state
                 let mut transaction = self.transaction();
                 Self::seed_committed_transaction_context(&mut transaction, &tx, entrypoint_index);
+                // Replay the route already authenticated by the committed block. Re-resolving a
+                // mutable routing policy here could execute the same signed bytes in a different
+                // dataspace after restart.
+                if let Some(context) = block
+                    .execution_context()
+                    .and_then(|bundle| bundle.external.get(entrypoint_index))
+                {
+                    assert_eq!(
+                        context.entrypoint_hash, entrypoint_hash,
+                        "committed execution context must remain aligned with its transaction"
+                    );
+                    transaction.current_lane_id = Some(context.lane_id);
+                    transaction.current_dataspace_id = Some(context.dataspace_id);
+                    transaction.world.current_dataspace_id = Some(context.dataspace_id);
+                }
                 let contract_deployment_bootstrap =
                     crate::executor::ContractDeploymentSelfBootstrapAuthorization::derive(
                         &transaction.world,
@@ -51472,10 +51585,29 @@ impl<'state> StateBlock<'state> {
                             .expect("committed IVM transaction should replay without errors");
                     }
                     Executable::Instructions(_) => {
+                        // Mirror `Executor::execute_metered_instructions`: only the exact plain
+                        // instruction sequence from this signed transaction receives the
+                        // depth-zero bootstrap authority. Data triggers run after it is cleared.
+                        assert!(
+                            transaction
+                                .offline_asset_bootstrap_direct_signed_authority
+                                .is_none(),
+                            "committed direct-instruction scope must start inactive"
+                        );
+                        transaction.offline_asset_bootstrap_direct_signed_authority =
+                            Some(tx.authority().clone());
                         transaction.apply_executable_with_contract_deployment_bootstrap(
                             tx.instructions(),
                             tx.authority(),
                             contract_deployment_bootstrap.as_ref(),
+                        );
+                        assert_eq!(
+                            transaction
+                                .offline_asset_bootstrap_direct_signed_authority
+                                .take()
+                                .as_ref(),
+                            Some(tx.authority()),
+                            "committed direct-instruction scope must retain its signed authority"
                         );
                     }
                 }
@@ -62697,6 +62829,18 @@ impl StateTransaction<'_, '_> {
         step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        if self.offline_asset_bootstrap_finalized {
+            return Err(ValidationFail::NotPermitted(
+                "a governed offline asset bootstrap must be the final executable in its transaction"
+                    .to_owned(),
+            )
+            .into());
+        }
+        // Trigger instruction lists, trigger batches, and trigger contracts are
+        // recursive executable effects rather than members of the directly
+        // signed plain-instruction prefix. Once any trigger begins, a later
+        // offline bootstrap in the same transaction must fail closed.
+        self.offline_asset_bootstrap_unbound_effects = true;
         let (res, outcome_override) = match executable {
             ExecutableRef::Instructions(instructions) => {
                 let instruction_groups = std::collections::BTreeMap::from([(
@@ -66958,6 +67102,11 @@ seiyaku SequentialNfts {
                 Some(nft_seq_base),
             )
             .expect("both contract-call items must use disjoint NFT sequences");
+        assert!(
+            state_transaction.offline_asset_bootstrap_unbound_effects,
+            "entering a trigger batch must permanently mark its recursive contract effects \
+             outside the directly signed offline-bootstrap prefix"
+        );
 
         let mut expected_sequence = nft_seq_base;
         let mut expected_nfts = Vec::new();

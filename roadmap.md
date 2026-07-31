@@ -253,10 +253,34 @@ cutover work.
 - Produce production candidate evidence from a clean signed checkout. Build the
   exact source-sealed release binary with
   `scripts/build_kagemusha_v4_candidate_bundle.py` on an admitted host with at
-  least 24 GiB of installed memory, then run that binary's `generate-candidate`
-  command through `scripts/run_kagemusha_v4_generation.py` and retain the
-  generation JSONL/summary beside the published candidate and sealed-build
-  report. Keep the non-raiseable 256 MiB guard, file-backed proving-key
+  least 24 GiB of installed memory, but only after a separately pinned root
+  provisioner has verified and atomically published the complete source,
+  Python/bootstrap, Cargo/rustc/sysroot/dynamic-library, linker, GPG, and
+  keyring closure as root-owned, non-writable, content-addressed bytes. Consumer
+  admission must inventory every regular Mach-O image in that tree, including
+  dlopened Python extensions, and reject every non-system dependency that
+  escapes it. The
+  root supervisor must execute compilation under an exclusive no-login
+  `boi-build` UID with an operator-inaccessible target, then stable-copy and
+  atomically root-publish the binary/report under the artifact-tree digest.
+  Generation and promotion must receive independently pinned candidate/Kagami
+  build publication receipts and consume only their root-owned receipt-named
+  executables; a mutable Cargo target must never cross stages. Generation must
+  be another root-supervised, sanitized, exclusive invocation under the exact
+  receipt-named `boi-build` UID. Its launcher must create a fresh single-use
+  worker root containing candidate and resource-report children. Those remain
+  provisional until root descriptor-copies and atomically publishes them under
+  the exact independently pinned
+  `iroha.kagemusha.root_published_generated_candidate.v1` receipt. Finalization
+  must use the strict receipt-admitting runner; direct binary invocation and
+  provisional paths remain rejected. Mutable
+  checkout, Rustup, Homebrew, ambient keyring, and user-owned disk-image paths
+  remain non-production. Then run the root-published binary's
+  `generate-candidate` command through
+  `scripts/run_kagemusha_v4_generation.py`, have root publish the candidate and
+  JSONL/summary under that receipt, then use the same strict runner for
+  finalization. Keep
+  the non-raiseable 256 MiB guard, file-backed proving-key
   serialization, and checked 232 MiB static admission estimate unchanged. A
   non-shipping memory-benchmark report is diagnostic calibration, not candidate
   or release evidence. Do not restore high-degree generation or a release-sized

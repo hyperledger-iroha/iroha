@@ -59,6 +59,11 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<offline::TopUpKagemushaRecursiveV4>,
     InstructionRegistry::register_slice::<offline::RedeemKagemushaRecursiveV4>,
     InstructionRegistry::register_slice::<offline::ActivateKagemushaRecursiveReleaseV4>,
+    |registry| {
+        registry.register_with_id_slice::<offline::EnactOfflineAssetBootstrapV1>(
+            offline::EnactOfflineAssetBootstrapV1::WIRE_ID,
+        )
+    },
     InstructionRegistry::register_slice::<offline::RegisterOfflineDeviceAttestation>,
     InstructionRegistry::register_slice::<offline::SetOfflineDeviceAttestationPolicy>,
     InstructionRegistry::register_slice::<zk::RegisterAssetHiddenZkPool>,
@@ -1840,6 +1845,10 @@ mod tests {
         assert!(registry.contains(rwa::RwaInstructionBox::WIRE_ID));
         assert!(registry.contains(repo::RepoInstructionBox::WIRE_ID));
         assert!(registry.contains(settlement::SettlementInstructionBox::WIRE_ID));
+        assert!(
+            registry.contains(offline::EnactOfflineAssetBootstrapV1::WIRE_ID),
+            "governed offline bootstrap stable wire id missing from default registry"
+        );
         assert!(
             registry.contains(std::any::type_name::<bridge::ApplySccpRouteGovernance>()),
             "atomic SCCP route-governance type path missing from default registry"

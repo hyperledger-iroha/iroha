@@ -8,37 +8,93 @@ archives.
 ## Source identity
 
 The candidate `source_tree_sha256` is the output of the full source-tree seal,
-not the Apple bridge dependency-closure fingerprint. Build through the sealed
-helper rather than invoking Cargo directly:
+not the Apple bridge dependency-closure fingerprint. The following is the
+internal worker command, not an operator command: the root supervisor may run
+it only under the exclusive no-login `boi-build` UID and its inaccessible
+private target.
 
 ```sh
-SOURCE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
-git verify-commit "$SOURCE_COMMIT"
-python3 -I scripts/build_kagemusha_v4_candidate_bundle.py --root "$PWD"
+BUILD_CLOSURE=<root-published-content-addressed-closure>
+/usr/bin/env -i HOME=/var/empty LANG=C LC_ALL=C \
+  PATH=/usr/bin:/bin TMPDIR=/private/tmp TZ=UTC \
+  KAGEMUSHA_BUILD_USER_NAME=boi-build KAGEMUSHA_BUILD_UID=<numeric-uid> \
+  "$BUILD_CLOSURE/toolchain/python/bin/python3" -I \
+  "$BUILD_CLOSURE/source/scripts/build_kagemusha_v4_candidate_bundle.py" \
+  --root "$BUILD_CLOSURE/source" \
+  --target-dir <fresh-external-target-directory> \
+  --reviewed-source-closure "$BUILD_CLOSURE/reviewed-source-closure.json" \
+  --reviewed-source-closure-sha256 <independently-pinned-64-lower-hex> \
+  --toolchain-provenance "$BUILD_CLOSURE/production-build-closure.json" \
+  --toolchain-provenance-sha256 <independently-pinned-64-lower-hex> \
+  > <boi-build-private-target>/sealed-kagemusha-candidate-build.json
 ```
 
-The seal requires an entirely clean checkout, including untracked files. It
-hashes the canonical Git-index path, mode, and exact regular-file bytes or
-symlink-target bytes for the complete source tree. Candidate generation,
-candidate validation, Android staging, and the candidate-only native build all
-recompute this same seal. Commit-signature verification is the explicit Git
-step above; require the helper report's `source_commit` to equal the verified
-`SOURCE_COMMIT`. The helper verifies the clean exact source identity before,
-during, and after a locked release build; sanitizes ambient compiler controls;
-requires at least 24 GiB of installed physical memory; and prints canonical
-JSON containing the exact `binary_path`, binary digest, source commit, and
-source-tree digest. The memory check is build admission, not an OS-hard compiler
-limit. Pass those returned identities and that exact prebuilt binary through
-`scripts/run_kagemusha_v4_generation.py` with the `generate-candidate`
-subcommand.
+The production closure is prepared by a separately installed root provisioner
+in a non-traversable root-only staging directory, verified before publication,
+made `root:wheel` with no writable entries, and atomically renamed beneath a
+root-owned non-user-writable parent. It contains the reviewed source and
+descriptor, Python bootstrap, Cargo/rustc plus the complete sysroot and
+non-system dynamic-library closure, canonical offline Cargo vendor/config,
+exact Git and builtin helper directory, Apple developer/SDK/clang-resource
+closure, linker, GPG verifier, and canonical keyring. Developer
+Rustup/Homebrew/Xcode paths, online registries, ambient loader/Python state, and
+a user-owned disk image are not production inputs.
+
+The supervisor stable-hashes and copies the worker binary/report through
+root-only staging, removes every write bit, and atomically publishes them with
+`root-published-candidate-build.json` under the artifact tree digest. Android
+staging accepts only the receipt-named root-owned binary, passed to
+`scripts/run_kagemusha_v4_generation.py` together with
+`--root-published-build-receipt` and its independent SHA-256 pin. A binary path
+from the mutable worker report is never a cross-stage input.
+
+Generation is a second exclusive `boi-build` worker phase, not an operator
+command. The root supervisor must prove that the build-receipt UID has no other
+process or session and launch the admitted immutable Python runner with
+`/usr/bin/env -i`, `HOME=/var/empty`, `LANG=C`, `LC_ALL=C`,
+`PATH=/usr/bin:/bin`, `TMPDIR=/private/tmp`, and `TZ=UTC`. The launcher itself
+creates a previously absent mode-`0700` single-use output parent and rejects a
+pre-existing or reusable parent. Its `candidate` and `resource-report`
+directories must both be direct children of that parent.
+
+Those bytes are explicitly
+`provisional_boi_generation_worker_output`, not Android-lab or release input.
+The root supervisor must keep the worker UID quarantined, stable-hash and
+descriptor-copy the candidate and resource evidence through root-only staging,
+remove write bits, and atomically publish the normalized exact tree with
+`generation-worker-launch.json` and
+`root-published-generated-candidate.json`. The root inventory is exactly those
+two files plus `candidate/` and `resource-report/`. The launch schema
+`boi.taira.generation_worker_launch.v1` binds the canonical command digest,
+worker root/device/inode, and storage admission/reserve values. The generated
+receipt schema is
+`iroha.kagemusha.root_published_generated_candidate.v1`; the consumer requires
+its independent SHA-256 pin, exact candidate/report inventories, successful
+generation summary, launch and candidate-build receipt bindings, and matching
+UID/source/toolchain identities. The existing candidate-*build* receipt covers
+only the generator executable and sealed build report. Production finalization
+runs under `/usr/bin/env -i`, admits both root-published receipt descriptors,
+and commits both hashes to the authenticated release. It rejects the
+provisional worker path; diagnostic Android staging remains non-production
+evidence.
+
+The seal hashes the canonical Git-index path, mode, and exact regular-file
+bytes or symlink-target bytes for the complete source tree. The helper verifies
+that identity and the exact admitted GPG signer before, during, and after a
+locked release build; rejects ambient compiler controls; requires at least
+24 GiB of installed physical memory; and prints canonical JSON containing the
+exact binary and closure identities. The memory check is build admission, not
+an OS-hard compiler limit. Pass only the root-published receipt-named binary
+and the independently pinned receipt through
+`scripts/run_kagemusha_v4_generation.py` with `generate-candidate`.
 
 The separate `kagemusha_recursive_spend_v4_memory_benchmark` is calibration
 only. It emits no candidate and its report is rejected as Android-lab,
 promotion, or release evidence.
 
 Direct unsupervised generation is rejected; the launcher rejects Cargo, shell
-wrappers, and every subcommand except `generate-candidate`. The guarded generator emits
-an owner-private directory containing exactly:
+wrappers, and every subcommand except `generate-candidate`. The guarded
+generator emits a worker-only owner-private directory containing exactly:
 
 - `candidate-manifest.norito`, the canonical `CandidateV4` record;
 - its canonical JSON view and SHA-256 sidecar;

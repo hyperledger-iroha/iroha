@@ -34,6 +34,8 @@ use iroha_data_model::offline::{
 
 use crate::{Outcome, RunArgs};
 
+mod taira_dual_state;
+
 type Result<T> = color_eyre::Result<T>;
 
 const MANIFEST_JSON_FILE_NAME: &str = "manifest.json";
@@ -119,6 +121,9 @@ enum Command {
     /// Build one release-bound activation instruction from an authenticated V4 catalog.
     #[command(name = "prepare-activation-v4")]
     PrepareActivationV4(PrepareActivationV4Args),
+    /// Generate and semantically validate BOI Taira `.is2`/`.is` resources.
+    #[command(name = "taira-dual-state")]
+    TairaDualState(taira_dual_state::Args),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -245,6 +250,7 @@ impl<T: Write> RunArgs<T> for Args {
                     policy_state_sha256,
                 )?;
             }
+            Command::TairaDualState(args) => args.run(writer)?,
         }
         Ok(())
     }
@@ -444,6 +450,14 @@ impl VerifiedReleaseV4 {
             candidate_sha256: candidate
                 .sha256()
                 .map_err(|error| eyre!("failed to identify immutable V4 candidate: {error}"))?,
+            root_published_generated_candidate_receipt_sha256: self
+                .authenticated
+                .manifest()
+                .root_published_generated_candidate_receipt_sha256,
+            generation_worker_launch_receipt_sha256: self
+                .authenticated
+                .manifest()
+                .generation_worker_launch_receipt_sha256,
             manifest_sha256: self.authenticated.manifest_sha256(),
             release_attestation_sha256: self.authenticated.release_attestation_sha256(),
             release_policy_sha256: self.authenticated.release_policy_sha256(),

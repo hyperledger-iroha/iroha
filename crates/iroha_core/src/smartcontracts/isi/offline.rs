@@ -24,9 +24,10 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError, MathError},
         offline::{
-            ActivateKagemushaRecursiveReleaseV4, AuditOfflineNote, IssueOfflineNote,
-            RedeemKagemushaRecursiveV4, RedeemOfflineNote, RegisterOfflineDeviceAttestation,
-            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursiveV4,
+            ActivateKagemushaRecursiveReleaseV4, AuditOfflineNote, EnactOfflineAssetBootstrapV1,
+            IssueOfflineNote, OfflineAssetBootstrapManifestV1, RedeemKagemushaRecursiveV4,
+            RedeemOfflineNote, RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
+            TopUpKagemushaRecursiveV4,
         },
     },
     name::Name,
@@ -49,6 +50,10 @@ use iroha_data_model::{
     proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     transaction::SignedTransaction,
     zk::{BackendTag, OpenVerifyEnvelope},
+};
+use iroha_executor_data_model::permission::offline::{
+    CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
+    CanManageOfflineEscrow,
 };
 use iroha_primitives::numeric::Quantity;
 use p256::PublicKey as P256PublicKey;
@@ -5109,6 +5114,475 @@ pub mod isi {
         Ok(())
     }
 
+    const OFFLINE_ASSET_BOOTSTRAP_REQUIRED_PARLIAMENT_BODIES:
+        [iroha_data_model::governance::types::ParliamentBody; 7] = [
+        iroha_data_model::governance::types::ParliamentBody::RulesCommittee,
+        iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
+        iroha_data_model::governance::types::ParliamentBody::InterestPanel,
+        iroha_data_model::governance::types::ParliamentBody::ReviewPanel,
+        iroha_data_model::governance::types::ParliamentBody::PolicyJury,
+        iroha_data_model::governance::types::ParliamentBody::OversightCommittee,
+        iroha_data_model::governance::types::ParliamentBody::FmaCommittee,
+    ];
+
+    fn offline_asset_bootstrap_marker(manifest_fingerprint: [u8; 32]) -> Result<Name, Error> {
+        format!(
+            "offline_asset_bootstrap_v1_{}",
+            hex::encode(manifest_fingerprint)
+        )
+        .parse()
+        .map_err(|error| {
+            labeled_invariant(
+                "offline_bootstrap_invalid",
+                format!("failed to derive offline asset bootstrap replay marker: {error}"),
+            )
+            .into()
+        })
+    }
+
+    fn validate_offline_asset_bootstrap_manifest(
+        manifest: &OfflineAssetBootstrapManifestV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if state_transaction._curr_block.is_genesis() {
+            return Err(labeled_invariant(
+                "offline_bootstrap_invalid",
+                "governed offline asset bootstrap is post-genesis only",
+            )
+            .into());
+        }
+        if state_transaction.offline_asset_bootstrap_unbound_effects {
+            return Err(labeled_invariant(
+                "offline_bootstrap_plan_mismatch",
+                "governed offline asset bootstrap requires a plain instruction transaction with no contract invocation",
+            )
+            .into());
+        }
+        if &manifest.chain_id != state_transaction.chain_id() {
+            return Err(labeled_invariant(
+                "wrong_chain",
+                "offline asset bootstrap manifest targets a different chain",
+            )
+            .into());
+        }
+        if manifest.enactment_authority != manifest.asset_definition_owner {
+            return Err(labeled_invariant(
+                "offline_bootstrap_invalid",
+                "offline asset bootstrap enactment authority must equal the asset-definition owner",
+            )
+            .into());
+        }
+        let observed_prefix =
+            iroha_data_model::isi::offline::offline_asset_bootstrap_prefix_fingerprint(
+                &state_transaction.offline_asset_bootstrap_prefix,
+            );
+        if manifest.preceding_instructions_hash != observed_prefix {
+            return Err(labeled_invariant(
+                "offline_bootstrap_plan_mismatch",
+                "Parliament manifest does not bind the exact ordered instructions preceding enactment",
+            )
+            .into());
+        }
+        let route_dataspace = state_transaction
+            .current_dataspace_id
+            .or(state_transaction.world.current_dataspace_id);
+        if route_dataspace != Some(manifest.dataspace_id) {
+            return Err(labeled_invariant(
+                "offline_bootstrap_invalid",
+                "offline asset bootstrap must execute on its exact manifest dataspace route",
+            )
+            .into());
+        }
+        let dataspace = state_transaction
+            .world
+            .dataspace_catalog()
+            .by_id(manifest.dataspace_id)
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "offline_bootstrap_invalid",
+                    "offline asset bootstrap references an unknown dataspace",
+                )
+            })?;
+
+        let definition = &manifest.asset_definition;
+        if !definition.id.is_opaque_canonical() || definition.id.try_domain().is_some() {
+            return Err(labeled_invariant(
+                "offline_bootstrap_invalid",
+                "offline asset bootstrap requires one opaque domainless asset definition id",
+            )
+            .into());
+        }
+        let alias = definition.alias.as_ref().ok_or_else(|| {
+            labeled_invariant(
+                "offline_bootstrap_invalid",
+                "offline asset bootstrap asset definition must carry its authoritative alias",
+            )
+        })?;
+        if alias.name_segment() != definition.name
+            || alias.dataspace_segment() != dataspace.alias
+            || alias.domain_segment().is_none()
+        {
+            return Err(labeled_invariant(
+                "offline_bootstrap_invalid",
+                "offline asset bootstrap alias must bind the asset name and exact dataspace",
+            )
+            .into());
+        }
+        let alias_domain = DomainId::try_new(
+            alias
+                .domain_segment()
+                .expect("validated authoritative alias domain"),
+            alias.dataspace_segment(),
+        )
+        .map_err(|error| {
+            labeled_invariant(
+                "offline_bootstrap_invalid",
+                format!("offline asset bootstrap alias domain is invalid: {error}"),
+            )
+        })?;
+        state_transaction.world.domain(&alias_domain)?;
+        if definition.spec.scale() != Some(2)
+            || definition.balance_scope_policy != AssetBalancePolicy::Global
+            || definition.confidential_policy.mode
+                != iroha_data_model::asset::definition::ConfidentialPolicyMode::Convertible
+        {
+            return Err(labeled_invariant(
+                "offline_bootstrap_invalid",
+                "offline asset bootstrap requires a global fixed-scale-2 convertible asset",
+            )
+            .into());
+        }
+        if !crate::smartcontracts::isi::domain::isi::asset_definition_offline_enabled(
+            &definition.metadata,
+        )? {
+            return Err(labeled_invariant(
+                "offline_bootstrap_invalid",
+                "offline asset bootstrap definition must set offline.enabled=true",
+            )
+            .into());
+        }
+        if state_transaction
+            .world
+            .asset_definition(&definition.id)
+            .is_ok()
+            || state_transaction
+                .world
+                .zk_assets
+                .get(&definition.id)
+                .is_some()
+        {
+            return Err(labeled_invariant(
+                "offline_bootstrap_replay",
+                "offline asset bootstrap target asset is already registered",
+            )
+            .into());
+        }
+
+        let zk_asset = &manifest.zk_asset;
+        let verifier_ids = [
+            zk_asset.vk_transfer().clone(),
+            zk_asset.vk_unshield().clone(),
+            zk_asset.vk_shield().clone(),
+        ];
+        let distinct_verifiers = verifier_ids
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if zk_asset.asset() != &definition.id
+            || *zk_asset.mode() != iroha_data_model::isi::zk::ZkAssetMode::Hybrid
+            || !*zk_asset.allow_shield()
+            || !*zk_asset.allow_unshield()
+            || verifier_ids.iter().any(Option::is_none)
+            || distinct_verifiers.len() != verifier_ids.len()
+        {
+            return Err(labeled_invariant(
+                "offline_bootstrap_invalid",
+                "offline asset bootstrap requires three distinct verifier-bound hybrid ZK paths",
+            )
+            .into());
+        }
+
+        let release_manifest = &manifest.release.activation().release_record.manifest;
+        if release_manifest.chain_id != manifest.chain_id
+            || release_manifest.asset != definition.id
+            || release_manifest.asset_scale != 2
+        {
+            return Err(labeled_invariant(
+                "offline_bootstrap_asset_mismatch",
+                "offline release activation does not bind the exact bootstrap chain, asset, and scale",
+            )
+            .into());
+        }
+
+        let expected_escrow = iroha_data_model::offline::offline_escrow_account_id(
+            &manifest.chain_id,
+            &definition.id,
+        );
+        if manifest.escrow != expected_escrow
+            || manifest.escrow == manifest.issuer
+            || manifest.escrow == manifest.asset_definition_owner
+            || manifest.issuer == manifest.asset_definition_owner
+        {
+            return Err(labeled_invariant(
+                "offline_bootstrap_invalid",
+                "offline bootstrap owner, issuer, and deterministic escrow identities are invalid",
+            )
+            .into());
+        }
+        for account in [
+            &manifest.asset_definition_owner,
+            &manifest.issuer,
+            &manifest.escrow,
+        ] {
+            state_transaction.world.account(account)?;
+        }
+        if manifest.initial_allocations.is_empty()
+            || manifest
+                .initial_allocations
+                .get(&manifest.issuer)
+                .is_none_or(|amount| amount <= &Quantity::zero())
+            || manifest
+                .initial_allocations
+                .iter()
+                .any(|(account, amount)| account == &manifest.escrow || amount <= &Quantity::zero())
+        {
+            return Err(labeled_invariant(
+                "offline_bootstrap_invalid",
+                "offline bootstrap requires a positive issuer allocation, positive allocations only, and no pre-funded escrow",
+            )
+            .into());
+        }
+        for account in manifest.initial_allocations.keys() {
+            state_transaction.world.account(account)?;
+        }
+        Ok(())
+    }
+
+    fn validate_offline_asset_bootstrap_certificate(
+        manifest: &OfflineAssetBootstrapManifestV1,
+        certificate: &iroha_data_model::governance::types::ParliamentEnactmentCertificate,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<[u8; 32], Error> {
+        let fingerprint = manifest.fingerprint();
+        let current_height = state_transaction._curr_block.height().get();
+        if certificate.payload.preimage_hash != fingerprint
+            || certificate.payload.at_window.lower != certificate.payload.at_window.upper
+            || certificate.payload.at_window.lower != current_height
+            || manifest.parliament_selection_height != current_height
+        {
+            return Err(labeled_invariant(
+                "offline_bootstrap_unauthorized",
+                "Parliament certificate must bind this exact manifest and one exact execution height",
+            )
+                .into());
+        }
+        validate_offline_asset_bootstrap_certificate_signatures(certificate, state_transaction)?;
+
+        let signatures = &certificate.signatures.signatures;
+        let (_, bodies) =
+            crate::smartcontracts::isi::world::isi::derive_jit_parliament_bodies_for_enactment(
+                manifest.preceding_instructions_hash,
+                manifest.parliament_selection_height,
+                state_transaction,
+            )?;
+        if bodies.selection_epoch != manifest.parliament_selection_height {
+            return Err(labeled_invariant(
+                "offline_bootstrap_unauthorized",
+                "derived Parliament selection height differs from the signed manifest",
+            )
+            .into());
+        }
+        let roster_root =
+            crate::smartcontracts::isi::world::isi::compute_parliament_roster_root(&bodies)?;
+        if roster_root != manifest.parliament_roster_root {
+            return Err(labeled_invariant(
+                "offline_bootstrap_unauthorized",
+                "recomputed Parliament roster root differs from the certificate-bound manifest",
+            )
+            .into());
+        }
+        for body in OFFLINE_ASSET_BOOTSTRAP_REQUIRED_PARLIAMENT_BODIES {
+            let roster = bodies.rosters.get(&body).ok_or_else(|| {
+                labeled_invariant(
+                    "offline_bootstrap_unauthorized",
+                    "required Parliament body roster is missing",
+                )
+            })?;
+            if roster.body != body
+                || roster.epoch != manifest.parliament_selection_height
+                || roster.members.is_empty()
+            {
+                return Err(labeled_invariant(
+                    "offline_bootstrap_unauthorized",
+                    "required Parliament body roster is invalid or empty",
+                )
+                .into());
+            }
+            let approvals = signatures
+                .iter()
+                .filter(|approval| roster.members.contains(&approval.signer))
+                .count();
+            let required = crate::state::council_quorum_threshold(
+                roster.members.len(),
+                state_transaction.gov.parliament_quorum_bps,
+            );
+            if u32::try_from(approvals).unwrap_or(u32::MAX) < required {
+                return Err(labeled_invariant(
+                    "offline_bootstrap_unauthorized",
+                    format!("Parliament body {body:?} did not reach its exact quorum"),
+                )
+                .into());
+            }
+        }
+        if signatures.iter().any(|approval| {
+            !OFFLINE_ASSET_BOOTSTRAP_REQUIRED_PARLIAMENT_BODIES
+                .iter()
+                .filter_map(|body| bodies.rosters.get(body))
+                .any(|roster| roster.members.contains(&approval.signer))
+        }) {
+            return Err(labeled_invariant(
+                "offline_bootstrap_unauthorized",
+                "Parliament certificate contains a signer outside every required derived body",
+            )
+            .into());
+        }
+        Ok(fingerprint)
+    }
+
+    fn validate_offline_asset_bootstrap_certificate_signatures(
+        certificate: &iroha_data_model::governance::types::ParliamentEnactmentCertificate,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if certificate.signatures.scheme
+            != iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold
+        {
+            return Err(labeled_invariant(
+                "offline_bootstrap_unauthorized",
+                "unsupported Parliament enactment signature scheme",
+            )
+            .into());
+        }
+        let signatures = &certificate.signatures.signatures;
+        if signatures.is_empty()
+            || !signatures
+                .windows(2)
+                .all(|pair| pair[0].signer < pair[1].signer)
+        {
+            return Err(labeled_invariant(
+                "offline_bootstrap_unauthorized",
+                "Parliament signatures must be non-empty, unique, and ordered by signer",
+            )
+            .into());
+        }
+        for approval in signatures {
+            state_transaction.world.account(&approval.signer)?;
+            if approval.signer.controller().single_signatory() != Some(&approval.public_key) {
+                return Err(labeled_invariant(
+                    "offline_bootstrap_unauthorized",
+                    "Parliament signer account does not bind the submitted public key",
+                )
+                .into());
+            }
+            approval
+                .signature
+                .verify(&approval.public_key, &certificate.payload)
+                .map_err(|_| {
+                    labeled_invariant(
+                        "offline_bootstrap_unauthorized",
+                        "invalid Parliament enactment signature",
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
+    impl Execute for EnactOfflineAssetBootstrapV1 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if state_transaction.offline_asset_bootstrap_execution_depth != 1
+                || state_transaction
+                    .offline_asset_bootstrap_direct_signed_authority
+                    .as_ref()
+                    != Some(authority)
+                || &self.manifest.enactment_authority != authority
+            {
+                return Err(labeled_invariant(
+                    "offline_bootstrap_unauthorized",
+                    "offline asset bootstrap must execute exactly once at depth zero under its certificate-bound directly signed authority",
+                )
+                .into());
+            }
+            validate_offline_asset_bootstrap_manifest(&self.manifest, state_transaction)?;
+            let fingerprint = validate_offline_asset_bootstrap_certificate(
+                &self.manifest,
+                &self.certificate,
+                state_transaction,
+            )?;
+            let replay_marker = offline_asset_bootstrap_marker(fingerprint)?;
+            if state_transaction
+                .world
+                .smart_contract_state
+                .get(&replay_marker)
+                .is_some()
+            {
+                return Err(labeled_invariant(
+                    "offline_bootstrap_replay",
+                    "this exact offline asset bootstrap was already enacted",
+                )
+                .into());
+            }
+            let certificate_bytes = norito::to_bytes(&self.certificate).map_err(|error| {
+                labeled_invariant(
+                    "offline_bootstrap_invalid",
+                    format!("failed to encode Parliament enactment certificate: {error}"),
+                )
+            })?;
+
+            let previous_registration_authorization =
+                state_transaction.offline_asset_registration_authorized;
+            state_transaction.offline_asset_registration_authorized = true;
+            let registration_result =
+                Register::asset_definition(self.manifest.asset_definition.clone())
+                    .execute(&self.manifest.asset_definition_owner, state_transaction);
+            state_transaction.offline_asset_registration_authorized =
+                previous_registration_authorization;
+            registration_result?;
+            self.manifest
+                .zk_asset
+                .clone()
+                .execute(&self.manifest.asset_definition_owner, state_transaction)?;
+
+            let fixed_permissions: [Permission; 3] = [
+                CanManageOfflineEscrow.into(),
+                CanActivateKagemushaRecursiveReleaseV4.into(),
+                CanManageOfflineDeviceAttestationPolicy.into(),
+            ];
+            for permission in fixed_permissions {
+                Grant::account_permission(permission, self.manifest.issuer.clone())
+                    .execute(&self.manifest.asset_definition_owner, state_transaction)?;
+            }
+            self.manifest
+                .release
+                .execute(&self.manifest.issuer, state_transaction)?;
+            for (account, amount) in self.manifest.initial_allocations {
+                Mint::asset_quantity(
+                    amount,
+                    AssetId::of(self.manifest.asset_definition.id.clone(), account),
+                )
+                .execute(&self.manifest.asset_definition_owner, state_transaction)?;
+            }
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(replay_marker, certificate_bytes);
+            Ok(())
+        }
+    }
+
     fn is_offline_escrow_manager(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
@@ -9082,6 +9556,1527 @@ pub mod isi {
             )
         }
 
+        struct OfflineBootstrapExecutorFixture {
+            state: State,
+            chain_id: iroha_data_model::ChainId,
+            authority: AccountId,
+            authority_keypair: KeyPair,
+            outsider_keypair: KeyPair,
+            instruction: EnactOfflineAssetBootstrapV1,
+            bodies: iroha_data_model::governance::types::ParliamentBodies,
+            asset_definition_id: AssetDefinitionId,
+            issuer: AccountId,
+            release_state_key: Name,
+        }
+
+        fn bootstrap_digest(bytes: impl AsRef<[u8]>) -> [u8; 32] {
+            Sha256::digest(bytes.as_ref()).into()
+        }
+
+        fn bootstrap_reviewed_source_closure(
+            source_commit: &str,
+            source_tree_sha256: [u8; 32],
+        ) -> (
+            iroha_data_model::offline::KagemushaReviewedSourceClosureV1,
+            [u8; 32],
+        ) {
+            use iroha_data_model::offline::{
+                KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1, KagemushaReviewedSourceClosureV1,
+            };
+
+            let tracked_binary_diff_sha256 = bootstrap_digest([0x91; 32]);
+            let untracked_path_mode_blob_oid_manifest_sha256 = bootstrap_digest([]);
+            let mut combined = Sha256::new();
+            combined.update(b"iroha-source-diff-v1\0");
+            combined.update(b"tracked-binary-diff-sha256\0");
+            combined.update(tracked_binary_diff_sha256);
+            combined.update(b"untracked-path-blob-manifest-sha256\0");
+            combined.update(untracked_path_mode_blob_oid_manifest_sha256);
+            let closure = KagemushaReviewedSourceClosureV1 {
+                schema: KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned(),
+                base_commit: source_commit.to_owned(),
+                source_commit: source_commit.to_owned(),
+                source_repo_dirty: true,
+                source_tree_sha256,
+                tracked_binary_diff_sha256,
+                untracked_file_count: 0,
+                untracked_path_mode_blob_oid_manifest: Vec::new(),
+                untracked_path_mode_blob_oid_manifest_sha256,
+                ignored_cargo_lock_size_bytes: 1,
+                ignored_cargo_lock_sha256: bootstrap_digest([0x92]),
+                combined_source_fingerprint_sha256: combined.finalize().into(),
+            };
+            let descriptor_sha256 = closure
+                .canonical_descriptor_sha256()
+                .expect("bootstrap fixture source closure is canonical");
+            (closure, descriptor_sha256)
+        }
+
+        fn bootstrap_release_profile(
+            parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+            generation: &str,
+            tag: u8,
+        ) -> (
+            iroha_data_model::offline::KagemushaPastaCycleProofProfileV4,
+            Vec<u8>,
+        ) {
+            use iroha_data_model::offline::{
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
+                KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
+                KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KagemushaPastaCycleArtifactKindV4,
+                KagemushaPastaCycleParityV1, KagemushaPastaCycleProofProfileV4,
+                KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4,
+            };
+
+            let circuit_id = match parity {
+                KagemushaPastaCycleParityV1::StepEq => {
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
+                }
+                KagemushaPastaCycleParityV1::StepEp => {
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
+                }
+            };
+            let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
+            let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)
+                .expect("bootstrap fixture public layout");
+            let circuit_params = KagemushaStepCircuitParamsV4 {
+                version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+                k,
+                num_advice_per_phase: vec![8],
+                num_lookup_advice_per_phase: vec![1],
+                num_fixed: 1,
+                lookup_bits: k - 1,
+                num_instance_columns: 1,
+                public_input_limbs: layout.instance_column_limbs,
+                minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
+                max_parent_proof_bytes: 4_096,
+            };
+            let mut profile = KagemushaPastaCycleProofProfileV4 {
+                parity,
+                circuit_id: circuit_id.to_owned(),
+                parameter_generation: "bootstrap-executor-params".to_owned(),
+                ipa_k: k,
+                circuit_params,
+                compiled_protocol_structure_sha256: [tag.wrapping_add(0x40); 32],
+                step_proof_size_bytes: 4_096,
+                artifacts: Vec::new(),
+            };
+            let kinds = [
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+                KagemushaPastaCycleArtifactKindV4::ProvingKey,
+                KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+                KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+            ];
+            let mut verifier_key = Vec::new();
+            let artifacts = kinds
+                .into_iter()
+                .enumerate()
+                .map(|(index, kind)| {
+                    let byte =
+                        tag.wrapping_add(u8::try_from(index).expect("four artifact roles fit u8"));
+                    let payload = vec![byte; 64 + index];
+                    if kind == KagemushaPastaCycleArtifactKindV4::VerifyingKey {
+                        verifier_key = payload.clone();
+                    }
+                    let mut framed = Vec::new();
+                    crate::zk::kagemusha_artifact_v4::write_kagemusha_pasta_cycle_artifact_v4(
+                        &mut framed,
+                        generation,
+                        &profile,
+                        kind,
+                        &payload,
+                    )
+                    .expect("bootstrap fixture artifact framing")
+                })
+                .collect();
+            profile.artifacts = artifacts;
+            (profile, verifier_key)
+        }
+
+        #[allow(clippy::too_many_lines)]
+        fn bootstrap_release_fixture(
+            chain_id: &iroha_data_model::ChainId,
+            asset_definition_id: &AssetDefinitionId,
+        ) -> (
+            iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4,
+            iroha_data_model::offline::KagemushaAuthenticatedReleaseV4,
+            [u8; 32],
+            Vec<u8>,
+            Vec<u8>,
+        ) {
+            use iroha_crypto::SignatureOf;
+            use iroha_data_model::offline::{
+                KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1,
+                KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
+                KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
+                KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
+                KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4, KagemushaAuthenticatedReleaseV4,
+                KagemushaPastaCycleParityV1, KagemushaRecursiveSpendArtifactManifestV4,
+                KagemushaRecursiveSpendCryptographicReviewApprovalV4,
+                KagemushaRecursiveSpendCryptographicReviewEvidenceV4,
+                KagemushaRecursiveSpendCryptographicReviewPayloadV4,
+                KagemushaRecursiveSpendPromotedReleaseV4,
+                KagemushaRecursiveSpendReleaseApprovalRoleV1,
+                KagemushaRecursiveSpendReleaseApprovalV4,
+                KagemushaRecursiveSpendReleaseAttestationV4,
+                KagemushaRecursiveSpendReleasePolicyV1, KagemushaRecursiveSpendReleaseRecordV4,
+                KagemushaRecursiveSpendReleaseRolePolicyV1,
+                KagemushaTopUpFinalityRosterArtifactReferenceV4,
+            };
+
+            let generation = "bootstrap-executor-release";
+            let (step_eq, step_eq_verifier_key) =
+                bootstrap_release_profile(KagemushaPastaCycleParityV1::StepEq, generation, 0x10);
+            let (step_ep, step_ep_verifier_key) =
+                bootstrap_release_profile(KagemushaPastaCycleParityV1::StepEp, generation, 0x20);
+            let benchmark = b"signed bootstrap executor physical-device benchmark";
+            let source_commit = "0123456789abcdef0123456789abcdef01234567";
+            let source_tree_sha256 = [0x61; 32];
+            let (reviewed_source_closure, reviewed_source_closure_descriptor_sha256) =
+                bootstrap_reviewed_source_closure(source_commit, source_tree_sha256);
+            let mut manifest = KagemushaRecursiveSpendArtifactManifestV4 {
+                schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
+                version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+                bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+                proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+                transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
+                generation: generation.to_owned(),
+                source_commit: source_commit.to_owned(),
+                source_tree_sha256,
+                source_repo_dirty: true,
+                reviewed_source_closure,
+                reviewed_source_closure_descriptor_sha256,
+                root_published_generated_candidate_receipt_sha256: [0x64; 32],
+                generation_worker_launch_receipt_sha256: [0x65; 32],
+                chain_id: chain_id.clone(),
+                asset: asset_definition_id.clone(),
+                asset_scale: 2,
+                activation_height: 3,
+                withdrawal_height: 100,
+                max_proof_bytes: 9_000,
+                profiles: vec![step_eq, step_ep],
+                topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
+                    file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
+                    size_bytes: 128,
+                    sha256: [0x31; 32],
+                    artifact_generation: generation.to_owned(),
+                    circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
+                    purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
+                    artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
+                    required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+                },
+                benchmark_evidence_sha256: bootstrap_digest(benchmark),
+                cryptographic_review_sha256: [0x63; 32],
+                release_attestation_sha256: [0x62; 32],
+            };
+            let roles = [
+                KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
+                KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+                KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+            ];
+            let release_keypairs = [
+                KeyPair::from_seed(vec![0x71; 32], Algorithm::Ed25519),
+                KeyPair::from_seed(vec![0x72; 32], Algorithm::Ed25519),
+                KeyPair::from_seed(vec![0x73; 32], Algorithm::Ed25519),
+            ];
+            let candidate = manifest
+                .immutable_candidate()
+                .expect("bootstrap fixture immutable candidate");
+            let review_payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
+                &candidate,
+                [0x81; 32],
+                [
+                    [0x82; 32], [0x83; 32], [0x84; 32], [0x85; 32], [0x86; 32], [0x87; 32],
+                ],
+            )
+            .expect("bootstrap fixture review payload");
+            let review = norito::to_bytes(&KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
+                schema: KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4.to_owned(),
+                version: KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V4,
+                approvals: vec![KagemushaRecursiveSpendCryptographicReviewApprovalV4 {
+                    public_key: release_keypairs[1].public_key().clone(),
+                    signature: SignatureOf::try_new(
+                        release_keypairs[1].private_key(),
+                        &review_payload,
+                    )
+                    .expect("bootstrap fixture review signature"),
+                }],
+                payload: review_payload,
+            })
+            .expect("bootstrap fixture canonical review");
+            manifest.cryptographic_review_sha256 = bootstrap_digest(&review);
+            let policy = KagemushaRecursiveSpendReleasePolicyV1 {
+                schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+                policy_id: "bootstrap-executor-policy".to_owned(),
+                roles: roles
+                    .iter()
+                    .zip(&release_keypairs)
+                    .map(
+                        |(&role, keypair)| KagemushaRecursiveSpendReleaseRolePolicyV1 {
+                            role,
+                            threshold: 1,
+                            authorized_signers: vec![keypair.public_key().clone()],
+                        },
+                    )
+                    .collect(),
+            };
+            let subject = manifest
+                .release_attestation_subject()
+                .expect("bootstrap fixture release subject");
+            let release_attestation = KagemushaRecursiveSpendReleaseAttestationV4 {
+                schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4.to_owned(),
+                version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
+                subject: subject.clone(),
+                approvals: roles
+                    .iter()
+                    .zip(&release_keypairs)
+                    .map(
+                        |(&role, keypair)| KagemushaRecursiveSpendReleaseApprovalV4 {
+                            role,
+                            public_key: keypair.public_key().clone(),
+                            signature: SignatureOf::try_new(
+                                keypair.private_key(),
+                                &subject.approval_payload(role),
+                            )
+                            .expect("bootstrap fixture release signature"),
+                        },
+                    )
+                    .collect(),
+            };
+            manifest.release_attestation_sha256 = bootstrap_digest(
+                norito::to_bytes(&release_attestation)
+                    .expect("bootstrap fixture canonical release attestation"),
+            );
+            let authenticated_release = KagemushaAuthenticatedReleaseV4::verify(
+                &manifest,
+                &policy,
+                &release_attestation,
+                benchmark,
+                &review,
+            )
+            .expect("bootstrap fixture release authenticates");
+            let promotion_record = KagemushaRecursiveSpendPromotedReleaseV4 {
+                schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
+                version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
+                generation: manifest.generation.clone(),
+                candidate_sha256: manifest
+                    .immutable_candidate()
+                    .and_then(|candidate| candidate.sha256())
+                    .expect("bootstrap fixture candidate digest"),
+                root_published_generated_candidate_receipt_sha256: manifest
+                    .root_published_generated_candidate_receipt_sha256,
+                generation_worker_launch_receipt_sha256: manifest
+                    .generation_worker_launch_receipt_sha256,
+                manifest_sha256: authenticated_release.manifest_sha256(),
+                release_attestation_sha256: authenticated_release.release_attestation_sha256(),
+                release_policy_sha256: authenticated_release.release_policy_sha256(),
+                approved_signers: authenticated_release.approved_signers().to_vec(),
+                artifact_inventory_verified: true,
+                bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+                artifact_roles: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
+                    .map(str::to_owned)
+                    .to_vec(),
+                max_proof_bytes: manifest.max_proof_bytes,
+            };
+            let release_record = KagemushaRecursiveSpendReleaseRecordV4 {
+                manifest,
+                release_attestation,
+                physical_device_benchmark_summary: benchmark.to_vec(),
+                cryptographic_review_summary: review,
+                promotion_record,
+            };
+            release_record
+                .validate_structure()
+                .expect("bootstrap fixture durable release record");
+            (
+                release_record,
+                authenticated_release.clone(),
+                authenticated_release.release_policy_sha256(),
+                step_eq_verifier_key,
+                step_ep_verifier_key,
+            )
+        }
+
+        fn bootstrap_base_verifier(name: &str, tag: u8) -> (VerifyingKeyId, VerifyingKeyRecord) {
+            let id = VerifyingKeyId::new("halo2/ipa", name);
+            let key = VerifyingKeyBox::new("halo2/ipa".to_owned(), vec![tag; 16]);
+            let mut record = VerifyingKeyRecord::new(
+                1,
+                format!("bootstrap-base-{name}"),
+                BackendTag::Halo2IpaPasta,
+                "pasta",
+                [tag.wrapping_add(1); 32],
+                crate::zk::hash_vk(&key),
+            );
+            record.status = ConfidentialStatus::Active;
+            record.vk_len = u32::try_from(key.bytes.len()).expect("small fixture key");
+            record.max_proof_bytes = 4_096;
+            record.key = Some(key);
+            (id, record)
+        }
+
+        fn bootstrap_certificate(
+            manifest: &OfflineAssetBootstrapManifestV1,
+            keypairs: impl IntoIterator<Item = KeyPair>,
+        ) -> iroha_data_model::governance::types::ParliamentEnactmentCertificate {
+            use iroha_data_model::governance::types::{
+                AtWindow, EnactmentSignatureScheme, ParliamentEnactment,
+                ParliamentEnactmentCertificate, ParliamentEnactmentSignature,
+                ParliamentEnactmentSignatureSet,
+            };
+
+            let payload = ParliamentEnactment {
+                preimage_hash: manifest.fingerprint(),
+                at_window: AtWindow {
+                    lower: manifest.parliament_selection_height,
+                    upper: manifest.parliament_selection_height,
+                },
+            };
+            let mut signatures = keypairs
+                .into_iter()
+                .map(|keypair| ParliamentEnactmentSignature {
+                    signer: AccountId::new(keypair.public_key().clone()),
+                    public_key: keypair.public_key().clone(),
+                    signature: iroha_crypto::SignatureOf::try_new(keypair.private_key(), &payload)
+                        .expect("bootstrap fixture parliament signature"),
+                })
+                .collect::<Vec<_>>();
+            signatures.sort_by(|left, right| left.signer.cmp(&right.signer));
+            ParliamentEnactmentCertificate {
+                payload,
+                signatures: ParliamentEnactmentSignatureSet {
+                    scheme: EnactmentSignatureScheme::SimpleThreshold,
+                    signatures,
+                },
+            }
+        }
+
+        #[allow(clippy::too_many_lines)]
+        fn offline_bootstrap_executor_fixture(
+            omitted_body: Option<iroha_data_model::governance::types::ParliamentBody>,
+        ) -> OfflineBootstrapExecutorFixture {
+            use iroha_data_model::{
+                asset::{
+                    AssetBalancePolicy, AssetDefinitionAlias, Mintable, NewAssetDefinition,
+                    definition::AssetConfidentialPolicy,
+                },
+                governance::types::ParliamentBody,
+                isi::{
+                    offline::offline_asset_bootstrap_prefix_fingerprint,
+                    zk::{RegisterZkAsset, ZkAssetMode},
+                },
+                metadata::Metadata,
+                nexus::DataSpaceId,
+            };
+            use iroha_primitives::{json::Json, numeric::NumericSpec};
+
+            let chain_id = iroha_data_model::ChainId::from("bootstrap-executor-chain");
+            let authority_keypair = KeyPair::from_seed(vec![0x91; 32], Algorithm::Ed25519);
+            let authority = AccountId::new(authority_keypair.public_key().clone());
+            let issuer_keypair = KeyPair::from_seed(vec![0x92; 32], Algorithm::Ed25519);
+            let issuer = AccountId::new(issuer_keypair.public_key().clone());
+            let parliament_keypairs = (0_u8..8)
+                .map(|index| KeyPair::from_seed(vec![0xA0 + index; 32], Algorithm::Ed25519))
+                .collect::<Vec<_>>();
+            let outsider_keypair = KeyPair::from_seed(vec![0xD0; 32], Algorithm::Ed25519);
+            let asset_definition_id = AssetDefinitionId::from_uuid_bytes([
+                0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+                0xcd, 0x2f,
+            ])
+            .expect("bootstrap fixture opaque UUIDv4 asset");
+            let escrow = iroha_data_model::offline::offline_escrow_account_id(
+                &chain_id,
+                &asset_definition_id,
+            );
+            let domain_id =
+                DomainId::try_new("boi", "universal").expect("bootstrap fixture domain");
+            let mut accounts = vec![
+                Account::new(authority.clone()).build(&authority),
+                Account::new(issuer.clone()).build(&authority),
+                Account::new(escrow.clone()).build(&authority),
+                Account::new(AccountId::new(outsider_keypair.public_key().clone()))
+                    .build(&authority),
+            ];
+            accounts.extend(parliament_keypairs.iter().map(|keypair| {
+                Account::new(AccountId::new(keypair.public_key().clone())).build(&authority)
+            }));
+            let mut world = World::with([Domain::new(domain_id).build(&authority)], accounts, []);
+            for keypair in &parliament_keypairs {
+                let account = AccountId::new(keypair.public_key().clone());
+                world.citizens.insert(
+                    account.clone(),
+                    crate::state::CitizenshipRecord::new(account, Quantity::from(1_000_000_u64), 1),
+                );
+            }
+            let (transfer_vk, transfer_record) =
+                bootstrap_base_verifier("bootstrap-transfer", 0x41);
+            let (shield_vk, shield_record) = bootstrap_base_verifier("bootstrap-shield", 0x42);
+            let (unshield_vk, unshield_record) =
+                bootstrap_base_verifier("bootstrap-unshield", 0x43);
+            world
+                .verifying_keys
+                .insert(transfer_vk.clone(), transfer_record);
+            world
+                .verifying_keys
+                .insert(shield_vk.clone(), shield_record);
+            world
+                .verifying_keys
+                .insert(unshield_vk.clone(), unshield_record);
+
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "offline.enabled".parse().expect("bootstrap metadata key"),
+                Json::new(true),
+            );
+            let asset_definition = NewAssetDefinition {
+                id: asset_definition_id.clone(),
+                name: "ds".to_owned(),
+                description: Some("Digital Shekel".to_owned()),
+                alias: Some(
+                    "ds#boi.universal"
+                        .parse::<AssetDefinitionAlias>()
+                        .expect("bootstrap asset alias"),
+                ),
+                spec: NumericSpec::fractional(2),
+                mintable: Mintable::Infinitely,
+                logo: None,
+                metadata,
+                balance_scope_policy: AssetBalancePolicy::Global,
+                confidential_policy: AssetConfidentialPolicy::convertible(),
+            };
+            let zk_asset = RegisterZkAsset::new(
+                asset_definition_id.clone(),
+                ZkAssetMode::Hybrid,
+                true,
+                true,
+                Some(transfer_vk),
+                Some(unshield_vk),
+                Some(shield_vk),
+            );
+            let (
+                release_record,
+                authenticated_release,
+                release_policy_sha256,
+                step_eq_verifier_key,
+                step_ep_verifier_key,
+            ) = bootstrap_release_fixture(&chain_id, &asset_definition_id);
+            let manifest_sha256 = authenticated_release.manifest_sha256();
+            let release_catalog =
+                super::super::kagemusha_terminal_registry_v4::KagemushaReleaseCatalogV4::
+                    for_executor_fixture_for_testing(
+                        release_record,
+                        authenticated_release,
+                        release_policy_sha256,
+                        step_eq_verifier_key,
+                        step_ep_verifier_key,
+                    )
+                    .expect("bootstrap fixture authenticated catalog");
+            let release_activation = release_catalog
+                .build_activation(manifest_sha256, 1)
+                .expect("bootstrap fixture release activation");
+            release_activation
+                .validate_structure()
+                .expect("catalog-built activation retains exact release bindings");
+            let release_state_key =
+                super::super::kagemusha_terminal_registry_v4::release_state_key(
+                    &iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
+                        version:
+                            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+                        generation: release_activation
+                            .release_record
+                            .manifest
+                            .generation
+                            .clone(),
+                        manifest_sha256,
+                    },
+                )
+                .expect("bootstrap fixture release state key");
+            let release = ActivateKagemushaRecursiveReleaseV4::new(
+                release_activation,
+                release_activation_device_policy(),
+            );
+
+            let mut state = State::new_with_chain_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            );
+            let mut governance = iroha_config::parameters::actual::Governance::default();
+            governance.rules_committee_size = 3;
+            governance.agenda_council_size = 3;
+            governance.interest_panel_size = 3;
+            governance.review_panel_size = 3;
+            governance.policy_jury_size = 3;
+            governance.oversight_committee_size = 3;
+            governance.fma_committee_size = 3;
+            governance.parliament_alternate_size = Some(1);
+            match omitted_body {
+                Some(ParliamentBody::RulesCommittee) => governance.rules_committee_size = 0,
+                Some(ParliamentBody::AgendaCouncil) => governance.agenda_council_size = 0,
+                Some(ParliamentBody::InterestPanel) => governance.interest_panel_size = 0,
+                Some(ParliamentBody::ReviewPanel) => governance.review_panel_size = 0,
+                Some(ParliamentBody::PolicyJury) => governance.policy_jury_size = 0,
+                Some(ParliamentBody::OversightCommittee) => {
+                    governance.oversight_committee_size = 0;
+                }
+                Some(ParliamentBody::FmaCommittee) => governance.fma_committee_size = 0,
+                None => {}
+            }
+            state.set_gov(governance);
+            state.set_kagemusha_release_catalog(release_catalog);
+            state
+                .block(BlockHeader::new(
+                    NonZeroU64::new(1).expect("height one"),
+                    None,
+                    None,
+                    None,
+                    POLICY_TEST_TIME_MS - 1,
+                    0,
+                ))
+                .commit()
+                .expect("bootstrap fixture commits an empty height one");
+
+            let preceding_instructions_hash = offline_asset_bootstrap_prefix_fingerprint(&[]);
+            let (bodies, parliament_roster_root) = {
+                let mut block = state.block(BlockHeader::new(
+                    NonZeroU64::new(2).expect("height two"),
+                    None,
+                    None,
+                    None,
+                    POLICY_TEST_TIME_MS,
+                    0,
+                ));
+                let mut transaction = block.transaction();
+                transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                let (_, bodies) =
+                    crate::smartcontracts::isi::world::isi::
+                        derive_jit_parliament_bodies_for_enactment(
+                            preceding_instructions_hash,
+                            2,
+                            &transaction,
+                        )
+                        .expect("bootstrap fixture JIT parliament");
+                let root =
+                    crate::smartcontracts::isi::world::isi::compute_parliament_roster_root(&bodies)
+                        .expect("bootstrap fixture parliament root");
+                (bodies, root)
+            };
+            let manifest = OfflineAssetBootstrapManifestV1 {
+                chain_id: chain_id.clone(),
+                enactment_authority: authority.clone(),
+                parliament_selection_height: 2,
+                parliament_roster_root,
+                preceding_instructions_hash,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                asset_definition,
+                asset_definition_owner: authority.clone(),
+                zk_asset,
+                issuer: issuer.clone(),
+                initial_allocations: BTreeMap::from([(
+                    issuer.clone(),
+                    Quantity::from(1_000_000_u64),
+                )]),
+                escrow,
+                release,
+            };
+            let selected_members = bodies
+                .rosters
+                .values()
+                .flat_map(|roster| roster.members.iter().cloned())
+                .collect::<BTreeSet<_>>();
+            let selected_keypairs = parliament_keypairs
+                .iter()
+                .filter(|keypair| {
+                    selected_members.contains(&AccountId::new(keypair.public_key().clone()))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let certificate = bootstrap_certificate(&manifest, selected_keypairs);
+            let instruction = EnactOfflineAssetBootstrapV1::new(manifest, certificate);
+            OfflineBootstrapExecutorFixture {
+                state,
+                chain_id,
+                authority,
+                authority_keypair,
+                outsider_keypair,
+                instruction,
+                bodies,
+                asset_definition_id,
+                issuer,
+                release_state_key,
+            }
+        }
+
+        fn bootstrap_signed_transaction(
+            fixture: &OfflineBootstrapExecutorFixture,
+            instructions: Vec<InstructionBox>,
+        ) -> SignedTransaction {
+            use iroha_data_model::transaction::{Executable, FeePaymentIntent, TransactionBuilder};
+
+            TransactionBuilder::new(
+                fixture.chain_id.clone(),
+                fixture.authority.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_executable(Executable::Instructions(instructions.into()))
+            .sign(fixture.authority_keypair.private_key())
+        }
+
+        fn assert_bootstrap_invariant_rejection(
+            error: iroha_data_model::ValidationFail,
+            label: &str,
+            detail: &str,
+        ) {
+            let iroha_data_model::ValidationFail::InstructionFailed(
+                InstructionExecutionError::InvariantViolation(message),
+            ) = error
+            else {
+                panic!("expected a typed bootstrap invariant rejection, got {error:?}");
+            };
+            let expected_prefix = format!("{OFFLINE_REJECTION_REASON_PREFIX}{label}:");
+            assert!(
+                message.starts_with(&expected_prefix) && message.contains(detail),
+                "unexpected bootstrap rejection: {message}",
+            );
+        }
+
+        #[test]
+        fn offline_bootstrap_executes_through_initial_executor_with_seven_derived_bodies() {
+            use iroha_data_model::{
+                nexus::DataSpaceId, prelude::AssetId, transaction::SignedTransaction,
+            };
+
+            let fixture = offline_bootstrap_executor_fixture(None);
+            assert_eq!(fixture.bodies.rosters.len(), 7);
+            assert_eq!(
+                fixture
+                    .bodies
+                    .rosters
+                    .keys()
+                    .copied()
+                    .collect::<BTreeSet<_>>(),
+                OFFLINE_ASSET_BOOTSTRAP_REQUIRED_PARLIAMENT_BODIES
+                    .into_iter()
+                    .collect(),
+                "the fixture must exercise all seven distinct derived body rosters",
+            );
+            for body in OFFLINE_ASSET_BOOTSTRAP_REQUIRED_PARLIAMENT_BODIES {
+                let roster = fixture.bodies.rosters.get(&body).expect("required roster");
+                assert_eq!(roster.body, body);
+                assert!(!roster.members.is_empty());
+                let approvals = fixture
+                    .instruction
+                    .certificate()
+                    .signatures
+                    .signatures
+                    .iter()
+                    .filter(|signature| roster.members.contains(&signature.signer))
+                    .count();
+                let required = crate::state::council_quorum_threshold(
+                    roster.members.len(),
+                    fixture.state.gov.parliament_quorum_bps,
+                );
+                assert!(
+                    u32::try_from(approvals).expect("small fixture approval count") >= required,
+                    "{body:?} fixture quorum is incomplete",
+                );
+            }
+
+            let transaction: SignedTransaction =
+                bootstrap_signed_transaction(&fixture, vec![fixture.instruction.clone().into()]);
+            let mut block = fixture.state.block(BlockHeader::new(
+                NonZeroU64::new(2).expect("height two"),
+                None,
+                None,
+                None,
+                POLICY_TEST_TIME_MS,
+                0,
+            ));
+            {
+                let mut state_transaction = block.transaction();
+                state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                crate::executor::Executor::Initial
+                    .execute_transaction(
+                        &mut state_transaction,
+                        &fixture.authority,
+                        transaction,
+                        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+                    )
+                    .expect("seven-body certificate enacts through the real initial executor");
+                state_transaction.apply();
+            }
+            block.commit().expect("persist governed bootstrap block");
+
+            let marker =
+                offline_asset_bootstrap_marker(fixture.instruction.manifest().fingerprint())
+                    .expect("bootstrap replay marker");
+            let mut inspection_block = fixture.state.block(BlockHeader::new(
+                NonZeroU64::new(3).expect("height three"),
+                None,
+                None,
+                None,
+                POLICY_TEST_TIME_MS + 1,
+                0,
+            ));
+            let mut inspection = inspection_block.transaction();
+            inspection.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            assert!(
+                inspection
+                    .world
+                    .asset_definition(&fixture.asset_definition_id)
+                    .is_ok(),
+                "asset definition must persist after block commit",
+            );
+            assert!(
+                inspection
+                    .world
+                    .zk_assets
+                    .get(&fixture.asset_definition_id)
+                    .is_some(),
+                "hybrid ZK policy must persist after block commit",
+            );
+            assert_eq!(
+                inspection
+                    .world
+                    .asset(&AssetId::of(
+                        fixture.asset_definition_id.clone(),
+                        fixture.issuer.clone(),
+                    ))
+                    .expect("issuer allocation persists")
+                    .as_ref(),
+                &Quantity::from(1_000_000_u64),
+            );
+            assert!(
+                inspection
+                    .world
+                    .smart_contract_state
+                    .get(&fixture.release_state_key)
+                    .is_some(),
+                "authenticated ABI-21 release record must persist",
+            );
+            assert!(
+                inspection.world.smart_contract_state.get(&marker).is_some(),
+                "certificate-bound replay marker must persist",
+            );
+            assert!(
+                inspection
+                    .world
+                    .smart_contract_state
+                    .get(&*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY)
+                    .is_some(),
+                "governed device-attestation policy must persist",
+            );
+        }
+
+        #[test]
+        fn offline_bootstrap_plain_signed_overlay_applies_and_commits_with_scoped_authority() {
+            use iroha_data_model::{nexus::DataSpaceId, transaction::SignedTransaction};
+
+            let fixture = offline_bootstrap_executor_fixture(None);
+            let transaction: SignedTransaction =
+                bootstrap_signed_transaction(&fixture, vec![fixture.instruction.clone().into()]);
+            let mut block = fixture.state.block(BlockHeader::new(
+                NonZeroU64::new(2).expect("height two"),
+                None,
+                None,
+                None,
+                POLICY_TEST_TIME_MS,
+                0,
+            ));
+            {
+                let mut state_transaction = block.transaction();
+                state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                let overlay = crate::pipeline::overlay::build_overlay_for_transaction(
+                    &transaction,
+                    &state_transaction,
+                )
+                .expect("build exact plain signed overlay");
+                overlay
+                    .apply_signed_transaction_with_chunk(
+                        &mut state_transaction,
+                        &fixture.authority,
+                        1,
+                        None,
+                    )
+                    .expect("apply governed bootstrap through the live plain-overlay path");
+                assert!(
+                    state_transaction
+                        .offline_asset_bootstrap_direct_signed_authority
+                        .is_none(),
+                    "plain-overlay direct signed scope must be restored before commit",
+                );
+                state_transaction.apply();
+            }
+            block
+                .commit()
+                .expect("commit governed bootstrap applied through plain overlay");
+
+            let marker =
+                offline_asset_bootstrap_marker(fixture.instruction.manifest().fingerprint())
+                    .expect("bootstrap replay marker");
+            let view = fixture.state.view();
+            assert!(
+                view.world()
+                    .asset_definition(&fixture.asset_definition_id)
+                    .is_ok(),
+                "plain-overlay commit must persist the governed asset definition",
+            );
+            assert!(
+                view.world().smart_contract_state().get(&marker).is_some(),
+                "plain-overlay commit must persist its certificate-bound marker",
+            );
+        }
+
+        #[test]
+        fn offline_bootstrap_committed_block_replay_restores_direct_signed_scope() {
+            use std::borrow::Cow;
+
+            use iroha_data_model::{
+                block::SignedBlock, nexus::DataSpaceId, transaction::DataTriggerSequence,
+            };
+
+            let fixture = offline_bootstrap_executor_fixture(None);
+            let transaction =
+                bootstrap_signed_transaction(&fixture, vec![fixture.instruction.clone().into()]);
+            let entrypoint_hash = transaction.hash_as_entrypoint();
+            let accepted = crate::tx::AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+            let parent: SignedBlock = crate::block::BlockBuilder::new(Vec::<
+                crate::tx::AcceptedTransaction<'static>,
+            >::new())
+            .chain(0, None)
+            .sign(fixture.authority_keypair.private_key())
+            .unpack(|_| {})
+            .into();
+            let mut signed: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
+                .chain(0, Some(&parent))
+                .sign(fixture.authority_keypair.private_key())
+                .unpack(|_| {})
+                .into();
+            signed
+                .set_transaction_results(
+                    Vec::new(),
+                    &[entrypoint_hash],
+                    vec![Ok(DataTriggerSequence::default())],
+                )
+                .expect("bootstrap replay result binds its exact transaction");
+            let committed = crate::block::ValidBlock::committed_from_replay_signed_block(signed);
+            let committed_parent =
+                crate::block::ValidBlock::committed_from_replay_signed_block(parent);
+            let mut parent_block = fixture.state.block(committed_parent.as_ref().header());
+            let _events = parent_block.apply(&committed_parent, Vec::new());
+            parent_block
+                .commit()
+                .expect("commit the replay fixture's height-one baseline");
+            assert_eq!(
+                committed.as_ref().header().height().get(),
+                2,
+                "the governed bootstrap replay fixture must remain post-genesis",
+            );
+            assert_eq!(
+                committed
+                    .as_ref()
+                    .execution_context()
+                    .and_then(|bundle| bundle.external.first())
+                    .map(|context| context.dataspace_id),
+                Some(DataSpaceId::UNIVERSAL),
+                "the committed fixture must bind the exact bootstrap route",
+            );
+
+            let mut replay_block = fixture.state.block(committed.as_ref().header());
+            let _events = replay_block.apply(&committed, Vec::new());
+            replay_block
+                .commit()
+                .expect("committed governed bootstrap must restore through StateBlock replay");
+
+            let marker =
+                offline_asset_bootstrap_marker(fixture.instruction.manifest().fingerprint())
+                    .expect("bootstrap replay marker");
+            let view = fixture.state.view();
+            assert!(
+                view.world()
+                    .asset_definition(&fixture.asset_definition_id)
+                    .is_ok(),
+                "committed replay must restore the governed asset definition",
+            );
+            assert!(
+                view.world().smart_contract_state().get(&marker).is_some(),
+                "committed replay must restore its certificate-bound replay marker",
+            );
+            assert!(
+                view.world()
+                    .smart_contract_state()
+                    .get(&fixture.release_state_key)
+                    .is_some(),
+                "committed replay must restore the authenticated ABI-21 release",
+            );
+        }
+
+        #[test]
+        fn offline_bootstrap_rejects_trigger_contract_and_nested_dispatch() {
+            use iroha_data_model::{
+                isi::{ExecuteTrigger, Register},
+                nexus::DataSpaceId,
+                prelude::ExecuteTriggerEventFilter,
+                smart_contract::ContractAddress,
+                trigger::{
+                    Trigger,
+                    action::{Action, Repeats},
+                },
+            };
+
+            let fixture = offline_bootstrap_executor_fixture(None);
+            let mut block = fixture.state.block(BlockHeader::new(
+                NonZeroU64::new(2).expect("height two"),
+                None,
+                None,
+                None,
+                POLICY_TEST_TIME_MS,
+                0,
+            ));
+            let trigger_id: iroha_data_model::trigger::TriggerId = "offline_bootstrap_indirect"
+                .parse()
+                .expect("bootstrap trigger id");
+            {
+                let mut setup = block.transaction();
+                let filter = ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(fixture.authority.clone());
+                Register::trigger(Trigger::new(
+                    trigger_id.clone(),
+                    Action::new(
+                        vec![InstructionBox::from(fixture.instruction.clone())],
+                        Repeats::Exactly(1),
+                        fixture.authority.clone(),
+                        filter,
+                    ),
+                ))
+                .execute(&fixture.authority, &mut setup)
+                .expect("register indirect bootstrap trigger fixture");
+                setup.apply();
+            }
+
+            {
+                let transaction = bootstrap_signed_transaction(
+                    &fixture,
+                    vec![ExecuteTrigger::new(trigger_id).into()],
+                );
+                let mut triggered = block.transaction();
+                triggered.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                triggered.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                let error = crate::executor::Executor::Initial
+                    .execute_transaction(
+                        &mut triggered,
+                        &fixture.authority,
+                        transaction,
+                        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+                    )
+                    .expect_err("a trigger-emitted governed bootstrap must be rejected");
+                let iroha_data_model::ValidationFail::InstructionFailed(
+                    InstructionExecutionError::InvalidParameter(
+                        iroha_data_model::isi::error::InvalidParameterError::SmartContract(message),
+                    ),
+                ) = error
+                else {
+                    panic!("unexpected typed trigger bootstrap rejection: {error:?}");
+                };
+                assert!(
+                    message.contains("depth-zero instruction in its directly signed"),
+                    "unexpected trigger bootstrap rejection: {message}",
+                );
+                assert!(
+                    triggered.offline_asset_bootstrap_unbound_effects,
+                    "trigger dispatch must remain outside the signed instruction prefix",
+                );
+            }
+
+            {
+                let mut nested = block.transaction();
+                nested.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                nested.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                nested.bind_direct_signed_instruction_authority_for_testing(Some(
+                    fixture.authority.clone(),
+                ));
+                nested.offline_asset_bootstrap_execution_depth = 1;
+                let error = crate::executor::Executor::Initial
+                    .execute_instruction(
+                        &mut nested,
+                        &fixture.authority,
+                        fixture.instruction.clone().into(),
+                    )
+                    .expect_err("a recursively nested governed bootstrap must be rejected");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("depth-zero instruction in its directly signed"),
+                    "unexpected nested bootstrap rejection: {error}",
+                );
+                assert!(
+                    nested.offline_asset_bootstrap_unbound_effects,
+                    "nested dispatch must remain outside the signed instruction prefix",
+                );
+            }
+
+            {
+                let contract_address = ContractAddress::derive(
+                    iroha_data_model::account::address::chain_discriminant(),
+                    &fixture.authority,
+                    1,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("bootstrap contract address");
+                let context = crate::executor::ContractRuntimeExecutionContext {
+                    contract_subject: contract_address.subject_id(),
+                    contract_address,
+                    contract_alias: None,
+                    entrypoint: "bootstrap".to_owned(),
+                };
+                let mut contracted = block.transaction();
+                contracted.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                contracted.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                contracted.bind_direct_signed_instruction_authority_for_testing(Some(
+                    fixture.authority.clone(),
+                ));
+                let error = crate::executor::Executor::Initial
+                    .execute_instruction_with_contract_runtime_context(
+                        &mut contracted,
+                        &fixture.authority,
+                        fixture.instruction.clone().into(),
+                        Some(&context),
+                    )
+                    .expect_err("a contract-emitted governed bootstrap must be rejected");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("depth-zero instruction in its directly signed"),
+                    "unexpected contract bootstrap rejection: {error}",
+                );
+                assert!(
+                    contracted.offline_asset_bootstrap_unbound_effects,
+                    "contract dispatch must remain outside the signed instruction prefix",
+                );
+            }
+
+            drop(block);
+            assert_bootstrap_state_absent(&fixture);
+        }
+
+        fn assert_bootstrap_state_absent(fixture: &OfflineBootstrapExecutorFixture) {
+            use iroha_data_model::nexus::DataSpaceId;
+
+            let marker =
+                offline_asset_bootstrap_marker(fixture.instruction.manifest().fingerprint())
+                    .expect("bootstrap replay marker");
+            let mut inspection_block = fixture.state.block(BlockHeader::new(
+                NonZeroU64::new(2).expect("height two"),
+                None,
+                None,
+                None,
+                POLICY_TEST_TIME_MS,
+                0,
+            ));
+            let mut inspection = inspection_block.transaction();
+            inspection.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            assert!(
+                inspection
+                    .world
+                    .asset_definition(&fixture.asset_definition_id)
+                    .is_err(),
+                "rejected bootstrap must not publish its asset definition",
+            );
+            assert!(
+                inspection
+                    .world
+                    .zk_assets
+                    .get(&fixture.asset_definition_id)
+                    .is_none(),
+                "rejected bootstrap must not publish its ZK policy",
+            );
+            assert!(
+                inspection.world.smart_contract_state.get(&marker).is_none(),
+                "rejected bootstrap must not publish its replay marker",
+            );
+            assert!(
+                inspection
+                    .world
+                    .smart_contract_state
+                    .get(&fixture.release_state_key)
+                    .is_none(),
+                "rejected bootstrap must not publish its release",
+            );
+        }
+
+        #[test]
+        fn offline_bootstrap_late_finality_failure_discards_all_prior_effects() {
+            use iroha_data_model::{Level, isi::Log, nexus::DataSpaceId};
+
+            let fixture = offline_bootstrap_executor_fixture(None);
+            let transaction = bootstrap_signed_transaction(
+                &fixture,
+                vec![
+                    fixture.instruction.clone().into(),
+                    Log::new(Level::INFO, "forbidden after enactment".to_owned()).into(),
+                ],
+            );
+            {
+                let mut block = fixture.state.block(BlockHeader::new(
+                    NonZeroU64::new(2).expect("height two"),
+                    None,
+                    None,
+                    None,
+                    POLICY_TEST_TIME_MS,
+                    0,
+                ));
+                let mut state_transaction = block.transaction();
+                state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                let error = crate::executor::Executor::Initial
+                    .execute_transaction(
+                        &mut state_transaction,
+                        &fixture.authority,
+                        transaction,
+                        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+                    )
+                    .expect_err(
+                        "an instruction after enactment must fail the complete transaction",
+                    );
+                assert!(
+                    error.to_string().contains("final instruction"),
+                    "unexpected late-finality rejection: {error}",
+                );
+                // The failed StateTransaction is deliberately not applied: this
+                // is the production rollback boundary used by block execution.
+            }
+            assert_bootstrap_state_absent(&fixture);
+        }
+
+        #[test]
+        fn offline_bootstrap_exact_and_conflicting_replays_fail_closed() {
+            use iroha_data_model::nexus::DataSpaceId;
+
+            let fixture = offline_bootstrap_executor_fixture(None);
+            let exact =
+                bootstrap_signed_transaction(&fixture, vec![fixture.instruction.clone().into()]);
+            let mut block = fixture.state.block(BlockHeader::new(
+                NonZeroU64::new(2).expect("height two"),
+                None,
+                None,
+                None,
+                POLICY_TEST_TIME_MS,
+                0,
+            ));
+            {
+                let mut first = block.transaction();
+                first.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                crate::executor::Executor::Initial
+                    .execute_transaction(
+                        &mut first,
+                        &fixture.authority,
+                        exact.clone(),
+                        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+                    )
+                    .expect("first exact enactment succeeds");
+                first.apply();
+            }
+            {
+                let mut replay = block.transaction();
+                replay.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                let error = crate::executor::Executor::Initial
+                    .execute_transaction(
+                        &mut replay,
+                        &fixture.authority,
+                        exact,
+                        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+                    )
+                    .expect_err("the identical instruction cannot enact twice");
+                assert_bootstrap_invariant_rejection(
+                    error,
+                    "offline_bootstrap_replay",
+                    "target asset is already registered",
+                );
+            }
+            block
+                .commit()
+                .expect("the first enactment persists despite discarded exact replay");
+
+            let conflicting_fixture = offline_bootstrap_executor_fixture(None);
+            let mut conflicting_manifest = conflicting_fixture.instruction.manifest().clone();
+            conflicting_manifest.initial_allocations.insert(
+                conflicting_fixture.issuer.clone(),
+                Quantity::from(2_000_000_u64),
+            );
+            let conflicting_instruction = EnactOfflineAssetBootstrapV1::new(
+                conflicting_manifest,
+                conflicting_fixture.instruction.certificate().clone(),
+            );
+            let conflicting = bootstrap_signed_transaction(
+                &conflicting_fixture,
+                vec![conflicting_instruction.into()],
+            );
+            {
+                let mut conflicting_block = conflicting_fixture.state.block(BlockHeader::new(
+                    NonZeroU64::new(2).expect("height two"),
+                    None,
+                    None,
+                    None,
+                    POLICY_TEST_TIME_MS,
+                    0,
+                ));
+                let mut state_transaction = conflicting_block.transaction();
+                state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                let error = crate::executor::Executor::Initial
+                    .execute_transaction(
+                        &mut state_transaction,
+                        &conflicting_fixture.authority,
+                        conflicting,
+                        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+                    )
+                    .expect_err("a certificate cannot authorize a different allocation manifest");
+                assert_bootstrap_invariant_rejection(
+                    error,
+                    "offline_bootstrap_unauthorized",
+                    "must bind this exact manifest",
+                );
+            }
+            assert_bootstrap_state_absent(&conflicting_fixture);
+        }
+
+        #[test]
+        fn offline_bootstrap_rejects_derived_roster_omission_and_quorum_shortfall() {
+            use iroha_data_model::{governance::types::ParliamentBody, nexus::DataSpaceId};
+
+            let omitted = offline_bootstrap_executor_fixture(Some(ParliamentBody::FmaCommittee));
+            assert!(
+                omitted
+                    .bodies
+                    .rosters
+                    .get(&ParliamentBody::FmaCommittee)
+                    .is_none_or(|roster| roster.members.is_empty()),
+                "the omission fixture must omit the required FMA roster or derive it empty",
+            );
+            let omitted_tx =
+                bootstrap_signed_transaction(&omitted, vec![omitted.instruction.clone().into()]);
+            {
+                let mut block = omitted.state.block(BlockHeader::new(
+                    NonZeroU64::new(2).expect("height two"),
+                    None,
+                    None,
+                    None,
+                    POLICY_TEST_TIME_MS,
+                    0,
+                ));
+                let mut state_transaction = block.transaction();
+                state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                let error = crate::executor::Executor::Initial
+                    .execute_transaction(
+                        &mut state_transaction,
+                        &omitted.authority,
+                        omitted_tx,
+                        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+                    )
+                    .expect_err("an omitted required derived roster must fail");
+                assert_bootstrap_invariant_rejection(
+                    error,
+                    "offline_bootstrap_unauthorized",
+                    "required Parliament body roster is",
+                );
+            }
+            assert_bootstrap_state_absent(&omitted);
+
+            let quorum = offline_bootstrap_executor_fixture(None);
+            let mut short_certificate = quorum.instruction.certificate().clone();
+            short_certificate.signatures.signatures.truncate(1);
+            let short_instruction = EnactOfflineAssetBootstrapV1::new(
+                quorum.instruction.manifest().clone(),
+                short_certificate,
+            );
+            let short_tx = bootstrap_signed_transaction(&quorum, vec![short_instruction.into()]);
+            {
+                let mut block = quorum.state.block(BlockHeader::new(
+                    NonZeroU64::new(2).expect("height two"),
+                    None,
+                    None,
+                    None,
+                    POLICY_TEST_TIME_MS,
+                    0,
+                ));
+                let mut state_transaction = block.transaction();
+                state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                let error = crate::executor::Executor::Initial
+                    .execute_transaction(
+                        &mut state_transaction,
+                        &quorum.authority,
+                        short_tx,
+                        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+                    )
+                    .expect_err("one Parliament approval cannot satisfy all seven quorums");
+                assert_bootstrap_invariant_rejection(
+                    error,
+                    "offline_bootstrap_unauthorized",
+                    "did not reach its exact quorum",
+                );
+            }
+            assert_bootstrap_state_absent(&quorum);
+        }
+
+        #[test]
+        fn offline_bootstrap_rejects_signature_from_outside_every_derived_body() {
+            use iroha_data_model::{
+                governance::types::ParliamentEnactmentSignature, nexus::DataSpaceId,
+            };
+
+            let fixture = offline_bootstrap_executor_fixture(None);
+            let mut certificate = fixture.instruction.certificate().clone();
+            let payload = certificate.payload;
+            certificate
+                .signatures
+                .signatures
+                .push(ParliamentEnactmentSignature {
+                    signer: AccountId::new(fixture.outsider_keypair.public_key().clone()),
+                    public_key: fixture.outsider_keypair.public_key().clone(),
+                    signature: iroha_crypto::SignatureOf::try_new(
+                        fixture.outsider_keypair.private_key(),
+                        &payload,
+                    )
+                    .expect("wrong-body fixture signature"),
+                });
+            certificate
+                .signatures
+                .signatures
+                .sort_by(|left, right| left.signer.cmp(&right.signer));
+            let instruction = EnactOfflineAssetBootstrapV1::new(
+                fixture.instruction.manifest().clone(),
+                certificate,
+            );
+            let transaction = bootstrap_signed_transaction(&fixture, vec![instruction.into()]);
+            {
+                let mut block = fixture.state.block(BlockHeader::new(
+                    NonZeroU64::new(2).expect("height two"),
+                    None,
+                    None,
+                    None,
+                    POLICY_TEST_TIME_MS,
+                    0,
+                ));
+                let mut state_transaction = block.transaction();
+                state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+                let error = crate::executor::Executor::Initial
+                    .execute_transaction(
+                        &mut state_transaction,
+                        &fixture.authority,
+                        transaction,
+                        &mut crate::smartcontracts::ivm::cache::IvmCache::new(),
+                    )
+                    .expect_err("a signer outside every derived body must fail");
+                assert_bootstrap_invariant_rejection(
+                    error,
+                    "offline_bootstrap_unauthorized",
+                    "outside every required derived body",
+                );
+            }
+            assert_bootstrap_state_absent(&fixture);
+        }
+
+        #[test]
+        fn offline_bootstrap_certificate_signatures_reject_order_duplicate_and_invalid_bytes() {
+            use iroha_data_model::governance::types::{
+                AtWindow, EnactmentSignatureScheme, ParliamentEnactment,
+                ParliamentEnactmentCertificate, ParliamentEnactmentSignature,
+                ParliamentEnactmentSignatureSet,
+            };
+
+            let keypairs = [
+                KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519)
+                    .expect("first parliament signer"),
+                KeyPair::try_from_seed(vec![0x32; 32], Algorithm::Ed25519)
+                    .expect("second parliament signer"),
+            ];
+            let accounts = keypairs
+                .iter()
+                .map(|keypair| AccountId::new(keypair.public_key().clone()))
+                .collect::<Vec<_>>();
+            let world = World::with(
+                [],
+                accounts
+                    .iter()
+                    .map(|account| Account::new(account.clone()).build(account)),
+                [],
+            );
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let mut block = state.block(offline_test_header());
+            let transaction = block.transaction();
+            let payload = ParliamentEnactment {
+                preimage_hash: [0xA9; 32],
+                at_window: AtWindow { lower: 1, upper: 1 },
+            };
+            let mut signatures = keypairs
+                .iter()
+                .zip(accounts)
+                .map(|(keypair, signer)| ParliamentEnactmentSignature {
+                    signer,
+                    public_key: keypair.public_key().clone(),
+                    signature: iroha_crypto::SignatureOf::try_new(keypair.private_key(), &payload)
+                        .expect("checked parliament signature"),
+                })
+                .collect::<Vec<_>>();
+            signatures.sort_by(|left, right| left.signer.cmp(&right.signer));
+            let certificate = ParliamentEnactmentCertificate {
+                payload,
+                signatures: ParliamentEnactmentSignatureSet {
+                    scheme: EnactmentSignatureScheme::SimpleThreshold,
+                    signatures,
+                },
+            };
+            validate_offline_asset_bootstrap_certificate_signatures(&certificate, &transaction)
+                .expect("ordered distinct signatures verify");
+
+            let mut reversed = certificate.clone();
+            reversed.signatures.signatures.reverse();
+            assert!(
+                validate_offline_asset_bootstrap_certificate_signatures(&reversed, &transaction)
+                    .is_err(),
+                "reversed signatures must fail deterministic ordering"
+            );
+
+            let mut duplicate = certificate.clone();
+            duplicate
+                .signatures
+                .signatures
+                .push(duplicate.signatures.signatures[1].clone());
+            assert!(
+                validate_offline_asset_bootstrap_certificate_signatures(&duplicate, &transaction)
+                    .is_err(),
+                "a duplicate signer must fail before quorum evaluation"
+            );
+
+            let mut invalid = certificate;
+            invalid.payload.preimage_hash[0] ^= 0xFF;
+            assert!(
+                validate_offline_asset_bootstrap_certificate_signatures(&invalid, &transaction)
+                    .is_err(),
+                "signatures over different payload bytes must fail"
+            );
+        }
+
         fn offline_holding_limit_test_state(
             escrow_balance: Option<u32>,
         ) -> (State, AssetDefinitionId, AssetId, AccountId) {
@@ -9279,6 +11274,7 @@ pub mod isi {
         fn every_offline_executor_has_no_local_service_gate() {
             let source = include_str!("offline.rs");
             let executor_names = [
+                "EnactOfflineAssetBootstrapV1",
                 "IssueOfflineNote",
                 "RedeemOfflineNote",
                 "AuditOfflineNote",

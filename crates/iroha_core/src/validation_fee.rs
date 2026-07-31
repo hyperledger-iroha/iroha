@@ -3380,6 +3380,9 @@ fn native_instruction_ds_effect_disposition(
     // control-plane records, or deferred-execution bookkeeping.
     audited_no_ds_effect!(
         iroha_data_model::isi::register::RegisterPeerWithPop,
+        // One certificate-bound bootstrap registers policy/control-plane state and grants
+        // fixed permissions, but it cannot move an existing asset balance.
+        iroha_data_model::isi::offline::EnactOfflineAssetBootstrapV1,
         // These lifecycle steps only register content-addressed artifacts or create an
         // initially absent address -> code-hash binding. The executor rejects activation
         // over an address already bound to a different hash. Deactivation/removal remain

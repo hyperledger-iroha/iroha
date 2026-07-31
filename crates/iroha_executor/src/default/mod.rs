@@ -81,9 +81,9 @@ use iroha_smart_contract::data_model::{
             UnenrollFeeSponsorBeneficiary, WithdrawFeeSponsorProgram,
         },
         offline::{
-            ActivateKagemushaRecursiveReleaseV4, RedeemKagemushaRecursiveV4,
-            RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
-            TopUpKagemushaRecursiveV4,
+            ActivateKagemushaRecursiveReleaseV4, EnactOfflineAssetBootstrapV1,
+            RedeemKagemushaRecursiveV4, RegisterOfflineDeviceAttestation,
+            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursiveV4,
         },
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
@@ -1002,6 +1002,9 @@ impl InstructionDispatch for InstructionBox {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<ActivateKagemushaRecursiveReleaseV4>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<EnactOfflineAssetBootstrapV1>() {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<RegisterOfflineDeviceAttestation>() {

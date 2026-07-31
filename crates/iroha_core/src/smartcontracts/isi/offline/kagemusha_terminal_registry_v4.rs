@@ -187,11 +187,175 @@ pub struct KagemushaReleaseCatalogV4 {
     releases: BTreeMap<[u8; 32], Arc<KagemushaCachedReleaseV4>>,
 }
 
+fn validate_decoded_catalog_budget(max_decoded_bytes: u64) -> Result<(), String> {
+    if max_decoded_bytes == 0 {
+        return Err(
+            "Kagemusha V4 decoded catalog memory budget must be greater than zero".to_owned(),
+        );
+    }
+    if max_decoded_bytes > DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4 {
+        return Err(format!(
+            "Kagemusha V4 decoded catalog memory budget cannot exceed the non-raiseable {DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4}-byte safety ceiling"
+        ));
+    }
+    Ok(())
+}
+
 impl KagemushaReleaseCatalogV4 {
     /// Return an unconfigured, always-unready catalog.
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Build a release catalog for native executor-path tests without loading
+    /// the release-sized proving inventory.
+    ///
+    /// The fixture seam remains deliberately narrow: it accepts an already
+    /// authenticated release, revalidates the durable release record and
+    /// promotion binding, reconstructs and authenticates both framed verifier
+    /// artifacts against the signed manifest, and derives the same qualified
+    /// verifier identities used by production activation. Only the unused
+    /// parameters, proving keys, and bootstrap witnesses are omitted.
+    #[cfg(test)]
+    pub(crate) fn for_executor_fixture_for_testing(
+        release_record: iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4,
+        authenticated_release: KagemushaAuthenticatedReleaseV4,
+        configured_policy_sha256: [u8; 32],
+        step_eq_verifier_key: Vec<u8>,
+        step_ep_verifier_key: Vec<u8>,
+    ) -> Result<Self, String> {
+        use std::io::Cursor;
+
+        use crate::zk::{
+            kagemusha_artifact_source_v4::{
+                KagemushaArtifactReadSeekV4, KagemushaAuthenticatedArtifactSourceV4,
+                KagemushaQualifiedArtifactSourceV4, KagemushaQualifiedParityMetadataV4,
+            },
+            kagemusha_artifact_v4::write_kagemusha_pasta_cycle_artifact_v4,
+        };
+
+        struct ExecutorFixtureSourceV4 {
+            authenticated_release: KagemushaAuthenticatedReleaseV4,
+            verifier_frames: BTreeMap<KagemushaPastaCycleParityV1, Vec<u8>>,
+        }
+
+        impl KagemushaAuthenticatedArtifactSourceV4 for ExecutorFixtureSourceV4 {
+            fn authenticated_release(&self) -> &KagemushaAuthenticatedReleaseV4 {
+                &self.authenticated_release
+            }
+
+            fn with_framed_artifact(
+                &self,
+                parity: KagemushaPastaCycleParityV1,
+                kind: KagemushaPastaCycleArtifactKindV4,
+                consume: &mut dyn FnMut(&mut dyn KagemushaArtifactReadSeekV4) -> Result<(), String>,
+            ) -> Result<(), String> {
+                if kind != KagemushaPastaCycleArtifactKindV4::VerifyingKey {
+                    return Err(
+                        "executor fixture catalog exposes only authenticated verifier artifacts"
+                            .to_owned(),
+                    );
+                }
+                let frame = self
+                    .verifier_frames
+                    .get(&parity)
+                    .ok_or_else(|| "executor fixture verifier parity is missing".to_owned())?;
+                consume(&mut Cursor::new(frame.as_slice()))
+            }
+        }
+
+        release_record
+            .validate_structure()
+            .map_err(|error| format!("executor fixture release record is invalid: {error}"))?;
+        if release_record.manifest != *authenticated_release.manifest()
+            || release_record.promotion_record.release_policy_sha256 != configured_policy_sha256
+            || authenticated_release.release_policy_sha256() != configured_policy_sha256
+        {
+            return Err(
+                "executor fixture release, promotion, and configured policy identities differ"
+                    .to_owned(),
+            );
+        }
+        release_record
+            .promotion_record
+            .validate_against_authenticated_release(&authenticated_release)
+            .map_err(|error| format!("executor fixture promotion record is invalid: {error}"))?;
+
+        let mut verifier_frames = BTreeMap::new();
+        let mut qualified_metadata = BTreeMap::new();
+        for (parity, verifier_key) in [
+            (KagemushaPastaCycleParityV1::StepEq, step_eq_verifier_key),
+            (KagemushaPastaCycleParityV1::StepEp, step_ep_verifier_key),
+        ] {
+            let proof_profile = profile(authenticated_release.manifest(), parity)?;
+            let expected_descriptor = kagemusha_artifact_descriptor_v4(
+                authenticated_release.manifest(),
+                parity,
+                KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+            )?;
+            let mut frame = Vec::new();
+            let observed_descriptor = write_kagemusha_pasta_cycle_artifact_v4(
+                &mut frame,
+                &authenticated_release.manifest().generation,
+                proof_profile,
+                KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+                &verifier_key,
+            )?;
+            if &observed_descriptor != expected_descriptor {
+                return Err(
+                    "executor fixture verifier bytes differ from the authenticated descriptor"
+                        .to_owned(),
+                );
+            }
+            let key = VerifyingKeyBox::new(
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+                verifier_key,
+            );
+            let metadata = KagemushaQualifiedParityMetadataV4::new(
+                parity,
+                proof_profile.circuit_params.clone(),
+                proof_profile.compiled_protocol_structure_sha256,
+                expected_descriptor.payload_size_bytes,
+                expected_descriptor.payload_sha256,
+                crate::zk::hash_vk(&key),
+            )?;
+            verifier_frames.insert(parity, frame);
+            qualified_metadata.insert(parity, metadata);
+        }
+
+        let source: Arc<dyn KagemushaAuthenticatedArtifactSourceV4> =
+            Arc::new(ExecutorFixtureSourceV4 {
+                authenticated_release: authenticated_release.clone(),
+                verifier_frames,
+            });
+        let qualified_source = Arc::new(KagemushaQualifiedArtifactSourceV4::new(
+            source,
+            authenticated_release.clone(),
+            qualified_metadata
+                .remove(&KagemushaPastaCycleParityV1::StepEq)
+                .ok_or_else(|| "executor fixture Eq verifier metadata is missing".to_owned())?,
+            qualified_metadata
+                .remove(&KagemushaPastaCycleParityV1::StepEp)
+                .ok_or_else(|| "executor fixture Ep verifier metadata is missing".to_owned())?,
+        )?);
+        let verifier = Arc::new(
+            KagemushaPastaCycleOpaqueVerifierV4::from_qualified_artifact_source(Arc::clone(
+                &qualified_source,
+            ))?,
+        );
+        let manifest_sha256 = authenticated_release.manifest_sha256();
+        let cached = KagemushaCachedReleaseV4 {
+            release_record,
+            resolved: ResolvedKagemushaTerminalVerifierV4 {
+                qualified_source,
+                verifier,
+            },
+        };
+        Ok(Self {
+            configured_policy_sha256: Some(configured_policy_sha256),
+            releases: BTreeMap::from([(manifest_sha256, Arc::new(cached))]),
+        })
     }
 
     /// Whether a canonical policy and artifact directory were configured.
@@ -238,22 +402,57 @@ impl KagemushaReleaseCatalogV4 {
         )
     }
 
+    /// Authenticate a catalog from policy bytes already captured by the caller.
+    ///
+    /// This is used by semantic admission tooling that must bind every later
+    /// consumer to one exact policy capture. The artifact directory retains the
+    /// same descriptor-relative, no-symlink authentication as [`Self::load`].
+    pub fn load_from_policy_bytes(
+        policy_bytes: &[u8],
+        artifact_dir: &Path,
+    ) -> Result<Self, String> {
+        Self::load_from_policy_bytes_with_decoded_budget(
+            policy_bytes,
+            artifact_dir,
+            DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4,
+        )
+    }
+
+    /// Authenticate a captured policy and catalog under an explicit decoded
+    /// resident-memory ceiling.
+    pub fn load_from_policy_bytes_with_decoded_budget(
+        policy_bytes: &[u8],
+        artifact_dir: &Path,
+        max_decoded_bytes: u64,
+    ) -> Result<Self, String> {
+        validate_decoded_catalog_budget(max_decoded_bytes)?;
+        #[cfg(all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        ))]
+        {
+            Self::load_descriptor_relative_artifacts(policy_bytes, artifact_dir, max_decoded_bytes)
+        }
+        #[cfg(not(all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        )))]
+        {
+            let _ = (policy_bytes, artifact_dir);
+            Err(
+                "Kagemusha V4 descriptor-relative catalog loading is unsupported on this platform"
+                    .to_owned(),
+            )
+        }
+    }
+
     /// Authenticate a catalog under an explicit decoded-resident memory ceiling.
     pub fn load_with_decoded_budget(
         policy_path: &Path,
         artifact_dir: &Path,
         max_decoded_bytes: u64,
     ) -> Result<Self, String> {
-        if max_decoded_bytes == 0 {
-            return Err(
-                "Kagemusha V4 decoded catalog memory budget must be greater than zero".to_owned(),
-            );
-        }
-        if max_decoded_bytes > DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4 {
-            return Err(format!(
-                "Kagemusha V4 decoded catalog memory budget cannot exceed the non-raiseable {DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4}-byte safety ceiling"
-            ));
-        }
+        validate_decoded_catalog_budget(max_decoded_bytes)?;
         #[cfg(all(
             unix,
             not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
@@ -290,8 +489,27 @@ impl KagemushaReleaseCatalogV4 {
         let mut policy_file = policy_parent.open_file(policy_file_name, "release policy")?;
         let policy_bytes =
             read_bounded_opened_file(&mut policy_file, MAX_POLICY_BYTES, "release policy")?;
-        let policy = decode_trusted_policy(&policy_bytes)?;
-        let policy_sha256: [u8; 32] = Sha256::digest(&policy_bytes).into();
+        let catalog = Self::load_descriptor_relative_artifacts(
+            &policy_bytes,
+            artifact_dir,
+            max_decoded_bytes,
+        )?;
+        policy_file.verify_unchanged()?;
+        policy_parent.verify_path_identity()?;
+        Ok(catalog)
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    fn load_descriptor_relative_artifacts(
+        policy_bytes: &[u8],
+        artifact_dir: &Path,
+        max_decoded_bytes: u64,
+    ) -> Result<Self, String> {
+        let policy = decode_trusted_policy(policy_bytes)?;
+        let policy_sha256: [u8; 32] = Sha256::digest(policy_bytes).into();
 
         let artifact_root = CatalogDirectory::open_path(artifact_dir, "artifact root")?;
         let directory_names = artifact_root.entry_names("artifact root")?;
@@ -342,8 +560,6 @@ impl KagemushaReleaseCatalogV4 {
             return Err("Kagemusha V4 artifact inventory changed while it was loaded".to_owned());
         }
         artifact_root.verify_path_identity()?;
-        policy_file.verify_unchanged()?;
-        policy_parent.verify_path_identity()?;
         if releases.is_empty() {
             return Err(
                 "configured Kagemusha V4 artifact directory contains no releases".to_owned(),
@@ -2323,6 +2539,8 @@ mod tests {
             source_repo_dirty: true,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
+            root_published_generated_candidate_receipt_sha256: [0x64; 32],
+            generation_worker_launch_receipt_sha256: [0x65; 32],
             chain_id: ChainId::from("candidate-binding-chain"),
             asset: AssetDefinitionId::new(
                 DomainId::try_new("candidate", "binding").expect("candidate-binding domain"),
@@ -2443,6 +2661,10 @@ mod tests {
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: manifest.generation.clone(),
             candidate_sha256,
+            root_published_generated_candidate_receipt_sha256: manifest
+                .root_published_generated_candidate_receipt_sha256,
+            generation_worker_launch_receipt_sha256: manifest
+                .generation_worker_launch_receipt_sha256,
             manifest_sha256: authenticated.manifest_sha256(),
             release_attestation_sha256: authenticated.release_attestation_sha256(),
             release_policy_sha256: authenticated.release_policy_sha256(),

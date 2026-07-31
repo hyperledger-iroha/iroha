@@ -259,11 +259,11 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21;
 /// Exact schema identifier for the degree-parameterized artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v4";
-/// Exact schema of the independently pinned reviewed dirty source closure.
+/// Exact schema of the independently pinned reviewed source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1: &str = "iroha.reviewed-source-closure.v1";
 /// Maximum untracked regular-file entries in one reviewed source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1: usize = 100_000;
-/// Maximum ignored root `Cargo.lock` bytes admitted by the reviewed closure.
+/// Maximum separately bound root `Cargo.lock` bytes admitted by the reviewed closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V1: u64 = 16 * 1024 * 1024;
 /// Degree-parameterized Pasta-cycle backend selected only by ABI 21 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4: &str =
@@ -1644,7 +1644,7 @@ mod model {
         pub path_bytes_base64: String,
     }
 
-    /// Canonical independently reviewed dirty source closure for one candidate.
+    /// Canonical independently reviewed source closure for one candidate.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1658,9 +1658,12 @@ mod model {
         pub base_commit: String,
         /// Exact checked-out source commit; first release requires `base_commit`.
         pub source_commit: String,
-        /// Derived dirty state; first release requires `true`.
+        /// Conservative state indicating whether exact build bytes differ from the commit.
+        ///
+        /// A legacy separately-bound ignored `Cargo.lock` may make this true
+        /// even when the generic tracked diff and untracked manifest are empty.
         pub source_repo_dirty: bool,
-        /// Producer full-tree SHA-256 of tracked, untracked, and `Cargo.lock` bytes.
+        /// Producer full-tree SHA-256 of tracked, untracked, and separately bound `Cargo.lock` bytes.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
         /// SHA-256 of the canonical full-index binary Git diff from `source_commit`.
@@ -1674,9 +1677,13 @@ mod model {
         /// SHA-256 of each entry's canonical compact sorted-key JSON plus LF.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub untracked_path_mode_blob_oid_manifest_sha256: [u8; 32],
-        /// Exact ignored root `Cargo.lock` byte length.
+        /// Exact separately bound root `Cargo.lock` byte length.
+        ///
+        /// The field retains its V1 serialized name for compatibility.
         pub ignored_cargo_lock_size_bytes: u64,
-        /// SHA-256 of the exact ignored root `Cargo.lock` bytes.
+        /// SHA-256 of the exact separately bound root `Cargo.lock` bytes.
+        ///
+        /// The field retains its V1 serialized name for compatibility.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub ignored_cargo_lock_sha256: [u8; 32],
         /// Cross-repository tracked-diff/untracked-manifest fingerprint.
@@ -1710,11 +1717,17 @@ mod model {
         pub source_tree_sha256: [u8; 32],
         /// Whether the exact build tree differed from `source_commit`.
         pub source_repo_dirty: bool,
-        /// Complete independently pinned reviewed dirty source closure.
+        /// Complete independently pinned reviewed source closure.
         pub reviewed_source_closure: KagemushaReviewedSourceClosureV1,
         /// SHA-256 of the exact canonical descriptor JSON bytes.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
+        /// SHA-256 of the independently pinned root-published generated-candidate receipt.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub root_published_generated_candidate_receipt_sha256: [u8; 32],
+        /// SHA-256 of the canonical generation-worker launch receipt included in that publication.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub generation_worker_launch_receipt_sha256: [u8; 32],
         /// Chain for which the release was built.
         pub chain_id: ChainId,
         /// Asset definition for which the release was built.
@@ -1744,10 +1757,10 @@ mod model {
 
     /// Immutable ABI-21 candidate captured before external review and device evidence exist.
     ///
-    /// The embedded manifest commits the independently reviewed dirty source
+    /// The embedded manifest commits the independently reviewed source
     /// closure, network parameters, inline circuit configuration, exact eight
-    /// recursive artifacts, and finality roster. Its benchmark, review, and
-    /// attestation digest slots must all be zero.
+    /// recursive artifacts, and finality roster. Its two root-publication,
+    /// benchmark, review, and attestation digest slots must all be zero.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1785,7 +1798,7 @@ mod model {
         /// Exact source-tree identity copied from the candidate.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
-        /// Exact reviewed dirty-tree state copied from the candidate.
+        /// Exact reviewed source-tree state copied from the candidate.
         pub source_repo_dirty: bool,
         /// Exact independently pinned closure descriptor digest copied from the candidate.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -1953,11 +1966,17 @@ mod model {
         /// Exact source-tree identity copied from the V4 manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub source_tree_sha256: [u8; 32],
-        /// Exact dirty-tree state copied from the V4 manifest.
+        /// Exact source-tree state copied from the V4 manifest.
         pub source_repo_dirty: bool,
         /// Exact independently pinned closure descriptor digest copied from the manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub reviewed_source_closure_descriptor_sha256: [u8; 32],
+        /// Exact root-published generated-candidate receipt approved by every role.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub root_published_generated_candidate_receipt_sha256: [u8; 32],
+        /// Exact generation-worker launch receipt approved by every role.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub generation_worker_launch_receipt_sha256: [u8; 32],
         /// Digest of the signed physical-device evidence file.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub benchmark_evidence_sha256: [u8; 32],
@@ -2074,6 +2093,12 @@ mod model {
         /// SHA-256 of the immutable pre-evidence candidate record.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub candidate_sha256: [u8; 32],
+        /// SHA-256 of the root-published generated-candidate receipt admitted at finalization.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub root_published_generated_candidate_receipt_sha256: [u8; 32],
+        /// SHA-256 of the included generation-worker launch receipt admitted at finalization.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub generation_worker_launch_receipt_sha256: [u8; 32],
         /// SHA-256 of the complete canonical V4 manifest.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
@@ -5306,7 +5331,6 @@ impl KagemushaReviewedSourceClosureV1 {
         if self.schema != KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1
             || !is_kagemusha_source_commit(&self.base_commit)
             || self.base_commit != self.source_commit
-            || !self.source_repo_dirty
             || !nonzero_digests
             || untracked_count != Some(self.untracked_path_mode_blob_oid_manifest.len())
             || untracked_count.is_none_or(|count| {
@@ -5379,7 +5403,9 @@ impl KagemushaReviewedSourceClosureV1 {
         let empty_sha256: [u8; 32] = Sha256::digest([]).into();
         let derived_dirty =
             self.tracked_binary_diff_sha256 != empty_sha256 || self.untracked_file_count != 0;
-        if combined_sha256 != self.combined_source_fingerprint_sha256 || !derived_dirty {
+        if combined_sha256 != self.combined_source_fingerprint_sha256
+            || (derived_dirty && !self.source_repo_dirty)
+        {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "pasta_cycle.v4.reviewed_source_closure.fingerprint",
             });
@@ -5402,7 +5428,13 @@ impl KagemushaReviewedSourceClosureV1 {
         append_python_ascii_json_string(&mut out, &self.schema);
         out.push_str(",\"source_commit\":");
         append_python_ascii_json_string(&mut out, &self.source_commit);
-        out.push_str(",\"source_repo_dirty\":true,\"source_tree_sha256\":\"");
+        out.push_str(",\"source_repo_dirty\":");
+        out.push_str(if self.source_repo_dirty {
+            "true"
+        } else {
+            "false"
+        });
+        out.push_str(",\"source_tree_sha256\":\"");
         out.push_str(&hex::encode(self.source_tree_sha256));
         out.push_str("\",\"tracked_binary_diff_sha256\":\"");
         out.push_str(&hex::encode(self.tracked_binary_diff_sha256));
@@ -5457,8 +5489,9 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
 
     /// Validate an immutable V4 release candidate before its attestation exists.
     ///
-    /// Candidate manifests precede external evidence, so benchmark, review,
-    /// and attestation digests must all remain zero. They are not valid release
+    /// Candidate manifests precede root publication and external evidence, so
+    /// the two publication-receipt digests plus the benchmark, review, and
+    /// attestation digests must all remain zero. They are not valid release
     /// manifests and must never be accepted by production artifact readers.
     ///
     /// # Errors
@@ -5480,9 +5513,10 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
 
     /// Reconstruct the byte-exact immutable candidate that preceded this finalized manifest.
     ///
-    /// Finalization fills only the two evidence digests and the release-attestation
-    /// digest. Clearing exactly those fields must therefore recover a valid, clean
-    /// candidate; a closure mismatch or otherwise invalid finalized manifest fails closed.
+    /// Finalization fills only the two publication-receipt digests, two evidence
+    /// digests, and the release-attestation digest. Clearing exactly those fields
+    /// must therefore recover a valid, clean candidate; a closure mismatch or
+    /// otherwise invalid finalized manifest fails closed.
     ///
     /// # Errors
     ///
@@ -5492,6 +5526,8 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
     ) -> Result<KagemushaRecursiveSpendCandidateV4, KagemushaValidationError> {
         self.validate()?;
         let mut manifest = self.clone();
+        manifest.root_published_generated_candidate_receipt_sha256 = [0; 32];
+        manifest.generation_worker_launch_receipt_sha256 = [0; 32];
         manifest.benchmark_evidence_sha256 = [0; 32];
         manifest.cryptographic_review_sha256 = [0; 32];
         manifest.release_attestation_sha256 = [0; 32];
@@ -5527,7 +5563,6 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || !is_kagemusha_portable_identifier(&self.generation)
             || !is_kagemusha_source_commit(&self.source_commit)
             || self.source_tree_sha256 == [0; 32]
-            || !self.source_repo_dirty
             || !reviewed_source_closure_valid
             || !is_kagemusha_chain_id(&self.chain_id)
             || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
@@ -5540,10 +5575,14 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || self.profiles[0].parity != KagemushaPastaCycleParityV1::StepEq
             || self.profiles[1].parity != KagemushaPastaCycleParityV1::StepEp
             || self.topup_finality_roster_artifact.artifact_generation != self.generation
+            || (finalized && self.root_published_generated_candidate_receipt_sha256 == [0; 32])
+            || (finalized && self.generation_worker_launch_receipt_sha256 == [0; 32])
             || (finalized && self.benchmark_evidence_sha256 == [0; 32])
             || (finalized && self.cryptographic_review_sha256 == [0; 32])
             || (finalized && self.release_attestation_sha256 == [0; 32])
             || (!finalized && self.benchmark_evidence_sha256 != [0; 32])
+            || (!finalized && self.root_published_generated_candidate_receipt_sha256 != [0; 32])
+            || (!finalized && self.generation_worker_launch_receipt_sha256 != [0; 32])
             || (!finalized && self.cryptographic_review_sha256 != [0; 32])
             || (!finalized && self.release_attestation_sha256 != [0; 32])
         {
@@ -5582,6 +5621,8 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
         }
         if finalized {
             for evidence_digest in [
+                self.root_published_generated_candidate_receipt_sha256,
+                self.generation_worker_launch_receipt_sha256,
                 self.benchmark_evidence_sha256,
                 self.cryptographic_review_sha256,
             ] {
@@ -5630,6 +5671,9 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             source_repo_dirty: self.source_repo_dirty,
             reviewed_source_closure_descriptor_sha256: self
                 .reviewed_source_closure_descriptor_sha256,
+            root_published_generated_candidate_receipt_sha256: self
+                .root_published_generated_candidate_receipt_sha256,
+            generation_worker_launch_receipt_sha256: self.generation_worker_launch_receipt_sha256,
             benchmark_evidence_sha256: self.benchmark_evidence_sha256,
             cryptographic_review_sha256: self.cryptographic_review_sha256,
         })
@@ -6156,6 +6200,8 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
     pub fn validate(&self) -> Result<(), KagemushaReleaseVerificationError> {
         let digests = [
             self.candidate_sha256,
+            self.root_published_generated_candidate_receipt_sha256,
+            self.generation_worker_launch_receipt_sha256,
             self.manifest_sha256,
             self.release_attestation_sha256,
             self.release_policy_sha256,
@@ -6214,6 +6260,12 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
             .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
         if self.candidate_sha256 != candidate_sha256
             || self.generation != release.manifest().generation
+            || self.root_published_generated_candidate_receipt_sha256
+                != release
+                    .manifest()
+                    .root_published_generated_candidate_receipt_sha256
+            || self.generation_worker_launch_receipt_sha256
+                != release.manifest().generation_worker_launch_receipt_sha256
             || self.manifest_sha256 != release.manifest_sha256()
             || self.release_attestation_sha256 != release.release_attestation_sha256()
             || self.release_policy_sha256 != release.release_policy_sha256()
@@ -7192,6 +7244,60 @@ mod kagemusha_v4_artifact_contract_tests {
         }
     }
 
+    #[test]
+    fn reviewed_source_closure_accepts_exact_clean_tree_state() {
+        let empty_sha256: [u8; 32] = Sha256::digest([]).into();
+        let mut combined = Sha256::new();
+        combined.update(KAGEMUSHA_REVIEWED_SOURCE_DIFF_DOMAIN_V1);
+        combined.update(KAGEMUSHA_REVIEWED_SOURCE_TRACKED_DIFF_DOMAIN_V1);
+        combined.update(empty_sha256);
+        combined.update(KAGEMUSHA_REVIEWED_SOURCE_UNTRACKED_MANIFEST_DOMAIN_V1);
+        combined.update(empty_sha256);
+
+        let mut closure = reviewed_source_closure();
+        closure.source_repo_dirty = false;
+        closure.tracked_binary_diff_sha256 = empty_sha256;
+        closure.untracked_file_count = 0;
+        closure.untracked_path_mode_blob_oid_manifest.clear();
+        closure.untracked_path_mode_blob_oid_manifest_sha256 = empty_sha256;
+        closure.combined_source_fingerprint_sha256 = combined.finalize().into();
+        closure.validate().expect("exact clean source closure");
+        let descriptor = closure
+            .canonical_descriptor_bytes()
+            .expect("canonical clean source descriptor");
+        assert!(
+            descriptor
+                .windows(br#""source_repo_dirty":false"#.len())
+                .any(|window| window == br#""source_repo_dirty":false"#)
+        );
+
+        let mut legacy_ignored_lock = closure.clone();
+        legacy_ignored_lock.source_repo_dirty = true;
+        legacy_ignored_lock
+            .validate()
+            .expect("legacy ignored Cargo.lock conservatively marks source dirty");
+        let legacy_descriptor = legacy_ignored_lock
+            .canonical_descriptor_bytes()
+            .expect("legacy ignored-lock descriptor");
+        assert!(
+            legacy_descriptor
+                .windows(br#""source_repo_dirty":true"#.len())
+                .any(|window| window == br#""source_repo_dirty":true"#)
+        );
+
+        let descriptor_sha256 = closure
+            .canonical_descriptor_sha256()
+            .expect("clean source descriptor digest");
+        let mut clean_manifest = manifest();
+        clean_manifest.source_tree_sha256 = closure.source_tree_sha256;
+        clean_manifest.source_repo_dirty = false;
+        clean_manifest.reviewed_source_closure = closure;
+        clean_manifest.reviewed_source_closure_descriptor_sha256 = descriptor_sha256;
+        clean_manifest
+            .validate()
+            .expect("manifest bound to exact clean source closure");
+    }
+
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
         let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
         let layout =
@@ -7297,6 +7403,10 @@ mod kagemusha_v4_artifact_contract_tests {
             source_repo_dirty: true,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
+            root_published_generated_candidate_receipt_sha256: digest(
+                b"v4 root-published generated candidate receipt",
+            ),
+            generation_worker_launch_receipt_sha256: digest(b"v4 generation worker launch receipt"),
             chain_id: ChainId::from("v4-artifact-test-chain"),
             asset: AssetDefinitionId::new(
                 DomainId::try_new("wonderland", "universal").expect("test domain"),
@@ -7330,6 +7440,8 @@ mod kagemusha_v4_artifact_contract_tests {
         template: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> KagemushaRecursiveSpendCandidateV4 {
         let mut manifest = template.clone();
+        manifest.root_published_generated_candidate_receipt_sha256 = [0; 32];
+        manifest.generation_worker_launch_receipt_sha256 = [0; 32];
         manifest.benchmark_evidence_sha256 = [0; 32];
         manifest.cryptographic_review_sha256 = [0; 32];
         manifest.release_attestation_sha256 = [0; 32];
@@ -7399,6 +7511,10 @@ mod kagemusha_v4_artifact_contract_tests {
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: "v4-artifact-test-release".to_owned(),
             candidate_sha256: digest(b"v4 promotion candidate"),
+            root_published_generated_candidate_receipt_sha256: digest(
+                b"v4 promotion generated receipt",
+            ),
+            generation_worker_launch_receipt_sha256: digest(b"v4 promotion launch receipt"),
             manifest_sha256: digest(b"v4 promotion manifest"),
             release_attestation_sha256: digest(b"v4 promotion attestation"),
             release_policy_sha256: digest(b"v4 promotion policy"),
@@ -7568,6 +7684,21 @@ mod kagemusha_v4_artifact_contract_tests {
 
         let mut tampered = record.clone();
         tampered.manifest_sha256 = [0; 32];
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.root_published_generated_candidate_receipt_sha256 = [0; 32];
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.generation_worker_launch_receipt_sha256 =
+            tampered.root_published_generated_candidate_receipt_sha256;
         assert_eq!(
             tampered.validate(),
             Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
@@ -7979,6 +8110,22 @@ mod kagemusha_v4_artifact_contract_tests {
             bootstrap_tamper
                 .release_attestation_subject()
                 .expect("valid modified bootstrap subject")
+        );
+        let mut generated_receipt_tamper = manifest.clone();
+        generated_receipt_tamper.root_published_generated_candidate_receipt_sha256[0] ^= 1;
+        assert_ne!(
+            second_subject,
+            generated_receipt_tamper
+                .release_attestation_subject()
+                .expect("valid modified generated-receipt subject")
+        );
+        let mut launch_receipt_tamper = manifest.clone();
+        launch_receipt_tamper.generation_worker_launch_receipt_sha256[0] ^= 1;
+        assert_ne!(
+            second_subject,
+            launch_receipt_tamper
+                .release_attestation_subject()
+                .expect("valid modified launch-receipt subject")
         );
 
         let policy = KagemushaRecursiveSpendReleasePolicyV1 {

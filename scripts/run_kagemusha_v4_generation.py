@@ -24,6 +24,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.formal import run_sumeragi_v2_tlapm_guard as resource_guard
+from scripts import kagemusha_root_published_build as published_build
+from scripts import build_kagemusha_v4_candidate_bundle as candidate_builder
+from scripts import (
+    kagemusha_root_published_generated_candidate as published_generated,
+)
 from scripts.kagemusha_staged_resource_guard import (
     DEFAULT_FOOTPRINT_INTERVAL_SECONDS,
     DEFAULT_MAX_MEMORY_GIB,
@@ -50,7 +55,29 @@ JOURNAL_SCHEMA = "iroha.kagemusha.candidate_guard_journal.v1"
 MAX_JOURNAL_BYTES = 4096
 MAX_RECOVERABLE_JOURNALS = 64
 CANDIDATE_SESSION_WRAPPER_FLAG = "--kagemusha-candidate-session-wrapper"
+EXECUTABLE_FD_ENV = "IROHA_KAGEMUSHA_EXECUTABLE_FD"
 MINIMUM_OUTPUT_FREE_BYTES = 512 * 1024 * 1024
+GENERATION_WORKER_NAME = "boi-build"
+GENERATION_PUBLICATION_STATUS = "provisional_boi_generation_worker_output"
+GENERATION_CROSS_STAGE_STATUS = (
+    "blocked_pending_root_descriptor_copy_atomic_publication_receipt"
+)
+GENERATED_CANDIDATE_RECEIPT_OPTION = (
+    "--root-published-generated-candidate-receipt"
+)
+GENERATED_CANDIDATE_RECEIPT_SHA256_OPTION = (
+    "--root-published-generated-candidate-receipt-sha256"
+)
+FINALIZATION_GENERATED_RECEIPT_FD_OPTION = (
+    "--root-published-generated-candidate-receipt-fd"
+)
+FINALIZATION_LAUNCH_RECEIPT_FD_OPTION = (
+    "--generation-worker-launch-receipt-fd"
+)
+FINALIZATION_LAUNCH_RECEIPT_SHA256_OPTION = (
+    "--generation-worker-launch-receipt-sha256"
+)
+FINALIZATION_RECEIPT_MAX_BYTES = 64 * 1024
 DISK_BACKED_OUTPUT_FILESYSTEM_TYPES = frozenset(
     {
         "apfs",
@@ -161,6 +188,8 @@ class ExecutableSnapshot:
             )
         if self.execution_copy is not None:
             return str(self.execution_copy.path)
+        if self.owner_uid == published_build.TRUSTED_OWNER_UID:
+            return str(self.path)
         return f"/proc/self/fd/{execution_descriptor}"
 
     def execution_descriptor(self) -> int:
@@ -229,6 +258,7 @@ class PinnedOutputParent:
         """Return stable JSON evidence for the pinned output parent."""
 
         return {
+            "admission": "fresh_single_use_generation_worker_output_parent",
             "canonical_path": str(self.path),
             "device": self.device,
             "filesystem_type": self.filesystem_type,
@@ -266,11 +296,16 @@ def _validate_executable_metadata(metadata: os.stat_result) -> None:
 
     if (
         not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
+        or metadata.st_uid
+        not in (published_build.TRUSTED_OWNER_UID, os.geteuid())
         or metadata.st_nlink != 1
         or metadata.st_size <= 0
         or metadata.st_mode & stat.S_IXUSR == 0
         or metadata.st_mode & 0o022 != 0
+        or (
+            metadata.st_uid == published_build.TRUSTED_OWNER_UID
+            and metadata.st_mode & 0o222 != 0
+        )
     ):
         raise resource_guard.GuardError(
             "Kagemusha executable has unsafe ownership, links, mode, or size"
@@ -373,6 +408,40 @@ def _snapshot_executable(path_text: str, expected_name: str) -> ExecutableSnapsh
         changed_ns=metadata.st_ctime_ns,
         descriptor=descriptor,
     )
+
+
+def _require_root_published_executable(
+    snapshot: ExecutableSnapshot,
+    admitted: published_build.AdmittedPublishedBuild,
+) -> None:
+    """Require the opened executable to be the immutable receipt-named bytes."""
+
+    if (
+        snapshot.path != admitted.executable
+        or snapshot.sha256 != admitted.executable_sha256
+        or snapshot.size_bytes != admitted.executable_size_bytes
+        or snapshot.owner_uid != published_build.TRUSTED_OWNER_UID
+    ):
+        raise resource_guard.GuardError(
+            "admitted executable differs from the root-published receipt"
+        )
+
+
+def _require_generation_worker_identity(
+    admitted: published_build.AdmittedPublishedBuild,
+) -> None:
+    """Require generation under the same dedicated non-root UID as the build."""
+
+    effective_uid = os.geteuid()
+    if (
+        admitted.build_user_name != GENERATION_WORKER_NAME
+        or effective_uid == published_build.TRUSTED_OWNER_UID
+        or effective_uid != admitted.build_uid
+    ):
+        raise resource_guard.GuardError(
+            "Kagemusha generation must run as the receipt-named non-root "
+            f"{GENERATION_WORKER_NAME} UID"
+        )
 
 
 def _validate_execution_copy(snapshot: ExecutableSnapshot) -> None:
@@ -673,11 +742,44 @@ def _reject_foreign_kagemusha_jobs() -> None:
         )
 
 
-def _prepare_report_directory(path: Path) -> tuple[Path, Path]:
+def _prepare_report_directory(
+    path: Path,
+    *,
+    output_parent: PinnedOutputParent | None = None,
+) -> tuple[Path, Path]:
     """Create one new owner-private resource evidence directory."""
 
-    path.mkdir(parents=True, mode=0o700, exist_ok=False)
-    os.chmod(path, 0o700)
+    if output_parent is None:
+        path.mkdir(parents=True, mode=0o700, exist_ok=False)
+        os.chmod(path, 0o700)
+    else:
+        output_parent.validate()
+        report_name = path.name
+        if (
+            not _valid_output_leaf(report_name)
+            or report_name == output_parent.output_name
+        ):
+            raise resource_guard.GuardError(
+                "Kagemusha resource report must be one safe output-parent leaf"
+            )
+        try:
+            report_parent = path.parent.resolve(strict=True)
+        except OSError as error:
+            raise resource_guard.GuardError(
+                "Kagemusha resource-report parent is unavailable"
+            ) from error
+        if report_parent != output_parent.path:
+            raise resource_guard.GuardError(
+                "Kagemusha resource report must be inside the fresh single-use "
+                "generation output parent"
+            )
+        try:
+            os.mkdir(report_name, mode=0o700, dir_fd=output_parent.descriptor)
+        except OSError as error:
+            raise resource_guard.GuardError(
+                "Kagemusha resource-report directory must be new"
+            ) from error
+        path = output_parent.path / report_name
     return path / "kagemusha_resource.jsonl", path / "kagemusha_resource_summary.json"
 
 
@@ -811,7 +913,7 @@ def _valid_output_leaf(output_name: str) -> bool:
 def _prepare_guarded_command(
     command: Sequence[str],
 ) -> tuple[list[str], PinnedOutputParent, str]:
-    """Bind one unguessable staging prefix to this supervised invocation."""
+    """Create and pin one fresh parent for this supervised worker invocation."""
 
     out_dir = Path(_required_option(command, "--out-dir"))
     output_name = out_dir.name
@@ -819,38 +921,84 @@ def _prepare_guarded_command(
         raise resource_guard.GuardError(
             "Kagemusha output path must end in one directory name"
         )
-    parent = out_dir.parent if out_dir.parent != Path("") else Path(".")
+    requested_parent = out_dir.parent
+    parent_name = requested_parent.name
+    if (
+        requested_parent in {Path(""), Path(".")}
+        or not _valid_output_leaf(parent_name)
+    ):
+        raise resource_guard.GuardError(
+            "Kagemusha output requires a dedicated new single-use parent directory"
+        )
+    requested_grandparent = requested_parent.parent
     try:
-        parent = parent.resolve(strict=True)
+        grandparent = requested_grandparent.resolve(strict=True)
     except OSError as error:
         raise resource_guard.GuardError(
-            f"Kagemusha output parent is unavailable: {error}"
+            f"Kagemusha output-parent container is unavailable: {error}"
         ) from error
-    if not parent.is_dir():
-        raise resource_guard.GuardError("Kagemusha output parent is not a directory")
+    if not grandparent.is_dir():
+        raise resource_guard.GuardError(
+            "Kagemusha output-parent container is not a directory"
+        )
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
     if hasattr(os, "O_DIRECTORY"):
         flags |= os.O_DIRECTORY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    grandparent_descriptor = -1
+    descriptor = -1
+    created = False
     try:
-        descriptor = os.open(parent, flags)
+        grandparent_descriptor = os.open(grandparent, flags)
+        os.mkdir(
+            parent_name,
+            mode=0o700,
+            dir_fd=grandparent_descriptor,
+        )
+        created = True
+        descriptor = os.open(
+            parent_name,
+            flags,
+            dir_fd=grandparent_descriptor,
+        )
         opened = os.fstat(descriptor)
-        current = os.stat(parent, follow_symlinks=False)
-    except OSError as error:
-        if "descriptor" in locals():
-            os.close(descriptor)
+        current = os.stat(
+            parent_name,
+            dir_fd=grandparent_descriptor,
+            follow_symlinks=False,
+        )
+    except FileExistsError as error:
         raise resource_guard.GuardError(
-            f"Kagemusha output parent cannot be pinned: {error}"
+            "Kagemusha output parent must be fresh and must not be "
+            "preexisting or reusable"
         ) from error
+    except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+            descriptor = -1
+        if created and grandparent_descriptor >= 0:
+            try:
+                os.rmdir(parent_name, dir_fd=grandparent_descriptor)
+            except OSError:
+                pass
+        raise resource_guard.GuardError(
+            f"Kagemusha fresh output parent cannot be created and pinned: {error}"
+        ) from error
+    finally:
+        if grandparent_descriptor >= 0:
+            os.close(grandparent_descriptor)
+    parent = grandparent / parent_name
     if (
         not stat.S_ISDIR(opened.st_mode)
         or not stat.S_ISDIR(current.st_mode)
         or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+        or opened.st_uid != os.geteuid()
+        or stat.S_IMODE(opened.st_mode) != 0o700
     ):
         os.close(descriptor)
         raise resource_guard.GuardError(
-            "Kagemusha output parent changed while it was pinned"
+            "Kagemusha fresh output parent identity or ownership is invalid"
         )
     try:
         filesystem_type = _filesystem_type(parent)
@@ -1321,6 +1469,8 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
     try:
         if resource_guard._lifeline_closed(args.lifeline_fd, 0):
             return 1
+        body_environment = os.environ.copy()
+        body_environment[EXECUTABLE_FD_ENV] = str(args.executable_fd)
         child = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
@@ -1331,7 +1481,7 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
                 *args.child_directory_fd,
             ),
             start_new_session=True,
-            env=os.environ.copy(),
+            env=body_environment,
         )
         process_group_id = child.pid
         resource_guard._close_descriptor(args.auth_fd)
@@ -1406,6 +1556,7 @@ def _spawn_pinned_guarded_session(
     token = secrets.token_hex(32)
     child_environment = environment.copy()
     child_environment.pop("SUMERAGI_TLAPS_SUPERVISOR_PID", None)
+    child_environment.pop(EXECUTABLE_FD_ENV, None)
     child_environment[resource_guard.RESOURCE_GUARD_AUTH_FD_ENV] = str(auth_reader)
     child_environment[resource_guard.RESOURCE_GUARD_AUTH_TOKEN_ENV] = token
     wrapper_command = [
@@ -1707,6 +1858,15 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resource-report", required=True, type=Path)
     parser.add_argument("--max-memory-gib", type=float)
+    parser.add_argument(
+        "--root-published-build-receipt",
+        type=Path,
+        help="independently pinned root-published candidate receipt",
+    )
+    parser.add_argument(
+        "--root-published-build-receipt-sha256",
+        help="independent SHA-256 pin for the root-published candidate receipt",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser
 
@@ -1724,12 +1884,43 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
     output_parent: PinnedOutputParent | None = None
     executable_snapshot: ExecutableSnapshot | None = None
     try:
+        if (
+            args.root_published_build_receipt is None
+            or args.root_published_build_receipt_sha256 is None
+        ):
+            raise resource_guard.GuardError(
+                "Kagemusha generation requires an independently pinned "
+                "root-published candidate-build receipt"
+            )
+        admitted_build = published_build.admit_candidate(
+            args.root_published_build_receipt,
+            args.root_published_build_receipt_sha256,
+        )
+        _require_generation_worker_identity(admitted_build)
         _validate_generation_command(command)
+        try:
+            supplied_executable = Path(command[0]).resolve(strict=True)
+        except OSError as error:
+            raise resource_guard.GuardError(
+                "Kagemusha candidate executable is unavailable"
+            ) from error
+        if supplied_executable != admitted_build.executable:
+            raise resource_guard.GuardError(
+                "generation command does not use the receipt-named "
+                "root-published candidate executable"
+            )
         executable_snapshot = _snapshot_executable(command[0], BUNDLE_EXECUTABLE)
+        _require_root_published_executable(
+            executable_snapshot,
+            admitted_build,
+        )
         command[0] = str(executable_snapshot.path)
         guarded_command, output_parent, staging_id = _prepare_guarded_command(command)
         memory_limit = _effective_memory_limit_bytes(args.max_memory_gib)
-        jsonl_path, summary_path = _prepare_report_directory(args.resource_report)
+        jsonl_path, summary_path = _prepare_report_directory(
+            args.resource_report,
+            output_parent=output_parent,
+        )
         with resource_guard._host_lock(
             resource_guard.HEAVY_JOB_LOCK_PATH, description="memory-heavy job"
         ) as heavy_lock:
@@ -1782,9 +1973,25 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
                         ),
                         post_success_finalize=publish_candidate,
                         report_context={
+                            "cross_stage_status": GENERATION_CROSS_STAGE_STATUS,
                             "executable_identity": (
                                 executable_snapshot.report_context()
                             ),
+                            "publication_status": GENERATION_PUBLICATION_STATUS,
+                            "root_published_build": {
+                                "artifact_root": str(
+                                    admitted_build.artifact_root
+                                ),
+                                "artifact_tree_sha256": (
+                                    admitted_build.artifact_tree_sha256
+                                ),
+                                "receipt": str(admitted_build.receipt),
+                                "receipt_sha256": (
+                                    admitted_build.receipt_sha256
+                                ),
+                                "build_uid": admitted_build.build_uid,
+                                "build_user_name": admitted_build.build_user_name,
+                            },
                             "output_parent": output_parent.report_context(),
                             "same_parent_recovered_staging_directories": (
                                 recovered_staging
@@ -1799,7 +2006,11 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
     except resource_guard.LockUnavailable as error:
         print(f"Kagemusha resource guard refused to start: {error}", file=sys.stderr)
         return resource_guard.LOCK_UNAVAILABLE_EXIT_CODE
-    except (resource_guard.GuardError, OSError) as error:
+    except (
+        published_build.PublishedBuildError,
+        resource_guard.GuardError,
+        OSError,
+    ) as error:
         print(f"Kagemusha resource guard failed closed: {error}", file=sys.stderr)
         return 1
     finally:
@@ -1809,16 +2020,319 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
             executable_snapshot.close()
 
 
+def _finalization_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run production Kagemusha finalization only from an independently "
+            "pinned root-published generated candidate."
+        )
+    )
+    parser.add_argument(
+        GENERATED_CANDIDATE_RECEIPT_OPTION,
+        required=True,
+        type=Path,
+    )
+    parser.add_argument(
+        GENERATED_CANDIDATE_RECEIPT_SHA256_OPTION,
+        required=True,
+    )
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    return parser
+
+
+def _validate_finalization_command(
+    command: Sequence[str],
+    admitted: published_generated.AdmittedPublishedGeneratedCandidate,
+) -> None:
+    """Require the receipt-named binary and candidate for finalization."""
+
+    if len(command) < 2 or command[1] != "finalize-release":
+        raise resource_guard.GuardError(
+            "production finalization supervises only finalize-release"
+        )
+    if any(
+        option in command
+        for option in (
+            FINALIZATION_GENERATED_RECEIPT_FD_OPTION,
+            GENERATED_CANDIDATE_RECEIPT_SHA256_OPTION,
+            FINALIZATION_LAUNCH_RECEIPT_FD_OPTION,
+            FINALIZATION_LAUNCH_RECEIPT_SHA256_OPTION,
+        )
+    ):
+        raise resource_guard.GuardError(
+            "receipt capability options are injected only after admission"
+        )
+    try:
+        executable = Path(command[0]).resolve(strict=True)
+    except OSError as error:
+        raise resource_guard.GuardError(
+            "Kagemusha finalization executable is unavailable"
+        ) from error
+    if executable != admitted.candidate_build.executable:
+        raise resource_guard.GuardError(
+            "production finalization must use the candidate-build "
+            "receipt-named executable"
+        )
+    candidate_dir = Path(_required_option(command, "--candidate-dir"))
+    try:
+        candidate_dir = candidate_dir.resolve(strict=True)
+    except OSError as error:
+        raise resource_guard.GuardError(
+            "Kagemusha finalization candidate is unavailable"
+        ) from error
+    if candidate_dir != admitted.candidate_dir:
+        raise resource_guard.GuardError(
+            "production finalization rejects direct provisional worker paths; "
+            "the candidate must be named by the root-published receipt"
+        )
+
+
+def _open_finalization_receipt_descriptor(
+    path: Path,
+    expected_sha256: str,
+) -> int:
+    """Open and retain one immutable root-published receipt capability."""
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
+    try:
+        before = path.lstat()
+        descriptor = os.open(os.fsencode(path), flags)
+        opened_before = os.fstat(descriptor)
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(descriptor, 64 * 1024):
+            size += len(chunk)
+            if size > FINALIZATION_RECEIPT_MAX_BYTES:
+                raise resource_guard.GuardError(
+                    "finalization receipt capability is oversized"
+                )
+            digest.update(chunk)
+        opened_after = os.fstat(descriptor)
+        after = path.lstat()
+        identity = lambda metadata: (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_nlink,
+            metadata.st_uid,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != published_build.TRUSTED_OWNER_UID
+            or before.st_nlink != 1
+            or before.st_size <= 0
+            or before.st_size > FINALIZATION_RECEIPT_MAX_BYTES
+            or before.st_mode & 0o222 != 0
+            or before.st_mode & 0o7000 != 0
+            or not (
+                identity(before)
+                == identity(opened_before)
+                == identity(opened_after)
+                == identity(after)
+            )
+            or size != before.st_size
+            or digest.hexdigest() != expected_sha256
+        ):
+            raise resource_guard.GuardError(
+                "finalization receipt capability differs from admission"
+            )
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return descriptor
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+
+
+def _validate_finalization_loader_boundary(
+    admitted_build: published_build.AdmittedPublishedBuild,
+    *,
+    otool: Path = Path("/usr/bin/otool"),
+) -> None:
+    """Recheck the exact Mach-O closure before a sanitized finalization exec."""
+
+    if sys.platform != "darwin":
+        raise resource_guard.GuardError(
+            "production finalization currently requires the reviewed macOS "
+            "deny-by-default loader boundary"
+        )
+    try:
+        metadata = otool.lstat()
+        if (
+            otool.resolve(strict=True) != otool
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != published_build.TRUSTED_OWNER_UID
+            or metadata.st_mode & 0o022 != 0
+            or metadata.st_mode & 0o7000 != 0
+        ):
+            raise resource_guard.GuardError(
+                "system Mach-O inspector is not immutable root storage"
+            )
+        candidate_builder._admit_macos_dynamic_tool_closure(
+            admitted_build.artifact_root,
+            (admitted_build.executable,),
+            otool=otool,
+        )
+    except candidate_builder.CandidateBuildError as error:
+        raise resource_guard.GuardError(
+            "finalization executable loader closure is not sealed"
+        ) from error
+
+
+def _sanitized_finalization_environment() -> dict[str, str]:
+    """Construct an ambient-free environment for the finalization process."""
+
+    return {
+        "HOME": "/var/empty",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/bin:/bin",
+        "TMPDIR": "/private/tmp",
+        "TZ": "UTC",
+    }
+
+
+def _run_receipt_bound_finalization_command(
+    command: Sequence[str],
+    executable_snapshot: ExecutableSnapshot,
+    receipt_descriptors: Sequence[int],
+) -> None:
+    """Execute finalization without a caller-mintable environment token."""
+
+    if not command or command[0] != executable_snapshot.execution_path():
+        raise resource_guard.GuardError(
+            "receipt-bound finalization must execute the admitted binary"
+        )
+    _validate_executable_unchanged(executable_snapshot)
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+            pass_fds=(
+                executable_snapshot.descriptor,
+                *receipt_descriptors,
+            ),
+            start_new_session=True,
+            env=_sanitized_finalization_environment(),
+        )
+        try:
+            returncode = process.wait(timeout=300)
+        except subprocess.TimeoutExpired as error:
+            resource_guard._terminate_owned_group(process, process.pid)
+            raise resource_guard.GuardError(
+                "receipt-bound finalization timed out"
+            ) from error
+        if returncode != 0:
+            raise resource_guard.GuardError(
+                "receipt-bound finalization failed with status "
+                f"{returncode}"
+            )
+        _validate_executable_unchanged(executable_snapshot)
+    except BaseException:
+        if process is not None and process.poll() is None:
+            resource_guard._terminate_owned_group(process, process.pid)
+        raise
+
+
+def _finalization_main(argv: Sequence[str] | None = None) -> int:
+    """Admit immutable generation output before invoking finalization."""
+
+    args = _finalization_parser().parse_args(argv)
+    command = list(args.command)
+    if command and command[0] == "--":
+        command.pop(0)
+    if not command:
+        print(
+            "Kagemusha production finalization requires a command after --",
+            file=sys.stderr,
+        )
+        return 2
+    executable_snapshot: ExecutableSnapshot | None = None
+    receipt_descriptors: list[int] = []
+    try:
+        admitted = published_generated.admit_generated_candidate(
+            args.root_published_generated_candidate_receipt,
+            args.root_published_generated_candidate_receipt_sha256,
+        )
+        _validate_finalization_command(command, admitted)
+        executable_snapshot = _snapshot_executable(
+            command[0],
+            BUNDLE_EXECUTABLE,
+        )
+        _require_root_published_executable(
+            executable_snapshot,
+            admitted.candidate_build,
+        )
+        _validate_finalization_loader_boundary(admitted.candidate_build)
+        generated_receipt_descriptor = _open_finalization_receipt_descriptor(
+            admitted.receipt,
+            admitted.receipt_sha256,
+        )
+        receipt_descriptors.append(generated_receipt_descriptor)
+        launch_receipt_descriptor = _open_finalization_receipt_descriptor(
+            admitted.worker_launch_receipt,
+            admitted.worker_launch_receipt_sha256,
+        )
+        receipt_descriptors.append(launch_receipt_descriptor)
+        command.extend(
+            (
+                FINALIZATION_GENERATED_RECEIPT_FD_OPTION,
+                str(generated_receipt_descriptor),
+                GENERATED_CANDIDATE_RECEIPT_SHA256_OPTION,
+                admitted.receipt_sha256,
+                FINALIZATION_LAUNCH_RECEIPT_FD_OPTION,
+                str(launch_receipt_descriptor),
+                FINALIZATION_LAUNCH_RECEIPT_SHA256_OPTION,
+                admitted.worker_launch_receipt_sha256,
+            )
+        )
+        command[0] = str(executable_snapshot.path)
+        _run_receipt_bound_finalization_command(
+            command,
+            executable_snapshot,
+            receipt_descriptors,
+        )
+        return 0
+    except (
+        published_build.PublishedBuildError,
+        published_generated.PublishedGeneratedCandidateError,
+        resource_guard.GuardError,
+        OSError,
+    ) as error:
+        print(
+            f"Kagemusha production finalization failed closed: {error}",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        for descriptor in receipt_descriptors:
+            os.close(descriptor)
+        if executable_snapshot is not None:
+            executable_snapshot.close()
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the generic staged-resource runner command line."""
 
     parser = argparse.ArgumentParser(
         description=(
-            "Run one Kagemusha V4 generation/acceptance command with a 16 GiB "
-            "maximum and reserved host headroom."
+            "Run one non-production Kagemusha diagnostic command with a "
+            "16 GiB maximum and reserved host headroom."
         )
     )
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument(
+        "--non-production-diagnostic",
+        action="store_true",
+        help="acknowledge that this generic guard emits no production evidence",
+    )
     parser.add_argument("--max-memory-gib", type=float, default=DEFAULT_MAX_MEMORY_GIB)
     parser.add_argument(
         "--minimum-headroom-gib", type=float, default=DEFAULT_MINIMUM_HEADROOM_GIB
@@ -1839,7 +2353,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.command = args.command[1:]
     if not args.command:
         parser.error("a command is required after --")
+    if not args.non_production_diagnostic:
+        parser.error(
+            "--non-production-diagnostic is required for the generic runner"
+        )
     return args
+
+
+def _reject_production_command_in_generic_runner(command: Sequence[str]) -> None:
+    """Keep the generic resource runner out of every production bundle path."""
+
+    if not command:
+        return
+    executable = Path(command[0]).name.removesuffix(".exe")
+    if (
+        executable == BUNDLE_EXECUTABLE
+        and len(command) > 1
+        and command[1]
+        in {
+            "finalize-release",
+            "generate-candidate",
+            "publish-staged-candidate",
+            "validate-candidate",
+        }
+    ):
+        raise ValueError(
+            "the generic runner is diagnostic-only and cannot execute a "
+            "Kagemusha candidate or release command"
+        )
 
 
 def _generic_main(argv: list[str] | None = None) -> int:
@@ -1847,6 +2388,7 @@ def _generic_main(argv: list[str] | None = None) -> int:
 
     args = parse_args(argv)
     try:
+        _reject_production_command_in_generic_runner(args.command)
         result = run_guarded_command(
             args.command,
             report_path=args.report,
@@ -1874,6 +2416,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     option_prefix = (
         arguments[: arguments.index("--")] if "--" in arguments else arguments
     )
+    if GENERATED_CANDIDATE_RECEIPT_OPTION in option_prefix:
+        return _finalization_main(arguments)
     if "--report" in option_prefix and "--resource-report" not in option_prefix:
         return _generic_main(arguments)
     return _candidate_main(arguments)

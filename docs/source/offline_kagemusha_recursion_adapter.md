@@ -327,20 +327,97 @@ measured proof bounds, physical-device evidence, independent review, signed
 release attestation, and canonical top-up-finality roster. A generation label
 is not a trust anchor.
 
-The supported two-stage packager is:
+Production does not execute the generator, Git checkout, Rustup/Homebrew
+toolchain, GPG home, or Python bootstrap from developer-owned paths. A
+separately installed root provisioner must first copy the complete source,
+Cargo/rustc plus the full sysroot and non-system Mach-O dependency closure,
+linker, GPG binary and keyring, and Python bootstrap into a root-only staging
+directory. It verifies the reviewed source and canonical closure manifest,
+offline vendored Cargo graph, exact Git/builtin-helper set, and Apple
+developer/SDK/clang-resource closure
+there, removes every write bit, changes ownership to `root:wheel`, then
+atomically renames the directory beneath a root-owned parent that is not
+writable by the build UID. The final directory name is its closure-tree
+SHA-256. The repository helper only admits and consumes that published
+closure; it is not the privileged provisioner.
+
+The independently pinned canonical `production-build-closure.json` uses schema
+`iroha.kagemusha.production_build_closure.v1` and provisioning protocol
+`iroha.kagemusha.root_private_atomic_publish.v1`. It names the closure root and
+whole-tree SHA-256; source root and reviewed descriptor; Cargo, rustc, linker,
+Git, GPG, and Python paths plus their SHA-256 digests; the explicit rustc
+sysroot; canonical read-only Cargo home and sibling vendor directory; Git exec
+directory; Apple developer directory, SDK, and clang resource directory; the
+read-only `GNUPGHOME`; and the exact uppercase OpenPGP signing-key fingerprint.
+Every named non-system tool is inside the closure. Cargo's exact config uses
+the stable relative vendor path `../cargo-vendor` and every Cargo invocation is
+`--locked --offline --frozen`. The tree digest
+covers the type, relative path, mode, length, and bytes (or internal symlink
+target) of every entry except that provenance file, avoiding a digest cycle.
+Mach-O dependencies must resolve either inside the closure or under Apple's
+root-controlled `/usr/lib` or `/System/Library`. Admission inventories every
+regular Mach-O image anywhere in the published closure, including dlopened
+Python extension modules and runtime images beneath the Git, GPG, Rust, and
+Apple trees; only the explicitly invoked tools receive root-executable
+`@rpath` treatment. An otherwise clean Python launcher cannot hide an absolute
+Homebrew dependency in `_hashlib` or another stdlib extension. The repository
+intentionally does not ship a mutable-checkout command that runs this
+privileged publication step; production remains blocked until the independently
+pinned root provisioner has published the closure.
+
+The same-UID threat also applies to compiler outputs: an operator-owned `0700`
+Cargo target is not isolated from another process running as that operator.
+The root supervisor therefore creates or verifies the no-login `boi-build`
+account, proves there is no other process or session for that UID, creates one
+private target owned only by that UID beneath a root-controlled work parent,
+and launches the following internal worker command under that UID. After the
+worker exits, root opens the candidate and canonical build report with
+`O_NOFOLLOW`, stable-hashes and copies their descriptor bytes through
+non-traversable root-only staging, removes every write bit, and atomically
+publishes the exact three-file candidate set. The third file is the canonical,
+independently pinned `root-published-candidate-build.json`; its schema is
+`iroha.kagemusha.root_published_candidate_build.v1` and its protocol is
+`iroha.kagemusha.distinct_uid_root_atomic_publish.v1`. The artifact directory
+is named by the whole-set tree SHA-256, with only the receipt excluded to avoid
+a digest cycle. The analogous root-published Kagami verifier uses schema
+`iroha.kagemusha.root_published_promotion_verifier.v1`.
+
+The build worker and subsequent generation worker are both internal root
+supervisor operations. Before each launch, root must prove that the no-login
+`boi-build` UID named by the admitted build receipt has no other process or
+session. Generation must run as that exact non-root UID in the shown empty
+environment, and `<fresh-generation-worker-root>` must not exist before the
+launcher creates it:
 
 ```text
-cd <clean-checkout>
-SOURCE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
-git verify-commit "$SOURCE_COMMIT"
-python3 -I scripts/build_kagemusha_v4_candidate_bundle.py --root "$PWD"
-# Require source_commit in the build report to equal $SOURCE_COMMIT.
+BUILD_CLOSURE=<root-published-content-addressed-closure>
+/usr/bin/env -i HOME=/var/empty LANG=C LC_ALL=C \
+  PATH=/usr/bin:/bin TMPDIR=/private/tmp TZ=UTC \
+  KAGEMUSHA_BUILD_USER_NAME=boi-build KAGEMUSHA_BUILD_UID=<numeric-uid> \
+  "$BUILD_CLOSURE/toolchain/python/bin/python3" -I \
+  "$BUILD_CLOSURE/source/scripts/build_kagemusha_v4_candidate_bundle.py" \
+  --root "$BUILD_CLOSURE/source" \
+  --target-dir <fresh-external-target-directory> \
+  --reviewed-source-closure \
+    "$BUILD_CLOSURE/reviewed-source-closure.json" \
+  --reviewed-source-closure-sha256 <independently-pinned-64-lower-hex> \
+  --toolchain-provenance \
+    "$BUILD_CLOSURE/production-build-closure.json" \
+  --toolchain-provenance-sha256 <independently-pinned-64-lower-hex> \
+  > <boi-build-private-target>/sealed-kagemusha-candidate-build.json
 
-python3 scripts/run_kagemusha_v4_generation.py \
-  --resource-report <new-resource-report-directory> -- \
-  <binary_path-from-sealed-build-report> \
+/usr/bin/env -i HOME=/var/empty LANG=C LC_ALL=C \
+  PATH=/usr/bin:/bin TMPDIR=/private/tmp TZ=UTC \
+  "$BUILD_CLOSURE/toolchain/python/bin/python3" -I \
+  "$BUILD_CLOSURE/source/scripts/run_kagemusha_v4_generation.py" \
+  --resource-report <fresh-generation-worker-root>/resource-report \
+  --root-published-build-receipt \
+    <root-published-artifact>/root-published-candidate-build.json \
+  --root-published-build-receipt-sha256 \
+    <independently-pinned-64-lower-hex> \
+  -- <root-published-artifact>/kagemusha_recursive_spend_v4_bundle \
   generate-candidate \
-  --out-dir <new-directory> \
+  --out-dir <fresh-generation-worker-root>/candidate \
   --chain-id <chain> --asset-definition-id <asset> --asset-scale <u32> \
   --generation <id> --parameter-generation <id> \
   --source-commit <40-lower-hex> --source-tree-sha256 <64-lower-hex> \
@@ -349,15 +426,49 @@ python3 scripts/run_kagemusha_v4_generation.py \
   --step-ep-circuit-params <canonical-norito-file> \
   --topup-finality-roster <canonical-norito-file>
 
-<binary_path-from-sealed-build-report> \
+/usr/bin/env -i HOME=/var/empty LANG=C LC_ALL=C \
+  PATH=/usr/bin:/bin TMPDIR=/private/tmp TZ=UTC \
+  "$BUILD_CLOSURE/toolchain/python/bin/python3" -I \
+  "$BUILD_CLOSURE/source/scripts/run_kagemusha_v4_generation.py" \
+  --root-published-generated-candidate-receipt \
+    <root-published-generated>/root-published-generated-candidate.json \
+  --root-published-generated-candidate-receipt-sha256 \
+    <independently-pinned-64-lower-hex> \
+  -- <root-published-artifact>/kagemusha_recursive_spend_v4_bundle \
   finalize-release \
-  --candidate-dir <generated-candidate> \
+  --candidate-dir <root-published-generated>/candidate \
   --out-dir <new-final-directory> \
   --release-policy <canonical-norito-file> \
   --release-attestation <canonical-norito-file> \
   --benchmark-evidence <exact-file> \
   --cryptographic-review <canonical-signed-norito-file>
 ```
+
+The candidate-build receipt authenticates the executable, not the generated
+candidate. The mutable candidate and resource summary are explicitly marked
+`provisional_boi_generation_worker_output`; their cross-stage state is
+`blocked_pending_root_descriptor_copy_atomic_publication_receipt`. The
+separately installed root supervisor must keep the build UID quarantined,
+stable-hash and copy every candidate/report byte from `O_NOFOLLOW` descriptors
+through root-only staging, normalize directories to `0555` and files to
+`0444`/`0555`, and atomically publish the exact four-entry inventory described
+below. The canonical independently pinned receipt uses schema
+`iroha.kagemusha.root_published_generated_candidate.v1` and binds the included
+canonical `boi.taira.generation_worker_launch.v1` receipt, candidate-build
+receipt, successful exact generation summary, subtree and root digests, build
+UID, and source/toolchain closure. The published root has exactly four direct
+entries: `candidate/`, `resource-report/`,
+`generation-worker-launch.json`, and
+`root-published-generated-candidate.json`; only the final receipt is excluded
+from the root tree digest. Both receipt files are canonical JSON plus LF,
+`root:wheel`, singly linked, and mode `0444`. Finalization runs under the same
+`/usr/bin/env -i` environment, admits the full generated receipt and launch
+receipt, rechecks the
+complete Mach-O loader closure, and passes both already-open descriptors and
+SHA-256 pins to the binary. The binary parses their exact mutually bound
+schemas and commits both receipt hashes to the final manifest, release
+attestation subject, and promotion record. Binary finalization without those
+admitted descriptors, and every provisional worker path, fail closed.
 
 Direct unsupervised `generate-candidate` execution is rejected. The launcher
 holds the per-user heavy-job lock shared with the strict TLAPS runner and applies
@@ -370,7 +481,11 @@ same-user TLAPM, Isabelle, Poly/ML, or Kagemusha work outside the owned group.
 A conflict terminates only the owned generation group with status 74, and a
 final exclusion check runs before successful candidate finalization so a late
 direct job cannot produce valid evidence.
-The launcher writes owner-private JSONL and summary evidence. A lower
+The launcher creates the previously absent output parent itself with mode
+`0700`, rejects every pre-existing or reusable parent, and requires the
+candidate directory and resource-report directory to be direct children of
+that fresh single-use worker root. It writes owner-private JSONL and summary
+evidence there. A lower
 `--max-memory-gib` is accepted; the ceiling cannot be raised. Its one-shot
 inherited launch capability prevents stale environment markers from bypassing
 the wrapper, but is not a security boundary against a malicious same-UID

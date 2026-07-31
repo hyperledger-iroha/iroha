@@ -407,6 +407,7 @@ os.write(fd, f'stage=residual-worker-{worker.pid}\\n'.encode())
                     str(runner),
                     "--report",
                     str(root / "report.json"),
+                    "--non-production-diagnostic",
                     "--minimum-headroom-gib",
                     "0",
                     "--",

@@ -2486,7 +2486,7 @@ pub mod isi {
         out
     }
 
-    fn compute_parliament_roster_root(
+    pub(crate) fn compute_parliament_roster_root(
         bodies: &iroha_data_model::governance::types::ParliamentBodies,
     ) -> Result<[u8; 32], Error> {
         let encoded = norito::to_bytes(bodies).map_err(|_| {
@@ -2500,14 +2500,24 @@ pub mod isi {
         Ok(root)
     }
 
-    fn derive_jit_parliament_snapshot(
+    /// Derive the exact proposal-time JIT Parliament bodies used by a signed enactment.
+    ///
+    /// The helper is shared by proposal snapshots and the narrow governed offline-asset
+    /// bootstrap lifecycle. It never accepts a caller-supplied roster: eligibility and
+    /// sortition are recomputed from current chain state.
+    pub(crate) fn derive_jit_parliament_bodies_for_enactment(
         proposal_id: [u8; 32],
-        created_height: u64,
+        selection_height: u64,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<crate::state::GovernanceParliamentSnapshot, Error> {
-        let selection_epoch = created_height;
+    ) -> Result<
+        (
+            [u8; 32],
+            iroha_data_model::governance::types::ParliamentBodies,
+        ),
+        Error,
+    > {
         let beacon =
-            derive_proposal_parliament_beacon(proposal_id, created_height, state_transaction);
+            derive_proposal_parliament_beacon(proposal_id, selection_height, state_transaction);
         let current_height = state_transaction._curr_block.height().get();
         let required_bond =
             required_citizenship_bond_for_role(&state_transaction.gov, "parliament").max(
@@ -2536,13 +2546,27 @@ pub mod isi {
         let bodies = draw::derive_parliament_bodies_from_bonded_citizens(
             &state_transaction.gov,
             &state_transaction.chain_id,
-            selection_epoch,
+            selection_height,
             &beacon,
             candidates
                 .iter()
                 .map(|(account_id, bond)| (account_id, bond.clone())),
             iroha_data_model::isi::governance::CouncilDerivationKind::Vrf,
         );
+        Ok((beacon, bodies))
+    }
+
+    fn derive_jit_parliament_snapshot(
+        proposal_id: [u8; 32],
+        created_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<crate::state::GovernanceParliamentSnapshot, Error> {
+        let selection_epoch = created_height;
+        let (beacon, bodies) = derive_jit_parliament_bodies_for_enactment(
+            proposal_id,
+            created_height,
+            state_transaction,
+        )?;
         let roster_root = compute_parliament_roster_root(&bodies)?;
         Ok(crate::state::GovernanceParliamentSnapshot {
             selection_epoch,

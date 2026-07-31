@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,9 @@ assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+ORIGINAL_REQUIRE_GENERATION_WORKER_IDENTITY = (
+    MODULE._require_generation_worker_identity
+)
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +30,58 @@ def _admit_test_output_filesystem(monkeypatch) -> None:
     """Keep tmp_path portable while filesystem-policy tests override explicitly."""
 
     monkeypatch.setattr(MODULE, "_filesystem_type", lambda _path: "ext4")
+    monkeypatch.setattr(
+        MODULE.published_build,
+        "admit_candidate",
+        lambda receipt, digest: SimpleNamespace(
+            artifact_root=receipt.parent,
+            artifact_tree_sha256="a" * 64,
+            build_uid=501,
+            build_user_name="boi-build",
+            executable=receipt.resolve(strict=True),
+            executable_sha256=digest,
+            executable_size_bytes=receipt.stat().st_size,
+            receipt=receipt.resolve(strict=True),
+            receipt_sha256=digest,
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_require_root_published_executable",
+        lambda _snapshot, _admitted: None,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_require_generation_worker_identity",
+        lambda _admitted: None,
+    )
+
+
+def _worker_output_root(tmp_path: Path, name: str = "generation-worker-output") -> Path:
+    return tmp_path / name
+
+
+def _candidate_path(tmp_path: Path, name: str = "generation-worker-output") -> Path:
+    return _worker_output_root(tmp_path, name) / "candidate"
+
+
+def _report_path(tmp_path: Path, name: str = "generation-worker-output") -> Path:
+    return _worker_output_root(tmp_path, name) / "resource-report"
+
+
+def _generation_command(
+    tmp_path: Path,
+    executable: Path,
+    *,
+    root_name: str = "generation-worker-output",
+    output_name: str = "candidate",
+) -> list[str]:
+    return [
+        str(executable),
+        "generate-candidate",
+        "--out-dir",
+        str(_worker_output_root(tmp_path, root_name) / output_name),
+    ]
 
 
 def _fake_prebuilt_generator(tmp_path: Path, body: str = "") -> Path:
@@ -84,14 +140,19 @@ if len(sys.argv) > 1 and sys.argv[1] in {"generate-candidate", "publish-staged-c
 
 
 def _guarded_args(tmp_path: Path, executable: Path) -> list[str]:
+    executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
     return [
         "--resource-report",
-        str(tmp_path / "resource-report"),
+        str(_report_path(tmp_path)),
+        "--root-published-build-receipt",
+        str(executable),
+        "--root-published-build-receipt-sha256",
+        executable_sha256,
         "--",
         str(executable),
         "generate-candidate",
         "--out-dir",
-        str(tmp_path / "candidate"),
+        str(_candidate_path(tmp_path)),
         "--source-commit",
         "0" * 40,
         "--source-tree-sha256",
@@ -117,7 +178,7 @@ def test_runner_executes_small_owned_group_and_writes_reports(
         MODULE.resource_guard, "HEAVY_JOB_LOCK_PATH", tmp_path / "heavy.lock"
     )
     monkeypatch.setattr(MODULE, "LOCK_PATH", tmp_path / "kagemusha.lock")
-    report_root = tmp_path / "resource-report"
+    report_root = _report_path(tmp_path)
 
     consume_capability = """
 import os
@@ -143,13 +204,30 @@ if record != expected:
     assert summary["post_run_validation"] == "completed"
     assert summary["post_success_finalize"] == "completed"
     assert summary["post_success_finalize_result"] == 1
-    assert (tmp_path / "candidate").is_dir()
+    assert _candidate_path(tmp_path).is_dir()
     assert summary["report_context"]["output_parent"]["canonical_path"] == str(
-        tmp_path.resolve()
+        _worker_output_root(tmp_path).resolve()
+    )
+    assert (
+        summary["report_context"]["output_parent"]["admission"]
+        == "fresh_single_use_generation_worker_output_parent"
+    )
+    assert (
+        summary["report_context"]["publication_status"]
+        == MODULE.GENERATION_PUBLICATION_STATUS
+    )
+    assert (
+        summary["report_context"]["cross_stage_status"]
+        == MODULE.GENERATION_CROSS_STAGE_STATUS
+    )
+    assert summary["report_context"]["root_published_build"]["build_uid"] == 501
+    assert (
+        summary["report_context"]["root_published_build"]["build_user_name"]
+        == "boi-build"
     )
     expected_parent = summary["report_context"]["output_parent"]
     executable_identity = summary["report_context"]["executable_identity"]
-    observations = (tmp_path / "candidate" / "fd-observations").read_text(
+    observations = (_candidate_path(tmp_path) / "fd-observations").read_text(
         encoding="ascii"
     ).splitlines()
     assert len(observations) == 2
@@ -170,7 +248,9 @@ if record != expected:
     assert execution_paths[0] == execution_paths[1]
     assert execution_paths[0] == executable_identity["execution"]["canonical_path"]
     assert executable_identity["execution"]["method"] == "darwin_private_fd_copy"
-    assert not list(tmp_path.glob(f"{MODULE.JOURNAL_PREFIX}*"))
+    assert not list(
+        _worker_output_root(tmp_path).glob(f"{MODULE.JOURNAL_PREFIX}*")
+    )
     assert executable_identity["canonical_path"] == str(executable.resolve())
     assert executable_identity["sha256"] == hashlib.sha256(
         executable.read_bytes()
@@ -213,12 +293,286 @@ def test_runner_requires_prebuilt_generator_and_exact_subcommand(tmp_path: Path)
     assert not report.exists()
 
 
-def test_runner_refuses_to_overwrite_resource_evidence(tmp_path: Path) -> None:
-    report_root = tmp_path / "resource-report"
-    report_root.mkdir()
+def test_runner_requires_receipt_named_executable(tmp_path: Path) -> None:
+    executable = _fake_prebuilt_generator(tmp_path)
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    other = _fake_prebuilt_generator(other_root)
+    arguments = _guarded_args(tmp_path, executable)
+    receipt_position = arguments.index("--root-published-build-receipt") + 1
+    digest_position = (
+        arguments.index("--root-published-build-receipt-sha256") + 1
+    )
+    arguments[receipt_position] = str(other)
+    arguments[digest_position] = hashlib.sha256(other.read_bytes()).hexdigest()
+
+    assert MODULE.main(arguments) == 1
+    assert not _report_path(tmp_path).exists()
+
+
+def test_generation_requires_receipt_named_non_root_build_uid(
+    monkeypatch,
+) -> None:
+    admitted = SimpleNamespace(
+        build_uid=501,
+        build_user_name=MODULE.GENERATION_WORKER_NAME,
+    )
+    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 501)
+    ORIGINAL_REQUIRE_GENERATION_WORKER_IDENTITY(admitted)
+
+    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 502)
+    with pytest.raises(
+        MODULE.resource_guard.GuardError,
+        match="receipt-named non-root",
+    ):
+        ORIGINAL_REQUIRE_GENERATION_WORKER_IDENTITY(admitted)
+
+    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
+    admitted.build_uid = 0
+    with pytest.raises(
+        MODULE.resource_guard.GuardError,
+        match="receipt-named non-root",
+    ):
+        ORIGINAL_REQUIRE_GENERATION_WORKER_IDENTITY(admitted)
+
+    admitted.build_uid = 501
+    admitted.build_user_name = "operator"
+    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 501)
+    with pytest.raises(
+        MODULE.resource_guard.GuardError,
+        match="receipt-named non-root",
+    ):
+        ORIGINAL_REQUIRE_GENERATION_WORKER_IDENTITY(admitted)
+
+
+def test_production_finalization_rejects_direct_provisional_worker_path(
+    tmp_path: Path,
+) -> None:
+    executable = _fake_prebuilt_generator(tmp_path)
+    published_candidate = tmp_path / "root-published" / "candidate"
+    published_candidate.mkdir(parents=True)
+    provisional_candidate = tmp_path / "worker-output" / "candidate"
+    provisional_candidate.mkdir(parents=True)
+    admitted = SimpleNamespace(
+        candidate_build=SimpleNamespace(executable=executable.resolve()),
+        candidate_dir=published_candidate.resolve(),
+    )
+    command = [
+        str(executable),
+        "finalize-release",
+        "--candidate-dir",
+        str(provisional_candidate),
+    ]
+
+    with pytest.raises(
+        MODULE.resource_guard.GuardError,
+        match="rejects direct provisional worker paths",
+    ):
+        MODULE._validate_finalization_command(command, admitted)
+
+
+def test_finalization_runner_admits_receipt_named_candidate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    executable = _fake_prebuilt_generator(tmp_path)
+    candidate = tmp_path / "root-published" / "candidate"
+    candidate.mkdir(parents=True)
+    admitted_build = SimpleNamespace(
+        executable=executable.resolve(),
+        executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
+        executable_size_bytes=executable.stat().st_size,
+    )
+    receipt = tmp_path / MODULE.published_generated.RECEIPT_FILE_NAME
+    receipt.write_bytes(b"generated receipt\n")
+    launch_receipt = (
+        tmp_path
+        / MODULE.published_generated.WORKER_LAUNCH_RECEIPT_FILE_NAME
+    )
+    launch_receipt.write_bytes(b"launch receipt\n")
+    admitted = SimpleNamespace(
+        candidate_build=admitted_build,
+        candidate_dir=candidate.resolve(),
+        receipt=receipt.resolve(),
+        receipt_sha256=hashlib.sha256(receipt.read_bytes()).hexdigest(),
+        worker_launch_receipt=launch_receipt.resolve(),
+        worker_launch_receipt_sha256=hashlib.sha256(
+            launch_receipt.read_bytes()
+        ).hexdigest(),
+    )
+    monkeypatch.setattr(
+        MODULE.published_generated,
+        "admit_generated_candidate",
+        lambda _receipt, _digest: admitted,
+    )
+    invoked: list[list[str]] = []
+    monkeypatch.setattr(
+        MODULE,
+        "_validate_finalization_loader_boundary",
+        lambda _admitted: None,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_open_finalization_receipt_descriptor",
+        lambda path, _digest: os.open(path, os.O_RDONLY),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_run_receipt_bound_finalization_command",
+        lambda command, _snapshot, _descriptors: invoked.append(
+            list(command)
+        ),
+    )
+    arguments = [
+        MODULE.GENERATED_CANDIDATE_RECEIPT_OPTION,
+        str(receipt),
+        MODULE.GENERATED_CANDIDATE_RECEIPT_SHA256_OPTION,
+        "a" * 64,
+        "--",
+        str(executable),
+        "finalize-release",
+        "--candidate-dir",
+        str(candidate),
+    ]
+
+    assert MODULE.main(arguments) == 0
+    assert len(invoked) == 1
+    assert invoked[0][0] == str(executable.resolve())
+    assert invoked[0][1] == "finalize-release"
+    assert MODULE.FINALIZATION_GENERATED_RECEIPT_FD_OPTION in invoked[0]
+    assert MODULE.FINALIZATION_LAUNCH_RECEIPT_FD_OPTION in invoked[0]
+    assert admitted.receipt_sha256 in invoked[0]
+    assert admitted.worker_launch_receipt_sha256 in invoked[0]
+
+
+def test_finalization_rejects_caller_supplied_receipt_capability(
+    tmp_path: Path,
+) -> None:
+    executable = _fake_prebuilt_generator(tmp_path)
+    candidate = tmp_path / "root-published" / "candidate"
+    candidate.mkdir(parents=True)
+    admitted = SimpleNamespace(
+        candidate_build=SimpleNamespace(executable=executable.resolve()),
+        candidate_dir=candidate.resolve(),
+    )
+    command = [
+        str(executable),
+        "finalize-release",
+        "--candidate-dir",
+        str(candidate),
+        MODULE.FINALIZATION_LAUNCH_RECEIPT_FD_OPTION,
+        "9",
+    ]
+
+    with pytest.raises(
+        MODULE.resource_guard.GuardError,
+        match="injected only after admission",
+    ):
+        MODULE._validate_finalization_command(command, admitted)
+
+
+def test_finalization_environment_discards_loader_overrides(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DYLD_INSERT_LIBRARIES", "/tmp/hostile.dylib")
+    monkeypatch.setenv("LD_PRELOAD", "/tmp/hostile.so")
+    monkeypatch.setenv("UNRELATED_SECRET", "must-not-propagate")
+
+    environment = MODULE._sanitized_finalization_environment()
+
+    assert environment == {
+        "HOME": "/var/empty",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/bin:/bin",
+        "TMPDIR": "/private/tmp",
+        "TZ": "UTC",
+    }
+
+
+def test_finalization_loader_boundary_is_deny_by_default_off_macos(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(MODULE.sys, "platform", "linux")
+    admitted = SimpleNamespace(
+        artifact_root=Path("/root/published"),
+        executable=Path("/root/published/kagemusha_recursive_spend_v4_bundle"),
+    )
+
+    with pytest.raises(
+        MODULE.resource_guard.GuardError,
+        match="requires the reviewed macOS",
+    ):
+        MODULE._validate_finalization_loader_boundary(admitted)
+
+
+def test_finalization_loader_boundary_scans_the_full_admitted_closure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inspector = (tmp_path / "otool").resolve()
+    inspector.write_bytes(b"immutable inspector\n")
+    inspector.chmod(0o500)
+    executable = _fake_prebuilt_generator(tmp_path)
+    admitted = SimpleNamespace(
+        artifact_root=tmp_path.resolve(),
+        executable=executable.resolve(),
+    )
+    observed: list[tuple[Path, tuple[Path, ...], Path]] = []
+    monkeypatch.setattr(MODULE.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        MODULE.published_build,
+        "TRUSTED_OWNER_UID",
+        os.geteuid(),
+    )
+    monkeypatch.setattr(
+        MODULE.candidate_builder,
+        "_admit_macos_dynamic_tool_closure",
+        lambda root, executables, *, otool: observed.append(
+            (root, tuple(executables), otool)
+        ),
+    )
+
+    MODULE._validate_finalization_loader_boundary(
+        admitted,
+        otool=inspector,
+    )
+
+    assert observed == [
+        (tmp_path.resolve(), (executable.resolve(),), inspector)
+    ]
+
+
+def test_generic_runner_is_explicitly_diagnostic_only(tmp_path: Path) -> None:
+    executable = _fake_prebuilt_generator(tmp_path)
+    with pytest.raises(SystemExit):
+        MODULE.parse_args(
+            [
+                "--report",
+                str(tmp_path / "report.json"),
+                "--",
+                "/usr/bin/true",
+            ]
+        )
+    with pytest.raises(ValueError, match="diagnostic-only"):
+        MODULE._reject_production_command_in_generic_runner(
+            [
+                str(executable),
+                "finalize-release",
+                "--candidate-dir",
+                str(tmp_path / "candidate"),
+            ]
+        )
+
+
+def test_runner_refuses_preexisting_reusable_output_parent(tmp_path: Path) -> None:
+    worker_root = _worker_output_root(tmp_path)
+    worker_root.mkdir()
+    (worker_root / "resource-report").mkdir()
     executable = _fake_prebuilt_generator(tmp_path)
 
     assert MODULE.main(_guarded_args(tmp_path, executable)) == 1
+    assert not _candidate_path(tmp_path).exists()
 
 
 def test_runner_refuses_when_shared_heavy_job_lock_is_held(
@@ -262,10 +616,12 @@ raise SystemExit(9)
     executable = _fake_prebuilt_generator(tmp_path, body)
 
     assert MODULE.main(_guarded_args(tmp_path, executable)) == 9
-    assert not list(tmp_path.glob(".kagemusha-v4-staging-*-work"))
-    assert not (tmp_path / "candidate").exists()
+    assert not list(
+        _worker_output_root(tmp_path).glob(".kagemusha-v4-staging-*-work")
+    )
+    assert not _candidate_path(tmp_path).exists()
     summary = json.loads(
-        (tmp_path / "resource-report" / "kagemusha_resource_summary.json").read_text(
+        (_report_path(tmp_path) / "kagemusha_resource_summary.json").read_text(
             encoding="utf-8"
         )
     )
@@ -280,7 +636,7 @@ def test_runner_rejects_caller_supplied_staging_id(tmp_path: Path) -> None:
     arguments.extend(["--staging-id", "0" * MODULE.STAGING_ID_HEX_LENGTH])
 
     assert MODULE.main(arguments) == 1
-    assert not (tmp_path / "resource-report").exists()
+    assert not _report_path(tmp_path).exists()
 
 
 def test_runner_rejects_symlinked_or_writable_executable(tmp_path: Path) -> None:
@@ -291,11 +647,11 @@ def test_runner_rejects_symlinked_or_writable_executable(tmp_path: Path) -> None
     symlink.symlink_to(executable)
 
     assert MODULE.main(_guarded_args(tmp_path, symlink)) == 1
-    assert not (tmp_path / "resource-report").exists()
+    assert not _report_path(tmp_path).exists()
 
     executable.chmod(0o722)
     assert MODULE.main(_guarded_args(tmp_path, executable)) == 1
-    assert not (tmp_path / "resource-report").exists()
+    assert not _report_path(tmp_path).exists()
 
 
 def test_runner_fails_if_executable_changes_during_run(
@@ -310,11 +666,11 @@ def test_runner_fails_if_executable_changes_during_run(
         """
 from pathlib import Path
 import sys
-original = Path(sys.argv[0]).parents[1] / "kagemusha_recursive_spend_v4_bundle"
+original = Path(sys.argv[0]).parents[2] / "kagemusha_recursive_spend_v4_bundle"
 original.rename(original.with_name("admitted-original"))
 original.write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")
 original.chmod(0o700)
-(Path(sys.argv[0]).parents[1] / "admitted-copy-ran").write_text(
+(Path(sys.argv[0]).parents[2] / "admitted-copy-ran").write_text(
     "yes", encoding="ascii"
 )
 """,
@@ -322,92 +678,98 @@ original.chmod(0o700)
 
     assert MODULE.main(_guarded_args(tmp_path, executable)) == 1
     summary = json.loads(
-        (tmp_path / "resource-report" / "kagemusha_resource_summary.json").read_text(
+        (_report_path(tmp_path) / "kagemusha_resource_summary.json").read_text(
             encoding="utf-8"
         )
     )
     assert summary["exit_reason"] == "post_run_validation_error"
     assert summary["post_run_validation"] == "failed"
     assert summary["post_success_finalize"] == "skipped"
-    assert not (tmp_path / "candidate").exists()
+    assert not _candidate_path(tmp_path).exists()
     assert (tmp_path / "admitted-copy-ran").read_text(encoding="ascii") == "yes"
 
 
 def test_stale_journal_recovers_only_its_exact_staging_directory(
     tmp_path: Path,
 ) -> None:
-    command = [
-        str(_fake_prebuilt_generator(tmp_path)),
-        "generate-candidate",
-        "--out-dir",
-        str(tmp_path / "candidate"),
-    ]
+    command = _generation_command(
+        tmp_path,
+        _fake_prebuilt_generator(tmp_path),
+    )
     _guarded, parent, staging_id = MODULE._prepare_guarded_command(command)
     try:
         MODULE._create_run_journal(parent, staging_id)
-        residue = tmp_path / f"{MODULE.STAGING_PREFIX}{staging_id}-crash"
+        residue = parent.path / f"{MODULE.STAGING_PREFIX}{staging_id}-crash"
         residue.mkdir(mode=0o700)
         (residue / "partial").write_bytes(b"partial")
 
         assert MODULE._recover_stale_runs(parent) == 1
         assert not residue.exists()
-        assert not list(tmp_path.glob(f"{MODULE.JOURNAL_PREFIX}*"))
+        assert not list(parent.path.glob(f"{MODULE.JOURNAL_PREFIX}*"))
     finally:
         parent.close()
 
 
-def test_stale_journal_for_candidate_a_does_not_block_candidate_b(
+def test_fresh_output_parent_cannot_be_reused_after_a_prior_run(
     tmp_path: Path,
 ) -> None:
     executable = _fake_prebuilt_generator(tmp_path)
-    first_command = [
-        str(executable),
-        "generate-candidate",
-        "--out-dir",
-        str(tmp_path / "candidate-a"),
-    ]
-    second_command = [
-        str(executable),
-        "generate-candidate",
-        "--out-dir",
-        str(tmp_path / "candidate-b"),
-    ]
-    _guarded, first_parent, first_id = MODULE._prepare_guarded_command(first_command)
-    try:
-        MODULE._create_run_journal(first_parent, first_id)
-        residue = tmp_path / f"{MODULE.STAGING_PREFIX}{first_id}-crash"
-        residue.mkdir(mode=0o700)
-    finally:
-        first_parent.close()
-
-    _guarded, second_parent, _second_id = MODULE._prepare_guarded_command(
-        second_command
+    first_command = _generation_command(tmp_path, executable, output_name="candidate-a")
+    _guarded, first_parent, _first_id = MODULE._prepare_guarded_command(
+        first_command
     )
+    first_parent.close()
+
+    second_command = _generation_command(
+        tmp_path,
+        executable,
+        output_name="candidate-b",
+    )
+    with pytest.raises(
+        MODULE.resource_guard.GuardError,
+        match="preexisting or reusable",
+    ):
+        MODULE._prepare_guarded_command(second_command)
+
+
+def test_fresh_output_parent_contains_the_resource_report(tmp_path: Path) -> None:
+    executable = _fake_prebuilt_generator(tmp_path)
+    command = _generation_command(tmp_path, executable)
+    _guarded, parent, _staging_id = MODULE._prepare_guarded_command(command)
     try:
-        assert MODULE._recover_stale_runs(second_parent) == 1
-        assert not residue.exists()
-        assert not list(tmp_path.glob(f"{MODULE.JOURNAL_PREFIX}*"))
+        with pytest.raises(
+            MODULE.resource_guard.GuardError,
+            match="inside the fresh single-use",
+        ):
+            MODULE._prepare_report_directory(
+                tmp_path / "outside-report",
+                output_parent=parent,
+            )
+        report, summary = MODULE._prepare_report_directory(
+            parent.path / "resource-report",
+            output_parent=parent,
+        )
+        assert report.parent == parent.path / "resource-report"
+        assert summary.parent == report.parent
     finally:
-        second_parent.close()
+        parent.close()
 
 
 def test_recovery_rejects_unjournaled_or_tampered_residue(tmp_path: Path) -> None:
-    command = [
-        str(_fake_prebuilt_generator(tmp_path)),
-        "generate-candidate",
-        "--out-dir",
-        str(tmp_path / "candidate"),
-    ]
+    command = _generation_command(
+        tmp_path,
+        _fake_prebuilt_generator(tmp_path),
+    )
     _guarded, parent, staging_id = MODULE._prepare_guarded_command(command)
     try:
-        unjournaled = tmp_path / f"{MODULE.STAGING_PREFIX}{staging_id}-unknown"
+        unjournaled = parent.path / f"{MODULE.STAGING_PREFIX}{staging_id}-unknown"
         unjournaled.mkdir(mode=0o700)
         with pytest.raises(MODULE.resource_guard.GuardError, match="unjournaled"):
             MODULE._recover_stale_runs(parent)
         unjournaled.rmdir()
 
         MODULE._create_run_journal(parent, staging_id)
-        marker = tmp_path / MODULE._journal_name(staging_id)
+        marker = parent.path / MODULE._journal_name(staging_id)
         marker.write_text("{}\n", encoding="utf-8")
         marker.chmod(0o600)
         with pytest.raises(MODULE.resource_guard.GuardError, match="output leaf"):
@@ -420,12 +782,10 @@ def test_recovery_rejects_unjournaled_or_tampered_residue(tmp_path: Path) -> Non
 def test_journal_write_failure_removes_partial_marker(
     tmp_path: Path, monkeypatch
 ) -> None:
-    command = [
-        str(_fake_prebuilt_generator(tmp_path)),
-        "generate-candidate",
-        "--out-dir",
-        str(tmp_path / "candidate"),
-    ]
+    command = _generation_command(
+        tmp_path,
+        _fake_prebuilt_generator(tmp_path),
+    )
     _guarded, parent, staging_id = MODULE._prepare_guarded_command(command)
 
     def fail_after_partial_write(descriptor: int, payload: bytes) -> None:
@@ -438,7 +798,7 @@ def test_journal_write_failure_removes_partial_marker(
             MODULE.resource_guard.GuardError, match="injected journal write failure"
         ):
             MODULE._create_run_journal(parent, staging_id)
-        assert not (tmp_path / MODULE._journal_name(staging_id)).exists()
+        assert not (parent.path / MODULE._journal_name(staging_id)).exists()
     finally:
         parent.close()
 
@@ -446,46 +806,38 @@ def test_journal_write_failure_removes_partial_marker(
 def test_uncertain_visible_publication_retains_recovery_journal(
     tmp_path: Path,
 ) -> None:
-    command = [
-        str(_fake_prebuilt_generator(tmp_path)),
-        "generate-candidate",
-        "--out-dir",
-        str(tmp_path / "candidate"),
-    ]
+    command = _generation_command(
+        tmp_path,
+        _fake_prebuilt_generator(tmp_path),
+    )
     _guarded, parent, staging_id = MODULE._prepare_guarded_command(command)
     try:
         MODULE._create_run_journal(parent, staging_id)
         MODULE._create_staging_directory(parent, staging_id)
-        (tmp_path / "candidate").mkdir(mode=0o700)
+        (parent.path / "candidate").mkdir(mode=0o700)
 
         with pytest.raises(MODULE.resource_guard.GuardError, match="retained"):
             MODULE._cleanup_guarded_run(parent, staging_id)
-        assert (tmp_path / MODULE._journal_name(staging_id)).is_file()
+        assert (parent.path / MODULE._journal_name(staging_id)).is_file()
     finally:
-        (tmp_path / "candidate").rmdir()
-        if (tmp_path / MODULE._journal_name(staging_id)).exists():
+        (parent.path / "candidate").rmdir()
+        if (parent.path / MODULE._journal_name(staging_id)).exists():
             MODULE._remove_run_journal(parent, staging_id)
         parent.close()
 
 
 def test_crash_recovery_is_scoped_to_the_same_output_parent(tmp_path: Path) -> None:
-    first_root = tmp_path / "first"
-    second_root = tmp_path / "second"
-    first_root.mkdir()
-    second_root.mkdir()
     executable = _fake_prebuilt_generator(tmp_path)
-    first_command = [
-        str(executable),
-        "generate-candidate",
-        "--out-dir",
-        str(first_root / "candidate"),
-    ]
-    second_command = [
-        str(executable),
-        "generate-candidate",
-        "--out-dir",
-        str(second_root / "candidate"),
-    ]
+    first_command = _generation_command(
+        tmp_path,
+        executable,
+        root_name="first-worker-output",
+    )
+    second_command = _generation_command(
+        tmp_path,
+        executable,
+        root_name="second-worker-output",
+    )
     _guarded, first_parent, staging_id = MODULE._prepare_guarded_command(
         first_command
     )
@@ -494,7 +846,7 @@ def test_crash_recovery_is_scoped_to_the_same_output_parent(tmp_path: Path) -> N
     )
     try:
         MODULE._create_run_journal(first_parent, staging_id)
-        residue = first_root / f"{MODULE.STAGING_PREFIX}{staging_id}-crash"
+        residue = first_parent.path / f"{MODULE.STAGING_PREFIX}{staging_id}-crash"
         residue.mkdir(mode=0o700)
 
         assert MODULE._recover_stale_runs(second_parent) == 0
@@ -508,14 +860,12 @@ def test_crash_recovery_is_scoped_to_the_same_output_parent(tmp_path: Path) -> N
 
 def test_pinned_output_parent_detects_path_replacement(tmp_path: Path) -> None:
     output_parent = tmp_path / "output-parent"
-    output_parent.mkdir()
     executable = _fake_prebuilt_generator(tmp_path)
-    command = [
-        str(executable),
-        "generate-candidate",
-        "--out-dir",
-        str(output_parent / "candidate"),
-    ]
+    command = _generation_command(
+        tmp_path,
+        executable,
+        root_name=output_parent.name,
+    )
     _guarded, parent, _staging_id = MODULE._prepare_guarded_command(command)
     moved = tmp_path / "moved-output-parent"
     try:
@@ -532,18 +882,15 @@ def test_output_parent_requires_disk_backing_and_free_space(
     tmp_path: Path, monkeypatch
 ) -> None:
     executable = _fake_prebuilt_generator(tmp_path)
-    command = [
-        str(executable),
-        "generate-candidate",
-        "--out-dir",
-        str(tmp_path / "candidate"),
-    ]
+    command = _generation_command(tmp_path, executable)
 
     monkeypatch.setattr(MODULE, "_filesystem_type", lambda _path: "tmpfs")
     with pytest.raises(MODULE.resource_guard.GuardError, match="disk-backed"):
         MODULE._prepare_guarded_command(command)
-    assert not list(tmp_path.glob(f"{MODULE.STAGING_PREFIX}*"))
-    assert not list(tmp_path.glob(f"{MODULE.JOURNAL_PREFIX}*"))
+    rejected_parent = _worker_output_root(tmp_path)
+    assert not list(rejected_parent.glob(f"{MODULE.STAGING_PREFIX}*"))
+    assert not list(rejected_parent.glob(f"{MODULE.JOURNAL_PREFIX}*"))
+    rejected_parent.rmdir()
 
     monkeypatch.setattr(MODULE, "_filesystem_type", lambda _path: "ext4")
     actual_fstatvfs = os.fstatvfs
@@ -574,12 +921,7 @@ def test_publisher_session_lifeline_prevents_orphaned_completion(
     )
     executable.chmod(0o700)
     snapshot = MODULE._snapshot_executable(str(executable), MODULE.BUNDLE_EXECUTABLE)
-    command = [
-        str(executable),
-        "generate-candidate",
-        "--out-dir",
-        str(tmp_path / "candidate"),
-    ]
+    command = _generation_command(tmp_path, executable)
     _guarded, parent, staging_id = MODULE._prepare_guarded_command(command)
     MODULE._create_run_journal(parent, staging_id)
     MODULE._prepare_execution_copy(parent, snapshot, staging_id)
@@ -597,6 +939,92 @@ def test_publisher_session_lifeline_prevents_orphaned_completion(
         assert not marker.exists()
     finally:
         session.close()
+        MODULE._release_execution_copy(parent, snapshot)
+        MODULE._cleanup_guarded_run(parent, staging_id)
+        parent.close()
+        snapshot.close()
+
+
+def test_pinned_session_exposes_only_the_exact_executable_descriptor(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / MODULE.BUNDLE_EXECUTABLE
+    marker = tmp_path / "descriptor-authenticated"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        f"fd_text = os.environ.get({MODULE.EXECUTABLE_FD_ENV!r}, '')\n"
+        "if not fd_text.isdecimal() or int(fd_text) < 3:\n"
+        "    raise SystemExit(81)\n"
+        "fd = int(fd_text)\n"
+        "opened = os.fstat(fd)\n"
+        "invoked = os.stat(sys.argv[0], follow_symlinks=True)\n"
+        "if (opened.st_dev, opened.st_ino) != (invoked.st_dev, invoked.st_ino):\n"
+        "    raise SystemExit(82)\n"
+        "os.lseek(fd, 0, os.SEEK_SET)\n"
+        "if b'descriptor-authenticated' not in os.read(fd, opened.st_size):\n"
+        "    raise SystemExit(83)\n"
+        "Path(sys.argv[1]).write_text('descriptor-authenticated', encoding='ascii')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    snapshot = MODULE._snapshot_executable(str(executable), MODULE.BUNDLE_EXECUTABLE)
+    command = _generation_command(tmp_path, executable)
+    _guarded, parent, staging_id = MODULE._prepare_guarded_command(command)
+    MODULE._create_run_journal(parent, staging_id)
+    MODULE._prepare_execution_copy(parent, snapshot, staging_id)
+    environment = os.environ.copy()
+    environment[MODULE.EXECUTABLE_FD_ENV] = "999999"
+    session = MODULE._spawn_pinned_guarded_session(
+        [snapshot.execution_path(), str(marker)],
+        environment,
+        (),
+        (),
+        snapshot,
+    )
+    try:
+        assert session.wrapper.wait(timeout=6) == 0
+        assert (
+            session.control.read_line(
+                timeout=2,
+                description="exact executable descriptor test",
+            ).split()[:3]
+            == ["EXIT", "0", "0"]
+        )
+        assert marker.read_text(encoding="ascii") == "descriptor-authenticated"
+    finally:
+        session.close()
+        MODULE._release_execution_copy(parent, snapshot)
+        MODULE._cleanup_guarded_run(parent, staging_id)
+        parent.close()
+        snapshot.close()
+
+
+def test_darwin_root_owned_executable_still_uses_private_execution_copy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(MODULE.sys, "platform", "darwin")
+    executable = _fake_prebuilt_generator(tmp_path)
+    snapshot = MODULE._snapshot_executable(
+        str(executable),
+        MODULE.BUNDLE_EXECUTABLE,
+    )
+    snapshot.owner_uid = MODULE.published_build.TRUSTED_OWNER_UID
+    command = _generation_command(tmp_path, executable)
+    _guarded, parent, staging_id = MODULE._prepare_guarded_command(command)
+    MODULE._create_run_journal(parent, staging_id)
+    try:
+        MODULE._prepare_execution_copy(parent, snapshot, staging_id)
+        assert snapshot.execution_copy is not None
+        assert snapshot.execution_path() == str(snapshot.execution_copy.path)
+        assert (
+            snapshot.report_context()["execution"]["method"]
+            == "darwin_private_fd_copy"
+        )
+    finally:
         MODULE._release_execution_copy(parent, snapshot)
         MODULE._cleanup_guarded_run(parent, staging_id)
         parent.close()

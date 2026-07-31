@@ -34,6 +34,7 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         (self.root / "Cargo.lock").write_text(
             "# fixture lockfile consumed by --locked\n", encoding="utf-8"
         )
+        self.git("add", "-f", "Cargo.lock")
 
     def tearDown(self) -> None:
         self.review_directory.cleanup()
@@ -95,20 +96,26 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         with self.assertRaisesRegex(seal.SourceSealError, "differs"):
             seal.compute_fingerprint(self.root, str(path), pin)
 
-    def test_clean_tree_has_no_dirty_review_bypass(self) -> None:
+    def test_clean_tree_descriptor_is_reproducible_and_reviewable(self) -> None:
         (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
         self.commit()
-        descriptor = seal.compute_observed_descriptor(self.root)
+        identity, descriptor, path, pin = self.reviewed_identity()
+
         self.assertFalse(descriptor["source_repo_dirty"])
-        payload = seal._canonical_json_bytes(descriptor)
-        path = self.review_root / "clean.json"
-        path.write_bytes(payload)
-        with self.assertRaisesRegex(seal.SourceSealError, "must be nonempty"):
-            seal.compute_identity(
-                self.root,
-                str(path),
-                hashlib.sha256(payload).hexdigest(),
-            )
+        self.assertFalse(identity.source_repo_dirty)
+        self.assertEqual(descriptor, seal.compute_observed_descriptor(self.root))
+        self.assertEqual(
+            seal._canonical_json_bytes(descriptor),
+            seal._canonical_json_bytes(seal.compute_observed_descriptor(self.root)),
+        )
+        self.assertEqual(
+            identity.source_tree_sha256,
+            seal.compute_fingerprint(self.root, str(path), pin),
+        )
+        self.assertEqual(
+            descriptor["ignored_cargo_lock_sha256"],
+            hashlib.sha256((self.root / "Cargo.lock").read_bytes()).hexdigest(),
+        )
 
     def test_descriptor_pin_and_canonical_bytes_are_mandatory(self) -> None:
         (self.root / "tracked.txt").write_text("base\n", encoding="utf-8")
@@ -151,16 +158,18 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         with self.assertRaisesRegex(seal.SourceSealError, "differs"):
             seal.compute_identity(self.root, str(path), pin)
 
-    def test_source_tree_and_descriptor_bind_ignored_root_cargo_lock(self) -> None:
+    def test_source_tree_and_descriptor_bind_tracked_root_cargo_lock(self) -> None:
         (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
         self.commit()
         (self.root / "tracked.txt").write_text("reviewed\n", encoding="utf-8")
         identity, descriptor, path, pin = self.reviewed_identity()
 
         (self.root / "Cargo.lock").write_text(
-            "# changed ignored lockfile consumed by --locked\n", encoding="utf-8"
+            "# changed tracked lockfile consumed by --locked\n", encoding="utf-8"
         )
-        self.assertEqual(seal.status(self.root), b" M tracked.txt\0")
+        observed_status = seal.status(self.root).split(b"\0")
+        self.assertIn(b" M Cargo.lock", observed_status)
+        self.assertIn(b" M tracked.txt", observed_status)
         with self.assertRaisesRegex(seal.SourceSealError, "differs"):
             seal.compute_identity(self.root, str(path), pin)
         replacement = seal.compute_observed_descriptor(self.root)
@@ -173,19 +182,33 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
             replacement["ignored_cargo_lock_sha256"],
         )
 
-    def test_rejects_missing_or_symlinked_root_cargo_lock(self) -> None:
+    def test_rejects_missing_or_symlinked_tracked_root_cargo_lock(self) -> None:
         (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
         self.commit()
         (self.root / "tracked.txt").write_text("reviewed\n", encoding="utf-8")
         (self.root / "Cargo.lock").unlink()
-        with self.assertRaisesRegex(seal.SourceSealError, "ignored source set"):
+        with self.assertRaisesRegex(seal.SourceSealError, "Cargo.lock is missing"):
             seal.compute_observed_descriptor(self.root)
 
         os.symlink("tracked.txt", self.root / "Cargo.lock")
         with self.assertRaisesRegex(
-            seal.SourceSealError, "regular file|must not be executable"
+            seal.SourceSealError, "singly linked regular file"
         ):
             seal.compute_observed_descriptor(self.root)
+
+    def test_legacy_sole_ignored_root_cargo_lock_is_conservatively_dirty(self) -> None:
+        self.git("rm", "--cached", "-q", "Cargo.lock")
+        (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        self.commit()
+        identity, descriptor, path, pin = self.reviewed_identity()
+
+        self.assertTrue(identity.source_repo_dirty)
+        self.assertTrue(descriptor["source_repo_dirty"])
+        self.assertEqual(seal.status(self.root), b"")
+        self.assertEqual(
+            identity.source_tree_sha256,
+            seal.compute_fingerprint(self.root, str(path), pin),
+        )
 
     def test_rejects_any_additional_ignored_source(self) -> None:
         (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
@@ -195,7 +218,7 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         self.commit()
         (self.root / "tracked.txt").write_text("reviewed\n", encoding="utf-8")
         (self.root / "hidden-input.bin").write_bytes(b"unbound ignored input\n")
-        with self.assertRaisesRegex(seal.SourceSealError, "ignored source set"):
+        with self.assertRaisesRegex(seal.SourceSealError, "sole ignored path"):
             seal.compute_observed_descriptor(self.root)
 
     def test_rejects_hardlinked_tracked_source(self) -> None:
@@ -206,6 +229,303 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         first.write_bytes(b"reviewed dirty inode\n")
         with self.assertRaisesRegex(seal.SourceSealError, "singly linked"):
             seal.compute_observed_descriptor(self.root)
+
+    def test_rejects_assume_unchanged_tracked_source(self) -> None:
+        tracked = self.root / "tracked.txt"
+        tracked.write_text("tracked\n", encoding="utf-8")
+        self.commit()
+        self.git("update-index", "--assume-unchanged", "tracked.txt")
+        tracked.write_text("hidden working-tree change\n", encoding="utf-8")
+
+        self.assertEqual(self.git("diff", "--", "tracked.txt"), b"")
+        self.assertEqual(seal.status(self.root), b"")
+        with self.assertRaisesRegex(seal.SourceSealError, "assume-unchanged"):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_rejects_skip_worktree_tracked_source(self) -> None:
+        tracked = self.root / "tracked.txt"
+        tracked.write_text("tracked\n", encoding="utf-8")
+        self.commit()
+        self.git("update-index", "--skip-worktree", "tracked.txt")
+        tracked.write_text("hidden working-tree change\n", encoding="utf-8")
+
+        self.assertEqual(self.git("diff", "--", "tracked.txt"), b"")
+        self.assertEqual(seal.status(self.root), b"")
+        with self.assertRaisesRegex(seal.SourceSealError, "skip-worktree"):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_raw_bytes_reject_local_clean_filter_diff_bypass(self) -> None:
+        tracked = self.root / "tracked.txt"
+        tracked.write_text("tracked\n", encoding="utf-8")
+        self.commit()
+        info_attributes = self.root / ".git" / "info" / "attributes"
+        info_attributes.write_text("tracked.txt filter=hide\n", encoding="utf-8")
+        self.git("config", "filter.hide.clean", "sed s/modified/tracked/")
+        tracked.write_text("modified\n", encoding="utf-8")
+
+        self.assertEqual(self.git("diff", "--", "tracked.txt"), b"")
+        with self.assertRaisesRegex(
+            seal.SourceSealError,
+            "content-conversion attribute",
+        ):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_rejects_partial_clean_filter_with_another_visible_change(self) -> None:
+        hidden = self.root / "hidden.txt"
+        visible = self.root / "visible.txt"
+        hidden.write_text("reviewed\n", encoding="utf-8")
+        visible.write_text("reviewed\n", encoding="utf-8")
+        self.commit()
+        info_attributes = self.root / ".git" / "info" / "attributes"
+        info_attributes.write_text("hidden.txt filter=hide\n", encoding="utf-8")
+        self.git("config", "filter.hide.clean", "sed s/malicious/reviewed/")
+        hidden.write_text("malicious\n", encoding="utf-8")
+        visible.write_text("visible change\n", encoding="utf-8")
+
+        diff = self.git("diff", "--", "hidden.txt", "visible.txt")
+        self.assertNotIn(b"malicious", diff)
+        self.assertIn(b"visible change", diff)
+        with self.assertRaisesRegex(
+            seal.SourceSealError,
+            "content-conversion attribute",
+        ):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_rejects_transform_filter_even_when_changed_path_set_agrees(self) -> None:
+        tracked = self.root / "tracked.txt"
+        tracked.write_text("baseline\n", encoding="utf-8")
+        self.commit()
+        info_attributes = self.root / ".git" / "info" / "attributes"
+        info_attributes.write_text("tracked.txt filter=hide\n", encoding="utf-8")
+        self.git("config", "filter.hide.clean", "sed s/malicious/reviewed/")
+        tracked.write_text("malicious\n", encoding="utf-8")
+
+        diff = self.git("diff", "--", "tracked.txt")
+        self.assertIn(b"reviewed", diff)
+        self.assertNotIn(b"malicious", diff)
+        with self.assertRaisesRegex(
+            seal.SourceSealError,
+            "content-conversion attribute",
+        ):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_rejects_legacy_crlf_content_conversion_attribute(self) -> None:
+        tracked = self.root / "tracked.txt"
+        tracked.write_bytes(b"reviewed line\n")
+        self.commit()
+        info_attributes = self.root / ".git" / "info" / "attributes"
+        info_attributes.write_text("tracked.txt crlf\n", encoding="utf-8")
+        tracked.write_bytes(b"reviewed line\r\n")
+
+        with self.assertRaisesRegex(
+            seal.SourceSealError,
+            "content-conversion attribute crlf=set",
+        ):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_raw_mode_ignores_local_core_filemode_false(self) -> None:
+        tracked = self.root / "tracked.txt"
+        tracked.write_text("tracked\n", encoding="utf-8")
+        self.commit()
+        clean = seal.compute_observed_descriptor(self.root)
+        self.git("config", "core.fileMode", "false")
+        tracked.chmod(0o755)
+
+        self.assertEqual(self.git("diff", "--", "tracked.txt"), b"")
+        changed = seal.compute_observed_descriptor(self.root)
+        self.assertTrue(changed["source_repo_dirty"])
+        self.assertNotEqual(
+            clean["source_tree_sha256"],
+            changed["source_tree_sha256"],
+        )
+        self.assertNotEqual(
+            changed["tracked_binary_diff_sha256"],
+            hashlib.sha256(b"").hexdigest(),
+        )
+
+    def test_rejects_unbound_partially_staged_index_preimage(self) -> None:
+        tracked = self.root / "tracked.txt"
+        tracked.write_bytes(b"signed HEAD bytes\n")
+        self.commit()
+        tracked.write_bytes(b"arbitrary staged intermediary\n")
+        self.git("add", "tracked.txt")
+        tracked.write_bytes(b"signed HEAD bytes\n")
+
+        self.assertEqual(self.git("diff", "HEAD", "--", "tracked.txt"), b"")
+        with self.assertRaisesRegex(
+            seal.SourceSealError,
+            "unbound intermediary blob or mode",
+        ):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_recursive_internal_symlink_chain_is_bound(self) -> None:
+        target = self.root / "target.txt"
+        target.write_text("tracked target\n", encoding="utf-8")
+        os.symlink("target.txt", self.root / "second-link")
+        os.symlink("second-link", self.root / "first-link")
+        self.commit()
+        identity, _, path, pin = self.reviewed_identity()
+
+        self.assertFalse(identity.source_repo_dirty)
+        target.write_text("changed target\n", encoding="utf-8")
+        with self.assertRaisesRegex(seal.SourceSealError, "differs"):
+            seal.compute_identity(self.root, str(path), pin)
+
+    def test_internal_broken_tracked_symlink_is_admitted_as_absent(self) -> None:
+        os.symlink("missing/internal-target", self.root / "broken-link")
+        self.commit()
+
+        descriptor = seal.compute_observed_descriptor(self.root)
+        self.assertFalse(descriptor["source_repo_dirty"])
+
+    def test_rejects_tracked_symlink_cycle(self) -> None:
+        os.symlink("second-link", self.root / "first-link")
+        os.symlink("first-link", self.root / "second-link")
+        self.commit()
+
+        with self.assertRaisesRegex(seal.SourceSealError, "cycle"):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_rejects_tracked_symlink_escaping_to_mutable_external_bytes(self) -> None:
+        external = self.review_root / "external-target.txt"
+        external.write_text("external bytes\n", encoding="utf-8")
+        payload = os.path.relpath(external, self.root)
+        self.assertTrue(payload.startswith(".."))
+        os.symlink(payload, self.root / "external-link")
+        self.commit()
+
+        with self.assertRaisesRegex(seal.SourceSealError, "escapes"):
+            seal.compute_observed_descriptor(self.root)
+        external.write_text("mutated external bytes\n", encoding="utf-8")
+        with self.assertRaisesRegex(seal.SourceSealError, "escapes"):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_private_materialization_is_exact_and_isolated(self) -> None:
+        tracked = self.root / "tracked.txt"
+        tracked.write_text("base\n", encoding="utf-8")
+        self.commit()
+        tracked.write_text("reviewed dirty bytes\n", encoding="utf-8")
+        staged = self.root / "staged.txt"
+        staged.write_text("reviewed staged bytes\n", encoding="utf-8")
+        self.git("add", "staged.txt")
+        untracked = self.root / "untracked.txt"
+        untracked.write_text("reviewed untracked bytes\n", encoding="utf-8")
+        identity, _, descriptor, pin = self.reviewed_identity()
+        materialized_root = self.review_root / "private-source"
+        materialized_descriptor = self.review_root / "private-descriptor.json"
+
+        materialization = seal.materialize_reviewed_closure(
+            self.root,
+            materialized_root,
+            materialized_descriptor,
+            str(descriptor),
+            pin,
+            expected_identity=identity,
+        )
+        self.assertEqual(materialization.identity, identity)
+        self.assertEqual(
+            (materialized_root / "tracked.txt").read_bytes(),
+            b"reviewed dirty bytes\n",
+        )
+        self.assertEqual(
+            (materialized_root / "staged.txt").read_bytes(),
+            b"reviewed staged bytes\n",
+        )
+        self.assertEqual(
+            (materialized_root / "untracked.txt").read_bytes(),
+            b"reviewed untracked bytes\n",
+        )
+        tracked.write_text("attacker mutation during Cargo\n", encoding="utf-8")
+        self.assertEqual(
+            (materialized_root / "tracked.txt").read_bytes(),
+            b"reviewed dirty bytes\n",
+        )
+        self.assertEqual(
+            seal.compute_identity(
+                materialized_root,
+                str(materialized_descriptor),
+                pin,
+            ),
+            identity,
+        )
+
+    def test_private_materialization_copies_bound_untracked_symlink_target(self) -> None:
+        os.symlink("generated-target.txt", self.root / "tracked-link")
+        self.commit()
+        target = self.root / "generated-target.txt"
+        target.write_text("bound generated target\n", encoding="utf-8")
+        identity, _, descriptor, pin = self.reviewed_identity()
+        materialized_root = self.review_root / "private-source"
+        materialized_descriptor = self.review_root / "private-descriptor.json"
+
+        materialization = seal.materialize_reviewed_closure(
+            self.root,
+            materialized_root,
+            materialized_descriptor,
+            str(descriptor),
+            pin,
+            expected_identity=identity,
+        )
+        self.assertEqual(
+            os.readlink(materialized_root / "tracked-link"),
+            "generated-target.txt",
+        )
+        self.assertEqual(
+            (materialized_root / "generated-target.txt").read_bytes(),
+            b"bound generated target\n",
+        )
+        self.assertEqual(materialization.identity, identity)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS hdiutil")
+    def test_sealed_materialization_denies_host_writes_on_read_only_image(self) -> None:
+        tracked = self.root / "tracked.txt"
+        tracked.write_bytes(b"reviewed source bytes\n")
+        self.commit()
+        identity, _, descriptor, pin = self.reviewed_identity()
+
+        with seal.sealed_reviewed_closure(
+            self.root,
+            self.review_root / "sealed-workspace",
+            str(descriptor),
+            pin,
+            expected_identity=identity,
+        ) as materialization:
+            self.assertEqual(materialization.identity, identity)
+            self.assertNotEqual(
+                os.statvfs(materialization.root).f_flag & os.ST_RDONLY,
+                0,
+            )
+            sealed_file = materialization.root / "tracked.txt"
+            with self.assertRaises(OSError):
+                sealed_file.write_bytes(b"transient hostile source bytes\n")
+            with self.assertRaises(OSError):
+                sealed_file.chmod(0o600)
+            self.assertEqual(sealed_file.read_bytes(), b"reviewed source bytes\n")
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS system paths")
+    def test_write_denial_accepts_real_root_owned_read_boundary(self) -> None:
+        root_owned_source = Path("/usr/share").resolve(strict=True)
+        root_owned_descriptor = Path("/private/etc/hosts").resolve(strict=True)
+        source_metadata = root_owned_source.lstat()
+        descriptor_metadata = root_owned_descriptor.lstat()
+        if (
+            source_metadata.st_uid != 0
+            or descriptor_metadata.st_uid != 0
+            or source_metadata.st_mode & 0o022
+            or descriptor_metadata.st_mode & 0o022
+        ):
+            self.skipTest("host root-owned fixture paths are not safely permissioned")
+
+        command = seal.write_denied_source_command(
+            root_owned_source,
+            root_owned_descriptor,
+            ["/usr/bin/true"],
+            platform_name="darwin",
+        )
+
+        self.assertEqual(command[0], "/usr/bin/sandbox-exec")
+        self.assertIn(f"SOURCE_ROOT={root_owned_source}", command)
+        self.assertIn(f"SOURCE_DESCRIPTOR={root_owned_descriptor}", command)
 
     def test_root_must_be_exact_repository_root(self) -> None:
         (self.root / "nested").mkdir()

@@ -339,7 +339,8 @@ pub fn claim_kagemusha_generation_supervisor_permit_v4()
         };
 
         let descriptor_text = std::env::var(RESOURCE_GUARD_AUTH_FD_ENV_V4).map_err(|_| {
-            "Kagemusha V4 generation must run through scripts/run_kagemusha_v4_generation.py"
+            "Kagemusha V4 generation/finalization must run through \
+             scripts/run_kagemusha_v4_generation.py"
                 .to_owned()
         })?;
         if descriptor_text.is_empty() || !descriptor_text.bytes().all(|byte| byte.is_ascii_digit())

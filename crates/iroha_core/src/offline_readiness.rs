@@ -250,6 +250,45 @@ pub fn mandatory_offline_policy_from_config(
     })
 }
 
+/// Construct the same secret-free mandatory-offline policy from independently
+/// reviewed public inputs.
+///
+/// Deployment semantic tooling uses this after authenticating the release
+/// catalog and exact operator documents. It deliberately accepts no private
+/// key and still requires the supplied public key to be the authority's sole
+/// controller.
+///
+/// # Errors
+///
+/// Returns an error for an empty asset catalog or a signer/authority mismatch.
+pub fn mandatory_offline_policy_from_reviewed_public_inputs(
+    chain_id: &ChainId,
+    configured_escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
+    authority: AccountId,
+    signing_public_key: PublicKey,
+    minimum_fee_asset_balance: Quantity,
+) -> Result<MandatoryOfflinePolicy, MandatoryOfflineConfigurationError> {
+    if configured_escrow_accounts.is_empty() {
+        return Err(MandatoryOfflineConfigurationError::new(format!(
+            "chain `{chain_id}` reviewed offline escrow catalog must bind at least one asset"
+        )));
+    }
+    if authority.try_signatory() != Some(&signing_public_key) {
+        return Err(MandatoryOfflineConfigurationError::new(format!(
+            "chain `{chain_id}` reviewed offline command public key does not control its authority"
+        )));
+    }
+    Ok(MandatoryOfflinePolicy {
+        chain_id: chain_id.clone(),
+        configured_escrow_accounts,
+        issuer: OfflineIssuerReadinessPolicy {
+            authority,
+            signing_public_key,
+            minimum_fee_asset_balance,
+        },
+    })
+}
+
 /// Evaluate mandatory offline cash against one committed state snapshot.
 ///
 /// The evaluated height, hash, timestamp, fee selector, settlement bindings,
@@ -1677,6 +1716,50 @@ mod tests {
                 .expect_err("substituted signer must reject")
                 .message()
                 .contains("does not control")
+        );
+    }
+
+    #[test]
+    fn reviewed_public_policy_constructor_is_secret_free_and_fail_closed() {
+        let chain_id = ChainId::from("offline-readiness-reviewed-test");
+        let signer_key_pair = key_pair(7);
+        let authority = AccountId::new(signer_key_pair.public_key().clone());
+        let escrows = BTreeMap::from([(asset("ds"), account(8))]);
+        let policy = mandatory_offline_policy_from_reviewed_public_inputs(
+            &chain_id,
+            escrows.clone(),
+            authority.clone(),
+            signer_key_pair.public_key().clone(),
+            Quantity::from(1_u32),
+        )
+        .expect("complete public inputs");
+        assert_eq!(policy.chain_id(), &chain_id);
+        assert_eq!(policy.configured_escrow_accounts(), &escrows);
+        assert_eq!(policy.issuer().authority(), &authority);
+
+        assert!(
+            mandatory_offline_policy_from_reviewed_public_inputs(
+                &chain_id,
+                BTreeMap::new(),
+                authority.clone(),
+                signer_key_pair.public_key().clone(),
+                Quantity::from(1_u32),
+            )
+            .expect_err("empty catalog must reject")
+            .message()
+            .contains("at least one")
+        );
+        assert!(
+            mandatory_offline_policy_from_reviewed_public_inputs(
+                &chain_id,
+                escrows,
+                authority,
+                key_pair(9).public_key().clone(),
+                Quantity::from(1_u32),
+            )
+            .expect_err("substituted public key must reject")
+            .message()
+            .contains("does not control")
         );
     }
 

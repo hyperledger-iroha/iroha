@@ -1459,6 +1459,12 @@ impl From<crate::isi::offline::ActivateKagemushaRecursiveReleaseV4> for Instruct
     }
 }
 
+impl From<crate::isi::offline::EnactOfflineAssetBootstrapV1> for InstructionBox {
+    fn from(i: crate::isi::offline::EnactOfflineAssetBootstrapV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::offline::RegisterOfflineDeviceAttestation> for InstructionBox {
     fn from(i: crate::isi::offline::RegisterOfflineDeviceAttestation) -> Self {
         InstructionBox(Box::new(i))

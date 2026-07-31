@@ -198,18 +198,56 @@ No reviewed V4 catalog is checked into this repository, and localnet must not
 substitute generated test keys. Produce the externally mounted release through
 the sealed workflow:
 
-1. Build the source-bound candidate generator with
-   `scripts/build_kagemusha_v4_candidate_bundle.py`.
-2. Run `scripts/run_kagemusha_v4_generation.py ... generate-candidate` with the
-   reviewed chain, asset, scale, activation window, circuit parameters, and
-   top-up finality roster.
-3. Run the sealed binary's `finalize-release` command with the canonical
-   release policy, signed release attestation, benchmark evidence, and signed
-   cryptographic review.
-4. Configure the final policy and artifact paths in
+1. Have the separately installed root provisioner publish the complete source,
+   bootstrap, Rust sysroot/dynamic-library, linker, GPG/keyring, and tool
+   closure from a root-only staging directory into its root-owned,
+   content-addressed final path. The root supervisor then runs the admitted
+   Python builder under the exclusive no-login `boi-build` UID with a target
+   inaccessible to the operator UID. Root stable-hashes/copies the worker
+   binary and report from descriptors and atomically publishes the exact
+   three-file artifact set with independently pinned
+   `root-published-candidate-build.json`. A mutable checkout, user-owned target
+   or DMG, Rustup/Homebrew executable, or ambient keyring is not a production
+   input or cross-stage artifact.
+2. As the root supervisor, prove the receipt-named no-login `boi-build` UID is
+   otherwise idle, then launch
+   `scripts/run_kagemusha_v4_generation.py ... generate-candidate` under that
+   exact UID through a sanitized `/usr/bin/env -i` environment. Supply the
+   root-published candidate-build receipt and receipt SHA-256, exact
+   receipt-named binary, reviewed chain, asset, scale, activation window,
+   circuit parameters, and top-up finality roster. The launcher creates and
+   exclusively uses one previously absent output parent containing direct
+   `candidate` and `resource-report` children; it rejects a pre-existing or
+   reusable parent.
+3. Keep that candidate and its reports as
+   `provisional_boi_generation_worker_output` only. Root must keep the worker
+   UID quarantined, stable-hash and copy all bytes from `O_NOFOLLOW`
+   descriptors, and atomically publish the exact normalized tree with
+   `generation-worker-launch.json` and
+   `root-published-generated-candidate.json`. The generated root contains
+   exactly those two files plus the direct `candidate/` and
+   `resource-report/` directories. The launch schema is
+   `boi.taira.generation_worker_launch.v1`; the independently pinned generated
+   receipt schema is
+   `iroha.kagemusha.root_published_generated_candidate.v1`. Together they bind
+   the canonical command digest, worker root/device/inode, storage admission
+   and post-build reserve, candidate-build receipt, successful generation
+   summary, tree digests, UID, and source/toolchain identity.
+4. Run the strict Python finalization path with that generated-candidate receipt
+   and its independent SHA-256 pin under `/usr/bin/env -i`, the receipt-named
+   binary, and
+   `--candidate-dir <root-published-generated>/candidate`. It admits the
+   complete generated and launch receipts, performs a fail-closed loader scan,
+   and passes both immutable receipt descriptors to `finalize-release`. Their
+   SHA-256 identities are committed to the final manifest, signed attestation
+   subject, and promotion record. A binary invocation without those admitted
+   descriptors, or any provisional worker path, is rejected. Supply the
+   canonical release policy, signed release attestation, benchmark evidence,
+   and signed cryptographic review.
+5. Configure the final policy and artifact paths in
    `[settlement.offline]`, and configure the issuer under
    `[torii.kagemusha_commands]`.
-5. In genesis, register and fund that issuer with the exact
+6. In genesis, register and fund that issuer with the exact
    `CanManageOfflineEscrow` permission; register the offline asset at fixed
    scale with `offline.enabled=true`; register the transfer, top-up-shield, and
    unshield verifier records and ZK bindings; grant the release activation and

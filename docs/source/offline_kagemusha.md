@@ -353,11 +353,57 @@ witnesses, and promotion record rather than trusting filenames or JSON alone:
 ```bash
 KAGEMUSHA_V4_RELEASE_POLICY_PATH=/run/iroha/kagemusha/release-policy.norito \
 KAGEMUSHA_V4_ARTIFACT_ROOT=/run/iroha/kagemusha/v4 \
+KAGEMUSHA_BUILD_PYTHON_EXECUTABLE=<root-published-closure>/toolchain/python/bin/python3 \
+KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=<root-published-closure>/reviewed-source-closure.json \
+KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256=<independently-pinned-64-lower-hex> \
+KAGEMUSHA_BUILD_TOOLCHAIN_PROVENANCE=<root-published-closure>/production-build-closure.json \
+KAGEMUSHA_BUILD_TOOLCHAIN_PROVENANCE_SHA256=<independently-pinned-64-lower-hex> \
+KAGEMUSHA_PROMOTION_VERIFIER_RECEIPT=<root-published-verifier>/root-published-promotion-verifier.json \
+KAGEMUSHA_PROMOTION_VERIFIER_RECEIPT_SHA256=<independently-pinned-64-lower-hex> \
+KAGEMUSHA_ROOT_PUBLISHED_GENERATED_CANDIDATE_RECEIPT_SHA256=<independently-pinned-64-lower-hex> \
+KAGEMUSHA_GENERATION_WORKER_LAUNCH_RECEIPT_SHA256=<independently-pinned-64-lower-hex> \
   ci/check_kagemusha_production_readiness.sh promotion
 ```
 
-The policy path is always an explicit runtime input. No build-time environment
-variable or embedded policy selects a Kagemusha trust root.
+Run that command from the source directory inside the same root-published
+content-addressed production closure. Its launcher clears the environment and
+executes the exact admitted Python in isolated mode; a root override,
+`PYTHON*`, `DYLD_*`, or `LD_*` bootstrap is forbidden. The corridor
+fails closed unless the bootstrap, source, full Rust sysroot and non-system
+dynamic dependency closure, offline Cargo vendor/config, exact Git helpers,
+Apple developer/SDK/resource closure, GPG/keyring, and provenance are
+root-owned and non-writable beneath a root-controlled parent. It never builds a
+verifier in an operator-owned target: the exact Kagami executable and sealed
+build report must have been produced by the exclusive no-login `boi-build`
+worker and atomically root-published under the independently pinned verifier
+receipt. The policy and release-artifact trees are also root-owned,
+non-writable promotion inputs. The policy path is always an explicit runtime
+input. No build-time environment variable or embedded policy selects a
+Kagemusha trust root.
+
+Candidate generation is likewise an internal root-supervised phase under the
+exact non-root `boi-build` UID named by the candidate-build receipt, after root
+has proved that UID has no other process or session. The supervisor launches
+the admitted Python runner with `/usr/bin/env -i`; the runner creates a
+previously absent mode-`0700` single-use parent and requires its candidate and
+resource reports beneath that parent. It labels both as provisional worker
+output. The candidate-build receipt authenticates only the generator, so
+root must descriptor-copy those bytes through root-only staging and atomically
+publish the normalized exact tree under the independently pinned canonical
+`iroha.kagemusha.root_published_generated_candidate.v1` receipt. Its exact
+four-entry root consists of `candidate/`, `resource-report/`,
+`generation-worker-launch.json`, and
+`root-published-generated-candidate.json`; the launch receipt uses schema
+`boi.taira.generation_worker_launch.v1` and records the canonical command
+digest, worker root/device/inode, and the 64 GiB admission and 16 GiB post-build
+storage floors. The strict finalization runner uses `/usr/bin/env -i`, admits
+both immutable receipts and their candidate-build/source/toolchain bindings,
+successful generation summary, and tree digests, then performs the fail-closed
+Mach-O loader scan before passing their descriptors to the binary. The binary
+parses the exact mutually bound schemas and commits both receipt hashes to the
+final manifest, signed attestation subject, promotion record, and readiness
+comparison. Binary finalization without those admitted descriptors, and every
+provisional worker path, fail closed.
 
 The release driver funds four wallets with `10.75`, spends `6.25`, then `2.10`,
 then `0.05` after a receiver restart, and redeems every remaining branch. It

@@ -15368,6 +15368,12 @@ mod kagemusha_bridge_tests {
             source_repo_dirty: true,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
+            root_published_generated_candidate_receipt_sha256: digest(
+                b"SBD generated-candidate receipt",
+            ),
+            generation_worker_launch_receipt_sha256: digest(
+                b"SBD generation-worker launch receipt",
+            ),
             chain_id: ChainId::from("sbd-streaming-install-test"),
             asset,
             asset_scale: 2,
@@ -18353,6 +18359,12 @@ mod kagemusha_bridge_tests {
             source_repo_dirty: true,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
+            root_published_generated_candidate_receipt_sha256: digest(
+                b"production-gate generated-candidate receipt",
+            ),
+            generation_worker_launch_receipt_sha256: digest(
+                b"production-gate generation-worker launch receipt",
+            ),
             chain_id,
             asset,
             asset_scale: 2,
@@ -18471,6 +18483,10 @@ mod kagemusha_bridge_tests {
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: generation.to_owned(),
             candidate_sha256: candidate.sha256().expect("candidate digest"),
+            root_published_generated_candidate_receipt_sha256: manifest
+                .root_published_generated_candidate_receipt_sha256,
+            generation_worker_launch_receipt_sha256: manifest
+                .generation_worker_launch_receipt_sha256,
             manifest_sha256: authenticated.manifest_sha256(),
             release_attestation_sha256: authenticated.release_attestation_sha256(),
             release_policy_sha256: authenticated.release_policy_sha256(),

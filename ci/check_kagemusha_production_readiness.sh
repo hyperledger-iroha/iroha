@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="${KAGEMUSHA_PRODUCTION_READINESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="${KAGEMUSHA_PRODUCTION_READINESS_ROOT:-${SCRIPT_ROOT}}"
 MODE="candidate"
 SELF_TEST="false"
 
@@ -16,20 +17,42 @@ for argument in "$@"; do
   esac
 done
 
-python3 - "${ROOT_DIR}" "${MODE}" "${SELF_TEST}" <<'PY'
+if [[ "${MODE}" == "promotion" && "${ROOT_DIR}" != "${SCRIPT_ROOT}" ]]; then
+  echo "promotion must run from the admitted closure source; root override is forbidden" >&2
+  exit 2
+fi
+
+run_readiness_python() {
+  "$@" <<'PY'
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import types
 from pathlib import Path
 
+sys.dont_write_bytecode = True
 root = Path(sys.argv[1])
 mode = sys.argv[2]
 self_test = sys.argv[3] == "true"
+if sys.flags.isolated != 1:
+    raise SystemExit("readiness corridor requires Python isolated mode")
+if mode == "promotion":
+    admitted_python = os.environ.get("KAGEMUSHA_BUILD_PYTHON_EXECUTABLE", "")
+    if (
+        not admitted_python
+        or not Path(admitted_python).is_absolute()
+        or Path(sys.executable).resolve(strict=True)
+        != Path(admitted_python).resolve(strict=True)
+    ):
+        raise SystemExit(
+            "promotion must run directly under the admitted closure Python"
+        )
 
 MODEL = "crates/iroha_data_model/src/offline/mod.rs"
 BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
@@ -601,16 +624,113 @@ def strict_json(path: Path) -> dict[str, object]:
     return value
 
 
-def release_verifier_command(directory: Path, policy: Path) -> list[str]:
-    """Use only the maintained in-tree verifier for promotion decisions."""
+def source_only_module(
+    module_name: str,
+    path: Path,
+    source_bytes: bytes | None = None,
+) -> types.ModuleType:
+    """Execute stable source bytes directly without consulting any repo pyc."""
+
+    if source_bytes is None:
+        source_bytes = read_regular_bounded(
+            path,
+            16 * 1024 * 1024,
+            f"{module_name} source",
+        )
+    module = types.ModuleType(module_name)
+    module.__file__ = str(path)
+    module.__package__ = module_name.rpartition(".")[0]
+    sys.modules[module_name] = module
+    try:
+        exec(compile(source_bytes, str(path), "exec"), module.__dict__)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+def require_root_controlled_bootstrap(path: Path, source_root: Path) -> None:
+    """Fail before executing a bootstrap that the promotion UID could replace."""
+
+    metadata = path.lstat()
+    source_metadata = source_root.lstat()
+    if (
+        path.resolve(strict=True) != path
+        or source_root.resolve(strict=True) != source_root
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_nlink != 1
+        or metadata.st_mode & 0o222 != 0
+        or not stat.S_ISDIR(source_metadata.st_mode)
+        or source_metadata.st_uid != 0
+        or source_metadata.st_mode & 0o222 != 0
+    ):
+        raise ValueError("promotion bootstrap is not root-published and immutable")
+    ancestor = source_root.parent
+    while True:
+        ancestor_metadata = ancestor.lstat()
+        if (
+            ancestor.resolve(strict=True) != ancestor
+            or not stat.S_ISDIR(ancestor_metadata.st_mode)
+            or ancestor_metadata.st_uid != 0
+            or ancestor_metadata.st_mode & 0o022 != 0
+        ):
+            raise ValueError(
+                "promotion bootstrap parent chain is not root-controlled"
+            )
+        if ancestor == ancestor.parent:
+            break
+        ancestor = ancestor.parent
+
+
+def require_root_controlled_storage(
+    path: Path,
+    *,
+    directory: bool,
+) -> None:
+    """Require immutable promotion input storage outside the operator UID."""
+
+    metadata = path.lstat()
+    if (
+        path.resolve(strict=True) != path
+        or metadata.st_uid != 0
+        or metadata.st_mode & 0o222 != 0
+        or metadata.st_mode & 0o7000 != 0
+        or (directory and not stat.S_ISDIR(metadata.st_mode))
+        or (
+            not directory
+            and (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+            )
+        )
+    ):
+        raise ValueError("promotion input is not root-published and immutable")
+    ancestor = path.parent
+    while True:
+        ancestor_metadata = ancestor.lstat()
+        if (
+            ancestor.resolve(strict=True) != ancestor
+            or not stat.S_ISDIR(ancestor_metadata.st_mode)
+            or ancestor_metadata.st_uid != 0
+            or ancestor_metadata.st_mode & 0o022 != 0
+        ):
+            raise ValueError(
+                "promotion input parent chain is not root-controlled"
+            )
+        if ancestor == ancestor.parent:
+            break
+        ancestor = ancestor.parent
+
+
+def release_verifier_command(
+    verifier: Path,
+    directory: Path,
+    policy: Path,
+) -> list[str]:
+    """Use only the admitted root-published Kagami verifier."""
     return [
-        "cargo",
-        "run",
-        "--locked",
-        "--quiet",
-        "-p",
-        "iroha_kagami",
-        "--",
+        str(verifier),
         "kagemusha",
         "verify-release-v4",
         "--bundle-dir",
@@ -634,6 +754,25 @@ def promotion_errors() -> list[str]:
         ]
     policy = Path(policy_text)
     artifact_root = Path(artifact_text)
+    generated_receipt_sha256 = os.environ.get(
+        "KAGEMUSHA_ROOT_PUBLISHED_GENERATED_CANDIDATE_RECEIPT_SHA256",
+        "",
+    )
+    launch_receipt_sha256 = os.environ.get(
+        "KAGEMUSHA_GENERATION_WORKER_LAUNCH_RECEIPT_SHA256",
+        "",
+    )
+    if (
+        re.fullmatch(r"[0-9a-f]{64}", generated_receipt_sha256) is None
+        or re.fullmatch(r"[0-9a-f]{64}", launch_receipt_sha256) is None
+        or generated_receipt_sha256 == "0" * 64
+        or launch_receipt_sha256 == "0" * 64
+        or generated_receipt_sha256 == launch_receipt_sha256
+    ):
+        errors.append(
+            "promotion requires distinct nonzero generated-candidate and "
+            "generation-worker launch receipt SHA-256 pins"
+        )
     if (
         not policy.is_file()
         or policy.is_symlink()
@@ -643,6 +782,17 @@ def promotion_errors() -> list[str]:
         errors.append("promotion policy must be a nonempty regular file")
     if not artifact_root.is_dir() or artifact_root.is_symlink():
         errors.append("promotion artifact root must be a real directory")
+        return errors
+    try:
+        policy = policy.resolve(strict=True)
+        artifact_root = artifact_root.resolve(strict=True)
+        require_root_controlled_storage(policy, directory=False)
+        require_root_controlled_storage(artifact_root, directory=True)
+    except OSError:
+        errors.append("promotion policy/artifact paths must resolve exactly")
+        return errors
+    except ValueError as error:
+        errors.append(f"promotion policy/artifact storage is mutable: {error}")
         return errors
 
     source_identity: dict[str, object] | None = None
@@ -660,54 +810,7 @@ def promotion_errors() -> list[str]:
         errors.append(
             "promotion requires the independently pinned reviewed source-closure path and SHA-256"
         )
-    else:
-        source_identity_result = subprocess.run(
-            [
-                sys.executable,
-                "-I",
-                str(root / "scripts/kagemusha_source_tree_seal.py"),
-                "identity",
-                "--root",
-                str(root),
-                "--reviewed-source-closure",
-                reviewed_closure_text,
-                "--reviewed-source-closure-sha256",
-                reviewed_closure_sha256,
-            ],
-            cwd=root,
-            check=False,
-            capture_output=True,
-        )
-        if source_identity_result.returncode != 0:
-            errors.append(
-                "promotion source differs from the independently pinned reviewed closure"
-            )
-        else:
-            try:
-                parsed_identity = json.loads(source_identity_result.stdout)
-                if (
-                    not isinstance(parsed_identity, dict)
-                    or parsed_identity.get("schema")
-                    != "iroha.kagemusha.reviewed_source_tree_identity.v1"
-                    or parsed_identity.get("source_repo_dirty") is not True
-                    or parsed_identity.get(
-                        "reviewed_source_closure_descriptor_sha256"
-                    )
-                    != reviewed_closure_sha256
-                    or not isinstance(
-                        parsed_identity.get("reviewed_source_closure"), dict
-                    )
-                ):
-                    raise ValueError("reviewed source identity is not exact")
-                source_identity = parsed_identity
-            except (UnicodeError, ValueError, json.JSONDecodeError):
-                errors.append("promotion reviewed source identity is malformed")
-    signature = subprocess.run(
-        ["git", "verify-commit", "HEAD"], cwd=root, check=False, capture_output=True
-    )
-    if signature.returncode != 0:
-        errors.append("promotion requires a locally verifiable signature on HEAD")
-    authenticated_verification_allowed = not errors
+    captured_commit: str | None = None
 
     directories = []
     for path in artifact_root.iterdir():
@@ -721,15 +824,206 @@ def promotion_errors() -> list[str]:
     if not directories:
         errors.append("promotion artifact root contains no manifest-digest releases")
         return errors
+    private_materialization = None
+    materialized_source_root: Path | None = None
+    promotion_toolchain = None
+    promotion_verifier = None
+    source_seal = None
+    candidate_builder = None
+    published_build = None
+    if not errors:
+        try:
+            source_seal_path = root / "scripts/kagemusha_source_tree_seal.py"
+            require_root_controlled_bootstrap(source_seal_path, root)
+            resource_guard_path = (
+                root / "scripts/formal/run_sumeragi_v2_tlapm_guard.py"
+            )
+            require_root_controlled_bootstrap(resource_guard_path, root)
+            provenance_text = os.environ.get(
+                "KAGEMUSHA_BUILD_TOOLCHAIN_PROVENANCE",
+                "",
+            )
+            provenance_sha256 = os.environ.get(
+                "KAGEMUSHA_BUILD_TOOLCHAIN_PROVENANCE_SHA256",
+                "",
+            )
+            if not provenance_text:
+                raise ValueError(
+                    "promotion requires pinned production-closure provenance"
+                )
+            candidate_builder_path = (
+                root / "scripts/build_kagemusha_v4_candidate_bundle.py"
+            )
+            require_root_controlled_bootstrap(candidate_builder_path, root)
+            candidate_builder = source_only_module(
+                "_kagemusha_ci_candidate_builder",
+                candidate_builder_path,
+            )
+            scripts_package = sys.modules.get("scripts")
+            if scripts_package is None:
+                scripts_package = types.ModuleType("scripts")
+                scripts_package.__path__ = []
+                sys.modules["scripts"] = scripts_package
+            sys.modules["scripts.kagemusha_source_tree_seal"] = (
+                candidate_builder.source_seal
+            )
+            scripts_package.kagemusha_source_tree_seal = (
+                candidate_builder.source_seal
+            )
+            published_build_path = (
+                root / "scripts/kagemusha_root_published_build.py"
+            )
+            require_root_controlled_bootstrap(published_build_path, root)
+            published_build = source_only_module(
+                "_kagemusha_ci_root_published_build",
+                published_build_path,
+            )
+            source_seal = candidate_builder.source_seal
+            promotion_toolchain = (
+                candidate_builder._admitted_production_rust_toolchain(
+                    "cargo",
+                    Path(provenance_text),
+                    provenance_sha256,
+                )
+            )
+            reviewed_closure_path = Path(reviewed_closure_text).resolve(strict=True)
+            candidate_builder._admit_production_closure_binding(
+                root,
+                reviewed_closure_path,
+                promotion_toolchain,
+            )
+            source_seal.configure_production_git(
+                promotion_toolchain.git,
+                promotion_toolchain.git_exec_path,
+            )
+            expected_identity = source_seal.compute_identity(
+                root,
+                reviewed_closure_text,
+                reviewed_closure_sha256,
+            )
+            source_identity = {
+                "reviewed_source_closure": (
+                    expected_identity.reviewed_source_closure
+                ),
+                "reviewed_source_closure_descriptor_sha256": (
+                    expected_identity.reviewed_source_closure_descriptor_sha256
+                ),
+                "schema": source_seal.SOURCE_IDENTITY_SCHEMA,
+                "source_commit": expected_identity.source_commit,
+                "source_repo_dirty": expected_identity.source_repo_dirty,
+                "source_tree_sha256": expected_identity.source_tree_sha256,
+            }
+            captured_commit = expected_identity.source_commit
+            private_materialization = source_seal.SourceMaterialization(
+                root=root,
+                reviewed_source_closure=reviewed_closure_path,
+                identity=expected_identity,
+            )
+            materialized_source_root = root
+            candidate_builder._reject_ambient_cargo_configs(
+                materialized_source_root
+            )
+            verifier_receipt_text = os.environ.get(
+                "KAGEMUSHA_PROMOTION_VERIFIER_RECEIPT",
+                "",
+            )
+            verifier_receipt_sha256 = os.environ.get(
+                "KAGEMUSHA_PROMOTION_VERIFIER_RECEIPT_SHA256",
+                "",
+            )
+            if not verifier_receipt_text:
+                raise ValueError(
+                    "promotion requires a pinned root-published Kagami verifier"
+                )
+            promotion_verifier = published_build.admit_promotion_verifier(
+                Path(verifier_receipt_text),
+                verifier_receipt_sha256,
+            )
+            candidate_builder._admit_macos_dynamic_tool_closure(
+                promotion_verifier.artifact_root,
+                (promotion_verifier.executable,),
+                otool=promotion_toolchain.linker.parent / "otool",
+            )
+            materialized_identity = private_materialization.identity
+            if (
+                materialized_identity.source_commit
+                != source_identity.get("source_commit")
+                or materialized_identity.source_tree_sha256
+                != source_identity.get("source_tree_sha256")
+                or materialized_identity.source_repo_dirty
+                is not source_identity.get("source_repo_dirty")
+                or materialized_identity.reviewed_source_closure
+                != source_identity.get("reviewed_source_closure")
+                or materialized_identity.reviewed_source_closure_descriptor_sha256
+                != source_identity.get(
+                    "reviewed_source_closure_descriptor_sha256"
+                )
+            ):
+                raise ValueError(
+                    "private promotion source differs from reviewed identity"
+                )
+            if not isinstance(captured_commit, str):
+                raise ValueError(
+                    "promotion reviewed source identity has no exact commit"
+                )
+            candidate_builder._verify_exact_signed_commit(
+                materialized_source_root,
+                captured_commit,
+                promotion_toolchain,
+            )
+            if (
+                promotion_verifier.production_closure_tree_sha256
+                != promotion_toolchain.closure_tree_sha256
+                or promotion_verifier.toolchain_provenance_sha256
+                != promotion_toolchain.provenance_sha256
+                or promotion_verifier.reviewed_source_closure_descriptor_sha256
+                != expected_identity.reviewed_source_closure_descriptor_sha256
+                or promotion_verifier.source_commit
+                != expected_identity.source_commit
+                or promotion_verifier.source_tree_sha256
+                != expected_identity.source_tree_sha256
+            ):
+                raise ValueError(
+                    "root-published Kagami verifier differs from the admitted "
+                    "source/build closure"
+                )
+        except (ImportError, OSError, ValueError, RuntimeError) as error:
+            errors.append(
+                f"promotion could not admit the root-published build closure: {error}"
+            )
+    authenticated_verification_allowed = (
+        not errors
+        and private_materialization is not None
+        and materialized_source_root is not None
+        and promotion_toolchain is not None
+        and promotion_verifier is not None
+        and source_seal is not None
+        and candidate_builder is not None
+        and published_build is not None
+    )
     expected_inventory = set(ARTIFACTS + FINAL_METADATA)
     for directory in directories:
         directory_error_count = len(errors)
         if not directory.is_dir() or directory.is_symlink() or not re.fullmatch(r"[0-9a-f]{64}", directory.name):
             errors.append(f"noncanonical release entry: {directory.name}")
             continue
+        try:
+            require_root_controlled_storage(directory, directory=True)
+        except (OSError, ValueError) as error:
+            errors.append(
+                f"{directory.name}: release directory is mutable: {error}"
+            )
+            continue
         actual = set()
         for path in directory.iterdir():
             actual.add(path.name)
+            try:
+                require_root_controlled_storage(path, directory=False)
+            except (OSError, ValueError) as error:
+                errors.append(
+                    f"{directory.name}/{path.name}: release file is mutable: {error}"
+                )
+                break
             if len(actual) > MAX_RELEASE_INVENTORY_ENTRIES:
                 errors.append(f"{directory.name}: final release inventory is oversized")
                 break
@@ -763,12 +1057,25 @@ def promotion_errors() -> list[str]:
             continue
         if manifest.get("schema") != "kagemusha.offline.recursive_spend.artifact_manifest.v4":
             errors.append(f"{directory.name}: manifest schema is not V4")
-        if manifest.get("bridge_abi_version") != 21 or manifest.get("source_repo_dirty") is not True:
-            errors.append(f"{directory.name}: ABI/source-tree promotion binding is invalid")
+        if (
+            manifest.get("bridge_abi_version") != 21
+            or not isinstance(manifest.get("source_repo_dirty"), bool)
+            or manifest.get(
+                "root_published_generated_candidate_receipt_sha256"
+            )
+            != generated_receipt_sha256
+            or manifest.get("generation_worker_launch_receipt_sha256")
+            != launch_receipt_sha256
+        ):
+            errors.append(
+                f"{directory.name}: ABI/source/receipt promotion binding is invalid"
+            )
         if source_identity is not None and (
             manifest.get("source_commit") != source_identity.get("source_commit")
             or manifest.get("source_tree_sha256")
             != source_identity.get("source_tree_sha256")
+            or manifest.get("source_repo_dirty")
+            != source_identity.get("source_repo_dirty")
             or manifest.get("reviewed_source_closure")
             != source_identity.get("reviewed_source_closure")
             or manifest.get("reviewed_source_closure_descriptor_sha256")
@@ -828,10 +1135,28 @@ def promotion_errors() -> list[str]:
             except (OSError, ValueError) as error:
                 errors.append(f"{directory.name}/{name}: invalid evidence: {error}")
         if authenticated_verification_allowed and len(errors) == directory_error_count:
-            command = release_verifier_command(directory, policy)
+            assert materialized_source_root is not None
+            assert private_materialization is not None
+            assert source_seal is not None
+            assert candidate_builder is not None
+            assert promotion_toolchain is not None
+            assert promotion_verifier is not None
+            verifier_command = release_verifier_command(
+                promotion_verifier.executable,
+                directory,
+                policy,
+            )
             verified = subprocess.run(
-                command,
-                cwd=root,
+                verifier_command,
+                cwd=promotion_verifier.artifact_root,
+                env={
+                    "HOME": "/var/empty",
+                    "LANG": "C",
+                    "LC_ALL": "C",
+                    "PATH": "/usr/bin:/bin",
+                    "TMPDIR": "/private/tmp",
+                    "TZ": "UTC",
+                },
                 check=False,
                 capture_output=True,
                 text=True,
@@ -842,6 +1167,25 @@ def promotion_errors() -> list[str]:
                 errors.append(
                     f"{directory.name}: authenticated V4 release verification failed{suffix}"
                 )
+            elif source_seal is not None and private_materialization is not None:
+                try:
+                    candidate_builder._recheck_admitted_toolchain(
+                        promotion_toolchain
+                    )
+                    current_materialized_identity = source_seal.compute_identity(
+                        materialized_source_root,
+                        str(private_materialization.reviewed_source_closure),
+                        reviewed_closure_sha256,
+                    )
+                    if current_materialized_identity != private_materialization.identity:
+                        raise ValueError(
+                            "private promotion source changed during verification"
+                        )
+                except (OSError, RuntimeError, ValueError) as error:
+                    errors.append(
+                        f"{directory.name}: private authenticated verifier source "
+                        f"changed: {error}"
+                    )
     return errors
 
 
@@ -908,22 +1252,51 @@ if self_test:
     previous_verifier_override = os.environ.get(verifier_override_name)
     os.environ[verifier_override_name] = "/usr/bin/true"
     try:
-        verifier_command = release_verifier_command(Path("release"), Path("policy.norito"))
+        verifier_command = release_verifier_command(
+            Path("/root/published-verifier/kagami"),
+            Path("release"),
+            Path("policy.norito"),
+        )
     finally:
         if previous_verifier_override is None:
             del os.environ[verifier_override_name]
         else:
             os.environ[verifier_override_name] = previous_verifier_override
-    if verifier_command[:7] != [
-        "cargo",
-        "run",
-        "--locked",
-        "--quiet",
-        "-p",
-        "iroha_kagami",
-        "--",
+    if verifier_command[:3] != [
+        "/root/published-verifier/kagami",
+        "kagemusha",
+        "verify-release-v4",
     ]:
         errors.append("self-test failed to reject a substituted release verifier")
+    if (
+        "candidate_builder._verify_exact_signed_commit(" not in readiness_source
+        or "captured_commit," not in readiness_source
+        or "_admit_production_closure_binding(" not in readiness_source
+        or "require_root_controlled_bootstrap(" not in readiness_source
+        or "published_build.admit_promotion_verifier(" not in readiness_source
+        or "promotion_verifier.executable" not in readiness_source
+        or "root_published_generated_candidate_receipt_sha256"
+        not in readiness_source
+        or "generation_worker_launch_receipt_sha256" not in readiness_source
+        or "source_only_module(" not in readiness_source
+        or "/usr/bin/env -i" not in readiness_source
+        or '"${KAGEMUSHA_BUILD_PYTHON_EXECUTABLE}" -I -' not in readiness_source
+        or "source_seal.configure_production_git(" not in readiness_source
+        or ("tempfile." + "TemporaryDirectory") in readiness_source
+        or (
+            "cargo_" + "command = release_verifier_command"
+        )
+        in readiness_source
+        or ("source_identity_" + "command") in readiness_source
+        or (
+            "from scripts import "
+            + "kagemusha_source_tree_seal"
+        )
+        in readiness_source
+    ):
+        errors.append(
+            "self-test found an unbound mutable promotion verifier source"
+        )
 
 if errors:
     print(f"Kagemusha ABI-21/V4 {mode} corridor failed:", file=sys.stderr)
@@ -932,3 +1305,50 @@ if errors:
     raise SystemExit(1)
 print(f"Kagemusha ABI-21/V4 {mode} corridor passed.")
 PY
+}
+
+if [[ "${MODE}" == "promotion" ]]; then
+  required_promotion_variables=(
+    KAGEMUSHA_BUILD_PYTHON_EXECUTABLE
+    KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE
+    KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256
+    KAGEMUSHA_BUILD_TOOLCHAIN_PROVENANCE
+    KAGEMUSHA_BUILD_TOOLCHAIN_PROVENANCE_SHA256
+    KAGEMUSHA_PROMOTION_VERIFIER_RECEIPT
+    KAGEMUSHA_PROMOTION_VERIFIER_RECEIPT_SHA256
+    KAGEMUSHA_ROOT_PUBLISHED_GENERATED_CANDIDATE_RECEIPT_SHA256
+    KAGEMUSHA_GENERATION_WORKER_LAUNCH_RECEIPT_SHA256
+    KAGEMUSHA_V4_ARTIFACT_ROOT
+    KAGEMUSHA_V4_RELEASE_POLICY_PATH
+  )
+  for variable_name in "${required_promotion_variables[@]}"; do
+    if [[ -z "${!variable_name:-}" ]]; then
+      echo "promotion requires ${variable_name}" >&2
+      exit 2
+    fi
+  done
+  run_readiness_python \
+    /usr/bin/env -i \
+    HOME=/var/empty \
+    LANG=C \
+    LC_ALL=C \
+    PATH=/usr/bin:/bin \
+    TMPDIR=/private/tmp \
+    TZ=UTC \
+    KAGEMUSHA_BUILD_PYTHON_EXECUTABLE="${KAGEMUSHA_BUILD_PYTHON_EXECUTABLE}" \
+    KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE="${KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE}" \
+    KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256="${KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256}" \
+    KAGEMUSHA_BUILD_TOOLCHAIN_PROVENANCE="${KAGEMUSHA_BUILD_TOOLCHAIN_PROVENANCE}" \
+    KAGEMUSHA_BUILD_TOOLCHAIN_PROVENANCE_SHA256="${KAGEMUSHA_BUILD_TOOLCHAIN_PROVENANCE_SHA256}" \
+    KAGEMUSHA_PROMOTION_VERIFIER_RECEIPT="${KAGEMUSHA_PROMOTION_VERIFIER_RECEIPT}" \
+    KAGEMUSHA_PROMOTION_VERIFIER_RECEIPT_SHA256="${KAGEMUSHA_PROMOTION_VERIFIER_RECEIPT_SHA256}" \
+    KAGEMUSHA_ROOT_PUBLISHED_GENERATED_CANDIDATE_RECEIPT_SHA256="${KAGEMUSHA_ROOT_PUBLISHED_GENERATED_CANDIDATE_RECEIPT_SHA256}" \
+    KAGEMUSHA_GENERATION_WORKER_LAUNCH_RECEIPT_SHA256="${KAGEMUSHA_GENERATION_WORKER_LAUNCH_RECEIPT_SHA256}" \
+    KAGEMUSHA_V4_ARTIFACT_ROOT="${KAGEMUSHA_V4_ARTIFACT_ROOT}" \
+    KAGEMUSHA_V4_RELEASE_POLICY_PATH="${KAGEMUSHA_V4_RELEASE_POLICY_PATH}" \
+    "${KAGEMUSHA_BUILD_PYTHON_EXECUTABLE}" -I - \
+    "${ROOT_DIR}" "${MODE}" "${SELF_TEST}"
+else
+  run_readiness_python \
+    python3 -I - "${ROOT_DIR}" "${MODE}" "${SELF_TEST}"
+fi

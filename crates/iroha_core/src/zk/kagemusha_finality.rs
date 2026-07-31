@@ -841,6 +841,8 @@ mod tests {
             source_repo_dirty: true,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
+            root_published_generated_candidate_receipt_sha256: [0x74; 32],
+            generation_worker_launch_receipt_sha256: [0x75; 32],
             chain_id: chain_id.clone(),
             asset: asset.clone(),
             asset_scale: 2,

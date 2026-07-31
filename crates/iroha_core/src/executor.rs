@@ -5195,6 +5195,28 @@ impl Executor {
         let prior_sccp_ivm_proved_execution_binding =
             state_transaction.sccp_ivm_proved_execution_binding.clone();
         state_transaction.sccp_ivm_proved_execution_binding = sccp_ivm_proved_execution_binding;
+        let install_direct_signed_scope = ivm_proved_replay.is_none()
+            && contract_runtime_context.is_none()
+            && entrypoint_authorization.is_none();
+        let previous_direct_signed_authority = if install_direct_signed_scope {
+            if state_transaction
+                .offline_asset_bootstrap_direct_signed_authority
+                .is_some()
+            {
+                state_transaction.sccp_ivm_proved_execution_binding =
+                    prior_sccp_ivm_proved_execution_binding;
+                return Err(ValidationFail::InternalError(
+                    "directly signed instruction scope is already active".to_owned(),
+                ));
+            }
+            Some(
+                state_transaction
+                    .offline_asset_bootstrap_direct_signed_authority
+                    .replace(authority.clone()),
+            )
+        } else {
+            None
+        };
         let execution_result = (|| -> Result<(), ValidationFail> {
             if let Some(replay) = ivm_proved_replay {
                 for queued in replay.queued {
@@ -5307,6 +5329,13 @@ impl Executor {
                 }
             } else {
                 for (index, isi) in instructions.into_iter().enumerate() {
+                    if state_transaction.offline_asset_bootstrap_finalized {
+                        return Err(ValidationFail::NotPermitted(
+                            "a governed offline asset bootstrap must be the final instruction in \
+                             its transaction"
+                                .to_owned(),
+                        ));
+                    }
                     if let Some(authorization) = entrypoint_authorization {
                         authorization
                             .validate_for_authority(&state_transaction.world, authority)?;
@@ -5326,7 +5355,20 @@ impl Executor {
                         } else {
                             false
                         };
-                    if !executed_bootstrap_grant {
+                    if executed_bootstrap_grant {
+                        let directly_signed = contract_runtime_context.is_none()
+                            && entrypoint_authorization.is_none()
+                            && state_transaction.offline_asset_bootstrap_execution_depth == 0
+                            && state_transaction
+                                .offline_asset_bootstrap_direct_signed_authority
+                                .as_ref()
+                                == Some(authority);
+                        if directly_signed {
+                            state_transaction.offline_asset_bootstrap_prefix.push(isi);
+                        } else {
+                            state_transaction.offline_asset_bootstrap_unbound_effects = true;
+                        }
+                    } else {
                         self.execute_instruction_with_contract_runtime_context(
                             state_transaction,
                             authority,
@@ -5347,6 +5389,9 @@ impl Executor {
         })();
         state_transaction.sccp_ivm_proved_execution_binding =
             prior_sccp_ivm_proved_execution_binding;
+        if let Some(previous) = previous_direct_signed_authority {
+            state_transaction.offline_asset_bootstrap_direct_signed_authority = previous;
+        }
         execution_result?;
 
         // Track confidential gas after successful execution.
@@ -5469,6 +5514,13 @@ impl Executor {
         logical_time_ms: u64,
         trigger_context: Option<(&TriggerId, u64)>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
+        if state_transaction.offline_asset_bootstrap_finalized {
+            return Err(ValidationFail::NotPermitted(
+                "a governed offline asset bootstrap must be the final executable in its transaction"
+                    .to_owned(),
+            ));
+        }
+        state_transaction.offline_asset_bootstrap_unbound_effects = true;
         let resolved = self.resolve_contract_invocation(state_transaction, call, ivm_cache)?;
         self.execute_resolved_contract_invocation(
             state_transaction,
@@ -5494,6 +5546,16 @@ impl Executor {
         trigger_context: Option<(&TriggerId, u64)>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
         use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
+
+        if state_transaction.offline_asset_bootstrap_finalized {
+            return Err(ValidationFail::NotPermitted(
+                "a governed offline asset bootstrap must be the final executable in its transaction"
+                    .to_owned(),
+            ));
+        }
+        // Trigger-batch contract calls enter this resolved path directly and
+        // therefore do not pass through `execute_contract_invocation`.
+        state_transaction.offline_asset_bootstrap_unbound_effects = true;
 
         let ResolvedContractInvocation {
             identity,
@@ -6700,6 +6762,12 @@ impl Executor {
         instruction_index: usize,
         bootstrap_authorization: Option<&ContractDeploymentSelfBootstrapAuthorization>,
     ) -> Result<(), ValidationFail> {
+        if state_transaction.offline_asset_bootstrap_finalized {
+            return Err(ValidationFail::NotPermitted(
+                "a governed offline asset bootstrap must be the final instruction in its transaction"
+                    .to_owned(),
+            ));
+        }
         if let Some(authorization) = bootstrap_authorization
             && execute_contract_deployment_self_bootstrap_grant(
                 authorization,
@@ -6709,6 +6777,18 @@ impl Executor {
                 state_transaction,
             )?
         {
+            let directly_signed = state_transaction.offline_asset_bootstrap_execution_depth == 0
+                && state_transaction
+                    .offline_asset_bootstrap_direct_signed_authority
+                    .as_ref()
+                    == Some(authority);
+            if directly_signed {
+                state_transaction
+                    .offline_asset_bootstrap_prefix
+                    .push(instruction);
+            } else {
+                state_transaction.offline_asset_bootstrap_unbound_effects = true;
+            }
             return Ok(());
         }
         self.execute_instruction(state_transaction, authority, instruction)
@@ -6779,6 +6859,12 @@ impl Executor {
         instruction_index: usize,
         bootstrap_authorization: Option<&ContractDeploymentSelfBootstrapAuthorization>,
     ) -> Result<(), ValidationFail> {
+        if state_transaction.offline_asset_bootstrap_finalized {
+            return Err(ValidationFail::NotPermitted(
+                "a governed offline asset bootstrap must be the final instruction in its transaction"
+                    .to_owned(),
+            ));
+        }
         if contract_runtime_context.is_none()
             && let Some(authorization) = bootstrap_authorization
             && execute_contract_deployment_self_bootstrap_grant(
@@ -6789,6 +6875,18 @@ impl Executor {
                 state_transaction,
             )?
         {
+            let directly_signed = state_transaction.offline_asset_bootstrap_execution_depth == 0
+                && state_transaction
+                    .offline_asset_bootstrap_direct_signed_authority
+                    .as_ref()
+                    == Some(authority);
+            if directly_signed {
+                state_transaction
+                    .offline_asset_bootstrap_prefix
+                    .push(instruction.clone());
+            } else {
+                state_transaction.offline_asset_bootstrap_unbound_effects = true;
+            }
             return Ok(());
         }
         self.execute_borrowed_overlay_instruction(
@@ -6833,6 +6931,34 @@ impl Executor {
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
+        let is_offline_bootstrap = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::offline::EnactOfflineAssetBootstrapV1>()
+            .is_some();
+        let entry_depth = state_transaction.offline_asset_bootstrap_execution_depth;
+        let directly_signed = entry_depth == 0
+            && contract_runtime_context.is_none()
+            && state_transaction
+                .offline_asset_bootstrap_direct_signed_authority
+                .as_ref()
+                == Some(authority);
+        if !directly_signed {
+            state_transaction.offline_asset_bootstrap_unbound_effects = true;
+        }
+        if is_offline_bootstrap && !directly_signed {
+            return Err(ValidationFail::NotPermitted(
+                "a governed offline asset bootstrap must be a depth-zero instruction in its directly signed plain-instruction transaction"
+                    .to_owned(),
+            ));
+        }
+        if state_transaction.offline_asset_bootstrap_finalized {
+            return Err(ValidationFail::NotPermitted(
+                "a governed offline asset bootstrap must be the final instruction in its transaction"
+                    .to_owned(),
+            ));
+        }
+        let record_in_offline_bootstrap_prefix = directly_signed && !is_offline_bootstrap;
+        let prefix_instruction = record_in_offline_bootstrap_prefix.then(|| instruction.clone());
         ensure_contract_deployment_permission_mutation_allowed(state_transaction, &instruction)?;
         ensure_lifecycle_hook_cannot_mutate_contract_binding(
             contract_runtime_context,
@@ -6846,7 +6972,13 @@ impl Executor {
         trace!("Running instruction execution");
         let instr_id = instruction.id();
 
-        let result = match self {
+        state_transaction.offline_asset_bootstrap_execution_depth =
+            entry_depth.checked_add(1).ok_or_else(|| {
+                ValidationFail::NotPermitted(
+                    "native instruction execution depth overflowed".to_owned(),
+                )
+            })?;
+        let mut result = match self {
             Self::Initial => Self::execute_initial_instruction(
                 state_transaction,
                 authority,
@@ -6861,6 +6993,16 @@ impl Executor {
                 instruction,
             ),
         };
+        state_transaction.offline_asset_bootstrap_execution_depth = entry_depth;
+        if result.is_ok()
+            && !is_offline_bootstrap
+            && state_transaction.offline_asset_bootstrap_finalized
+        {
+            result = Err(ValidationFail::NotPermitted(
+                "a nested governed offline asset bootstrap cannot finalize while an outer instruction is still executing"
+                    .to_owned(),
+            ));
+        }
         if let Err(err) = &result {
             iroha_logger::error!(
                 ?profile,
@@ -6868,6 +7010,15 @@ impl Executor {
                 ?err,
                 "instruction execution failed"
             );
+        }
+        if result.is_ok() && directly_signed {
+            if is_offline_bootstrap {
+                state_transaction.offline_asset_bootstrap_finalized = true;
+            } else if let Some(instruction) = prefix_instruction {
+                state_transaction
+                    .offline_asset_bootstrap_prefix
+                    .push(instruction);
+            }
         }
         result
     }
@@ -6880,6 +7031,34 @@ impl Executor {
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
+        let is_offline_bootstrap = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::offline::EnactOfflineAssetBootstrapV1>()
+            .is_some();
+        let entry_depth = state_transaction.offline_asset_bootstrap_execution_depth;
+        let directly_signed = entry_depth == 0
+            && contract_runtime_context.is_none()
+            && state_transaction
+                .offline_asset_bootstrap_direct_signed_authority
+                .as_ref()
+                == Some(authority);
+        if !directly_signed {
+            state_transaction.offline_asset_bootstrap_unbound_effects = true;
+        }
+        if is_offline_bootstrap && !directly_signed {
+            return Err(ValidationFail::NotPermitted(
+                "a governed offline asset bootstrap must be a depth-zero instruction in its directly signed plain-instruction transaction"
+                    .to_owned(),
+            ));
+        }
+        if state_transaction.offline_asset_bootstrap_finalized {
+            return Err(ValidationFail::NotPermitted(
+                "a governed offline asset bootstrap must be the final instruction in its transaction"
+                    .to_owned(),
+            ));
+        }
+        let record_in_offline_bootstrap_prefix = directly_signed && !is_offline_bootstrap;
+        let prefix_instruction = record_in_offline_bootstrap_prefix.then(|| instruction.clone());
         ensure_contract_deployment_permission_mutation_allowed(state_transaction, instruction)?;
         ensure_lifecycle_hook_cannot_mutate_contract_binding(
             contract_runtime_context,
@@ -6893,7 +7072,13 @@ impl Executor {
         trace!("Running borrowed instruction execution");
         let instr_id = instruction.id();
 
-        let result = match self {
+        state_transaction.offline_asset_bootstrap_execution_depth =
+            entry_depth.checked_add(1).ok_or_else(|| {
+                ValidationFail::NotPermitted(
+                    "native instruction execution depth overflowed".to_owned(),
+                )
+            })?;
+        let mut result = match self {
             Self::Initial => Self::execute_initial_instruction(
                 state_transaction,
                 authority,
@@ -6901,15 +7086,23 @@ impl Executor {
                 profile,
                 contract_runtime_context,
             ),
-            Self::UserProvided(_) => self
-                .execute_instruction_with_profile_and_contract_runtime_context(
-                    state_transaction,
-                    authority,
-                    instruction.clone(),
-                    profile,
-                    contract_runtime_context,
-                ),
+            Self::UserProvided(loaded_executor) => dispatch_instruction_with_ivm(
+                loaded_executor,
+                state_transaction,
+                authority,
+                instruction.clone(),
+            ),
         };
+        state_transaction.offline_asset_bootstrap_execution_depth = entry_depth;
+        if result.is_ok()
+            && !is_offline_bootstrap
+            && state_transaction.offline_asset_bootstrap_finalized
+        {
+            result = Err(ValidationFail::NotPermitted(
+                "a nested governed offline asset bootstrap cannot finalize while an outer instruction is still executing"
+                    .to_owned(),
+            ));
+        }
         if let Err(err) = &result {
             iroha_logger::error!(
                 ?profile,
@@ -6917,6 +7110,15 @@ impl Executor {
                 ?err,
                 "borrowed instruction execution failed"
             );
+        }
+        if result.is_ok() && directly_signed {
+            if is_offline_bootstrap {
+                state_transaction.offline_asset_bootstrap_finalized = true;
+            } else if let Some(instruction) = prefix_instruction {
+                state_transaction
+                    .offline_asset_bootstrap_prefix
+                    .push(instruction);
+            }
         }
         result
     }
@@ -9501,6 +9703,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
         iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
         iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4,
+        iroha_data_model::isi::offline::EnactOfflineAssetBootstrapV1,
         iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,
         iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy,
     ) {
@@ -16408,6 +16611,66 @@ mod tests {
     }
 
     #[test]
+    fn offline_bootstrap_prefix_is_direct_only_and_finality_blocks_later_instructions() {
+        let authority = ALICE_ID.clone();
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+        transaction.bind_direct_signed_instruction_authority_for_testing(Some(authority.clone()));
+        let executor = super::Executor::Initial;
+
+        executor
+            .execute_instruction(
+                &mut transaction,
+                &authority,
+                Log::new(Level::INFO, "direct prefix".to_owned()).into(),
+            )
+            .expect("directly signed instruction executes");
+        assert_eq!(transaction.offline_asset_bootstrap_prefix.len(), 1);
+        assert!(!transaction.offline_asset_bootstrap_unbound_effects);
+
+        transaction.offline_asset_bootstrap_execution_depth = 1;
+        executor
+            .execute_instruction(
+                &mut transaction,
+                &authority,
+                Log::new(Level::INFO, "nested effect".to_owned()).into(),
+            )
+            .expect("ordinary nested instruction still executes");
+        transaction.offline_asset_bootstrap_execution_depth = 0;
+        assert_eq!(
+            transaction.offline_asset_bootstrap_prefix.len(),
+            1,
+            "nested effects must not enter the directly signed prefix"
+        );
+        assert!(
+            transaction.offline_asset_bootstrap_unbound_effects,
+            "nested execution must permanently disqualify a later enactment"
+        );
+
+        transaction.offline_asset_bootstrap_finalized = true;
+        let later = executor.execute_instruction(
+            &mut transaction,
+            &authority,
+            Log::new(Level::INFO, "after enactment".to_owned()).into(),
+        );
+        assert!(
+            matches!(
+                later,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("final instruction")
+            ),
+            "no executable may follow a finalized offline bootstrap: {later:?}"
+        );
+        assert_eq!(transaction.offline_asset_bootstrap_prefix.len(), 1);
+    }
+
+    #[test]
     fn initial_executor_enforces_exact_pkr_mint_and_metadata_permissions() {
         let owner = ALICE_ID.clone();
         let retail = checked_account_id();
@@ -16491,17 +16754,24 @@ mod tests {
                 InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
             )
             .expect("the exact PKR definition mint grant must authorize minting");
-        executor
-            .execute_instruction(
-                &mut stx,
-                &retail,
-                InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
-                    pkr.clone(),
-                    offline_key,
-                    Json::new(true),
-                )),
-            )
-            .expect("the exact PKR metadata grant must authorize offline metadata changes");
+        let governed_offline_metadata = executor.execute_instruction(
+            &mut stx,
+            &retail,
+            InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
+                pkr.clone(),
+                offline_key,
+                Json::new(true),
+            )),
+        );
+        assert!(
+            matches!(
+                governed_offline_metadata,
+                Err(ValidationFail::InstructionFailed(
+                    InstructionExecutionError::InvariantViolation(ref message)
+                )) if message.contains("offline.enabled mutation is forbidden")
+            ),
+            "an exact metadata permission must not bypass governed offline bootstrap: {governed_offline_metadata:?}"
+        );
 
         assert_eq!(
             stx.world
@@ -16517,7 +16787,7 @@ mod tests {
                 .expect("PKR definition")
                 .metadata()
                 .get(&"offline.enabled".parse::<Name>().expect("metadata key")),
-            Some(&Json::new(true)),
+            None,
         );
     }
 
@@ -18907,6 +19177,11 @@ seiyaku MeteredFailure {
             (1..=10).contains(&state_transaction.last_tx_gas_used),
             "failed VM execution must retain its chargeable gas, observed {}",
             state_transaction.last_tx_gas_used
+        );
+        assert!(
+            state_transaction.offline_asset_bootstrap_unbound_effects,
+            "even a failed resolved contract invocation must remain outside the directly signed \
+             offline-bootstrap prefix"
         );
     }
 

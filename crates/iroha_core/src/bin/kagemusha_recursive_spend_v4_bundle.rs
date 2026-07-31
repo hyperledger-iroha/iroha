@@ -14,7 +14,6 @@ use std::{
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use iroha_core::zk::kagemusha_artifact_v4::{
@@ -83,13 +82,38 @@ const HELP: &str = "\
 Generate an unsigned ABI-21 candidate, then finalize those exact bytes after approval.
 
 Usage:
-  python3 scripts/build_kagemusha_v4_candidate_bundle.py \\
-    > sealed-kagemusha-candidate-build.json
-  python3 scripts/run_kagemusha_v4_generation.py \\
-    --resource-report <new-resource-report-directory> -- \\
-    <binary_path-from-sealed-kagemusha-candidate-build.json> \\
+  # Internal worker command. The separately installed root supervisor must
+  # create and exclusively own the no-login boi-build session/target, set the
+  # two worker-identity variables, then copy and root-publish the result from
+  # stable descriptors. Operators must not run this directly.
+  /usr/bin/env -i HOME=/var/empty LANG=C LC_ALL=C \\
+    PATH=/usr/bin:/bin TMPDIR=/private/tmp TZ=UTC \\
+    KAGEMUSHA_BUILD_USER_NAME=boi-build KAGEMUSHA_BUILD_UID=<numeric-uid> \\
+    <root-published-closure>/toolchain/python/bin/python3 -I \\
+    <root-published-closure>/source/scripts/build_kagemusha_v4_candidate_bundle.py \\
+    --root <root-published-closure>/source \\
+    --target-dir <fresh-external-target-directory> \\
+    --reviewed-source-closure \\
+      <root-published-closure>/reviewed-source-closure.json \\
+    --reviewed-source-closure-sha256 <64-lower-hex> \\
+    --toolchain-provenance \\
+      <root-published-closure>/production-build-closure.json \\
+    --toolchain-provenance-sha256 <64-lower-hex> \\
+    > <boi-build-private-target>/sealed-kagemusha-candidate-build.json
+  # Internal generation worker command. Root must again prove that the
+  # receipt-named boi-build UID has no other process or session, then launch
+  # this exact command under that UID with a previously absent one-run root.
+  /usr/bin/env -i HOME=/var/empty LANG=C LC_ALL=C \\
+    PATH=/usr/bin:/bin TMPDIR=/private/tmp TZ=UTC \\
+    <root-published-closure>/toolchain/python/bin/python3 -I \\
+    <root-published-closure>/source/scripts/run_kagemusha_v4_generation.py \\
+    --resource-report <fresh-generation-worker-root>/resource-report \\
+    --root-published-build-receipt \\
+      <root-published-artifact>/root-published-candidate-build.json \\
+    --root-published-build-receipt-sha256 <independently-pinned-64-lower-hex> \\
+    -- <root-published-artifact>/kagemusha_recursive_spend_v4_bundle \\
     generate-candidate \\
-    --out-dir <new-directory> \\
+    --out-dir <fresh-generation-worker-root>/candidate \\
     --chain-id <chain> --asset-definition-id <asset> --asset-scale <u32> \\
     --generation <id> --parameter-generation <id> \\
     --source-commit <40-lower-hex> --source-tree-sha256 <64-lower-hex> \\
@@ -98,16 +122,27 @@ Usage:
     --step-ep-circuit-params <canonical-norito-file> \\
     --topup-finality-roster <canonical-norito-file>
 
-  <binary_path-from-sealed-kagemusha-candidate-build.json> \\
+  # Production finalization is also launched from an empty environment. The
+  # Python gate admits both immutable receipts and rechecks the full loader
+  # closure before passing their already-open descriptors to the bundle.
+  /usr/bin/env -i HOME=/var/empty LANG=C LC_ALL=C \\
+    PATH=/usr/bin:/bin TMPDIR=/private/tmp TZ=UTC \\
+    <root-published-closure>/toolchain/python/bin/python3 -I \\
+    <root-published-closure>/source/scripts/run_kagemusha_v4_generation.py \\
+    --root-published-generated-candidate-receipt \\
+      <root-published-generated>/root-published-generated-candidate.json \\
+    --root-published-generated-candidate-receipt-sha256 \\
+      <independently-pinned-64-lower-hex> \\
+    -- <root-published-artifact>/kagemusha_recursive_spend_v4_bundle \\
     finalize-release \\
-    --candidate-dir <generated-candidate> \\
+    --candidate-dir <root-published-generated>/candidate \\
     --out-dir <new-final-directory> \\
     --release-policy <canonical-norito-file> \\
     --release-attestation <canonical-norito-file> \\
     --benchmark-evidence <exact-file> \\
     --cryptographic-review <exact-file>
 
-  <binary_path-from-sealed-kagemusha-candidate-build.json> \\
+  <root-published-artifact>/kagemusha_recursive_spend_v4_bundle \\
     validate-candidate \\
     --candidate-dir <generated-candidate> \\
     --out-dir <new-validation-directory>
@@ -120,6 +155,19 @@ reviewed-closure-bound, pre-evidence candidate record; that directory is not an
 approved release and contains no approval payload. Candidate generation requires
 the requested commit to be the signed checkout HEAD and the complete dirty
 checkout to match the independently pinned source-closure descriptor.
+The generation candidate and resource reports remain mutable worker output and
+are never cross-stage inputs. Production finalization accepts them only after
+root descriptor-copies and atomically publishes the exact candidate/report tree
+under an independently pinned
+`iroha.kagemusha.root_published_generated_candidate.v1` receipt. That receipt
+binds the included canonical
+`boi.taira.generation_worker_launch.v1` receipt, candidate-build receipt,
+generation summary, full tree digests, build UID, and source/toolchain closure.
+The generated root has exactly four direct entries: `candidate/`,
+`resource-report/`, `generation-worker-launch.json`, and
+`root-published-generated-candidate.json`; only the final receipt is excluded
+from the root tree digest. The candidate-build receipt alone does not cover
+generation output.
 Finalization binds the two supplied evidence files into the release manifest,
 verifies signed attestation thresholds,
 requires canonical signed Norito cryptographic-review evidence bound to the exact
@@ -131,12 +179,20 @@ Both output directories must be new.
 The generate-candidate command is intentionally available only through
 scripts/run_kagemusha_v4_generation.py, which owns the host-global lock,
 process group, physical-memory ceiling, per-run staging identity, cleanup, and
-resource report. If generation is terminated, the launcher removes only the
-owner-private staging directory carrying that invocation's unguessable id.
+resource report. It requires the receipt-named non-root boi-build UID, creates
+the previously absent output parent itself as a fresh mode-0700 single-use
+worker root, and requires both candidate and report beneath that root. If
+generation is terminated, the launcher removes only the owner-private staging
+directory carrying that invocation's unguessable id.
 Build the source-sealed release binary with the helper before entering that
 256 MiB guard: wrapping `cargo run` would include the compiler in the guarded
-process group. The finalize-release and validate-candidate commands do not
-require the generation guard.
+process group. `finalize-release` requires the strict receipt-admitting runner's
+inherited generated-candidate and launch receipt descriptors. The binary parses
+both exact schemas, checks their mutual bindings, and commits both receipt
+SHA-256 values into the final manifest, signed attestation subject, and
+promotion record. A direct invocation without those immutable receipt
+capabilities fails closed.
+`validate-candidate` is diagnostic and does not require the generation guard.
 ";
 
 const GENERATE_OPTIONS: &[&str] = &[
@@ -166,6 +222,10 @@ const FINALIZE_OPTIONS: &[&str] = &[
     "release-attestation",
     "benchmark-evidence",
     "cryptographic-review",
+    "root-published-generated-candidate-receipt-fd",
+    "root-published-generated-candidate-receipt-sha256",
+    "generation-worker-launch-receipt-fd",
+    "generation-worker-launch-receipt-sha256",
 ];
 
 const PUBLISH_STAGED_CANDIDATE_OPTIONS: &[&str] = &[
@@ -193,21 +253,88 @@ const CANDIDATE_VALIDATION_REPORT_SCHEMA_V1: &str =
 const MAX_MANIFEST_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MAX_ATTESTATION_BYTES: u64 = 1024 * 1024;
+const MAX_FINALIZATION_RECEIPT_BYTES: u64 = 64 * 1024;
+const ROOT_PUBLISHED_GENERATED_CANDIDATE_RECEIPT_SCHEMA_V1: &str =
+    "iroha.kagemusha.root_published_generated_candidate.v1";
+const GENERATION_WORKER_LAUNCH_RECEIPT_SCHEMA_V1: &str = "boi.taira.generation_worker_launch.v1";
+const ROOT_PUBLISHED_GENERATED_CANDIDATE_PROTOCOL_V1: &str =
+    "iroha.kagemusha.distinct_uid_root_atomic_publish.v1";
+const ROOT_PUBLISHED_GENERATED_CANDIDATE_STATUS_V1: &str = "root_published_boi_generation_output";
+const PROVISIONAL_GENERATED_CANDIDATE_STATUS_V1: &str = "provisional_boi_generation_worker_output";
+const PROVISIONAL_GENERATED_CANDIDATE_CROSS_STAGE_STATUS_V1: &str =
+    "blocked_pending_root_descriptor_copy_atomic_publication_receipt";
+const KAGEMUSHA_BUILD_USER_NAME_V1: &str = "boi-build";
+const MINIMUM_GENERATION_STORAGE_AT_ADMISSION_BYTES_V1: u64 = 64 * 1024 * 1024 * 1024;
+const MINIMUM_GENERATION_POST_BUILD_RESERVE_BYTES_V1: u64 = 16 * 1024 * 1024 * 1024;
+const MAX_RECORDED_GENERATION_STORAGE_BYTES_V1: u64 = 1_u64 << 60;
 const BUILD_SOURCE_COMMIT: Option<&str> = option_env!("KAGEMUSHA_BUILD_SOURCE_COMMIT");
 const BUILD_SOURCE_TREE_SHA256: Option<&str> = option_env!("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256");
-const BUILD_REVIEWED_SOURCE_CLOSURE: Option<&str> =
-    option_env!("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE");
-const BUILD_REVIEWED_SOURCE_CLOSURE_SHA256: Option<&str> =
-    option_env!("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256");
-const TRUSTED_GIT_EXECUTABLE: &str = "/usr/bin/git";
-const TRUSTED_PYTHON_EXECUTABLE: &str = "/usr/bin/python3";
-const TRUSTED_TOOL_PATH: &str = "/usr/bin:/bin";
+const BUILD_SOURCE_IDENTITY_JSON: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/kagemusha_embedded_source_identity_v1.json"
+));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSpec {
     file_name: &'static str,
     parity: KagemushaPastaCycleParityV1,
     kind: KagemushaPastaCycleArtifactKindV4,
+}
+
+#[derive(Debug)]
+struct KagemushaFinalizationReceiptPermitV4 {
+    root_published_generated_candidate_receipt_sha256: [u8; 32],
+    generation_worker_launch_receipt_sha256: [u8; 32],
+}
+
+#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct RootPublishedGeneratedCandidateReceiptV1 {
+    artifact_root: String,
+    artifact_tree_sha256: String,
+    build_uid: u32,
+    build_user_name: String,
+    candidate_build_artifact_tree_sha256: String,
+    candidate_build_receipt_path: String,
+    candidate_build_receipt_sha256: String,
+    candidate_dir_path: String,
+    candidate_tree_sha256: String,
+    generation_resource_report_path: String,
+    generation_resource_report_tree_sha256: String,
+    generation_summary_path: String,
+    generation_summary_sha256: String,
+    production_closure_tree_sha256: String,
+    provisional_cross_stage_status: String,
+    provisional_generation_publication_status: String,
+    publication_protocol: String,
+    publication_status: String,
+    reviewed_source_closure_descriptor_sha256: String,
+    schema: String,
+    source_commit: String,
+    source_tree_sha256: String,
+    toolchain_provenance_sha256: String,
+    worker_launch_receipt_sha256: String,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct GenerationWorkerLaunchReceiptV1 {
+    build_uid: u32,
+    build_user_name: String,
+    candidate_build_receipt_path: String,
+    candidate_build_receipt_sha256: String,
+    candidate_output_leaf: String,
+    generation_command_sha256: String,
+    resource_report_leaf: String,
+    schema: String,
+    storage_available_bytes_after_generation: u64,
+    storage_available_bytes_at_admission: u64,
+    storage_device: u64,
+    storage_minimum_available_bytes: u64,
+    storage_post_build_reserve_bytes: u64,
+    worker_root: String,
+    worker_root_device: u64,
+    worker_root_inode: u64,
 }
 
 const INPUTS: [InputSpec; 8] = [
@@ -433,6 +560,7 @@ struct BundleMetadata {
     parameter_generation: String,
     source_commit: String,
     source_tree_sha256: [u8; 32],
+    source_repo_dirty: bool,
     reviewed_source_closure: KagemushaReviewedSourceClosureV1,
     reviewed_source_closure_descriptor_sha256: [u8; 32],
     activation_height: u64,
@@ -642,7 +770,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         "publish-staged-candidate" => {
             publish_staged_candidate(&options, claim_kagemusha_generation_supervisor_permit_v4()?)
         }
-        "finalize-release" => finalize_release(&options),
+        "finalize-release" => finalize_release(
+            &options,
+            claim_kagemusha_finalization_receipt_permit_v4(&options)?,
+        ),
         "validate-candidate" => validate_candidate(&options),
         _ => unreachable!("command was checked above"),
     }
@@ -792,6 +923,298 @@ fn parse_digest(
         return Err(format!("--{name} must not be all zero").into());
     }
     Ok(digest)
+}
+
+fn admit_finalization_receipt_fd(
+    options: &BTreeMap<String, String>,
+    descriptor_option: &str,
+    digest_option: &str,
+    label: &str,
+) -> Result<([u8; 32], Vec<u8>), Box<dyn Error>> {
+    #[cfg(not(unix))]
+    {
+        let _ = (options, descriptor_option, digest_option);
+        return Err(format!("{label} admission requires Unix descriptors").into());
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let descriptor_text = required(options, descriptor_option);
+        if !canonical_unsigned_decimal(descriptor_text) {
+            return Err(format!("--{descriptor_option} must be a canonical descriptor").into());
+        }
+        let descriptor = descriptor_text
+            .parse::<i32>()
+            .ok()
+            .filter(|descriptor| *descriptor >= 3)
+            .ok_or_else(|| format!("--{descriptor_option} is not an inherited descriptor"))?;
+        let expected_sha256 = parse_digest(options, digest_option)?;
+        let mut receipt = File::open(format!("/dev/fd/{descriptor}"))
+            .map_err(|error| format!("{label} descriptor is unavailable: {error}"))?;
+        let before = receipt
+            .metadata()
+            .map_err(|error| format!("{label} metadata is unavailable: {error}"))?;
+        if !before.is_file()
+            || before.uid() != 0
+            || before.gid() != 0
+            || before.nlink() != 1
+            || before.size() == 0
+            || before.size() > MAX_FINALIZATION_RECEIPT_BYTES
+            || before.mode() & 0o777 != 0o444
+            || before.mode() & 0o7000 != 0
+        {
+            return Err(format!("{label} descriptor metadata is unsafe").into());
+        }
+        let mut payload = Vec::with_capacity(usize::try_from(before.size())?);
+        receipt.read_to_end(&mut payload)?;
+        let after = receipt
+            .metadata()
+            .map_err(|error| format!("{label} metadata is unavailable: {error}"))?;
+        if (
+            before.dev(),
+            before.ino(),
+            before.mode(),
+            before.nlink(),
+            before.uid(),
+            before.size(),
+            before.mtime(),
+            before.mtime_nsec(),
+            before.ctime(),
+            before.ctime_nsec(),
+        ) != (
+            after.dev(),
+            after.ino(),
+            after.mode(),
+            after.nlink(),
+            after.uid(),
+            after.size(),
+            after.mtime(),
+            after.mtime_nsec(),
+            after.ctime(),
+            after.ctime_nsec(),
+        ) || payload.last() != Some(&b'\n')
+            || payload.contains(&0)
+            || <[u8; 32]>::from(Sha256::digest(&payload)) != expected_sha256
+        {
+            return Err(format!("{label} changed or differs from its independent pin").into());
+        }
+        Ok((expected_sha256, payload))
+    }
+}
+
+fn is_nonzero_lower_sha256(value: &str) -> bool {
+    is_lower_hex(value, 64) && value.as_bytes().iter().any(|byte| *byte != b'0')
+}
+
+fn is_canonical_lexical_absolute_path(value: &str) -> bool {
+    value.starts_with('/')
+        && value.len() > 1
+        && !value.as_bytes().contains(&0)
+        && value[1..]
+            .split('/')
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
+}
+
+fn validate_root_published_generated_candidate_receipt_v1(
+    receipt: &RootPublishedGeneratedCandidateReceiptV1,
+    candidate_dir: &str,
+) -> Result<(), Box<dyn Error>> {
+    let digest_fields = [
+        receipt.artifact_tree_sha256.as_str(),
+        receipt.candidate_build_artifact_tree_sha256.as_str(),
+        receipt.candidate_build_receipt_sha256.as_str(),
+        receipt.candidate_tree_sha256.as_str(),
+        receipt.generation_resource_report_tree_sha256.as_str(),
+        receipt.generation_summary_sha256.as_str(),
+        receipt.production_closure_tree_sha256.as_str(),
+        receipt.reviewed_source_closure_descriptor_sha256.as_str(),
+        receipt.source_tree_sha256.as_str(),
+        receipt.toolchain_provenance_sha256.as_str(),
+        receipt.worker_launch_receipt_sha256.as_str(),
+    ];
+    let artifact_root = Path::new(&receipt.artifact_root);
+    let candidate = Path::new(&receipt.candidate_dir_path);
+    let resource_report = Path::new(&receipt.generation_resource_report_path);
+    let summary = Path::new(&receipt.generation_summary_path);
+    let candidate_build_receipt = Path::new(&receipt.candidate_build_receipt_path);
+    if receipt.schema != ROOT_PUBLISHED_GENERATED_CANDIDATE_RECEIPT_SCHEMA_V1
+        || receipt.publication_protocol != ROOT_PUBLISHED_GENERATED_CANDIDATE_PROTOCOL_V1
+        || receipt.publication_status != ROOT_PUBLISHED_GENERATED_CANDIDATE_STATUS_V1
+        || receipt.provisional_generation_publication_status
+            != PROVISIONAL_GENERATED_CANDIDATE_STATUS_V1
+        || receipt.provisional_cross_stage_status
+            != PROVISIONAL_GENERATED_CANDIDATE_CROSS_STAGE_STATUS_V1
+        || receipt.build_uid == 0
+        || receipt.build_user_name != KAGEMUSHA_BUILD_USER_NAME_V1
+        || digest_fields
+            .iter()
+            .any(|digest| !is_nonzero_lower_sha256(digest))
+        || !is_lower_hex(&receipt.source_commit, 40)
+        || receipt.source_commit == "0".repeat(40)
+        || !is_canonical_lexical_absolute_path(&receipt.artifact_root)
+        || !is_canonical_lexical_absolute_path(&receipt.candidate_dir_path)
+        || !is_canonical_lexical_absolute_path(&receipt.generation_resource_report_path)
+        || !is_canonical_lexical_absolute_path(&receipt.generation_summary_path)
+        || !is_canonical_lexical_absolute_path(&receipt.candidate_build_receipt_path)
+        || artifact_root.file_name().and_then(|name| name.to_str())
+            != Some(receipt.artifact_tree_sha256.as_str())
+        || candidate != artifact_root.join("candidate")
+        || resource_report != artifact_root.join("resource-report")
+        || summary != resource_report.join("kagemusha_resource_summary.json")
+        || candidate_build_receipt
+            .file_name()
+            .and_then(|name| name.to_str())
+            != Some("root-published-candidate-build.json")
+        || candidate_dir != receipt.candidate_dir_path.as_str()
+    {
+        return Err("root-published generated-candidate receipt capability is not exact".into());
+    }
+    Ok(())
+}
+
+fn validate_generation_worker_launch_receipt_v1(
+    launch: &GenerationWorkerLaunchReceiptV1,
+    generated: &RootPublishedGeneratedCandidateReceiptV1,
+    launch_sha256: [u8; 32],
+) -> Result<(), Box<dyn Error>> {
+    let worker_root = Path::new(&launch.worker_root);
+    let run_name = worker_root
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str());
+    let valid_run_name = run_name.is_some_and(|name| {
+        name.len() == 36 && name.starts_with("run-") && is_lower_hex(&name[4..], 32)
+    });
+    if launch.schema != GENERATION_WORKER_LAUNCH_RECEIPT_SCHEMA_V1
+        || launch.build_uid == 0
+        || launch.build_uid != generated.build_uid
+        || launch.build_user_name != KAGEMUSHA_BUILD_USER_NAME_V1
+        || launch.build_user_name != generated.build_user_name
+        || launch.candidate_build_receipt_path != generated.candidate_build_receipt_path
+        || launch.candidate_build_receipt_sha256 != generated.candidate_build_receipt_sha256
+        || launch.candidate_output_leaf != "candidate"
+        || launch.resource_report_leaf != "resource-report"
+        || !is_nonzero_lower_sha256(&launch.generation_command_sha256)
+        || !is_canonical_lexical_absolute_path(&launch.worker_root)
+        || worker_root.file_name().and_then(|name| name.to_str()) != Some("generation-output")
+        || worker_root
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            != Some("worker")
+        || !valid_run_name
+        || launch.storage_device == 0
+        || launch.worker_root_device == 0
+        || launch.worker_root_inode == 0
+        || launch.storage_device != launch.worker_root_device
+        || launch.storage_available_bytes_at_admission > MAX_RECORDED_GENERATION_STORAGE_BYTES_V1
+        || launch.storage_available_bytes_after_generation
+            > MAX_RECORDED_GENERATION_STORAGE_BYTES_V1
+        || launch.storage_minimum_available_bytes > MAX_RECORDED_GENERATION_STORAGE_BYTES_V1
+        || launch.storage_post_build_reserve_bytes > MAX_RECORDED_GENERATION_STORAGE_BYTES_V1
+        || launch.storage_available_bytes_at_admission < launch.storage_minimum_available_bytes
+        || launch.storage_available_bytes_after_generation < launch.storage_post_build_reserve_bytes
+        || launch.storage_minimum_available_bytes < MINIMUM_GENERATION_STORAGE_AT_ADMISSION_BYTES_V1
+        || launch.storage_post_build_reserve_bytes < MINIMUM_GENERATION_POST_BUILD_RESERVE_BYTES_V1
+        || launch.storage_minimum_available_bytes <= launch.storage_post_build_reserve_bytes
+        || hex::encode(launch_sha256) != generated.worker_launch_receipt_sha256
+    {
+        return Err("generation-worker launch receipt capability is not exact".into());
+    }
+    Ok(())
+}
+
+fn claim_kagemusha_finalization_receipt_permit_v4(
+    options: &BTreeMap<String, String>,
+) -> Result<KagemushaFinalizationReceiptPermitV4, Box<dyn Error>> {
+    const FINALIZATION_ENVIRONMENT: [(&str, &str); 6] = [
+        ("HOME", "/var/empty"),
+        ("LANG", "C"),
+        ("LC_ALL", "C"),
+        ("PATH", "/usr/bin:/bin"),
+        ("TMPDIR", "/private/tmp"),
+        ("TZ", "UTC"),
+    ];
+    let mut environment_count = 0_usize;
+    for (key, value) in std::env::vars_os() {
+        environment_count += 1;
+        let Some(key) = key.to_str() else {
+            return Err("Kagemusha V4 finalization environment has a non-UTF-8 key".into());
+        };
+        let Some(value) = value.to_str() else {
+            return Err("Kagemusha V4 finalization environment has a non-UTF-8 value".into());
+        };
+        if !FINALIZATION_ENVIRONMENT
+            .iter()
+            .any(|(expected_key, expected_value)| key == *expected_key && value == *expected_value)
+        {
+            return Err(
+                "Kagemusha V4 finalization environment is not the exact sanitized set".into(),
+            );
+        }
+    }
+    if environment_count != FINALIZATION_ENVIRONMENT.len() {
+        return Err("Kagemusha V4 finalization environment is incomplete".into());
+    }
+    let (root_published_generated_candidate_receipt_sha256, generated_receipt_payload) =
+        admit_finalization_receipt_fd(
+            options,
+            "root-published-generated-candidate-receipt-fd",
+            "root-published-generated-candidate-receipt-sha256",
+            "root-published generated-candidate receipt",
+        )?;
+    let (generation_worker_launch_receipt_sha256, launch_receipt_payload) =
+        admit_finalization_receipt_fd(
+            options,
+            "generation-worker-launch-receipt-fd",
+            "generation-worker-launch-receipt-sha256",
+            "generation-worker launch receipt",
+        )?;
+    if root_published_generated_candidate_receipt_sha256 == generation_worker_launch_receipt_sha256
+    {
+        return Err("Kagemusha V4 finalization receipt identities must be distinct".into());
+    }
+    let generated_receipt: RootPublishedGeneratedCandidateReceiptV1 =
+        norito::json::from_slice(&generated_receipt_payload).map_err(|error| {
+            format!("root-published generated-candidate receipt is invalid JSON: {error}")
+        })?;
+    let launch_receipt: GenerationWorkerLaunchReceiptV1 =
+        norito::json::from_slice(&launch_receipt_payload).map_err(|error| {
+            format!("generation-worker launch receipt is invalid JSON: {error}")
+        })?;
+    let mut canonical_generated_receipt = norito::json::to_json(&generated_receipt)
+        .map_err(|error| {
+            format!("root-published generated-candidate receipt cannot be canonicalized: {error}")
+        })?
+        .into_bytes();
+    canonical_generated_receipt.push(b'\n');
+    let mut canonical_launch_receipt = norito::json::to_json(&launch_receipt)
+        .map_err(|error| {
+            format!("generation-worker launch receipt cannot be canonicalized: {error}")
+        })?
+        .into_bytes();
+    canonical_launch_receipt.push(b'\n');
+    if generated_receipt_payload != canonical_generated_receipt
+        || launch_receipt_payload != canonical_launch_receipt
+    {
+        return Err("Kagemusha V4 finalization receipts are not canonical JSON plus LF".into());
+    }
+    validate_root_published_generated_candidate_receipt_v1(
+        &generated_receipt,
+        required(options, "candidate-dir"),
+    )?;
+    validate_generation_worker_launch_receipt_v1(
+        &launch_receipt,
+        &generated_receipt,
+        generation_worker_launch_receipt_sha256,
+    )?;
+    Ok(KagemushaFinalizationReceiptPermitV4 {
+        root_published_generated_candidate_receipt_sha256,
+        generation_worker_launch_receipt_sha256,
+    })
 }
 
 fn open_input(path: &Path, maximum: u64, label: &str) -> Result<OpenedInput, Box<dyn Error>> {
@@ -1070,6 +1493,7 @@ fn prepare_bundle_metadata(
             parameter_generation,
             source_commit,
             source_tree_sha256: parse_digest(options, "source-tree-sha256")?,
+            source_repo_dirty: source_identity.source_repo_dirty,
             reviewed_source_closure: source_identity.reviewed_source_closure.clone(),
             reviewed_source_closure_descriptor_sha256,
             activation_height,
@@ -1357,52 +1781,6 @@ fn prepare_artifact(
     })
 }
 
-fn trusted_source_command(executable: &str) -> Command {
-    let mut command = Command::new(executable);
-    command.env_clear().env("PATH", TRUSTED_TOOL_PATH);
-    for variable in ["HOME", "GNUPGHOME"] {
-        if let Some(value) = env::var_os(variable) {
-            command.env(variable, value);
-        }
-    }
-    command
-}
-
-fn validate_signed_base_source(source_commit: &str) -> Result<(), Box<dyn Error>> {
-    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let head = trusted_source_command(TRUSTED_GIT_EXECUTABLE)
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(&repository_root)
-        .args(["rev-parse", "--verify", "HEAD^{commit}"])
-        .output()
-        .map_err(|error| format!("failed to inspect candidate Git HEAD: {error}"))?;
-    if !head.status.success() {
-        return Err("candidate source is not a Git checkout with a commit HEAD".into());
-    }
-    let head = std::str::from_utf8(&head.stdout)
-        .map_err(|_| "candidate Git HEAD is not canonical UTF-8")?
-        .trim_end_matches(['\r', '\n']);
-    if head != source_commit {
-        return Err(format!(
-            "--source-commit must exactly equal the checked-out candidate HEAD ({head})"
-        )
-        .into());
-    }
-
-    let signature = trusted_source_command(TRUSTED_GIT_EXECUTABLE)
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(&repository_root)
-        .args(["verify-commit", source_commit])
-        .output()
-        .map_err(|error| format!("failed to verify candidate commit signature: {error}"))?;
-    if !signature.status.success() {
-        return Err("candidate commit must carry a locally verifiable signature".into());
-    }
-    Ok(())
-}
-
 fn is_lower_hex(value: &str, expected_len: usize) -> bool {
     value.len() == expected_len
         && value
@@ -1412,36 +1790,17 @@ fn is_lower_hex(value: &str, expected_len: usize) -> bool {
 }
 
 fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error>> {
-    let (Some(reviewed_closure), Some(reviewed_closure_sha256)) = (
-        BUILD_REVIEWED_SOURCE_CLOSURE,
-        BUILD_REVIEWED_SOURCE_CLOSURE_SHA256,
-    ) else {
-        return Err("candidate generation requires an embedded reviewed source-closure pin".into());
-    };
-    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let seal_script = repository_root.join("scripts/kagemusha_source_tree_seal.py");
-    let output = trusted_source_command(TRUSTED_PYTHON_EXECUTABLE)
-        .arg("-I")
-        .arg(&seal_script)
-        .arg("identity")
-        .arg("--root")
-        .arg(&repository_root)
-        .arg("--reviewed-source-closure")
-        .arg(reviewed_closure)
-        .arg("--reviewed-source-closure-sha256")
-        .arg(reviewed_closure_sha256)
-        .output()
-        .map_err(|error| format!("failed to run the Kagemusha source-tree seal: {error}"))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Kagemusha source-tree seal rejected the checkout: {detail}").into());
+    if BUILD_SOURCE_IDENTITY_JSON.is_empty()
+        || BUILD_SOURCE_IDENTITY_JSON.len() > 16 * 1024 * 1024
+        || !BUILD_SOURCE_IDENTITY_JSON.ends_with(b"\n")
+        || BUILD_SOURCE_IDENTITY_JSON.contains(&0)
+    {
+        return Err("candidate generation requires an embedded reviewed source identity".into());
     }
     let identity: FullSourceTreeIdentityV1 =
-        norito::json::from_slice(&output.stdout).map_err(|error| {
-            format!("Kagemusha source-tree identity is not canonical JSON: {error}")
-        })?;
+        norito::json::from_slice(BUILD_SOURCE_IDENTITY_JSON)
+            .map_err(|error| format!("embedded source identity is not canonical JSON: {error}"))?;
     if identity.schema != "iroha.kagemusha.reviewed_source_tree_identity.v1"
-        || !identity.source_repo_dirty
         || !is_lower_hex(&identity.source_commit, 40)
         || !is_lower_hex(&identity.source_tree_sha256, 64)
         || !is_lower_hex(&identity.reviewed_source_closure_descriptor_sha256, 64)
@@ -1449,7 +1808,7 @@ fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error
         || identity.reviewed_source_closure.source_commit != identity.source_commit
         || hex::encode(identity.reviewed_source_closure.source_tree_sha256)
             != identity.source_tree_sha256
-        || !identity.reviewed_source_closure.source_repo_dirty
+        || identity.reviewed_source_closure.source_repo_dirty != identity.source_repo_dirty
         || identity
             .reviewed_source_closure
             .canonical_descriptor_sha256()
@@ -1458,7 +1817,7 @@ fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error
             .as_deref()
             != Some(identity.reviewed_source_closure_descriptor_sha256.as_str())
     {
-        return Err("Kagemusha reviewed source-closure identity is malformed".into());
+        return Err("embedded Kagemusha reviewed source identity is malformed".into());
     }
     Ok(identity)
 }
@@ -1471,15 +1830,12 @@ fn validate_current_source(
     let first = read_source_tree_identity()?;
     if first.source_commit != expected_commit || first.source_tree_sha256 != expected_tree_sha256 {
         return Err(
-            "Kagemusha source commit/tree pair does not identify the exact reviewed closure".into(),
+            "Kagemusha source commit/tree pair does not match the embedded reviewed closure".into(),
         );
     }
-    validate_signed_base_source(expected_commit)?;
     let second = read_source_tree_identity()?;
     if second != first {
-        return Err(
-            "Kagemusha reviewed source closure changed during signature verification".into(),
-        );
+        return Err("embedded Kagemusha reviewed source identity is unstable".into());
     }
     Ok(first)
 }
@@ -1488,7 +1844,7 @@ fn validate_current_manifest_source(
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
 ) -> Result<(), Box<dyn Error>> {
     let current = validate_current_source(&manifest.source_commit, manifest.source_tree_sha256)?;
-    if !manifest.source_repo_dirty
+    if manifest.source_repo_dirty != current.source_repo_dirty
         || manifest.reviewed_source_closure != current.reviewed_source_closure
         || hex::encode(manifest.reviewed_source_closure_descriptor_sha256)
             != current.reviewed_source_closure_descriptor_sha256
@@ -1785,7 +2141,7 @@ fn verify_staged_candidate_for_publication(
     let current_source = validate_current_source(expected_commit, expected_tree_sha256)?;
     if manifest.source_commit != expected_commit
         || manifest.source_tree_sha256 != expected_tree_sha256
-        || !manifest.source_repo_dirty
+        || manifest.source_repo_dirty != current_source.source_repo_dirty
         || manifest.reviewed_source_closure != current_source.reviewed_source_closure
         || hex::encode(manifest.reviewed_source_closure_descriptor_sha256)
             != current_source.reviewed_source_closure_descriptor_sha256
@@ -2118,17 +2474,12 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
         if out_dir.exists() {
             return Err(format!("output directory already exists: {}", out_dir.display()).into());
         }
-        let repository_root =
-            fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))?;
         let output_parent = fs::canonicalize(
             out_dir
                 .parent()
                 .filter(|path| !path.as_os_str().is_empty())
                 .unwrap_or_else(|| Path::new(".")),
         )?;
-        if output_parent.starts_with(&repository_root) {
-            return Err("candidate validation output must be outside the source repository".into());
-        }
         let trusted_parent = TrustedOutputParent::open(&out_dir)?;
         let mut staging_builder = tempfile::Builder::new();
         staging_builder
@@ -2188,7 +2539,10 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
         reason = "release authentication, byte-for-byte copying, revalidation, and atomic publication form one ordered security ceremony"
     )
 )]
-fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+fn finalize_release(
+    options: &BTreeMap<String, String>,
+    receipt_permit: KagemushaFinalizationReceiptPermitV4,
+) -> Result<(), Box<dyn Error>> {
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err(
         "Kagemusha V4 release finalization requires Linux, Android, or macOS atomic directory publication"
@@ -2311,6 +2665,10 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
             return Err("V4 benchmark and review evidence must be distinct".into());
         }
         let mut manifest = candidate_manifest.clone();
+        manifest.root_published_generated_candidate_receipt_sha256 =
+            receipt_permit.root_published_generated_candidate_receipt_sha256;
+        manifest.generation_worker_launch_receipt_sha256 =
+            receipt_permit.generation_worker_launch_receipt_sha256;
         manifest.benchmark_evidence_sha256 = benchmark_evidence_sha256;
         manifest.cryptographic_review_sha256 = cryptographic_review_sha256;
         manifest.release_attestation_sha256 = Sha256::digest(&attestation_bytes).into();
@@ -2544,6 +2902,10 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
             candidate_sha256: candidate_record
                 .sha256()
                 .map_err(|error| format!("failed to identify immutable V4 candidate: {error}"))?,
+            root_published_generated_candidate_receipt_sha256: manifest
+                .root_published_generated_candidate_receipt_sha256,
+            generation_worker_launch_receipt_sha256: manifest
+                .generation_worker_launch_receipt_sha256,
             manifest_sha256: authenticated.manifest_sha256(),
             release_attestation_sha256: authenticated.release_attestation_sha256(),
             release_policy_sha256: authenticated.release_policy_sha256(),
@@ -2706,10 +3068,12 @@ fn write_candidate(
         generation: metadata.generation.clone(),
         source_commit: metadata.source_commit,
         source_tree_sha256: metadata.source_tree_sha256,
-        source_repo_dirty: true,
+        source_repo_dirty: metadata.source_repo_dirty,
         reviewed_source_closure: metadata.reviewed_source_closure,
         reviewed_source_closure_descriptor_sha256: metadata
             .reviewed_source_closure_descriptor_sha256,
+        root_published_generated_candidate_receipt_sha256: [0; 32],
+        generation_worker_launch_receipt_sha256: [0; 32],
         chain_id: metadata.chain_id,
         asset: metadata.asset,
         asset_scale: metadata.asset_scale,
@@ -3625,21 +3989,20 @@ mod tests {
     }
 
     #[test]
-    fn source_validation_uses_fixed_tools_and_a_sanitized_path() {
+    fn runtime_source_validation_uses_only_the_embedded_identity() {
         let source = include_str!("kagemusha_recursive_spend_v4_bundle.rs");
         let validation = source
-            .split_once("fn trusted_source_command(")
-            .expect("trusted source command helper exists")
+            .split_once("fn read_source_tree_identity(")
+            .expect("embedded source identity helper exists")
             .1
             .split_once("fn build_candidate(")
             .expect("source-validation boundary exists")
             .0;
 
-        assert!(validation.contains("command.env_clear()"));
-        assert!(validation.contains("TRUSTED_GIT_EXECUTABLE"));
-        assert!(validation.contains("TRUSTED_PYTHON_EXECUTABLE"));
-        assert!(!validation.contains("Command::new(\"git\")"));
-        assert!(!validation.contains("KAGEMUSHA_SOURCE_SEAL_PYTHON"));
+        assert!(validation.contains("BUILD_SOURCE_IDENTITY_JSON"));
+        assert!(!validation.contains("CARGO_MANIFEST_DIR"));
+        assert!(!validation.contains("Command::new"));
+        assert!(!validation.contains("kagemusha_source_tree_seal.py"));
     }
 
     #[test]
@@ -3851,6 +4214,177 @@ mod tests {
     }
 
     #[test]
+    fn direct_finalization_requires_the_receipt_bound_capability() {
+        let source = include_str!("kagemusha_recursive_spend_v4_bundle.rs");
+        let dispatch = source
+            .split_once("fn main()")
+            .expect("bundle dispatch exists")
+            .1
+            .split_once("\nfn parse_options(")
+            .expect("bundle dispatch boundary exists")
+            .0;
+        let finalizer_signature = source
+            .split_once("fn finalize_release(")
+            .expect("release finalizer exists")
+            .1
+            .split_once(") -> Result")
+            .expect("release finalizer signature closes")
+            .0;
+        let finalizer_dispatch = dispatch
+            .split_once("\"finalize-release\" =>")
+            .expect("finalization dispatch exists")
+            .1
+            .split_once("\"validate-candidate\" =>")
+            .expect("finalization dispatch closes")
+            .0;
+        let receipt_claim = source
+            .split_once("fn claim_kagemusha_finalization_receipt_permit_v4(")
+            .expect("receipt claim exists")
+            .1
+            .split_once("\nfn open_input(")
+            .expect("receipt claim boundary exists")
+            .0;
+
+        assert!(finalizer_dispatch.contains("finalize_release("));
+        assert!(
+            finalizer_dispatch
+                .contains("claim_kagemusha_finalization_receipt_permit_v4(&options)?")
+        );
+        assert!(
+            finalizer_signature.contains("receipt_permit: KagemushaFinalizationReceiptPermitV4")
+        );
+        assert!(!finalizer_dispatch.contains("claim_kagemusha_generation_supervisor_permit_v4()"));
+        assert!(receipt_claim.contains("FINALIZATION_ENVIRONMENT"));
+        assert!(receipt_claim.contains("(\"HOME\", \"/var/empty\")"));
+        assert!(receipt_claim.contains("(\"PATH\", \"/usr/bin:/bin\")"));
+        assert!(receipt_claim.contains("validate_root_published_generated_candidate_receipt_v1("));
+        assert!(receipt_claim.contains("validate_generation_worker_launch_receipt_v1("));
+    }
+
+    fn finalization_receipts() -> (
+        RootPublishedGeneratedCandidateReceiptV1,
+        GenerationWorkerLaunchReceiptV1,
+        [u8; 32],
+    ) {
+        let artifact_tree_sha256 = "11".repeat(32);
+        let launch_sha256 = [0x22; 32];
+        let artifact_root = format!("/root/published/{artifact_tree_sha256}");
+        let candidate_build_receipt_path =
+            "/root/build/root-published-candidate-build.json".to_owned();
+        let generated = RootPublishedGeneratedCandidateReceiptV1 {
+            artifact_root: artifact_root.clone(),
+            artifact_tree_sha256,
+            build_uid: 777,
+            build_user_name: KAGEMUSHA_BUILD_USER_NAME_V1.to_owned(),
+            candidate_build_artifact_tree_sha256: "33".repeat(32),
+            candidate_build_receipt_path: candidate_build_receipt_path.clone(),
+            candidate_build_receipt_sha256: "44".repeat(32),
+            candidate_dir_path: format!("{artifact_root}/candidate"),
+            candidate_tree_sha256: "55".repeat(32),
+            generation_resource_report_path: format!("{artifact_root}/resource-report"),
+            generation_resource_report_tree_sha256: "66".repeat(32),
+            generation_summary_path: format!(
+                "{artifact_root}/resource-report/kagemusha_resource_summary.json"
+            ),
+            generation_summary_sha256: "77".repeat(32),
+            production_closure_tree_sha256: "88".repeat(32),
+            provisional_cross_stage_status: PROVISIONAL_GENERATED_CANDIDATE_CROSS_STAGE_STATUS_V1
+                .to_owned(),
+            provisional_generation_publication_status: PROVISIONAL_GENERATED_CANDIDATE_STATUS_V1
+                .to_owned(),
+            publication_protocol: ROOT_PUBLISHED_GENERATED_CANDIDATE_PROTOCOL_V1.to_owned(),
+            publication_status: ROOT_PUBLISHED_GENERATED_CANDIDATE_STATUS_V1.to_owned(),
+            reviewed_source_closure_descriptor_sha256: "99".repeat(32),
+            schema: ROOT_PUBLISHED_GENERATED_CANDIDATE_RECEIPT_SCHEMA_V1.to_owned(),
+            source_commit: "aa".repeat(20),
+            source_tree_sha256: "bb".repeat(32),
+            toolchain_provenance_sha256: "cc".repeat(32),
+            worker_launch_receipt_sha256: hex::encode(launch_sha256),
+        };
+        let launch = GenerationWorkerLaunchReceiptV1 {
+            build_uid: generated.build_uid,
+            build_user_name: generated.build_user_name.clone(),
+            candidate_build_receipt_path,
+            candidate_build_receipt_sha256: generated.candidate_build_receipt_sha256.clone(),
+            candidate_output_leaf: "candidate".to_owned(),
+            generation_command_sha256: "dd".repeat(32),
+            resource_report_leaf: "resource-report".to_owned(),
+            schema: GENERATION_WORKER_LAUNCH_RECEIPT_SCHEMA_V1.to_owned(),
+            storage_available_bytes_after_generation: 32 * 1024 * 1024 * 1024,
+            storage_available_bytes_at_admission: 80 * 1024 * 1024 * 1024,
+            storage_device: 42,
+            storage_minimum_available_bytes: 64 * 1024 * 1024 * 1024,
+            storage_post_build_reserve_bytes: 16 * 1024 * 1024 * 1024,
+            worker_root: format!(
+                "/root/work/run-{}/worker/generation-output",
+                "ee".repeat(16)
+            ),
+            worker_root_device: 42,
+            worker_root_inode: 43,
+        };
+        (generated, launch, launch_sha256)
+    }
+
+    #[test]
+    fn finalization_receipt_capability_requires_exact_mutual_binding() {
+        let (mut generated, mut launch, launch_sha256) = finalization_receipts();
+        let generated_json =
+            norito::json::to_json(&generated).expect("encode generated-candidate receipt");
+        let launch_json = norito::json::to_json(&launch).expect("encode launch receipt");
+        let _: RootPublishedGeneratedCandidateReceiptV1 =
+            norito::json::from_json(&generated_json).expect("decode exact generated receipt");
+        let _: GenerationWorkerLaunchReceiptV1 =
+            norito::json::from_json(&launch_json).expect("decode exact launch receipt");
+        let generated_with_extra = format!(
+            "{},\"unexpected\":1}}",
+            generated_json
+                .strip_suffix('}')
+                .expect("generated receipt JSON object")
+        );
+        let launch_with_extra = format!(
+            "{},\"unexpected\":1}}",
+            launch_json
+                .strip_suffix('}')
+                .expect("launch receipt JSON object")
+        );
+        assert!(
+            norito::json::from_json::<RootPublishedGeneratedCandidateReceiptV1>(
+                &generated_with_extra,
+            )
+            .is_err()
+        );
+        assert!(
+            norito::json::from_json::<GenerationWorkerLaunchReceiptV1>(&launch_with_extra).is_err()
+        );
+        validate_root_published_generated_candidate_receipt_v1(
+            &generated,
+            &generated.candidate_dir_path,
+        )
+        .expect("exact generated-candidate receipt");
+        validate_generation_worker_launch_receipt_v1(&launch, &generated, launch_sha256)
+            .expect("exact mutually bound launch receipt");
+
+        assert!(
+            validate_root_published_generated_candidate_receipt_v1(
+                &generated,
+                "/root/substituted/candidate",
+            )
+            .is_err()
+        );
+        launch.generation_command_sha256 = "DD".repeat(32);
+        assert!(
+            validate_generation_worker_launch_receipt_v1(&launch, &generated, launch_sha256)
+                .is_err()
+        );
+        launch.generation_command_sha256 = "dd".repeat(32);
+        generated.worker_launch_receipt_sha256 = "ff".repeat(32);
+        assert!(
+            validate_generation_worker_launch_receipt_v1(&launch, &generated, launch_sha256)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn parser_rejects_unknown_duplicate_and_noncanonical_numbers() {
         assert!(
             parse_options(["--unknown".to_owned(), "x".to_owned()], GENERATE_OPTIONS,).is_err()
@@ -3910,8 +4444,10 @@ mod tests {
     }
 
     #[test]
-    fn candidate_source_must_match_the_signed_checkout_head() {
-        assert!(validate_signed_base_source("0000000000000000000000000000000000000000").is_err());
+    fn candidate_source_requires_a_compile_time_embedded_identity() {
+        if BUILD_SOURCE_IDENTITY_JSON.is_empty() {
+            assert!(read_source_tree_identity().is_err());
+        }
     }
 
     #[test]

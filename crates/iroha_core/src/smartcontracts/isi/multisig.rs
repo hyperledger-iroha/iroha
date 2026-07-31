@@ -2021,41 +2021,54 @@ fn execute_approve(
             _ => unreachable!("proposal_state.is_relayed checked above"),
         }
 
-        for instruction in proposal_state.instructions {
-            let instruction_debug = format!("{instruction:?}");
-            iroha_logger::info!(
-                multisig_account = %multisig_account,
-                instructions_hash = %instructions_hash,
-                approver = %authority,
-                instruction = %instruction_debug,
-                "multisig approval executing authenticated instruction"
-            );
-            let execution_result =
-                if let Ok(multisig) = MultisigInstructionBox::try_from(&instruction) {
-                    execute_multisig_instruction(state_transaction, &multisig_account, multisig)
-                } else {
-                    instruction
-                        .execute(&multisig_account, state_transaction)
-                        .map_err(ValidationFail::from)
-                };
-            if let Err(err) = execution_result {
-                iroha_logger::error!(
+        state_transaction.offline_asset_bootstrap_unbound_effects = true;
+        let previous_depth = state_transaction.offline_asset_bootstrap_execution_depth;
+        let deferred_depth = previous_depth.checked_add(1).ok_or_else(|| {
+            ValidationFail::InternalError(
+                "multisig deferred instruction nesting depth overflowed".to_owned(),
+            )
+        })?;
+        state_transaction.offline_asset_bootstrap_execution_depth = deferred_depth;
+        let deferred_result = (|| -> Result<(), ValidationFail> {
+            for instruction in proposal_state.instructions {
+                let instruction_debug = format!("{instruction:?}");
+                iroha_logger::info!(
                     multisig_account = %multisig_account,
                     instructions_hash = %instructions_hash,
                     approver = %authority,
                     instruction = %instruction_debug,
-                    error = ?err,
-                    "multisig approval authenticated instruction failed"
+                    "multisig approval executing authenticated instruction"
                 );
-                return Err(err);
+                let execution_result =
+                    if let Ok(multisig) = MultisigInstructionBox::try_from(&instruction) {
+                        execute_multisig_instruction(state_transaction, &multisig_account, multisig)
+                    } else {
+                        instruction
+                            .execute(&multisig_account, state_transaction)
+                            .map_err(ValidationFail::from)
+                    };
+                if let Err(err) = execution_result {
+                    iroha_logger::error!(
+                        multisig_account = %multisig_account,
+                        instructions_hash = %instructions_hash,
+                        approver = %authority,
+                        instruction = %instruction_debug,
+                        error = ?err,
+                        "multisig approval authenticated instruction failed"
+                    );
+                    return Err(err);
+                }
+                iroha_logger::info!(
+                    multisig_account = %multisig_account,
+                    instructions_hash = %instructions_hash,
+                    approver = %authority,
+                    "multisig approval finished authenticated instruction"
+                );
             }
-            iroha_logger::info!(
-                multisig_account = %multisig_account,
-                instructions_hash = %instructions_hash,
-                approver = %authority,
-                "multisig approval finished authenticated instruction"
-            );
-        }
+            Ok(())
+        })();
+        state_transaction.offline_asset_bootstrap_execution_depth = previous_depth;
+        deferred_result?;
 
         store_multisig_approval_outcome(
             state_transaction,
@@ -6978,6 +6991,86 @@ seiyaku TriggerDispatch {
                 .get(&execution_key),
             Some(&execution_bytes),
             "conflicting write must not alter transaction-bound terminal state"
+        );
+    }
+
+    #[test]
+    fn same_authority_deferred_proposal_cannot_reuse_direct_signed_scope() {
+        let state = State::new_with_chain(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("multisig-deferred-direct-scope"),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let domain_id =
+            DomainId::try_new("deferred-scope", "universal").expect("fixture domain id");
+        let signer = checked_keypair();
+        let signer_id = new_account_id(&signer);
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer_id,
+            &domain_id,
+            "register fixture domain",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &signer_id,
+            &domain_id,
+            &signer_id,
+            "register fixture signer",
+        );
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_id.clone(), 1)]),
+            quorum: NonZeroU16::new(1).expect("one is nonzero"),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
+                .expect("default TTL is nonzero"),
+        };
+        let multisig_id = register_multisig_account(
+            &mut state_transaction,
+            &signer_id,
+            &domain_id,
+            &spec,
+            "register fixture multisig",
+        );
+        let instructions = vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "deferred scope fixture".to_owned(),
+        ))];
+        let instructions_hash = HashOf::new(&instructions);
+        execute_propose(
+            &mut state_transaction,
+            &signer_id,
+            &MultisigPropose::new(multisig_id.clone(), instructions, None),
+        )
+        .expect("store deferred proposal");
+
+        state_transaction.offline_asset_bootstrap_direct_signed_authority =
+            Some(multisig_id.clone());
+        state_transaction.offline_asset_bootstrap_execution_depth = 1;
+        state_transaction.tx_call_hash = Some(Hash::prehashed([0xd7; Hash::LENGTH]));
+        execute_approve(
+            &mut state_transaction,
+            &multisig_id,
+            &MultisigApprove::new(multisig_id.clone(), instructions_hash),
+        )
+        .expect("same-authority approval executes harmless deferred fixture");
+
+        assert!(
+            state_transaction.offline_asset_bootstrap_unbound_effects,
+            "all deferred proposal effects must be permanently unbound from the signed prefix",
+        );
+        assert_eq!(
+            state_transaction.offline_asset_bootstrap_execution_depth, 1,
+            "deferred execution must restore its caller depth",
+        );
+        assert_eq!(
+            state_transaction
+                .offline_asset_bootstrap_direct_signed_authority
+                .as_ref(),
+            Some(&multisig_id),
+            "deferred execution must not disturb the outer direct-signed authority assertion",
         );
     }
 

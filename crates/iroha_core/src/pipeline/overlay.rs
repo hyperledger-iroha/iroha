@@ -1741,12 +1741,47 @@ impl TxOverlay {
             &crate::executor::ContractDeploymentSelfBootstrapAuthorization,
         >,
     ) -> Result<(), ValidationFail> {
-        self.apply_inner(
+        let exact_plain_instruction_overlay = self.source == TxOverlaySource::Instructions
+            && self.execution_contexts.is_none()
+            && self.entrypoint_authorization.is_none()
+            && self.lifecycle_completion.is_none()
+            && self.ivm_gas_used.is_none()
+            && self.completed_axt.is_empty()
+            && self.durable_state_overlay.is_empty()
+            && self.durable_state_authorizations.is_empty()
+            && self.sccp_ivm_proved_execution_binding.is_none();
+        if !exact_plain_instruction_overlay {
+            return self.apply_inner(
+                state_tx,
+                authority,
+                chunk_size.max(1),
+                bootstrap_authorization,
+            );
+        }
+        if state_tx
+            .offline_asset_bootstrap_direct_signed_authority
+            .is_some()
+        {
+            return Err(ValidationFail::InternalError(
+                "directly signed instruction scope is already active".to_owned(),
+            ));
+        }
+        if state_tx.offline_asset_bootstrap_execution_depth != 0 {
+            return Err(ValidationFail::InternalError(
+                "plain signed overlay entered through nested instruction dispatch".to_owned(),
+            ));
+        }
+        let previous = state_tx
+            .offline_asset_bootstrap_direct_signed_authority
+            .replace(authority.clone());
+        let result = self.apply_inner(
             state_tx,
             authority,
             chunk_size.max(1),
             bootstrap_authorization,
-        )
+        );
+        state_tx.offline_asset_bootstrap_direct_signed_authority = previous;
+        result
     }
 
     fn validate_execution_context(
@@ -2298,8 +2333,11 @@ where
     match tx.instructions() {
         Executable::Instructions(batch) => {
             // We already have fully-formed owned instructions; just clone boxes.
-            let mut instrs: Vec<InstructionBox> = batch.iter().cloned().collect();
-            prune_redundant_contract_ops(state_ro, &mut instrs);
+            // Caller-authored plain instructions must retain byte-for-byte order
+            // and multiplicity so live overlay execution remains identical to
+            // committed replay. Redundant contract-operation pruning is only
+            // valid for VM-derived effects.
+            let instrs: Vec<InstructionBox> = batch.iter().cloned().collect();
             Ok(TxOverlay::from_instructions(instrs))
         }
         Executable::Batch(_) => Err(OverlayBuildError::ContractCall(

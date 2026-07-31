@@ -2375,7 +2375,17 @@ pub mod isi {
                 )
                 .into());
             }
-            asset_definition_offline_enabled(asset_definition.metadata())?;
+            let offline_enabled = asset_definition_offline_enabled(asset_definition.metadata())?;
+            if offline_enabled
+                && !state_transaction._curr_block.is_genesis()
+                && !state_transaction.offline_asset_registration_authorized
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "post-genesis offline-enabled asset definitions require EnactOfflineAssetBootstrapV1"
+                        .into(),
+                )
+                .into());
+            }
             let mut stored_definition = asset_definition.clone();
             stored_definition.alias = None;
             state_transaction
@@ -2412,6 +2422,19 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
+            let asset_definition = state_transaction
+                .world
+                .asset_definition(&asset_definition_id)
+                .map_err(Error::from)?;
+            if asset_definition_offline_enabled(asset_definition.metadata())? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister mandatory offline asset definition {asset_definition_id}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
 
             if crate::smartcontracts::isi::asset::isi::is_sccp_settlement_asset_definition(
                 state_transaction,
@@ -2959,11 +2982,20 @@ pub mod isi {
                 migrate_global_balances_to_dataspace,
             } = self;
 
-            let current_policy = state_transaction
+            let asset_definition = state_transaction
                 .world
                 .asset_definition(&asset_definition_id)
-                .map_err(Error::from)?
-                .balance_scope_policy();
+                .map_err(Error::from)?;
+            if asset_definition_offline_enabled(asset_definition.metadata())? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot change balance policy for mandatory offline asset definition {asset_definition_id}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            let current_policy = asset_definition.balance_scope_policy();
 
             if current_policy == balance_scope_policy {
                 if migrate_global_balances_to_dataspace.is_some() {
@@ -3193,6 +3225,16 @@ pub mod isi {
                 value,
             } = self;
             let ensure_offline_escrow = key.as_ref() == OFFLINE_ASSET_ENABLED_METADATA_KEY;
+            if ensure_offline_escrow
+                && !state_transaction._curr_block.is_genesis()
+                && !state_transaction.offline_asset_registration_authorized
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "post-genesis offline.enabled mutation is forbidden; enact a complete governed offline asset bootstrap"
+                        .into(),
+                )
+                .into());
+            }
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
                 &value,
@@ -3250,6 +3292,15 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            if self.key().as_ref() == OFFLINE_ASSET_ENABLED_METADATA_KEY
+                && !state_transaction._curr_block.is_genesis()
+                && !state_transaction.offline_asset_registration_authorized
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "post-genesis offline.enabled removal is forbidden".into(),
+                )
+                .into());
+            }
             let asset_definition_id = self.object().clone();
 
             let value = state_transaction
@@ -10188,6 +10239,124 @@ mod tests {
                 .escrow_accounts
                 .contains_key(&definition_id),
             "offline-enabled asset registration must still derive its escrow binding"
+        );
+    }
+
+    #[test]
+    fn post_genesis_offline_asset_squatting_requires_governed_enactment() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId =
+            DomainId::try_new("offline-governed", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+        let metadata_key: Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
+            .parse()
+            .expect("metadata key");
+        let definition = |name: &str, offline_enabled: bool| {
+            let mut metadata = Metadata::default();
+            if offline_enabled {
+                metadata.insert(metadata_key.clone(), Json::new(true));
+            }
+            NewAssetDefinition {
+                id: AssetDefinitionId::new(domain_id.clone(), name.parse().expect("asset name")),
+                name: name.to_uppercase(),
+                description: None,
+                alias: None,
+                spec: NumericSpec::integer(),
+                mintable: Mintable::Infinitely,
+                logo: None,
+                metadata,
+                balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+                confidential_policy: AssetConfidentialPolicy::transparent(),
+            }
+        };
+
+        let removable = definition("existing", true);
+        let removable_id = removable.id.clone();
+        let mut genesis = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut genesis_tx = genesis.transaction();
+        Register::asset_definition(removable)
+            .execute(&authority, &mut genesis_tx)
+            .expect("height-one offline asset remains a signed-genesis operation");
+        genesis_tx.apply();
+        genesis.commit().expect("commit height one");
+
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut tx = block.transaction();
+        let raw_offline = definition("raw", true);
+        let raw_offline_id = raw_offline.id.clone();
+        let register_error = Register::asset_definition(raw_offline)
+            .execute(&authority, &mut tx)
+            .expect_err("raw post-genesis offline asset registration must fail");
+        assert!(
+            register_error
+                .to_string()
+                .contains("EnactOfflineAssetBootstrapV1"),
+            "unexpected registration rejection: {register_error}"
+        );
+        assert!(tx.world.asset_definition(&raw_offline_id).is_err());
+
+        let plain = definition("plain", false);
+        let plain_id = plain.id.clone();
+        Register::asset_definition(plain)
+            .execute(&authority, &mut tx)
+            .expect("ordinary post-genesis asset registration remains available");
+        let set_error =
+            SetKeyValue::asset_definition(plain_id.clone(), metadata_key.clone(), Json::new(true))
+                .execute(&authority, &mut tx)
+                .expect_err("raw post-genesis offline.enabled mutation must fail");
+        assert!(set_error.to_string().contains("offline.enabled mutation"));
+        assert!(
+            tx.world
+                .asset_definition(&plain_id)
+                .expect("plain definition remains")
+                .metadata()
+                .get(&metadata_key)
+                .is_none()
+        );
+
+        let remove_error =
+            RemoveKeyValue::asset_definition(removable_id.clone(), metadata_key.clone())
+                .execute(&authority, &mut tx)
+                .expect_err("raw post-genesis offline.enabled removal must fail");
+        assert!(remove_error.to_string().contains("offline.enabled removal"));
+        assert_eq!(
+            tx.world
+                .asset_definition(&removable_id)
+                .expect("offline definition remains")
+                .metadata()
+                .get(&metadata_key),
+            Some(&Json::new(true))
+        );
+
+        let unregister_error = Unregister::asset_definition(removable_id.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("a mandatory offline asset definition must be immutable");
+        assert!(
+            unregister_error
+                .to_string()
+                .contains("cannot unregister mandatory offline asset")
+        );
+        assert!(tx.world.asset_definition(&removable_id).is_ok());
+
+        let balance_policy_error = SetAssetDefinitionBalancePolicy::new(
+            removable_id.clone(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL),
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("a mandatory offline asset balance policy must be immutable");
+        assert!(
+            balance_policy_error
+                .to_string()
+                .contains("cannot change balance policy for mandatory offline asset")
+        );
+        assert_eq!(
+            tx.world
+                .asset_definition(&removable_id)
+                .expect("mandatory offline definition remains")
+                .balance_scope_policy(),
+            iroha_data_model::asset::AssetBalancePolicy::Global
         );
     }
 
