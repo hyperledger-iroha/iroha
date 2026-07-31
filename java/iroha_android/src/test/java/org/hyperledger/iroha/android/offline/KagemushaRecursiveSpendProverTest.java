@@ -193,7 +193,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS == 8;
     assert KagemushaRecursiveSpendProver.MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4
-        == 256 * 1024;
+        == 384 * 1024;
     assert KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V2 == 32 * 1024;
     assert KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V4 == 32 * 1024 * 1024;
     assert KagemushaRecursiveSpendProver.MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4 == 6_488_064;

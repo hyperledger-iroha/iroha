@@ -1,0 +1,48 @@
+{
+  "id": "sorafs/reports/capacity-marketplace-validation",
+  "title": "SoraFS Capacity Marketplace Validation",
+  "description": "Review window: 2026-03-18 → 2026-03-24",
+  "source": "@site/docs/sorafs/reports/capacity-marketplace-validation.md",
+  "sourceDirName": "sorafs/reports",
+  "slug": "/sorafs/reports/capacity-marketplace-validation",
+  "permalink": "/next/sorafs/reports/capacity-marketplace-validation",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/reports/capacity-marketplace-validation.md",
+  "tags": [
+    {
+      "inline": true,
+      "label": "SF-2c",
+      "permalink": "/next/tags/sf-2-c"
+    },
+    {
+      "inline": true,
+      "label": "acceptance",
+      "permalink": "/next/tags/acceptance"
+    },
+    {
+      "inline": true,
+      "label": "checklist",
+      "permalink": "/next/tags/checklist"
+    }
+  ],
+  "version": "current",
+  "frontMatter": {
+    "title": "SoraFS Capacity Marketplace Validation",
+    "tags": [
+      "SF-2c",
+      "acceptance",
+      "checklist"
+    ],
+    "summary": "Acceptance checklist covering provider onboarding, dispute workflows, and treasury reconciliation gating the SoraFS capacity marketplace general availability."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "AI Moderation Calibration Report (2026-02)",
+    "permalink": "/next/sorafs/reports/ai-moderation-calibration-202602"
+  },
+  "next": {
+    "title": "SoraFS Orchestrator GA Parity Report",
+    "permalink": "/next/sorafs/reports/orchestrator-ga-parity"
+  }
+}

@@ -2102,6 +2102,14 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         queue_len_before: 1,
         queue_len_after: 2,
         queue_capacity: 4,
+        ordinal_source_before: 11,
+        physical_admission_ordinal: 11,
+        lifecycle_ordinal: 11,
+        ordinal_source_after: 12,
+        dormant_reservations_before: 0,
+        dormant_reservations_after: 0,
+        dormant_owner_ordinal: 0,
+        ordinal_minted: true,
     };
     assert!(
         production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(ingress)
@@ -2128,6 +2136,156 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
         )
     );
     assert!(check_production_ingress_transition(replaced_ingress_owner).is_none());
+
+    let uncommitted_ingress_ordinal = ProductionIngressIdentityAndClassTraceProjection {
+        ordinal_source_after: ingress.ordinal_source_before,
+        ..ingress
+    };
+    assert!(
+        !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            uncommitted_ingress_ordinal
+        )
+    );
+    assert!(check_production_ingress_transition(uncommitted_ingress_ordinal).is_none());
+
+    let skipped_ingress_ordinal = ProductionIngressIdentityAndClassTraceProjection {
+        ordinal_source_before: 10,
+        ..ingress
+    };
+    assert!(
+        !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            skipped_ingress_ordinal
+        )
+    );
+    assert!(check_production_ingress_transition(skipped_ingress_ordinal).is_none());
+
+    let dormant_replacement = ProductionIngressIdentityAndClassTraceProjection {
+        lifecycle_ordinal: 7,
+        dormant_reservations_before: 2,
+        dormant_reservations_after: 1,
+        dormant_owner_ordinal: 7,
+        ..ingress
+    };
+    assert!(
+        production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            dormant_replacement
+        )
+    );
+    assert!(check_production_ingress_transition(dormant_replacement).is_some());
+
+    let replaced_dormant_owner = ProductionIngressIdentityAndClassTraceProjection {
+        lifecycle_ordinal: 7,
+        dormant_reservations_before: 2,
+        dormant_reservations_after: 1,
+        dormant_owner_ordinal: 8,
+        ..ingress
+    };
+    assert!(
+        !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            replaced_dormant_owner
+        )
+    );
+    assert!(check_production_ingress_transition(replaced_dormant_owner).is_none());
+
+    let over_capacity_dormant_owner = ProductionIngressIdentityAndClassTraceProjection {
+        dormant_reservations_before: 3,
+        dormant_reservations_after: 3,
+        ..ingress
+    };
+    assert!(
+        !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            over_capacity_dormant_owner
+        )
+    );
+    assert!(check_production_ingress_transition(over_capacity_dormant_owner).is_none());
+
+    let materialized_reservation = ProductionIngressIdentityAndClassTraceProjection {
+        ordinal_source_before: 12,
+        physical_admission_ordinal: 11,
+        ordinal_source_after: 12,
+        ordinal_minted: false,
+        ..ingress
+    };
+    assert!(
+        !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            materialized_reservation,
+        ),
+        "generic ingress admission cannot authorize a second, non-minting publication"
+    );
+    assert!(check_production_ingress_transition(materialized_reservation).is_none());
+
+    let materialization = ProductionIngressReservationMaterializationTraceProjection {
+        incoming_height: 4,
+        incoming_view: 2,
+        incoming_generation: 3,
+        incoming_class: SERVICE_CLASS_PROGRESS,
+        stored_height: 4,
+        stored_view: 2,
+        stored_generation: 3,
+        stored_class: SERVICE_CLASS_PROGRESS,
+        queue_len_before: 1,
+        queue_len_after: 2,
+        reserved_slots_before: 1,
+        reserved_slots_after: 0,
+        queue_capacity: 4,
+        ordinal_source_before: 12,
+        physical_admission_ordinal: 11,
+        lifecycle_ordinal: 11,
+        ordinal_source_after: 12,
+        dormant_reservations_before: 0,
+        dormant_reservations_after: 0,
+        dormant_owner_ordinal: 0,
+    };
+    assert!(
+        production_ingress_reservation_materialization_refines_protected_ownership_kernel(
+            materialization,
+        )
+    );
+    assert_eq!(
+        check_production_ingress_reservation_materialization_transition(materialization)
+            .expect("exact reservation materialization must mint evidence")
+            .into_projection(),
+        materialization,
+    );
+
+    for rejected in [
+        ProductionIngressReservationMaterializationTraceProjection {
+            queue_len_after: materialization.queue_len_before,
+            ..materialization
+        },
+        ProductionIngressReservationMaterializationTraceProjection {
+            reserved_slots_before: 0,
+            ..materialization
+        },
+        ProductionIngressReservationMaterializationTraceProjection {
+            ordinal_source_after: materialization.ordinal_source_after + 1,
+            ..materialization
+        },
+        ProductionIngressReservationMaterializationTraceProjection {
+            dormant_reservations_before: 1,
+            dormant_reservations_after: 0,
+            dormant_owner_ordinal: 10,
+            ..materialization
+        },
+    ] {
+        assert!(
+            check_production_ingress_reservation_materialization_transition(rejected).is_none(),
+            "materialization weakening must be rejected: {rejected:?}",
+        );
+    }
+
+    let dormant_materialization = ProductionIngressReservationMaterializationTraceProjection {
+        lifecycle_ordinal: 7,
+        dormant_reservations_before: 2,
+        dormant_reservations_after: 1,
+        dormant_owner_ordinal: 7,
+        ..materialization
+    };
+    assert!(
+        check_production_ingress_reservation_materialization_transition(dormant_materialization)
+            .is_some(),
+        "exact dormant backing is consumed only at materialization",
+    );
 
     let flush = ProductionReliableFlushTraceProjection {
         status: 2,

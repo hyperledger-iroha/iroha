@@ -448,29 +448,31 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetSubjectSwitchEpisodeAtBudget",
     ): (
-        "AdequateLeaderTargetOccurrenceOwnerSelected",
-        "AdequateLeaderTargetLiveCandidateOwnerIdentitySet",
-        "AdequateLeaderFrozenSubjectSwitchOwnerUniverse",
-        "retired",
-        "AdequateLeaderTargetStrictOccurrenceDescentGoal",
+        "AdequateLeaderTargetCarriedOwnerEpisodeAtBudget",
+        "AsyncProposalSubject",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetOffSubjectRetirementAndReentryGoal",
     ): (
+        "NodeHasDecision",
+        "AdequateLeaderTargetOccurrenceCorridorExitHandoff",
         "owner",
         "retired",
-        "AdequateLeaderTargetOccurrenceOwnerRetirementClosed",
-        "AdequateLeaderTargetProductiveSubjectReentryGoal",
+        "AdequateLeaderFrozenSubjectSwitchOwnerUniverse",
+        "SetLessThan",
+        "AdequateLeaderTargetSubjectSwitchRemainingBudget",
+        "AdequateLeaderTargetProductiveOwnerEpisodeAtBudget",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetSubjectSwitchEpisodeAdvanceGoal",
     ): (
         "AdequateLeaderTargetSubjectSwitchDiscoveredOwnerSet",
-        "AdequateLeaderTargetOccurrenceOwnerRetirementClosed",
+        "AdequateLeaderFrozenSubjectSwitchOwnerUniverse",
         "AdequateLeaderTargetSubjectSwitchRemainingBudget",
         "AdequateLeaderTargetSubjectSwitchEpisodeAtBudget",
+        "owner",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
@@ -487,8 +489,9 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
     ): (
         "AdequateLeaderTargetOccurrenceRankServiceProperty",
         "AdequateLeaderTargetOffSubjectControlNoReentryProperty",
-        "AdequateLeaderTargetSubjectSwitchEpisodeAtBudget",
-        "AdequateLeaderTargetSubjectSwitchBudgetDescentGoal",
+        "AdequateLeaderTargetInternalBodyAvailableNoReentryProperty",
+        "AdequateLeaderTargetDurableRetirementCarryProperty",
+        "AdequateLeaderTargetSubjectSwitchCarryStepProperty",
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
@@ -573,8 +576,10 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKEN_SEQUENCES = {
         "AdequateLeaderTargetSubjectSwitchEpisodeAtBudget",
     ): (
         (
-            "owner \\in AdequateLeaderFrozenSubjectSwitchOwnerUniverse( "
-            "target, leaderContext, leader, leaderView) \\ retired"
+            "/\\ AdequateLeaderTargetCarriedOwnerEpisodeAtBudget( "
+            "target, leaderContext, leader, leaderView, subject, "
+            "occurrenceRank, owner, retired, budget) "
+            "/\\ subject # AsyncProposalSubject(leader)"
         ),
     ),
     (
@@ -585,12 +590,8 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKEN_SEQUENCES = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetSubjectSwitchEpisodeAdvanceGoal",
     ): (
-        (
-            "AdequateLeaderTargetOccurrenceOwnerRetirementClosed( target, "
-            "leaderContext, leader, leaderView, subject, occurrenceRank, "
-            "owner)"
-        ),
-        "retired2 = retired \\cup discovered",
+        "retired \\cup discovered \\subseteq retired2",
+        "owner \\in retired2",
         "budget2 < budget",
     ),
 }
@@ -718,19 +719,129 @@ SERVE_LIFECYCLE_FORBIDDEN_OPERATOR_TOKENS.update(
 
 _SERVE_LIFECYCLE_REGRESSION_TEST_SHA256 = {
     "certified_serve_receiver_close_rolls_back_pending_capacity_replacement": (
-        "468d01287d92542ffe440414bdaf4313375ea37aafb34e6fa9ac5fe1800107b3"
+        "84b842c16236650617b87549fed2bb9e5749c37c10e1420c5106d9f43e27dae2"
     ),
     "certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement": (
-        "0b152887eee3cd1b7f556159e6222ce9598eeded46c1e4b427ebfd45b793db4d"
+        "b25a9bde54862c23946d9a0565fd35f62eb94ef8f0eb31bee1487470fb164e95"
     ),
     "certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement": (
-        "66c1018a861b7dc18f36b3d2e9fbbca9ed8cbb68be314f4fb35edf5d215d5d25"
+        "dc7fd3972ed40bfe639eb2602801003cdbc3a397ff3b8509ae5cc4404b537d2a"
     ),
     "certified_serve_terminal_replay_source_retains_retired_route_and_reconnects": (
-        "fcd7b536f2c8c37c759a4bc7594a4aeb96c85b673ad765551cf35fd9a0bee72a"
+        "0a7a8945f503aafa12ea6b32d59f170ff0d4ac5f5aef7eaab9137782f6aabf0c"
     ),
     "certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo": (
-        "f2287c813fb08f857814177a37dfbe19e7ad95047ab23ef1a3c5587d008b082a"
+        "90c1c4bbb4c2cfea2f277d0864825da1eada534e2d18b383e800fb73dacc4c26"
+    ),
+}
+
+_WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
+    "v2_worker_reply_route_cases.rs": (
+        "1f09f47bc8c88ad5921908bf6e43a4298a2b8fdfbffea9a896ec74a314f32695"
+    ),
+    "v2_worker_backpressure_cases.rs": (
+        "a167531d17ab4973b16a9d52a9f42cd4cd86dc511a4160bd71238205c6f05afd"
+    ),
+    "v2_worker_serve_unsealed_cases.rs": (
+        "800c0bcd452d222e5f28522ecd60bee6cebe35956d8583a4dc8c6476e380adf0"
+    ),
+    "v2_worker_serve_decision_restart_cases.rs": (
+        "6b29eb6cdea21f6f55a7f993316932f4bd8024770b5e2b6bbaa833603cfc0a51"
+    ),
+}
+
+_WORKER_TEST_INCLUDE_TEST_COUNT = {
+    "v2_worker_reply_route_cases.rs": 22,
+    "v2_worker_backpressure_cases.rs": 18,
+    "v2_worker_serve_unsealed_cases.rs": 23,
+    "v2_worker_serve_decision_restart_cases.rs": 11,
+}
+
+_SERVE_TERMINAL_DISCHARGE_WORKER_ITEM_SHA256 = {
+    "fully_authenticate_persisted_certified_serve_request": (
+        "ae5834c7f6d85a453e8e99c6572e43b3cdab2739b39bc290fae1f7fdaa449330"
+    ),
+    "validate_persisted_certified_serve_terminal_outcomes": (
+        "cc4cd229b6caf35425f3a055cd02f254e95df35fe88ce71eb2da7b1c28d8326d"
+    ),
+    "discharge_restored_certified_serve_lifecycles": (
+        "2e10d5070cd6f0e3cc969b87992de444001f069e88d28abde647fa1dc07277b0"
+    ),
+    "V2IoCommandQueue::begin_decision_serve_reconciliation": (
+        "f85805fd7fd696c83ea81898515f35d88d71089f1b242dd1a4ab417fedd2cb25"
+    ),
+    "V2IoCommandQueue::finish_decision_serve_reconciliation": (
+        "2e4664fd343921017ff75884e330517123f4c4ad64dbdff4a6cc54e7d99f7360"
+    ),
+    "V2IoCommandQueue::convert_exact_terminal_retry_after_decision": (
+        "82d7a24819444b6aa420cfc3508f8273135139ba2aa1bfce92132d6efbd343af"
+    ),
+    "V2IoCommandQueue::serve_lifecycle_has_live_ingress_carrier": (
+        "34cd86f08eb05fcf22f93e7eb43f9cfba420c93367ca9a7fa3f584bd5458465d"
+    ),
+    "V2IoCommandQueue::stage_selected_serve_rejection": (
+        "b738358338981eab7438837115ca15d2612b20707a4f3c02059e0ff054314c74"
+    ),
+    "V2IoCommandQueue::publish_serve_ingress_physical_drain": (
+        "381d1fcf02175284df667ab50340f90e78bcd861d8b0d25026c2e9e679721cc3"
+    ),
+    "V2IoCommandQueue::serve_completion_delivery_ownership": (
+        "27517081197cd425d8a5b3cc3e8db5e792d321b4f6f7d92049af39b356395b8a"
+    ),
+    "V2IoCommandQueue::complete_serve_response": (
+        "621e0544277fbbe138465d2646f1aedbc58018775f993c323e3447ab928342ca"
+    ),
+    "V2IoCommandQueue::acknowledge_serve_completion": (
+        "5b5410c3e68627f94b6957775d7529be346d41b7d49eeaf2430b151173a1a7ff"
+    ),
+}
+
+_SERVE_TERMINAL_DISCHARGE_EFFECT_ITEM_SHA256 = {
+    "step": "2cf52cc49b8e63e0832092db5a5cabc4e42d8e950f610d7b4adc9f91c392973a",
+    "step_pending_tip_recovery": (
+        "fb90682d18989823e4181ff3a4f140304f8d8a7c04e4ff429b02e0eeadc4f778"
+    ),
+    "finish_decision_serve_reconciliation": (
+        "695fd230a5bfef0530212cf253e6a76d1c79a5757c3a026c819f5736b79a2578"
+    ),
+}
+
+_SERVE_TERMINAL_DISCHARGE_REGRESSION_TEST_SHA256 = {
+    "prepared_serve_carrier_is_atomically_superseded_by_decision": (
+        "bb9ee636e548e01a0f431ec88fc0e41ca49de6fde696ab3dde3be137e12eab69"
+    ),
+    "established_serve_owner_survives_decision_retry_carrier_retirement": (
+        "2d8cf5bb288bc6903bae3f0d0458627c493ec6319a3ea406ee9ae63b3990fedb"
+    ),
+    "decision_serve_fence_rejects_conflicting_durable_subject_without_ordinals": (
+        "abfbd4a484c097d3c84a43b2f5ec24af8dbe5477fb4c92bc16cb95ae3c75be39"
+    ),
+    "decision_serve_fence_rolls_back_failed_batch_and_converts_before_ordinals": (
+        "6db5f05dc8c7c5debfe59ecc93d02ea14a852ac872087549a27a80ae3a8357e2"
+    ),
+    "active_serve_completion_after_decision_publishes_negative_without_response": (
+        "e8a1beab84ba965b77f8385f68d900cdd9a9d38ec5fb78684e341209aebcbfbe"
+    ),
+    "completion_pending_serve_is_suppressed_after_decision_before_delivery": (
+        "918070dedec8a8b826c343184fc998deed56064eb9f662312eef9f99ec171a12"
+    ),
+    "production_restart_retires_raw_terminal_replay_waiter_without_resigning": (
+        "3664e45df8ce2fe473ef65a371dd21534ae07bdb820ce21d6ee2066de4ca9cea"
+    ),
+    "production_restart_atomically_supersedes_raw_terminal_replay_waiter": (
+        "a5ae8d5c0062a1a491ed4bc495f0f73fa26f000d351781d926ee7e484e749ca9"
+    ),
+    "production_restart_rejects_negative_tombstone_with_physical_retry_waiter": (
+        "9355427e97a565824743d647b37a8ca91239e1fe6da798a4fc433e96531ffd73"
+    ),
+    "same_height_foreign_context_is_rejected_before_every_serve_ordinal": (
+        "123afc268113523defc80c061549452b0f96d3dd09a9e20fda801397517637a8"
+    ),
+}
+
+_SERVE_TERMINAL_DISCHARGE_EFFECT_REGRESSION_TEST_SHA256 = {
+    "decision_serve_fence_rejects_durable_decision_loss_without_reopening": (
+        "c7608c60005b34990c8cb09781649d44a15dca4ed647269073ff068ffc8bd150"
     ),
 }
 _SERVE_INGRESS_ORDINAL_STRUCT_SHA256 = {
@@ -776,16 +887,16 @@ _SERVE_INGRESS_GATE_REGRESSION_TEST_SHA256 = {
 }
 _SERVE_INGRESS_GATE_WORKER_REGRESSION_TEST_SHA256 = {
     "fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers": (
-        "f330e8cbb207fd3872c81d79817209a35cf7acfc2f033cc32f8c1b37ec232f19"
+        "8830d0a705537df7599ad6815f8e41201655aaed5f399863cf9dcec7e6309bae"
     ),
     "fair_ingress_gate_overflow_closes_without_partial_admission": (
-        "820e286fc897de3e36b4463d707faee647de8db649554e8a48ce2efe48afc419"
+        "5a36f512c8c77a9c370a1343f5fc5ad5a7ab669faa1f1e992e851c5ddcab7e5f"
     ),
     "fair_ingress_rollover_retires_ticket_before_old_service_teardown": (
-        "16712f671a24fd8c0bc00543719eb8ac4b4022789274803292fb1f7219ed27c3"
+        "0c27de66d91cd2c0744cf962e673de7e54881838e12f4d920cbfeabeccbcf875"
     ),
     "selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle": (
-        "7d4298be7b35579fb36dd79bf8224325aa63e4ad084763e02c8978263fe4726f"
+        "39ee630ad3e6b080a70514ac7b72228a930453fd2b7765785af1425e5a615193"
     ),
 }
 _SERVICED_CANDIDATE_STORE_STRUCT_SHA256 = {
@@ -1370,7 +1481,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
 }
 _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {
     "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity": (
-        "a64e65c344cd7a423ff744f2e651356d0aae41e5878097c8df18af92e61cf66b"
+        "b0f499e4dc8b84a5c95397a9b99b25eef07a5e56dd0fb5b6fdcf82f8df418bd4"
     ),
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {

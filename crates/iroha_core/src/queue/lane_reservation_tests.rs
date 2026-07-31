@@ -254,7 +254,7 @@ fn commit_barrier_owns_hash_until_plan_reconciliation() {
 #[test]
 fn plan_admission_append_never_owns_queue_mutation_lock() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let state = lane_reservation_test_state();
+    let mut state = lane_reservation_test_state();
     let dir = tempdir().expect("tempdir");
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     queue
@@ -265,6 +265,10 @@ fn plan_admission_append_never_owns_queue_mutation_lock() {
         )
         .expect("install plan journal");
     let transaction = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
+        &transaction,
+    );
     let hash = transaction.hash();
     let reached = Arc::new(Barrier::new(2));
     let resume = Arc::new(Barrier::new(2));
@@ -483,15 +487,15 @@ fn global_candidate_lease_excludes_autonomous_reservation_until_exact_drop() {
 #[test]
 fn lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let state = lane_reservation_test_state();
+    let mut state = lane_reservation_test_state();
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let dir = tempdir().expect("tempdir");
-    push_globally_bound_lane_reservation_candidate(
-        &queue,
-        &state,
-        &dir,
-        accepted_tx_by_someone(&time_source),
+    let transaction = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
+        &transaction,
     );
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let scope = lane_reservation_scope(&state, b"diagnostic-owner", b"diagnostic-proposal");
 
     assert!(

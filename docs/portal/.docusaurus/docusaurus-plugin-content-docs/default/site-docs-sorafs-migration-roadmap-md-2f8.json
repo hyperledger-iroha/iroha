@@ -1,0 +1,26 @@
+{
+  "id": "sorafs/migration-roadmap",
+  "title": "SoraFS Migration Roadmap",
+  "description": "Adapted from docs/source/sorafs/migrationroadmap.md.",
+  "source": "@site/docs/sorafs/migration-roadmap.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/migration-roadmap",
+  "permalink": "/next/sorafs/migration-roadmap",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/migration-roadmap.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "SoraFS Migration Roadmap"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "SoraFS Gateway & DNS Kickoff Runbook",
+    "permalink": "/next/sorafs/gateway-dns-runbook"
+  },
+  "next": {
+    "title": "SoraFS Migration Ledger",
+    "permalink": "/next/sorafs/migration-ledger"
+  }
+}

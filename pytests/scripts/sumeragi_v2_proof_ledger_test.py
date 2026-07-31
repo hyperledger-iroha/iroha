@@ -54,6 +54,7 @@ def load_checker():
 PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_status_cases.py",
     "sumeragi_v2_proof_ledger_liveness_cases.py",
+    "sumeragi_v2_proof_ledger_terminal_discharge_cases.py",
     "sumeragi_v2_proof_ledger_release_inventory_cases.py",
     "sumeragi_v2_proof_ledger_release_corridor_cases.py",
     "sumeragi_v2_proof_ledger_formal_contract_cases.py",
@@ -77,7 +78,7 @@ def checker_source_paths() -> tuple[Path, ...]:
 
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 10
+    assert len(filenames) == len(set(filenames)) == 11
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
@@ -125,6 +126,24 @@ def copy_process_lifetime_worker_launch_fixture(tmp_path: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
     return repo_root
+
+
+def copy_serve_lifecycle_production_fixture(tmp_path: Path, module) -> Path:
+    """Copy the complete Serve worker/effect source and lexical test closure."""
+
+    for relative in (
+        Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+        *(
+            Path("crates/iroha_core/src/sumeragi/tests") / filename
+            for filename in module._WORKER_TEST_INCLUDE_SOURCE_SHA256
+        ),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(module.ROOT_DIR / relative, destination)
+    return tmp_path
 
 
 def copy_reply_writer_deadline_fixture(tmp_path: Path) -> None:
@@ -195,6 +214,10 @@ def copy_liveness_ownership_mutation_fixture(
     shutil.copy2(
         module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla",
         formal_dir / "SumeragiV2AsyncNetwork.tla",
+    )
+    shutil.copy2(
+        module.FORMAL_DIR / "SumeragiV2AsyncProgressOwnershipProofs.tla",
+        formal_dir / "SumeragiV2AsyncProgressOwnershipProofs.tla",
     )
     runner = repo_root / module.LIVENESS_OWNERSHIP_MUTATION_RUNNER
     runner.parent.mkdir(parents=True)
@@ -2320,20 +2343,41 @@ def total_gate_claim(module, constant: str):
     )
 
 
-def leader_wire_auxiliary(module):
-    """Return the ingress claim and its durable leader-wire auxiliary view."""
+def ingress_auxiliary(module, kernel: str):
+    """Return the ingress claim and one exact auxiliary kernel view."""
 
     claim = total_gate_claim(
         module,
         "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
     )
     views = module._cross_tool_kernel_views(claim)
-    assert len(views) == 2
-    return claim, views[1]
+    assert len(views) == 3
+    matching = tuple(view for view in views if view.verified_kernel == kernel)
+    assert len(matching) == 1
+    return claim, matching[0]
+
+
+def materialization_auxiliary(module):
+    """Return the ingress reservation-materialization auxiliary view."""
+
+    return ingress_auxiliary(
+        module,
+        "production_ingress_reservation_materialization_refines_"
+        "protected_ownership_kernel",
+    )
+
+
+def leader_wire_auxiliary(module):
+    """Return the ingress claim and its durable leader-wire auxiliary view."""
+
+    return ingress_auxiliary(
+        module,
+        "production_leader_wire_admission_refines_lifecycle_ownership_kernel",
+    )
 
 
 def test_total_checked_gate_contract_cardinality_and_payload_schema() -> None:
-    """The four legacy and thirteen total claims cannot be mode-confused."""
+    """Thirteen total claims own exactly seventeen distinct checked gates."""
 
     module = load_checker()
     assert module.CROSS_TOOL_EVIDENCE_SCHEMA_VERSION == 3
@@ -2360,8 +2404,8 @@ def test_total_checked_gate_contract_cardinality_and_payload_schema() -> None:
         if claim.proof_mode == "total_checked_gate"
         for view in module._cross_tool_kernel_views(claim)
     ]
-    assert len(gates) == 16
-    assert len({gate.name for gate in gates}) == 16
+    assert len(gates) == 17
+    assert len({gate.name for gate in gates}) == 17
 
     claim = total_gate_claim(
         module, "ProductionDurableIntentTraceRefinesProgressWitness"
@@ -2375,23 +2419,49 @@ def test_total_checked_gate_contract_cardinality_and_payload_schema() -> None:
     assert document["theorem_projection_builder"] is None
 
 
-def test_ingress_claim_binds_durable_leader_wire_auxiliary_evidence() -> None:
-    """One existing ingress mapping owns the separate durable admission proof."""
+def test_claim_local_checked_token_contract_includes_borrower_seal() -> None:
+    """Every legacy and total claim payload binds the read-only token seam."""
 
     module = load_checker()
-    claim, view = leader_wire_auxiliary(module)
-    auxiliary = claim.supplemental_kernels[0]
+    assert module._cross_tool_claim_checked_token_contract() == {
+        "source": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+        "struct_item_token_sha256": module._CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256,
+        "borrower_item_token_sha256": (
+            module._CHECKED_PRODUCTION_TOKEN_BORROWER_SHA256
+        ),
+        "consumer_item_token_sha256": (
+            module._CHECKED_PRODUCTION_TOKEN_CONSUMER_SHA256
+        ),
+    }
+
+
+def test_ingress_claim_binds_materialization_and_leader_wire_evidence() -> None:
+    """Ingress owns reservation materialization before leader-wire evidence."""
+
+    module = load_checker()
+    claim, materialization_view = materialization_auxiliary(module)
+    _same_claim, leader_view = leader_wire_auxiliary(module)
+    materialization, leader_wire = claim.supplemental_kernels
     assert [len(contract.claims) for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS] == [
         4,
         7,
         6,
     ]
-    assert len(claim.supplemental_kernels) == 1
+    assert len(claim.supplemental_kernels) == 2
     assert (
-        auxiliary.auxiliary_verus_theorem
+        materialization.auxiliary_verus_theorem
+        == "production_ingress_reservation_materialization_refines_"
+        "protected_ownership"
+    )
+    assert (
+        leader_wire.auxiliary_verus_theorem
         == "production_leader_wire_admission_trace_refines_lifecycle_ownership"
     )
-    assert auxiliary.total_gate == module._LEADER_WIRE_ADMISSION_GATE
+    assert (
+        materialization.total_gate
+        == module._INGRESS_RESERVATION_MATERIALIZATION_GATE
+    )
+    assert leader_wire.total_gate == module._LEADER_WIRE_ADMISSION_GATE
     assert (
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"
         in claim.production_sources
@@ -2400,11 +2470,16 @@ def test_ingress_claim_binds_durable_leader_wire_auxiliary_evidence() -> None:
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"
         in module._verus_evidence_contract_module().REQUIRED_SOURCE_PATHS
     )
-    assert claim.source_item_seals == module._LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS
+    assert claim.source_item_seals == (
+        *module._INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS,
+        *module._LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS,
+    )
 
     relevant_sources = {
-        view.verified_kernel_source,
-        view.production_call_sites[0].source,
+        materialization_view.verified_kernel_source,
+        materialization_view.production_call_sites[0].source,
+        leader_view.verified_kernel_source,
+        leader_view.production_call_sites[0].source,
     }
     source_entries = [
         {
@@ -2414,30 +2489,346 @@ def test_ingress_claim_binds_durable_leader_wire_auxiliary_evidence() -> None:
         for relative in sorted(relevant_sources)
     ]
     verus_source = (ROOT_DIR / claim.verus_source).read_text(encoding="utf-8")
-    kernel_payload, _ = module._cross_tool_total_kernel_payload(
+    materialization_kernel, _ = module._cross_tool_total_kernel_payload(
         claim,
-        view,
+        materialization_view,
         source_entries=source_entries,
         verus_source=verus_source,
         root_dir=ROOT_DIR,
     )
-    theorem_payload = module._cross_tool_auxiliary_total_theorem_payload(
+    materialization_theorem = module._cross_tool_auxiliary_total_theorem_payload(
         claim,
-        view,
+        materialization_view,
         verus_source=verus_source,
     )
-    call_payload = module._cross_tool_total_call_site_payload(
+    materialization_call = module._cross_tool_total_call_site_payload(
         claim,
-        view,
-        view.production_call_sites[0],
+        materialization_view,
+        materialization_view.production_call_sites[0],
         source_entries=source_entries,
         root_dir=ROOT_DIR,
     )
-    assert kernel_payload["name"] == auxiliary.verified_kernel
-    assert theorem_payload["name"] == auxiliary.auxiliary_verus_theorem
-    assert call_payload["gate_call_count"] == 3
-    assert call_payload["mutation_authorization_indices"] == [0, 0, 2, 2, 2]
-    assert len(module._cross_tool_source_item_seal_payload(claim, root_dir=ROOT_DIR)) == 27
+    leader_kernel, _ = module._cross_tool_total_kernel_payload(
+        claim,
+        leader_view,
+        source_entries=source_entries,
+        verus_source=verus_source,
+        root_dir=ROOT_DIR,
+    )
+    leader_theorem = module._cross_tool_auxiliary_total_theorem_payload(
+        claim,
+        leader_view,
+        verus_source=verus_source,
+    )
+    leader_call = module._cross_tool_total_call_site_payload(
+        claim,
+        leader_view,
+        leader_view.production_call_sites[0],
+        source_entries=source_entries,
+        root_dir=ROOT_DIR,
+    )
+    assert materialization_kernel["name"] == materialization.verified_kernel
+    assert materialization_theorem["name"] == (
+        materialization.auxiliary_verus_theorem
+    )
+    assert materialization_call["gate_call_count"] == 1
+    assert materialization_call["mutation_authorization_indices"] == [0, 0, 0, 0]
+    assert leader_kernel["name"] == leader_wire.verified_kernel
+    assert leader_theorem["name"] == leader_wire.auxiliary_verus_theorem
+    assert leader_call["gate_call_count"] == 3
+    assert leader_call["mutation_authorization_indices"] == [0, 0, 2, 2, 2]
+    assert len(
+        module._cross_tool_source_item_seal_payload(claim, root_dir=ROOT_DIR)
+    ) == 29
+
+
+@pytest.mark.parametrize("mutation", ("missing", "reordered", "weakened_gate"))
+def test_ingress_auxiliary_inventory_rejects_materialization_drift(
+    mutation: str,
+) -> None:
+    """Materialization is the first exact supplemental ingress obligation."""
+
+    module = load_checker()
+    claim, _view = materialization_auxiliary(module)
+    materialization, leader_wire = claim.supplemental_kernels
+    if mutation == "missing":
+        supplemental = (leader_wire,)
+    elif mutation == "reordered":
+        supplemental = (leader_wire, materialization)
+    else:
+        assert materialization.total_gate is not None
+        weakened_gate = replace(
+            materialization.total_gate,
+            verus_kernel_arguments="projection",
+        )
+        supplemental = (
+            replace(materialization, total_gate=weakened_gate),
+            leader_wire,
+        )
+    errors, _gates, _calls = module._cross_tool_total_gate_promotion_contract_errors(
+        replace(claim, supplemental_kernels=supplemental)
+    )
+    assert any(
+        "reservation-materialization/leader-wire auxiliary" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    (
+        ("direct_kernel_fallback", "direct boolean kernel"),
+        ("missing_token", "exact checked-gate seam"),
+        ("dropped_token", "exact checked-gate seam"),
+        ("mutation_before_token", "state-changing linearization point"),
+    ),
+)
+def test_materialization_auxiliary_rejects_checked_token_bypasses(
+    tmp_path: Path,
+    mutation: str,
+    expected_error: str,
+) -> None:
+    """Reserved-slot publication requires one consumed token before mutation."""
+
+    module = load_checker()
+    claim, view = materialization_auxiliary(module)
+    call_site = view.production_call_sites[0]
+    destination = tmp_path / call_site.source
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT_DIR / call_site.source, destination)
+    source = destination.read_text(encoding="utf-8")
+    item = next(
+        candidate
+        for candidate in module.rust_items(source, call_site.item)
+        if candidate.brace_context == call_site.brace_context
+    )
+    consumption = (
+        "let _authorized_transition = checked_transition.into_projection();"
+    )
+    if mutation == "direct_kernel_fallback":
+        anchor = "let checked_transition ="
+        assert item.source.count(anchor) == 1
+        mutated_item = item.source.replace(
+            anchor,
+            "let _direct_fallback = "
+            "production_ingress_reservation_materialization_refines_"
+            "protected_ownership_kernel(ingress_trace);\n"
+            + anchor,
+            1,
+        )
+    elif mutation == "missing_token":
+        assert item.source.count(consumption) == 1
+        mutated_item = item.source.replace(consumption, "", 1)
+    elif mutation == "dropped_token":
+        assert item.source.count(consumption) == 1
+        mutated_item = item.source.replace(
+            consumption,
+            "drop(checked_transition);",
+            1,
+        )
+    else:
+        boundary = "self.reserved_body_available = None;"
+        gate = "let checked_transition ="
+        assert item.source.count(boundary) == 1
+        assert item.source.count(gate) == 1
+        mutated_item = item.source.replace(boundary, "", 1).replace(
+            gate,
+            boundary + "\n            " + gate,
+            1,
+        )
+    destination.write_text(
+        source.replace(item.source, mutated_item, 1),
+        encoding="utf-8",
+    )
+    mutated_source = destination.read_text(encoding="utf-8")
+    mutated_item = next(
+        candidate
+        for candidate in module.rust_items(mutated_source, call_site.item)
+        if candidate.brace_context == call_site.brace_context
+    )
+    live_call = replace(
+        call_site,
+        item_token_sha256=module._rust_sealed_item_token_sha256(mutated_item),
+    )
+    source_entries = [
+        {
+            "path": call_site.source,
+            "sha256": module._sha256_file(destination),
+        }
+    ]
+    with pytest.raises(ValueError, match=expected_error):
+        module._cross_tool_total_call_site_payload(
+            claim,
+            view,
+            live_call,
+            source_entries=source_entries,
+            root_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    (
+        ("production_macro", "shared macro"),
+        ("production_kernel", "exact nonconstant reviewed body"),
+        ("production_gate", "evaluate only its exact kernel"),
+        ("verus_kernel", "must exactly match production"),
+        ("verus_gate", "exactly mirror the production kernel"),
+    ),
+)
+def test_materialization_auxiliary_rejects_kernel_or_gate_weakening(
+    tmp_path: Path,
+    mutation: str,
+    expected_error: str,
+) -> None:
+    """The materialization macro, kernels, and total gates are exact mirrors."""
+
+    module = load_checker()
+    claim, view = materialization_auxiliary(module)
+    production_relative = view.verified_kernel_source
+    production_source = (ROOT_DIR / production_relative).read_text(encoding="utf-8")
+    verus_source = (ROOT_DIR / claim.verus_source).read_text(encoding="utf-8")
+    root_dir = ROOT_DIR
+    if mutation.startswith("production_"):
+        destination = tmp_path / production_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if mutation == "production_macro":
+            item = module.rust_macro_items(
+                production_source,
+                "production_ingress_reservation_materialization_trace_body",
+            )[0]
+            old = (
+                "$projection.ordinal_source_before "
+                "== $projection.ordinal_source_after"
+            )
+            new = "$projection.ordinal_source_before >= $projection.ordinal_source_after"
+        elif mutation == "production_kernel":
+            item = module.rust_items(production_source, view.verified_kernel)[0]
+            old = (
+                "production_ingress_reservation_materialization_trace_body!"
+                "(projection)"
+            )
+            new = "projection.reserved_slots_before == 1"
+        else:
+            assert view.total_gate is not None
+            item = module.rust_items(production_source, view.total_gate.name)[0]
+            old = "    } else {\n        None\n    }"
+            new = (
+                "    } else {\n"
+                "        Some(CheckedProductionTransition { projection })\n"
+                "    }"
+            )
+        assert item.source.count(old) == 1
+        mutated_item = item.source.replace(old, new, 1)
+        destination.write_text(
+            production_source.replace(item.source, mutated_item, 1),
+            encoding="utf-8",
+        )
+        root_dir = tmp_path
+        source_entries = [
+            {
+                "path": production_relative,
+                "sha256": module._sha256_file(destination),
+            }
+        ]
+    else:
+        item_name = (
+            view.verified_kernel
+            if mutation == "verus_kernel"
+            else view.total_gate.name
+        )
+        item = module.rust_items(verus_source, item_name)[0]
+        if mutation == "verus_kernel":
+            old = (
+                "production_ingress_reservation_materialization_trace_body!"
+                "(projection)"
+            )
+            new = "projection.reserved_slots_before == 1u8"
+        else:
+            old = "    } else {\n        None\n    }"
+            new = "    } else {\n        Some(projection)\n    }"
+        assert item.source.count(old) == 1
+        verus_source = verus_source.replace(
+            item.source,
+            item.source.replace(old, new, 1),
+            1,
+        )
+        source_entries = [
+            {
+                "path": production_relative,
+                "sha256": module._sha256_file(ROOT_DIR / production_relative),
+            }
+        ]
+    with pytest.raises(ValueError, match=expected_error):
+        module._cross_tool_total_kernel_payload(
+            claim,
+            view,
+            source_entries=source_entries,
+            verus_source=verus_source,
+            root_dir=root_dir,
+        )
+
+
+@pytest.mark.parametrize("source_index", (0, 1))
+def test_materialization_projection_source_seals_reject_layout_drift(
+    tmp_path: Path,
+    source_index: int,
+) -> None:
+    """Both production and Verus materialization projections are sealed."""
+
+    module = load_checker()
+    claim, _view = materialization_auxiliary(module)
+    seal = module._INGRESS_RESERVATION_MATERIALIZATION_SOURCE_ITEM_SEALS[
+        source_index
+    ]
+    destination = tmp_path / seal.source
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source = (ROOT_DIR / seal.source).read_text(encoding="utf-8")
+    item = next(
+        candidate
+        for candidate in module.rust_struct_items(source, seal.item)
+        if candidate.brace_context == seal.brace_context
+    )
+    old = (
+        "pub(crate) reserved_slots_before: u8,"
+        if source_index == 0
+        else "pub reserved_slots_before: u8,"
+    )
+    new = old.replace("reserved_slots_before", "reservation_count_before")
+    assert item.source.count(old) == 1
+    destination.write_text(
+        source.replace(item.source, item.source.replace(old, new, 1), 1),
+        encoding="utf-8",
+    )
+    diagnostic_claim = replace(claim, source_item_seals=(seal,))
+    with pytest.raises(ValueError, match="cross-tool source seal"):
+        module._cross_tool_source_item_seal_payload(
+            diagnostic_claim,
+            root_dir=tmp_path,
+        )
+
+
+def test_materialization_auxiliary_rejects_verus_proof_weakening() -> None:
+    """The occupancy-preserving implication is exact auxiliary evidence."""
+
+    module = load_checker()
+    claim, view = materialization_auxiliary(module)
+    source = (ROOT_DIR / claim.verus_source).read_text(encoding="utf-8")
+    old = "projection.reserved_slots_before == 1u8"
+    new = "projection.reserved_slots_before >= 0u8"
+    theorem = module.rust_items(source, view.auxiliary_verus_theorem)[0]
+    assert theorem.source.count(old) == 1
+    mutated = source.replace(
+        theorem.source,
+        theorem.source.replace(old, new, 1),
+        1,
+    )
+    with pytest.raises(ValueError, match="exact reviewed implication token seal"):
+        module._cross_tool_auxiliary_total_theorem_payload(
+            claim,
+            view,
+            verus_source=mutated,
+        )
 
 
 @pytest.mark.parametrize(
@@ -2629,16 +3020,24 @@ def test_leader_wire_auxiliary_contract_rejects_missing_proof_inventory() -> Non
 
     module = load_checker()
     claim, _view = leader_wire_auxiliary(module)
-    auxiliary = claim.supplemental_kernels[0]
+    auxiliary = next(
+        kernel
+        for kernel in claim.supplemental_kernels
+        if kernel.auxiliary_verus_theorem
+        == "production_leader_wire_admission_trace_refines_lifecycle_ownership"
+    )
     weakened = replace(
         claim,
-        supplemental_kernels=(
+        supplemental_kernels=tuple(
             replace(
-                auxiliary,
+                kernel,
                 auxiliary_verus_theorem=None,
                 auxiliary_verus_parameters=None,
                 auxiliary_verus_theorem_item_sha256=None,
-            ),
+            )
+            if kernel == auxiliary
+            else kernel
+            for kernel in claim.supplemental_kernels
         ),
     )
     errors, _gates, _calls = (
@@ -3130,6 +3529,136 @@ def test_total_checked_gate_rejects_opaque_token_forging(
         }
     ]
     with pytest.raises(ValueError, match="token|CheckedProductionTransition"):
+        module._cross_tool_checked_token_payload(
+            source_entries=entries,
+            root_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "in_flight_projection_visibility",
+        "in_flight_macro_predicate",
+        "in_flight_kernel_body",
+        "in_flight_constructor_always_some",
+        "in_flight_constructor_wrong_kernel",
+        "materialization_projection_visibility",
+        "legacy_constructor_always_some",
+        "borrower_visibility",
+        "borrower_body",
+    ),
+)
+def test_total_checked_gate_rejects_in_flight_token_contract_weakening(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    """The auxiliary reservation gate cannot weaken the shared opaque token."""
+
+    module = load_checker()
+    sources = (
+        module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+        "crates/iroha_core/src/sumeragi/v2_core.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
+    )
+    for relative in sources:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+    path = tmp_path / module._CHECKED_PRODUCTION_TOKEN_SOURCE
+    source = path.read_text(encoding="utf-8")
+
+    if mutation == "in_flight_projection_visibility":
+        item = module.rust_struct_items(
+            source, "ProductionInFlightReservationTransitionProjection"
+        )[0]
+        assert item.source.count("    pub(crate) action: u8,") == 1
+        mutated = item.source.replace(
+            "    pub(crate) action: u8,",
+            "    pub action: u8,",
+            1,
+        )
+    elif mutation == "in_flight_macro_predicate":
+        item = module.rust_macro_items(
+            source, "production_in_flight_reservation_transition_body"
+        )[0]
+        old = (
+            "projection.before.state "
+            "== refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT)"
+        )
+        new = "true"
+        assert item.source.count(old) >= 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation == "in_flight_kernel_body":
+        item = module.rust_items(
+            source, "production_in_flight_reservation_transition_kernel"
+        )[0]
+        old = "production_in_flight_reservation_transition_body!(projection)"
+        new = "projection.action > 0"
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation.startswith("in_flight_constructor_"):
+        item = module.rust_items(
+            source, "check_production_in_flight_reservation_transition"
+        )[0]
+        if mutation == "in_flight_constructor_always_some":
+            old = "    } else {\n        None\n    }"
+            new = (
+                "    } else {\n"
+                "        Some(CheckedProductionTransition { projection })\n"
+                "    }"
+            )
+        else:
+            old = "production_in_flight_reservation_transition_kernel(projection)"
+            new = (
+                "production_application_trace_refines_decision_completion_kernel("
+                "Default::default())"
+            )
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation == "materialization_projection_visibility":
+        item = module.rust_struct_items(
+            source, "ProductionIngressReservationMaterializationTraceProjection"
+        )[0]
+        old = "    pub(crate) reserved_slots_before: u8,"
+        new = "    pub reserved_slots_before: u8,"
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+    elif mutation == "legacy_constructor_always_some":
+        item = module.rust_items(
+            source,
+            "check_production_body_ownership_effective_lock_transition",
+        )[0]
+        old = "    } else {\n        None\n    }"
+        new = (
+            "    } else {\n"
+            "        Some(CheckedProductionTransition { projection })\n"
+            "    }"
+        )
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+    else:
+        item = module.rust_items(source, "accepted_projection")[0]
+        if mutation == "borrower_visibility":
+            old = "pub(crate) const fn accepted_projection"
+            new = "pub const fn accepted_projection"
+        else:
+            old = "&self.projection"
+            new = "match self { Self { projection } => projection }"
+        assert item.source.count(old) == 1
+        mutated = item.source.replace(old, new, 1)
+
+    path.write_text(source.replace(item.source, mutated, 1), encoding="utf-8")
+    entries = [
+        {
+            "path": module._CHECKED_PRODUCTION_TOKEN_SOURCE,
+            "sha256": module._sha256_file(path),
+        }
+    ]
+    with pytest.raises(
+        ValueError,
+        match="in-flight|materialization|effective-lock|borrowed|borrower|token",
+    ):
         module._cross_tool_checked_token_payload(
             source_entries=entries,
             root_dir=tmp_path,
@@ -4559,7 +5088,29 @@ def test_effective_lock_checked_token_seams_bind_live_mutation_boundaries() -> N
         ],
         root_dir=ROOT_DIR,
     )
-    assert token_payload["constructor_count"] == 21
+    assert token_payload["constructor_count"] == 23
+    assert token_payload["borrower_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_TOKEN_BORROWER_SHA256
+    )
+    assert token_payload["in_flight_projection_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_IN_FLIGHT_PROJECTION_SHA256
+    )
+    assert token_payload["in_flight_macro_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_IN_FLIGHT_MACRO_SHA256
+    )
+    assert token_payload["in_flight_kernel_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_IN_FLIGHT_KERNEL_SHA256
+    )
+    assert token_payload["in_flight_constructor_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_IN_FLIGHT_CONSTRUCTOR_SHA256
+    )
+    assert token_payload["materialization_projection_item_token_sha256"] == (
+        module._CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_PROJECTION_SHA256
+    )
+    assert {
+        item["name"]: item["item_token_sha256"]
+        for item in token_payload["legacy_effective_lock_constructor_items"]
+    } == module._CHECKED_PRODUCTION_EFFECTIVE_LOCK_GATE_SHA256
 
     for claim in claims:
         relatives = {
@@ -7416,6 +7967,11 @@ def test_shared_tlc_result_contract_rejects_profile_inventory_weakening(
             '[[ "$primary_diagnostic_count" -ge 1 ]] || {',
         ),
         (
+            "scripts/formal/run_sumeragi_v2_certified_response_identity_separation_mutation.sh",
+            '[[ "$primary_diagnostic_count" -eq 1 ]] || {',
+            '[[ "$primary_diagnostic_count" -ge 1 ]] || {',
+        ),
+        (
             "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh",
             '  )" == 1 ]] || {',
             '  )" -ge 1 ]] || {',
@@ -9578,10 +10134,10 @@ def test_shared_tlc_result_contract_is_complete_and_source_sealed(
     module = load_checker()
     repo_root = copy_shared_tlc_result_contract_fixture(tmp_path, module)
 
-    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 31
-    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 31
+    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 32
+    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 32
     assert len(module.SHARED_TLC_RESULT_SPECIALIZED_CALLERS) == 4
-    assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 32
+    assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 33
     assert set(module.SHARED_TLC_RESULT_BRANCH_PROFILES) == set(
         module.SHARED_TLC_RESULT_CONTRACT_CALLERS
     )
@@ -9870,711 +10426,6 @@ def test_shared_tlc_result_contract_rejects_aggregate_branch_weakening(
     assert any(expected_error in error for error in errors), errors
 
 
-def test_liveness_ownership_mutation_source_seal_covers_exact_corpus(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    artifacts = module.LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS
-
-    assert len(artifacts) == 120
-    assert sum(name.endswith(".tla") for name in artifacts) == 28
-    assert sum(name.endswith("_fixed.cfg") for name in artifacts) == 28
-    assert sum(name.endswith("_bug.cfg") for name in artifacts) == 64
-    assert len(module.LIVENESS_OWNERSHIP_MUTATION_SHA256) == 121
-    assert (
-        "_liveness_ownership_mutation_source_fidelity_errors"
-        in module.validate_ledger.__code__.co_names
-    )
-    assert module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    ) == []
-
-
-@pytest.mark.parametrize(
-    "artifact_name",
-    (
-        "SumeragiV2ExactResponseClaimLifecycleMutation.tla",
-        "SumeragiV2ControlLivePredecessorMutation.tla",
-        "control_live_predecessor_bug.cfg",
-        "SumeragiV2ImportedCertificateTailMutation.tla",
-        "imported_tc_tail_bug.cfg",
-        "SumeragiV2TimeoutLifecycleStageClassifierMutation.tla",
-        "timeout_lifecycle_stage_classifier_bug.cfg",
-        "SumeragiV2PersistInstallTimeoutRootRetirementMutation.tla",
-        "persist_install_timeout_root_retirement_bug.cfg",
-        "exact_serve_frozen_predecessor_churn_bug.cfg",
-        "adequate_leader_candidate_tombstone_fixed.cfg",
-        "adequate_leader_candidate_terminal_discard_resurrection_bug.cfg",
-        "adequate_leader_candidate_retired_chunk_decision_bug.cfg",
-        "fixed_corridor_action_credit_per_child_recharge_bug.cfg",
-        "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla",
-        "adequate_leader_deadline_authority_fixed.cfg",
-        "adequate_leader_deadline_authority_omitted_roster_bound_bug.cfg",
-        "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla",
-        "adequate_leader_selected_lifecycle_episode_fixed.cfg",
-        (
-            "adequate_leader_selected_lifecycle_episode_"
-            "semantic_shortcut_bug.cfg"
-        ),
-        "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla",
-        "fixed_corridor_receipt_acquisition_global_retire_bug.cfg",
-        "SumeragiV2ProducerReplayCapacityMutation.tla",
-        "producer_replay_capacity_replenishment_lasso_bug.cfg",
-        "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh",
-    ),
-)
-def test_liveness_ownership_mutation_source_seal_rejects_stale_artifact(
-    tmp_path: Path,
-    artifact_name: str,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    path = (
-        repo_root / artifact_name
-        if "/" in artifact_name
-        else formal_dir / artifact_name
-    )
-    path.write_text(
-        path.read_text(encoding="utf-8") + "\n\\* stale mutation\n",
-        encoding="utf-8",
-    )
-
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    assert any(
-        str(path) in error and "must match exact reviewed SHA-256" in error
-        for error in errors
-    ), errors
-
-
-@pytest.mark.parametrize(
-    ("artifact_name", "old", "new", "expected_error"),
-    (
-        (
-            "SumeragiV2FixedCorridorPhysicalBudgetMutation.tla",
-            "  2 * DeferredNormalCapacity\n",
-            "  DeferredNormalCapacity\n",
-            "DeferredDrainBudget must equal only",
-        ),
-        (
-            "SumeragiV2FixedCorridorPhysicalBudgetMutation.tla",
-            "    + 4 * DeferredDrainBudget\n",
-            "    + DeferredDrainBudget\n",
-            "CompletePhysicalWindowBudget must equal only",
-        ),
-        (
-            "fixed_corridor_physical_budget_omitted_lane_cursor_bug.cfg",
-            "INVARIANT PhysicalWindowBudgetCoversIndependentLanesAndCursorResets\n",
-            "INVARIANT TypeInvariant\n",
-            "physical-budget mutation config must equal only",
-        ),
-        (
-            "SumeragiV2FixedCorridorActionCreditMutation.tla",
-            "BeginTimeoutParentDebt == 69\n",
-            "BeginTimeoutParentDebt == 68\n",
-            "BeginTimeoutParentDebt must equal only",
-        ),
-        (
-            "SumeragiV2FixedCorridorActionCreditMutation.tla",
-            "       THEN ValidateBodyExactChildBatchDebt\n",
-            "       THEN ValidateBodyParentDebt\n",
-            "DispatchValidateBody must equal only",
-        ),
-        (
-            "fixed_corridor_action_credit_per_child_recharge_bug.cfg",
-            "INVARIANT ExactSuccessorHandoffStrictlyConsumesCumulativeActionDebt\n",
-            "INVARIANT TypeInvariant\n",
-            "action-credit mutation config must equal only",
-        ),
-        (
-            "SumeragiV2ProposalPipelineBudgetMutation.tla",
-            "  4 * ValidatorCount * SlotCapacity * PerSlotEpisode\n",
-            "  4 * ValidatorCount * "
-            "(PhysicalEpisodeBudget + SlotCapacity)\n",
-            "ExactPipelineBudget must equal only",
-        ),
-        (
-            "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla",
-            "  /\\ leaderArmable'\n",
-            "  /\\ ~leaderArmable'\n",
-            "InstallSynchronizedLeaderView must equal only",
-        ),
-        (
-            "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla",
-            "  OtherReceipt(otherView, 0) \\in receipts\n",
-            "  LeaderReceipt(otherView, 0) \\in receipts\n",
-            "UnchangedLeaderKeyRetainsReceipt must equal only",
-        ),
-        (
-            "fixed_corridor_receipt_acquisition_prestate_only_bug.cfg",
-            "INVARIANT ReceiptAcquisitionAndRetention\n",
-            "INVARIANT TypeInvariant\n",
-            "receipt-acquisition mutation config must equal only",
-        ),
-        (
-            "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla",
-            "  THEN deadline <= RosterDeadline\n",
-            "  THEN deadline <= FabricatedReceiptDeadline\n",
-            "deadline-authority mutation operator "
-            "ReceiptOwnsFrozenRosterWindow must equal only",
-        ),
-        (
-            "adequate_leader_deadline_authority_fixed.cfg",
-            "CONSTANT EnforceRosterDeadlineAuthority = TRUE\n",
-            "CONSTANT EnforceRosterDeadlineAuthority = FALSE\n",
-            "deadline-authority mutation config must equal only",
-        ),
-        (
-            "adequate_leader_deadline_authority_omitted_roster_bound_bug.cfg",
-            "CONSTANT EnforceRosterDeadlineAuthority = FALSE\n",
-            "CONSTANT EnforceRosterDeadlineAuthority = TRUE\n",
-            "deadline-authority mutation config must equal only",
-        ),
-        (
-            "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla",
-            "     ELSE ~LowerOccurrenceCoexists\n",
-            "     ELSE TRUE\n",
-            "selected-lifecycle mutation operator "
-            "SelectedLifecycleEpisodeActive must equal only",
-        ),
-        (
-            "adequate_leader_selected_lifecycle_episode_fixed.cfg",
-            "CONSTANT PreserveSelectedLifecycleEpisode = TRUE\n",
-            "CONSTANT PreserveSelectedLifecycleEpisode = FALSE\n",
-            "selected-lifecycle mutation config must equal only",
-        ),
-        (
-            "adequate_leader_selected_lifecycle_episode_semantic_shortcut_bug.cfg",
-            "CONSTANT PreserveSelectedLifecycleEpisode = FALSE\n",
-            "CONSTANT PreserveSelectedLifecycleEpisode = TRUE\n",
-            "selected-lifecycle mutation config must equal only",
-        ),
-        (
-            "SumeragiV2ProducerReplayCapacityMutation.tla",
-            "  /\\ queueDepth + 1 + TargetReservationCharge <= Capacity\n",
-            "  /\\ queueDepth < Capacity\n",
-            "OrdinaryEnqueuePreservesReplayReservation must equal only",
-        ),
-        (
-            "SumeragiV2ProducerReplayCapacityMutation.tla",
-            '  /\\ targetStatus\' = "Queued"\n',
-            '  /\\ targetStatus\' = "Dormant"\n',
-            "ExactReplayAtomicallyConsumesReservation must equal only",
-        ),
-        (
-            "producer_replay_capacity_replenishment_lasso_bug.cfg",
-            "PROPERTY EventuallyExactTargetIsTombstoned\n",
-            "INVARIANT TypeInvariant\n",
-            "replay-capacity mutation config must equal only",
-        ),
-    ),
-)
-def test_liveness_ownership_exact_mutations_fail_after_reseal(
-    tmp_path: Path,
-    artifact_name: str,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path,
-        module,
-    )
-    path = formal_dir / artifact_name
-    source = path.read_text(encoding="utf-8")
-    assert source.count(old) == 1
-    path.write_text(source.replace(old, new, 1), encoding="utf-8")
-    module.LIVENESS_OWNERSHIP_MUTATION_SHA256[artifact_name] = hashlib.sha256(
-        path.read_bytes()
-    ).hexdigest()
-
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir,
-        repo_root,
-    )
-
-    assert any(expected_error in error for error in errors), errors
-
-
-def test_liveness_ownership_mutation_source_seal_rejects_inventory_drift(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    missing = formal_dir / "exact_response_claim_restart_reopen_bug.cfg"
-    missing.unlink()
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-    assert any(
-        str(missing) in error
-        and "missing liveness-ownership mutation artifact" in error
-        for error in errors
-    ), errors
-
-    shutil.copy2(module.FORMAL_DIR / missing.name, missing)
-    extra = formal_dir / "adequate_leader_candidate_unreviewed_bug.cfg"
-    extra.write_text("SPECIFICATION Spec\n", encoding="utf-8")
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-    assert any(
-        str(extra) in error
-        and "extra liveness-ownership mutation artifact" in error
-        for error in errors
-    ), errors
-
-    extra.unlink()
-    symlink = formal_dir / "exact_ingress_ticket_priority_fixed.cfg"
-    target = formal_dir / "exact_ingress_ticket_priority_fixed.target"
-    symlink.rename(target)
-    symlink.symlink_to(target.name)
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-    assert any(
-        str(symlink) in error and "artifact must be a regular file" in error
-        for error in errors
-    ), errors
-
-
-@pytest.mark.parametrize(
-    ("symbol", "old", "new", "expected_error"),
-    (
-        (
-            "AsyncControlServiceAdmissionStartsOrReplaces",
-            "        /\\ AsyncControlServiceRecordForItem(item).consumed\n",
-            "",
-            "strict-newer replacement requires consumed predecessor",
-        ),
-        (
-            "CanAdmitIngressItem",
-            "  /\\ ~AsyncControlServiceAdmissionBlockedByLivePredecessor(item)\n",
-            "",
-            "live predecessor closes fresh ingress admission without coalescing",
-        ),
-    ),
-)
-def test_liveness_ownership_source_seal_rejects_live_predecessor_gate_weakening(
-    tmp_path: Path,
-    symbol: str,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    source = path.read_text(encoding="utf-8")
-    path.write_text(
-        mutate_tla_operator(source, symbol, old, new),
-        encoding="utf-8",
-    )
-
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    assert any(expected_error in error for error in errors), errors
-
-
-@pytest.mark.parametrize(
-    ("symbol", "old", "new", "expected_error"),
-    (
-        (
-            "AsyncTimeoutLifecycleCandidateRetiredBy",
-            "  /\\ candidate.causalOrigin.height = height\n",
-            "",
-            "exact same-node/context/height timeout-root retirement boundary",
-        ),
-        (
-            "CandidateAdmissionCoalesced",
-            "    \\/ AsyncTimeoutLifecycleCandidateRetiredThroughInstall(candidate)\n",
-            "",
-            "installed timeout-root retransmission coalescing",
-        ),
-        (
-            "RemoveNextNodeCommandAfterDispatch",
-            '        IF command.kind = "PersistInstallTC"\n',
-            "        IF FALSE\n",
-            "Runtime FIFO timeout-root retirement",
-        ),
-        (
-            "AppendCausalSuccessors",
-            '        IF command.kind = "PersistInstallTC"\n',
-            "        IF FALSE\n",
-            "causal timeout-root retirement before install successors",
-        ),
-        (
-            "AsyncIoTimeoutLifecycleRetirementTransition",
-            "                  ![node] = AsyncTimeoutLifecycleSetAfterInstall(\n",
-            "                  ![node] = @\n",
-            "atomic executor and Serve-predecessor timeout-root retirement",
-        ),
-        (
-            "SerializedRuntimeStep",
-            "  /\\ AsyncIoTimeoutLifecycleRetirementTransition(node)\n",
-            "  /\\ UNCHANGED AsyncIoVars\n",
-            "ordinary Runtime path applies timeout-root I/O retirement",
-        ),
-        (
-            "SerializedRuntimePrecedesServeIngressStep",
-            "  /\\ AsyncIoTimeoutLifecycleRetirementTransition(node)\n",
-            "  /\\ UNCHANGED AsyncIoVars\n",
-            "older Runtime interleave applies timeout-root I/O retirement",
-        ),
-        (
-            "AsyncControlServiceStateAfterTimeoutRetirement",
-            "               THEN command.view\n",
-            "               THEN @\n",
-            "durable monotone per-height timeout retirement high-watermark",
-        ),
-    ),
-)
-def test_liveness_ownership_source_seal_rejects_timeout_root_retirement_weakening(
-    tmp_path: Path,
-    symbol: str,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    source = path.read_text(encoding="utf-8")
-    path.write_text(
-        mutate_tla_operator(source, symbol, old, new),
-        encoding="utf-8",
-    )
-
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    assert any(expected_error in error for error in errors), errors
-
-
-def test_liveness_ownership_source_seal_requires_blocked_packet_action_theorem(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    source = path.read_text(encoding="utf-8")
-    old = "THEOREM AsyncControlServiceBlockedNewerPacketCannotPassIngress =="
-    new = "THEOREM WeakenedBlockedNewerPacketCanPassIngress =="
-    assert source.count(old) == 1
-    path.write_text(source.replace(old, new, 1), encoding="utf-8")
-
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    assert any("blocked newer packet action theorem" in error for error in errors), errors
-
-
-@pytest.mark.parametrize(
-    ("symbol", "old", "new", "expected_error"),
-    (
-        (
-            "CandidateConsumerCurrent",
-            "     THEN candidate.height = height\n",
-            "     THEN /\\ candidate.consumerView = nodeView[candidate.node]\n"
-            "          /\\ candidate.consumerGeneration = generation[candidate.node]\n",
-            "height/context-stable imported certificate consumer",
-        ),
-        (
-            "ImportedCommitDecisionTail",
-            '       \\in {"CommitQC", "CommitCertificateResponse"}\n',
-            '       = "CommitQC"\n',
-            "authenticated CommitQC import-tail scope",
-        ),
-        (
-            "ImportedTimeoutCertificateTail",
-            '  /\\ candidate.evidence.kind = "TimeoutCertificate"\n',
-            "",
-            "authenticated timeout-certificate import-tail scope",
-        ),
-    ),
-)
-def test_liveness_ownership_source_seal_rejects_imported_tail_weakening(
-    tmp_path: Path,
-    symbol: str,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    source = path.read_text(encoding="utf-8")
-    path.write_text(
-        mutate_tla_operator(source, symbol, old, new),
-        encoding="utf-8",
-    )
-
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    assert any(expected_error in error for error in errors), errors
-
-
-@pytest.mark.parametrize(
-    ("theorem", "expected_error"),
-    (
-        (
-            "AsyncNextNodeCommandOwnsOldestLifecycleOrdinal",
-            "runtime FIFO selector theorem for the oldest lifecycle",
-        ),
-        (
-            "AsyncNextDeferredCommandOwnsOldestLifecycleWithoutHandoff",
-            "Busy-deferred selector theorem for the oldest lifecycle",
-        ),
-        (
-            "AsyncDeferredHandoffRetainsExactSelectedLifecycle",
-            "Busy handoff theorem retaining the exact predecessor",
-        ),
-    ),
-)
-def test_liveness_ownership_source_seal_requires_runtime_predecessor_theorems(
-    tmp_path: Path,
-    theorem: str,
-    expected_error: str,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
-    source = path.read_text(encoding="utf-8")
-    old = f"THEOREM {theorem} =="
-    new = f"THEOREM Weakened{theorem} =="
-    assert source.count(old) == 1
-    path.write_text(source.replace(old, new, 1), encoding="utf-8")
-
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    assert any(expected_error in error for error in errors), errors
-
-
-def test_liveness_ownership_runner_rejects_nonzero_state_helper_deletion(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    runner = repo_root / module.LIVENESS_OWNERSHIP_MUTATION_RUNNER
-    source = runner.read_text(encoding="utf-8")
-    helper_start = source.index("assert_nonzero_state_space() {")
-    helper_end = source.index("\n\nrun_case() {", helper_start)
-    runner.write_text(
-        source[:helper_start] + source[helper_end + 2 :],
-        encoding="utf-8",
-    )
-    module.LIVENESS_OWNERSHIP_MUTATION_SHA256[
-        module.LIVENESS_OWNERSHIP_MUTATION_RUNNER
-    ] = hashlib.sha256(runner.read_bytes()).hexdigest()
-
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    assert any(
-        "must retain one exact nonzero state-space helper before run_case"
-        in error
-        for error in errors
-    ), errors
-
-
-@pytest.mark.parametrize(
-    ("old", "new", "expected_error"),
-    (
-        (
-            "  state_line=\"$(grep -E '^[0-9][0-9,]* states generated, "
-            "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 "
-            "|| true)\"\n",
-            "  state_line=\"$(grep -E 'states generated, .* distinct states "
-            "found' \"$log\" | tail -n 1 || true)\"\n",
-            "exact TLC state-summary parser",
-        ),
-        (
-            "  state_line=\"$(grep -E '^[0-9][0-9,]* states generated, "
-            "[0-9][0-9,]* distinct states found' \"$log\" | tail -n 1 "
-            "|| true)\"\n",
-            '  state_line=""\n',
-            "exact TLC state-summary parser",
-        ),
-        (
-            "  if ((generated <= 0 || distinct <= 0)); then",
-            "  if ((generated < 0 || distinct < 0)); then",
-            "reject generated or distinct TLC state counts less than or "
-            "equal to zero",
-        ),
-        (
-            '  assert_nonzero_state_space "$label" "$log"\n',
-            "",
-            "invoke the nonzero state-space helper exactly once per TLC case",
-        ),
-        (
-            'run_case "$label" "$model" "$config" 12 \\\n',
-            'run_case "$label" "$model" "$config" 0 \\\n',
-            "TLC invariant-violation status check",
-        ),
-        (
-            'run_case "$label" "$model" "$config" 13 \\\n',
-            'run_case "$label" "$model" "$config" 0 \\\n',
-            "TLC temporal-violation status check",
-        ),
-        (
-            "|exact_response_claim_duplicate_bug.cfg|"
-            "OneLogicalChargePerWaiterFamily",
-            "|exact_response_claim_duplicate_bug.cfg|TypeInvariant",
-            "failing case matrix must equal",
-        ),
-        (
-            "|adequate_leader_candidate_terminal_discard_resurrection_bug.cfg|"
-            "TerminalDiscardCannotBeReadmitted",
-            "|adequate_leader_candidate_terminal_discard_resurrection_bug.cfg|"
-            "TypeInvariant",
-            "failing case matrix must equal",
-        ),
-        (
-            "|exact_installed_tc_view_only_bug.cfg|ExactInstalledTcAuthority",
-            "|exact_installed_tc_view_only_bug.cfg|TypeInvariant",
-            "failing case matrix must equal",
-        ),
-        (
-            "|adequate_leader_candidate_retired_chunk_view_bug.cfg|"
-            "RetiredChunkStageCannotReadmitAfterViewAdvance",
-            "|adequate_leader_candidate_retired_chunk_view_bug.cfg|"
-            "TypeInvariant",
-            "failing case matrix must equal",
-        ),
-        (
-            "|fixed_corridor_receipt_acquisition_prestate_only_bug.cfg|"
-            "ReceiptAcquisitionAndRetention",
-            "|fixed_corridor_receipt_acquisition_prestate_only_bug.cfg|"
-            "TypeInvariant",
-            "failing case matrix must equal",
-        ),
-        (
-            "|SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla|"
-            "adequate_leader_deadline_authority_fixed.cfg",
-            "|SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla|"
-            "adequate_leader_deadline_authority_omitted_roster_bound_bug.cfg",
-            "repaired case matrix must equal",
-        ),
-        (
-            "|adequate_leader_deadline_authority_omitted_roster_bound_bug.cfg|"
-            "NoPrematureExit",
-            "|adequate_leader_deadline_authority_omitted_roster_bound_bug.cfg|"
-            "TypeInvariant",
-            "failing case matrix must equal",
-        ),
-        (
-            "|SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla|"
-            "adequate_leader_selected_lifecycle_episode_fixed.cfg",
-            "|SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla|"
-            "adequate_leader_selected_lifecycle_episode_"
-            "semantic_shortcut_bug.cfg",
-            "repaired case matrix must equal",
-        ),
-        (
-            "|adequate_leader_selected_lifecycle_episode_"
-            "semantic_shortcut_bug.cfg|"
-            "SelectedLifecycleEpisodeOrPhysicalDescent",
-            "|adequate_leader_selected_lifecycle_episode_"
-            "semantic_shortcut_bug.cfg|TypeInvariant",
-            "failing case matrix must equal",
-        ),
-        (
-            "producer-replay-capacity-replenishment-lasso|"
-            "SumeragiV2ProducerReplayCapacityMutation.tla|"
-            "producer_replay_capacity_replenishment_lasso_bug.cfg",
-            "producer-replay-capacity-replenishment-lasso|"
-            "SumeragiV2ProducerReplayCapacityMutation.tla|"
-            "producer_replay_capacity_fixed.cfg",
-            "temporal liveness mutation matrix must equal",
-        ),
-        (
-            "all 63 invariant and 1 temporal liveness-ownership mutations "
-            "produced their exact named counterexamples; repaired models passed",
-            "all liveness-ownership cases passed",
-            "exact mutation completion marker",
-        ),
-    ),
-)
-def test_liveness_ownership_runner_rejects_status_property_and_marker_weakening(
-    tmp_path: Path,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    runner = repo_root / module.LIVENESS_OWNERSHIP_MUTATION_RUNNER
-    source = runner.read_text(encoding="utf-8")
-    assert source.count(old) == 1
-    runner.write_text(source.replace(old, new, 1), encoding="utf-8")
-    module.LIVENESS_OWNERSHIP_MUTATION_SHA256[
-        module.LIVENESS_OWNERSHIP_MUTATION_RUNNER
-    ] = hashlib.sha256(runner.read_bytes()).hexdigest()
-
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    assert any(expected_error in error for error in errors), errors
-
-
-def test_liveness_ownership_source_seal_rejects_skipped_ci_invocation(
-    tmp_path: Path,
-) -> None:
-    module = load_checker()
-    repo_root, formal_dir = copy_liveness_ownership_mutation_fixture(
-        tmp_path, module
-    )
-    ci_gate = repo_root / "ci" / "check_sumeragi_formal.sh"
-    invocation = (
-        "bash scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh\n"
-    )
-    source = ci_gate.read_text(encoding="utf-8")
-    assert source.count(invocation) == 1
-    ci_gate.write_text(source.replace(invocation, "", 1), encoding="utf-8")
-
-    errors = module._liveness_ownership_mutation_source_fidelity_errors(
-        formal_dir, repo_root
-    )
-
-    assert any(
-        "must invoke the sealed liveness-ownership mutation runner exactly once"
-        in error
-        for error in errors
-    ), errors
 
 
 @pytest.mark.parametrize(
@@ -11270,23 +11121,22 @@ def test_serve_scheduler_ordinal_model_rank_dependency_and_config_mutations_fail
             "exact mutant completion summary",
         ),
         (
-            "readonly TLC_FINISHED_PATTERN='^Finished in "
-            "(([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|"
-            "([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|"
-            "[0-9]+d) at \\([0-9]{4}-[0-9]{2}-[0-9]{2} "
-            "[0-9]{2}:[0-9]{2}:[0-9]{2}\\)$'",
-            "readonly TLC_FINISHED_PATTERN='.*'",
-            "exact TLC terminal-marker pattern",
+            'source "${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract.sh"',
+            'source "${REPO_ROOT}/scripts/formal/'
+            'unreviewed_tlc_result_contract.sh"',
+            "shared TLC result-contract import",
         ),
         (
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" -ge 0 ]]',
-            "single TLC terminal-marker check",
+            '    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" '
+            '"$actual_status"\n',
+            "",
+            "shared fixed-success assertion",
         ),
         (
-            'for marker in "Temporal properties were violated." "Stuttering"; do',
-            'for marker in "Temporal properties were violated."; do',
-            "exact temporal lasso markers",
+            '    "Error: Temporal properties were violated."\n',
+            '    "Temporal properties were violated."\n',
+            "exact temporal primary-diagnostic assertion",
         ),
         (
             '[[ "$(grep -Fxc "$SANY_SUCCESS_MARKER" '
@@ -11328,22 +11178,22 @@ def test_serve_scheduler_ordinal_runner_rejects_status_and_marker_weakening(
         (
             "  actual_status=$?",
             '  actual_status="$expected_status"',
-            "TLC status and terminal-marker checker",
+            "TLC status and shared-result-contract checker",
         ),
         (
-            '  assert_nonzero_state_space "$label" "$log"\n',
+            '    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"\n',
             "",
-            "TLC status and terminal-marker checker",
+            "TLC status and shared-result-contract checker",
         ),
         (
-            "  if ((generated <= 0 || distinct <= 0)); then",
-            "  if ((generated < 0 || distinct < 0)); then",
-            "nonzero state-space checker",
+            '  if [[ "$expected_status" -eq 0 ]]; then',
+            "  if true; then",
+            "TLC status and shared-result-contract checker",
         ),
         (
             '      -config "$config" "$MODEL"',
             '      -config "$SHARED_FIXED_CONFIG" "$MODEL"',
-            "TLC status and terminal-marker checker",
+            "TLC status and shared-result-contract checker",
         ),
         (
             "common=(\n",
@@ -11351,9 +11201,9 @@ def test_serve_scheduler_ordinal_runner_rejects_status_and_marker_weakening(
             "preflight and SANY execution",
         ),
         (
-            '  grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank" || {',
-            "  true || {",
-            "TLC status and terminal-marker checker",
+            '    sumeragi_v2_tlc_assert_terminal "$label" "$log"\n',
+            "    true\n",
+            "TLC status and shared-result-contract checker",
         ),
         (
             '  [[ "$(grep -Ec \'^(Error:|Deadlock reached[.])\' '
@@ -11687,9 +11537,14 @@ def test_commit_import_provenance_model_and_config_mutations_fail_closed(
             "status-12 successor-origin counterexample",
         ),
         (
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" -ge 0 ]]',
-            "single TLC terminal-marker check",
+            '    sumeragi_v2_tlc_assert_terminal "$label" "$log"\n',
+            "    true\n",
+            "shared terminal-footer assertion",
+        ),
+        (
+            '  [[ "$primary_diagnostic_count" -eq 1 ]] || {',
+            "  if false; then",
+            "unique primary-diagnostic rejection",
         ),
     ),
 )
@@ -12016,9 +11871,14 @@ def test_indexed_service_activation_model_and_config_mutations_fail_closed(
             "invariant/liveness non-interchangeability check",
         ),
         (
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]]',
-            '[[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" -ge 0 ]]',
-            "single TLC terminal-marker check",
+            '    sumeragi_v2_tlc_assert_terminal "$label" "$log"\n',
+            "    true\n",
+            "shared terminal-footer assertion",
+        ),
+        (
+            '  [[ "$primary_diagnostic_count" -eq 1 ]] || {',
+            "  if false; then",
+            "unique primary-diagnostic rejection",
         ),
     ),
 )
@@ -12385,9 +12245,14 @@ def test_historical_discovery_occurrence_rank_seal_rejects_inventory_drift(
             "retained stronger negative control",
         ),
         (
-            'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
-            "true",
-            "final TLC terminal-marker check",
+            '    sumeragi_v2_tlc_assert_terminal "$label" "$log"\n',
+            "    true\n",
+            "shared terminal-footer assertion",
+        ),
+        (
+            '[[ "$mutant_primary_diagnostic_count" -eq 1 ]] || {',
+            "if false; then",
+            "unique primary-diagnostic rejection",
         ),
         (
             'echo "[tlc] exact terminal contract passed; '
@@ -15306,6 +15171,36 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
             '"$expected_status" "$expected_marker" "Stuttering"',
             '"$expected_status" "$expected_marker"',
+            "runner must retain exact 45-case root-anchored V3 fragment",
+        ),
+        (
+            "scripts/formal/"
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            'source "${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract.sh"',
+            'source "${REPO_ROOT}/scripts/formal/'
+            'sumeragi_v2_tlc_result_contract_weakened.sh"',
+            "runner must retain exact 45-case root-anchored V3 fragment",
+        ),
+        (
+            "scripts/formal/"
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            '    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"\n',
+            "",
+            "runner must retain exact 45-case root-anchored V3 fragment",
+        ),
+        (
+            "scripts/formal/"
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            'readonly TEMPORAL_MARKER="Error: Temporal properties were violated."',
+            'readonly TEMPORAL_MARKER="Temporal properties were violated."',
+            "runner must retain exact 45-case root-anchored V3 fragment",
+        ),
+        (
+            "scripts/formal/"
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            '    [[ "$primary_diagnostic_count" -eq 1 ]] || {\n',
+            '    [[ "$primary_diagnostic_count" -ge 0 ]] || {\n',
             "runner must retain exact 45-case root-anchored V3 fragment",
         ),
         (
@@ -19707,11 +19602,6 @@ def test_timeout_and_historical_closure_dependencies_reject_deletion(
     ("symbol", "old", "new"),
     (
         (
-            "AsyncDormantExactReplyRequestPacketIsRetained",
-            "=> packet \\in asyncTransport",
-            "=> TRUE",
-        ),
-        (
             "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
             "/\\ packet \\in OverdueResponsivePackets",
             "/\\ TRUE",
@@ -20286,7 +20176,7 @@ def test_historical_import_provenance_statement_mutations_fail_closed(
         ),
         (
             "AsyncControlServiceSlotTransition",
-            "AsyncCandidateLifecycleReservationsAvailableIn(compactedState)",
+            "AsyncCandidateLifecycleReservationsAvailableIn(serveIngressState)",
             "TRUE",
             "omits required production behavior",
         ),
@@ -20729,10 +20619,6 @@ def test_async_lifecycle_owner_token_proof_dependencies_reject_deletion(
 @pytest.mark.parametrize(
     ("symbol", "token"),
     (
-        (
-            "AsyncDormantExactReplyRequestPacketIsRetained",
-            "AsyncDormantExactReplyRequestPacket",
-        ),
         (
             "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
             "AsyncPacketOwnsClockDeadline",
@@ -23468,13 +23354,7 @@ def test_serve_ingress_gate_contract_is_complete(tmp_path: Path) -> None:
     """The current per-height gate implementation and regressions are sealed."""
 
     module = load_checker()
-    for relative in (
-        Path("crates/iroha_core/src/sumeragi/mod.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-    ):
-        target = tmp_path / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(module.ROOT_DIR / relative, target)
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
 
     errors = module._serve_ingress_gate_production_source_fidelity_errors(
         tmp_path
@@ -23516,13 +23396,7 @@ def test_serve_ingress_gate_contract_rejects_implementation_mutations(
     """Gate requirement, binding, and exact-height retirement cannot weaken."""
 
     module = load_checker()
-    for relative in (
-        Path("crates/iroha_core/src/sumeragi/mod.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-    ):
-        target = tmp_path / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(module.ROOT_DIR / relative, target)
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
     target = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
     mutate_rust_item_source_in_context(
         module,
@@ -23559,7 +23433,10 @@ def test_serve_ingress_gate_contract_rejects_implementation_mutations(
             "fair_ingress_gate_overflow_closes_without_partial_admission",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/tests/"
+                "v2_worker_serve_decision_restart_cases.rs"
+            ),
             (
                 "fair_ingress_rollover_retires_ticket_before_old_service_"
                 "teardown"
@@ -23582,13 +23459,7 @@ def test_serve_ingress_gate_regressions_cannot_be_deleted(
     """Exact admission, overflow, and rollover regressions remain mandatory."""
 
     module = load_checker()
-    for source_relative in (
-        Path("crates/iroha_core/src/sumeragi/mod.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-    ):
-        target = tmp_path / source_relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(module.ROOT_DIR / source_relative, target)
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
     mutate_rust_item_source(
         module,
         tmp_path / relative,
@@ -23655,13 +23526,13 @@ def test_serve_lifecycle_production_contract_rejects_bypass(
     """Queue, shutdown, response binding, and empty-route retention are sealed."""
 
     module = load_checker()
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
     relative = Path(
         "crates/iroha_core/src/sumeragi/v2_worker.rs"
     )
     source = (module.ROOT_DIR / relative).read_text(encoding="utf-8")
     assert source.count(old) >= 1
     target = tmp_path / relative
-    target.parent.mkdir(parents=True)
     target.write_text(source.replace(old, new, 1), encoding="utf-8")
 
     errors = module._serve_lifecycle_production_source_fidelity_errors(
@@ -23677,6 +23548,7 @@ def test_serve_lifecycle_reply_route_control_flow_rejects_reordering(
     """Empty-route retention cannot run before ownership validation."""
 
     module = load_checker()
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
     relative = Path("crates/iroha_core/src/sumeragi/v2_worker.rs")
     source = (module.ROOT_DIR / relative).read_text(encoding="utf-8")
     validation = (
@@ -23692,7 +23564,6 @@ def test_serve_lifecycle_reply_route_control_flow_rejects_reordering(
         + validation
     )
     target = tmp_path / relative
-    target.parent.mkdir(parents=True)
     target.write_text(
         source.replace(validation, reordered, 1),
         encoding="utf-8",
@@ -23714,12 +23585,12 @@ def test_serve_lifecycle_reply_route_empty_branch_cannot_be_noop(
     """The checked empty predicate must own completion and return."""
 
     module = load_checker()
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
     relative = Path("crates/iroha_core/src/sumeragi/v2_worker.rs")
     source = (module.ROOT_DIR / relative).read_text(encoding="utf-8")
     branch = "        if reply_routes.is_empty() {\n"
     assert source.count(branch) == 1
     target = tmp_path / relative
-    target.parent.mkdir(parents=True)
     target.write_text(
         source.replace(
             branch,
@@ -23756,12 +23627,12 @@ def test_serve_lifecycle_required_regressions_cannot_be_deleted(
     """Release source fidelity requires each repaired-defect regression."""
 
     module = load_checker()
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
     relative = Path("crates/iroha_core/src/sumeragi/v2_worker.rs")
     source = (module.ROOT_DIR / relative).read_text(encoding="utf-8")
     declaration = f"fn {test_name}("
     assert source.count(declaration) == 1
     target = tmp_path / relative
-    target.parent.mkdir(parents=True)
     target.write_text(
         source.replace(
             declaration,
@@ -30729,8 +30600,8 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
             "CommandSuccessors parent inventory must be closed",
         ),
         (
-            "![command.node] = @ \\o FreshCommandSuccessors(command)",
-            "![command.node] = @ \\o CommandSuccessors(command)",
+            "![command.node] = retained \\o FreshCommandSuccessors(command)",
+            "![command.node] = retained \\o CommandSuccessors(command)",
             "AppendCausalSuccessors must equal only",
         ),
         (
@@ -30840,6 +30711,11 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
             "consume an exact scheduled response",
         ),
         (
+            "  /\\ ~IngressPacketPolicyRejected(item)\n",
+            "",
+            "CanAdmitIngressItem must equal only",
+        ),
+        (
             "  /\\ ~AsyncControlServiceAdmissionCoalesced(item)\n",
             "",
             "CanAdmitIngressItem must equal only",
@@ -30861,12 +30737,9 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
             "CanAdmitIngressItem must equal only",
         ),
         (
-            "  /\\ packet \\in asyncTransport\n"
-            "  /\\ ~AsyncServeTransportAdmissionGateAllows(\n"
-            "       packet.item.envelope.recipient, packet.item)",
-            "  /\\ ~AsyncServeTransportAdmissionGateAllows(\n"
-            "       packet.item.envelope.recipient, packet.item)",
-            "AsyncDormantExactReplyRequestPacket must equal only",
+            "  /\\ server \\in request.envelope.certificate.signers\n",
+            "",
+            "CertifiedServeCanRespond must equal only",
         ),
         (
             "  /\\ AsyncServeTransportAdmissionGateAllows(\n"
@@ -31499,6 +31372,26 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             + canonical_runtime[end:]
         )
 
+    runtime_ingress_context = (("impl", "RuntimeIngressOwnershipEvidence"),)
+    runtime.write_text(
+        mutate_runtime_item_in_context(
+            "validate_exact",
+            runtime_ingress_context,
+            "            && lifecycle_ordinal_is_exact\n"
+            "            && leader_wire_runtime_receipt_is_exact\n",
+            "            && true\n"
+            "            && true\n",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "canonical ownership validation must include lifecycle and runtime "
+        "receipt exactness in its final predicate" in error
+        for error in errors
+    ), errors
+    runtime.write_text(canonical_runtime, encoding="utf-8")
+
     production_driver_mutations = (
         (
             "dispatch",
@@ -31507,10 +31400,28 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "production authenticated runtime dispatch bridge declaration and complete control flow must match",
         ),
         (
+            "dispatch",
+            "tagged.causal_origin.root_lifecycle_ordinal != Some(lifecycle_ordinal)",
+            "false",
+            "authenticated dispatch must bind, clear, and transfer one exact producer lifecycle",
+        ),
+        (
+            "dispatch",
+            "self.clear_selected_producer_lifecycle();",
+            "",
+            "authenticated dispatch must bind, clear, and transfer one exact producer lifecycle",
+        ),
+        (
+            "dispatch",
+            "let producer_handoff = outcome.producer_handoff();",
+            "let producer_handoff = None;",
+            "authenticated dispatch must bind, clear, and transfer one exact producer lifecycle",
+        ),
+        (
             "dispatch_deferred",
-            "SumeragiV2Adapter::drain_deferred_with_evidence(self)",
+            "SumeragiV2Adapter::drain_deferred_with_handoff_for_ordinals(self, eligible)",
             "Ok(None)",
-            "production exact deferred ownership dispatch bridge declaration and complete control flow must match",
+            "deferred dispatch must retain the selected occurrence and optional producer handoff",
         ),
     )
     for item_name, old, new, expected_error in production_driver_mutations:
@@ -31553,16 +31464,34 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "per-source ownership merge transition declaration and complete control flow must match",
         ),
         (
+            "merge_downstream",
+            "if retained_lifecycle.is_some() != candidate_lifecycle.is_some()",
+            "if false",
+            "per-source merge must preserve the tagged-versus-untagged lifecycle domain",
+        ),
+        (
             "reconcile_deferred_ingress_ownership",
             "if !active.contains(&ordinal) || !candidate.validate_exact()",
             "if active.contains(&ordinal) || !candidate.validate_exact()",
             "authenticated deferred carrier reconciliation declaration and complete control flow must match",
         ),
         (
+            "reconcile_deferred_ingress_ownership",
+            ".rebase_deferred_ingress(merged_lifecycle, ingress_identity)?",
+            ".clone()",
+            "an earlier aggregate carrier must rebase its exact deferred owner before either ownership map is committed",
+        ),
+        (
             "accept_driver_dispatch",
-            ".reconcile_deferred_ingress_ownership(dispatch.deferred_ingress)\n            .is_err()",
-            ".reconcile_deferred_ingress_ownership(dispatch.deferred_ingress)\n            .is_ok()",
+            ".reconcile_deferred_ingress_ownership(deferred_ingress)\n            .is_err()",
+            ".reconcile_deferred_ingress_ownership(deferred_ingress)\n            .is_ok()",
             "driver dispatch ownership acceptance declaration and complete control flow must match",
+        ),
+        (
+            "accept_driver_dispatch",
+            "                || producer_handoff.is_some())",
+            "                || false)",
+            "retryable dispatch must not expose effects, deferred ownership, or a producer handoff",
         ),
         (
             "enqueue_network_with_ingress_ownership",
@@ -31571,16 +31500,110 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "authenticated ingress ownership admission and deferred merge declaration and complete control flow must match",
         ),
         (
+            "enqueue_network_with_ingress_ownership",
+            "                    .recognizes_minted(ordinal)\n"
+            "                    .unwrap_or(false) => {}",
+            "                    .recognizes_minted(ordinal)\n"
+            "                    .unwrap_or(true) => {}",
+            "authenticated admission must reject an unminted or inconsistent actor-global lifecycle before authentication",
+        ),
+        (
             "can_admit_network_message_with_ingress_ownership",
             ".is_some_and(|retained| retained.can_merge_downstream(&ownership))",
             ".is_some()",
             "authenticated ingress ownership capacity preflight declaration and complete control flow must match",
         ),
         (
+            "can_admit_network_message_with_ingress_ownership",
+            "                    .recognizes_minted(ordinal)\n"
+            "                    .unwrap_or(false)",
+            "                    .recognizes_minted(ordinal)\n"
+            "                    .unwrap_or(true)",
+            "capacity preflight must drain an unminted lifecycle into the mutating fail-closed seam",
+        ),
+        (
             "take_last_scheduler_ownership",
             "self.last_scheduler_ownership.take()",
             "self.last_scheduler_ownership.clone()",
             "runner scheduler ownership handoff declaration and complete control flow must match",
+        ),
+        (
+            "with_driver_and_lifecycle_ordinals",
+            "        ingress\n"
+            "            .install_dormant_local_fifo_reservations("
+            "dormant_local_fifo_reservations)\n"
+            "            .map_err(|_| "
+            "RuntimeConfigError::InvalidLifecycleOwnership)?;",
+            "        let _ = dormant_local_fifo_reservations;",
+            "restart must install dormant Local FIFO reservations before retaining any startup successor",
+        ),
+        (
+            "step",
+            "if token.identity().admission_ordinal() != "
+            "effect_parent.lifecycle_ordinal()",
+            "if false",
+            "live dispatch must retain successors, acknowledge the exact producer, and publish its terminal before observing effects",
+        ),
+        (
+            "step_recovery",
+            "if token.identity().admission_ordinal() != owner.lifecycle_ordinal()",
+            "if false",
+            "recovery dispatch must retain successors, acknowledge the exact producer, and publish its terminal before observing effects",
+        ),
+        (
+            "dispatch_one_adapter_deferred",
+            "if token.identity().admission_ordinal() != "
+            "lifecycle_owner.lifecycle_ordinal()",
+            "if false",
+            "deferred dispatch must retain successors, acknowledge the exact producer, and publish its terminal before observing effects",
+        ),
+        (
+            "later_same_semantic_fair_retry_retains_runtime_lifecycle_root",
+            "fn later_same_semantic_fair_retry_retains_runtime_lifecycle_root()",
+            "fn removed_later_same_semantic_fair_retry_retains_runtime_lifecycle_root()",
+            "named later_same_semantic_fair_retry_retains_runtime_lifecycle_root; found 0",
+        ),
+        (
+            "later_same_semantic_fair_retry_retains_runtime_lifecycle_root",
+            "assert_eq!(queued.lifecycle_ordinal, Some(retained_ordinal));",
+            "assert_eq!(queued.lifecycle_ordinal, Some(retry_ordinal));",
+            "same-semantic retry must preserve its first immutable runtime lifecycle root",
+        ),
+        (
+            "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it",
+            "fn ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it()",
+            "fn removed_ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it()",
+            "named ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it; found 0",
+        ),
+        (
+            "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it",
+            "assert_eq!(consumed.lifecycle_ordinal, fair_ordinal);",
+            "assert_eq!(consumed.lifecycle_ordinal, serve_ordinal);",
+            "ordinary Fair ownership must precede Serve exactly until runtime consumes it",
+        ),
+        (
+            "older_frozen_aggregate_carrier_rebases_queued_runtime_minimum",
+            "fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum()",
+            "fn removed_older_frozen_aggregate_carrier_rebases_queued_runtime_minimum()",
+            "named older_frozen_aggregate_carrier_rebases_queued_runtime_minimum; found 0",
+        ),
+        (
+            "older_frozen_aggregate_carrier_rebases_queued_runtime_minimum",
+            "assert_eq!(queued.lifecycle_ordinal, Some(older_ordinal));",
+            "assert_eq!(queued.lifecycle_ordinal, Some(newer_ordinal));",
+            "an older aggregate carrier must become the queued runtime minimum",
+        ),
+        (
+            "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals",
+            "fn network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals()",
+            "fn removed_network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals()",
+            "named network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals; found 0",
+        ),
+        (
+            "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals",
+            "assert_eq!(unminted_runtime.queued_commands(), 0);",
+            "assert_eq!(unminted_runtime.queued_commands(), 1);",
+            "unminted fair ownership must fail closed without a physical queue position",
         ),
         (
             "commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
@@ -34222,67 +34245,6 @@ def test_async_source_fidelity_pins_exact_restart_fifo_and_decision_frontier(
             "    NodeHasApplication(node) => RestartSignatureReplay(node) = <<>>",
             "AppliedRecoverySchedulesNoSameHeightWork must state only",
         ),
-        (
-            "SumeragiV2AsyncLivenessProofs.tla",
-            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
-            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "AsyncRecoveryEligibleAtBudgetLeadsLowerCycleOrRequired proof "
-            "must cite AsyncSpecAlwaysStrongTypeInvariant",
-        ),
-        (
-            "SumeragiV2AsyncLivenessProofs.tla",
-            "BY AsyncRecoveredReadyLeadsToGstOrEligible,\n"
-            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "BY AsyncRecoveredReadyLeadsToGstOrEligible,\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "AsyncRecoveryRecoveredAtBudgetLeadsLowerCycleOrEligible proof "
-            "must cite AsyncSpecAlwaysStrongTypeInvariant",
-        ),
-        (
-            "SumeragiV2AsyncLivenessProofs.tla",
-            "BY AsyncRecoveryReplayLeadsToRecoveredReady,\n"
-            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "BY AsyncRecoveryReplayLeadsToRecoveredReady,\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "AsyncRecoveryReplayAtBudgetLeadsLowerCycleOrRecovered proof "
-            "must cite AsyncSpecAlwaysStrongTypeInvariant",
-        ),
-        (
-            "SumeragiV2AsyncLivenessProofs.tla",
-            "BY AsyncRecoverySignatureDrainObligation,\n"
-            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "BY AsyncRecoverySignatureDrainObligation,\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "AsyncRecoveryReplayingAtBudgetLeadsLowerCycleOrRecovered proof "
-            "must cite AsyncSpecAlwaysStrongTypeInvariant",
-        ),
-        (
-            "SumeragiV2AsyncLivenessProofs.tla",
-            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
-            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
-            "   AsyncSpecAlwaysStrongTypeInvariant, SMTT(45), Isa, PTL",
-            "AsyncRecoveryEligibleAtBudgetLeadsLowerCycleOrRequired proof "
-            "must cite AsyncRecoveryCycleAtBudgetStep",
-        ),
-        (
-            "SumeragiV2AsyncLivenessProofs.tla",
-            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
-            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
-            "   (* AsyncSpecAlwaysStrongTypeInvariant *)\n"
-            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
-            "AsyncRecoveryEligibleAtBudgetLeadsLowerCycleOrRequired proof "
-            "must cite AsyncSpecAlwaysStrongTypeInvariant",
-        ),
     )
     for name, needle, replacement, expected_error in mutations:
         source = sources[name]
@@ -36762,18 +36724,21 @@ def test_async_source_fidelity_pins_certified_body_serving_authority(
         encoding="utf-8"
     )
     needle = (
-        'CertifiedServeCanRespond(request) ==\n'
+        'CertifiedServeCanRespond(server, request) ==\n'
         '  /\\ request.kind = "CertifiedRequest"\n'
-        '  /\\ BodyHeldBy(durableBodies, request.envelope.recipient, context,\n'
+        '  /\\ request.envelope.recipient = server\n'
+        '  /\\ server \\in request.envelope.certificate.signers\n'
+        '  /\\ BodyHeldBy(durableBodies, server, request.envelope.certificate.context,\n'
         '                request.envelope.view, request.envelope.subject)'
     )
     assert needle in async_source
     async_path.write_text(
         async_source.replace(
             needle,
-            needle
-            + "\n  /\\ \\E validation \\in validatedBodies:\n"
-            + "       validation.node = request.envelope.recipient",
+            needle.replace(
+                '  /\\ server \\in request.envelope.certificate.signers\n',
+                "",
+            ),
             1,
         ),
         encoding="utf-8",
@@ -39560,7 +39525,7 @@ def test_retired_rotating_leader_facade_theorem_is_rejected() -> None:
     ("target_module", "reviewed_limit"),
     (
         ("SumeragiV2AsyncInstallRunnerProofs", 5_775),
-        ("SumeragiV2AsyncProgressOwnershipProofs", 5_658),
+        ("SumeragiV2AsyncProgressOwnershipProofs", 5_662),
     ),
 )
 def test_reviewed_async_shard_line_ceiling_rejects_one_more_line(

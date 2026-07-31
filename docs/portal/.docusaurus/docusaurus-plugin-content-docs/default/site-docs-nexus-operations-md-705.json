@@ -1,0 +1,28 @@
+{
+  "id": "nexus/nexus-operations",
+  "title": "Nexus operations runbook",
+  "description": "Field-ready summary of the Nexus operator workflow, mirroring `docs/source/nexus_operations.md`.",
+  "source": "@site/docs/nexus/operations.md",
+  "sourceDirName": "nexus",
+  "slug": "/nexus/nexus-operations",
+  "permalink": "/next/nexus/nexus-operations",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/nexus/operations.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "nexus-operations",
+    "title": "Nexus operations runbook",
+    "description": "Field-ready summary of the Nexus operator workflow, mirroring `docs/source/nexus_operations.md`."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Nexus fee model updates",
+    "permalink": "/next/nexus/nexus-fee-model"
+  },
+  "next": {
+    "title": "Sora Nexus data-space operator onboarding",
+    "permalink": "/next/nexus/nexus-operator-onboarding"
+  }
+}

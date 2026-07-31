@@ -1132,10 +1132,6 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ),
     (
         "SumeragiV2AsyncNetwork",
-        "AsyncDormantExactReplyRequestPacketIsRetained",
-    ): ("AsyncDormantExactReplyRequestPacket",),
-    (
-        "SumeragiV2AsyncNetwork",
         "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
     ): (
         "AsyncPacketOwnsClockDeadline",

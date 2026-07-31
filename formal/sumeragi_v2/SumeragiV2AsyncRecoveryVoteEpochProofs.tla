@@ -13,9 +13,10 @@ Init/Next induction rather than an implicit reachability claim.
 Replay tracks the exact ingress-admission owner read by `RunNodeWork`.
 Restart independently revalidates every unsealed active-height Serve
 lifecycle and persists its typed terminal before replay becomes visible.
-Consequently replay observes neither a physical Serve carrier nor requester-
-dependent Dormant/AwaitingRetry debt; the monotone lifecycle and scheduler
-high-watermarks remain retained.
+Consequently replay observes neither a physical Serve carrier nor
+requester-dependent suspended Serve debt; the monotone lifecycle and
+scheduler high-watermarks remain retained.  This is separate from the
+durable leader-wire and Candidate-continuation Dormant states.
 ***************************************************************************)
 
 AsyncRecoveryExecutionInvariant ==
@@ -1963,8 +1964,10 @@ BY RestartSignatureReplayCommandsAreSignatures,
 
 (***************************************************************************
 Replay entry removes every active exact-Serve ingress selector owner for the
-recovering node.  Durable undrained waiters remain only as dormant debt;
-physically drained lifecycles have no old scheduler ticket, and volatile
+recovering node.  Every persisted waiter is discharged locally: an unsealed
+admission becomes its exact typed terminal, while a terminal Response waiter
+is revalidated for exact replay or atomically converted to the Decision
+outcome.  No requester-dependent dormant debt survives.  Volatile
 policy-rejection occurrences are discarded.  The only transition which can
 add an active admission is `AdmitHiddenPacket`; replay quarantine excludes the
 recovering node from that action.  Drain and receiver-close transitions only

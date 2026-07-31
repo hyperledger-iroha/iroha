@@ -156,7 +156,9 @@ fn run_measurement() -> Result<(), Box<dyn Error>> {
         .checked_add(generated.step_ep.step_proof_size_bytes)
         .ok_or_else(|| benchmark_error("measured Step-proof byte sum overflowed"))?;
     if pair_bytes <= step_bytes
-        || pair_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+        || pair_bytes >= generated.max_recursive_pair_bytes
+        || generated.max_recursive_pair_bytes
+            > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
     {
         return Err(
             benchmark_error("measured proof pair is outside its fixed byte corridor").into(),
@@ -166,7 +168,7 @@ fn run_measurement() -> Result<(), Box<dyn Error>> {
         &generated.measured_live_pair_bytes,
         &generated.step_eq.circuit_params,
         &generated.step_ep.circuit_params,
-        pair_bytes,
+        generated.max_recursive_pair_bytes,
     )
     .map_err(|error| benchmark_error(format!("generated live proof pair is invalid: {error}")))?;
     if measured_pair != generated.measured_live_pair_bytes.len() {
@@ -203,6 +205,10 @@ fn run_measurement() -> Result<(), Box<dyn Error>> {
     );
     println!("ep_step_proof_bytes={measured_ep}");
     println!("proof_pair_bytes={measured_pair}");
+    println!(
+        "recursive_proof_pair_max_bytes={}",
+        generated.max_recursive_pair_bytes
+    );
     Ok(())
 }
 

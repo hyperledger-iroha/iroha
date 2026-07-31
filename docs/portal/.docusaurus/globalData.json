@@ -1,0 +1,954 @@
+{
+  "docusaurus-plugin-content-docs": {
+    "default": {
+      "path": "/",
+      "versions": [
+        {
+          "name": "current",
+          "label": "Next",
+          "isLast": false,
+          "path": "/next",
+          "mainDocId": "intro",
+          "docs": [
+            {
+              "id": "api/overview",
+              "path": "/next/api/overview"
+            },
+            {
+              "id": "da/commitments-plan",
+              "path": "/next/da/commitments-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "da/ingest-plan",
+              "path": "/next/da/ingest-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "da/replication-policy",
+              "path": "/next/da/replication-policy",
+              "sidebar": "docs"
+            },
+            {
+              "id": "da/threat-model",
+              "path": "/next/da/threat-model",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/deploy-guide",
+              "path": "/next/devportal/deploy-guide"
+            },
+            {
+              "id": "devportal/incident-runbooks",
+              "path": "/next/devportal/incident-runbooks"
+            },
+            {
+              "id": "devportal/norito-rpc-adoption",
+              "path": "/next/devportal/norito-rpc-adoption",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/observability",
+              "path": "/next/devportal/observability",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-feedback-log",
+              "path": "/next/devportal/preview-feedback-log",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-feedback/w0/preview-feedback-w0-summary",
+              "path": "/next/devportal/preview-feedback/w0/preview-feedback-w0-summary",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-feedback/w1/preview-feedback-w1-log",
+              "path": "/next/devportal/preview-feedback/w1/preview-feedback-w1-log",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-feedback/w1/preview-feedback-w1-plan",
+              "path": "/next/devportal/preview-feedback/w1/preview-feedback-w1-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-feedback/w1/preview-feedback-w1-summary",
+              "path": "/next/devportal/preview-feedback/w1/preview-feedback-w1-summary",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-feedback/w2/preview-feedback-w2-plan",
+              "path": "/next/devportal/preview-feedback/w2/preview-feedback-w2-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-feedback/w2/preview-feedback-w2-summary",
+              "path": "/next/devportal/preview-feedback/w2/preview-feedback-w2-summary",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-feedback/w3/preview-feedback-w3-log",
+              "path": "/next/devportal/preview-feedback/w3/preview-feedback-w3-log",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-feedback/w3/preview-feedback-w3-summary",
+              "path": "/next/devportal/preview-feedback/w3/preview-feedback-w3-summary",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-host-exposure",
+              "path": "/next/devportal/preview-host-exposure",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-integrity-plan",
+              "path": "/next/devportal/preview-integrity-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-invite-flow",
+              "path": "/next/devportal/preview-invite-flow",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/preview-invite-tracker",
+              "path": "/next/devportal/preview-invite-tracker",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/public-preview-invite",
+              "path": "/next/devportal/public-preview-invite",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/publishing-monitoring",
+              "path": "/next/devportal/publishing-monitoring",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/reviewer-onboarding",
+              "path": "/next/devportal/reviewer-onboarding",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/security-hardening",
+              "path": "/next/devportal/security-hardening",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/torii-rpc-overview",
+              "path": "/next/devportal/torii-rpc-overview",
+              "sidebar": "docs"
+            },
+            {
+              "id": "devportal/try-it",
+              "path": "/next/devportal/try-it",
+              "sidebar": "docs"
+            },
+            {
+              "id": "finance/settlement-iso-mapping",
+              "path": "/next/finance/settlement-iso-mapping",
+              "sidebar": "docs"
+            },
+            {
+              "id": "governance/api",
+              "path": "/next/governance/api",
+              "sidebar": "docs"
+            },
+            {
+              "id": "intro",
+              "path": "/next/intro",
+              "sidebar": "docs"
+            },
+            {
+              "id": "ministry/agenda-workflow",
+              "path": "/next/ministry/agenda-workflow",
+              "sidebar": "docs"
+            },
+            {
+              "id": "ministry/ai-moderation-runner",
+              "path": "/next/ministry/ai-moderation-runner",
+              "sidebar": "docs"
+            },
+            {
+              "id": "ministry/volunteer-briefs",
+              "path": "/next/ministry/volunteer-briefs",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/confidential-assets",
+              "path": "/next/nexus/confidential-assets",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/confidential-gas-calibration",
+              "path": "/next/nexus/confidential-gas-calibration",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-bootstrap-plan",
+              "path": "/next/nexus/nexus-bootstrap-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-default-lane-quickstart",
+              "path": "/next/nexus/nexus-default-lane-quickstart",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-elastic-lane",
+              "path": "/next/nexus/nexus-elastic-lane",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-fee-model",
+              "path": "/next/nexus/nexus-fee-model",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-lane-model",
+              "path": "/next/nexus/nexus-lane-model",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-operations",
+              "path": "/next/nexus/nexus-operations",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-operator-onboarding",
+              "path": "/next/nexus/nexus-operator-onboarding",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-overview",
+              "path": "/next/nexus/nexus-overview",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-refactor-plan",
+              "path": "/next/nexus/nexus-refactor-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-routed-trace-audit-2026q1",
+              "path": "/next/nexus/nexus-routed-trace-audit-2026q1",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-settlement-faq",
+              "path": "/next/nexus/nexus-settlement-faq",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-spec",
+              "path": "/next/nexus/nexus-spec",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-telemetry-remediation",
+              "path": "/next/nexus/nexus-telemetry-remediation",
+              "sidebar": "docs"
+            },
+            {
+              "id": "nexus/nexus-transition-notes",
+              "path": "/next/nexus/nexus-transition-notes",
+              "sidebar": "docs"
+            },
+            {
+              "id": "norito-streaming-roadmap",
+              "path": "/next/norito-streaming-roadmap"
+            },
+            {
+              "id": "norito/examples/call-transfer-asset",
+              "path": "/next/norito/examples/call-transfer-asset"
+            },
+            {
+              "id": "norito/examples/hajimari-entrypoint",
+              "path": "/next/norito/examples/hajimari-entrypoint"
+            },
+            {
+              "id": "norito/examples/index",
+              "path": "/next/norito/examples/",
+              "sidebar": "docs"
+            },
+            {
+              "id": "norito/examples/nft-flow",
+              "path": "/next/norito/examples/nft-flow"
+            },
+            {
+              "id": "norito/examples/register-and-mint",
+              "path": "/next/norito/examples/register-and-mint"
+            },
+            {
+              "id": "norito/examples/threshold-escrow",
+              "path": "/next/norito/examples/threshold-escrow"
+            },
+            {
+              "id": "norito/examples/transfer-asset",
+              "path": "/next/norito/examples/transfer-asset"
+            },
+            {
+              "id": "norito/getting-started",
+              "path": "/next/norito/getting-started",
+              "sidebar": "docs"
+            },
+            {
+              "id": "norito/ledger-walkthrough",
+              "path": "/next/norito/ledger-walkthrough",
+              "sidebar": "docs"
+            },
+            {
+              "id": "norito/overview",
+              "path": "/next/norito/overview",
+              "sidebar": "docs"
+            },
+            {
+              "id": "norito/quickstart",
+              "path": "/next/norito/quickstart",
+              "sidebar": "docs"
+            },
+            {
+              "id": "norito/streaming",
+              "path": "/next/norito/streaming",
+              "sidebar": "docs"
+            },
+            {
+              "id": "norito/try-it-console",
+              "path": "/next/norito/try-it-console",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/account-address-status",
+              "path": "/next/reference/account-address-status",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/address-safety",
+              "path": "/next/reference/address-safety",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/norito-codec",
+              "path": "/next/reference/norito-codec",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/publishing-checklist",
+              "path": "/next/reference/publishing-checklist",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/README",
+              "path": "/next/reference",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/torii-app-api-parity",
+              "path": "/next/reference/torii-app-api-parity"
+            },
+            {
+              "id": "reference/torii-mcp",
+              "path": "/next/reference/torii-mcp",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/torii-rapidoc",
+              "path": "/next/reference/torii-rapidoc",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/torii-swagger",
+              "path": "/next/reference/torii-swagger",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/android-telemetry-redaction",
+              "path": "/next/sdks/android-telemetry",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/javascript",
+              "path": "/next/sdks/javascript",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/javascript-governance-iso",
+              "path": "/next/sdks/javascript/governance-iso-examples",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/nexus-app-facade",
+              "path": "/next/sdks/nexus-app-facade"
+            },
+            {
+              "id": "sdks/nexus-quickstarts",
+              "path": "/next/sdks/nexus-quickstarts",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/python",
+              "path": "/next/sdks/python",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/recipes/java-ledger-flow",
+              "path": "/next/sdks/recipes/java-ledger-flow",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/recipes/javascript-connect-preview",
+              "path": "/next/sdks/recipes/javascript-connect-preview",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/recipes/javascript-governance-iso",
+              "path": "/next/sdks/recipes/javascript-governance-iso",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/recipes/javascript-ledger-flow",
+              "path": "/next/sdks/recipes/javascript-ledger-flow",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/recipes/python-ledger-flow",
+              "path": "/next/sdks/recipes/python-ledger-flow",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/recipes/rust-ledger-flow",
+              "path": "/next/sdks/recipes/rust-ledger-flow",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/recipes/swift-ledger-flow",
+              "path": "/next/sdks/recipes/swift-ledger-flow",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/rust",
+              "path": "/next/sdks/rust",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/address-checksum-runbook",
+              "path": "/next/sns/address-checksum-runbook",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/address-display-guidelines",
+              "path": "/next/sns/address-display-guidelines",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/bulk-onboarding-toolkit",
+              "path": "/next/sns/bulk-onboarding-toolkit",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/governance-playbook",
+              "path": "/next/sns/governance-playbook",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/kpi-dashboard",
+              "path": "/next/sns/kpi-dashboard",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/local-to-global-toolkit",
+              "path": "/next/sns/local-to-global-toolkit",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/onboarding-kit",
+              "path": "/next/sns/onboarding-kit",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/payment-settlement-plan",
+              "path": "/next/sns/payment-settlement-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/registrar-api",
+              "path": "/next/sns/registrar-api",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/registry-schema",
+              "path": "/next/sns/registry-schema",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/regulatory/regulatory-eu-dsa-2026-03",
+              "path": "/next/sns/regulatory/regulatory-eu-dsa-2026-03",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/regulatory/regulatory-eu-dsa-2027-01",
+              "path": "/next/sns/regulatory/regulatory-eu-dsa-2027-01"
+            },
+            {
+              "id": "sns/suffix-catalog",
+              "path": "/next/sns/suffix-catalog",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sns/training-collateral",
+              "path": "/next/sns/training-collateral",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/capacity-reconciliation",
+              "path": "/next/sorafs/capacity-reconciliation",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/capacity-simulation",
+              "path": "/next/sorafs/capacity-simulation",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/chunker-conformance",
+              "path": "/next/sorafs/chunker-conformance",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/chunker-profile-authoring",
+              "path": "/next/sorafs/chunker-profile-authoring",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/chunker-registry",
+              "path": "/next/sorafs/chunker-registry",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/chunker-registry-charter",
+              "path": "/next/sorafs/chunker-registry-charter",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/chunker-registry-rollout-checklist",
+              "path": "/next/sorafs/chunker-registry-rollout-checklist",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/deal-engine",
+              "path": "/next/sorafs/deal-engine",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/developer-ci",
+              "path": "/next/sorafs/developer-ci",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/developer-cli",
+              "path": "/next/sorafs/developer-cli",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/developer-deployment",
+              "path": "/next/sorafs/developer-deployment",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/developer-index",
+              "path": "/next/sorafs/developer-index",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/developer-releases",
+              "path": "/next/sorafs/developer-releases",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/developer-sdk-index",
+              "path": "/next/sorafs/developer-sdk-index",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/developer-sdk-rust",
+              "path": "/next/sorafs/developer-sdk-rust",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/direct-mode-pack",
+              "path": "/next/sorafs/direct-mode-pack",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/dispute-revocation-runbook",
+              "path": "/next/sorafs/dispute-revocation-runbook",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/gateway-dns-runbook",
+              "path": "/next/sorafs/gateway-dns-runbook",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/manifest-pipeline",
+              "path": "/next/sorafs/manifest-pipeline",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/migration-ledger",
+              "path": "/next/sorafs/migration-ledger",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/migration-roadmap",
+              "path": "/next/sorafs/migration-roadmap",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/multi-source-rollout",
+              "path": "/next/sorafs/multi-source-rollout",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/node-client-protocol",
+              "path": "/next/sorafs/node-client-protocol",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/node-operations",
+              "path": "/next/sorafs/node-operations",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/node-plan",
+              "path": "/next/sorafs/node-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/node-storage",
+              "path": "/next/sorafs/node-storage",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/observability-plan",
+              "path": "/next/sorafs/observability-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/operations-playbook",
+              "path": "/next/sorafs/operations-playbook",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/orchestrator-config",
+              "path": "/next/sorafs/orchestrator-config",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/orchestrator-ops",
+              "path": "/next/sorafs/orchestrator-ops",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/orchestrator-tuning",
+              "path": "/next/sorafs/orchestrator-tuning",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/pin-registry-ops",
+              "path": "/next/sorafs/pin-registry-ops",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/pin-registry-plan",
+              "path": "/next/sorafs/pin-registry-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/pin-registry-validation-plan",
+              "path": "/next/sorafs/pin-registry-validation-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/portal-publish-plan",
+              "path": "/next/sorafs/portal-publish-plan"
+            },
+            {
+              "id": "sorafs/priority-snapshot-2025-03",
+              "path": "/next/sorafs/priority-snapshot-2025-03",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/provider-admission-policy",
+              "path": "/next/sorafs/provider-admission-policy",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/provider-advert-multisource",
+              "path": "/next/sorafs/provider-advert-multisource",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/provider-advert-rollout",
+              "path": "/next/sorafs/provider-advert-rollout",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/quickstart",
+              "path": "/next/sorafs/quickstart",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/reference-sdk/errors",
+              "path": "/next/sorafs/reference-sdk/errors",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/repair-plan",
+              "path": "/next/sorafs/repair-plan"
+            },
+            {
+              "id": "sorafs/reports/ai-moderation-calibration-202602",
+              "path": "/next/sorafs/reports/ai-moderation-calibration-202602",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/reports/capacity-marketplace-validation",
+              "path": "/next/sorafs/reports/capacity-marketplace-validation",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/reports/orchestrator-ga-parity",
+              "path": "/next/sorafs/reports/orchestrator-ga-parity",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/reports/sf1-determinism",
+              "path": "/next/sorafs/reports/sf1-determinism",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/reports/sf2c-capacity-soak",
+              "path": "/next/sorafs/reports/sf2c-capacity-soak",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/reports/sf6-security-review",
+              "path": "/next/sorafs/reports/sf6-security-review",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/reserve-ledger-digest",
+              "path": "/next/sorafs/reserve-ledger-digest",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/runbooks-index",
+              "path": "/next/sorafs/runbooks-index",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/signing-ceremony",
+              "path": "/next/sorafs/signing-ceremony",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/staging-manifest-playbook",
+              "path": "/next/sorafs/staging-manifest-playbook",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/storage-capacity-marketplace",
+              "path": "/next/sorafs/storage-capacity-marketplace",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/taikai-anchor-runbook",
+              "path": "/next/sorafs/taikai-anchor-runbook",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/taikai-monitoring-dashboards",
+              "path": "/next/sorafs/taikai-monitoring-dashboards",
+              "sidebar": "docs"
+            },
+            {
+              "id": "soranet/constant-rate-profiles",
+              "path": "/next/soranet/constant-rate-profiles",
+              "sidebar": "docs"
+            },
+            {
+              "id": "soranet/gar-jurisdictional-review",
+              "path": "/next/soranet/gar-jurisdictional-review",
+              "sidebar": "docs"
+            },
+            {
+              "id": "soranet/gar-operator-onboarding",
+              "path": "/next/soranet/gar-operator-onboarding",
+              "sidebar": "docs"
+            },
+            {
+              "id": "soranet/pq-primitives",
+              "path": "/next/soranet/pq-primitives",
+              "sidebar": "docs"
+            },
+            {
+              "id": "soranet/pq-ratchet-runbook",
+              "path": "/next/soranet/pq-ratchet-runbook",
+              "sidebar": "docs"
+            },
+            {
+              "id": "soranet/pq-rollout-plan",
+              "path": "/next/soranet/pq-rollout-plan",
+              "sidebar": "docs"
+            },
+            {
+              "id": "soranet/privacy-metrics-pipeline",
+              "path": "/next/soranet/privacy-metrics-pipeline",
+              "sidebar": "docs"
+            },
+            {
+              "id": "soranet/puzzle-service-operations",
+              "path": "/next/soranet/puzzle-service-operations",
+              "sidebar": "docs"
+            },
+            {
+              "id": "soranet/testnet-rollout",
+              "path": "/next/soranet/testnet-rollout",
+              "sidebar": "docs"
+            },
+            {
+              "id": "soranet/transport",
+              "path": "/next/soranet/transport",
+              "sidebar": "docs"
+            }
+          ],
+          "draftIds": [],
+          "sidebars": {
+            "docs": {
+              "link": {
+                "path": "/next/intro",
+                "label": "intro"
+              }
+            }
+          }
+        },
+        {
+          "name": "2025-q2",
+          "label": "2025-q2",
+          "isLast": true,
+          "path": "/",
+          "mainDocId": "intro",
+          "docs": [
+            {
+              "id": "api/overview",
+              "path": "/api/overview"
+            },
+            {
+              "id": "devportal/try-it",
+              "path": "/devportal/try-it",
+              "sidebar": "docs"
+            },
+            {
+              "id": "intro",
+              "path": "/intro",
+              "sidebar": "docs"
+            },
+            {
+              "id": "norito-streaming-roadmap",
+              "path": "/norito-streaming-roadmap"
+            },
+            {
+              "id": "norito/getting-started",
+              "path": "/norito/getting-started",
+              "sidebar": "docs"
+            },
+            {
+              "id": "norito/overview",
+              "path": "/norito/overview",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/norito-codec",
+              "path": "/reference/norito-codec",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/publishing-checklist",
+              "path": "/reference/publishing-checklist",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/README",
+              "path": "/reference",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/torii-rapidoc",
+              "path": "/reference/torii-rapidoc",
+              "sidebar": "docs"
+            },
+            {
+              "id": "reference/torii-swagger",
+              "path": "/reference/torii-swagger",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/javascript",
+              "path": "/sdks/javascript",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/python",
+              "path": "/sdks/python",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sdks/rust",
+              "path": "/sdks/rust",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/manifest-pipeline",
+              "path": "/sorafs/manifest-pipeline",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/node-operations",
+              "path": "/sorafs/node-operations",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/pin-registry-ops",
+              "path": "/sorafs/pin-registry-ops",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/quickstart",
+              "path": "/sorafs/quickstart",
+              "sidebar": "docs"
+            },
+            {
+              "id": "sorafs/staging-manifest-playbook",
+              "path": "/sorafs/staging-manifest-playbook",
+              "sidebar": "docs"
+            }
+          ],
+          "draftIds": [],
+          "sidebars": {
+            "docs": {
+              "link": {
+                "path": "/intro",
+                "label": "intro"
+              }
+            }
+          }
+        }
+      ],
+      "breadcrumbs": true
+    }
+  }
+}

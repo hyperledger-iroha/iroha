@@ -722,6 +722,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             "production-recursive-prover-linkage",
         ]
         let maximumProofBytes = KagemushaRecursiveSpend.absoluteMaximumProofPairBytesV4
+        XCTAssertEqual(maximumProofBytes, 384 * 1024)
         let archive = KagemushaRecursiveSpend.frameArchive(
             schema: KagemushaRecursiveSpend.nativeCapabilitiesWireNameV4,
             payload: fields([

@@ -1,0 +1,27 @@
+{
+  "id": "sorafs/reserve-ledger-digest",
+  "title": "Reserve Ledger Digest & Dashboards",
+  "description": "How to turn `sorafs reserve ledger` output into telemetry, dashboards, and alerts for the Reserve+Rent policy.",
+  "source": "@site/docs/sorafs/reserve-ledger-digest.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/reserve-ledger-digest",
+  "permalink": "/next/sorafs/reserve-ledger-digest",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/reserve-ledger-digest.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Reserve Ledger Digest & Dashboards",
+    "description": "How to turn `sorafs reserve ledger` output into telemetry, dashboards, and alerts for the Reserve+Rent policy."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Runbook Index",
+    "permalink": "/next/sorafs/runbooks-index"
+  },
+  "next": {
+    "title": "SoraFS Capacity Reconciliation",
+    "permalink": "/next/sorafs/capacity-reconciliation"
+  }
+}

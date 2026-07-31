@@ -1,0 +1,17 @@
+{
+  "id": "norito-streaming-roadmap",
+  "title": "Norito Streaming Roadmap",
+  "description": "The following backlog captures the near-term work items the Streaming Working",
+  "source": "@site/docs/norito-streaming-roadmap.md",
+  "sourceDirName": ".",
+  "slug": "/norito-streaming-roadmap",
+  "permalink": "/next/norito-streaming-roadmap",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/norito-streaming-roadmap.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Norito Streaming Roadmap"
+  }
+}

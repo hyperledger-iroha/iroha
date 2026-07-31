@@ -138,6 +138,12 @@ impl RuntimeProviderBrokerLifecycleV1 {
             lifecycle: Arc::clone(self),
         })
     }
+
+    #[cfg(all(any(target_os = "linux", target_os = "macos"), test))]
+    pub(super) fn active_provider_call_count(&self) -> usize {
+        self.active_provider_calls
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 impl Default for RuntimeProviderBrokerLifecycleV1 {

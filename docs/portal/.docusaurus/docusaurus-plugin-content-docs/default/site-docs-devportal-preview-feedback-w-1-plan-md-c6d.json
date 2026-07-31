@@ -1,0 +1,29 @@
+{
+  "id": "devportal/preview-feedback/w1/preview-feedback-w1-plan",
+  "title": "W1 partner preflight plan",
+  "description": "Tasks, owners, and evidence checklist for the partner preview cohort.",
+  "source": "@site/docs/devportal/preview-feedback/w1/plan.md",
+  "sourceDirName": "devportal/preview-feedback/w1",
+  "slug": "/devportal/preview-feedback/w1/preview-feedback-w1-plan",
+  "permalink": "/next/devportal/preview-feedback/w1/preview-feedback-w1-plan",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/preview-feedback/w1/plan.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "preview-feedback-w1-plan",
+    "title": "W1 partner preflight plan",
+    "sidebar_label": "W1 plan",
+    "description": "Tasks, owners, and evidence checklist for the partner preview cohort."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "W0 feedback (midpoint)",
+    "permalink": "/next/devportal/preview-feedback/w0/preview-feedback-w0-summary"
+  },
+  "next": {
+    "title": "W1 feedback log",
+    "permalink": "/next/devportal/preview-feedback/w1/preview-feedback-w1-log"
+  }
+}

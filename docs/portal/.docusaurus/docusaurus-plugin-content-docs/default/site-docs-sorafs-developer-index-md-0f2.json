@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/developer-index",
+  "title": "SoraFS Developer Guides",
+  "description": "Landing page for SoraFS developer documentation, samples, and automation references.",
+  "source": "@site/docs/sorafs/developer-index.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/developer-index",
+  "permalink": "/next/sorafs/developer-index",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/developer-index.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "developer-index",
+    "title": "SoraFS Developer Guides",
+    "description": "Landing page for SoraFS developer documentation, samples, and automation references.",
+    "sidebar_label": "Developer Overview"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "SoraFS Quickstart",
+    "permalink": "/next/sorafs/quickstart"
+  },
+  "next": {
+    "title": "SoraFS Chunking → Manifest Pipeline",
+    "permalink": "/next/sorafs/manifest-pipeline"
+  }
+}

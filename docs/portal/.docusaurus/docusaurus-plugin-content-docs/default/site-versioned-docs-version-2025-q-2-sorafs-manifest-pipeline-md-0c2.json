@@ -1,0 +1,24 @@
+{
+  "id": "sorafs/manifest-pipeline",
+  "title": "SoraFS Chunking → Manifest Pipeline",
+  "description": "This companion to the quickstart traces the end-to-end pipeline that turns raw",
+  "source": "@site/versioned_docs/version-2025-q2/sorafs/manifest-pipeline.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/manifest-pipeline",
+  "permalink": "/sorafs/manifest-pipeline",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/versioned_docs/version-2025-q2/sorafs/manifest-pipeline.md",
+  "tags": [],
+  "version": "2025-q2",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "SoraFS Quickstart",
+    "permalink": "/sorafs/quickstart"
+  },
+  "next": {
+    "title": "Staging Manifest Playbook",
+    "permalink": "/sorafs/staging-manifest-playbook"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "reference/account-address-status",
+  "title": "Account address compliance",
+  "description": "Summary of the ADDR-2 fixture workflow and how SDK teams stay in sync.",
+  "source": "@site/docs/reference/account-address-status.md",
+  "sourceDirName": "reference",
+  "slug": "/reference/account-address-status",
+  "permalink": "/next/reference/account-address-status",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/reference/account-address-status.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "account-address-status",
+    "title": "Account address compliance",
+    "description": "Summary of the ADDR-2 fixture workflow and how SDK teams stay in sync."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Address Safety & Accessibility",
+    "permalink": "/next/reference/address-safety"
+  },
+  "next": {
+    "title": "Publishing Checklist",
+    "permalink": "/next/reference/publishing-checklist"
+  }
+}

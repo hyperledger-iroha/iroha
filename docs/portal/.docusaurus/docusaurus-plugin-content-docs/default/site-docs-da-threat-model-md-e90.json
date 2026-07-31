@@ -1,0 +1,24 @@
+{
+  "id": "da/threat-model",
+  "title": "threat-model",
+  "description": "title: Data Availability Threat Model",
+  "source": "@site/docs/da/threat-model.md",
+  "sourceDirName": "da",
+  "slug": "/da/threat-model",
+  "permalink": "/next/da/threat-model",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/da/threat-model.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "commitments-plan",
+    "permalink": "/next/da/commitments-plan"
+  },
+  "next": {
+    "title": "Transport Overview",
+    "permalink": "/next/soranet/transport"
+  }
+}

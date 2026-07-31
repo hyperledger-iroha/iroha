@@ -1111,7 +1111,9 @@ pub enum LaneQueueReservationError {
         hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
     },
     /// A live reservation and its indexed durable QueuePlan claim disagree.
-    #[error("live lane queue reservation {hash} has a mismatched durable QueuePlan claim: {reason}")]
+    #[error(
+        "live lane queue reservation {hash} has a mismatched durable QueuePlan claim: {reason}"
+    )]
     ReconciliationDurableClaimMismatch {
         /// Queue identity whose claim is inconsistent.
         hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
@@ -1646,6 +1648,10 @@ pub struct Queue {
     /// Deterministic test handoff between a durability precheck and its protected recheck.
     #[cfg(test)]
     durability_observer_lock_handoff:
+        parking_lot::Mutex<Option<QueueDurabilityObserverLockHandoff>>,
+    /// Deterministic test handoff after Nexus snapshots queue hashes but before it observes one.
+    #[cfg(test)]
+    nexus_revalidation_snapshot_handoff:
         parking_lot::Mutex<Option<QueueDurabilityObserverLockHandoff>>,
     /// One-shot append fault consumed by install-time reservation reconciliation tests.
     #[cfg(test)]
@@ -4491,12 +4497,11 @@ impl Queue {
         claim: &QueuePlanDurableClaimIndexEntry,
     ) -> Result<LaneQueueReservationReconciliationRecordV1, LaneQueueReservationError> {
         let key = record.key;
-        let mismatch = |reason: String| {
-            LaneQueueReservationError::ReconciliationDurableClaimMismatch {
+        let mismatch =
+            |reason: String| LaneQueueReservationError::ReconciliationDurableClaimMismatch {
                 hash: key.signed_transaction_hash,
                 reason,
-            }
-        };
+            };
         let durable_admission = claim.durable_admission();
         let binding = claim.global_admission_binding().map_err(mismatch)?;
         if durable_admission.entrypoint_hash != key.entrypoint_hash {
@@ -4591,9 +4596,7 @@ impl Queue {
                 .get(&hash)
                 .is_none_or(|fifo_order| *fifo_order.value() != record.fifo_order)
             {
-                return Err(
-                    LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash },
-                );
+                return Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash });
             }
             let claim = self
                 .durable_plan_claims
@@ -4606,9 +4609,8 @@ impl Queue {
         }
         drop(store);
 
-        ordered_records.sort_by_key(|record| {
-            (record.fifo_ordinal, record.key.signed_transaction_hash)
-        });
+        ordered_records
+            .sort_by_key(|record| (record.fifo_ordinal, record.key.signed_transaction_hash));
         for records in ordered_records.windows(2) {
             if records[0].fifo_ordinal == records[1].fifo_ordinal {
                 return Err(
@@ -4638,9 +4640,7 @@ impl Queue {
             };
             let group = &mut ordered_groups[group_index];
             group.ordered_keys.push(record.key);
-            if group.ordered_keys.len()
-                > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS
-            {
+            if group.ordered_keys.len() > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS {
                 return Err(LaneQueueReservationError::InvalidIdentity(format!(
                     "lane queue reconciliation group {:?} exceeds the maximum {} reservations",
                     group.identity,
@@ -4861,6 +4861,15 @@ impl Queue {
     #[cfg(test)]
     fn wait_for_durability_observer_lock_handoff_for_test(&self) {
         let handoff = self.durability_observer_lock_handoff.lock().take();
+        if let Some(handoff) = handoff {
+            handoff.reached.wait();
+            handoff.resume.wait();
+        }
+    }
+
+    #[cfg(test)]
+    fn wait_for_nexus_revalidation_snapshot_handoff_for_test(&self) {
+        let handoff = self.nexus_revalidation_snapshot_handoff.lock().take();
         if let Some(handoff) = handoff {
             handoff.reached.wait();
             handoff.resume.wait();
@@ -7515,6 +7524,8 @@ impl Queue {
                 lane_reservation_transition_lock: parking_lot::Mutex::new(()),
                 #[cfg(test)]
                 durability_observer_lock_handoff: parking_lot::Mutex::new(None),
+                #[cfg(test)]
+                nexus_revalidation_snapshot_handoff: parking_lot::Mutex::new(None),
                 #[cfg(test)]
                 install_reconciliation_append_fault: parking_lot::Mutex::new(None),
                 #[cfg(test)]
@@ -13908,11 +13919,24 @@ impl Queue {
         let tracked = self
             .txs
             .iter()
-            .map(|entry| (*entry.key(), Arc::clone(entry.value())))
+            .map(|entry| *entry.key())
             .collect::<Vec<_>>();
+        #[cfg(test)]
+        self.wait_for_nexus_revalidation_snapshot_handoff_for_test();
         let mut invalid_lifecycle = Vec::new();
         let mut corrupt_ownership = Vec::new();
-        for (hash, tx) in tracked {
+        for hash in tracked {
+            // Observe the current owner and all of its immutable indexes under the same
+            // transition-index lock. A hash can disappear after the outer snapshot when an
+            // admission rolls back or a terminal operation completes; absence is then a normal
+            // completed transition, not corrupt ownership of the stale transaction snapshot.
+            let active_transitions = self.durability_transitions.lock();
+            if active_transitions.contains(&hash) {
+                continue;
+            }
+            let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
+                continue;
+            };
             if !self.is_pending(tx.as_ref(), state_view) {
                 #[cfg(feature = "telemetry")]
                 {
@@ -13920,15 +13944,14 @@ impl Queue {
                 }
                 continue;
             }
-            let routing_plan = match self.immutable_queued_routing_plan_if_available_in_view(
+            let routing_plan = match self.immutable_queued_routing_plan_in_view(
                 hash,
                 tx.as_ref(),
                 state_view,
                 &routing_nexus,
                 block_height,
             ) {
-                Ok(Some(plan)) => plan,
-                Ok(None) => continue,
+                Ok(plan) => plan,
                 Err(err) => {
                     iroha_logger::warn!(
                         tx = %hash,
@@ -14602,6 +14625,8 @@ pub mod tests {
 
         let transaction = accepted_tx_by_someone(&time_source);
         let follower_transaction = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+        register_accepted_tx_authority_for_queue_test(&mut state, &follower_transaction);
         let routing_plan = queue
             .route_plan_with_state(&transaction, &state)
             .expect("route global guard fixture transaction");
@@ -17544,6 +17569,13 @@ pub mod tests {
         accepted_tx_by(account_id, &key_pair, time_source)
     }
 
+    fn register_accepted_tx_authority_for_queue_test(
+        state: &mut State,
+        transaction: &AcceptedTransaction<'_>,
+    ) {
+        register_test_authority(state, transaction.as_ref().authority());
+    }
+
     fn accepted_unique_entrypoint_tx_by_someone(
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
@@ -17890,6 +17922,7 @@ pub mod tests {
             .expect("install journal");
 
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let hash = tx.hash();
         let entrypoint = tx.entrypoint().clone();
         let entrypoint_bytes =
@@ -18092,6 +18125,7 @@ pub mod tests {
             .expect("strict claim journal baseline metadata")
             .len();
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let entrypoint = tx.entrypoint().clone();
         let entrypoint_hash = entrypoint.hash();
         let signed_transaction_hash = exact_signed_transaction_hash(&entrypoint);
@@ -18209,6 +18243,7 @@ pub mod tests {
             .expect("install V4 claim journal");
         seed_committed_height_for_queue_test(&state, 1);
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let plan = queue
             .route_plan_with_state(&tx, &state)
             .expect("resolve strict retry route");
@@ -18309,6 +18344,7 @@ pub mod tests {
         ));
 
         let mutated_tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &mutated_tx);
         assert!(!queue.has_revalidatable_durable_plan_claim_with_state(
             &mutated_tx,
             &state,
@@ -18480,6 +18516,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install rollover journal");
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let plan = queue
             .route_plan_with_state(&tx, &state)
             .expect("resolve rollover route");
@@ -18687,6 +18724,7 @@ pub mod tests {
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
                 .expect("install fault-boundary rollover journal");
             let tx = accepted_tx_by_someone(&time_source);
+            register_accepted_tx_authority_for_queue_test(&mut state, &tx);
             let plan = queue
                 .route_plan_with_state(&tx, &state)
                 .expect("resolve fault-boundary rollover route");
@@ -18822,6 +18860,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install removed-claim journal");
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let hash = tx.hash();
         let plan = queue
             .route_plan_with_state(&tx, &state)
@@ -19218,6 +19257,7 @@ pub mod tests {
         let queue = Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
 
         let startup_pending = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &startup_pending);
         let startup_pending_plan = queue
             .route_plan_with_state(&startup_pending, &state)
             .expect("route startup-pending transaction");
@@ -19311,6 +19351,7 @@ pub mod tests {
             queue.inject_plan_journal_fault_script(faults);
 
             let tx = accepted_tx_by_someone(&time_source);
+            register_accepted_tx_authority_for_queue_test(&mut state, &tx);
             let hash = tx.hash();
             let plan = queue.route_plan_with_state(&tx, &state).expect("route");
             let error = queue
@@ -19965,6 +20006,7 @@ pub mod tests {
             .expect("install journal");
 
         let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let hash = tx.hash();
         let entrypoint = tx.entrypoint().clone();
         let plan = queue
@@ -21711,13 +21753,15 @@ pub mod tests {
     fn durability_transition_defers_reads_without_reordering_fifo_or_latching_fault() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
 
         let first = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &first);
         let first_hash = first.hash();
         let second = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &second);
         let second_hash = second.hash();
         queue.push(first.clone(), state.view()).expect("push first");
         queue.push(second, state.view()).expect("push second");
@@ -21748,6 +21792,56 @@ pub mod tests {
         drop(transition);
         assert_eq!(queue.pop_queued_hash(), Some(first_hash));
         assert_eq!(queue.pop_queued_hash(), Some(second_hash));
+    }
+
+    #[test]
+    fn nexus_revalidation_skips_owner_removed_after_hash_snapshot_without_latching_fault() {
+        let fixture = globally_bound_guard_fixture();
+        let queue = Arc::clone(&fixture.queue);
+        let binding = fixture.binding.clone();
+        let hash = fixture.transaction.hash();
+        let reached = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        *queue.nexus_revalidation_snapshot_handoff.lock() =
+            Some(QueueDurabilityObserverLockHandoff {
+                reached: Arc::clone(&reached),
+                resume: Arc::clone(&resume),
+            });
+
+        thread::scope(|scope| {
+            let observer_queue = Arc::clone(&queue);
+            let state = &fixture.state;
+            let observer = scope.spawn(move || {
+                let router = observer_queue.router.read().clone();
+                let lane_catalog = observer_queue.lane_catalog.read().clone();
+                let dataspace_catalog = observer_queue.dataspace_catalog.read().clone();
+                observer_queue.revalidate_pending_transactions_with_state(
+                    &router,
+                    state,
+                    &lane_catalog,
+                    &dataspace_catalog,
+                    true,
+                );
+            });
+
+            reached.wait();
+            assert!(
+                matches!(
+                    queue.reject_exact_queue_plan_admission_claim(&binding),
+                    Ok(true)
+                ),
+                "the terminal owner removal must complete after the reconfiguration hash snapshot"
+            );
+            assert!(!queue.txs.contains_key(&hash));
+            resume.wait();
+            observer.join().expect("join Nexus revalidation observer");
+        });
+
+        assert!(
+            !queue.accepted_work_validation_faulted(),
+            "a hash removed after the outer snapshot is completed ownership, not corruption"
+        );
+        fixture.assert_terminally_removed();
     }
 
     #[test]

@@ -32,18 +32,33 @@ commands and the final reconciliation pass are recorded.
 
 ## Taira testnet recovery and offline-cash release closure
 
-The source-side consensus-stall, exact `/status.blocks`, restart-cost,
-supervisor-loop, and canonical offline-cash ingress repairs are complete, but
-public Taira remains on the old deployment. Do not expose it as a ready offline
-cash lane until the guarded reset reports `mandatory: true`, `ready: true` and
-passes the signed public canary.
+The source-side consensus-stall, exact `/status.blocks`, supervisor-loop, and
+canonical offline-cash ingress repairs are complete. The restart source patch
+also restores snapshot-authenticated autoscale windows before canonical
+reserialization, rejects any writer payload that cannot pass isolated restart
+initialization before publication/geometry compaction, keeps capture and
+publication ordered under one lock, leaves process gas/telemetry untouched
+during dry-run validation, and blocks empty-state fallback when either the
+configured-primary durable binding disagrees or its geometry floor was
+compacted. The first-party Soracloud signed-mutation path also uses
+middleware-authenticated signer headers only: Torii rejects retired inline
+signing fields and the CLI omits them from every mutation request. Focused
+locked/offline source validation is complete; source sealing, release
+generation, and live rollout remain open, and public Taira remains on the old
+deployment. Do not expose it as a ready offline-cash lane until the guarded
+reset reports `mandatory: true`, `ready: true` and passes the signed public
+canary. The rollout checker now enforces that same `/readyz` invariant on
+public ingress and every direct validator rather than relying on controller
+evidence alone.
 
 Remaining work stays ordered and fail-closed:
 
-- Seal the reviewed r5 source closure anchored to signed commit
-  `41287ed727addc87418c1a0878f7bd97c7cce83b`, then build and hash the candidate,
-  runtime, configuration, and eight-artifact release bundle from that one
-  provenance set.
+- Seal the independently reviewed minimal source closure on signed
+  `optimizations` anchor `54515044a3408011915d6bb1b70bcb4bdac15b76`.
+  The prior r5 seal anchored to
+  `41287ed727addc87418c1a0878f7bd97c7cce83b` predates this patch and must not be
+  used to attest it. Build and hash the candidate, runtime, configuration, and
+  eight-artifact release bundle from the resulting single provenance set.
 - Capture fresh signed physical-device evidence on exact `iPhone18,2` / `V54AP`
   hardware and collect all six independent review categories. Unavailable
   devices and the incomplete review set remain hard promotion gates; simulator,
@@ -603,9 +618,12 @@ The historical ABI-19/V3 path had a 1,600-byte per-step limit. Its degree-18 pro
 composition; it is not the current artifact/readiness contract. V4's
 authenticated profiles pin measured per-parity proof bounds and its manifest
 pins the pair bound. The reviewed `[443]` advice / `[47, 0, 0]` lookup profile retains
-defensive ceilings of 128 KiB per step and 256 KiB per canonical pair. Those
-ceilings are not availability signals; promotion must pin the candidate's
-measured exact values and pass independent review and device evidence.
+defensive ceilings of 192 KiB per step and 384 KiB per canonical pair. The
+current composite graph preflights at exactly 147,776 bytes per parity and
+300,916 bytes for a recursive pair. The manifest must authenticate that
+recursive maximum rather than the smaller 296,164-byte initialization sample.
+Those ceilings are not availability signals; promotion must pin the
+candidate's exact values and pass independent review and device evidence.
 
 ## SORA Economic Constitution
 

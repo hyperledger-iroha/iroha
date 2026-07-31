@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/node-operations",
+  "title": "Node Operations Runbook",
+  "description": "Validate the embedded `sorafs-node` deployment inside Torii.",
+  "source": "@site/versioned_docs/version-2025-q2/sorafs/node-operations.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/node-operations",
+  "permalink": "/sorafs/node-operations",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/versioned_docs/version-2025-q2/sorafs/node-operations.md",
+  "tags": [],
+  "version": "2025-q2",
+  "frontMatter": {
+    "id": "node-operations",
+    "title": "Node Operations Runbook",
+    "sidebar_label": "Node Operations Runbook",
+    "description": "Validate the embedded `sorafs-node` deployment inside Torii."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Staging Manifest Playbook",
+    "permalink": "/sorafs/staging-manifest-playbook"
+  },
+  "next": {
+    "title": "Pin Registry Operations",
+    "permalink": "/sorafs/pin-registry-ops"
+  }
+}

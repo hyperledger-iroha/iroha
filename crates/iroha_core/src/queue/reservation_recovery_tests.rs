@@ -532,10 +532,15 @@ fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay(
 #[test]
 fn restart_commit_barrier_tombstones_pending_plan_before_replay() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let state = lane_reservation_test_state();
+    let mut state = lane_reservation_test_state();
     let dir = tempdir().expect("tempdir");
     let plan_path = dir.path().join("queue-plans-commit-window.norito");
     let reservation_path = dir.path().join("lane-reservations-commit-window.norito");
+    let transaction = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(
+        Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
+        &transaction,
+    );
     {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         queue
@@ -544,12 +549,7 @@ fn restart_commit_barrier_tombstones_pending_plan_before_replay() {
         queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("install reservation journal");
-        push_globally_bound_lane_reservation_candidate(
-            &queue,
-            &state,
-            &dir,
-            accepted_tx_by_someone(&time_source),
-        );
+        push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
         let key = *queue
             .reserve_transactions_for_lane(
                 &state,

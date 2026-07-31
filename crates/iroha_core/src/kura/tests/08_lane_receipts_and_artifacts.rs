@@ -2161,6 +2161,50 @@
     }
 
     #[test]
+    fn latest_certified_matching_reuses_attested_frontier_before_history_scan() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let (session, signer_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 1);
+        let expected = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified frontier");
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            Some(expected.clone()),
+            "prime the exact frontier validation attestation"
+        );
+
+        fail_next_certified_lane_block_artifact_validation_for_tests();
+        assert_eq!(
+            kura.latest_certified_lane_block_artifact_matching(lane_id, |_| {
+                let geometry_guard = kura
+                    .lane_geometry_lock
+                    .try_lock()
+                    .expect("frontier predicate must run without lane_geometry_lock");
+                let sidecar_guard = kura
+                    .sidecar_lock
+                    .try_lock()
+                    .expect("frontier predicate must run without sidecar_lock");
+                drop(sidecar_guard);
+                drop(geometry_guard);
+                true
+            }),
+            Some(expected.clone()),
+            "matching must return the attested frontier without validating historical sidecars"
+        );
+        assert_eq!(
+            Kura::validate_certified_lane_block_artifact(&expected),
+            Err("injected certified lane block artifact validation failure"),
+            "the frontier short-circuit must leave historical validation untouched"
+        );
+    }
+
+    #[test]
     fn latest_certified_frontier_validation_attestation_is_exact_artifact_bound() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);

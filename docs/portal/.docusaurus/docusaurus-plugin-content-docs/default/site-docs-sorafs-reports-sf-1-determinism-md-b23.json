@@ -1,0 +1,27 @@
+{
+  "id": "sorafs/reports/sf1-determinism",
+  "title": "SoraFS SF1 Determinism Dry-Run",
+  "description": "This report captures the baseline dry-run for the canonical",
+  "source": "@site/docs/sorafs/reports/sf1-determinism.md",
+  "sourceDirName": "sorafs/reports",
+  "slug": "/sorafs/reports/sf1-determinism",
+  "permalink": "/next/sorafs/reports/sf1-determinism",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/reports/sf1-determinism.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "SoraFS SF1 Determinism Dry-Run",
+    "summary": "Checklist and expected digests for validating the canonical `sorafs.sf1@1.0.0` chunker profile."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "SoraFS Orchestrator GA Parity Report",
+    "permalink": "/next/sorafs/reports/orchestrator-ga-parity"
+  },
+  "next": {
+    "title": "SF-2c Capacity Accrual Soak Report",
+    "permalink": "/next/sorafs/reports/sf2c-capacity-soak"
+  }
+}

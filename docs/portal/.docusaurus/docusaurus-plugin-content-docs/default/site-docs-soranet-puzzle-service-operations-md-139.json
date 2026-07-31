@@ -1,0 +1,29 @@
+{
+  "id": "soranet/puzzle-service-operations",
+  "title": "Puzzle Service Operations Guide",
+  "description": "Operating the `soranet-puzzle-service` daemon for Argon2/ML-DSA admission tickets.",
+  "source": "@site/docs/soranet/puzzle-service-operations.md",
+  "sourceDirName": "soranet",
+  "slug": "/soranet/puzzle-service-operations",
+  "permalink": "/next/soranet/puzzle-service-operations",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/soranet/puzzle-service-operations.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "puzzle-service-operations",
+    "title": "Puzzle Service Operations Guide",
+    "sidebar_label": "Puzzle Service Ops",
+    "description": "Operating the `soranet-puzzle-service` daemon for Argon2/ML-DSA admission tickets."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "GAR Operator Onboarding",
+    "permalink": "/next/soranet/gar-operator-onboarding"
+  },
+  "next": {
+    "title": "Privacy Metrics Pipeline",
+    "permalink": "/next/soranet/privacy-metrics-pipeline"
+  }
+}

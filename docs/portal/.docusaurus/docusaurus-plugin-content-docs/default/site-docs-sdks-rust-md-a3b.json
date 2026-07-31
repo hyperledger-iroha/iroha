@@ -1,0 +1,24 @@
+{
+  "id": "sdks/rust",
+  "title": "Rust SDK Quickstart",
+  "description": "The Rust client API lives in the iroha crate, which exposes a client::Client",
+  "source": "@site/docs/sdks/rust.md",
+  "sourceDirName": "sdks",
+  "slug": "/sdks/rust",
+  "permalink": "/next/sdks/rust",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sdks/rust.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "Nexus SDK quickstarts",
+    "permalink": "/next/sdks/nexus-quickstarts"
+  },
+  "next": {
+    "title": "Python SDK Quickstart",
+    "permalink": "/next/sdks/python"
+  }
+}
