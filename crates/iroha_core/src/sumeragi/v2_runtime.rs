@@ -10010,9 +10010,13 @@ mod tests {
                 let mut ownership = admitted
                     .take_ingress_ownership()
                     .expect("preowned leader wire retains fair ownership");
+                assert!(
+                    ownership.leader_wire_runtime_receipt().is_some(),
+                    "checked dequeue atomically installs the durable runtime handoff"
+                );
                 ingress
                     .bind_leader_wire_runtime_ownership(&mut ownership)
-                    .expect("bind preowned leader-wire runtime receipt");
+                    .expect("repeated preowned leader-wire bind is idempotent");
                 ownership
             })
             .collect();
