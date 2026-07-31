@@ -115,6 +115,245 @@ def swap_ordered_once(path: Path, earlier: str, later: str) -> None:
     )
 
 
+def copy_native_prepublication_fixture(
+    tmp_path: Path, module
+) -> list[dict]:
+    """Copy the production files consumed by the ML-NAT-06 order contract."""
+
+    models = canonical_models()
+    relatives = {
+        Path(relative)
+        for relative, _, _, _ in module.NATIVE_PREPUBLICATION_BINDINGS
+    }
+    for relative in relatives:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    return models
+
+
+def validate_native_prepublication_fixture(
+    tmp_path: Path, module, models: list[dict]
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    module._validate_native_prepublication_contract(tmp_path, models, errors)
+    return tuple(errors)
+
+
+def test_native_prepublication_contract_accepts_current_production(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_native_prepublication_fixture(tmp_path, module)
+    assert validate_native_prepublication_fixture(tmp_path, module, models) == ()
+
+
+def test_native_prepublication_contract_rejects_removed_prepublication_call(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_native_prepublication_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
+    replace_once(
+        path,
+        ".prepublish_native_amx_participant_application_evidence(",
+        ".skip_native_amx_participant_application_evidence(",
+    )
+    errors = validate_native_prepublication_fixture(tmp_path, module, models)
+    assert any(
+        "V2ApplyService::validate_and_apply" in error
+        and "prepublish_native_amx_participant_application_evidence" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("earlier", "later"),
+    (
+        (
+            ".store_v2_finality_artifact(artifact)",
+            ".prepublish_native_amx_participant_application_evidence(",
+        ),
+        (
+            ".prepublish_native_amx_participant_application_evidence(",
+            "!token.authenticates("
+            "committed_block.as_ref(), &native_amx_manifest, artifact)",
+        ),
+        (
+            "!token.authenticates("
+            "committed_block.as_ref(), &native_amx_manifest, artifact)",
+            ".apply_without_execution_with_verified_v2_finality("
+            "&committed_block, commit_topology)",
+        ),
+        (
+            ".apply_without_execution_with_verified_v2_finality("
+            "&committed_block, commit_topology)",
+            "state_block.commit().map_err",
+        ),
+    ),
+    ids=(
+        "finality-before-prepublication",
+        "prepublication-before-readback-token",
+        "readback-token-before-wsv-stage",
+        "wsv-stage-before-wsv-commit",
+    ),
+)
+def test_native_prepublication_contract_rejects_apply_order_drift(
+    tmp_path: Path, earlier: str, later: str
+) -> None:
+    module = load_checker()
+    models = copy_native_prepublication_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
+    swap_ordered_once(path, earlier, later)
+    errors = validate_native_prepublication_fixture(tmp_path, module, models)
+    assert any(
+        "ordered Native prepublication item "
+        "V2ApplyService::validate_and_apply" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("earlier", "later"),
+    (
+        (
+            "self.write_native_amx_participant_application_manifest_artifact_"
+            "with_retention_policy_under_publication_guard(",
+            "self.write_native_amx_participant_application_receipt_artifact_"
+            "only_with_retention_policy_under_publication_guard(",
+        ),
+        (
+            "self.write_native_amx_participant_application_receipt_artifact_"
+            "only_with_retention_policy_under_publication_guard(",
+            "self.write_native_amx_participant_receipt_latest_index_"
+            "under_publication_guard(",
+        ),
+        (
+            "self.write_native_amx_participant_receipt_latest_index_"
+            "under_publication_guard(",
+            "self.authenticate_native_amx_participant_application_"
+            "prepublication_under_publication_guard(",
+        ),
+    ),
+    ids=(
+        "all-manifests-before-all-receipts",
+        "all-receipts-before-all-latest-indexes",
+        "all-latest-indexes-before-readback-auth",
+    ),
+)
+def test_native_prepublication_contract_rejects_kura_phase_order_drift(
+    tmp_path: Path, earlier: str, later: str
+) -> None:
+    module = load_checker()
+    models = copy_native_prepublication_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/kura.rs"
+    swap_ordered_once(path, earlier, later)
+    errors = validate_native_prepublication_fixture(tmp_path, module, models)
+    assert any(
+        "ordered Native prepublication item "
+        "persist_native_amx_participant_application_evidence_"
+        "under_publication_guard" in error
+        for error in errors
+    ), errors
+
+
+def test_native_prepublication_contract_rejects_prewsv_retention_cleanup(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_native_prepublication_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/kura.rs"
+    replace_once(
+        path,
+        "const fn permits_retention_cleanup(self) -> bool {\n"
+        "        matches!(self, Self::PostWsvRepair)\n"
+        "    }",
+        "const fn permits_retention_cleanup(self) -> bool {\n"
+        "        matches!(self, Self::PreWsv)\n"
+        "    }",
+    )
+    errors = validate_native_prepublication_fixture(tmp_path, module, models)
+    assert any(
+        "permits_retention_cleanup must authorize only PostWsvRepair" in error
+        for error in errors
+    ), errors
+
+
+def test_native_prepublication_contract_rejects_unguarded_retention_cleanup(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_native_prepublication_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/kura.rs"
+    replace_once(path, "if permit_cleanup {", "if true {")
+    errors = validate_native_prepublication_fixture(tmp_path, module, models)
+    assert any(
+        "cleanup-only-after-WSV" in error
+        or (
+            "ordered Native prepublication item "
+            "persist_native_amx_participant_application_evidence_"
+            "under_publication_guard" in error
+        )
+        for error in errors
+    ), errors
+
+
+def test_native_prepublication_contract_rejects_writer_retention_guard_weakening(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_native_prepublication_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/kura.rs"
+    replace_once(
+        path,
+        "if !permit_retention_cleanup {\n"
+        "            self.require_native_amx_evidence_prune_intent_absent_locked"
+        "(&namespace)?;\n"
+        "        }",
+        "if false {\n"
+        "            self.require_native_amx_evidence_prune_intent_absent_locked"
+        "(&namespace)?;\n"
+        "        }",
+    )
+    errors = validate_native_prepublication_fixture(tmp_path, module, models)
+    assert any(
+        "must fail closed on retention state before PostWsvRepair" in error
+        for error in errors
+    ), errors
+
+
+def test_native_prepublication_contract_rejects_repair_mode_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_native_prepublication_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/kura.rs"
+    source = path.read_text(encoding="utf-8")
+    repair_offset = source.index(
+        "pub(crate) fn repair_native_amx_participant_application_evidence"
+    )
+    mode_offset = source.index(
+        "NativeAmxParticipantApplicationPublicationMode::PostWsvRepair",
+        repair_offset,
+    )
+    path.write_text(
+        source[:mode_offset]
+        + "NativeAmxParticipantApplicationPublicationMode::PreWsv"
+        + source[
+            mode_offset
+            + len(
+                "NativeAmxParticipantApplicationPublicationMode::PostWsvRepair"
+            ) :
+        ],
+        encoding="utf-8",
+    )
+    errors = validate_native_prepublication_fixture(tmp_path, module, models)
+    assert any(
+        "post-WSV Native repair must not use PreWsv publication mode" in error
+        for error in errors
+    ), errors
+
+
 def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> None:
     module = load_checker()
     contract = canonical_contract()

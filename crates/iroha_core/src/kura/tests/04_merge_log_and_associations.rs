@@ -1247,6 +1247,7 @@
         let configured_prune_bound =
             Kura::native_amx_evidence_prune_intent_max_bytes_for_retention(
                 native_cfg.roster_sidecar_retention,
+                V2_PENDING_CONTROL_SIDECAR_BYTES.get(),
             )
             .expect("configured Native AMX prune bound");
         assert_eq!(
@@ -1257,6 +1258,7 @@
             configured_prune_bound
                 < Kura::native_amx_evidence_prune_intent_max_bytes_for_retention(
                     ROSTER_SIDECAR_RETENTION,
+                    V2_PENDING_CONTROL_SIDECAR_BYTES.get(),
                 )
                 .expect("default Native AMX prune bound"),
             "the prune-journal hard limit must derive from configured retention"
@@ -2893,4 +2895,3 @@
         assert!(!reopened.canonical_association_stage_path().exists());
         assert!(!reopened.canonical_storage_poisoned.load(Ordering::Acquire));
     }
-

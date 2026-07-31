@@ -1537,12 +1537,28 @@ impl V2ApplyService {
         } else {
             None
         };
-        if native_amx_prepublication.as_ref().is_some_and(|token| {
-            !token.authenticates(committed_block.as_ref(), &native_amx_manifest, artifact)
-        }) {
+        let native_amx_frontiers = State::native_amx_participant_frontier_markers(
+            committed_block.as_ref(),
+        )
+        .map_err(|error| {
+            V2ApplyError::committed_recovery_required(
+                "pre-WSV Native AMX participant frontier projection",
+                &error,
+            )
+        })?;
+        let native_amx_prepublication_matches_state = match native_amx_prepublication.as_ref() {
+            Some(token) => token.authenticates_state_frontiers(
+                committed_block.as_ref(),
+                &native_amx_manifest,
+                artifact,
+                &native_amx_frontiers,
+            ),
+            None => native_amx_frontiers.is_empty(),
+        };
+        if !native_amx_prepublication_matches_state {
             return Err(V2ApplyError::committed_recovery_required(
                 "pre-WSV Native AMX participant evidence publication",
-                &"read-back token differs from the canonical Native application manifest",
+                &"read-back token differs from the exact State frontier projection",
             ));
         }
 
