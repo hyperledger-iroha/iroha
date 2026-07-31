@@ -79985,6 +79985,7 @@ pub async fn handle_status(
     }
 
     let mut status = Status::from(telemetry.metrics().await);
+    status.build.irohad_sha256 = running_executable_sha256()?.to_owned();
     status.build.torii_cargo_features = torii_cargo_features().to_owned();
     status.peer_id = peer_id.unwrap_or_default();
     normalize_status_block_visibility(&mut status, authoritative_block_height);
@@ -80073,6 +80074,119 @@ fn normalize_status_block_visibility(status: &mut Status, authoritative_block_he
 #[cfg(feature = "telemetry")]
 fn torii_cargo_features() -> &'static str {
     option_env!("VERGEN_CARGO_FEATURES").unwrap_or("unknown")
+}
+
+#[cfg(feature = "telemetry")]
+static RUNNING_EXECUTABLE_SHA256: OnceLock<std::result::Result<String, String>> = OnceLock::new();
+
+#[cfg(feature = "telemetry")]
+fn running_executable_sha256() -> Result<&'static str> {
+    RUNNING_EXECUTABLE_SHA256
+        .get_or_init(compute_running_executable_sha256)
+        .as_deref()
+        .map_err(|message| {
+            Error::StatusFailure(eyre!(
+                "failed to establish running irohad executable identity: {message}"
+            ))
+        })
+}
+
+#[cfg(feature = "telemetry")]
+fn compute_running_executable_sha256() -> std::result::Result<String, String> {
+    #[cfg(target_os = "linux")]
+    let executable_path = std::path::PathBuf::from("/proc/self/exe");
+    #[cfg(not(target_os = "linux"))]
+    let executable_path =
+        std::env::current_exe().map_err(|err| format!("resolve current executable path: {err}"))?;
+
+    let mut executable = std::fs::File::open(&executable_path).map_err(|err| {
+        format!(
+            "open current executable {}: {err}",
+            executable_path.display()
+        )
+    })?;
+    let metadata_before = executable.metadata().map_err(|err| {
+        format!(
+            "stat opened current executable {}: {err}",
+            executable_path.display()
+        )
+    })?;
+    if !metadata_before.is_file() {
+        return Err(format!(
+            "opened current executable is not a regular file: {}",
+            executable_path.display()
+        ));
+    }
+    if metadata_before.len() == 0 {
+        return Err(format!(
+            "opened current executable is empty: {}",
+            executable_path.display()
+        ));
+    }
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 128 * 1024];
+    loop {
+        let count = std::io::Read::read(&mut executable, &mut buffer).map_err(|err| {
+            format!(
+                "read opened current executable {}: {err}",
+                executable_path.display()
+            )
+        })?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+
+    let metadata_after = executable.metadata().map_err(|err| {
+        format!(
+            "restat opened current executable {}: {err}",
+            executable_path.display()
+        )
+    })?;
+    if !runtime_executable_metadata_is_stable(&metadata_before, &metadata_after) {
+        return Err(format!(
+            "opened current executable changed while it was hashed: {}",
+            executable_path.display()
+        ));
+    }
+
+    let digest = format!("{:x}", hasher.finalize());
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || digest.bytes().all(|byte| byte == b'0')
+    {
+        return Err("SHA-256 implementation returned an invalid executable digest".to_owned());
+    }
+    Ok(digest)
+}
+
+#[cfg(all(feature = "telemetry", unix))]
+fn runtime_executable_metadata_is_stable(
+    before: &std::fs::Metadata,
+    after: &std::fs::Metadata,
+) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    before.dev() == after.dev()
+        && before.ino() == after.ino()
+        && before.mode() == after.mode()
+        && before.size() == after.size()
+        && before.mtime() == after.mtime()
+        && before.mtime_nsec() == after.mtime_nsec()
+}
+
+#[cfg(all(feature = "telemetry", not(unix)))]
+fn runtime_executable_metadata_is_stable(
+    before: &std::fs::Metadata,
+    after: &std::fs::Metadata,
+) -> bool {
+    before.len() == after.len()
+        && before.modified().ok() == after.modified().ok()
+        && before.created().ok() == after.created().ok()
 }
 
 #[cfg(feature = "telemetry")]
@@ -80496,6 +80610,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn running_executable_hash_is_exact_lowercase_sha256() {
+        let actual = super::compute_running_executable_sha256()
+            .expect("current test executable must have a stable identity");
+
+        #[cfg(target_os = "linux")]
+        let executable_path = std::path::PathBuf::from("/proc/self/exe");
+        #[cfg(not(target_os = "linux"))]
+        let executable_path = std::env::current_exe().expect("resolve current test executable");
+        let executable_bytes =
+            std::fs::read(executable_path).expect("independently read current test executable");
+        let expected = format!("{:x}", Sha256::digest(executable_bytes));
+
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 64);
+        assert!(
+            actual
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
+        assert!(actual.bytes().any(|byte| byte != b'0'));
+    }
+
     #[tokio::test]
     async fn status_response_does_not_wait_for_lazy_block_counter_sync() {
         let metrics = Arc::new(Metrics::default());
@@ -80512,6 +80649,7 @@ mod tests {
             true,
             None,
             Some(4_274),
+            None,
             None,
         )
         .await
@@ -80543,16 +80681,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_root_and_tail_report_torii_crate_features() {
+    async fn status_root_and_tail_report_exact_build_provenance() {
         use http_body_util::BodyExt;
 
         let telemetry = MaybeTelemetry::for_tests();
-        let expected = super::torii_cargo_features();
+        let expected_features = super::torii_cargo_features();
+        let expected_executable_sha256 =
+            super::running_executable_sha256().expect("running executable identity");
         let response = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
             None,
             true,
+            None,
             None,
             None,
             None,
@@ -80572,7 +80713,14 @@ mod tests {
                 .get("build")
                 .and_then(|build| build.get("torii_cargo_features"))
                 .and_then(norito::json::Value::as_str),
-            Some(expected)
+            Some(expected_features)
+        );
+        assert_eq!(
+            payload
+                .get("build")
+                .and_then(|build| build.get("irohad_sha256"))
+                .and_then(norito::json::Value::as_str),
+            Some(expected_executable_sha256)
         );
 
         let response = super::handle_status(
@@ -80580,6 +80728,7 @@ mod tests {
             None,
             Some("build/torii_cargo_features"),
             true,
+            None,
             None,
             None,
             None,
@@ -80594,7 +80743,29 @@ mod tests {
             .to_bytes();
         let payload: norito::json::Value =
             norito::json::from_slice(&body).expect("decode status tail");
-        assert_eq!(payload.as_str(), Some(expected));
+        assert_eq!(payload.as_str(), Some(expected_features));
+
+        let response = super::handle_status(
+            &telemetry,
+            None,
+            Some("build/irohad_sha256"),
+            true,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("running executable status tail succeeds");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect running executable status tail")
+            .to_bytes();
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode running executable status tail");
+        assert_eq!(payload.as_str(), Some(expected_executable_sha256));
     }
 
     #[cfg(feature = "app_api")]
@@ -80623,9 +80794,10 @@ mod tests {
         });
 
         let path = format!("sorafs_micropayments/{provider_hex}");
-        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None, None)
-            .await
-            .expect("status tail succeeds");
+        let response =
+            super::handle_status(&telemetry, None, Some(&path), true, None, None, None, None)
+                .await
+                .expect("status tail succeeds");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         let body = response
             .into_body()
@@ -80683,6 +80855,7 @@ mod tests {
             None,
             true,
             Some(&policy),
+            None,
             None,
             None,
         )
@@ -80835,6 +81008,7 @@ mod tests {
             None,
             Some("teu_lane_commit"),
             false,
+            None,
             None,
             None,
             None,
@@ -81109,6 +81283,7 @@ mod tests {
             )),
             None,
             true,
+            None,
             None,
             None,
             None,

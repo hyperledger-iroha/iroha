@@ -3415,6 +3415,7 @@ mod serde_tests {
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
                 torii_cargo_features: "app_api,telemetry".to_owned(),
+                irohad_sha256: "ab".repeat(32),
             },
             peer_id: "ed0120AABB".to_owned(),
             peers: 3,
@@ -3463,10 +3464,11 @@ mod serde_tests {
             decoded.build.torii_cargo_features,
             status.build.torii_cargo_features
         );
+        assert_eq!(decoded.build.irohad_sha256, status.build.irohad_sha256);
     }
 
     #[test]
-    fn build_status_defaults_missing_torii_feature_provenance() {
+    fn build_status_defaults_missing_runtime_provenance() {
         let legacy_json = r#"{
             "version":"2.0.0-rc.test",
             "git_commit_sha":"deadbeef",
@@ -3477,6 +3479,7 @@ mod serde_tests {
             norito::json::from_json(legacy_json).expect("decode legacy build status");
 
         assert!(decoded.torii_cargo_features.is_empty());
+        assert!(decoded.irohad_sha256.is_empty());
     }
 
     #[test]
@@ -3487,12 +3490,14 @@ mod serde_tests {
             cargo_features: "metric-instrumentation".to_owned(),
             target_triple: "aarch64-unknown-linux-gnu".to_owned(),
             torii_cargo_features: "app_api,telemetry".to_owned(),
+            irohad_sha256: "cd".repeat(32),
         };
         let bytes = to_bytes(&status).expect("encode build status");
         let archived = from_bytes::<BuildStatus>(&bytes).expect("archive build status");
         let decoded: BuildStatus = norito::core::NoritoDeserialize::deserialize(archived);
 
         assert_eq!(decoded.torii_cargo_features, status.torii_cargo_features);
+        assert_eq!(decoded.irohad_sha256, status.irohad_sha256);
     }
 
     #[test]
@@ -3514,6 +3519,7 @@ mod serde_tests {
         assert_eq!(decoded.cargo_features, legacy.cargo_features);
         assert_eq!(decoded.target_triple, legacy.target_triple);
         assert!(decoded.torii_cargo_features.is_empty());
+        assert!(decoded.irohad_sha256.is_empty());
     }
 
     #[test]
@@ -5613,6 +5619,16 @@ pub struct BuildStatus {
     /// An empty value means the producer predates Torii feature provenance.
     #[norito(default)]
     pub torii_cargo_features: String,
+    /// Lowercase SHA-256 of the currently running executable.
+    ///
+    /// Torii computes this from the opened runtime image while constructing
+    /// `/status`. An empty value means the producer predates runtime-image
+    /// identity or has not yet populated the response.
+    ///
+    /// This field is append-only so legacy Norito payloads retain their
+    /// positional field identities.
+    #[norito(default)]
+    pub irohad_sha256: String,
 }
 
 impl BuildStatus {
@@ -5629,6 +5645,7 @@ impl BuildStatus {
                 .unwrap_or("unknown")
                 .to_owned(),
             torii_cargo_features: String::new(),
+            irohad_sha256: String::new(),
         }
     }
 }
@@ -21437,6 +21454,7 @@ mod test {
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
                 torii_cargo_features: "app_api,telemetry".to_owned(),
+                irohad_sha256: "ab".repeat(32),
             },
             peer_id: "ed0120AABB".to_owned(),
             observed_at_ms: 1_234_999,
@@ -21678,7 +21696,8 @@ mod test {
                 "git_commit_sha": "deadbeef",
                 "cargo_features": "telemetry,zk-halo2",
                 "target_triple": "aarch64-apple-darwin",
-                "torii_cargo_features": "app_api,telemetry"
+                "torii_cargo_features": "app_api,telemetry",
+                "irohad_sha256": "abababababababababababababababababababababababababababababababab"
             },
             "peer_id": "ed0120AABB",
             "observed_at_ms": 1_234_999,
@@ -21856,7 +21875,8 @@ mod test {
                 "git_commit_sha": "deadbeef",
                 "cargo_features": "telemetry,zk-halo2",
                 "target_triple": "aarch64-apple-darwin",
-                "torii_cargo_features": "app_api,telemetry"
+                "torii_cargo_features": "app_api,telemetry",
+                "irohad_sha256": "abababababababababababababababababababababababababababababababab"
               },
               "peer_id": "ed0120AABB",
               "observed_at_ms": 1234999,
