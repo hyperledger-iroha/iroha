@@ -49,6 +49,7 @@ use iroha_data_model::{
         VerifiedLaneRelayRecord, fee_sponsor_vault_allocation_claim_digest,
         fee_sponsor_vault_source_state_root, lane_relay_fastpq_claim_digest,
     },
+    state_path::StatePath,
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -545,7 +546,7 @@ impl NexusFeeRelayWorker {
     }
 
     fn verified_relay_exists(&self, envelope: &LaneRelayEnvelope) -> Result<bool> {
-        let key = Name::from_str(&envelope.relay_ref().relay_state_key())
+        let key = StatePath::from_str(&envelope.relay_ref().relay_state_key())
             .wrap_err("parse verified lane relay state key")?;
         Ok(self
             .state
@@ -865,7 +866,7 @@ impl NexusFeeRelayWorker {
         &self,
         work: &DurableAllocationWork,
     ) -> Result<Option<VerifiedFeeSponsorVaultAllocation>> {
-        let key = Name::from_str(&VerifiedFeeSponsorVaultAllocation::state_key_for(
+        let key = StatePath::from_str(&VerifiedFeeSponsorVaultAllocation::state_key_for(
             &work.program_id,
             &work.asset_definition_id,
             &work.lease_id,
