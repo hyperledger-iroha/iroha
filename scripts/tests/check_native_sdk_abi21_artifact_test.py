@@ -698,6 +698,11 @@ def test_repository_wires_exact_abi21_release_contract() -> None:
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
     assert (
+        'REQUIRED_NATIVE_ASSERTION="A freshly built connect_norito_bridge ABI 21 '
+        'artifact-streaming library is required"'
+        in jni_lane
+    )
+    assert (
         "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"
         in hermetic_runner.PROFILES["gradle-jvm"]
     )

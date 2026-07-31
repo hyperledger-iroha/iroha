@@ -10,7 +10,7 @@ SOURCE_SEAL="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
 ABI21_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi21_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 PINNED_TOOLCHAIN="1.93.1"
-REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library"
+REQUIRED_NATIVE_ASSERTION="A freshly built connect_norito_bridge ABI 21 artifact-streaming library is required"
 
 fail() {
   printf '[kagemusha-jvm-native] ERROR: %s\n' "$*" >&2
