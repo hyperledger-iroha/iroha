@@ -4274,6 +4274,15 @@ fn asset_event_summary(event: &AssetEvent) -> (String, String) {
             "Asset balance decreased".to_owned(),
             format!("asset={} amount={}", change.asset(), change.amount()),
         ),
+        AssetEvent::Transferred(transfer) => (
+            "Asset transferred".to_owned(),
+            format!(
+                "source={} destination={} amount={}",
+                transfer.source(),
+                transfer.destination(),
+                transfer.amount()
+            ),
+        ),
         AssetEvent::MetadataInserted(change) => (
             "Asset metadata inserted".to_owned(),
             format!("asset={} key={}", change.target(), change.key()),
@@ -4281,6 +4290,18 @@ fn asset_event_summary(event: &AssetEvent) -> (String, String) {
         AssetEvent::MetadataRemoved(change) => (
             "Asset metadata removed".to_owned(),
             format!("asset={} key={}", change.target(), change.key()),
+        ),
+        AssetEvent::BatchTransferOutcome(outcome) => (
+            "Asset batch transfer outcome".to_owned(),
+            format!(
+                "leg_index={} leg_id={} asset={} destination={} amount={} status={:?}",
+                outcome.leg_index,
+                outcome.leg_id,
+                outcome.asset,
+                outcome.destination,
+                outcome.amount,
+                outcome.status
+            ),
         ),
     }
 }

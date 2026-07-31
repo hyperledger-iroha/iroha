@@ -8319,11 +8319,89 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// Return whether the fair-ingress head can reach authentication and then
     /// either claim its exact runtime prefix or coalesce with an exact queued
     /// authenticated owner.
+    fn can_admit_pre_runtime_leader_wire(
+        &self,
+        outer_message: &wire::ConsensusMessageV2,
+        runtime_message: &wire::ConsensusMessageV2,
+        default_class: CommandClass,
+        ownership: &FairV2IngressOwnershipEvidence,
+    ) -> Option<bool> {
+        let token = ownership.leader_wire_token()?;
+        if ownership.leader_wire_runtime_receipt().is_some() {
+            return None;
+        }
+
+        // Productive fair ingress owns the durable Ingress token while the
+        // packet is still physically queued. Its Runtime receipt can only be
+        // minted by the atomic dequeue immediately after this read-only
+        // predicate succeeds. Validate that exact pre-handoff state here;
+        // never weaken RuntimeIngressOwnershipEvidence, whose token+receipt
+        // pairing remains the post-dequeue proof boundary.
+        let outer = super::message::BlockMessage::V2(outer_message.clone());
+        if !ownership.validate_exact()
+            || !ownership.matches_message(&outer)
+            || ownership.runtime_physical_cut().is_some()
+            || ownership.runtime_lifecycle_ordinal() != Some(token.scheduler_ordinal())
+            || !self
+                .ingress
+                .lifecycle_ordinals
+                .recognizes_minted(token.scheduler_ordinal())
+                .unwrap_or(false)
+        {
+            // Drain malformed process-local ownership so the mutating seam
+            // reports the exact invariant failure instead of pinning a fair
+            // lane forever.
+            return Some(true);
+        }
+
+        if let Some((_, admission_ordinal)) = self
+            .driver
+            .deferred_authenticated_message_owner(runtime_message)
+        {
+            // A Busy-deferred aggregate already owns its sole serialized
+            // occurrence. An exact restart retry may rejoin that lifecycle;
+            // a distinct productive token must remain in fair ingress until
+            // the deferred owner retires and a real FIFO slot is available.
+            let same_token = self
+                .deferred_ingress_ownership
+                .get(&admission_ordinal)
+                .and_then(|retained| retained.leader_wire_token().ok().flatten())
+                == Some(token);
+            return Some(same_token);
+        }
+
+        for queued in &self.ingress.commands {
+            if !queued.command.matches_wire_envelope(runtime_message) {
+                continue;
+            }
+            let Some(retained) = queued.ingress_ownership.as_ref() else {
+                // Let the mutating seam expose a corrupt authenticated owner.
+                return Some(true);
+            };
+            match retained.leader_wire_token() {
+                Ok(Some(retained_token)) if retained_token == token => return Some(true),
+                Ok(_) => {}
+                Err(_) => return Some(true),
+            }
+        }
+
+        let may_use_progress = self
+            .driver
+            .wire_ingress_may_use_progress(&runtime_message.payload);
+        let capacity = match self.ingress.check_capacity(default_class) {
+            Ok(()) => Ok(()),
+            Err(_) if may_use_progress => self.ingress.check_capacity(CommandClass::Progress),
+            Err(error) => Err(error),
+        };
+        Some(capacity.is_ok())
+    }
+
     pub(crate) fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
         ingress_ownership: &FairV2IngressOwnershipEvidence,
     ) -> bool {
+        let outer_message = message;
         let (runtime_message, default_class) = match &message.payload {
             wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => (
                 wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
@@ -8343,6 +8421,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             &runtime_message,
             ingress_ownership.clone(),
         ) else {
+            if let Some(admissible) = self.can_admit_pre_runtime_leader_wire(
+                outer_message,
+                &runtime_message,
+                default_class,
+                ingress_ownership,
+            ) {
+                return admissible;
+            }
             // Drain malformed process-local ownership so the mutating seam can
             // fail closed instead of leaving the fair queue permanently stuck.
             return true;
@@ -14924,6 +15010,82 @@ mod tests {
             Some(runtime_ingress_causal_origin_projection_hash(final_ingress))
         );
         assert!(final_owner.validate_exact());
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner() {
+        let directory = TempDir::new().expect("temporary pre-runtime leader-wire directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 2, 2),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before Busy-deferred aggregate ingress");
+        let owner_tag = runtime.round_tag();
+        let timeout = runtime
+            .driver
+            .timeout_elapsed(owner_tag)
+            .expect("install a signer fence before aggregate dispatch");
+        assert!(matches!(
+            timeout.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                signed_runtime_quorum_certificate(&context, &keys, 0x7A),
+            ));
+        let first_source = context.roster[2].validator.clone();
+        let second_source = context.roster[1].validator.clone();
+        let (_leader_wire_directory, leader_wire_ingress, ownerships) =
+            preowned_leader_wire_ownerships(
+                &context,
+                &[(message.clone(), first_source)],
+                runtime.ingress.lifecycle_ordinals.clone(),
+            );
+        let [first_ownership]: [FairV2IngressOwnershipEvidence; 1] = ownerships
+            .try_into()
+            .expect("fixture creates one exact runtime-owned carrier");
+        runtime
+            .enqueue_network_with_ingress_ownership(message.clone(), first_ownership)
+            .expect("first leader-wire carrier enters the runtime");
+        assert!(matches!(
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+        ));
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("Busy dispatch retains the first exact carrier");
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
+
+        assert!(matches!(
+            leader_wire_ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(message.clone()),
+                Some(second_source),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let selected = leader_wire_ingress.try_recv_if(|inbound| {
+            let BlockMessage::V2(candidate) = inbound.message() else {
+                return true;
+            };
+            let ownership = inbound
+                .ingress_ownership()
+                .expect("productive fair ingress attaches exact ownership");
+            runtime.can_admit_network_message_with_ingress_ownership(candidate, ownership)
+        });
+        assert!(
+            selected.is_none(),
+            "a distinct productive leader-wire token must remain physically queued behind the Busy owner"
+        );
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
         assert!(!runtime.fail_closed);
     }
 

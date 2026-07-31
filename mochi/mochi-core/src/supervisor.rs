@@ -50,6 +50,16 @@ const SMOKE_MAX_ATTEMPTS: usize = 3;
 const LOCAL_MCP_PROFILE: &str = "writer";
 const LOCAL_MCP_TOOL_PREFIX: &str = "iroha.";
 const LOCAL_NORITO_RPC_STAGE: &str = "ga";
+const LOCAL_MULTI_PEER_POW_TICKET_TTL_SECS: i64 = 300;
+// Mochi runs every validator on one developer machine. Keep the mandatory
+// SoraNet memory-hard admission proof enabled, but use the protocol's minimum
+// supported Argon2 work factors so a four-peer full mesh cannot monopolize the
+// host before consensus has committed genesis. Production nodes which are not
+// rendered by Mochi retain Iroha's canonical 64 MiB, two-pass defaults.
+const LOCAL_MULTI_PEER_POW_PUZZLE_MEMORY_KIB: i64 = 4_096;
+const LOCAL_MULTI_PEER_POW_PUZZLE_TIME_COST: i64 = 1;
+const LOCAL_MULTI_PEER_POW_PUZZLE_LANES: i64 = 1;
+const LOCAL_MULTI_PEER_POW_DIFFICULTY: i64 = 1;
 fn timestamp_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3179,6 +3189,49 @@ impl PeerSpec {
         let mut network = toml::Table::new();
         network.insert("address".into(), toml::Value::String(network_bind));
         network.insert("public_address".into(), toml::Value::String(network_public));
+        if all_peers.len() > 1 {
+            // Keep PoW and replay protection enabled for a local full mesh,
+            // while bounding the work a single developer host must perform.
+            let mut puzzle = toml::Table::new();
+            puzzle.insert(
+                "memory_kib".into(),
+                toml::Value::Integer(LOCAL_MULTI_PEER_POW_PUZZLE_MEMORY_KIB),
+            );
+            puzzle.insert(
+                "time_cost".into(),
+                toml::Value::Integer(LOCAL_MULTI_PEER_POW_PUZZLE_TIME_COST),
+            );
+            puzzle.insert(
+                "lanes".into(),
+                toml::Value::Integer(LOCAL_MULTI_PEER_POW_PUZZLE_LANES),
+            );
+            let mut pow = toml::Table::new();
+            pow.insert(
+                "difficulty".into(),
+                toml::Value::Integer(LOCAL_MULTI_PEER_POW_DIFFICULTY),
+            );
+            pow.insert(
+                "ticket_ttl_secs".into(),
+                toml::Value::Integer(LOCAL_MULTI_PEER_POW_TICKET_TTL_SECS),
+            );
+            pow.insert(
+                "revocation_store_path".into(),
+                toml::Value::String(
+                    self.storage_dir
+                        .canonicalize()?
+                        .join("soranet/ticket_revocations.norito")
+                        .display()
+                        .to_string(),
+                ),
+            );
+            pow.insert("puzzle".into(), toml::Value::Table(puzzle));
+            let mut soranet_handshake = toml::Table::new();
+            soranet_handshake.insert("pow".into(), toml::Value::Table(pow));
+            network.insert(
+                "soranet_handshake".into(),
+                toml::Value::Table(soranet_handshake),
+            );
+        }
         root.insert("network".into(), toml::Value::Table(network));
 
         let torii_bind = socket_addr_literal(&self.torii_bind, "torii.address")?;
@@ -5050,6 +5103,97 @@ esac
             .and_then(toml::Value::as_array)
             .expect("array");
         assert_eq!(trusted.len(), 4);
+    }
+
+    #[test]
+    fn multi_peer_configs_bound_soranet_pow_for_local_full_mesh() {
+        if !ports_available("multi_peer_configs_bound_soranet_pow_for_local_full_mesh") {
+            return;
+        }
+        let _env = env_lock().lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _stub = KagamiStub::install(temp.path());
+        let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
+            .data_root(temp.path().join("four-peer"))
+            .torii_base_port(28000)
+            .p2p_base_port(29000)
+            .build()
+            .expect("build four-peer supervisor");
+        let mut revocation_paths = HashSet::new();
+
+        for (index, peer) in supervisor.peers().iter().enumerate() {
+            let config: toml::Table = toml::from_str(
+                &fs::read_to_string(peer.config_path()).expect("peer config readable"),
+            )
+            .expect("valid peer config");
+            let pow = config
+                .get("network")
+                .and_then(toml::Value::as_table)
+                .and_then(|network| network.get("soranet_handshake"))
+                .and_then(toml::Value::as_table)
+                .and_then(|handshake| handshake.get("pow"))
+                .and_then(toml::Value::as_table)
+                .expect("multi-peer PoW override");
+            assert_eq!(
+                pow.get("ticket_ttl_secs").and_then(toml::Value::as_integer),
+                Some(LOCAL_MULTI_PEER_POW_TICKET_TTL_SECS),
+                "peer{index} must allow local full-mesh handshakes to finish"
+            );
+            assert_eq!(
+                pow.get("difficulty").and_then(toml::Value::as_integer),
+                Some(LOCAL_MULTI_PEER_POW_DIFFICULTY),
+                "peer{index} must bound local full-mesh hashcash work"
+            );
+            let revocation_path = PathBuf::from(
+                pow.get("revocation_store_path")
+                    .and_then(toml::Value::as_str)
+                    .expect("peer-local revocation ledger path"),
+            );
+            assert!(
+                revocation_path.is_absolute(),
+                "peer{index} revocation ledger must not depend on the launcher cwd"
+            );
+            assert!(
+                revocation_paths.insert(revocation_path),
+                "peer{index} must own a unique revocation ledger lock"
+            );
+            let puzzle = pow
+                .get("puzzle")
+                .and_then(toml::Value::as_table)
+                .expect("multi-peer puzzle override");
+            assert_eq!(
+                puzzle.get("memory_kib").and_then(toml::Value::as_integer),
+                Some(LOCAL_MULTI_PEER_POW_PUZZLE_MEMORY_KIB)
+            );
+            assert_eq!(
+                puzzle.get("time_cost").and_then(toml::Value::as_integer),
+                Some(LOCAL_MULTI_PEER_POW_PUZZLE_TIME_COST)
+            );
+            assert_eq!(
+                puzzle.get("lanes").and_then(toml::Value::as_integer),
+                Some(LOCAL_MULTI_PEER_POW_PUZZLE_LANES)
+            );
+        }
+        assert_eq!(revocation_paths.len(), 4);
+
+        let single = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+            .data_root(temp.path().join("single-peer"))
+            .torii_base_port(30000)
+            .p2p_base_port(31000)
+            .build()
+            .expect("build single-peer supervisor");
+        let single_config: toml::Table = toml::from_str(
+            &fs::read_to_string(single.peers()[0].config_path()).expect("peer config readable"),
+        )
+        .expect("valid peer config");
+        assert!(
+            single_config
+                .get("network")
+                .and_then(toml::Value::as_table)
+                .and_then(|network| network.get("soranet_handshake"))
+                .is_none(),
+            "single-peer Mochi must keep Iroha's canonical production PoW defaults"
+        );
     }
 
     #[test]

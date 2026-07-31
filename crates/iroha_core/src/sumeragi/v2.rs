@@ -6931,6 +6931,13 @@ impl SumeragiV2Adapter {
                 "snapshot claims durable-Decision reclamation before a durable Decision".to_owned(),
             ));
         }
+        let retired_process_candidates = self
+            .serviced_candidates
+            .iter()
+            .filter_map(|(candidate, service_view)| {
+                (*service_view < current_view).then_some(*candidate)
+            })
+            .collect::<BTreeSet<_>>();
         self.serviced_candidates
             .retain(|_, service_view| *service_view >= current_view);
         let previous_durable_len = self.durable_serviced_candidates.len();
@@ -6939,16 +6946,32 @@ impl SumeragiV2Adapter {
             .retain(|_, service_view| *service_view >= current_view);
         if !decision_durable {
             // A strict certified view advance is itself the durable reason an
-            // older lifecycle cannot re-enter. Remove its paired producer
-            // tombstone whenever the exact service tombstone is reclaimed so
-            // every non-Decision snapshot keeps the two tables atomic.
+            // older terminal lifecycle cannot re-enter. Remove its paired
+            // producer tombstone whenever the exact service tombstone is
+            // reclaimed so every non-Decision snapshot keeps the two tables
+            // atomic. A live reservation is different: its runtime owner can
+            // still be completing the exact transition which installed the
+            // newer view. Retain that restart-safe admission metadata until
+            // the owner explicitly hands off or releases it; dropping only
+            // the durable half here leaves a process-local ghost which the
+            // next legitimate retry must fail closed.
             self.durable_producer_continuations.retain(|_, record| {
                 if record.status() == ProducerContinuationStatus::Terminal {
                     self.durable_serviced_candidates
                         .contains_key(&record.identity().candidate())
                 } else {
-                    record.identity().candidate().source_view() >= current_view
+                    true
                 }
+            });
+            // Process-only terminals close same-episode ABA retries, but a
+            // certified view advance is already the durable retirement reason
+            // for every service marker pruned above. Retaining only this half
+            // of the pair makes a retagged deferred occurrence look like a
+            // corrupt live reservation. Reclaim the terminal with its exact
+            // process marker while preserving every Reserved owner.
+            self.producer_continuations.retain(|_, record| {
+                record.status() != ProducerContinuationStatus::Terminal
+                    || !retired_process_candidates.contains(&record.identity().candidate())
             });
         }
         let mut durable_changed = self.durable_serviced_candidates.len() != previous_durable_len
@@ -12300,6 +12323,142 @@ mod tests {
             !adapter.producer_continuations.contains_key(&address),
             "goal-reaching retirement cannot manufacture successor acknowledgement"
         );
+    }
+
+    #[test]
+    fn strict_view_advance_retains_live_producer_admission_until_owner_release() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let event = reducer::Event::TimeoutElapsed { tag };
+        let candidate = adapter
+            .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+            .expect("timeout has a producer stage");
+        let causal_key = Hash::new(b"live producer across strict view advance");
+        adapter
+            .bind_selected_producer_lifecycle(causal_key.clone(), 1)
+            .expect("bind live producer owner");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve live producer")
+            .expect("tracked timeout reserves");
+        let address = reservation.address;
+        adapter.clear_selected_producer_lifecycle();
+
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+        let timeout = wire::TimeoutCertificate {
+            round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xA5; 96],
+            }],
+        };
+        adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+            ))
+            .expect("install timeout certificate and advance the view");
+        assert_eq!(adapter.current_tag().view(), tag.view() + 1);
+        assert_eq!(
+            adapter.durable_producer_continuations.get(&address),
+            adapter.producer_continuations.get(&address),
+            "strict-view reclamation must not split a still-live producer from its durable admission"
+        );
+
+        adapter
+            .bind_selected_producer_lifecycle(causal_key, 1)
+            .expect("rebind exact live retry");
+        let retry = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("exact live retry remains admissible")
+            .expect("exact live retry retains its reservation");
+        assert_eq!(retry.address, address);
+        assert_eq!(retry.change, ProducerReservationChange::Unchanged);
+        assert!(!adapter.fail_closed);
+    }
+
+    #[test]
+    fn strict_view_advance_reclaims_process_terminal_before_retagged_retry() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let event = reducer::Event::TimeoutElapsed { tag };
+        let candidate = adapter
+            .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+            .expect("timeout has a producer stage");
+        let causal_key = Hash::new(b"process terminal before retagged retry");
+        adapter
+            .bind_selected_producer_lifecycle(causal_key.clone(), 1)
+            .expect("bind original producer owner");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve original producer")
+            .expect("tracked timeout reserves");
+        let handoff = adapter
+            .record_serviced_candidate(Some(candidate), false, false, Some(reservation))
+            .expect("record original producer service")
+            .expect("original service returns a handoff");
+        let address = handoff.identity().address();
+        adapter
+            .acknowledge_producer_handoff(
+                handoff,
+                ProducerContinuationHandoffEvidence::ConcreteSuccessor,
+            )
+            .expect("acknowledge volatile successor");
+        adapter.clear_selected_producer_lifecycle();
+        assert_eq!(
+            adapter.producer_continuations[&address].status(),
+            ProducerContinuationStatus::Terminal
+        );
+        assert!(
+            !adapter
+                .durable_producer_continuations
+                .contains_key(&address)
+        );
+        assert!(adapter.serviced_candidates.contains_key(&candidate.0));
+
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+        let timeout = wire::TimeoutCertificate {
+            round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xA6; 96],
+            }],
+        };
+        adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+            ))
+            .expect("install timeout certificate and advance the view");
+        assert_eq!(adapter.current_tag().view(), tag.view() + 1);
+        assert!(!adapter.serviced_candidates.contains_key(&candidate.0));
+        assert!(
+            !adapter.producer_continuations.contains_key(&address),
+            "the strict episode exit must reclaim its process-only terminal"
+        );
+
+        let retagged_candidate = (candidate.0, adapter.current_tag().view(), candidate.2);
+        adapter
+            .bind_selected_producer_lifecycle(causal_key, 1)
+            .expect("rebind the exact deferred owner");
+        let retry = adapter
+            .reserve_selected_producer_continuation(Some(retagged_candidate))
+            .expect("retagged exact retry does not collide with a stale terminal")
+            .expect("retagged exact retry reserves");
+        assert_eq!(retry.change, ProducerReservationChange::Inserted);
+        assert!(!adapter.fail_closed);
     }
 
     #[test]
