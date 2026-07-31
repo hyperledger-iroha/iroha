@@ -32,8 +32,8 @@ fn decode_string_invalid_utf8_yields_error() {
     // the validated payload view when parsing the first length header.
     let view = core::from_bytes_view(&bytes).expect("view");
     let payload = view.as_bytes();
-    let (len, lhdr) = core::read_len_from_slice_with_flags(payload, view.flags())
-        .expect("length header");
+    let (len, lhdr) =
+        core::read_len_from_slice_with_flags(payload, view.flags()).expect("length header");
     let hdr_len = Header::SIZE;
     assert!(len >= 1);
     // leave length as 1, corrupt the first content byte following the length header

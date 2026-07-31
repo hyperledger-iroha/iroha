@@ -26,10 +26,7 @@ fn canonical_guest_executor_upgrade_works() -> Result<()> {
     let upgrade = Upgrade::new(Executor::new(IvmBytecode::from_compiled(
         CANONICAL_EXECUTOR.to_vec(),
     )));
-    client.submit_blocking(
-        upgrade,
-        FeePaymentIntent::authority(Vec::new(), None),
-    )?;
+    client.submit_blocking(upgrade, FeePaymentIntent::authority(Vec::new(), None))?;
 
     client.submit_blocking(
         Log::new(Level::INFO, "canonical executor is active".to_owned()),

@@ -5229,11 +5229,7 @@ mod tests {
     fn public_runtime_gateway_authentication_is_exactly_scoped() {
         let catalog_routes = CATALOGED_ROUTES
             .iter()
-            .filter(|route| {
-                route
-                    .stable_route_id()
-                    .starts_with("protocol.soracloud.")
-            })
+            .filter(|route| route.stable_route_id().starts_with("protocol.soracloud."))
             .collect::<Vec<_>>();
         assert_eq!(catalog_routes.len(), soracloud_gateway::ROUTES.len());
         assert_eq!(soracloud_gateway::ROUTES.len(), 4);

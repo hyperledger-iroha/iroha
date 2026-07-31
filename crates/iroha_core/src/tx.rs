@@ -1275,9 +1275,8 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx: SignedTransaction,
         signed_bytes: Option<Arc<Vec<u8>>>,
     ) -> Self {
-        let canonical_signed_bytes = Arc::new(
-            norito::encode_canonical(&tx).expect("encode accepted signed transaction"),
-        );
+        let canonical_signed_bytes =
+            Arc::new(norito::encode_canonical(&tx).expect("encode accepted signed transaction"));
         let signed_bytes = signed_bytes
             .filter(|bytes| bytes.as_slice() == canonical_signed_bytes.as_slice())
             .unwrap_or(canonical_signed_bytes);
@@ -7426,8 +7425,8 @@ pub mod tests {
             Err(norito::core::Error::ChecksumMismatch)
         ));
 
-        let alternate_flags = norito::core::default_encode_flags()
-            ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate = {
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             norito::to_bytes(&signed).expect("encode alternate-layout signed transaction")

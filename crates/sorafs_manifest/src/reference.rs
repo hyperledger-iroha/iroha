@@ -8784,8 +8784,8 @@ mod tests {
     #[test]
     fn validate_repair_payload_bytes_rejects_alternate_norito_layout() {
         let task = repair_task_record();
-        let alternate_flags = norito::core::default_encode_flags()
-            ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let bytes = {
             let _flags = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             to_bytes(&task).expect("encode task with alternate layout")
