@@ -40,6 +40,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use norito::codec::{Decode, Encode};
+use norito::core::DecodeFromSlice;
 use norito::json::{self, Map, Number, Value};
 #[cfg(test)]
 use {
@@ -1091,6 +1092,7 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
         );
 
         if let Some(mut payload) = raw.payload_json.clone() {
+            apply_generated_payload_metadata(&mut payload, &fixture.summary)?;
             if payload_json_uses_instruction_list(&payload) {
                 let wire_payloads = wire_payloads_from_encoded(&fixture.encoded)?;
                 apply_wire_payloads_to_payload_json(&mut payload, &wire_payloads)?;
@@ -1098,20 +1100,26 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
             entry.insert("payload".to_owned(), payload);
         } else if let Some(payload) = raw.payload.as_ref() {
             let mut payload_obj = Map::new();
-            payload_obj.insert("chain".to_owned(), Value::String(payload.chain.clone()));
+            payload_obj.insert(
+                "chain".to_owned(),
+                Value::String(fixture.summary.chain.clone()),
+            );
             payload_obj.insert(
                 "authority".to_owned(),
-                Value::String(payload.authority.clone()),
+                Value::String(fixture.summary.authority.clone()),
             );
             payload_obj.insert(
                 "creation_time_ms".to_owned(),
-                Value::Number(Number::U64(payload.creation_time_ms)),
+                Value::Number(Number::U64(fixture.summary.creation_time_ms)),
             );
             payload_obj.insert(
                 "time_to_live_ms".to_owned(),
-                optional_u64_value(payload.ttl_ms),
+                optional_u64_value(fixture.summary.ttl_ms),
             );
-            payload_obj.insert("nonce".to_owned(), optional_u32_value(payload.nonce));
+            payload_obj.insert(
+                "nonce".to_owned(),
+                optional_u32_value(fixture.summary.nonce),
+            );
 
             let mut executable_obj = Map::new();
             match &payload.executable {
@@ -1191,6 +1199,30 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
     }
 
     Ok(Value::Array(out))
+}
+
+fn apply_generated_payload_metadata(
+    payload: &mut Value,
+    summary: &PayloadSummary,
+) -> Result<()> {
+    let obj = payload
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("payload must remain an object while regenerating"))?;
+    obj.insert("chain".to_owned(), Value::String(summary.chain.clone()));
+    obj.insert(
+        "authority".to_owned(),
+        Value::String(summary.authority.clone()),
+    );
+    obj.insert(
+        "creation_time_ms".to_owned(),
+        Value::Number(Number::U64(summary.creation_time_ms)),
+    );
+    obj.insert(
+        "time_to_live_ms".to_owned(),
+        optional_u64_value(summary.ttl_ms),
+    );
+    obj.insert("nonce".to_owned(), optional_u32_value(summary.nonce));
+    Ok(())
 }
 
 fn payload_json_uses_instruction_list(payload: &Value) -> bool {
@@ -1543,6 +1575,31 @@ mod tests {
         let nonce = obj.get("nonce").expect("nonce must be present");
         assert!(matches!(nonce, Value::Null));
     }
+
+    #[test]
+    fn fixtures_json_materializes_the_builder_default_ttl() {
+        let keypair = signing_keypair().expect("test keypair");
+        let mut raw = sample_fixture(None);
+        raw.payload.as_mut().expect("sample payload").ttl_ms = None;
+        let fixture = raw
+            .clone()
+            .into_fixture(&keypair, true, true)
+            .expect("fixture");
+
+        let value =
+            build_fixtures_json(&[raw], std::slice::from_ref(&fixture)).expect("fixtures json");
+        let ttl = value.as_array().expect("fixture array")[0]
+            .as_object()
+            .and_then(|entry| entry.get("payload"))
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("time_to_live_ms"))
+            .and_then(Value::as_u64)
+            .expect("canonical default TTL");
+
+        assert_eq!(Some(ttl), fixture.summary.ttl_ms);
+        assert_eq!(ttl, 100_000);
+    }
+
     #[test]
     fn fixtures_json_injects_wire_instruction_payloads() {
         let keypair = signing_keypair().expect("test keypair");

@@ -25,17 +25,17 @@ test("compact vector is an exact deterministic ABI21 browser-codec artifact", ()
     vector["source.bundle.sha256"],
     compactHashVectorSourceBundleSha256(),
   );
-  assert.equal(vector["versioned.bytes"], "648");
-  assert.equal(vector["bare.bytes"], "647");
-  assert.equal(vector["compact.length.hex"], "f703");
-  assert.equal(vector["canonical.prefix.hex"], "00000000f703");
+  assert.equal(vector["versioned.bytes"], "647");
+  assert.equal(vector["bare.bytes"], "646");
+  assert.equal(vector["compact.length.hex"], "f603");
+  assert.equal(vector["canonical.prefix.hex"], "00000000f603");
   assert.equal(
     vector["canonical.hash"],
-    "1bc7da85d038c52752ce4fd5fa79316e5f3e0af4e9b08fdbf225c0f1d1b249df",
+    "93789bf438da34c44a7fd55cb8e9bd3038f4d4671cdc64e78ece1ccd30682259",
   );
   assert.equal(
     vector["payload.prehash"],
-    "aa8293edd3261028afae447b2fc9a3a6ac0cdd6d46dd133218b6b59492224983",
+    "d71bdaf2535f83ee28914cd84d81a2ed0ac420d4e2801eea5dfa86b7287075c9",
   );
   assert.equal(fs.readFileSync(COMPACT_HASH_VECTOR_PATH, "utf8"), renderCompactHashVector());
   checkCompactHashVectorFile();

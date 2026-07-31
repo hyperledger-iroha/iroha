@@ -533,6 +533,8 @@ public final class NexusAppClient {
 }
 
 private enum SwiftNexusTransferPayloadEncoder {
+    private static let defaultTransactionTTL: UInt64 = 100_000
+    private static let maxChainIDBytes = 128
     private static let instructionWireName = "iroha.transfer"
     private static let transferBoxTypeName = "iroha_data_model::isi::transfer::TransferBox"
     private static let transferBoxAssetDiscriminant: UInt32 = 2
@@ -587,11 +589,17 @@ private enum SwiftNexusTransferPayloadEncoder {
         executable.writeField(instructions.data)
 
         var payload = CompactNoritoWriter()
-        payload.writeField(encodeChainId(chainId))
+        payload.writeField(try encodeChainId(chainId))
         payload.writeField(try encodeAccountId(authority))
         payload.writeField(CompactNorito.encodeUInt64(creationTimeMs))
         payload.writeField(executable.data)
-        payload.writeField(try CompactNorito.encodeOption(ttlMs, encode: CompactNorito.encodeUInt64))
+        let normalizedTTL = ttlMs ?? defaultTransactionTTL
+        guard normalizedTTL > 0 else {
+            throw NexusAppError(code: "invalid_ttl",
+                                message: "Transaction TTL must be a positive signature-bound lifetime.")
+        }
+        payload.writeField(try CompactNorito.encodeOption(normalizedTTL,
+                                                          encode: CompactNorito.encodeUInt64))
         payload.writeField(try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32))
         payload.writeField(try feePayment.compactNorito())
         payload.writeField(try encodeMetadata(metadata))
@@ -628,10 +636,30 @@ private enum SwiftNexusTransferPayloadEncoder {
         return instruction.data
     }
 
-    private static func encodeChainId(_ value: String) -> Data {
-        var writer = CompactNoritoWriter()
-        writer.writeField(CompactNorito.encodeString(value))
-        return writer.data
+    private static func encodeChainId(_ value: String) throws -> Data {
+        let bytes = Array(value.utf8)
+        let isAlphaNumeric: (UInt8) -> Bool = { byte in
+            (byte >= 0x30 && byte <= 0x39)
+                || (byte >= 0x41 && byte <= 0x5A)
+                || (byte >= 0x61 && byte <= 0x7A)
+        }
+        guard !bytes.isEmpty,
+              bytes.count <= maxChainIDBytes,
+              isAlphaNumeric(bytes[0]),
+              isAlphaNumeric(bytes[bytes.count - 1]),
+              bytes.allSatisfy({ byte in
+                  isAlphaNumeric(byte)
+                      || byte == 0x2E
+                      || byte == 0x5F
+                      || byte == 0x3A
+                      || byte == 0x2D
+              }) else {
+            throw NexusAppError(
+                code: "invalid_chain_id",
+                message: "Chain ID must be 1...128 canonical ASCII bytes."
+            )
+        }
+        CompactNorito.encodeString(value)
     }
 
     private static func encodeAccountId(_ value: String) throws -> Data {

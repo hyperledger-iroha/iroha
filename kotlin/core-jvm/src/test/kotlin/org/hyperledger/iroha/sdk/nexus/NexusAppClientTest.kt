@@ -125,6 +125,27 @@ class NexusAppClientTest {
     }
 
     @Test
+    fun `buildTransferDraft binds the canonical default ttl when omitted`() {
+        val client = NexusAppClient(
+            config = NexusAppConfig(
+                chainId = "test-chain",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                authority = ACCOUNT_ID,
+                signingPublicKey = PUBLIC_KEY,
+            ),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
+        )
+        val omittedTtl = sampleInput().copy(ttlMs = null)
+        val explicitDefault = sampleInput().copy(ttlMs = 100_000L)
+
+        val omittedDraft = client.buildTransferDraft(omittedTtl)
+        val explicitDraft = client.buildTransferDraft(explicitDefault)
+
+        assertEquals(100_000L, omittedDraft.input.ttlMs)
+        assertContentEquals(explicitDraft.signable.payloadBytes, omittedDraft.signable.payloadBytes)
+    }
+
+    @Test
     fun `finalizeAndSubmit accepts exact zero signature algorithm alias`() {
         val torii = FakeToriiClient()
         val client = NexusAppClient(

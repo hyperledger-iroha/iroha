@@ -32,9 +32,7 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeChainId(string chainId)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteField(EncodeString(RequireExactNonBlank(chainId, nameof(chainId))));
-        return writer.ToArray();
+        return EncodeString(RequireCanonicalChainId(chainId, nameof(chainId)));
     }
 
     public byte[] EncodeAccountId(string accountId)
@@ -681,5 +679,36 @@ internal sealed class TransactionEncodingContext
             throw new ArgumentException("Value must not contain control characters.", paramName);
         }
         return value;
+    }
+
+    private static string RequireCanonicalChainId(string? value, string paramName)
+    {
+        const int maxChainIdBytes = 128;
+        if (string.IsNullOrEmpty(value) || value.Length > maxChainIdBytes)
+        {
+            throw new ArgumentException(
+                $"Chain ID must contain 1..{maxChainIdBytes} ASCII bytes.",
+                paramName);
+        }
+        if (!IsAsciiLetterOrDigit(value[0]) || !IsAsciiLetterOrDigit(value[^1]))
+        {
+            throw new ArgumentException(
+                "Chain ID must begin and end with an ASCII alphanumeric character.",
+                paramName);
+        }
+        if (value.Any(character =>
+                !IsAsciiLetterOrDigit(character)
+                && character is not ('.' or '_' or ':' or '-')))
+        {
+            throw new ArgumentException("Chain ID contains a non-canonical character.", paramName);
+        }
+        return value;
+    }
+
+    private static bool IsAsciiLetterOrDigit(char value)
+    {
+        return value is (>= 'a' and <= 'z')
+            or (>= 'A' and <= 'Z')
+            or (>= '0' and <= '9');
     }
 }

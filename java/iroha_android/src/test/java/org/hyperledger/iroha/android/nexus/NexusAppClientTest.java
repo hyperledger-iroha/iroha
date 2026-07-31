@@ -148,6 +148,22 @@ public final class NexusAppClientTest {
   }
 
   @Test
+  public void buildTransferDraftBindsTheCanonicalDefaultTtlWhenOmitted() {
+    final NexusAppClient client =
+        new NexusAppClient(
+            new NexusAppConfig(
+                "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()));
+    final NexusTransferInput omittedTtl = sampleInput().toBuilder().ttlMs(null).build();
+    final NexusTransferInput explicitDefault = sampleInput().toBuilder().ttlMs(100_000L).build();
+
+    final NexusTransferDraft omittedDraft = client.buildTransferDraft(omittedTtl);
+    final NexusTransferDraft explicitDraft = client.buildTransferDraft(explicitDefault);
+
+    assertEquals(Long.valueOf(100_000L), omittedDraft.input().ttlMs());
+    assertArrayEquals(explicitDraft.signable().payloadBytes(), omittedDraft.signable().payloadBytes());
+  }
+
+  @Test
   public void finalizeAndSubmitAcceptsExactZeroSignatureAlgorithmAlias() {
     final FakeToriiClient torii = new FakeToriiClient();
     final NexusAppClient client =

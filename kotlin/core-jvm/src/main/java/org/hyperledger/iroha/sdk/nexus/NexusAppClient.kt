@@ -21,6 +21,7 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 const val NEXUS_SIGNATURE_ALGORITHM_ED25519: String = "ed25519"
+private const val DEFAULT_NEXUS_TRANSACTION_TTL_MS: Long = 100_000L
 
 /** Typed error raised by [NexusAppClient]. */
 class NexusAppError(
@@ -206,6 +207,7 @@ class NexusAppClient @JvmOverloads constructor(
         val normalized = input.copy(
             authority = authority,
             signingPublicKey = signingPublicKey.copyOf(),
+            ttlMs = input.ttlMs ?: DEFAULT_NEXUS_TRANSACTION_TTL_MS,
         )
         val instruction = TransferWirePayloadEncoder.encodeAssetTransfer(
             normalized.sourceAssetId,

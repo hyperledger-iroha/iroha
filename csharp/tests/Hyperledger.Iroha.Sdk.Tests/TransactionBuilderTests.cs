@@ -671,6 +671,46 @@ public sealed class TransactionBuilderTests
         Assert.Throws<ArgumentException>(() => context.EncodeChainId(chainId));
     }
 
+    [Fact]
+    public void TransactionEncodingContextUsesTransparentCanonicalChainIdWireLayout()
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Equal(
+            Convert.FromHexString("083030303030303432"),
+            context.EncodeChainId(FixtureChainId));
+    }
+
+    [Theory]
+    [InlineData("-chain")]
+    [InlineData("chain-")]
+    [InlineData("bad/chain")]
+    [InlineData("scalar-😀")]
+    public void TransactionBuilderRejectsNonCanonicalChainIds(string chainId)
+    {
+        Assert.Throws<ArgumentException>(() =>
+            new TransactionBuilder(chainId, FixtureAccountId, EmptyAuthorityFeePayment));
+    }
+
+    [Fact]
+    public void TransactionBuilderRejectsOversizedChainIds()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            new TransactionBuilder(new string('x', 129), FixtureAccountId, EmptyAuthorityFeePayment));
+    }
+
+    [Fact]
+    public void TransactionBuilderDefaultsToSignatureBoundTtlAndRejectsMissingTtl()
+    {
+        var builder = NewTransactionBuilder();
+
+        Assert.Equal(100_000UL, builder.TimeToLiveMilliseconds);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            builder.SetTimeToLiveMilliseconds(null));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            builder.SetTimeToLiveMilliseconds(0));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(" ")]

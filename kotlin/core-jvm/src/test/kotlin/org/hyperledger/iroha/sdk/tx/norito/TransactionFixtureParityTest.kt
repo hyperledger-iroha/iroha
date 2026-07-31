@@ -377,6 +377,7 @@ class TransactionFixtureParityTest {
                     "chain" to "00000001",
                     "authority" to sampleAuthority(0x51),
                     "creation_time_ms" to 0L,
+                    "time_to_live_ms" to 100_000L,
                     "fee_payment" to mapOf(
                         "payer" to "authority",
                         "value" to mapOf(

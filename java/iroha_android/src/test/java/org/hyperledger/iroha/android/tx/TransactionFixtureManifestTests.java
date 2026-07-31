@@ -1687,12 +1687,12 @@ public final class TransactionFixtureManifestTests {
   private static final class ChainIdAdapter implements TypeAdapter<String> {
     @Override
     public void encode(final NoritoEncoder encoder, final String value) {
-      encodeSizedField(encoder, STRING_ADAPTER, value);
+      STRING_ADAPTER.encode(encoder, value);
     }
 
     @Override
     public String decode(final NoritoDecoder decoder) {
-      return decodeSizedField(decoder, STRING_ADAPTER, "chain_id.inner");
+      return STRING_ADAPTER.decode(decoder);
     }
   }
 

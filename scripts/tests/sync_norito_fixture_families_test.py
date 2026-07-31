@@ -37,12 +37,20 @@ def _entry(name: str, payload: bytes, signed: bytes) -> dict[str, object]:
     }
 
 
+def _sized_field(value: bytes) -> bytes:
+    return MODULE._compact_length(len(value)) + value
+
+
+def _signed_envelope(payload: bytes, signature: bytes = b"signature") -> bytes:
+    return _sized_field(signature) + _sized_field(payload) + _sized_field(b"\x00")
+
+
 def _write_source(root: Path) -> Path:
     source = root / "source"
     source.mkdir()
     entries = [
-        _entry("alpha", b"\x00alpha", b"\x01alpha"),
-        _entry("beta", b"\x00beta", b"\x01beta"),
+        _entry("alpha", b"\x00alpha", _signed_envelope(b"\x00alpha")),
+        _entry("beta", b"\x00beta", _signed_envelope(b"\x00beta")),
     ]
     (source / MODULE.MANIFEST_NAME).write_text(
         json.dumps({"fixtures": entries}, indent=2) + "\n",
@@ -86,6 +94,33 @@ def _write_source(root: Path) -> Path:
             base64.b64decode(str(entry["payload_base64"]))
         )
     return source
+
+
+def test_signed_hash_commits_to_payload_but_not_authorization_proof() -> None:
+    payload = b"canonical-payload"
+    first = _signed_envelope(payload, b"first-signature")
+    second = _signed_envelope(payload, b"replacement-signature")
+    changed_payload = _signed_envelope(payload + b"-changed", b"first-signature")
+
+    assert MODULE._signed_transaction_hash(first) == MODULE._signed_transaction_hash(second)
+    assert MODULE._signed_transaction_hash(first) != MODULE._signed_transaction_hash(
+        changed_payload
+    )
+
+
+@pytest.mark.parametrize(
+    "signed",
+    (
+        b"",
+        b"\x80",
+        b"\x81\x00x" + _sized_field(b"payload") + _sized_field(b"\x00"),
+        _sized_field(b"signature") + b"\xff" * 10,
+        _signed_envelope(b"payload") + b"trailing",
+    ),
+)
+def test_signed_hash_rejects_malformed_or_noncanonical_envelopes(signed: bytes) -> None:
+    with pytest.raises(MODULE.FixtureSyncError):
+        MODULE._signed_transaction_hash(signed)
 
 
 def test_sync_is_exact_and_preserves_only_swift_specific_norito(tmp_path: Path) -> None:

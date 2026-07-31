@@ -263,8 +263,43 @@ def _compact_length(value: int) -> bytes:
             return bytes(output)
 
 
+def _read_compact_length(data: bytes, offset: int, context: str) -> tuple[int, int]:
+    start = offset
+    value = 0
+    for index in range(10):
+        if offset >= len(data):
+            raise FixtureSyncError(f"{context} has a truncated compact length")
+        byte = data[offset]
+        offset += 1
+        chunk = byte & 0x7F
+        if index == 9 and chunk > 1:
+            raise FixtureSyncError(f"{context} compact length overflows u64")
+        value |= chunk << (index * 7)
+        if byte & 0x80 == 0:
+            if data[start:offset] != _compact_length(value):
+                raise FixtureSyncError(f"{context} has a non-canonical compact length")
+            return value, offset
+    raise FixtureSyncError(f"{context} compact length exceeds ten bytes")
+
+
+def _read_sized_field(data: bytes, offset: int, context: str) -> tuple[bytes, int]:
+    length, payload_offset = _read_compact_length(data, offset, context)
+    end = payload_offset + length
+    if end > len(data):
+        raise FixtureSyncError(f"{context} length exceeds the signed transaction")
+    return data[payload_offset:end], end
+
+
 def _signed_transaction_hash(data: bytes) -> str:
-    return _iroha_hash(b"\x00\x00\x00\x00" + _compact_length(len(data)) + data)
+    _, offset = _read_sized_field(data, 0, "signed transaction signature")
+    payload, offset = _read_sized_field(data, offset, "signed transaction payload")
+    _, offset = _read_sized_field(
+        data, offset, "signed transaction multisig signatures"
+    )
+    if offset != len(data):
+        raise FixtureSyncError("signed transaction has trailing bytes")
+    external_payload = b"\x00\x00\x00\x00" + _compact_length(len(payload)) + payload
+    return _iroha_hash(external_payload)
 
 
 def _validate_payload_source(

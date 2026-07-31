@@ -622,13 +622,13 @@ internal class TransactionPayloadAdapter private constructor(
 
     private class ChainIdAdapter : TypeAdapter<String> {
         override fun encode(encoder: NoritoEncoder, value: String) {
-            encodeSizedField(encoder, STRING_ADAPTER, value)
+            STRING_ADAPTER.encode(encoder, value)
         }
 
         override fun decode(decoder: NoritoDecoder): String {
             val payload = decoder.readBytes(decoder.remaining())
             val sized = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
-            val value = decodeSizedField(sized, STRING_ADAPTER)
+            val value = STRING_ADAPTER.decode(sized)
             require(sized.remaining() == 0) { "Trailing bytes after ChainId payload" }
             return value
         }

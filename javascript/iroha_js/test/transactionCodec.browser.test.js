@@ -378,7 +378,7 @@ test("browser transfer payload is byte-for-byte native Rust canonical", () => {
     sampleInput({
       metadata: { z: [true, null, { b: 2, a: "é" }], a: "-1.25" },
       quantity: "0.0000000000000000000000000001",
-      ttlMs: 0,
+      ttlMs: 1,
       nonce: 0xffff_ffff,
     }),
   ]) {
@@ -440,7 +440,7 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   ]);
   expectCodecError(
     () => browserSignedTransactionHashHex(legacyOuterAttachment),
-    "malformed_signed_transaction",
+    "malformed_payload",
   );
 });
 
@@ -600,6 +600,11 @@ test("browser builder rejects ambiguous, non-canonical, and hostile inputs", () 
     () => buildBrowserTransferPayload(sampleInput({ nonce: 0 })),
     "invalid_integer",
   );
+  expectCodecError(
+    () => buildBrowserTransferPayload(sampleInput({ ttlMs: 0 })),
+    "invalid_integer",
+  );
+  assert.throws(() => nativeBuild(sampleInput({ ttlMs: 0 })));
   for (const quantity of [0, 1, -1, "01", "1.0", "1e3", Number.NaN]) {
     expectCodecError(
       () => buildBrowserTransferPayload(sampleInput({ quantity })),
@@ -824,7 +829,7 @@ test("browser metadata preserves prototype-shaped keys and enforces Rust Unicode
     "invalid_input",
   );
   expectCodecError(
-    () => buildBrowserTransferPayload(sampleInput({ chainId: "x".repeat(1_025) })),
+    () => buildBrowserTransferPayload(sampleInput({ chainId: "x".repeat(129) })),
     "bounds_exceeded",
   );
   expectCodecError(
@@ -837,7 +842,7 @@ test("browser metadata preserves prototype-shaped keys and enforces Rust Unicode
   );
 });
 
-test("browser rejects lone surrogates while preserving scalar and noncharacter parity", () => {
+test("browser rejects non-ASCII chain IDs while preserving metadata scalar parity", () => {
   for (const surrogate of ["\ud800", "\udfff"]) {
     expectCodecError(
       () => buildBrowserTransferPayload(sampleInput({ chainId: `bad${surrogate}` })),
@@ -862,13 +867,18 @@ test("browser rejects lone surrogates while preserving scalar and noncharacter p
   }
 
   const scalarInput = sampleInput({
-    chainId: "scalar-😀",
+    chainId: "scalar-chain",
     metadata: { "emoji😀": "paired😀", noncharacters: "\ufdd0\u{10ffff}" },
   });
   assert.deepEqual(
     buildBrowserTransferPayload(scalarInput),
     Buffer.from(nativeBuild(scalarInput).payloadBytes),
   );
+  expectCodecError(
+    () => buildBrowserTransferPayload(sampleInput({ chainId: "scalar-😀" })),
+    "invalid_input",
+  );
+  assert.throws(() => nativeBuild(sampleInput({ chainId: "scalar-😀" })));
 });
 
 test("browser numeric parsing rejects multi-megabyte decimal strings before conversion", () => {
@@ -1303,6 +1313,40 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
         replaceSignedPayload(finalized.signedTransaction, Buffer.of(0)),
       ),
     "malformed_signed_transaction",
+  );
+  const missingTtlPayload = replacePayloadField(payload, 4, Buffer.of(0));
+  expectCodecError(
+    () =>
+      validateBrowserTransferSignable({
+        payloadBytes: missingTtlPayload,
+        payloadHashHex: browserTransactionPayloadHashHex(missingTtlPayload),
+        authority: AUTHORITY,
+        signingPublicKey: PUBLIC_KEY,
+      }),
+    "malformed_payload",
+  );
+  expectCodecError(
+    () =>
+      browserSignedTransactionHashHex(
+        replaceSignedPayload(finalized.signedTransaction, missingTtlPayload),
+      ),
+    "malformed_signed_transaction",
+  );
+  expectCodecError(
+    () =>
+      validateBrowserTransferSignable({
+        payloadBytes: replacePayloadField(
+          payload,
+          0,
+          stringArchive("scalar-😀"),
+        ),
+        payloadHashHex: browserTransactionPayloadHashHex(
+          replacePayloadField(payload, 0, stringArchive("scalar-😀")),
+        ),
+        authority: AUTHORITY,
+        signingPublicKey: PUBLIC_KEY,
+      }),
+    "malformed_payload",
   );
 
   const versioned = finalized.signedTransaction;
