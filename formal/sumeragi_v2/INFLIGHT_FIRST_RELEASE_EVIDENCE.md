@@ -39,7 +39,7 @@ release boundary, and a 4097-entry selected conjunction.
 ## Evidence status and projection boundary
 
 This kernel is **bounded abstract model-checking evidence only**. It is not a
-production-refinement theorem. Schema 3 of
+production-refinement theorem. Schema 4 of
 `multilane_source_bindings.json` records a separate
 `layout_only_no_transition_refinement` contract. That layout-only source
 binding fails closed if the model, configs, runners, documentation, accepted
@@ -47,6 +47,23 @@ version constants, exact payload/reservation fields, queue durability order,
 Kura execution-input persistence/recovery consumers, or the formal release
 receipt's distinct fifth layout-only result row drift. It remains outside the
 four production-refinement kernels.
+
+Within that deliberately limited contract, the reservation journal's local
+primitive transition seam is also source-bound. The binding covers the
+move-only `PreparedReservationJournalTransition` capability, its exact frame,
+ownership bound, state-instance domain, structural pre-state shape, generation,
+resulting-state history, and ordered owner-token coverage, the primitive
+refinement check, runtime rejection of an Absent-to-Committed transition,
+post-I/O semantic/owner revalidation, bounded direct application without a
+full-state clone, durable append, and snapshot compaction. Adversarial
+capability tests and post-sync restart tests are whole-file tokens of this
+contract. Disk-ahead publication failures poison the live owner and require
+reconstruction from the canonical journal on restart.
+
+This local source binding is not a cross-store transition theorem. Refinement
+across QueuePlan, Kura, the canonical carrier, WSV, FIFO restoration, and lane
+lifecycle remains open, as do the total forward simulation and reverse
+terminal-owner projection.
 
 The exact blocker is a machine-checked forward simulation from all Rust
 QueuePlan journal V4, reservation journal V5, Kura, recovery, filesystem-error,

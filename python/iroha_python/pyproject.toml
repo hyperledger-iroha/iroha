@@ -51,6 +51,9 @@ exclude = [
   "src/**/*.so",
   "src/**/*.dylib",
   "src/**/*.pyd",
+  "src/**/__pycache__/**",
+  "src/**/*.pyc",
+  "src/**/*.pyo",
 ]
 include = [
   "src/iroha_python/examples/connect_app_metadata.json",

@@ -1918,6 +1918,7 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_missing_extra_and_tampered_signer_pops
   sumeragi::v2_lane_work::tests::historical_recovery_request_survives_current_state_key_pruning
   sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_stale_incarnation_and_unanchored_view
+  sumeragi::v2_core::refinement::tests::in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps
   queue::reservation_journal::tests::crash_at_every_operation_frame_write_boundary_is_prefix_atomic
   queue::tests::concurrent_lane_reserve_attempts_cannot_duplicate_one_transaction
   queue::tests::lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary
@@ -2023,6 +2024,14 @@ required_multilane_queue_journal_focus_tests=(
   queue::reservation_journal::tests::complete_v4_bootstrap_is_rejected_without_repair_or_rewrite
   queue::reservation_journal::tests::v5_envelope_rejects_unsupported_record_versions_without_rewrite
   queue::reservation_journal::tests::v5_release_batch_replay_is_atomic_idempotent_and_exact
+  queue::reservation_journal::tests::post_sync_append_publication_failure_is_poisoned_and_replayed_on_reopen
+  queue::reservation_journal::tests::post_sync_compaction_publication_failure_is_poisoned_and_replayed_on_reopen
+  queue::reservation_journal::tests::runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_barrier
+  queue::reservation_journal::tests::prepared_checked_transition_is_bound_to_frame_and_state_generation
+  queue::reservation_journal::tests::prepared_checked_transition_rejects_same_generation_cross_state_substitution
+  queue::reservation_journal::tests::prepared_checked_transition_binds_exact_ordered_owner_token_coverage
+  queue::reservation_journal::tests::checked_transition_result_identity_and_candidate_application_are_atomic
+  queue::reservation_journal::tests::checked_transition_generation_overflow_is_rejected_without_mutation
   queue::tests::queue_plan_admission_context_binds_legacy_topology_and_contiguous_generation
   queue::tests::queue_plan_journal_replays_matching_plan_after_restart
   queue::tests::strict_durable_claim_rejects_stale_context_before_ownership_and_binds_exact_record
@@ -2172,7 +2181,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=280
+readonly expected_multilane_focus_test_count=289
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2343,7 +2352,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 280-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 289-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2451,8 +2460,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 281 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 280 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 290 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 289 focused tests" >&2
     exit 1
   fi
 fi
@@ -3638,4 +3647,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 280/280 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 289/289 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

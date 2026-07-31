@@ -1192,6 +1192,172 @@ def test_rejects_provenance_receipt_not_bound_to_opened_bundle(
     )
 
 
+def test_valid_provenance_rows_bind_signed_candidate_checksums(
+    tmp_path: Path,
+) -> None:
+    paths = write_source_bundle(tmp_path)
+
+    result, errors = validate(tmp_path)
+
+    assert errors == []
+    assert result is not None
+    provenance = read_json(paths["provenance_bundle"])
+    for index, target in enumerate(MODULE.REQUIRED_RELEASE_TARGETS):
+        row = provenance["targets"][index]
+        assert set(row) == {
+            "target",
+            "attestation_bundle",
+            "cosign_bundle",
+            "sha256sums",
+            "sha256sums_cosign_bundle",
+            "verification_receipt",
+        }
+        assert row["target"] == target
+        receipt = read_json(tmp_path / row["verification_receipt"]["artifact_path"])
+        sha256sums = tmp_path / row["sha256sums"]["artifact_path"]
+        sha256sums_cosign = (
+            tmp_path / row["sha256sums_cosign_bundle"]["artifact_path"]
+        )
+        assert receipt["sha256sums_sha256"] == hashlib.sha256(
+            sha256sums.read_bytes()
+        ).hexdigest()
+        assert receipt[
+            "sha256sums_cosign_bundle_sha256"
+        ] == hashlib.sha256(sha256sums_cosign.read_bytes()).hexdigest()
+
+
+def test_rejects_noncanonical_provenance_checksum_schema(
+    tmp_path: Path,
+) -> None:
+    paths = write_source_bundle(tmp_path)
+    provenance = read_json(paths["provenance_bundle"])
+    provenance["targets"][0]["checksums_compatibility_alias"] = provenance[
+        "targets"
+    ][0]["sha256sums"]
+    write_json(paths["provenance_bundle"], provenance)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    receipt = tmp_path / f"receipts/{target}.provenance.json"
+    receipt_payload = read_json(receipt)
+    receipt_payload["checksums_digest_compatibility_alias"] = receipt_payload[
+        "sha256sums_sha256"
+    ]
+    write_json(receipt, receipt_payload)
+    update_reference(
+        tmp_path,
+        paths["provenance_bundle"],
+        "targets",
+        receipt,
+        row=0,
+        field="verification_receipt",
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    diagnostics = "\n".join(errors)
+    assert (
+        "provenance_bundle source.targets[0] fields must match the "
+        "schema-closed contract"
+    ) in diagnostics
+    assert (
+        "provenance_bundle verification receipt[0] fields must match the "
+        "schema-closed contract"
+    ) in diagnostics
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_error"),
+    (
+        (
+            "sha256sums",
+            "sha256sums_sha256 must match the opened SHA256SUMS",
+        ),
+        (
+            "sha256sums_cosign_bundle",
+            "sha256sums_cosign_bundle_sha256 must match the opened bundle",
+        ),
+    ),
+)
+def test_rejects_mutated_candidate_checksum_provenance(
+    tmp_path: Path,
+    field: str,
+    expected_error: str,
+) -> None:
+    paths = write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    if field == "sha256sums":
+        artifact = tmp_path / f"raw/{target}/SHA256SUMS"
+        artifact.write_text(
+            f"{hashlib.sha256(b'tampered').hexdigest()}  tampered.release\n",
+            encoding="utf-8",
+        )
+    else:
+        artifact = tmp_path / f"raw/{target}/SHA256SUMS.sigstore.json"
+        write_json(
+            artifact,
+            {"bundle": "tampered-sha256sums-cosign", "target": target},
+        )
+    update_reference(
+        tmp_path,
+        paths["provenance_bundle"],
+        "targets",
+        artifact,
+        row=0,
+        field=field,
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any(expected_error in error for error in errors)
+
+
+def test_rejects_cross_target_sha256sums_cosign_bundle(
+    tmp_path: Path,
+) -> None:
+    paths = write_source_bundle(tmp_path)
+    provenance = read_json(paths["provenance_bundle"])
+    first = provenance["targets"][0]
+    second = provenance["targets"][1]
+    first["sha256sums_cosign_bundle"], second[
+        "sha256sums_cosign_bundle"
+    ] = (
+        second["sha256sums_cosign_bundle"],
+        first["sha256sums_cosign_bundle"],
+    )
+    write_json(paths["provenance_bundle"], provenance)
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert sum(
+        "sha256sums_cosign_bundle_sha256 must match the opened bundle" in error
+        for error in errors
+    ) == 2
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ("SHA256SUMS", "SHA256SUMS.sigstore.json"),
+)
+def test_rejects_missing_candidate_checksum_provenance_file(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    (tmp_path / f"raw/{target}/{filename}").unlink()
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any(
+        "provenance_bundle SHA256SUMS" in error
+        and "must reference an existing regular file" in error
+        for error in errors
+    )
+
+
 def test_rejects_invalid_release_operation_status(tmp_path: Path) -> None:
     paths = write_source_bundle(tmp_path)
     receipt = tmp_path / f"receipts/{MODULE.REQUIRED_RELEASE_TARGETS[0]}.release.json"

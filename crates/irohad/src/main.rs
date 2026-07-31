@@ -22,6 +22,8 @@ mod nexus_fee_relay_worker;
 mod runtime_provider_broker;
 /// Deployment-owned runtime-provider registry boundary for the standard launcher.
 pub mod runtime_provider_registry;
+/// Exact external credential boundary for authenticated Hugging Face inference.
+pub mod soracloud_hf_credential;
 /// Embedded Soracloud runtime-manager reconciliation.
 #[cfg(feature = "embedded-soracloud-runtime")]
 #[path = "soracloud_runtime.rs"]
@@ -36,7 +38,7 @@ pub mod soracloud_runtime_signer;
 pub mod sorafs_hedging_billing_runtime;
 /// Fail-closed config-bound `SoraFS` `PoP` runtime construction.
 pub mod sorafs_pop_runtime;
-/// Supervised finalized-PoR reputation reconciliation and archive compaction.
+/// Supervised finalized-PoR reputation reconciliation and optional archive compaction.
 pub mod sorafs_por_replay_archive_runtime;
 /// Immutable finalized-ledger query adapter for provider ingest.
 pub mod sorafs_provider_ingest_finalized_query;
@@ -49,8 +51,8 @@ pub mod sorafs_reputation_runtime;
 
 pub use runtime_provider_broker::{
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
-    RuntimeProviderBrokerServerErrorV1, serve_runtime_provider_broker_v1,
-    serve_runtime_provider_broker_with_lifecycle_v1,
+    RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
+    serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_lifecycle_v1,
 };
 pub use runtime_provider_registry::{
     IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
@@ -1343,7 +1345,8 @@ pub struct Iroha {
 /// signers, immutable publication, acknowledgement, sealed witness storage,
 /// authenticated Governance DAG publication/readback/head updates, sealed
 /// monotonic Governance DAG checkpoints, externally sealed reputation journal
-/// checkpoints, and the Soracloud mutation/provenance signer are the
+/// checkpoints, the Soracloud mutation/provenance signer, and the authenticated
+/// Hugging Face credential provider are the
 /// reference-node boundaries for
 /// ledger access, PKCS#11, managed-KMS, and threshold services. Provider
 /// credentials, unwrapped keys, PRF shares, seeds, and outputs must stay inside
@@ -1392,6 +1395,8 @@ pub struct IrohaRuntimeDeps {
             dyn iroha_torii::sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1,
         >,
     >,
+    sorafs_moderation_checkpoint_store:
+        Option<Arc<dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1>>,
     sorafs_evidence_viewer_webauthn:
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>>,
     sorafs_evidence_viewer_grants:
@@ -1404,6 +1409,12 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreV1>>,
     sorafs_evidence_viewer_compaction_archive:
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>>,
+    sorafs_evidence_viewer_transparency_publisher: Option<
+        Arc<
+            dyn sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyPublisherV1,
+        >,
+    >,
     sorafs_pop_credential_provider_registry:
         Option<Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>>,
     sorafs_potr_runtime_signer_roles: Option<Arc<iroha_torii::sorafs::PotrRuntimeSignerRolesV1>>,
@@ -1453,6 +1464,8 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1>>,
     soracloud_runtime_mutation_signer:
         Option<Arc<dyn soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>>,
+    soracloud_hf_inference_credential_provider:
+        Option<Arc<dyn soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>>,
 }
 
 impl IrohaRuntimeDeps {
@@ -1483,12 +1496,14 @@ impl IrohaRuntimeDeps {
             && self.sorafs_moderation_settlement_handoff.is_none()
             && self.sorafs_moderation_publication_handoff.is_none()
             && self.sorafs_moderation_panel_notification.is_none()
+            && self.sorafs_moderation_checkpoint_store.is_none()
             && self.sorafs_evidence_viewer_webauthn.is_none()
             && self.sorafs_evidence_viewer_grants.is_none()
             && self.sorafs_evidence_viewer_receipt_signer.is_none()
             && self.sorafs_evidence_viewer_erasure.is_none()
             && self.sorafs_evidence_viewer_checkpoint_store.is_none()
             && self.sorafs_evidence_viewer_compaction_archive.is_none()
+            && self.sorafs_evidence_viewer_transparency_publisher.is_none()
             && self.sorafs_pop_credential_provider_registry.is_none()
             && self.sorafs_potr_runtime_signer_roles.is_none()
             && self.sorafs_gateway_acme_client.is_none()
@@ -1512,6 +1527,7 @@ impl IrohaRuntimeDeps {
             && self.sorafs_provider_ingest_retention_authority.is_none()
             && self.sorafs_por_finalized_replay_archive.is_none()
             && self.soracloud_runtime_mutation_signer.is_none()
+            && self.soracloud_hf_inference_credential_provider.is_none()
     }
 
     /// Attach the production PKCS#11/KMS wrapper for moderation quarantine
@@ -1734,6 +1750,21 @@ impl IrohaRuntimeDeps {
         self
     }
 
+    /// Attach the raw deployment-owned authenticated HF credential provider.
+    ///
+    /// The registry resolver replaces this provider with an immutable facade
+    /// qualified against the exact configured handle, revision, policy digest,
+    /// active posture, and non-test posture. Bearer credentials remain inside
+    /// the provider.
+    #[must_use]
+    pub fn with_soracloud_hf_inference_credential_provider(
+        mut self,
+        provider: Arc<dyn soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>,
+    ) -> Self {
+        self.soracloud_hf_inference_credential_provider = Some(provider);
+        self
+    }
+
     /// Attach the runtime-only HSM/KMS signer for exact moderation native
     /// transaction envelopes.
     #[must_use]
@@ -1782,6 +1813,18 @@ impl IrohaRuntimeDeps {
         >,
     ) -> Self {
         self.sorafs_moderation_panel_notification = Some(boundary);
+        self
+    }
+
+    /// Attach the deployment-owned sealed monotonic moderation checkpoint authority.
+    #[must_use]
+    pub fn with_sorafs_moderation_checkpoint_store(
+        mut self,
+        checkpoint_store: Arc<
+            dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1,
+        >,
+    ) -> Self {
+        self.sorafs_moderation_checkpoint_store = Some(checkpoint_store);
         self
     }
 
@@ -1849,6 +1892,22 @@ impl IrohaRuntimeDeps {
         archive: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>,
     ) -> Self {
         self.sorafs_evidence_viewer_compaction_archive = Some(archive);
+        self
+    }
+
+    /// Attach the deployment-owned signed monotonic evidence transparency publisher.
+    ///
+    /// Publisher credentials and the Ed25519 private signing key remain inside
+    /// the deployment-owned implementation.
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_transparency_publisher(
+        mut self,
+        publisher: Arc<
+            dyn sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyPublisherV1,
+        >,
+    ) -> Self {
+        self.sorafs_evidence_viewer_transparency_publisher = Some(publisher);
         self
     }
 
@@ -9588,6 +9647,14 @@ impl Iroha {
                 journal_path.display()
             ))
         })?;
+        queue
+            .finalize_plan_journal_startup_recovery()
+            .map_err(|err| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "failed to finalize lane reservation recovery after queue plan replay {}: {err}",
+                    journal_path.display()
+                ))
+            })?;
         iroha_logger::info!(
             path = %journal_path.display(),
             replayable,
@@ -10694,6 +10761,9 @@ impl Iroha {
             runtime_deps.sorafs_orderbook_transaction_signer.clone();
         let soracloud_runtime_mutation_signer =
             runtime_deps.soracloud_runtime_mutation_signer.clone();
+        let soracloud_hf_inference_credential_provider = runtime_deps
+            .soracloud_hf_inference_credential_provider
+            .clone();
         let sorafs_moderation_transaction_signer =
             runtime_deps.sorafs_moderation_transaction_signer.clone();
         let sorafs_moderation_settlement_handoff =
@@ -10702,6 +10772,8 @@ impl Iroha {
             runtime_deps.sorafs_moderation_publication_handoff.clone();
         let sorafs_moderation_panel_notification =
             runtime_deps.sorafs_moderation_panel_notification.clone();
+        let sorafs_moderation_checkpoint_store =
+            runtime_deps.sorafs_moderation_checkpoint_store.clone();
         let sorafs_evidence_viewer_webauthn = runtime_deps.sorafs_evidence_viewer_webauthn.clone();
         let sorafs_evidence_viewer_grants = runtime_deps.sorafs_evidence_viewer_grants.clone();
         let sorafs_evidence_viewer_receipt_signer =
@@ -10711,6 +10783,9 @@ impl Iroha {
             runtime_deps.sorafs_evidence_viewer_checkpoint_store.clone();
         let sorafs_evidence_viewer_compaction_archive = runtime_deps
             .sorafs_evidence_viewer_compaction_archive
+            .clone();
+        let sorafs_evidence_viewer_transparency_publisher = runtime_deps
+            .sorafs_evidence_viewer_transparency_publisher
             .clone();
         let sorafs_potr_runtime_signer_roles =
             runtime_deps.sorafs_potr_runtime_signer_roles.clone();
@@ -10967,7 +11042,9 @@ impl Iroha {
         } else {
             None
         };
-        let sorafs_reputation_runtime = if let Some(reputation_config) = sorafs_reputation_config {
+        let sorafs_reputation_runtime = if let Some(reputation_config) =
+            sorafs_reputation_config.as_ref()
+        {
             let trust_policy = sorafs_node.reputation_trust_policy().ok_or_else(|| {
                 Report::new(StartError::StartTorii).attach(
                     "enabled committed SoraFS reputation runtime requires the configured canonical reputation trust policy",
@@ -10988,7 +11065,7 @@ impl Iroha {
                 })?;
             let query_qualification =
                 sorafs_reputation_runtime::finalized_query_qualification_v1(
-                    &reputation_config,
+                    reputation_config,
                     &config.common.chain,
                     trust_policy.as_ref(),
                 )
@@ -11043,7 +11120,7 @@ impl Iroha {
             })?;
             let (handle, child) = if reputation_archive_active {
                 sorafs_reputation_runtime::start(
-                    &reputation_config,
+                    reputation_config,
                     &config.common.chain,
                     trust_policy.as_ref(),
                     dependencies,
@@ -11057,7 +11134,7 @@ impl Iroha {
                             .map_err(eyre::Report::new)
                     });
                 sorafs_reputation_runtime::start_deferred(
-                    &reputation_config,
+                    reputation_config,
                     &config.common.chain,
                     trust_policy.as_ref(),
                     dependencies,
@@ -11075,26 +11152,41 @@ impl Iroha {
         } else {
             None
         };
-        if sorafs_node.config().por_replay_archive_policy().is_some() {
-            let reputation_runtime = sorafs_reputation_runtime.as_ref().ok_or_else(|| {
-                Report::new(StartError::StartTorii).attach(
-                    "enabled finalized PoR replay archival requires the committed reputation runtime",
-                )
-            })?;
+        if let (Some(reputation_runtime), Some(reputation_config)) = (
+            sorafs_reputation_runtime.as_ref(),
+            sorafs_reputation_config.as_ref(),
+        ) {
             let admission: Arc<
                 dyn sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1,
             > = Arc::new(reputation_runtime.clone());
-            let child = sorafs_por_replay_archive_runtime::start(
-                sorafs_node.clone(),
-                admission,
-                supervisor.shutdown_signal(),
-            )
+            let child = if sorafs_node.config().por_replay_archive_policy().is_some() {
+                sorafs_por_replay_archive_runtime::start(
+                    sorafs_node.clone(),
+                    admission,
+                    supervisor.shutdown_signal(),
+                )
+            } else {
+                // Reuse the validated native page-item bound as the maximum
+                // number of retained PoR terminals admitted by one reputation
+                // worker tick. Replay archival is independent and optional.
+                sorafs_por_replay_archive_runtime::start_reputation_reconciliation(
+                    sorafs_node.clone(),
+                    admission,
+                    reputation_config.poll_interval,
+                    reputation_config.page_items,
+                    supervisor.shutdown_signal(),
+                )
+            }
             .map_err(|error| {
                 Report::new(StartError::StartTorii).attach(format!(
-                    "failed to initialise finalized PoR replay-archive worker: {error}"
+                    "failed to initialise finalized PoR reputation worker: {error}"
                 ))
             })?;
             supervisor.monitor(child);
+        } else if sorafs_node.config().por_replay_archive_policy().is_some() {
+            return Err(Report::new(StartError::StartTorii).attach(
+                "enabled finalized PoR replay archival requires the committed reputation runtime",
+            ));
         }
         let sorafs_hedging_billing_runtime = if let Some(hedging_billing_config) =
             sorafs_hedging_billing_config
@@ -11205,6 +11297,11 @@ impl Iroha {
             Arc::clone(&state),
         )
         .with_sorafs_node(sorafs_node.clone());
+        let runtime_manager = if let Some(provider) = soracloud_hf_inference_credential_provider {
+            runtime_manager.with_hf_inference_credential_provider(provider)
+        } else {
+            runtime_manager
+        };
         let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
             let runtime_mutation_sink = Arc::new(
                 QueuedSoracloudRuntimeMutationSink::new(
@@ -11309,6 +11406,11 @@ impl Iroha {
         } else {
             runtime_deps
         };
+        let runtime_deps = if let Some(checkpoint_store) = sorafs_moderation_checkpoint_store {
+            runtime_deps.with_sorafs_moderation_checkpoint_store(checkpoint_store)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(runtime) = sorafs_appeal_finance_checkpoint_runtime {
             runtime_deps.with_sorafs_appeal_finance_checkpoint_runtime(runtime)
         } else {
@@ -11345,6 +11447,11 @@ impl Iroha {
             } else {
                 runtime_deps
             };
+        let runtime_deps = if let Some(publisher) = sorafs_evidence_viewer_transparency_publisher {
+            runtime_deps.with_sorafs_evidence_viewer_transparency_publisher(publisher)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(runtime) = sorafs_pop_credentials {
             runtime_deps.with_sorafs_pop_credentials(runtime)
         } else {
@@ -17336,6 +17443,10 @@ mod tests {
                 "with_sorafs_evidence_viewer_compaction_archive",
             ),
             (
+                "sorafs_evidence_viewer_transparency_publisher",
+                "with_sorafs_evidence_viewer_transparency_publisher",
+            ),
+            (
                 "sorafs_gateway_acme_client",
                 "with_sorafs_gateway_acme_client",
             ),
@@ -17418,14 +17529,25 @@ mod tests {
         let worker = compact_source
             .find("sorafs_por_replay_archive_runtime::start(")
             .expect("launcher starts the supervised reconciliation/compaction worker");
+        let reputation_only_worker = compact_source
+            .find("sorafs_por_replay_archive_runtime::start_reputation_reconciliation(")
+            .expect("launcher starts PoR reputation reconciliation without optional archival");
 
         assert!(
-            clone < inject && inject < node && node < reputation && reputation < worker,
+            clone < inject
+                && inject < node
+                && node < reputation
+                && reputation < worker
+                && reputation < reputation_only_worker,
             "the exact archive must enter the node before routes are built, and bounded compaction must start only after durable reputation admission"
         );
         assert!(compact_source.contains(
             "dynsorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1"
         ));
+        assert!(
+            compact_source.contains("reputation_config.poll_interval,reputation_config.page_items"),
+            "the reputation-only callback worker must use validated bounded runtime policy"
+        );
     }
 
     #[test]

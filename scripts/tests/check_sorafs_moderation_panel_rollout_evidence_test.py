@@ -20,13 +20,24 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+TEST_DIR = Path(__file__).resolve().parent
+if str(TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(TEST_DIR))
+from sorafs_rollout_runner_test_support import TopologyBoundChecker  # noqa: E402
+
 
 NOW_UNIX = 1_800_300_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
-DEPLOYMENT_ID = "moderation-panel-staging-a"
-ENVIRONMENT = "staging"
+DEPLOYMENT_ID = "moderation-panel-production-a"
+ENVIRONMENT = "production"
+CHECKER = TopologyBoundChecker(
+    MODULE.main,
+    deployment_id=DEPLOYMENT_ID,
+    environment=ENVIRONMENT,
+    name="moderation-panel-checker",
+)
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -519,7 +530,7 @@ POLICY_BOUND_FIXTURES = (
 
 
 def run_gate(root: Path, *extra: str) -> int:
-    return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
+    return CHECKER(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
 
 def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
@@ -2829,7 +2840,7 @@ def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
         {"schema": "sorafs.moderation_panel.unknown.v1"},
     )
 
-    assert MODULE.main(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
+    assert CHECKER(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
 
 
 def test_unknown_directory_artifact_is_ignored_for_subset_gate(tmp_path: Path) -> None:
@@ -2897,7 +2908,7 @@ def test_response_file_complete_evidence_passes(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert MODULE.main([f"@{args}"]) == 0
+    assert CHECKER([f"@{args}"]) == 0
     assert json.loads(summary.read_text(encoding="utf-8"))["status"] == "ready"
 
 

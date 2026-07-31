@@ -73,8 +73,8 @@ snapshots diverge.
 
 ## Reference Material
 
-- [`docs/genesis.md`](../../docs/genesis.md) – structure of the genesis manifest and
-  the `crypto` block.
+- [Public genesis reference](https://docs.iroha.tech/reference/genesis.html) –
+  structure of the genesis manifest and the `crypto` block.
 - [`specs/references/configuration.md`](../references/configuration.md) –
   overview of `iroha_config` sections and defaults.
 - [`specs/crypto/sm_operator_rollout.md`](sm_operator_rollout.md) – end to

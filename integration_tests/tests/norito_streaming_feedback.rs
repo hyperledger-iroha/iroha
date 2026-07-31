@@ -87,6 +87,7 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
         Err(err) => return Err(eyre!(err)),
     };
     let listen_addr = server.local_addr().map_err(|err| eyre!(err))?;
+    let server_certificate_fingerprint = server.certificate_fingerprint();
 
     let publisher_keys = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked streaming publisher Ed25519 keypair");
@@ -157,9 +158,10 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
         let viewer_handle = viewer_handle.clone();
         async move {
             let endpoint = format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port());
-            let mut client = StreamingClient::connect(&endpoint, settings)
-                .await
-                .map_err(|err| eyre!(err))?;
+            let mut client =
+                StreamingClient::connect(&endpoint, server_certificate_fingerprint, settings)
+                    .await
+                    .map_err(|err| eyre!(err))?;
 
             let report = CapabilityReport {
                 stream_id,

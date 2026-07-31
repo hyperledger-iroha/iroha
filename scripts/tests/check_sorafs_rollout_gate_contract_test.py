@@ -235,6 +235,12 @@ FINGERPRINT_FIELD_ALLOWED_NAMES = frozenset(
         "replica_finalized_state_equal",
         "started_at_unix",
         "completed_at_unix",
+        # The SF-11 supply-chain checker applies a schema-closed four-row
+        # validator to this structured fingerprint and canonical public-URL
+        # validation to both provenance identities.
+        "source_artifacts",
+        "provenance_certificate_identity",
+        "provenance_oidc_issuer",
         # Schema-closed gateway-load fields with dedicated type, unit, bound,
         # and reviewed-inventory validation in the lane checker.
         "gateway_version",
@@ -250,6 +256,9 @@ FINGERPRINT_FIELD_ALLOWED_NAMES = frozenset(
         "p95_latency_ms",
         "p99_latency_ms",
     }
+)
+EXTERNAL_SOURCE_CANARY_EXAMPLE_NAMES = frozenset(
+    {"sorafs_reference_sdk_release_supply_chain_canary.args.example"}
 )
 RUNNER_PLAN_CONSTANT_NAMES = (
     "PLAN_FIELDS",
@@ -2540,12 +2549,36 @@ def test_canary_builders_use_shared_reviewed_deployment_context_validation() -> 
     assert "test_unreviewed_environment_fails_before_write" in gateway_tests
 
 
+def test_external_source_canary_examples_have_dedicated_source_validation() -> None:
+    """Keep non-self-contained examples covered by their source-authentication suite."""
+
+    actual = {
+        path.name
+        for path in EXAMPLES_DIR.glob("sorafs_*canary.args.example")
+        if path.name in EXTERNAL_SOURCE_CANARY_EXAMPLE_NAMES
+    }
+    source_tests = read(
+        SCRIPTS_DIR
+        / "tests"
+        / "build_sorafs_reference_sdk_release_canary_test.py"
+    )
+
+    assert actual == EXTERNAL_SOURCE_CANARY_EXAMPLE_NAMES
+    assert "test_builds_complete_supply_chain_canary" in source_tests
+    assert "test_supply_chain_source_errors_fail_before_write" in source_tests
+    assert "test_supply_chain_rejects_wrong_verification_public_key" in source_tests
+
+
 def test_canary_argfile_examples_build_reviewed_artifacts(
     tmp_path: Path,
     capsys,
 ) -> None:
     failures: dict[str, list[str]] = {}
-    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+    examples = [
+        path
+        for path in sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+        if path.name not in EXTERNAL_SOURCE_CANARY_EXAMPLE_NAMES
+    ]
     validation = load_script_module(
         SCRIPTS_DIR / "sorafs_evidence_validation.py",
         "sorafs_evidence_validation_canary_examples_contract",
@@ -2611,7 +2644,11 @@ def test_canary_argfile_examples_build_payload_free_artifacts(
     capsys,
 ) -> None:
     failures: dict[str, list[str]] = {}
-    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+    examples = [
+        path
+        for path in sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+        if path.name not in EXTERNAL_SOURCE_CANARY_EXAMPLE_NAMES
+    ]
     explicit_false_flags = {
         "critical_alerts_firing",
         "debug_artifacts",
@@ -2685,7 +2722,11 @@ def test_canary_argfile_examples_build_artifacts_without_sensitive_fields(
     capsys,
 ) -> None:
     failures: dict[str, list[str]] = {}
-    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+    examples = [
+        path
+        for path in sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+        if path.name not in EXTERNAL_SOURCE_CANARY_EXAMPLE_NAMES
+    ]
     sensitivity = load_script_module(
         SENSITIVITY_HELPER,
         "sorafs_evidence_sensitivity_canary_examples_contract",
@@ -2743,7 +2784,11 @@ def test_canary_argfile_examples_build_canonical_json_artifacts(
     capsys,
 ) -> None:
     failures: dict[str, list[str]] = {}
-    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+    examples = [
+        path
+        for path in sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+        if path.name not in EXTERNAL_SOURCE_CANARY_EXAMPLE_NAMES
+    ]
 
     assert examples
 
@@ -5883,6 +5928,8 @@ def test_rollout_runner_dry_run_plan_uses_reviewed_top_level_keys() -> None:
         "external_evidence",
         "deployment_context",
         "evidence_contract",
+        "supply_chain_source",
+        "topology_qualification",
         "steps",
     }
     required_keys = {

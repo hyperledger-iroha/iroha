@@ -31,7 +31,12 @@ summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
 > admission anchor; it never contains credentials or private keys. Partial,
 > disabled-stale, test-marked, shared, zero, non-canonical, or substituted
 > bindings fail closed. This configuration and startup comparison are
-> source-complete; focused and workspace Cargo validation remains pending.
+> source-complete. The durable tracker also authenticates both terminal
+> callback acknowledgements: proof delivery must return the exact canonical
+> proof-outbox operation ID, and a latency repair must return the native repair
+> task ID derived from the signed receipt digest. A non-zero substituted
+> acknowledgement leaves the signed receipt durable and the handoff pending for
+> exact replay. Focused and workspace Cargo validation remains pending.
 > Remaining SF-14 work
 > includes production forwarding/reconciliation across that boundary, genuine
 > live multi-provider rollout evidence, deployment-owned HSM/KMS adapters for
@@ -199,7 +204,9 @@ summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
   source. It atomically persists the accepted policy identity/digest/sequence,
   finalized cursor, provider, and admission-envelope digest before any
   external handoff and restores that exact binding as the monotonic floor for
-  the next live admission read.
+  the next live admission read. It checkpoints proof-outcome and repair
+  completion only after their callbacks return the canonical operation and task
+  identifiers; arbitrary non-zero acknowledgements are rejected and retried.
 - **Ledger identity:** The authoritative key is
   `BLAKE3("sorafs.potr.request-scope.v1\0" || manifest_digest || provider_id
   || request_id)`. A conflicting receipt for the same scope fails closed

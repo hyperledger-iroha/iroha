@@ -117,7 +117,7 @@ and record lifecycle events in world state (`iroha_core::state::space_directory_
    ```
 
    The bundle embeds `SpaceDirectoryEvent` hooks from the profile to prove the
-   dataspace exposes the mandatory audit webhooks; see `docs/space-directory.md`
+   dataspace exposes the mandatory audit webhooks; see `specs/space_directory.md`
    for the field layout and evidence requirements.
 
 #### Torii APIs
@@ -142,11 +142,12 @@ authority (private keys travel only in-memory inside Torii’s secure handler):
   with the UAID, dataspace id, effective epoch, and optional reason (mirrors the
   CLI layout).
 
-The JS SDK (`javascript/iroha_js/src/toriiClient.js`) already wraps these read
-surfaces via `ToriiClient.getUaidPortfolio`, `.getUaidBindings`, and
-`.getUaidManifests`; future Swift/Python releases reuse the same REST payloads.
+The JS SDK (`javascript/iroha_js/src/toriiClient.js`) wraps these read surfaces
+via `ToriiClient.getUaidPortfolio`, `.getUaidBindings`, and
+`.getUaidManifests`; all SDK implementations use the same REST payloads.
 Reference `specs/torii/portfolio_api.md` for complete request/response
-schemas and `docs/space-directory.md` for the end-to-end operator playbook.
+schemas and `specs/space_directory.md` for the source-adjacent operator
+playbook.
 
 Recent SDK/AMX updates
 - **NX-11 (cross-lane relay verification):** SDK helpers now validate the lane relay

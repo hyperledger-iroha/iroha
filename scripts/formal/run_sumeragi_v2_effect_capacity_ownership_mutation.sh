@@ -172,10 +172,16 @@ run_case certified-response-blocked-by-unrelated-retained-debt "$CERTIFIED_REQUE
 run_case certified-request-partial-pq-drain "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_request_partial_pq_bug.cfg 12 \
   "TLC2 Version 2.19" \
-  "Invariant DrainRetainedFetchBIsAtomic is violated." \
-  "<DrainRetainedFetchB"
+  "Invariant RetainedFetchBInstallsExactPQAtomically is violated." \
+  "<AdmitRetainedFetchBAtReleasedCapacity"
 
-run_case certified-request-retained-owner-drains-atomically "$CERTIFIED_REQUEST_MODULE" \
+run_case certified-request-upgrade-barrier-lost "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_upgrade_barrier_lost_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant UpgradeFetchBKeepsExactRetryBarrier is violated." \
+  "<AdmitRetainedFetchBAtReleasedCapacity"
+
+run_case certified-request-retained-owner-installs-atomically "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_request_fixed.cfg 0 \
   "TLC2 Version 2.19" \
   "Finished computing initial states: 3 distinct states generated" \
@@ -184,7 +190,7 @@ run_case certified-request-retained-owner-drains-atomically "$CERTIFIED_REQUEST_
   "<AdmitOuterTransportResponseA" \
   "<ConsumeTransportOnlyResponseA" \
   "<ReleaseOrdinaryWorkCapacityA" \
-  "<DrainRetainedFetchB"
+  "<AdmitRetainedFetchBAtReleasedCapacity"
 
 readonly OUTER_TRANSPORT_MODULE="SumeragiV2EffectCapacityOuterTransportMutation.tla"
 run_case outer-certified-response-classification-missing "$OUTER_TRANSPORT_MODULE" \
@@ -344,9 +350,9 @@ run_case retained-oversize-installed "$BATCH_MODULE" \
 echo "[tlc] a persisted TimeoutVote Sign without a retained owner fails immediately"
 echo "[tlc] fair Fetch retirement plus unprotected refill has a capacity-full lasso"
 echo "[tlc] bounded FIFO priority and deterministic reconstructible-Fetch preemption force rank descent and Sign admission"
-echo "[tlc] Q-full Fetch B remains reconstructible Missing debt without partial P/Q/T ownership"
+echo "[tlc] capacity-blocked Fetch B keeps one exact task/authority/lifecycle FIFO owner without partial P/Q installation"
 echo "[tlc] transport-only response A crosses unrelated retained T and releases exact P/Q ownership"
-echo "[tlc] periodic retransmission atomically installs or upgrades Fetch B after request capacity is released"
+echo "[tlc] capacity release atomically installs Fetch B P/Q; new B drains T while an authority upgrade retains its exact retry barrier"
 echo "[tlc] certified responses and payload chunks share one independent per-validator outer transport-completion reserve"
 echo "[tlc] decided/non-Fetch terminating owners retire fairly while full-capacity Fetch remains reconstructible Missing debt"
 echo "[tlc] six permutations enforce stable (class, work_id) preemption and decided-owner exclusion"

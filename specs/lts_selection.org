@@ -121,9 +121,9 @@ for selecting a particular version as an LTS candidate
    must be fixable within the time-frame of at most the release window
    for the candidate. Failure to do so is an automatic disqualification.
 
-In addition to the regular release procedure outlined in
-[[release_procedure.org]], the LTS must adhere to the following additional
-steps.
+In addition to the current release procedure outlined in
+[[release_dual_track_runbook.md][the dual-track release procedure]], the LTS
+must adhere to the following additional steps.
 
 In /addition/ to performing a regular release, a separate PR with the
 title =[release]: <semver> LTS= where =<semver>= is the semantic

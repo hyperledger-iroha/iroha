@@ -62,6 +62,9 @@ def copy_layout_fixture(tmp_path: Path, module, contract: dict) -> None:
     relatives.update(
         Path(check["path"]) for check in contract["ordered_source_checks"]
     )
+    relatives.update(
+        Path(check["path"]) for check in contract["forbidden_source_checks"]
+    )
     relatives.update(Path(check["path"]) for check in contract["source_checks"])
     for relative in relatives:
         destination = tmp_path / relative
@@ -84,6 +87,27 @@ def replace_once(path: Path, old: str, new: str) -> None:
     source = path.read_text(encoding="utf-8")
     assert source.count(old) >= 1, f"fixture cannot find {old!r} in {path}"
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+
+def swap_ordered_once(path: Path, earlier: str, later: str) -> None:
+    """Swap one ordered token pair while retaining both source anchors."""
+
+    source = path.read_text(encoding="utf-8")
+    earlier_offset = source.find(earlier)
+    assert earlier_offset >= 0, f"fixture cannot find {earlier!r} in {path}"
+    later_offset = source.find(later, earlier_offset + len(earlier))
+    assert later_offset >= 0, (
+        f"fixture cannot find {later!r} after {earlier!r} in {path}"
+    )
+    middle = source[earlier_offset + len(earlier) : later_offset]
+    path.write_text(
+        source[:earlier_offset]
+        + later
+        + middle
+        + earlier
+        + source[later_offset + len(later) :],
+        encoding="utf-8",
+    )
 
 
 def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> None:
@@ -192,6 +216,672 @@ def test_inflight_layout_contract_rejects_durability_order_drift(
     path.write_text(source, encoding="utf-8")
     errors = validate_fixture(tmp_path, module, contract)
     assert any("missing or reorders token" in error for error in errors)
+
+
+def test_inflight_layout_contract_rejects_reservation_pre_state_identity_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    replace_once(
+        path,
+        "expected_state_identity: self.checked_state_identity,",
+        "expected_state_identity: resulting_state_identity,",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "IndexedReservationReplayState::prepare_checked_transition"
+        in error
+        and "expected_state_identity: self.checked_state_identity" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_token"),
+    (
+        (
+            "authorization_domain: self.authorization_domain.authorization(),",
+            "authorization_domain: Arc::new(()),",
+            "authorization_domain: self.authorization_domain.authorization()",
+        ),
+        (
+            "expected_shape: self.checked_shape(),",
+            "expected_shape: CheckedReplayStateShape { "
+            "live: 0, committed: 0, release_barriers: 0, "
+            "completed_releases: 0, ownership: 0, fifo_ordinals: 0, "
+            "live_lane_incarnations: 0, next_order: 0 },",
+            "expected_shape: self.checked_shape()",
+        ),
+        (
+            ".authorizes(&prepared.authorization_domain)",
+            ".authorizes(&self.authorization_domain.authorization())",
+            ".authorizes(&prepared.authorization_domain)",
+        ),
+        (
+            "self.checked_shape() != prepared.expected_shape",
+            "self.checked_shape() == prepared.expected_shape",
+            "self.checked_shape() != prepared.expected_shape",
+        ),
+    ),
+)
+def test_inflight_layout_contract_rejects_state_instance_and_shape_binding_drift(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_token: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    replace_once(path, old, new)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        expected_token in error
+        and (
+            "PreparedReservationJournalTransition" in error
+            or "prepare_checked_transition" in error
+            or "apply_checked_transition" in error
+        )
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "symbol", "expected_token"),
+    (
+        (
+            "fn clone(&self) -> Self {\n        Self::default()\n    }",
+            "fn clone(&self) -> Self {\n"
+            "        Self(Arc::clone(&self.0))\n"
+            "    }",
+            "CheckedReplayAuthorizationDomain::clone",
+            "Self::default()",
+        ),
+        (
+            "Arc::ptr_eq(&self.0, authorization)",
+            "true",
+            "CheckedReplayAuthorizationDomain::authorizes",
+            "Arc::ptr_eq(&self.0, authorization)",
+        ),
+    ),
+)
+def test_inflight_layout_contract_rejects_authorization_domain_weakening(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    symbol: str,
+    expected_token: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    replace_once(path, old, new)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        symbol in error and expected_token in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("field", "projection"),
+    (
+        ("live", "self.live.len()"),
+        ("committed", "self.committed.len()"),
+        ("release_barriers", "self.release_barriers.len()"),
+        ("completed_releases", "self.completed_releases.len()"),
+        ("ownership", "self.ownership.len()"),
+        ("fifo_ordinals", "self.fifo_ordinals.len()"),
+        (
+            "live_lane_incarnations",
+            "self.live_by_lane_incarnation.len()",
+        ),
+        ("next_order", "self.next_order"),
+    ),
+)
+def test_inflight_layout_contract_rejects_checked_shape_projection_weakening(
+    tmp_path: Path,
+    field: str,
+    projection: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    replace_once(path, f"{field}: {projection},", f"{field}: Default::default(),")
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "IndexedReservationReplayState::checked_shape" in error
+        and f"{field}: {projection}" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_checked_shape_field_extension(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    replace_once(
+        path,
+        "struct CheckedReplayStateShape {\n    live: usize,",
+        "struct CheckedReplayStateShape {\n"
+        "    unrelated_cache_entries: usize,\n"
+        "    live: usize,",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "CheckedReplayStateShape" in error
+        and "missing current-layout token" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_token"),
+    (
+        (
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,\n"
+            "                        key,\n"
+            "                        release_digest,\n"
+            "                        self.ownership.get(&hash).copied(),\n"
+            "                        candidate.ownership.get(&hash).copied(),",
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,\n"
+            "                        key,\n"
+            "                        release_digest,\n"
+            "                        self.ownership.get(&hash).copied(),\n"
+            "                        self.ownership.get(&hash).copied(),",
+            "candidate.ownership.get(&hash).copied()",
+        ),
+        (
+            "let after = before.or(Some(DurableReservationOwnership::Live(key)));",
+            "let after = Some(DurableReservationOwnership::Live(key));",
+            "let after = before.or(Some(DurableReservationOwnership::Live(key)));",
+        ),
+        (
+            "let after = if before == Some(DurableReservationOwnership::Live(*key)) {\n"
+            "                        None\n"
+            "                    } else {\n"
+            "                        before\n"
+            "                    };",
+            "let after = before;",
+            "let after = if before == Some(DurableReservationOwnership::Live(*key)) {",
+        ),
+        (
+            "IN_FLIGHT_RESERVATION_ACTION_COMMIT,\n"
+            "                    *key,\n"
+            "                    None,\n"
+            "                    before,\n"
+            "                    Some(DurableReservationOwnership::Committed(*key)),",
+            "IN_FLIGHT_RESERVATION_ACTION_COMMIT,\n"
+            "                    *key,\n"
+            "                    None,\n"
+            "                    before,\n"
+            "                    before,",
+            "IN_FLIGHT_RESERVATION_ACTION_COMMIT,",
+        ),
+        (
+            "let after = if before == "
+            "Some(DurableReservationOwnership::Committed(*key)) {\n"
+            "                    None\n"
+            "                } else {\n"
+            "                    before\n"
+            "                };",
+            "let after = before;",
+            "let after = if before == "
+            "Some(DurableReservationOwnership::Committed(*key)) {",
+        ),
+        (
+            "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,\n"
+            "                        before.key(),\n"
+            "                        None,\n"
+            "                        Some(before),\n"
+            "                        None,",
+            "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,\n"
+            "                        before.key(),\n"
+            "                        None,\n"
+            "                        Some(before),\n"
+            "                        Some(before),",
+            "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,",
+        ),
+        (
+            "Some(DurableReservationOwnership::Live(existing)) "
+            "if existing == *key => {\n"
+            "                            "
+            "Some(DurableReservationOwnership::Prepared {\n"
+            "                                key: *key,\n"
+            "                                barrier_digest: release_digest,\n"
+            "                            })\n"
+            "                        }",
+            "Some(DurableReservationOwnership::Live(_existing)) => {\n"
+            "                            "
+            "Some(DurableReservationOwnership::Prepared {\n"
+            "                                key: *key,\n"
+            "                                barrier_digest: release_digest,\n"
+            "                            })\n"
+            "                        }",
+            "Some(DurableReservationOwnership::Live(existing)) "
+            "if existing == *key => {",
+        ),
+        (
+            "}) if existing == key && barrier_digest == release_digest => {",
+            "}) if existing == key => {",
+            "barrier_digest == release_digest",
+        ),
+        (
+            "let after = if has_completion\n"
+            "                        && before\n"
+            "                            == "
+            "Some(DurableReservationOwnership::Completed {\n"
+            "                                key: *key,\n"
+            "                                barrier_digest: release_digest,\n"
+            "                            }) {\n"
+            "                        None\n"
+            "                    } else {\n"
+            "                        before\n"
+            "                    };",
+            "let after = before;",
+            "let after = if has_completion",
+        ),
+    ),
+    ids=(
+        "snapshot",
+        "reserve",
+        "release-direct",
+        "commit",
+        "forget-commit",
+        "prune",
+        "prepare-release",
+        "complete-release",
+        "forget-release",
+    ),
+)
+def test_inflight_layout_contract_rejects_action_owner_projection_drift(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_token: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    replace_once(path, old, new)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "IndexedReservationReplayState::check_in_flight_transition" in error
+        and expected_token in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_reordered_owner_token_coverage(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    swap_ordered_once(
+        path,
+        "prepared.owner_transition_count != prepared.owner_transitions.len()",
+        "checked_transition_coverage_identity(&prepared.owner_transitions)?",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "IndexedReservationReplayState::apply_checked_transition" in error
+        and "missing or reorders token "
+        "'checked_transition_coverage_identity(&prepared.owner_transitions)?'"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("earlier", "later", "rejected_token"),
+    (
+        (
+            "self.transition_semantics(frame, maximum, false)?;",
+            "let current_owner_transitions = "
+            "self.check_in_flight_transition(frame, maximum)?;",
+            "let current_owner_transitions = "
+            "self.check_in_flight_transition(frame, maximum)?;",
+        ),
+        (
+            "for checked in prepared.owner_transitions",
+            "self.transition_semantics(frame, maximum, true)?;",
+            "checked.into_projection()",
+        ),
+        (
+            "self.transition_semantics(frame, maximum, true)?;",
+            "self.transition_generation = prepared.next_generation;",
+            "self.transition_generation = prepared.next_generation;",
+        ),
+    ),
+)
+def test_inflight_layout_contract_rejects_revalidate_consume_apply_order_drift(
+    tmp_path: Path,
+    earlier: str,
+    later: str,
+    rejected_token: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    swap_ordered_once(path, earlier, later)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "IndexedReservationReplayState::apply_checked_transition" in error
+        and f"missing or reorders token {rejected_token!r}" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("injected", "forbidden"),
+    (
+        ("let _candidate = self.clone();", "self.clone()"),
+        ("let _candidate = Clone::clone(self);", "Clone::clone(self)"),
+        ("let _candidate = (*self).clone();", "(*self).clone()"),
+        ("let _candidate = self.to_owned();", "self.to_owned()"),
+        (
+            "let _candidate = ToOwned::to_owned(self);",
+            "ToOwned::to_owned(self)",
+        ),
+        (
+            "let _ = candidate.transition_semantics("
+            "frame, maximum, true)?;",
+            "candidate.transition_semantics(",
+        ),
+        ("*self = candidate;", "*self = candidate"),
+    ),
+    ids=(
+        "clone-method",
+        "clone-trait",
+        "clone-deref",
+        "to-owned-method",
+        "to-owned-trait",
+        "candidate-transition",
+        "candidate-swap",
+    ),
+)
+def test_inflight_layout_contract_rejects_unbounded_full_state_application(
+    tmp_path: Path,
+    injected: str,
+    forbidden: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    replace_once(
+        path,
+        "self.transition_semantics(frame, maximum, true)?;",
+        f"{injected}\n        self.transition_semantics(frame, maximum, true)?;",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "IndexedReservationReplayState::apply_checked_transition" in error
+        and "forbidden source-bound token" in error
+        and forbidden in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "earlier", "later"),
+    (
+        (
+            "IndexedReservationReplayState::transition_release_batch",
+            ".push(self.validate_live_secondary_indexes("
+            "key.signed_transaction_hash, *key)?)",
+            "if apply {",
+        ),
+        (
+            "IndexedReservationReplayState::transition_commit",
+            "Some(self.validate_live_secondary_indexes("
+            "key.signed_transaction_hash, existing)?)",
+            "if !apply {",
+        ),
+        (
+            "IndexedReservationReplayState::transition_prune",
+            "removals.push(self.validate_live_secondary_indexes(hash, key)?);",
+            "if apply {",
+        ),
+        (
+            "IndexedReservationReplayState::transition_complete_release",
+            "let live_record = "
+            "self.validate_live_secondary_indexes(hash, record.key)?;",
+            "if apply {",
+        ),
+    ),
+)
+def test_inflight_layout_contract_rejects_removal_before_full_preflight(
+    tmp_path: Path,
+    symbol: str,
+    earlier: str,
+    later: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    swap_ordered_once(path, earlier, later)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        symbol in error and "missing or reorders token" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_token"),
+    (
+        (
+            "expected_key.signed_transaction_hash != hash",
+            "false",
+            "expected_key.signed_transaction_hash != hash",
+        ),
+        (
+            "let record = self\n"
+            "            .live\n"
+            "            .get(&hash)\n"
+            "            .ok_or_else(|| "
+            'invalid_data("live reservation index has no exact record"))?;',
+            "let record = self\n"
+            "            .live\n"
+            "            .values()\n"
+            "            .next()\n"
+            "            .ok_or_else(|| "
+            'invalid_data("live reservation index has no exact record"))?;',
+            ".get(&hash)",
+        ),
+        (
+            "self.fifo_ordinals.get(&record.value.fifo_order.ordinal) "
+            "!= Some(&hash)",
+            "self.fifo_ordinals\n"
+            "            .get(&record.value.fifo_order.ordinal)\n"
+            "            .is_some_and(|existing| existing != &hash)",
+            "self.fifo_ordinals.get(&record.value.fifo_order.ordinal) "
+            "!= Some(&hash)",
+        ),
+        (
+            ".is_some_and(|hashes| hashes.contains(&hash))",
+            ".is_some_and(|_hashes| true)",
+            ".is_some_and(|hashes| hashes.contains(&hash))",
+        ),
+    ),
+)
+def test_inflight_layout_contract_rejects_secondary_index_preflight_weakening(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_token: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    replace_once(path, old, new)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "IndexedReservationReplayState::validate_live_secondary_indexes"
+        in error
+        and expected_token in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_panicking_preflighted_removal(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    replace_once(
+        path,
+        "self.live.remove(&hash);",
+        'self.live.remove(&hash).expect("unchecked live removal");',
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "IndexedReservationReplayState::remove_preflighted_live" in error
+        and "forbidden source-bound token 'expect('" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_legacy_unchecked_removal(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    replace_once(
+        path,
+        "self.remove_preflighted_live(record);",
+        "self.remove_live_unchecked(record.key.signed_transaction_hash);",
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "IndexedReservationReplayState::transition_release_batch" in error
+        and "remove_live_unchecked" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("earlier", "later", "rejected_token"),
+    (
+        (
+            ".prepare_checked_transition("
+            "frame, self.limits.max_owned_transactions)?",
+            "self.append_staged(&encoded, expected_end, prepared)",
+            "encode_frame_with_limit(frame, "
+            "self.limits.max_frame_payload_bytes)?",
+        ),
+        (
+            "self.append_staged(&encoded, expected_end, prepared)",
+            "if let Err(error) = "
+            "self.replay_state.apply_checked_transition(",
+            "if let Err(error) = "
+            "self.replay_state.apply_checked_transition(",
+        ),
+        (
+            "// replay instead of panicking or attempting an in-process retry.",
+            "self.poisoned = true;",
+            "self.poisoned = true;",
+        ),
+    ),
+)
+def test_inflight_layout_contract_rejects_append_publication_order_drift(
+    tmp_path: Path,
+    earlier: str,
+    later: str,
+    rejected_token: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    swap_ordered_once(path, earlier, later)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "LaneQueueReservationJournal::append_durable" in error
+        and f"missing or reorders token {rejected_token!r}" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("earlier", "later", "rejected_token"),
+    (
+        (
+            "self.parent.sync_all()",
+            "compacted_replay_state.apply_checked_transition(\n"
+            "                    frame,\n"
+            "                    self.limits.max_owned_transactions,\n"
+            "                    prepared,\n"
+            "                )",
+            "compacted_replay_state.apply_checked_transition(",
+        ),
+        (
+            "// The replacement is already durable. Keep the previous",
+            "self.replay_state = compacted_replay_state;",
+            "self.poisoned = true;",
+        ),
+    ),
+)
+def test_inflight_layout_contract_rejects_compaction_publication_order_drift(
+    tmp_path: Path,
+    earlier: str,
+    later: str,
+    rejected_token: str,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    swap_ordered_once(path, earlier, later)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        "LaneQueueReservationJournal::compact_if_needed" in error
+        and f"missing or reorders token {rejected_token!r}" in error
+        for error in errors
+    ), errors
+
+
+def test_inflight_layout_contract_rejects_capability_restart_test_name_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    copy_layout_fixture(tmp_path, module, contract)
+    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    test_name = (
+        "fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_"
+        "restore_commit_barrier()"
+    )
+    replace_once(
+        path,
+        test_name,
+        test_name.replace("restore_commit_barrier", "restore_any_commit_barrier"),
+    )
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(
+        f"current-layout token {test_name!r} must occur exactly once, found 0"
+        in error
+        for error in errors
+    ), errors
 
 
 def test_inflight_layout_contract_rejects_ledger_weakening(

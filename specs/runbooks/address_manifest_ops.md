@@ -4,10 +4,10 @@
 
 # Address Manifest Operations Runbook (ADDR-7c)
 
-This runbook operationalises roadmap item **ADDR-7c** by detailing how to
-verify, publish, and retire entries in the Sora Nexus account/alias manifest.
+This runbook details how to verify, publish, and retire entries in the Sora
+Nexus account/alias manifest.
 It supplements the technical contract in
-[`docs/account_structure.md`](../../docs/account_structure.md) §4 and the telemetry
+[`specs/account_structure.md`](../account_structure.md) §4 and the telemetry
 expectations recorded in `dashboards/grafana/address_ingest.json`.
 
 ## 1. Scope & Inputs
@@ -181,7 +181,7 @@ address-manifest-<REVISION>/
 
 ## 6. References
 
-- [`docs/account_structure.md`](../../docs/account_structure.md) §§4–4.1 (contract).
+- [`specs/account_structure.md`](../account_structure.md) §§4–4.1 (contract).
 - [`scripts/account_fixture_helper.py`](../../scripts/account_fixture_helper.py) (fixture sync).
 - [`fixtures/account/address_vectors.json`](../../fixtures/account/address_vectors.json) (canonical digests).
 - [`dashboards/grafana/address_ingest.json`](../../dashboards/grafana/address_ingest.json) (telemetry).

@@ -432,11 +432,11 @@ impl ReputationRuntimeHandleV1 {
     /// Durably enqueue one actual native `PoR` terminal callback.
     ///
     /// This is a fail-closed injection point for a `PoR` terminal owner and
-    /// returns only after the producer checkpoint is durable. The daemon does
-    /// not automatically discover or attach that owner. Every call revalidates
-    /// all active external bindings before and after the durable enqueue; a
-    /// post-enqueue drift fails the call while an exact retry replays the
-    /// retained admission.
+    /// returns only after the producer checkpoint is durable. The standard
+    /// daemon's supervised worker invokes it for every retained native terminal.
+    /// Every call revalidates all active external bindings before and after the
+    /// durable enqueue; a post-enqueue drift fails the call while an exact retry
+    /// replays the retained admission.
     ///
     /// # Errors
     ///

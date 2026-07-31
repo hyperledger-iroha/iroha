@@ -227,11 +227,13 @@ swapping two otherwise valid identifiers is also a compatibility failure.
 Registries retain the concrete Rust type name as a decode lookup alias. For
 queries, the frozen built-in mapping takes precedence over an installed
 application registry for canonical encoding and decoding; the application
-registry is then used as a fallback for custom query types. Internal refactors
-can therefore move an implementation without changing canonical bytes or
-breaking already encoded values. New built-ins must add a unique identifier
-and update the corresponding golden inventory; an existing V1 identifier must
-not be renamed or reused for a different layout.
+registry is then used as a fallback for custom query types. Installation rejects
+a custom query type that claims a type-name or wire-ID key owned by a different
+built-in, while still allowing an alternate alias for the same concrete type.
+Internal refactors can therefore move an implementation without changing
+canonical bytes or breaking already encoded values. New built-ins must add a
+unique identifier and update the corresponding golden inventory; an existing
+V1 identifier must not be renamed or reused for a different layout.
 
 The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
 Version 4 changes the canonical validation-fee governance layout:

@@ -84,10 +84,13 @@ invariants together.
 ## In-flight first-release formal boundary
 
 **Implementation:** Current first-release layouts are source-bound to the
-abstract kernel; a total transition projection is not implemented.
+abstract kernel, and the reservation-journal-local primitive transition seam
+is source-bound; a total transition projection is not implemented.
 **Closure:** Open.
-**Evidence:** Current-layout structural binding plus bounded TLC/Apalache
-evidence; total refinement theorem open.
+**Evidence:** Current schema-4 structural/source binding and local checked
+reservation-journal transition evidence. The dated bounded TLC/Apalache
+checkpoint below does not attest the current schema-4 source; total refinement
+theorem open.
 
 `SumeragiV2InFlightFirstRelease.tla` is a finite three-validator safety model
 for the accepted schema V2 carried by the production
@@ -102,12 +105,26 @@ Commit/QueuePlan-tombstone/ForgetCommit steps; prefix-recoverable four-stage
 release; exact lane-commit/release scope; conflicting/ABA bindings; and the
 4096 entry limit. Auxiliary post-WSV repair is explicit stuttering.
 
-This row is deliberately **not** a production-refinement claim. TLC exhausts
-the stated finite model and Apalache typechecks/bounds its abstract actions;
-neither checker proves that Rust filesystem/restart traces refine those
-actions. The open theorem is a total Rust pre/post-state forward simulation
-and reverse terminal-owner projection over QueuePlan journal V4, reservation
-journal V5, Kura, recovery, Commit, and Release. Schema 3 of
+The local production binding covers
+`PreparedReservationJournalTransition`,
+`prepare_checked_transition`, `apply_checked_transition`, runtime
+`transition_commit`, durable append, snapshot compaction, and the primitive
+refinement checker. It binds the exact frame/bound, state-instance domain,
+structural pre-state shape, generation/history identities, and ordered
+owner-token coverage through post-I/O revalidation and bounded direct
+publication without a full-state clone, including fail-closed post-durable
+restart reconstruction. This is only the reservation journal's primitive
+owner-transition seam. The QueuePlan, Kura, canonical carrier, WSV,
+FIFO-restoration, and lane-lifecycle transition refinements remain open, along
+with both the total forward simulation and reverse terminal-owner projection.
+
+This row is deliberately **not** a production-refinement claim. When run, TLC
+can exhaust the stated finite model and Apalache can typecheck/bound its
+abstract actions; neither checker proves that Rust filesystem/restart traces
+refine those actions. Current schema-4 static checks execute neither engine.
+The open theorem is a total Rust pre/post-state forward simulation and reverse
+terminal-owner projection over QueuePlan journal V4, reservation journal V5,
+Kura, recovery, Commit, and Release. Schema 4 of
 `multilane_source_bindings.json` deliberately classifies this as
 `layout_only_no_transition_refinement`: its exact version/field/order bindings
 detect drift but are insufficient to promote this row or a release status. See
@@ -1020,15 +1037,16 @@ explicit production builder; single-source construction is labelled as a test
 fixture.
 `ci/run_native_amx_v2_grouped_sdk_parity.sh` source-binds the exact fixture and
 OpenAPI, Python, JavaScript source/distribution, Swift, Kotlin, and Java
-consumers. Fresh standalone runs passed OpenAPI `4/4`, JavaScript `37/37`,
-Kotlin `6/6`, Java `5/5`, and the Python 3.12 harness `35/35`. A fresh
-source-built external ABI-21 macOS bridge also passed the Swift consumer `3/3`
-against fixture SHA-256
+consumers. The current harness contract requires OpenAPI `7`, Python `56`,
+JavaScript `54`, Swift `3`, Kotlin `6`, and Java `5` cases against fixture
+SHA-256
 `ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`
 and suite-source manifest SHA-256
-`52a6348576719497fd160379e7bae7c06482575a7fde0251ec18bc177f13bdeb`.
-Closure remains open until one release gate archives every language consumer
-together.
+`ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
+Current standalone OpenAPI and installed-package Python runs pass `7/7` and
+`56/56`, respectively. Those results are not a fresh archived replay of every
+surface. Closure remains open until one release gate archives every language
+consumer together.
 
 **Closure condition.** Generate one canonical grouped fixture and negative
 corpus from Rust and consume the exact files in OpenAPI, Python, JavaScript,
@@ -1111,12 +1129,16 @@ identical temporary), reservation duplication, base-state mismatch, bounded
 fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
-The release runner now inventories 280 exact, non-ignored multilane focus
-tests: 104 core multilane tests, 119 core queue-journal tests, seven
+The release runner now inventories 289 exact, non-ignored multilane focus
+tests: 105 core multilane tests, 127 core queue-journal tests, seven
 configuration tests, eight in `iroha_data_model`, 39 in Torii, one in
-Torii-shared, and two in the integration support library. That source
-inventory is not a passing test transcript; the full focused rerun and
-archived receipt remain required.
+Torii-shared, and two in the integration support library. The canonical
+inventory contains 290 TSV lines and has SHA-256
+`1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733`.
+The exact-source reservation-journal slice passes `65/65`, and its local
+identity-bound refinement regression passes `1/1`. That source inventory is
+not a passing 289-test transcript; the full focused rerun and archived receipt
+remain required.
 
 ### G-FORMAL — source-bound models and expected mutations
 
@@ -1209,15 +1231,15 @@ grouped corpus. Archive the corpus hash and per-SDK results. No SDK may skip a
 negative or substitute a hand-authored fixture.
 
 The Rust generator, 50-control grouped corpus, six-surface parity harness, and
-fixture/suite source-hash binding are present. Standalone OpenAPI, JavaScript,
-Kotlin, Java, Python, and Swift runs are fresh and passing. The Swift run used
-a source-built external ABI-21 macOS XCFramework and passed `3/3` against
-fixture SHA-256
+fixture/suite source-hash binding are present. The current harness contract
+requires OpenAPI `7`, Python `56`, JavaScript `54`, Swift `3`, Kotlin `6`, and
+Java `5` cases against fixture SHA-256
 `ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`
 and suite-source manifest SHA-256
-`52a6348576719497fd160379e7bae7c06482575a7fde0251ec18bc177f13bdeb`.
-One archived release replay of every required surface is not yet recorded, so
-neither `ML-API-04` closure nor this gate advances.
+`ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
+Current standalone OpenAPI and installed-package Python runs pass `7/7` and
+`56/56`, respectively. One archived release replay of every required surface
+is not yet recorded, so neither `ML-API-04` closure nor this gate advances.
 
 ### G-FINAL — clean release validation
 

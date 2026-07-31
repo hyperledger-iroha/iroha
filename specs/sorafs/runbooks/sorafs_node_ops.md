@@ -120,22 +120,43 @@ Before enabling `[sorafs.storage.evidence_viewer]`, bind
 `checkpoint_store_handle`, non-zero `checkpoint_store_revision`, and canonical
 non-zero `checkpoint_store_policy_digest_hex` to the deployment's exact
 linearizable sealed-CAS provider, alongside the required WebAuthn, grant,
-receipt-signer, erasure, and immutable compaction-archive bindings. The archive
-also requires a non-zero namespace id and exact Ed25519 public key. Keep
+receipt-signer, erasure, immutable compaction-archive, and transparency-publisher
+bindings. The publisher binding is public only and must contain the exact
+`transparency_publisher_handle`, non-zero `transparency_publisher_revision`,
+canonical non-zero `transparency_publisher_policy_digest_hex`, and canonical
+Ed25519 `transparency_publisher_public_key_hex`. The archive also requires a
+non-zero namespace id and exact Ed25519 public key. Keep
 `compaction_interval_ms` within `1000..=86400000` and
 `compaction_max_records` within `1..=1024`; the checked-in
 [`evidence_viewer_runtime_binding.toml`](../snippets/evidence_viewer_runtime_binding.toml)
 shows the complete non-secret shape. These are public identity and policy pins
-only; CAS/archive credentials, private keys, and vendor diagnostics remain
-inside the runtime providers. The deployment registry must return all six
-dependencies when the viewer is enabled and none when it is disabled. Missing,
-unrequested, substituted, stale, unavailable, or test-marked providers stop
-startup. The stock daemon broker protocol now implements slots 22–26 and 47
-with exact public qualification metadata, canonical bounded requests,
+only; CAS/archive/publisher credentials, private keys, and vendor diagnostics
+remain inside the runtime providers. The deployment registry must return all
+seven dependencies when the viewer is enabled and none when it is disabled.
+Missing, unrequested, substituted, stale, unavailable, or test-marked providers
+stop startup; so does failure to reconcile the publisher's current signed
+authoritative head. The stock daemon broker protocol implements slots 22–26,
+47, and 53 with exact public qualification metadata, canonical bounded requests,
 replay-safe mutation identities, typed ambiguity, and authenticated
-checkpoint/archive readback. A standard-binary deployment still fails closed
-until the broker service is packaged and supplied with genuine
-deployment-owned backends; no local provider is substituted.
+checkpoint/archive/transparency-head readback. It requalifies the configured
+publisher around every bounded head load and compare-and-publish call. A
+standard-binary deployment still fails closed until the broker service is
+packaged and supplied with genuine deployment-owned backends; no local provider
+is substituted.
+
+Torii owns the supervised transparency worker only while the evidence viewer and
+its qualified publisher are enabled. Startup constructs the producer and must
+reconcile the publisher's current signed authoritative head before the service
+can start. At the configured compaction cadence, the worker first
+fresh-reconciles that external head, reads a fresh service audit checkpoint, and
+walks at most 16 signed payload-free projection pages of 256 receipts each. Each
+advancing head uses exact predecessor compare-and-publish; rejected or ambiguous
+completion is resolved only by authoritative signed readback, without replaying
+the mutation. Transport uncertainty retires the affected broker connection and
+uses a fresh same-UID, exact-catalog session only for requalification and
+readback. Consecutive failures skip 1, 3, then at most 7 cadence ticks and emit
+payload-free logs. Normal shutdown signals, stops, and joins the worker. The
+repository does not provide the external durable publisher implementation.
 
 Treat the external signed head as authoritative. `checkpoint_path` names only a
 private revalidated cache: it may be absent, match the authoritative record, or

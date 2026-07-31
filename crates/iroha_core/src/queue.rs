@@ -1872,6 +1872,12 @@ enum PlanJournalAdmissionMode {
     RequiredDurableClaim,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueueAdmissionPreparationMode {
+    Ordinary,
+    AtomicJournalReplay,
+}
+
 #[cfg(test)]
 #[derive(Clone)]
 struct QueueDurabilityObserverLockHandoff {
@@ -1894,6 +1900,30 @@ struct PreparedQueueAdmission {
     fee_reservation: Option<FeeAdmissionReservation>,
     #[cfg(feature = "telemetry")]
     pending_teu: u64,
+}
+
+struct PreparedQueuePlanReplayAdmission {
+    admission: PreparedQueueAdmission,
+    claim: QueuePlanDurableClaimIndexEntry,
+    fifo_order: LaneQueueFifoOrderV5,
+    restored_reservation: bool,
+    replaces_missing_payload: bool,
+}
+
+struct PreparedQueuePlanReplay {
+    summary: QueuePlanJournalReplaySummary,
+    terminal_removals: Vec<QueuePlanJournalRemoval>,
+    admissions: Vec<PreparedQueuePlanReplayAdmission>,
+    final_fifo: Vec<SignedTxHash>,
+    next_fifo_ordinal: u64,
+    fee_reservations: FeeAdmissionReservationStore,
+    per_user_increments: HashMap<AccountId, usize>,
+}
+
+struct QueuePlanReplayReservationShape {
+    durable_owned_hashes: HashSet<SignedTxHash>,
+    durable_fifo_orders: HashMap<SignedTxHash, LaneQueueFifoOrderV5>,
+    missing_payload_hashes: HashSet<SignedTxHash>,
 }
 
 /// Failure to derive a deterministic proposal gas upper bound from an accepted transaction.
@@ -2027,7 +2057,7 @@ fn relay_lease_reservation_maps(
     Ok((relay_lease_charges, relay_lease_remaining))
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct FeeAdmissionReservationStore {
     live_by_hash: BTreeMap<SignedTxHash, FeeAdmissionReservation>,
 }
@@ -4824,6 +4854,774 @@ impl Queue {
         Ok(())
     }
 
+    /// Require the production startup shape before queue-plan replay publishes ownership.
+    ///
+    /// Reservation replay may already have installed missing-owner counters and exact durable FIFO
+    /// identities. It must not, however, have published any materialized queue owner or ancillary
+    /// index; accepting that partial shape would make journal replay bless an arbitrary prefix.
+    ///
+    /// Caller must hold `push_remove_lock`.
+    fn ensure_plan_journal_replay_startup_shape_locked(&self) -> std::io::Result<()> {
+        let materialized_shape_is_empty = self.txs.is_empty()
+            && self.materialized_active_len() == 0
+            && self.materialized_retained_bytes() == 0
+            && self.tx_hashes.is_empty()
+            && self.queued_count.load(Ordering::Acquire) == 0
+            && self.routing_decisions.is_empty()
+            && self.routing_plans.is_empty()
+            && self.durable_plan_claims.is_empty()
+            && self.tx_encoded_len.is_empty()
+            && self.tx_gas_cost.is_empty()
+            && self.tx_enqueued_at_ms.is_empty()
+            && self.queued_tx_enqueued_at_ms.is_empty()
+            && self.queued_age_ring.lock().is_empty()
+            && self.removed_hashes.is_empty()
+            && self.txs_per_user.is_empty()
+            && self
+                .fee_admission_reservations
+                .lock()
+                .live_by_hash
+                .is_empty()
+            && self.expiry_ring.lock().is_empty()
+            && self.expiry_ring_members.is_empty()
+            && self.tx_gossip.is_empty();
+        #[cfg(feature = "telemetry")]
+        let materialized_shape_is_empty = materialized_shape_is_empty
+            && self.tx_teu.is_empty()
+            && self
+                .lane_teu_pending
+                .iter()
+                .all(|entry| entry.value().tx_count == 0 && entry.value().teu == 0)
+            && self
+                .dataspace_teu_pending
+                .iter()
+                .all(|entry| entry.value().tx_count == 0 && entry.value().teu == 0);
+        if !materialized_shape_is_empty {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "queue-plan journal replay requires an empty materialized startup queue; only exact durable reservation FIFO identities may pre-exist",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Snapshot and authenticate every reservation-side owner relevant to queue-plan replay.
+    ///
+    /// The caller holds both `lane_reservation_transition_lock` and `push_remove_lock`, so the
+    /// durable-owner union, payload materialization, FIFO identities, and missing-owner accounting
+    /// cannot change while the returned shape is used for replay preflight.
+    fn plan_journal_replay_reservation_shape_locked(
+        &self,
+    ) -> std::io::Result<QueuePlanReplayReservationShape> {
+        let invalid = |reason: String| std::io::Error::new(std::io::ErrorKind::InvalidData, reason);
+        let store = self.lane_reservations.lock();
+        let durable_owned_hashes = store.durable_owned_hashes().collect::<HashSet<_>>();
+        let expected_missing_payload_hashes = durable_owned_hashes
+            .iter()
+            .copied()
+            .filter(|hash| !self.txs.contains_key(hash))
+            .collect::<HashSet<_>>();
+        if expected_missing_payload_hashes != store.missing_payload_hashes {
+            return Err(invalid(
+                "queue-plan replay found inconsistent durable reservation payload ownership"
+                    .to_owned(),
+            ));
+        }
+        if self
+            .missing_reservation_payload_count
+            .load(Ordering::Acquire)
+            != store.missing_payload_hashes.len()
+        {
+            return Err(invalid(
+                "queue-plan replay found inconsistent missing-reservation capacity accounting"
+                    .to_owned(),
+            ));
+        }
+
+        let mut durable_fifo_orders = HashMap::new();
+        for record in store.live_by_hash.values().chain(
+            store
+                .completed_releases
+                .iter()
+                .flat_map(|completion| completion.ordered_records.iter()),
+        ) {
+            record.validate().map_err(|reason| {
+                invalid(format!(
+                    "queue-plan replay found malformed durable reservation ownership: {reason}"
+                ))
+            })?;
+            let hash = record.key.signed_transaction_hash;
+            if durable_fifo_orders
+                .insert(hash, record.fifo_order)
+                .is_some()
+            {
+                return Err(invalid(format!(
+                    "queue-plan replay found multiple durable FIFO owners for {hash}"
+                )));
+            }
+        }
+
+        Ok(QueuePlanReplayReservationShape {
+            durable_owned_hashes,
+            durable_fifo_orders,
+            missing_payload_hashes: store.missing_payload_hashes.clone(),
+        })
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn prepare_plan_journal_replay_locked(
+        &self,
+        records: Vec<QueuePlanJournalRecordV4>,
+        state: &State,
+        state_view: &StateView<'_>,
+        #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
+    ) -> std::io::Result<PreparedQueuePlanReplay> {
+        let invalid = |reason: String| std::io::Error::new(std::io::ErrorKind::InvalidData, reason);
+        self.ensure_plan_journal_replay_startup_shape_locked()?;
+        let mut summary = QueuePlanJournalReplaySummary {
+            records: records.len(),
+            ..QueuePlanJournalReplaySummary::default()
+        };
+        let mut terminal_removals = Vec::new();
+        let mut pending_admissions = Vec::new();
+        let mut seen_hashes = HashSet::with_capacity(records.len());
+        let reservation_shape = self.plan_journal_replay_reservation_shape_locked()?;
+        let journal_hashes = records
+            .iter()
+            .map(|record| compatibility_queue_hash(record.entrypoint_hash))
+            .collect::<HashSet<_>>();
+        if journal_hashes.len() != records.len() {
+            return Err(invalid(
+                "queue-plan journal replay contains duplicate queue identities".to_owned(),
+            ));
+        }
+        if !reservation_shape
+            .missing_payload_hashes
+            .is_subset(&journal_hashes)
+        {
+            return Err(invalid(
+                "queue-plan replay cannot recover every payload-less durable reservation from the authenticated plan journal"
+                    .to_owned(),
+            ));
+        }
+        let (max_clock_drift, transaction_limits) = state.transaction_admission_limits();
+        let crypto = state.crypto();
+        let chain_id = state.chain_id_ref().clone();
+        let replay_observed_at = self.time_source.get_unix_time();
+
+        for record in records {
+            let entrypoint_hash = record.entrypoint_hash;
+            let hash = compatibility_queue_hash(entrypoint_hash);
+            if !seen_hashes.insert(hash) {
+                return Err(invalid(format!(
+                    "queue-plan journal replay contains duplicate queue identity {hash}"
+                )));
+            }
+            let recorded_routing_plan = record.routing_plan.clone();
+            let recorded_admission_context = record.admission_context.clone();
+            let recorded_global_admission_identity = record.global_admission_identity;
+            let recorded_signed_transaction_hash = record.signed_transaction_hash;
+            let enqueue_timestamp_ms = record.enqueue_timestamp_ms;
+            let recorded_journal_digest = record.claim_digest().map_err(|error| {
+                invalid(format!(
+                    "failed to rebuild V4 queue-plan journal claim: {error}"
+                ))
+            })?;
+            let accepted = AcceptedTransaction::accept_entrypoint_at_time(
+                record.entrypoint,
+                &chain_id,
+                max_clock_drift,
+                transaction_limits.clone(),
+                crypto.as_ref(),
+                Duration::from_millis(enqueue_timestamp_ms),
+            )
+            .map_err(|error| {
+                invalid(format!(
+                    "queue-plan journal transaction {hash} failed canonical stateless validation; retaining its durable record: {error}"
+                ))
+            })?;
+            if accepted.hash_as_entrypoint() != entrypoint_hash
+                || exact_signed_transaction_hash(accepted.entrypoint())
+                    != recorded_signed_transaction_hash
+            {
+                return Err(invalid(format!(
+                    "queue-plan journal transaction {hash} changed identity during stateless validation"
+                )));
+            }
+
+            let restored_fifo_order = self
+                .restored_reservation_fifo_order_for_identity(
+                    hash,
+                    entrypoint_hash,
+                    &recorded_routing_plan,
+                )
+                .map_err(|error| {
+                    invalid(format!(
+                        "queue-plan journal transaction {hash} conflicts with durable reservation ownership: {error}"
+                    ))
+                })?;
+            if reservation_shape.durable_owned_hashes.contains(&hash)
+                != restored_fifo_order.is_some()
+            {
+                return Err(invalid(format!(
+                    "queue-plan journal transaction {hash} has inconsistent durable reservation ownership"
+                )));
+            }
+            let has_materialized_owner = self.txs.contains_key(&hash);
+            let has_durable_reservation_owner = restored_fifo_order.is_some();
+            if state_view.transactions.get(&hash).is_some() {
+                if has_materialized_owner || has_durable_reservation_owner {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} is canonically committed while queue or reservation ownership remains live"
+                    )));
+                }
+                summary.tombstoned_committed = summary.tombstoned_committed.saturating_add(1);
+                terminal_removals.push((
+                    entrypoint_hash,
+                    recorded_routing_plan.digest(),
+                    recorded_journal_digest,
+                ));
+                continue;
+            }
+            let global_registry_match = if recorded_global_admission_identity.is_some() {
+                let binding =
+                    crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+                        &QueuePlanDurableAdmissionV2 {
+                            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+                            context: recorded_admission_context.clone(),
+                            global_admission_identity: recorded_global_admission_identity,
+                            routing_plan: recorded_routing_plan.clone(),
+                            entrypoint_hash,
+                            signed_transaction_hash: recorded_signed_transaction_hash,
+                            enqueue_timestamp_ms,
+                            journal_record_digest: recorded_journal_digest,
+                        },
+                    )
+                    .map_err(|reason| {
+                        invalid(format!(
+                            "queue-plan journal transaction {hash} has a malformed global admission binding; retaining its durable record: {reason}"
+                        ))
+                    })?;
+                let expected_chain_id_digest =
+                    crate::torii_proxy::queue_plan_admission_chain_id_digest(state_view.chain_id());
+                if binding.chain_id_digest != expected_chain_id_digest {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} belongs to another chain; retaining its durable record"
+                    )));
+                }
+                Some(
+                    queue_plan_admission_registry_match(
+                        state_view,
+                        binding.entrypoint_hash,
+                        binding.canonical_hash(),
+                    )
+                    .map_err(|reason| {
+                        invalid(format!(
+                            "queue-plan journal transaction {hash} cannot validate its global admission registry marker; retaining its durable record: {reason}"
+                        ))
+                    })?,
+                )
+            } else {
+                None
+            };
+            if global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Conflict) {
+                if has_materialized_owner || has_durable_reservation_owner {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} conflicts with canonical global admission while queue or reservation ownership remains live"
+                    )));
+                }
+                summary.tombstoned_conflicting_global_admission = summary
+                    .tombstoned_conflicting_global_admission
+                    .saturating_add(1);
+                terminal_removals.push((
+                    entrypoint_hash,
+                    recorded_routing_plan.digest(),
+                    recorded_journal_digest,
+                ));
+                continue;
+            }
+            if self.is_expired_at_with_enqueue_timestamp(
+                &accepted,
+                replay_observed_at,
+                Some(enqueue_timestamp_ms),
+            ) && global_registry_match.is_none()
+                && !has_durable_reservation_owner
+            {
+                if has_materialized_owner {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} expired while an in-memory queue owner remains live"
+                    )));
+                }
+                summary.tombstoned_expired = summary.tombstoned_expired.saturating_add(1);
+                terminal_removals.push((
+                    entrypoint_hash,
+                    recorded_routing_plan.digest(),
+                    recorded_journal_digest,
+                ));
+                continue;
+            }
+
+            let active_recorded_plan = resolve_routing_plan_for_queue_admission(
+                recorded_routing_plan.clone(),
+                state_view.nexus(),
+                state_view_height_for_routing(state_view),
+            )
+            .map_err(|error| {
+                invalid(format!(
+                    "queue-plan journal transaction {hash} no longer has its admitted routing plan active; retaining immutable ownership evidence: {error}"
+                ))
+            })?;
+            if active_recorded_plan != recorded_routing_plan
+                || !Self::durable_plan_claim_context_revalidates_in_view(
+                    state_view,
+                    &recorded_routing_plan,
+                    &recorded_admission_context,
+                )
+            {
+                return Err(invalid(format!(
+                    "queue-plan journal transaction {hash} no longer authenticates its admitted route generation or active lane incarnations; retaining immutable ownership evidence"
+                )));
+            }
+
+            let claim = QueuePlanDurableClaimIndexEntry {
+                entrypoint_hash,
+                signed_transaction_hash: recorded_signed_transaction_hash,
+                routing_plan: recorded_routing_plan.clone(),
+                admission_context: recorded_admission_context.clone(),
+                global_admission_identity: recorded_global_admission_identity,
+                enqueue_timestamp_ms,
+                journal_record_digest: recorded_journal_digest,
+            };
+            if self.durable_plan_claims.contains_key(&hash)
+                || self.routing_decisions.contains_key(&hash)
+                || self.routing_plans.contains_key(&hash)
+                || self.tx_encoded_len.contains_key(&hash)
+                || self.tx_gas_cost.contains_key(&hash)
+                || self.tx_enqueued_at_ms.contains_key(&hash)
+                || self.queued_tx_enqueued_at_ms.contains_key(&hash)
+                || self.removed_hashes.contains_key(&hash)
+                || self.global_selection_owners.lock().contains_key(&hash)
+            {
+                return Err(invalid(format!(
+                    "queue-plan journal transaction {hash} conflicts with orphaned in-memory queue metadata"
+                )));
+            }
+
+            let checked = CheckedTransaction::new_unchecked(accepted);
+            let next_block_height = state_view_height_for_routing(state_view).saturating_add(1);
+            let mut state_access = EagerAdmissionStateAccess::new(
+                state_view.world(),
+                &state_view.nexus,
+                &state_view.pipeline,
+                next_block_height,
+                state_view.latest_block().map_or(0, |block| {
+                    u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+                }),
+            );
+            let mut admission = self
+                .prepare_checked_for_enqueue(
+                    checked,
+                    recorded_routing_plan,
+                    &mut state_access,
+                    None,
+                    QueueAdmissionPreparationMode::AtomicJournalReplay,
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle,
+                )
+                .map_err(|failure| {
+                    invalid(format!(
+                        "queue-plan journal transaction {hash} failed current admission; retaining its durable record: {}",
+                        failure.err
+                    ))
+                })?;
+            admission.enqueued_at_ms = enqueue_timestamp_ms;
+            admission.admission_context = Some(recorded_admission_context);
+            admission.global_admission_identity = recorded_global_admission_identity;
+            admission.expected_journal_record_digest = Some(recorded_journal_digest);
+            admission.replayed_journal_record_digest = Some(recorded_journal_digest);
+            let replaces_missing_payload = reservation_shape.missing_payload_hashes.contains(&hash);
+            pending_admissions.push((
+                admission,
+                claim,
+                restored_fifo_order,
+                replaces_missing_payload,
+            ));
+        }
+
+        if self.transaction_selection_durability_faulted() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "queue-plan journal replay requires healthy queue durability state",
+            ));
+        }
+        if !self.durability_transitions.lock().is_empty()
+            || self.inflight_guards.load(Ordering::Acquire) != 0
+            || self.selection_attempts.load(Ordering::Acquire) != 0
+            || !self.global_selection_owners.lock().is_empty()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "queue-plan journal replay cannot overlap an in-flight queue ownership transition",
+            ));
+        }
+
+        let mut projected_active = self.active_len();
+        let mut projected_retained = self.retained_bytes();
+        let mut per_user_increments = HashMap::<AccountId, usize>::new();
+        let mut projected_fee_reservations = self.fee_admission_reservations.lock().clone();
+        for (admission, _claim, _restored_fifo_order, replaces_missing_payload) in
+            &pending_admissions
+        {
+            let capacity_slots = usize::from(!*replaces_missing_payload);
+            projected_active = projected_active
+                .checked_add(capacity_slots)
+                .ok_or_else(|| invalid("queue-plan replay capacity arithmetic overflow".into()))?;
+            let retained_cost = if *replaces_missing_payload {
+                Self::retained_byte_materialization_delta(admission.encoded_len)
+            } else {
+                Self::retained_byte_cost(admission.encoded_len)
+            };
+            projected_retained =
+                projected_retained
+                    .checked_add(retained_cost)
+                    .ok_or_else(|| {
+                        invalid("queue-plan replay retained-byte arithmetic overflow".into())
+                    })?;
+            if projected_active > self.capacity.get()
+                || projected_retained > self.max_retained_bytes.get()
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::OutOfMemory,
+                    "queue-plan journal replay exceeds aggregate queue capacity",
+                ));
+            }
+            if let Some(authority) = admission.checked.as_ref().authority_opt() {
+                let delta = per_user_increments.entry(authority.clone()).or_default();
+                *delta = delta
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("queue-plan replay per-user count overflow".into()))?;
+                let projected = self
+                    .queued_tx_count_for_user(authority)
+                    .checked_add(*delta)
+                    .ok_or_else(|| invalid("queue-plan replay per-user count overflow".into()))?;
+                if projected > self.capacity_per_user.get() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!(
+                            "queue-plan journal replay exceeds the per-user capacity for {authority}"
+                        ),
+                    ));
+                }
+            }
+            if let Some(reservation) = admission.fee_reservation.clone() {
+                projected_fee_reservations
+                    .reserve(admission.hash, reservation)
+                    .map_err(|error| {
+                        invalid(format!(
+                            "queue-plan journal transaction {} exceeds aggregate fee capacity: {error}",
+                            admission.hash
+                        ))
+                    })?;
+            }
+        }
+
+        let mut fifo_orders = HashMap::<SignedTxHash, LaneQueueFifoOrderV5>::new();
+        let mut fifo_ordinal_owners = BTreeMap::<u64, SignedTxHash>::new();
+        for entry in &self.fifo_order_by_hash {
+            let hash = *entry.key();
+            let order = *entry.value();
+            order.validate().map_err(|reason| {
+                invalid(format!(
+                    "queue-plan replay found invalid FIFO identity for {hash}: {reason}"
+                ))
+            })?;
+            if let Some(existing) = fifo_ordinal_owners.insert(order.ordinal, hash)
+                && existing != hash
+            {
+                return Err(invalid(format!(
+                    "queue-plan replay found FIFO ordinal {} owned by both {existing} and {hash}",
+                    order.ordinal
+                )));
+            }
+            if !self.txs.contains_key(&hash)
+                && !reservation_shape.durable_fifo_orders.contains_key(&hash)
+            {
+                return Err(invalid(format!(
+                    "queue-plan replay found orphaned FIFO identity for {hash}"
+                )));
+            }
+            fifo_orders.insert(hash, order);
+        }
+        for (hash, durable_order) in &reservation_shape.durable_fifo_orders {
+            if fifo_orders.get(hash) != Some(durable_order) {
+                return Err(invalid(format!(
+                    "queue-plan replay found missing or conflicting FIFO identity for durable reservation {hash}"
+                )));
+            }
+        }
+        if !self.fifo_snapshot_locked().is_empty() {
+            return Err(invalid(
+                "queue-plan replay found pre-existing ordinary FIFO membership".to_owned(),
+            ));
+        }
+
+        // Pending-plan append order is the original global FIFO order. Immutable reservation
+        // ordinals are fixed anchors in that sequence; fit every ordinary replay entry into the
+        // open ordinal intervals around those anchors. Appending ordinary entries from the current
+        // `next_fifo_ordinal` would move an entry that preceded a restored reservation behind it.
+        let anchors = pending_admissions
+            .iter()
+            .enumerate()
+            .filter_map(
+                |(index, (_admission, _claim, restored_fifo_order, _replaces_missing_payload))| {
+                    restored_fifo_order.map(|order| (index, order))
+                },
+            )
+            .collect::<Vec<_>>();
+        if anchors
+            .windows(2)
+            .any(|anchors| anchors[0].1.ordinal >= anchors[1].1.ordinal)
+        {
+            return Err(invalid(
+                "queue-plan replay reservation FIFO anchors disagree with authenticated journal order"
+                    .to_owned(),
+            ));
+        }
+        if anchors.len() != reservation_shape.durable_fifo_orders.len() {
+            return Err(invalid(
+                "queue-plan replay did not bind every durable FIFO anchor to one authenticated plan record"
+                    .to_owned(),
+            ));
+        }
+
+        let mut assigned_orders = vec![None; pending_admissions.len()];
+        let mut used_ordinals = fifo_ordinal_owners.keys().copied().collect::<BTreeSet<_>>();
+        let mut lower_ordinal = 0_u64;
+        let mut cursor = 0_usize;
+        for (anchor_index, anchor_order) in anchors {
+            anchor_order.validate().map_err(|reason| {
+                invalid(format!(
+                    "queue-plan replay restored invalid FIFO anchor: {reason}"
+                ))
+            })?;
+            let needed = anchor_index.saturating_sub(cursor);
+            let mut candidate = lower_ordinal.checked_add(1).ok_or_else(|| {
+                invalid("queue-plan replay exhausted the FIFO ordinal space".to_owned())
+            })?;
+            for slot in cursor..anchor_index {
+                while used_ordinals.contains(&candidate) {
+                    candidate = candidate.checked_add(1).ok_or_else(|| {
+                        invalid("queue-plan replay exhausted the FIFO ordinal space".to_owned())
+                    })?;
+                }
+                if candidate >= anchor_order.ordinal {
+                    return Err(invalid(format!(
+                        "{needed} queue-plan replay entries do not fit before durable FIFO ordinal {}",
+                        anchor_order.ordinal
+                    )));
+                }
+                let order = LaneQueueFifoOrderV5::new(candidate)
+                    .map_err(|error| invalid(error.to_string()))?;
+                assigned_orders[slot] = Some(order);
+                used_ordinals.insert(candidate);
+                candidate = candidate.checked_add(1).unwrap_or(0);
+            }
+            assigned_orders[anchor_index] = Some(anchor_order);
+            lower_ordinal = anchor_order.ordinal;
+            cursor = anchor_index.saturating_add(1);
+        }
+        let mut candidate = lower_ordinal.checked_add(1).ok_or_else(|| {
+            invalid("queue-plan replay exhausted the FIFO ordinal space".to_owned())
+        })?;
+        for slot in cursor..pending_admissions.len() {
+            while used_ordinals.contains(&candidate) {
+                candidate = candidate.checked_add(1).ok_or_else(|| {
+                    invalid("queue-plan replay exhausted the FIFO ordinal space".to_owned())
+                })?;
+            }
+            let order =
+                LaneQueueFifoOrderV5::new(candidate).map_err(|error| invalid(error.to_string()))?;
+            assigned_orders[slot] = Some(order);
+            used_ordinals.insert(candidate);
+            candidate = candidate.checked_add(1).unwrap_or(0);
+        }
+
+        let mut final_fifo = Vec::with_capacity(pending_admissions.len());
+        let mut admissions = Vec::with_capacity(pending_admissions.len());
+        for ((admission, claim, restored_fifo_order, replaces_missing_payload), assigned_order) in
+            pending_admissions.into_iter().zip(assigned_orders)
+        {
+            let hash = admission.hash;
+            let restored_reservation = restored_fifo_order.is_some();
+            if restored_reservation != replaces_missing_payload {
+                return Err(invalid(format!(
+                    "queue-plan replay found inconsistent missing-payload ownership for {hash}"
+                )));
+            }
+            let fifo_order = assigned_order.expect("every replay entry receives a FIFO identity");
+            if restored_fifo_order.is_some_and(|durable| durable != fifo_order) {
+                return Err(invalid(format!(
+                    "queue-plan replay changed durable FIFO identity for {hash}"
+                )));
+            }
+            if fifo_orders
+                .get(&hash)
+                .is_some_and(|existing| *existing != fifo_order)
+                || fifo_ordinal_owners
+                    .get(&fifo_order.ordinal)
+                    .is_some_and(|owner| *owner != hash)
+            {
+                return Err(invalid(format!(
+                    "queue-plan replay assigned conflicting FIFO identity for {hash}"
+                )));
+            }
+            fifo_orders.insert(hash, fifo_order);
+            fifo_ordinal_owners.insert(fifo_order.ordinal, hash);
+
+            if restored_reservation {
+                debug_assert!(!final_fifo.contains(&hash));
+            } else {
+                final_fifo.push(hash);
+            }
+            admissions.push(PreparedQueuePlanReplayAdmission {
+                admission,
+                claim,
+                fifo_order,
+                restored_reservation,
+                replaces_missing_payload,
+            });
+        }
+        let next_fifo_ordinal = fifo_orders
+            .values()
+            .map(|order| order.ordinal)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .unwrap_or(0);
+        if final_fifo.len() > self.tx_hashes.capacity() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::OutOfMemory,
+                "queue-plan journal replay exceeds FIFO capacity",
+            ));
+        }
+        final_fifo.sort_unstable_by_key(|hash| {
+            fifo_orders
+                .get(hash)
+                .expect("preflighted FIFO member must have an exact order")
+                .ordinal
+        });
+        summary.replayed = admissions.len();
+        Ok(PreparedQueuePlanReplay {
+            summary,
+            terminal_removals,
+            admissions,
+            final_fifo,
+            next_fifo_ordinal,
+            fee_reservations: projected_fee_reservations,
+            per_user_increments,
+        })
+    }
+
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    fn apply_plan_journal_replay_locked(
+        &self,
+        replay: PreparedQueuePlanReplay,
+    ) -> (
+        QueuePlanJournalReplaySummary,
+        Vec<QueueAdmissionNotification>,
+    ) {
+        let PreparedQueuePlanReplay {
+            summary,
+            terminal_removals: _,
+            admissions,
+            final_fifo,
+            next_fifo_ordinal,
+            fee_reservations,
+            per_user_increments,
+        } = replay;
+        *self.fee_admission_reservations.lock() = fee_reservations;
+        *self.next_fifo_ordinal.lock() = next_fifo_ordinal;
+
+        let mut notifications = Vec::with_capacity(admissions.len());
+        for replayed in admissions {
+            let PreparedQueuePlanReplayAdmission {
+                admission,
+                claim,
+                fifo_order,
+                restored_reservation,
+                replaces_missing_payload,
+            } = replayed;
+            let PreparedQueueAdmission {
+                checked,
+                hash,
+                routing_decision,
+                routing_plan,
+                encoded_len,
+                proposal_gas_cost,
+                enqueued_at_ms,
+                admission_context,
+                global_admission_identity,
+                expected_journal_record_digest: _,
+                replayed_journal_record_digest,
+                fee_reservation: _,
+                #[cfg(feature = "telemetry")]
+                pending_teu,
+            } = admission;
+            debug_assert_eq!(claim.routing_plan, routing_plan);
+            debug_assert_eq!(claim.enqueue_timestamp_ms, enqueued_at_ms);
+            debug_assert_eq!(
+                replayed_journal_record_digest,
+                Some(claim.journal_record_digest)
+            );
+            debug_assert_eq!(restored_reservation, replaces_missing_payload);
+
+            let lane_id = routing_decision.lane_id;
+            let dataspace_id = routing_decision.dataspace_id;
+            let authority = checked.as_ref().authority_opt().cloned();
+            let tx_arc = Arc::new(checked);
+            self.fifo_order_by_hash.insert(hash, fifo_order);
+            self.txs.insert(hash, Arc::clone(&tx_arc));
+            self.track_active_transaction();
+            self.routing_decisions.insert(hash, routing_decision);
+            self.routing_plans.insert(hash, routing_plan.clone());
+            self.record_routing_plan_in_ledger(hash, routing_plan.clone());
+            self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+            self.insert_tx_encoded_len(hash, encoded_len);
+            self.tx_gas_cost.insert(hash, proposal_gas_cost);
+            self.durable_plan_claims.insert(hash, claim.clone());
+            self.track_expiry_hash(hash);
+            #[cfg(feature = "telemetry")]
+            self.record_teu_enqueue_locked(
+                hash,
+                TxTeuInfo {
+                    lane_id,
+                    dataspace_id,
+                    teu: pending_teu,
+                },
+            );
+            notifications.push(QueueAdmissionNotification {
+                hash,
+                entrypoint_hash: claim.entrypoint_hash,
+                lane_id,
+                dataspace_id,
+                enqueue_timestamp_ms: enqueued_at_ms,
+                journal_record_digest: Some(claim.journal_record_digest),
+                routing_plan,
+                admission_context,
+                global_admission_identity,
+                signed_transaction_hash: claim.signed_transaction_hash,
+            });
+            let _ = authority;
+        }
+        self.apply_per_user_tx_count_increments(per_user_increments);
+        {
+            let mut store = self.lane_reservations.lock();
+            self.reconcile_missing_reservation_payloads_locked(&mut store);
+        }
+        self.replace_fifo_locked(&final_fifo);
+        (summary, notifications)
+    }
+
     /// Replay live pending queue-plan journal records against the current state.
     ///
     /// A still-active record is requeued with its exact original routing plan and durable claim.
@@ -4842,281 +5640,166 @@ impl Queue {
         &self,
         state: &State,
     ) -> std::io::Result<QueuePlanJournalReplaySummary> {
-        let replay = {
-            let guard = self.plan_journal.lock();
-            let Some(journal) = guard.as_ref() else {
-                return Ok(QueuePlanJournalReplaySummary::default());
-            };
-            journal.prepare_replay()?
-        };
-
-        let mut summary = QueuePlanJournalReplaySummary {
-            records: replay.len(),
-            ..QueuePlanJournalReplaySummary::default()
-        };
-        let mut journal_removals = Vec::new();
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
         #[cfg(feature = "telemetry")]
         let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
-        let (max_clock_drift, transaction_limits) = state.transaction_admission_limits();
-        let crypto = state.crypto();
-        let chain_id = state.chain_id_ref().clone();
+        let plan_journal_install_guard = self.plan_journal_install_lock.lock();
+        let reservation_transition_guard = self.lane_reservation_transition_lock.lock();
+        let lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+        let generation_before = state.state_view_generation();
+        if generation_before % 2 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "queue-plan journal replay observed an in-progress State generation",
+            ));
+        }
+        let state_view = state.view();
+        let replay_state_generation = state.state_view_generation();
+        if replay_state_generation != generation_before || replay_state_generation % 2 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "queue-plan journal replay could not bind one stable State generation",
+            ));
+        }
+        if self.plan_journal_installed.load(Ordering::Acquire) {
+            let queue_guard = self.push_remove_lock.lock();
+            self.ensure_plan_journal_replay_startup_shape_locked()?;
+            drop(queue_guard);
+        }
+        self.sync_nexus_routing_with_view(&state_view);
 
-        replay.for_each_record(|record| {
-            let entrypoint_hash = record.entrypoint_hash;
-            let hash = compatibility_queue_hash(entrypoint_hash);
-            let recorded_routing_plan = record.routing_plan.clone();
-            let recorded_admission_context = record.admission_context.clone();
-            let recorded_global_admission_identity = record.global_admission_identity.clone();
-            let recorded_signed_transaction_hash = record.signed_transaction_hash.clone();
-            let enqueue_timestamp_ms = record.enqueue_timestamp_ms;
-            let recorded_journal_digest = record.claim_digest().map_err(|error| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("failed to rebuild V4 queue-plan journal claim: {error}"),
-                )
-            })?;
-            let accepted = AcceptedTransaction::accept_entrypoint_at_time(
-                record.entrypoint,
-                &chain_id,
-                max_clock_drift,
-                transaction_limits.clone(),
-                crypto.as_ref(),
-                Duration::from_millis(enqueue_timestamp_ms),
-            )
+        // Startup replay is one publication transition. The lifecycle guard binds the route
+        // generation, the reservation transition guard freezes durable lane owners, and the queue
+        // lock excludes every in-memory owner/index mutation until all records validate.
+        let mut journal_guard = self.plan_journal.lock();
+        let Some(journal) = journal_guard.as_mut() else {
+            return Ok(QueuePlanJournalReplaySummary::default());
+        };
+        let queue_guard = self.push_remove_lock.lock();
+        let records = journal.prepare_replay()?.into_verified_records()?;
+        let expected_record_claims = records
+            .iter()
+            .map(|record| {
+                record.claim_digest().map(|claim_digest| {
+                    (record.entrypoint_hash, record.plan_digest(), claim_digest)
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!(
-                        "queue-plan journal transaction {hash} failed canonical stateless validation; retaining its durable record: {error}"
+                        "queue-plan journal replay could not bind its verified record set: {error}"
                     ),
                 )
             })?;
-            if accepted.hash_as_entrypoint() != entrypoint_hash
-                || exact_signed_transaction_hash(accepted.entrypoint())
-                    != recorded_signed_transaction_hash.clone()
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "queue-plan journal transaction {hash} changed identity during stateless validation"
-                    ),
-                ));
-            }
+        let prepared = self.prepare_plan_journal_replay_locked(
+            records,
+            state,
+            &state_view,
+            #[cfg(feature = "telemetry")]
+            telemetry_handle,
+        )?;
+        if state.state_view_generation() != replay_state_generation {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "queue-plan journal replay State generation changed before publication",
+            ));
+        }
 
-            let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
-            let state_view = state.view();
-            if state_view.transactions.get(&hash).is_some() {
-                summary.tombstoned_committed = summary.tombstoned_committed.saturating_add(1);
-                journal_removals.push((
-                    entrypoint_hash,
-                    recorded_routing_plan.digest(),
-                    recorded_journal_digest,
-                ));
-                return Ok(());
-            }
-            let global_registry_match = if recorded_global_admission_identity.is_some() {
-                let binding =
-                    crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
-                        &QueuePlanDurableAdmissionV2 {
-                            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
-                            context: recorded_admission_context.clone(),
-                            global_admission_identity: recorded_global_admission_identity.clone(),
-                            routing_plan: recorded_routing_plan.clone(),
-                            entrypoint_hash: entrypoint_hash.clone(),
-                            signed_transaction_hash: recorded_signed_transaction_hash,
-                            enqueue_timestamp_ms,
-                            journal_record_digest: recorded_journal_digest,
-                        },
+        // Re-open and authenticate the complete live set immediately before the durability and
+        // visibility boundary. The journal mutex excludes trusted writers; this second bounded
+        // comparison also fails closed on same-path external replacement or content drift.
+        let observed_record_claims = journal
+            .prepare_replay()?
+            .into_verified_records()?
+            .iter()
+            .map(|record| {
+                record.claim_digest().map(|claim_digest| {
+                    (
+                        record.entrypoint_hash,
+                        record.plan_digest(),
+                        claim_digest,
                     )
-                    .map_err(|reason| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!(
-                                "queue-plan journal transaction {hash} has a malformed global admission binding; retaining its durable record: {reason}"
-                            ),
-                        )
-                    })?;
-                let expected_chain_id_digest =
-                    crate::torii_proxy::queue_plan_admission_chain_id_digest(
-                        state_view.chain_id(),
-                    );
-                if binding.chain_id_digest != expected_chain_id_digest {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "queue-plan journal transaction {hash} belongs to another chain; retaining its durable record"
-                        ),
-                    ));
-                }
-                Some(
-                    queue_plan_admission_registry_match(
-                        &state_view,
-                        binding.entrypoint_hash.clone(),
-                        binding.canonical_hash(),
-                    )
-                    .map_err(|reason| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!(
-                                "queue-plan journal transaction {hash} cannot validate its global admission registry marker; retaining its durable record: {reason}"
-                            ),
-                        )
-                    })?,
-                )
-            } else {
-                None
-            };
-            if global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Conflict) {
-                summary.tombstoned_conflicting_global_admission = summary
-                    .tombstoned_conflicting_global_admission
-                    .saturating_add(1);
-                journal_removals.push((
-                    entrypoint_hash,
-                    recorded_routing_plan.digest(),
-                    recorded_journal_digest,
-                ));
-                return Ok(());
-            }
-            if self.is_expired(&accepted) && global_registry_match.is_none() {
-                summary.tombstoned_expired = summary.tombstoned_expired.saturating_add(1);
-                journal_removals.push((
-                    entrypoint_hash,
-                    recorded_routing_plan.digest(),
-                    recorded_journal_digest,
-                ));
-                return Ok(());
-            }
-
-            self.sync_nexus_routing_with_view(&state_view);
-            let active_recorded_plan = resolve_routing_plan_for_queue_admission(
-                recorded_routing_plan.clone(),
-                state_view.nexus(),
-                state_view_height_for_routing(&state_view),
-            )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!(
-                        "queue-plan journal transaction {hash} no longer has its admitted routing plan active; retaining immutable ownership evidence: {error}"
+                        "queue-plan journal replay could not rebind its verified record set: {error}"
                     ),
                 )
             })?;
-            if active_recorded_plan != recorded_routing_plan
-                || !Self::durable_plan_claim_context_revalidates_in_view(
-                    &state_view,
-                    &recorded_routing_plan,
-                    &recorded_admission_context,
-                )
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "queue-plan journal transaction {hash} no longer authenticates its admitted route generation or active lane incarnations; retaining immutable ownership evidence"
-                    ),
-                ));
-            }
+        if observed_record_claims != expected_record_claims {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "queue-plan journal live record set changed before atomic publication",
+            ));
+        }
 
-            if let Some(existing) = self.txs.get(&hash) {
-                let existing_matches = existing.value().as_accepted().entrypoint()
-                    == accepted.entrypoint()
-                    && self
-                        .routing_plans
-                        .get(&hash)
-                        .is_some_and(|plan| *plan == recorded_routing_plan);
-                drop(existing);
-                if !existing_matches {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::AlreadyExists,
-                        format!(
-                            "queue-plan journal transaction {hash} conflicts with existing in-memory queue ownership"
-                        ),
-                    ));
+        let terminal_removals = prepared.terminal_removals.clone();
+        if !terminal_removals.is_empty() {
+            match journal.remove_all_live_exact_atomic_strict_durable(&terminal_removals) {
+                Ok(()) => {}
+                Err(error) => {
+                    drop(journal_guard);
+                    drop(queue_guard);
+                    drop(reservation_transition_guard);
+                    drop(state_view);
+                    drop(lifecycle_guard);
+                    drop(plan_journal_install_guard);
+                    self.mark_plan_journal_durability_fault(&error, backpressure_telemetry);
+                    return Err(error);
                 }
-                let _queue_guard = self.push_remove_lock.lock();
-                self.durable_plan_claims.insert(
-                    hash,
-                    QueuePlanDurableClaimIndexEntry {
-                        entrypoint_hash,
-                        signed_transaction_hash: record.signed_transaction_hash,
-                        routing_plan: recorded_routing_plan,
-                        admission_context: recorded_admission_context,
-                        global_admission_identity: recorded_global_admission_identity,
-                        enqueue_timestamp_ms,
-                        journal_record_digest: recorded_journal_digest,
-                    },
-                );
-                return Ok(());
             }
-
-            let checked = CheckedTransaction::new_unchecked(accepted);
-            let next_block_height = state_view_height_for_routing(&state_view).saturating_add(1);
-            let mut state_access = EagerAdmissionStateAccess::new(
-                state_view.world(),
-                &state_view.nexus,
-                &state_view.pipeline,
-                next_block_height,
-                state_view.latest_block().map_or(0, |block| {
-                    u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-                }),
-            );
-            let mut prepared = match self.prepare_checked_for_enqueue(
-                checked,
-                recorded_routing_plan,
-                &mut state_access,
-                None,
-                #[cfg(feature = "telemetry")]
-                telemetry_handle,
-            ) {
-                Ok(prepared) => prepared,
-                Err(failure) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "queue-plan journal transaction {hash} failed current admission; retaining its durable record: {}",
-                            failure.err
-                        ),
-                    ));
-                }
-            };
-            prepared.enqueued_at_ms = enqueue_timestamp_ms;
-            prepared.admission_context = Some(recorded_admission_context);
-            prepared.global_admission_identity = recorded_global_admission_identity;
-            prepared.expected_journal_record_digest = Some(recorded_journal_digest);
-            prepared.replayed_journal_record_digest = Some(recorded_journal_digest);
-
-            match self.enqueue_prepared_admissions(
-                vec![prepared],
+        }
+        let (summary, notifications) = self.apply_plan_journal_replay_locked(prepared);
+        drop(journal_guard);
+        drop(queue_guard);
+        drop(reservation_transition_guard);
+        drop(state_view);
+        drop(lifecycle_guard);
+        drop(plan_journal_install_guard);
+        #[cfg(feature = "telemetry")]
+        {
+            let dirty_lanes = notifications
+                .iter()
+                .map(|notification| notification.lane_id)
+                .collect::<BTreeSet<_>>();
+            let dirty_dataspaces = notifications
+                .iter()
+                .map(|notification| (notification.lane_id, notification.dataspace_id))
+                .collect::<BTreeSet<_>>();
+            self.publish_teu_backlog_metric_keys(
                 backpressure_telemetry,
-                PlanJournalAdmissionMode::Skip,
-            ) {
-                Ok(notifications) => {
-                    summary.replayed = summary.replayed.saturating_add(notifications.len());
-                    self.publish_admission_notifications(&notifications);
-                }
-                Err((notifications, failure)) => {
-                    summary.replayed = summary.replayed.saturating_add(notifications.len());
-                    self.publish_admission_notifications(&notifications);
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!(
-                            "queue-plan journal transaction {hash} failed queue publication after durable recovery; retaining its durable record: {}",
-                            failure.err
-                        ),
-                    ));
-                }
-            }
-            Ok(())
-        })?;
-
-        self.record_plan_journal_removes_durable(journal_removals)?;
-        self.finalize_completed_releases(backpressure_telemetry)
-            .map_err(std::io::Error::other)?;
-
+                dirty_lanes.into_iter(),
+                dirty_dataspaces.into_iter(),
+            );
+        }
+        self.publish_admission_notifications(&notifications);
+        self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+        status::set_tx_queue_pressure(self.pressure_snapshot());
         Ok(summary)
+    }
+
+    /// Finish restart-idempotent lane-release ownership after queue-plan payload replay.
+    ///
+    /// This is deliberately a separate startup transition from [`Self::replay_plan_journal`].
+    /// Queue-plan replay has no fallible operation after its atomic journal/queue commit; a
+    /// reservation-journal `ForgetRelease` failure therefore cannot turn a committed queue-plan
+    /// replay into an error result. Startup must call this method immediately after successful
+    /// replay and before starting ingress, gossip, or consensus workers.
+    ///
+    /// # Errors
+    /// Returns an exact reservation-identity or reservation-journal recovery error.
+    pub fn finalize_plan_journal_startup_recovery(&self) -> std::io::Result<()> {
+        self.finalize_completed_releases(None)
+            .map_err(std::io::Error::other)
     }
 
     fn record_plan_journal_put_durable(
@@ -5566,32 +6249,6 @@ impl Queue {
                 DeferredQueuePlanJournalFlush::default()
             }
         }
-    }
-
-    fn record_plan_journal_removes_durable(
-        &self,
-        removals: Vec<QueuePlanJournalRemoval>,
-    ) -> std::io::Result<()> {
-        if removals.is_empty() {
-            return Ok(());
-        }
-        let mut guard = self.plan_journal.lock();
-        let journal = guard.as_mut().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "queue plan journal is not installed during startup replay",
-            )
-        })?;
-        let result = journal
-            .remove_many_deferred_flush(removals)
-            .and_then(|_| journal.sync_all_with_parent())
-            .and_then(|_| journal.compact_if_needed());
-        if let Err(error) = result {
-            drop(guard);
-            self.mark_plan_journal_durability_fault(&error, None);
-            return Err(error);
-        }
-        Ok(())
     }
 
     fn flush_plan_journal_deferred(&self, flush: DeferredQueuePlanJournalFlush) {
@@ -6718,17 +7375,33 @@ impl Queue {
 
     /// Checks if the transaction is expired at a specific time.
     fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
+        let enqueue_timestamp_ms =
+            if matches!(tx.entrypoint(), TransactionEntrypoint::SealedCommitment(_)) {
+                self.tx_enqueued_at_ms
+                    .get(&tx.hash())
+                    .map(|entry| *entry.value())
+            } else {
+                None
+            };
+        self.is_expired_at_with_enqueue_timestamp(tx, now, enqueue_timestamp_ms)
+    }
+
+    /// Check expiry against an explicitly bound queue-admission timestamp.
+    ///
+    /// Queue-plan replay uses the authenticated journal timestamp because a sealed commitment's
+    /// in-memory timestamp is deliberately not published until the complete replay applies.
+    fn is_expired_at_with_enqueue_timestamp(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        now: Duration,
+        enqueue_timestamp_ms: Option<u64>,
+    ) -> bool {
         if matches!(tx.entrypoint(), TransactionEntrypoint::SealedCommitment(_)) {
             // Sealed commitments have no signed wall-clock creation timestamp. Bound their local
             // queue residence from the admission timestamp instead; reveal-height validation
             // remains the consensus rule after inclusion, but cannot reclaim a commitment that
             // never reaches a block.
-            let hash = tx.hash();
-            let Some(enqueued_at_ms) = self
-                .tx_enqueued_at_ms
-                .get(&hash)
-                .map(|entry| *entry.value())
-            else {
+            let Some(enqueued_at_ms) = enqueue_timestamp_ms else {
                 // A transaction being checked before admission has no queue residence yet.
                 return false;
             };
@@ -8647,6 +9320,7 @@ impl Queue {
             routing_plan,
             state_access,
             gossip_payload,
+            QueueAdmissionPreparationMode::Ordinary,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
         )?;
@@ -8698,11 +9372,14 @@ impl Queue {
         routing_plan: RoutingPlan,
         state_access: &mut C,
         _gossip_payload: Option<Arc<Vec<u8>>>,
+        preparation_mode: QueueAdmissionPreparationMode,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<PreparedQueueAdmission, Failure> {
         // Reclaim bounded stale work and reject cheap saturation/duplication cases before fee,
         // manifest, privacy-proof, compliance, and gas analysis.
-        let _ = self.cull_expired_entries_if_due();
+        if preparation_mode == QueueAdmissionPreparationMode::Ordinary {
+            let _ = self.cull_expired_entries_if_due();
+        }
         let hash = checked.as_ref().hash();
         let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
         let replaces_missing_payload = self
@@ -8719,6 +9396,8 @@ impl Queue {
             Some(Error::PlanJournalDurabilityRejected {
                 reason: "queue ownership requires restart recovery".to_owned(),
             })
+        } else if preparation_mode == QueueAdmissionPreparationMode::AtomicJournalReplay {
+            None
         } else if self.txs.contains_key(&hash) {
             Some(Error::IsInQueue)
         } else if (!replaces_missing_payload && self.active_len() >= self.capacity.get())
@@ -9817,6 +10496,7 @@ impl Queue {
                 routing_plan,
                 &mut state_access,
                 None,
+                QueueAdmissionPreparationMode::Ordinary,
                 #[cfg(feature = "telemetry")]
                 telemetry_handle,
             ) {
@@ -11002,22 +11682,95 @@ impl Queue {
         tx: &CheckedTransaction<'static>,
         routing_plan: &RoutingPlan,
     ) -> Result<bool, Error> {
-        let store = self.lane_reservations.lock();
-        if store.commit_barriers.iter().any(|key| {
-            key.signed_transaction_hash == hash
-                && key.entrypoint_hash == tx.as_accepted().hash_as_entrypoint()
-                && key.routing_plan_digest == routing_plan.digest()
-                && key.coordinator_leg == routing_plan.coordinator_leg()
-        }) {
-            // The lane commit frame became durable before the pending-plan tombstone. Treat the
-            // exact old plan as already consumed; a genuinely different re-admitted plan remains
-            // distinguishable and is not removed by this barrier.
-            return Err(Error::InBlockchain);
-        }
-        let Some(record) = store.live_by_hash.get(&hash) else {
+        let Some(fifo_order) =
+            self.restored_reservation_fifo_order_for_admission(hash, tx, routing_plan)?
+        else {
             return Ok(false);
         };
-        if record.key.entrypoint_hash != tx.as_accepted().hash_as_entrypoint()
+        self.install_fifo_order_locked(hash, fifo_order)
+            .map_err(|error| Error::UnresolvedRoute {
+                reason: error.to_string(),
+            })?;
+        Ok(true)
+    }
+
+    /// Return the exact restored reservation order without mutating queue indexes.
+    ///
+    /// Caller must hold `push_remove_lock`.
+    fn restored_reservation_fifo_order_for_admission(
+        &self,
+        hash: SignedTxHash,
+        tx: &CheckedTransaction<'static>,
+        routing_plan: &RoutingPlan,
+    ) -> Result<Option<LaneQueueFifoOrderV5>, Error> {
+        self.restored_reservation_fifo_order_for_identity(
+            hash,
+            tx.as_accepted().hash_as_entrypoint(),
+            routing_plan,
+        )
+    }
+
+    /// Resolve one exact reservation-side payload owner without mutating queue indexes.
+    ///
+    /// An exact Commit barrier means the plan was already consumed and must not be replayed.
+    /// Any different durable identity for the same compatibility hash fails closed instead of
+    /// letting queue-plan replay manufacture a second owner.
+    ///
+    /// Caller must hold `push_remove_lock`.
+    fn restored_reservation_fifo_order_for_identity(
+        &self,
+        hash: SignedTxHash,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        routing_plan: &RoutingPlan,
+    ) -> Result<Option<LaneQueueFifoOrderV5>, Error> {
+        let store = self.lane_reservations.lock();
+        if let Some(key) = store
+            .commit_barriers
+            .iter()
+            .find(|key| key.signed_transaction_hash == hash)
+        {
+            if key.entrypoint_hash == entrypoint_hash
+                && key.routing_plan_digest == routing_plan.digest()
+                && key.coordinator_leg == routing_plan.coordinator_leg()
+            {
+                // The lane commit frame became durable before the pending-plan tombstone. Treat
+                // this exact old plan as already consumed.
+                return Err(Error::InBlockchain);
+            }
+            return Err(Error::UnresolvedRoute {
+                reason:
+                    "a durable lane commit barrier owns the same queue hash with a different exact identity"
+                        .to_owned(),
+            });
+        }
+        let mut records = store.live_by_hash.get(&hash).into_iter().chain(
+            store
+                .completed_releases
+                .iter()
+                .flat_map(|completion| completion.ordered_records.iter())
+                .filter(|record| record.key.signed_transaction_hash == hash),
+        );
+        let Some(record) = records.next() else {
+            if store.release_barriers.iter().any(|barrier| {
+                barrier
+                    .ordered_keys
+                    .iter()
+                    .any(|key| key.signed_transaction_hash == hash)
+            }) {
+                return Err(Error::UnresolvedRoute {
+                    reason:
+                        "a durable lane release barrier lost its exact reservation payload owner"
+                            .to_owned(),
+                });
+            }
+            return Ok(None);
+        };
+        if records.next().is_some() {
+            return Err(Error::UnresolvedRoute {
+                reason: "multiple durable reservation states own the same queue hash".to_owned(),
+            });
+        }
+        if record.key.entrypoint_hash != entrypoint_hash
             || record.key.routing_plan_digest != routing_plan.digest()
             || record.key.coordinator_leg != routing_plan.coordinator_leg()
         {
@@ -11026,13 +11779,7 @@ impl Queue {
                     .to_owned(),
             });
         }
-        let fifo_order = record.fifo_order;
-        drop(store);
-        self.install_fifo_order_locked(hash, fifo_order)
-            .map_err(|error| Error::UnresolvedRoute {
-                reason: error.to_string(),
-            })?;
-        Ok(true)
+        Ok(Some(record.fifo_order))
     }
 
     /// Install an exact durable FIFO order or allocate one for a new admission.
@@ -19164,7 +19911,7 @@ pub mod tests {
             .set_nexus(nexus)
             .expect("apply disabled Nexus state for legacy route test");
         install_single_validator_topology_for_queue_test(&state, 0x96);
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
             dataspace: DataSpaceId::UNIVERSAL,
@@ -19180,6 +19927,33 @@ pub mod tests {
         let admission_context = queue
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture replay fixture admission context");
+        let committed = accepted_tx_by(policy_authority.clone(), &policy_keypair, &time_source);
+        let committed_hash = committed.hash();
+        queue
+            .record_plan_journal_put_durable(
+                &committed,
+                &plan,
+                &admission_context,
+                Queue::duration_to_millis(time_source.get_unix_time()),
+                None,
+                None,
+                true,
+            )
+            .expect("persist committed terminal replay fixture");
+        time_handle.advance(Duration::from_millis(1));
+        let accepted = accepted_tx_by(policy_authority.clone(), &policy_keypair, &time_source);
+        let accepted_hash = accepted.hash();
+        queue
+            .record_plan_journal_put_durable(
+                &accepted,
+                &plan,
+                &admission_context,
+                Queue::duration_to_millis(time_source.get_unix_time()),
+                None,
+                None,
+                true,
+            )
+            .expect("persist valid replay prefix fixture");
         let rejected = accepted_tx_with(
             policy_authority.clone(),
             &policy_keypair,
@@ -19207,6 +19981,13 @@ pub mod tests {
                 true,
             )
             .expect("persist admission-rejection fixture");
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(committed_hash, nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("commit terminal replay fixture identity");
+        }
         drop(queue);
 
         let replay_queue = Queue::test_with_router_for_routes(config, &time_source, router, &[]);
@@ -19214,7 +19995,7 @@ pub mod tests {
             replay_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
                 .expect("reopen admission-rejection journal"),
-            1
+            3
         );
         let error = replay_queue
             .replay_plan_journal(&state)
@@ -19226,7 +20007,12 @@ pub mod tests {
             "unexpected replay error: {error}"
         );
         assert_eq!(replay_queue.active_len(), 0);
+        assert!(!replay_queue.txs.contains_key(&committed_hash));
+        assert!(!replay_queue.txs.contains_key(&accepted_hash));
         assert!(!replay_queue.txs.contains_key(&rejected_hash));
+        assert!(replay_queue.durable_plan_claims.is_empty());
+        assert!(replay_queue.tx_hashes.is_empty());
+        assert!(replay_queue.tx_gossip.is_empty());
         assert_eq!(
             replay_queue
                 .plan_journal
@@ -19235,9 +20021,142 @@ pub mod tests {
                 .expect("installed replay journal")
                 .live_record_count()
                 .expect("count retained admission-rejection record"),
-            1,
-            "current admission failure must retain acknowledged durable ownership"
+            3,
+            "a later admission failure must retain terminal and live durable owners without publishing or tombstoning a prefix"
         );
+    }
+
+    #[test]
+    fn queue_plan_journal_replay_rejects_aggregate_per_user_overflow_without_prefix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue-plan-aggregate-per-user.norito");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let mut state = State::new(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for aggregate replay test");
+        install_single_validator_topology_for_queue_test(&state, 0x95);
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let mut source_config = config_factory();
+        source_config.capacity = nonzero!(4_usize);
+        source_config.capacity_per_user = nonzero!(2_usize);
+        let queue = Queue::test_with_router_for_routes(
+            source_config,
+            &time_source,
+            Arc::clone(&router),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install aggregate replay journal");
+        let plan =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+        let admission_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture aggregate replay context");
+        let first = accepted_tx_by(authority.clone(), &keypair, &time_source);
+        time_handle.advance(Duration::from_millis(1));
+        let second = accepted_tx_by(authority.clone(), &keypair, &time_source);
+        let hashes = [first.hash(), second.hash()];
+        assert_ne!(hashes[0], hashes[1]);
+        for transaction in [&first, &second] {
+            queue
+                .record_plan_journal_put_durable(
+                    transaction,
+                    &plan,
+                    &admission_context,
+                    Queue::duration_to_millis(time_source.get_unix_time()),
+                    None,
+                    None,
+                    true,
+                )
+                .expect("persist aggregate replay owner");
+        }
+        drop(queue);
+
+        let mut replay_config = source_config;
+        replay_config.capacity_per_user = nonzero!(1_usize);
+        let replay_queue =
+            Queue::test_with_router_for_routes(replay_config, &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("reopen aggregate replay journal"),
+            2
+        );
+        let error = replay_queue
+            .replay_plan_journal(&state)
+            .expect_err("aggregate per-user overflow must reject the complete replay");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("per-user capacity"));
+        assert_eq!(replay_queue.active_len(), 0);
+        assert_eq!(replay_queue.queued_tx_count_for_user(&authority), 0);
+        assert!(
+            hashes
+                .iter()
+                .all(|hash| !replay_queue.txs.contains_key(hash))
+        );
+        assert!(replay_queue.durable_plan_claims.is_empty());
+        assert!(replay_queue.tx_hashes.is_empty());
+        assert!(replay_queue.tx_gossip.is_empty());
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed aggregate replay journal")
+                .live_record_count()
+                .expect("count retained aggregate replay records"),
+            2
+        );
+    }
+
+    #[test]
+    fn queue_plan_journal_replay_rejects_orphaned_startup_fifo_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue-plan-orphaned-fifo.norito");
+        let state = lane_reservation_test_state();
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install empty orphan-FIFO plan journal");
+        let orphan = accepted_tx_by_someone(&time_source).hash();
+        let fifo_order = LaneQueueFifoOrderV5::new(1).expect("valid orphan FIFO identity");
+        queue.fifo_order_by_hash.insert(orphan, fifo_order);
+
+        let error = queue
+            .replay_plan_journal(&state)
+            .expect_err("an unowned startup FIFO identity must fail closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("orphaned FIFO identity"),
+            "unexpected replay error: {error}"
+        );
+        assert_eq!(
+            queue
+                .fifo_order_by_hash
+                .get(&orphan)
+                .map(|entry| *entry.value()),
+            Some(fifo_order),
+            "failed replay must not rewrite pre-existing FIFO evidence"
+        );
+        assert_eq!(queue.active_len(), 0);
+        assert!(queue.txs.is_empty());
+        assert!(queue.tx_hashes.is_empty());
     }
 
     #[test]
@@ -28204,6 +29123,9 @@ pub mod tests {
                     .replayed,
                 2
             );
+            queue
+                .finalize_plan_journal_startup_recovery()
+                .expect("finish release recovery after atomic payload replay");
             if crash_after_completion {
                 assert!(
                     queue.lane_reservation_release_barriers().is_empty(),
@@ -28638,6 +29560,97 @@ pub mod tests {
                 .map(|transaction| transaction.as_ref().hash())
                 .collect::<Vec<_>>(),
             hashes
+        );
+        drop(selected);
+        assert_eq!(queue.active_len(), hashes.len());
+        assert_eq!(queue.queued_len(), hashes.len());
+        assert_eq!(queue.durable_plan_claims.len(), hashes.len());
+    }
+
+    #[test]
+    fn reservation_restart_fits_ordinary_fifo_around_middle_anchor() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let dir = tempdir().expect("tempdir");
+        let plan_path = dir.path().join("middle-fifo-plans.norito");
+        let reservation_path = dir.path().join("middle-fifo-reservations.norito");
+        let txs = (0..3)
+            .map(|_| accepted_tx_by_someone(&time_source))
+            .collect::<Vec<_>>();
+        let hashes = txs
+            .iter()
+            .map(AcceptedTransaction::hash)
+            .collect::<Vec<_>>();
+        let reserved_key = {
+            let queue = Arc::new(Queue::test(config_factory(), &time_source));
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install middle-anchor plan journal");
+            queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("install middle-anchor reservation journal");
+            for tx in txs.iter().cloned() {
+                push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, tx);
+            }
+            let excluded = BTreeSet::from([txs[0].hash_as_entrypoint()]);
+            let reserved = queue
+                .reserve_transactions_for_lane_excluding(
+                    &state,
+                    lane_reservation_scope(&state, b"middle-fifo-owner", b"middle-fifo-proposal"),
+                    nonzero!(1_usize),
+                    &excluded,
+                )
+                .expect("reserve only middle transaction B");
+            assert_eq!(reserved.len(), 1);
+            assert_eq!(reserved[0].as_accepted().hash(), hashes[1]);
+            *reserved[0].key()
+        };
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let reservation_replay = queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("restore middle durable FIFO anchor before payload replay");
+        assert_eq!(reservation_replay.restored, 1);
+        assert_eq!(reservation_replay.awaiting_transaction_replay, 1);
+        assert_eq!(
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install middle-anchor plan journal"),
+            3
+        );
+        assert_eq!(
+            queue
+                .replay_plan_journal(&state)
+                .expect("fit A and C around durable B")
+                .replayed,
+            3
+        );
+        for (index, hash) in hashes.iter().copied().enumerate() {
+            assert_eq!(
+                queue
+                    .fifo_order_by_hash
+                    .get(&hash)
+                    .map(|entry| entry.value().ordinal),
+                Some(u64::try_from(index).expect("small fixture index") + 1),
+            );
+        }
+        assert_eq!(queue.queued_len(), 2);
+        assert_eq!(
+            queue
+                .release_lane_reservations_in_order(&[reserved_key])
+                .expect("release middle FIFO anchor"),
+            1
+        );
+
+        let mut selected = Vec::new();
+        queue.get_transactions_for_block_with_state(&state, nonzero!(3_usize), &mut selected);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|transaction| transaction.as_ref().hash())
+                .collect::<Vec<_>>(),
+            hashes,
+            "restart replay must preserve A/B/C when only B retained a durable FIFO ordinal",
         );
         drop(selected);
         assert_eq!(queue.active_len(), hashes.len());
@@ -29349,7 +30362,10 @@ pub mod tests {
                         .expect("release recovery installs the exact production plan journal");
                     queue
                         .replay_plan_journal(&state)
-                        .expect_err("ambiguous startup ForgetRelease must fail plan-journal replay")
+                        .expect("payload replay commits before release reconciliation");
+                    queue.finalize_plan_journal_startup_recovery().expect_err(
+                        "ambiguous startup ForgetRelease must fail separate startup recovery",
+                    )
                 }
             };
             assert!(
@@ -29689,6 +30705,184 @@ pub mod tests {
         );
         queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut global);
         assert_eq!(global[0].as_ref().hash(), hash);
+    }
+
+    #[test]
+    fn committed_state_with_live_reservation_retains_sole_plan_payload_source() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let dir = tempdir().expect("tempdir");
+        let plan_path = dir.path().join("queue-plans-committed-live-owner.norito");
+        let reservation_path = dir
+            .path()
+            .join("lane-reservations-committed-live-owner.norito");
+        let transaction = accepted_tx_by_someone(&time_source);
+        let hash = transaction.hash();
+        {
+            let queue = Arc::new(Queue::test(config_factory(), &time_source));
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install committed-owner plan journal");
+            queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("install committed-owner reservation journal");
+            push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+            queue
+                .reserve_transactions_for_lane(
+                    &state,
+                    lane_reservation_scope(
+                        &state,
+                        b"committed-live-owner",
+                        b"committed-live-proposal",
+                    ),
+                    nonzero!(1_usize),
+                )
+                .expect("reserve transaction before canonical commit");
+        }
+
+        let block_header = ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        state_block
+            .transactions
+            .insert_block(HashSet::from([hash]), nonzero!(1_usize));
+        state_block.commit().expect("commit transaction identity");
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let reservation_replay = queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("restore live reservation before plan replay");
+        assert_eq!(reservation_replay.restored, 1);
+        assert_eq!(reservation_replay.awaiting_transaction_replay, 1);
+        assert_eq!(
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install sole payload journal"),
+            1
+        );
+
+        let error = queue
+            .replay_plan_journal(&state)
+            .expect_err("committed state plus live reservation requires explicit reconciliation");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains(
+                "canonically committed while queue or reservation ownership remains live"
+            ),
+            "unexpected replay error: {error}"
+        );
+        assert!(queue.txs.is_empty());
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(
+            queue
+                .missing_reservation_payload_count
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed sole payload journal")
+                .live_record_count()
+                .expect("count retained sole payload owner"),
+            1,
+            "terminal state must not tombstone the only payload source while reservation ownership remains live"
+        );
+    }
+
+    #[test]
+    fn expired_live_reservation_replays_payload_without_fifo_or_tombstone() {
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let dir = tempdir().expect("tempdir");
+        let plan_path = dir.path().join("queue-plans-expired-live-owner.norito");
+        let reservation_path = dir.path().join("reservations-expired-live-owner.norito");
+        let config = Config {
+            transaction_time_to_live: Duration::from_millis(1),
+            expired_cull_interval: Duration::from_millis(1),
+            expired_cull_batch: nonzero!(16_usize),
+            ..config_factory()
+        };
+        let transaction = accepted_tx_by_someone(&time_source);
+        let hash = transaction.hash();
+        let reserved_key = {
+            let queue = Arc::new(Queue::test(config, &time_source));
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install expired-owner plan journal");
+            queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("install expired-owner reservation journal");
+            push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+            *queue
+                .reserve_transactions_for_lane(
+                    &state,
+                    lane_reservation_scope(&state, b"expired-live-owner", b"expired-live-proposal"),
+                    nonzero!(1_usize),
+                )
+                .expect("reserve transaction before it expires")[0]
+                .key()
+        };
+        time_handle.advance(Duration::from_millis(2));
+
+        let queue = Arc::new(Queue::test(config, &time_source));
+        let reservation_replay = queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("restore expired live reservation before plan payload");
+        assert_eq!(reservation_replay.restored, 1);
+        assert_eq!(reservation_replay.awaiting_transaction_replay, 1);
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install expired live-owner plan journal"),
+            1
+        );
+
+        let summary = queue
+            .replay_plan_journal(&state)
+            .expect("materialize expired payload under its durable reservation owner");
+        assert_eq!(
+            summary,
+            QueuePlanJournalReplaySummary {
+                records: 1,
+                replayed: 1,
+                tombstoned_committed: 0,
+                tombstoned_expired: 0,
+                tombstoned_conflicting_global_admission: 0,
+            }
+        );
+        let replayed = queue
+            .txs
+            .get(&hash)
+            .expect("expired reservation payload must be materialized");
+        assert!(queue.is_expired(replayed.as_accepted()));
+        drop(replayed);
+        assert_eq!(
+            queue
+                .missing_reservation_payload_count
+                .load(Ordering::Relaxed),
+            0,
+            "exact plan replay must clear payload-less owner accounting"
+        );
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 0);
+        assert!(queue.tx_hashes.is_empty());
+        assert_eq!(queue.live_lane_reservations(), vec![reserved_key]);
+        assert_eq!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed expired live-owner plan journal")
+                .live_record_count()
+                .expect("count retained expired live-owner record"),
+            1,
+            "expiry must not tombstone the sole payload source while reservation ownership is live"
+        );
     }
 
     #[test]

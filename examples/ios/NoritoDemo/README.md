@@ -4,7 +4,7 @@ This is a minimal iOS app template that compiles out-of-the-box and can link the
 
 Requirements
 - Xcode 15+
-- iOS 13+ target
+- iOS 15+ target
 - XcodeGen (`brew install xcodegen`)
 
 Generate Xcode project
@@ -14,9 +14,9 @@ Generate Xcode project
 
 By default it shows whether NoritoBridge is linked (`canImport(NoritoBridge)`).
 
-After opening the project, ensure the renamed `IrohaSwift` Swift Package dependency is
-added via **File → Add Package Dependencies…** → `https://github.com/hyperledger/iroha-swift`.
-Older clones may still reference pre-rename identifiers; remove them before resolving.
+To exercise the SDK-backed paths, add the repository-local `IrohaSwift/`
+package via **File → Add Package Dependencies… → Add Local…** and select
+`../../../IrohaSwift`.
 
 Environment bootstrap
 - Copy `.env.example` to `.env` (or configure the scheme directly) to pre-fill Connect values.
@@ -41,8 +41,9 @@ Provisioning manifest status (OA12)
 - Pair manifest card screenshots with the Android sample’s `pos_security_audit.log` entries when rehearsing rotation drills so both platforms keep aligned OA12 evidence.
 
 Next steps
-- Add `docs/NoritoBridgeKit.swift` (or use the included `Sources/NoritoBridgeKit.swift`) to your app target for ergonomic bridging helpers.
-- Follow `docs/connect_swift_integration.md` to derive keys, build AAD/nonces, and send/receive Iroha Connect frames.
+- Use the included `Sources/NoritoBridgeKit.swift` for ergonomic bridging helpers.
+- Follow the [public Swift SDK tutorial](https://docs.iroha.tech/guide/tutorials/swift.html)
+  to derive keys, build AAD/nonces, and send/receive Iroha Connect frames.
 - When `NoritoBridge.xcframework` is linked, the demo UI exposes encrypted send/receive using the bridge.
 
 Key derivation (demo)

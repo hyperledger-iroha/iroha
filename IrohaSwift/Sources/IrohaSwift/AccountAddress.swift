@@ -799,7 +799,7 @@ private func cborAppendBytes(into buffer: inout Data, bytes: Data) {
     buffer.append(bytes)
 }
 
-/// Supported curve identifiers mirroring the registry in `docs/account_structure.md`.
+/// Supported curve identifiers mirroring the registry in `specs/account_structure.md`.
 /// Additional cases compile only when the corresponding feature flag is enabled so preview
 /// curves fail closed by default.
 private enum CurveId: UInt8 {

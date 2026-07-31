@@ -253,7 +253,15 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/sorafs_topology_qualification.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
             '- "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/tests/sorafs_topology_qualification_test.py"',
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
@@ -266,6 +274,10 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         (
             ".github/workflows/sorafs-cli-release.yml",
             "expected one aggregate offline provenance bundle",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "name: Attest aggregate signed-input provenance",
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
@@ -527,6 +539,31 @@ def test_validate_release_automation_rejects_alternate_promotion_job(
             "external receipt, topology, or public-key binding",
         ),
         (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
             "--supply-chain-source-root sf11-source",
             "source root and exact public provenance trust tuple",
         ),
@@ -677,6 +714,30 @@ def test_validate_release_automation_rejects_unpinned_gh_verifier(
     )
 
     with pytest.raises(ValueError, match="protected SHA-256"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_independent_topology_key(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    original = (
+        '[[ "$SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX" '
+        '== "$SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX" ]]'
+    )
+    assert original in source
+    workflow.write_text(
+        source.replace(
+            original,
+            '[[ "$SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX" == "" ]]',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="independently administered"):
         automation.validate_release_automation(tmp_path)
 
 

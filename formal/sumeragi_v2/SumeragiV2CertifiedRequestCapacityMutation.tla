@@ -19,9 +19,14 @@ Q, and the bounded retained AdapterEffect FIFO T distinct:
      outer count and canonical-envelope byte reserves, even while unrelated
      retained debt is present;
   5. consuming response A atomically retires A's exact P and Q owners; and
-  6. DrainRetainedFetchB removes the retained head and atomically installs
-     B's exact P/Q ownership.  For an existing ordinary B, the P task identity
-     is upgraded in place; for a new B, P and Q appear together.
+  6. AdmitRetainedFetchBAtReleasedCapacity atomically installs B's exact P/Q
+     ownership.  For a new B, the successful dispatch removes T.  For an
+     existing ordinary B, the P task identity is upgraded in place and the
+     exact T head remains as the retry barrier until asynchronous completion
+     retires the service owner.
+
+The bounded prefix ends at that P/Q installation boundary.  It does not model
+the later asynchronous completion which retires the existing-B barrier.
 
 RetentionPolicy supplies four independent negative controls:
 
@@ -30,7 +35,9 @@ RetentionPolicy supplies four independent negative controls:
   DuplicateRetentionPolicy   creates two owners for one admission; and
   OvertakeRetentionPolicy    lets a later control cross B's FIFO position.
 
-RequestOnlyDrainPolicy independently exposes a non-atomic Q-only drain.
+RequestOnlyDrainPolicy independently exposes a non-atomic Q-only install.
+RetainUpgradeBarrier supplies a focused mutant for dropping the existing-B
+retry barrier after its P/Q authority upgrade.
 FailOnCapacityBlockedFetch, the two outer reserve switches, and
 AllowTransportResponseUnderDebt preserve the independent pressure mutations
 that were already covered by this model.
@@ -42,6 +49,7 @@ validation, crash/restart reconstruction, or deductive protocol liveness.
 
 CONSTANTS RetentionPolicy,
           DrainPolicy,
+          RetainUpgradeBarrier,
           FailOnCapacityBlockedFetch,
           ReserveTransportResponseCount,
           ReserveTransportResponseBytes,
@@ -63,6 +71,7 @@ ASSUME RetentionPolicy \in
    DuplicateRetentionPolicy,
    OvertakeRetentionPolicy}
 ASSUME DrainPolicy \in {AtomicDrainPolicy, RequestOnlyDrainPolicy}
+ASSUME RetainUpgradeBarrier \in BOOLEAN
 ASSUME FailOnCapacityBlockedFetch \in BOOLEAN
 ASSUME ReserveTransportResponseCount \in BOOLEAN
 ASSUME ReserveTransportResponseBytes \in BOOLEAN
@@ -297,11 +306,13 @@ QueuedResponseIsExactAdmittedOwner ==
     /\ ~responseAConsumed
 
 (***************************************************************************
-After A releases capacity, one DrainRetainedFetchB transition carries the
-same retained owner into exact P/Q state and removes it from the FIFO.  The
-existing-B branch preserves TaskB; the new-B branch allocates TaskB once.
+After A releases capacity, one AdmitRetainedFetchBAtReleasedCapacity
+transition carries the same retained owner into exact P/Q state.  The new-B
+branch removes that successfully dispatched head.  The existing-B branch
+preserves TaskB and its exact T head as the admission barrier while service
+work remains in flight.
 ***************************************************************************)
-DrainRetainedFetchBIsAtomic ==
+RetainedFetchBInstallsExactPQAtomically ==
   (phase = 4) =>
     /\ (pressureScenario = FullWorkPressureScenario \/ responseAConsumed)
     /\ ~workA
@@ -311,9 +322,16 @@ DrainRetainedFetchBIsAtomic ==
     /\ requestOwner = FetchB
     /\ requestAuthority = AuthorityB
     /\ dispatchedFetchOwner = ExactFetchBOwner
-    /\ retainedEffects = <<>>
     /\ PendingWorkCount = 1
     /\ CertifiedRequestCount = CertifiedRequestCapacity
+
+NewFetchBDrainsExactRetainedOwner ==
+  (phase = 4 /\ ~preexistingOrdinaryWorkB) =>
+    retainedEffects = <<>>
+
+UpgradeFetchBKeepsExactRetryBarrier ==
+  (phase = 4 /\ preexistingOrdinaryWorkB) =>
+    retainedEffects = <<ExactFetchBOwner>>
 
 Init ==
   /\ pressureScenario \in PressureScenarios
@@ -521,11 +539,14 @@ ReleaseOrdinaryWorkCapacityA ==
          independentCapacityWitness>>
 
 (***************************************************************************
-Capacity release drains the already-admitted owner directly; there is no
+Capacity release retries the already-admitted owner directly; there is no
 periodic reconstruction step.  AtomicDrain installs or upgrades exact P/Q
-state in one transition.  RequestOnlyDrain is the partial-ownership mutant.
+state in one transition.  A new Fetch drains T immediately; an authority
+upgrade retains T as the exact retry barrier.  RequestOnlyDrain is the
+partial-ownership mutant, and RetainUpgradeBarrier controls only the latter
+barrier.
 ***************************************************************************)
-DrainRetainedFetchB ==
+AdmitRetainedFetchBAtReleasedCapacity ==
   /\ phase = 3
   /\ ~fatal
   /\ (pressureScenario = FullWorkPressureScenario \/ responseAConsumed)
@@ -539,7 +560,10 @@ DrainRetainedFetchB ==
   /\ workBTask = IF preexistingOrdinaryWorkB THEN TaskB ELSE NoTask
   /\ ~certifiedWorkB
   /\ phase' = 4
-  /\ retainedEffects' = Tail(retainedEffects)
+  /\ retainedEffects' =
+       IF preexistingOrdinaryWorkB /\ RetainUpgradeBarrier
+       THEN retainedEffects
+       ELSE Tail(retainedEffects)
   /\ dispatchedFetchOwner' = ExactFetchBOwner
   /\ IF DrainPolicy = AtomicDrainPolicy
        THEN /\ workB' = TRUE
@@ -571,7 +595,7 @@ Next ==
   \/ AdmitOuterTransportResponseA
   \/ ConsumeTransportOnlyResponseA
   \/ ReleaseOrdinaryWorkCapacityA
-  \/ DrainRetainedFetchB
+  \/ AdmitRetainedFetchBAtReleasedCapacity
 
 Spec ==
   /\ Init
@@ -580,7 +604,7 @@ Spec ==
   /\ WF_vars(AdmitOuterTransportResponseA)
   /\ WF_vars(ConsumeTransportOnlyResponseA)
   /\ WF_vars(ReleaseOrdinaryWorkCapacityA)
-  /\ WF_vars(DrainRetainedFetchB)
+  /\ WF_vars(AdmitRetainedFetchBAtReleasedCapacity)
 
 OuterResponseEventuallyAdmitted ==
   (phase = 1

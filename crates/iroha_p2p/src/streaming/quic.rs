@@ -30,10 +30,7 @@ use quinn::{
         QuicClientConfig as QuinnRustlsClientConfig, QuicServerConfig as QuinnRustlsServerConfig,
     },
 };
-use rustls::{
-    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    pki_types::{CertificateDer, PrivatePkcs8KeyDer},
-};
+use rustls::{client::danger::ServerCertVerifier, pki_types::PrivatePkcs8KeyDer};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -45,6 +42,9 @@ const DEFAULT_DATAGRAM_BUFFER: usize = 1 << 20;
 const MAX_CONTROL_FRAME_LEN: usize = 512 * 1024;
 const ALPN: &[u8] = b"nsc/1";
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Fingerprint that pins one streaming server certificate.
+pub type CertificateFingerprint = [u8; iroha_crypto::Hash::LENGTH];
 
 /// Result type used by the streaming QUIC helpers.
 pub type Result<T> = core::result::Result<T, Error>;
@@ -207,6 +207,7 @@ impl Default for TransportConfigSettings {
 pub struct StreamingServer {
     endpoint: Endpoint,
     settings: TransportConfigSettings,
+    certificate_fingerprint: CertificateFingerprint,
 }
 
 impl StreamingServer {
@@ -216,6 +217,7 @@ impl StreamingServer {
             rcgen::generate_simple_self_signed(["nsc.local".to_owned()])
                 .map_err(|e| Error::TlsServer(e.to_string()))?;
         let cert_der = cert.der().clone().into_owned();
+        let certificate_fingerprint = crate::transport::certificate_fingerprint(cert_der.as_ref());
         let priv_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
 
         let mut rustls_config =
@@ -223,7 +225,7 @@ impl StreamingServer {
                 .with_no_client_auth()
                 .with_single_cert(vec![cert_der], priv_key.into())
                 .map_err(|e| Error::TlsServer(e.to_string()))?;
-        rustls_config.max_early_data_size = u32::MAX;
+        rustls_config.max_early_data_size = 0;
         rustls_config.alpn_protocols = vec![ALPN.to_vec()];
         let rustls_config = Arc::new(rustls_config);
 
@@ -236,12 +238,22 @@ impl StreamingServer {
 
         let endpoint = Endpoint::server(server_config, addr)?;
 
-        Ok(Self { endpoint, settings })
+        Ok(Self {
+            endpoint,
+            settings,
+            certificate_fingerprint,
+        })
     }
 
     /// Retrieve the socket address the server is listening on.
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.endpoint.local_addr().map_err(Error::from)
+    }
+
+    /// Return the fingerprint clients must obtain through an authenticated channel.
+    #[must_use]
+    pub const fn certificate_fingerprint(&self) -> CertificateFingerprint {
+        self.certificate_fingerprint
     }
 
     /// Accept the next inbound streaming connection.
@@ -273,16 +285,27 @@ pub struct StreamingClient {
 
 impl StreamingClient {
     /// Connect to the remote publisher described by `multiaddr`.
-    pub async fn connect(multiaddr: &str, settings: TransportConfigSettings) -> Result<Self> {
+    ///
+    /// `expected_certificate_fingerprint` must come from an authenticated
+    /// manifest, directory, or operator configuration. Requiring it here keeps
+    /// transport authentication fail-closed even before streaming `KeyUpdate`
+    /// frames establish end-to-end content keys.
+    pub async fn connect(
+        multiaddr: &str,
+        expected_certificate_fingerprint: CertificateFingerprint,
+        settings: TransportConfigSettings,
+    ) -> Result<Self> {
         let parsed = parse_multiaddr(multiaddr)?;
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())?;
 
-        let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
+        let verifier: Arc<dyn ServerCertVerifier> = Arc::new(
+            crate::transport::CertificateKeyProofVerifier::pinned(expected_certificate_fingerprint),
+        );
         let mut tls_config = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
             .with_no_client_auth();
-        tls_config.enable_early_data = true;
+        tls_config.enable_early_data = false;
         tls_config.alpn_protocols = vec![ALPN.to_vec()];
         let tls_config = Arc::new(tls_config);
         let crypto = QuinnRustlsClientConfig::try_from(Arc::clone(&tls_config))
@@ -782,9 +805,9 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr> {
             Ok(ParsedMultiaddr {
                 host: IpAddr::V4(ip),
                 port,
-                // Use a stable SNI value. The streaming transport currently uses a self-signed
-                // certificate and disables certificate verification, so SNI is advisory but must
-                // still be a syntactically valid DNS name for the QUIC stack.
+                // Use a stable SNI value. Streaming authenticates the self-signed
+                // certificate by fingerprint, so SNI is advisory but must still be
+                // syntactically valid for the QUIC stack.
                 server_name: "nsc.local".to_string(),
             })
         }
@@ -843,50 +866,6 @@ fn build_transport_config(settings: TransportConfigSettings) -> Result<Arc<Trans
         .map_err(|e| Error::TransportConfig(e.to_string()))?;
     transport.max_idle_timeout(Some(idle));
     Ok(Arc::new(transport))
-}
-
-#[derive(Debug)]
-struct NoCertificateVerification;
-
-impl ServerCertVerifier for NoCertificateVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> std::result::Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ED25519,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-        ]
-    }
 }
 
 #[cfg(all(test, feature = "quic"))]
@@ -992,6 +971,31 @@ mod tests {
         };
         norito::streaming::resolve_transport_capabilities(&capabilities, &capabilities)
             .expect("default capabilities resolve")
+    }
+
+    #[test]
+    fn streaming_certificate_pin_rejects_another_certificate() {
+        let rcgen::CertifiedKey { cert, .. } =
+            rcgen::generate_simple_self_signed(["nsc.local".to_owned()])
+                .expect("generate certificate");
+        let cert_der = cert.der().clone().into_owned();
+        let fingerprint = crate::transport::certificate_fingerprint(cert_der.as_ref());
+        let server_name =
+            rustls::pki_types::ServerName::try_from("nsc.local").expect("valid server name");
+        let now = rustls::pki_types::UnixTime::since_unix_epoch(Duration::ZERO);
+
+        let verifier = crate::transport::CertificateKeyProofVerifier::pinned(fingerprint);
+        verifier
+            .verify_server_cert(&cert_der, &[], &server_name, &[], now)
+            .expect("matching certificate fingerprint");
+
+        let mut wrong_fingerprint = fingerprint;
+        wrong_fingerprint[0] ^= 1;
+        let verifier = crate::transport::CertificateKeyProofVerifier::pinned(wrong_fingerprint);
+        let error = verifier
+            .verify_server_cert(&cert_der, &[], &server_name, &[], now)
+            .expect_err("different certificate fingerprint must fail closed");
+        assert!(error.to_string().contains("fingerprint mismatch"));
     }
 
     #[test]
@@ -1107,6 +1111,7 @@ mod tests {
             Err(err) => panic!("server bind failed: {err:?}"),
         };
         let listen_addr = server.local_addr().expect("listen addr");
+        let server_certificate_fingerprint = server.certificate_fingerprint();
 
         let server_task = {
             let server = server.clone();
@@ -1187,12 +1192,15 @@ mod tests {
             let parsed = parse_multiaddr(&multiaddr).expect("multiaddr");
             let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap()).expect("endpoint");
 
-            let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
+            let verifier: Arc<dyn ServerCertVerifier> =
+                Arc::new(crate::transport::CertificateKeyProofVerifier::pinned(
+                    server_certificate_fingerprint,
+                ));
             let mut tls_config = rustls::ClientConfig::builder()
                 .dangerous()
                 .with_custom_certificate_verifier(verifier)
                 .with_no_client_auth();
-            tls_config.enable_early_data = true;
+            tls_config.enable_early_data = false;
             tls_config.alpn_protocols = vec![ALPN.to_vec()];
             let tls_config = Arc::new(tls_config);
             let crypto =
@@ -1310,6 +1318,7 @@ mod tests {
             Err(err) => panic!("server bind failed: {err:?}"),
         };
         let listen_addr = server.local_addr().expect("listen addr");
+        let server_certificate_fingerprint = server.certificate_fingerprint();
 
         let server_task = {
             let server = server.clone();
@@ -1385,6 +1394,7 @@ mod tests {
                 "client.connect",
                 StreamingClient::connect(
                     &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
+                    server_certificate_fingerprint,
                     settings,
                 ),
             )
@@ -1495,6 +1505,7 @@ mod tests {
             Err(err) => panic!("server bind failed: {err:?}"),
         };
         let listen_addr = server.local_addr().expect("listen addr");
+        let server_certificate_fingerprint = server.certificate_fingerprint();
 
         let server_task = {
             let server = server.clone();
@@ -1541,6 +1552,7 @@ mod tests {
                 "client.connect",
                 StreamingClient::connect(
                     &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
+                    server_certificate_fingerprint,
                     settings,
                 ),
             )
@@ -1617,6 +1629,7 @@ mod tests {
             Err(err) => panic!("server bind failed: {err:?}"),
         };
         let listen_addr = server.local_addr().expect("listen addr");
+        let server_certificate_fingerprint = server.certificate_fingerprint();
 
         let server_task = {
             let server = server.clone();
@@ -1661,6 +1674,7 @@ mod tests {
                 "client.connect",
                 StreamingClient::connect(
                     &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
+                    server_certificate_fingerprint,
                     settings,
                 ),
             )

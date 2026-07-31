@@ -383,13 +383,16 @@ Still outstanding:
   multi-instance rollout/rollback evidence. Install the exact inbound verifier
   in the deployment-owned Kubo/head receivers and replace its process-local
   replay cache with sealed cross-replica state. The generic packaged binary
-  calls the registry-aware launcher without inventing a registry and therefore
-  emits the typed `MissingRuntimeProviderRegistry` error before state access.
-  Supported deployment packages link the library, inject their audited runtime
-  registry programmatically, and provide the concrete adapters; no credential,
-  private-key, environment, or provider-file fallback exists. The standalone
-  launcher accepts one bounded, self-contained service TOML; unresolved
-  `extends` is rejected rather than silently reading an incomplete overlay.
+  now lives with `irohad`, requires a canonical public chain ID, projects only
+  the IPFS authenticator, optional signed-head authenticator, and sealed
+  checkpoint-store roles, and resolves them through the stock fixed local
+  runtime-provider broker. Missing, substituted, stale, revoked, test-marked,
+  or incomplete broker providers fail before state access. Deployment packages
+  must still supply and supervise the audited broker server and concrete
+  adapters; no credential, private-key, environment, or provider-file fallback
+  exists. The standalone launcher accepts one bounded, self-contained service
+  TOML; unresolved `extends` is rejected rather than silently reading an
+  incomplete overlay.
 - Define the bounded protocol needed to prune the authenticated DAG block
   prefix.
 - Decide from measured production scale whether the bounded authenticated JSON

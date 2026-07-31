@@ -53,6 +53,7 @@ async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
         Err(err) => return Err(eyre!(err)),
     };
     let listen_addr = server.local_addr().map_err(|err| eyre!(err))?;
+    let server_certificate_fingerprint = server.certificate_fingerprint();
 
     let (publisher_keys, viewer_keys) = test_keypairs();
     let publisher_peer = make_peer(&publisher_keys, 26_100);
@@ -69,6 +70,7 @@ async fn norito_streaming_end_to_end_roundtrip() -> EyreResult<()> {
     );
     let viewer_task = run_viewer(
         listen_addr.port(),
+        server_certificate_fingerprint,
         settings,
         publisher_peer.clone(),
         viewer_handle.clone(),
@@ -205,13 +207,14 @@ async fn run_publisher(
 
 async fn run_viewer(
     port: u16,
+    server_certificate_fingerprint: iroha_p2p::streaming::quic::CertificateFingerprint,
     settings: TransportConfigSettings,
     publisher_peer: Peer,
     handle: iroha_core::streaming::StreamingHandle,
     vector: StreamingTestVector,
 ) -> EyreResult<(norito::streaming::ManifestV1, Vec<Vec<u8>>)> {
     let endpoint = format!("/ip4/127.0.0.1/udp/{port}/quic");
-    let mut client = StreamingClient::connect(&endpoint, settings)
+    let mut client = StreamingClient::connect(&endpoint, server_certificate_fingerprint, settings)
         .await
         .map_err(|err| eyre!(err))?;
 

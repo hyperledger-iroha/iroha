@@ -148,6 +148,9 @@ def check_exact12_feature_boundary(
     overrides = overrides or {}
     errors: list[str] = []
     rust_model = read("crates/iroha_data_model/src/privacy.rs", overrides)
+    rust_proofs = read(
+        "crates/iroha_data_model/src/privacy/proofs.rs", overrides
+    )
     data_model_lib = read("crates/iroha_data_model/src/lib.rs", overrides)
     data_model_block = read(
         "crates/iroha_data_model/src/block/mod.rs", overrides
@@ -194,7 +197,8 @@ def check_exact12_feature_boundary(
         errors,
     )
     require(
-        rust_model.count(exact12_conformance_gate) == 2
+        rust_model.count(exact12_conformance_gate) == 1
+        and rust_proofs.count(exact12_conformance_gate) == 1
         and (
             exact12_conformance_gate
             + "\npub use exact12_fixture::{"
@@ -204,7 +208,7 @@ def check_exact12_feature_boundary(
             exact12_conformance_gate
             + "\nmod exact12_fixture {"
         )
-        in rust_model,
+        in rust_proofs,
         "privacy-exact12-conformance must gate exactly the exact-12 exports "
         "and implementation module",
         errors,
@@ -1242,6 +1246,9 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "python/iroha_python/src/iroha_python/privacy_catalog.py", overrides
     )
     rust_model = read("crates/iroha_data_model/src/privacy.rs", overrides)
+    rust_protocol = read(
+        "crates/iroha_data_model/src/privacy/protocol.rs", overrides
+    )
     js_crypto = read("javascript/iroha_js/src/crypto.js", overrides)
     py_crypto = read(
         "python/iroha_python/src/iroha_python/crypto.py", overrides
@@ -1473,10 +1480,12 @@ def check(overrides: dict[str, str] | None = None) -> None:
         )
 
     require(
-        "pub fn validate_privacy_capability_archive_v1" in rust_model
-        and "decode_canonical_with_limits::<PrivacyCapabilitySnapshotV1>" in rust_model
-        and "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024" in rust_model
-        and "snapshot.validate().is_err()" in rust_model,
+        "pub fn validate_privacy_capability_archive_v1" in rust_protocol
+        and "decode_canonical_with_limits::<PrivacyCapabilitySnapshotV1>"
+        in rust_protocol
+        and "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024"
+        in rust_protocol
+        and "snapshot.validate().is_err()" in rust_protocol,
         "Rust data model must own the bounded canonical typed capability validator",
         errors,
     )
@@ -1958,9 +1967,12 @@ def check(overrides: dict[str, str] | None = None) -> None:
                 '"src/**/*.so"',
                 '"src/**/*.dylib"',
                 '"src/**/*.pyd"',
+                '"src/**/__pycache__/**"',
+                '"src/**/*.pyc"',
+                '"src/**/*.pyo"',
             )
         ),
-        "privacy Python wheel policy must exclude checkout-native artifacts from mixed-project inputs",
+        "privacy Python wheel policy must exclude checkout-native and bytecode artifacts from mixed-project inputs",
         errors,
     )
     for rejected_environment_name in (

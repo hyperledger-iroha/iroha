@@ -20,7 +20,7 @@ These guidelines apply to the `scripts/` directory.
   - Safe defaults—never perform destructive actions unless `--force`/explicit flags are provided.
 - Provide `--help` output via `argparse`, `click`, or `getopts` so CI pipelines can discover options.
 - When updating scripts that feed CI dashboards (`render_*`, `run_sumeragi_*`, `swift_status_export.py`, etc.) also update the consuming documentation under `docs/` or `status.md`.
-- Run script unit tests when they exist: `pytest pytests/scripts` covers `scripts/test_env.py`, `run_sumeragi_da.py`, and translation helpers.
+- Run script unit tests when they exist: `pytest pytests/scripts` covers repository helpers, validation guards, and release automation.
 - Treat SDK parity helpers as multi-SDK tooling now: when touching `check_norito_bindings_sync.py`, `check_android_fixtures.py`, `norito_fixture_alignment.py`, or fixture regeneration scripts, keep Java and Kotlin parity expectations aligned.
 
 ## Notes

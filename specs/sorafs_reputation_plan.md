@@ -123,8 +123,10 @@ Checked-in response-file examples cover provider and metrics canaries.
 - **PoR/PDP/PoTR**: success ratios are derived from the native PoR journal and
   finalized proof-outcome feed. The externally authenticated PoR and counted
   stream-token journal-submission boundary is present. The PoR owner invokes
-  its exact durable callback through the supervised replay-archive worker; the
-  actual regional stream-token owner still needs to invoke its callback.
+  its exact durable callback through a bounded supervised worker whenever the
+  reputation runtime is enabled. Optional replay-archive compaction shares that
+  worker but is not a prerequisite for native PoR admission. The actual
+  regional stream-token owner still needs to invoke its callback.
 - **Latency**: P95 latency from PoTR receipts (hot/warm tiers). Normalise to `[0,1]` by mapping 0 ms→1.0, 90 s→0 (hot) / 5 min→0 (warm).
 - **Disputes**: count governance disputes resolved against provider per 1k
   orders. Native capacity-dispute `Opened` and `Resolved` journal transitions
@@ -300,9 +302,11 @@ publication authority.
   payload-free status are wired. The configured compact archive is
   Kura-authenticated at startup and captured after Kura finality plus the WSV
   checkpoint and before State publication. The standard daemon has no
-  validator-key or queue-backed journal fallback. External threshold-signing
-  and authenticated Governance DAG adapters, integrated Rust validation, and
-  reviewed deployment evidence remain open.
+  validator-key or queue-backed journal fallback. It also drains retained
+  native PoR terminals into durable reputation admission under the configured
+  bounded cadence even when optional replay archival is disabled. External
+  threshold-signing and authenticated Governance DAG adapters, integrated Rust
+  validation, and reviewed deployment evidence remain open.
 - Torii exposes only read handlers at `GET /v1/sorafs/reputation/latest` and
   `GET /v1/sorafs/reputation/providers/{provider_id}`. The provider endpoint
   returns the latest provider record with a Merkle proof. Historical lookup and

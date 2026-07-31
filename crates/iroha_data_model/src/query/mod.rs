@@ -646,6 +646,15 @@ struct QueryRegistryEntry {
     ctor: QueryConstructor,
 }
 
+impl QueryRegistryEntry {
+    fn collides_with(&self, other: &Self) -> bool {
+        self.type_name != other.type_name
+            && (self.type_name == other.wire_id
+                || self.wire_id == other.type_name
+                || self.wire_id == other.wire_id)
+    }
+}
+
 /// Registry storing query constructors under both Rust type names and stable wire identifiers.
 #[derive(Default)]
 pub struct QueryRegistry {
@@ -690,12 +699,11 @@ impl QueryRegistry {
             wire_id,
             ctor: ctor::<T>,
         };
-        if let Some(previous) = self.entries.iter().find(|previous| {
-            previous.type_name != entry.type_name
-                && (previous.type_name == entry.wire_id
-                    || previous.wire_id == entry.type_name
-                    || previous.wire_id == entry.wire_id)
-        }) {
+        if let Some(previous) = self
+            .entries
+            .iter()
+            .find(|previous| previous.collides_with(&entry))
+        {
             panic!(
                 "query registry key collision between `{}` and `{}`",
                 previous.type_name, entry.type_name
@@ -711,6 +719,21 @@ impl QueryRegistry {
             self.entries.push(entry);
         }
         self
+    }
+
+    fn assert_compatible_with(&self, other: &Self) {
+        for entry in &other.entries {
+            if let Some(previous) = self
+                .entries
+                .iter()
+                .find(|previous| previous.collides_with(entry))
+            {
+                panic!(
+                    "query registry key collision between `{}` and `{}`",
+                    previous.type_name, entry.type_name
+                );
+            }
+        }
     }
 
     /// Decode a query using a registered Rust type name or stable wire identifier.
@@ -807,7 +830,18 @@ define_builtin_query_registry! {
 /// If this function is never invoked, the data model falls back to a built-in
 /// registry covering the standard iterable query set, allowing JSON and Norito
 /// decoding to work out of the box in tests and utilities.
+///
+/// A custom registry may add an alias for the same concrete built-in type, but
+/// it cannot claim a type-name or wire-ID key owned by a different built-in.
+///
+/// # Panics
+///
+/// Panics if an entry collides with a key owned by a different built-in query.
 pub fn set_query_registry(registry: QueryRegistry) {
+    if QUERY_REGISTRY.get().is_some() {
+        return;
+    }
+    builtin_query_registry().assert_compatible_with(&registry);
     let _ = QUERY_REGISTRY.set(registry);
 }
 

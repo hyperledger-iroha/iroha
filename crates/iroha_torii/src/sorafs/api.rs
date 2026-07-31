@@ -9676,8 +9676,13 @@ fn moderation_orchestrator_error_response(error: ModerationOrchestratorError) ->
         | ModerationOrchestratorError::CheckpointIo(_)
         | ModerationOrchestratorError::CheckpointDurabilityUncertain(_)
         | ModerationOrchestratorError::DurabilityFaulted
+        | ModerationOrchestratorError::CheckpointStoreUnavailable
+        | ModerationOrchestratorError::CheckpointStoreAmbiguous
+        | ModerationOrchestratorError::CheckpointStoreFenced
+        | ModerationOrchestratorError::CheckpointStoreEquivocation
         | ModerationOrchestratorError::GenerationOverflow
-        | ModerationOrchestratorError::StateLockPoisoned => (
+        | ModerationOrchestratorError::StateLockPoisoned
+        | ModerationOrchestratorError::CheckpointStoreLockPoisoned => (
             StatusCode::SERVICE_UNAVAILABLE,
             "durable moderation orchestration is unavailable",
             "durability_failure",
@@ -20032,6 +20037,23 @@ fn moderation_resource_exhaustion_errors_map_to_too_many_requests() {
     ];
     for response in responses {
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn moderation_checkpoint_store_failures_map_to_service_unavailable() {
+    let responses = [
+        ModerationOrchestratorError::CheckpointStoreUnavailable,
+        ModerationOrchestratorError::CheckpointStoreAmbiguous,
+        ModerationOrchestratorError::CheckpointStoreFenced,
+        ModerationOrchestratorError::CheckpointStoreEquivocation,
+        ModerationOrchestratorError::CheckpointStoreLockPoisoned,
+    ]
+    .map(moderation_orchestrator_error_response);
+
+    for response in responses {
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
 

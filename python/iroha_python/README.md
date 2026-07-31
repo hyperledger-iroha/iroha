@@ -1041,7 +1041,8 @@ signed either by the destination account for two-party locks or by
 `release_authority` when one is configured. `CancelAssetLock` refunds the
 opener while the lock is still active only when the committed remaining amount
 equals `expected_remaining_amount`, preventing a stale cancel from racing a
-drawdown;
+drawdown. The precondition is mandatory: the helper never substitutes a
+process-local query result when the caller omits it.
 `ExpireAssetLock` refunds remaining custody after the optional expiry deadline.
 Zero, negative, NaN, and infinite amounts and expected-remaining preconditions
 are rejected by the SDK before transaction construction.

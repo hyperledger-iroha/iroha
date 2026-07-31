@@ -150,7 +150,6 @@ generated = [
   "**/node_modules/**",
   "**/target/**",
   "_apalache-out/**",
-  "android_work/**",
   "artifacts/**",
   "build/**",
   "coverage/**",

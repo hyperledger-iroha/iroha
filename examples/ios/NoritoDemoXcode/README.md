@@ -47,10 +47,10 @@ NoritoDemoXcode/
    - `CONNECT_ROLE` — default role selected in the UI (`app` or `wallet`).
    - Optional helpers: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
      `CONNECT_APPROVE_ACCOUNT_ID`, `CONNECT_APPROVE_PRIVATE_KEY_B64`, `CONNECT_APPROVE_SIGNATURE_B64`.
-4. Open `NoritoDemoXcode/NoritoDemoXcode.xcodeproj` in Xcode 15 or newer. The project
-   already references the renamed `IrohaSwift` Swift Package (`https://github.com/hyperledger/iroha-swift`);
-   if Xcode still lists the previous package identifier, remove it under **Package
-   Dependencies** and add the new URL before resolving.
+4. Open `NoritoDemoXcode/NoritoDemoXcode.xcodeproj` in Xcode 15 or newer. To
+   exercise SDK-backed paths, add the repository-local `IrohaSwift/` package
+   through **File → Add Package Dependencies… → Add Local…** and select
+   `../../../IrohaSwift`.
 5. Add `NoritoBridge.xcframework` to the project (`File → Add Files…`), ensure it is
    embedded for the `NoritoDemoXcode` target, and keep "Copy items if needed" enabled so
    local builds use the freshly produced archive.

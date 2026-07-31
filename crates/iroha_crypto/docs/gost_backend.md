@@ -84,7 +84,8 @@ Hardening` roadmap line items and will be updated as decisions land.
   Use the `--seed` flag (32 bytes for 256-bit curves, 64 bytes for 512-bit curves) when you
   need deterministic regeneration; otherwise rely on the default OS randomness.
 - When wiring the keys into genesis manifests or `iroha_config`, encode them as multihash
-  strings (see `docs/genesis.md` for examples such as `gost3410-2012-256-paramset-a:<hex>`).
+  strings (see the [public genesis reference](https://docs.iroha.tech/reference/genesis.html)
+  for examples such as `gost3410-2012-256-paramset-a:<hex>`).
   Downstream services such as Torii and the CLI pick the algorithm from the multihash prefix.
 - Keep `/dev/urandom` (or the platform equivalent) available on validator hosts. The signer
   hedges the deterministic HMAC-Streebog nonce with `scalar_len` bytes from `OsRng`; if the

@@ -81,4 +81,4 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 - [Torii Endpoints](https://docs.iroha.tech/reference/torii-endpoints.html)
 - [Peer Configuration Parameters](https://docs.iroha.tech/reference/peer-config/params.html)
 - [`kagami` repository documentation](https://github.com/hyperledger-iroha/iroha)
-- [Iroha Special Instructions](https://iroha-test.readthedocs.io/en/iroha2-dev/references/isi/)
+- [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instructions.html)

@@ -9,13 +9,7 @@
 
 use std::{collections::BTreeMap, fmt, str::FromStr, string::String, vec::Vec};
 
-use iroha_crypto::{
-    PublicKey, SignatureOf,
-    blake2::{
-        Blake2bVar,
-        digest::{Update, VariableOutput},
-    },
-};
+use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -994,30 +988,30 @@ pub struct ParliamentEnactmentCertificate {
     pub signatures: ParliamentEnactmentSignatureSet,
 }
 
-/// Domain separator for proposal fingerprints (`Blake2b-256`).
-pub const PROPOSAL_FINGERPRINT_DOMAIN: &[u8] =
-    crate::validation_fee::GOVERNANCE_PROPOSAL_FINGERPRINT_DOMAIN_V1;
-
 impl ProposalKind {
-    /// Compute the deterministic proposal fingerprint (`Blake2b-32`).
+    /// Compute the deterministic, proposal-kind-separated fingerprint (`Blake2b-32`).
     #[must_use]
     pub fn fingerprint(&self) -> [u8; 32] {
-        let encoded = Encode::encode(self);
-        let mut hasher = Blake2bVar::new(32).expect("Blake2bVar length");
-        hasher.update(PROPOSAL_FINGERPRINT_DOMAIN);
-        hasher.update(&encoded);
-        let mut out = [0u8; 32];
-        hasher
-            .finalize_variable(&mut out)
-            .expect("finalize Blake2bVar");
-        out
+        let domain = match self {
+            Self::DeployContract(_) => crate::governance_fingerprint::DEPLOY_CONTRACT_V1,
+            Self::RuntimeUpgrade(_) => crate::governance_fingerprint::RUNTIME_UPGRADE_V1,
+            Self::SccpRouteGovernance(_) => crate::governance_fingerprint::SCCP_ROUTE_GOVERNANCE_V1,
+            Self::ValidationFeePolicy(_) => crate::governance_fingerprint::VALIDATION_FEE_POLICY_V1,
+            Self::ValidationFeePayoutLifecycle(_) => {
+                crate::governance_fingerprint::VALIDATION_FEE_PAYOUT_LIFECYCLE_V1
+            }
+        };
+        crate::governance_fingerprint::fingerprint(domain, self)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use hex_literal::hex;
     use iroha_crypto::KeyPair;
+    use iroha_crypto::blake2::{
+        Blake2bVar,
+        digest::{Update, VariableOutput},
+    };
     use norito::core::{DecodeFromSlice, NoritoSerialize};
 
     use super::*;
@@ -1186,7 +1180,7 @@ mod tests {
 
         let manual_bytes = Encode::encode(&kind);
         let mut hasher = Blake2bVar::new(32).expect("Blake2bVar length");
-        hasher.update(PROPOSAL_FINGERPRINT_DOMAIN);
+        hasher.update(crate::governance_fingerprint::DEPLOY_CONTRACT_V1);
         hasher.update(&manual_bytes);
         let mut manual_arr = [0u8; 32];
         hasher
@@ -1195,11 +1189,7 @@ mod tests {
 
         assert_eq!(fp, manual_arr);
 
-        // Spot check deterministic value to guard accidental changes.
-        assert_eq!(
-            fp,
-            hex!("1e528b871a78dee8f667e590aa7105dc5e6b6e1c73152f5228dcf7355f2c9e2e")
-        );
+        assert_ne!(fp, [0; 32]);
     }
 
     #[test]

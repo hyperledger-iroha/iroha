@@ -76,6 +76,11 @@ impl IpaParams {
     }
 
     /// Decode one exact, canonical bare Norito payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Norito error for malformed, truncated, non-canonical,
+    /// or resource-limit-exceeding payloads.
     pub fn decode_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::codec::decode_exact_from_slice(bytes)
     }
@@ -114,6 +119,11 @@ impl IpaProofData {
     }
 
     /// Decode one exact, canonical bare Norito payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Norito error for malformed, truncated, non-canonical,
+    /// or resource-limit-exceeding payloads.
     pub fn decode_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::codec::decode_exact_from_slice(bytes)
     }
@@ -160,6 +170,11 @@ impl PolyOpenPublic {
     }
 
     /// Decode one exact, canonical bare Norito payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Norito error for malformed, truncated, non-canonical,
+    /// or resource-limit-exceeding payloads.
     pub fn decode_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::codec::decode_exact_from_slice(bytes)
     }

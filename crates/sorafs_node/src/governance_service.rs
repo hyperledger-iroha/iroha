@@ -205,6 +205,7 @@ pub struct GovernanceDagServiceRuntimeProviderBindingsV1 {
     head_authenticator_handle: Option<String>,
     head_authenticator_qualification: Option<GovernanceDagRuntimeProviderQualificationV1>,
     head_request_auth_public_key: Option<[u8; 32]>,
+    request_auth_max_body_bytes: u64,
     request_auth_max_envelope_lifetime_secs: u64,
     request_auth_max_future_skew_secs: u64,
     checkpoint_store_handle: String,
@@ -250,6 +251,12 @@ impl GovernanceDagServiceRuntimeProviderBindingsV1 {
     #[must_use]
     pub const fn head_request_auth_public_key(&self) -> Option<[u8; 32]> {
         self.head_request_auth_public_key
+    }
+
+    /// Maximum request body accepted by either request authenticator.
+    #[must_use]
+    pub const fn request_auth_max_body_bytes(&self) -> u64 {
+        self.request_auth_max_body_bytes
     }
 
     /// Maximum accepted signed-envelope lifetime in seconds.
@@ -1000,6 +1007,7 @@ fn runtime_provider_bindings(
         head_authenticator_handle,
         head_authenticator_qualification,
         head_request_auth_public_key,
+        request_auth_max_body_bytes: service.max_request_bytes.0,
         request_auth_max_envelope_lifetime_secs: service.request_auth_max_envelope_lifetime_secs,
         request_auth_max_future_skew_secs: service.request_auth_max_future_skew_secs,
         checkpoint_store_handle,
@@ -9945,6 +9953,7 @@ enabled = false
             .state_dir
             .clone()
             .expect("test state directory");
+        let request_auth_max_body_bytes = view.service.max_request_bytes.0;
         let registry = Arc::new(TestRuntimeProviderRegistry::returning(
             test_runtime_providers(Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE))),
         ));
@@ -9974,6 +9983,10 @@ enabled = false
         assert_eq!(
             observed.head_authenticator_qualification(),
             Some(TEST_AUTH_QUALIFICATION)
+        );
+        assert_eq!(
+            observed.request_auth_max_body_bytes(),
+            request_auth_max_body_bytes
         );
         assert_eq!(
             observed.checkpoint_store_handle(),

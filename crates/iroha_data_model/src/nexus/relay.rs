@@ -35,6 +35,20 @@ pub const VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_SETTLED_USAGE_STATE_KEY_PREFIX: 
     "pkdeploy_fee_sponsor_vault_allocation_settled_usage";
 /// FASTPQ business effect expected for verified lane-relay block commitments.
 pub const LANE_RELAY_FASTPQ_EFFECT_TYPE: &str = "lane_relay_block";
+const LANE_RELAY_FASTPQ_CLAIM_DIGEST_DOMAIN_V1: &[u8] = b"iroha.nexus.lane-relay.fastpq-claim.v1";
+const LANE_RELAY_MERGE_HINT_DOMAIN_V1: &[u8] = b"iroha.nexus.lane-relay.merge-hint.v1";
+const LANE_RELAY_SETTLEMENT_HASH_DOMAIN_V1: &[u8] = b"iroha.nexus.lane-relay.settlement.v1";
+const FEE_SPONSOR_VAULT_SOURCE_STATE_ROOT_DOMAIN_V1: &[u8] =
+    b"iroha.nexus.fee-sponsor-vault.source-state.v1";
+const FEE_SPONSOR_VAULT_ALLOCATION_CLAIM_DOMAIN_V1: &[u8] =
+    b"iroha.nexus.fee-sponsor-vault.allocation-claim.v1";
+
+fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> Hash {
+    let domain_len = u64::try_from(domain.len())
+        .expect("protocol-defined digest domains fit in u64")
+        .to_le_bytes();
+    Hash::new_from_chunks(&[&domain_len, domain, payload])
+}
 
 /// Relay envelope broadcast by Nexus lanes for merge validation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -281,7 +295,10 @@ pub fn lane_relay_fastpq_claim_digest(
         settlement_hash: envelope.settlement_hash,
     };
     let bytes = norito::encode_canonical(&claim)?;
-    Ok(Hash::new(bytes))
+    Ok(domain_separated_hash(
+        LANE_RELAY_FASTPQ_CLAIM_DIGEST_DOMAIN_V1,
+        &bytes,
+    ))
 }
 
 /// Canonical source-ledger claim authorized by a sponsor-vault spend lease.
@@ -346,7 +363,10 @@ pub fn fee_sponsor_vault_source_state_root(
         source_dataspace_id,
         source_height,
     };
-    Hash::new(commitment.encode())
+    domain_separated_hash(
+        FEE_SPONSOR_VAULT_SOURCE_STATE_ROOT_DOMAIN_V1,
+        &commitment.encode(),
+    )
 }
 
 /// Compute the canonical claim digest for a verified sponsor-vault allocation proof.
@@ -354,7 +374,10 @@ pub fn fee_sponsor_vault_source_state_root(
 pub fn fee_sponsor_vault_allocation_claim_digest(
     allocation: &FeeSponsorVaultAllocationClaim,
 ) -> Hash {
-    Hash::new(allocation.encode())
+    domain_separated_hash(
+        FEE_SPONSOR_VAULT_ALLOCATION_CLAIM_DOMAIN_V1,
+        &allocation.encode(),
+    )
 }
 
 /// Operator evidence bundle captured when ingesting a lane relay envelope fails.
@@ -636,7 +659,10 @@ impl LaneRelayEnvelope {
             rbc_bytes_total: self.rbc_bytes_total,
         };
         let bytes = norito::encode_canonical(&hint)?;
-        Ok(Hash::new(bytes))
+        Ok(domain_separated_hash(
+            LANE_RELAY_MERGE_HINT_DOMAIN_V1,
+            &bytes,
+        ))
     }
 
     /// Validate the relay envelope against a validator roster and quorum expectation.
@@ -958,7 +984,10 @@ pub fn compute_settlement_hash(
     settlement: &LaneBlockCommitment,
 ) -> Result<HashOf<LaneBlockCommitment>, LaneRelayError> {
     let bytes = norito::encode_canonical(settlement)?;
-    Ok(HashOf::from_untyped_unchecked(Hash::new(bytes)))
+    Ok(HashOf::from_untyped_unchecked(domain_separated_hash(
+        LANE_RELAY_SETTLEMENT_HASH_DOMAIN_V1,
+        &bytes,
+    )))
 }
 
 /// Errors encountered while validating or deriving relay envelopes.
@@ -1293,6 +1322,7 @@ impl LaneRelayError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::num::NonZeroU64;
 
     use iroha_crypto::{Hash, HashOf, KeyPair};
@@ -1378,6 +1408,27 @@ mod tests {
         assert!(
             !verified.is_merge_admissible(),
             "QC is still required for merge"
+        );
+    }
+
+    #[test]
+    fn relay_digest_domains_are_unique_and_bind_identical_payloads() {
+        let domains = [
+            LANE_RELAY_FASTPQ_CLAIM_DIGEST_DOMAIN_V1,
+            LANE_RELAY_MERGE_HINT_DOMAIN_V1,
+            LANE_RELAY_SETTLEMENT_HASH_DOMAIN_V1,
+            FEE_SPONSOR_VAULT_SOURCE_STATE_ROOT_DOMAIN_V1,
+            FEE_SPONSOR_VAULT_ALLOCATION_CLAIM_DOMAIN_V1,
+        ];
+        assert_eq!(
+            domains.into_iter().collect::<BTreeSet<_>>().len(),
+            domains.len()
+        );
+
+        let payload = b"identical canonical payload";
+        assert_ne!(
+            domain_separated_hash(LANE_RELAY_FASTPQ_CLAIM_DIGEST_DOMAIN_V1, payload),
+            domain_separated_hash(LANE_RELAY_MERGE_HINT_DOMAIN_V1, payload)
         );
     }
 

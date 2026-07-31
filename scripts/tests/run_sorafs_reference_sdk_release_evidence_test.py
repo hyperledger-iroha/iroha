@@ -28,6 +28,11 @@ PROVENANCE_CERTIFICATE_IDENTITY = (
 )
 PROVENANCE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX = "11" * 32
+TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX = "22" * 32
+TOPOLOGY_SIGNER_IDENTITY = "sorafs-reference-sdk-topology-hsm"
+TOPOLOGY_SIGNER_KEY_REVISION = 7
+TOPOLOGY_SIGNER_POLICY_DIGEST_HEX = "33" * 32
+TOPOLOGY_MAX_REVIEW_AGE_SECS = 3_600
 
 
 def write_payload(path: Path) -> Path:
@@ -66,9 +71,23 @@ def write_topology_qualification(path: Path) -> Path:
 
 
 def topology_args(tmp_path: Path) -> list[str]:
+    summary = write_topology_qualification(tmp_path / "l1-topology.summary")
+    envelope = write_payload(tmp_path / "l1-topology.envelope.json")
     return [
         "--topology-qualification-summary",
-        str(write_topology_qualification(tmp_path / "l1-topology.summary")),
+        str(summary),
+        "--topology-qualification-envelope",
+        str(envelope),
+        "--topology-qualification-verification-public-key-hex",
+        TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX,
+        "--topology-qualification-signer-identity",
+        TOPOLOGY_SIGNER_IDENTITY,
+        "--topology-qualification-signer-key-revision",
+        str(TOPOLOGY_SIGNER_KEY_REVISION),
+        "--topology-qualification-signer-policy-digest-hex",
+        TOPOLOGY_SIGNER_POLICY_DIGEST_HEX,
+        "--max-topology-qualification-review-age-secs",
+        str(TOPOLOGY_MAX_REVIEW_AGE_SECS),
     ]
 
 
@@ -148,6 +167,9 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
     assert plan["thresholds"] == {
         "max_evidence_age_secs": 1209600,
         "max_smoke_duration_secs": 1800,
+        "max_topology_qualification_review_age_secs": (
+            TOPOLOGY_MAX_REVIEW_AGE_SECS
+        ),
         "min_downstream_packages": 5,
         "min_release_targets": 4,
         "now_unix": 1800700000,
@@ -166,6 +188,16 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
         ).hexdigest(),
         "required": True,
         "source_root": str(tmp_path / "supply-chain-sources"),
+    }
+    assert plan["topology_qualification"] == {
+        "summary_path": str(tmp_path / "l1-topology.summary"),
+        "envelope_path": str(tmp_path / "l1-topology.envelope.json"),
+        "verification_public_key_fingerprint_hex": hashlib.sha256(
+            bytes.fromhex(TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX)
+        ).hexdigest(),
+        "signer_identity": TOPOLOGY_SIGNER_IDENTITY,
+        "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
+        "signer_policy_digest_hex": TOPOLOGY_SIGNER_POLICY_DIGEST_HEX,
     }
     assert plan["evidence_contract"]["release_archive"]["schema"] == (
         "sorafs.reference_sdk.release_archive_canary.v1"
@@ -231,6 +263,36 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
     assert "--max-smoke-duration-secs" in verifier
     assert "--now-unix" in verifier
     assert verifier[
+        verifier.index("--topology-qualification-summary") + 1
+    ] == str(tmp_path / "l1-topology.summary")
+    assert verifier[
+        verifier.index("--topology-qualification-envelope") + 1
+    ] == str(tmp_path / "l1-topology.envelope.json")
+    assert verifier[
+        verifier.index(
+            "--topology-qualification-verification-public-key-hex"
+        )
+        + 1
+    ] == TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX
+    assert verifier[
+        verifier.index("--topology-qualification-signer-identity") + 1
+    ] == TOPOLOGY_SIGNER_IDENTITY
+    assert verifier[
+        verifier.index("--topology-qualification-signer-key-revision") + 1
+    ] == str(TOPOLOGY_SIGNER_KEY_REVISION)
+    assert verifier[
+        verifier.index(
+            "--topology-qualification-signer-policy-digest-hex"
+        )
+        + 1
+    ] == TOPOLOGY_SIGNER_POLICY_DIGEST_HEX
+    assert verifier[
+        verifier.index(
+            "--max-topology-qualification-review-age-secs"
+        )
+        + 1
+    ] == str(TOPOLOGY_MAX_REVIEW_AGE_SECS)
+    assert verifier[
         verifier.index("--supply-chain-source-root") + 1
     ] == str(tmp_path / "supply-chain-sources")
     assert verifier[
@@ -292,6 +354,90 @@ def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     assert "cookbook-smoke.json" not in diagnostics
 
 
+def test_plan_json_rejects_missing_signed_topology_binding(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    del rendered["topology_qualification"]
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "reference SDK release runner plan fields must match the schema-closed contract"
+        in diagnostics
+    )
+    assert (
+        "reference SDK release runner plan topology_qualification must be an object"
+        in diagnostics
+    )
+
+
+def test_plan_json_rejects_tampered_signed_topology_binding(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        ("envelope_path", "runtime-only-envelope-substitution"),
+        ("verification_public_key_fingerprint_hex", "44" * 32),
+        ("signer_identity", "runtime-only-signer-substitution"),
+        ("signer_key_revision", 0),
+        ("signer_policy_digest_hex", "55" * 32),
+    )
+    for field, replacement in cases:
+        args = MODULE.parse_args(complete_args(tmp_path))
+        plan = MODULE.build_command_plan(args)
+        rendered = MODULE.plan_json(plan, args)
+        rendered["topology_qualification"][field] = replacement
+
+        errors = MODULE.validate_plan_json(rendered, plan, args)
+        diagnostics = "\n".join(errors)
+
+        assert (
+            "reference SDK release runner plan topology_qualification must match args"
+            in diagnostics
+        )
+        assert str(replacement) not in diagnostics
+
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    del rendered["topology_qualification"]["signer_identity"]
+    rendered["topology_qualification"]["private_key"] = (
+        "runtime-only-key-material"
+    )
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "reference SDK release runner plan topology_qualification fields "
+        "must match the schema-closed contract"
+        in diagnostics
+    )
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+
+
+def test_plan_json_rejects_tampered_topology_verifier_command(
+    tmp_path: Path,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    command = rendered["steps"][0]["command"]
+    policy_index = command.index(
+        "--topology-qualification-signer-policy-digest-hex"
+    )
+    substituted_policy = "66" * 32
+    command[policy_index + 1] = substituted_policy
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert "runner plan steps must match command plan" in diagnostics
+    assert substituted_policy not in diagnostics
+
+
 def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
     args = MODULE.parse_args(complete_args(tmp_path))
     plan = MODULE.build_command_plan(args)
@@ -307,6 +453,7 @@ def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
     ]
     rendered["thresholds"] = {
         "max_evidence_age_secs": -1,
+        "max_topology_qualification_review_age_secs": -1,
         "min_release_targets": 0,
         "min_downstream_packages": False,
         "max_smoke_duration_secs": "slow",
@@ -378,6 +525,12 @@ def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
     )
     assert (
         "reference SDK release runner plan thresholds.max_evidence_age_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "reference SDK release runner plan "
+        "thresholds.max_topology_qualification_review_age_secs must be a "
+        "non-negative integer"
         in diagnostics
     )
     assert (
@@ -578,6 +731,66 @@ def test_split_response_file_dry_run_prints_complete_reference_sdk_plan(
     assert "cookbook_smoke" in plan["evidence_contract"]
 
 
+def test_missing_signed_topology_arguments_fail_before_plan(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    required_options = (
+        "--now-unix",
+        "--topology-qualification-summary",
+        "--topology-qualification-envelope",
+        "--topology-qualification-verification-public-key-hex",
+        "--topology-qualification-signer-identity",
+        "--topology-qualification-signer-key-revision",
+        "--topology-qualification-signer-policy-digest-hex",
+    )
+    for option in required_options:
+        args = complete_args(tmp_path / option.removeprefix("--"))
+        option_index = args.index(option)
+        del args[option_index : option_index + 2]
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert option in captured.err
+        assert captured.out == ""
+
+
+def test_missing_signed_topology_envelope_file_fails_before_plan(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    missing = tmp_path / "runtime-only-missing-topology-envelope.json"
+    envelope_index = args.index("--topology-qualification-envelope") + 1
+    args[envelope_index] = str(missing)
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "input evidence file must exist and be a file" in captured.err
+    assert str(missing) not in captured.err
+    assert captured.out == ""
+
+
+def test_runner_preflight_rejects_reused_topology_and_provenance_key(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    provenance_key_index = args.index(
+        "--provenance-verification-public-key-hex"
+    ) + 1
+    args[provenance_key_index] = TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert MODULE.INDEPENDENT_VERIFICATION_KEYS_ERROR in captured.err
+    assert TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX not in captured.err
+    assert captured.out == ""
+
+
 def test_missing_required_kind_evidence_fails_before_plan(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
     evidence_index = args.index("--release-archive-evidence")
@@ -708,6 +921,8 @@ def test_subset_gate_rejects_supply_chain_source_inputs(
         [
             "--out-dir",
             str(tmp_path / "evidence"),
+            "--now-unix",
+            "1800700000",
             *topology_args(tmp_path),
             "--require-kind",
             "release_archive",
@@ -803,6 +1018,8 @@ def test_subset_gate_rejects_evidence_for_unrequired_kind(
         [
             "--out-dir",
             str(tmp_path / "evidence"),
+            "--now-unix",
+            "1800700000",
             *topology_args(tmp_path),
             "--require-kind",
             "release_archive",
@@ -828,6 +1045,8 @@ def test_unknown_required_kind_fails_before_plan(tmp_path: Path, capsys) -> None
             [
                 "--out-dir",
                 str(tmp_path / "evidence"),
+                "--now-unix",
+                "1800700000",
                 *topology_args(tmp_path),
                 "--require-kind",
                 "unknown",

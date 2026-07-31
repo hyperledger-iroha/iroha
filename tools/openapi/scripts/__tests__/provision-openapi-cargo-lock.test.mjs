@@ -82,7 +82,7 @@ test('V1 pin and CLI are exact and canonical', async () => {
   for (const invalid of [
     pinBytes.subarray(0, pinBytes.length - 1),
     Buffer.from(
-      pinBytes.toString('utf8').replace('bytes=315037', 'bytes=315038'),
+      pinBytes.toString('utf8').replace('bytes=315213', 'bytes=315214'),
     ),
     Buffer.from(
       pinBytes

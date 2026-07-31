@@ -11,19 +11,14 @@ Virtual Machine (IVM).
 
 > Workspace status and recent changes are tracked in [`status.md`](./status.md).
 
-## First-release Build Lines
+## First-release Scope
 
-Iroha 3 is the default build line for the first release. The workspace also
-retains an explicitly selected Iroha 2 compatibility build line for
-self-hosted, single-lane deployments:
-
-- **Iroha 3 (default)**: Nexus-aware deployments, including SORA Nexus.
-- **Iroha 2 compatibility build line**: self-hosted permissioned or consortium
-  networks without Nexus or SORA features.
-
-Both build lines share Norito serialization, Sumeragi consensus, and the
-Kotodama → IVM toolchain. Public and in-depth documentation describes Iroha 3;
-code-adjacent compatibility notes remain with the source.
+Iroha 3 is the first public release described by this repository. Workspace
+defaults, quickstarts, SDK guidance, and operator documentation target Iroha 3,
+where data availability and reliable broadcast are consensus requirements.
+Public and in-depth guidance is maintained in the sibling `iroha-docs`
+repository; this repository retains only concise contributor notes and
+code-adjacent specifications.
 
 ## Repository Layout
 

@@ -46,8 +46,11 @@ use super::{
     credential_pre_aux::{
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPostBaseChallengesV1,
         ZkX509CredentialMainPreAuxV1, ZkX509CredentialPreAuxBindingV1,
+        absorb_zk_x509_credential_pre_aux_binding_v1,
     },
-    credential_stark::ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1,
+    credential_stark::{
+        ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, ZkX509CredentialPublicBindingV1,
+    },
     der_air::ZkX509Rfc5280StatementV1,
     der_stark::{
         FIX_ACTIVE as DER_FIX_ACTIVE, FIX_COMPARATOR, FIX_FINAL_DOCUMENT, FIX_FIRST_ACTIVE,
@@ -426,8 +429,7 @@ const DER_PUBLIC_DIGEST_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:der-public
 const PROJECTION_PUBLIC_DIGEST_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:projection-public:v1";
 const ACCUMULATOR_LAYOUT_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:stark:accumulator-aggregate-layout:v1";
-const MAIN_LAYOUT_DOMAIN_V1: &[u8] =
-    b"iroha:privacy:zk-x509:stark:main-aggregate-layout:v1";
+const MAIN_LAYOUT_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:stark:main-aggregate-layout:v1";
 const ACCUMULATOR_REGISTRATION_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:stark:accumulator-registration:v1";
 const ACCUMULATOR_SCHEDULE_DIGEST_DOMAIN_V1: &[u8] =
@@ -8770,8 +8772,7 @@ struct MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
     p256_bindings: Vec<MainP256RegistrationBindingV1>,
     der: &'assembly ZkX509DerStarkBaseV1,
     rfc: &'assembly ZkX509Rfc5280StarkBaseMaterialV1,
-    sha: &'source
-        [ZkX509ShaBatchSegmentBaseSourceV1<'assembly>; ZK_X509_SHA_SEGMENT_COUNT_V1],
+    sha: &'source [ZkX509ShaBatchSegmentBaseSourceV1<'assembly>; ZK_X509_SHA_SEGMENT_COUNT_V1],
     p256: &'source P256MainBaseSourceV1,
 }
 
@@ -8779,8 +8780,7 @@ impl<'assembly, 'source> MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
     fn for_main_v1(
         layout: &AggregateProofLayoutV1,
         assembly: &'assembly ZkX509MainTraceAssemblyV1,
-        sha: &'source
-            [ZkX509ShaBatchSegmentBaseSourceV1<'assembly>; ZK_X509_SHA_SEGMENT_COUNT_V1],
+        sha: &'source [ZkX509ShaBatchSegmentBaseSourceV1<'assembly>; ZK_X509_SHA_SEGMENT_COUNT_V1],
         p256: &'source P256MainBaseSourceV1,
     ) -> Result<Self, ZkX509StarkErrorV1> {
         validate_zk_x509_main_verifier_profile_v1(assembly.verifier_profile)?;
@@ -8822,15 +8822,12 @@ impl<'assembly, 'source> MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
             .iter()
             .copied()
             .filter(|binding| binding.main == registration);
-        let binding = matches
-            .next()
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        let binding = matches.next().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
         if matches.next().is_some() {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
         Ok(binding)
     }
-
 }
 
 impl MainTraceGroupSourceV1 for MainLog19BaseTraceGroupSourceV1<'_, '_> {
@@ -8875,6 +8872,39 @@ impl MainTraceGroupSourceV1 for MainLog19BaseTraceGroupSourceV1<'_, '_> {
         _local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
+    }
+}
+
+fn zeroize_main_der_trace_v1(trace: &mut ZkX509DerStarkTraceV1) {
+    trace.base.zeroize_private_v1();
+    for row in &mut trace.aux_rows {
+        row.fill(F::ZERO);
+    }
+    trace.aux_rows.clear();
+}
+
+struct ZeroizingMainDerTraceGuardV1(Option<ZkX509DerStarkTraceV1>);
+
+impl ZeroizingMainDerTraceGuardV1 {
+    fn new_v1(trace: ZkX509DerStarkTraceV1) -> Self {
+        Self(Some(trace))
+    }
+
+    fn trace_v1(&self) -> Result<&ZkX509DerStarkTraceV1, ZkX509StarkErrorV1> {
+        self.0.as_ref().ok_or(ZkX509StarkErrorV1::InternalInvariant)
+    }
+
+    fn take_v1(&mut self) -> Result<ZkX509DerStarkTraceV1, ZkX509StarkErrorV1> {
+        self.0.take().ok_or(ZkX509StarkErrorV1::InternalInvariant)
+    }
+}
+
+impl Drop for ZeroizingMainDerTraceGuardV1 {
+    fn drop(&mut self) {
+        if let Some(trace) = self.0.as_mut() {
+            zeroize_main_der_trace_v1(trace);
+        }
+        self.0 = None;
     }
 }
 
@@ -8937,8 +8967,10 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
                 ZkX509StarkErrorV1::InternalInvariant
             })?;
 
-        let der = build_zk_x509_der_stark_trace_v1(assembly.der_base.clone(), post_base.der())
-            .map_err(ZkX509StarkErrorV1::from)?;
+        let mut der = ZeroizingMainDerTraceGuardV1::new_v1(
+            build_zk_x509_der_stark_trace_v1(assembly.der_base.clone(), post_base.der())
+                .map_err(ZkX509StarkErrorV1::from)?,
+        );
         let rfc = ZkX509Rfc5280StarkColumnProviderV1::new_v1(
             &assembly.rfc_base,
             post_base.der(),
@@ -8970,7 +9002,8 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
                 ZkX509StarkErrorV1::InternalInvariant
             })?;
         let claims = ZkX509MainTerminalClaimsV1 {
-            der: zk_x509_der_stark_terminal_claims_v1(&der).map_err(ZkX509StarkErrorV1::from)?,
+            der: zk_x509_der_stark_terminal_claims_v1(der.trace_v1()?)
+                .map_err(ZkX509StarkErrorV1::from)?,
             rfc5280: rfc.terminal_claims_v1(),
             sha: ZkX509ShaSegmentTerminalClaimsV1::from_sha_air_terminals_v1(
                 sha_segments,
@@ -8984,21 +9017,23 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
         if !zk_x509_main_rfc_sha_terminal_products_match_v1(claims.rfc5280, claims.sha) {
             return Err(ZkX509StarkErrorV1::TranscriptMismatch);
         }
+        let der_fixed = compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)
+            .map_err(ZkX509StarkErrorV1::from)?;
+        let sha_base =
+            main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses)?;
+        let sha_fixed = ZkX509ShaBatchFixedProviderV1::new_v1(assembly.sha_schedule.shape())
+            .map_err(map_main_sha_source_error_v1)?;
+        let der = der.take_v1()?;
 
         Ok(Self {
             registrations,
             p256_bindings,
             der,
-            der_fixed: compile_zk_x509_der_stark_fixed_schedule_v1(ZkX509DerStarkShapeV1)
-                .map_err(ZkX509StarkErrorV1::from)?,
+            der_fixed,
             rfc,
-            sha_base: main_log19_sha_base_sources_v1(
-                &assembly.sha_schedule,
-                &assembly.sha_witnesses,
-            )?,
+            sha_base,
             sha_aux,
-            sha_fixed: ZkX509ShaBatchFixedProviderV1::new_v1(assembly.sha_schedule.shape())
-                .map_err(map_main_sha_source_error_v1)?,
+            sha_fixed,
             p256,
             post_base,
             claims,
@@ -9031,9 +9066,7 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
             .iter()
             .copied()
             .filter(|binding| binding.main == registration);
-        let binding = matches
-            .next()
-            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        let binding = matches.next().ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
         if matches.next().is_some() {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
@@ -9042,6 +9075,10 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
 
     const fn terminal_claims_v1(&self) -> ZkX509MainTerminalClaimsV1 {
         self.claims
+    }
+
+    fn zeroize_private_v1(&mut self) {
+        zeroize_main_der_trace_v1(&mut self.der);
     }
 
     fn native_fixed_column_v1(
@@ -9080,6 +9117,12 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
             }
         };
         Ok(ZeroizingMainTraceColumnV1(column))
+    }
+}
+
+impl Drop for MainLog19BoundTraceGroupSourceV1<'_> {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
     }
 }
 
@@ -9295,29 +9338,19 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
             2..=5 => {
                 let segment = registration_index - 2;
                 let current = ZkX509ShaBatchRowV1 {
-                    base: opening
-                        .base_current
-                        .try_into()
+                    base: *<&[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1]>::try_from(opening.base_current)
                         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    aux: opening
-                        .aux_current
-                        .try_into()
+                    aux: *<&[F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]>::try_from(opening.aux_current)
                         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    fixed: fixed_current
-                        .try_into()
+                    fixed: *<&[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]>::try_from(fixed_current)
                         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
                 };
                 let next = ZkX509ShaBatchRowV1 {
-                    base: opening
-                        .base_next
-                        .try_into()
+                    base: *<&[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1]>::try_from(opening.base_next)
                         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    aux: opening
-                        .aux_next
-                        .try_into()
+                    aux: *<&[F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]>::try_from(opening.aux_next)
                         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    fixed: fixed_next
-                        .try_into()
+                    fixed: *<&[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]>::try_from(fixed_next)
                         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
                 };
                 evaluate_zk_x509_sha_batch_residues_v1(
@@ -12471,6 +12504,58 @@ enum MainTraceColumnKindV1 {
     Aux,
 }
 
+/// Exact ordered ownership of the six authenticated masked-LDE matrices.
+///
+/// Every scratch file is anonymous and owner-private; its ephemeral key and
+/// nonce prefix are zeroized by the aggregate scratch owner. Keeping this
+/// typed set alive across the phase boundary prevents a prover from discarding
+/// the committed codeword and later reconstructing a substitute from native
+/// columns and masks.
+struct MainTraceScratchSetV1 {
+    scratches: [aggregate::EncryptedFieldMatrixScratchV1; FULL_PROFILE_TRACE_GROUPS_V1],
+}
+
+impl MainTraceScratchSetV1 {
+    fn from_ordered_v1(
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+        scratches: Vec<aggregate::EncryptedFieldMatrixScratchV1>,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        layout.validate_exact_full_profile_registration_v1()?;
+        let scratches = scratches
+            .try_into()
+            .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
+        let set = Self { scratches };
+        set.validate_v1(layout, kind)?;
+        Ok(set)
+    }
+
+    fn validate_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        layout.validate_exact_full_profile_registration_v1()?;
+        let rows = layout.common_lde_size();
+        for (scratch, group) in self.scratches.iter().zip(&layout.trace_groups) {
+            let width = match kind {
+                MainTraceColumnKindV1::Base => group.base_width,
+                MainTraceColumnKindV1::Aux => group.aux_width,
+            };
+            if scratch.rows() != rows
+                || scratch.width() != width
+                || scratch.chunk_rows() == 0
+                || scratch.chunk_count() == 0
+                || scratch.chunk_rows().checked_mul(scratch.chunk_count()) != Some(rows)
+                || scratch.ciphertext_bytes() == 0
+            {
+                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+            }
+        }
+        Ok(())
+    }
+}
+
 fn registered_main_group_column_v1(
     layout: &AggregateProofLayoutV1,
     group_index: usize,
@@ -12521,6 +12606,7 @@ fn commit_main_trace_group_v1<R: TryRngCore>(
     (
         aggregate::StreamingRowCommitmentResultV1,
         aggregate::StreamingTraceMaskSetV1,
+        aggregate::EncryptedFieldMatrixScratchV1,
     ),
     ZkX509StarkErrorV1,
 > {
@@ -12529,7 +12615,9 @@ fn commit_main_trace_group_v1<R: TryRngCore>(
         .trace_groups
         .get(group_index)
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-    if MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1.get(group_index).copied()
+    if MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1
+        .get(group_index)
+        .copied()
         != Some(group.native_trace_log2)
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
@@ -12539,7 +12627,7 @@ fn commit_main_trace_group_v1<R: TryRngCore>(
         MainTraceColumnKindV1::Aux => (AUX_LEAF_DOMAIN, AUX_NODE_DOMAIN, group.aux_width),
     };
     let mut source_error = None;
-    let result = aggregate::commit_masked_trace_columns_v1(
+    let result = aggregate::commit_masked_trace_columns_retaining_encrypted_scratch_v1(
         leaf_domain,
         node_domain,
         group_index,
@@ -12564,7 +12652,8 @@ fn commit_main_trace_group_v1<R: TryRngCore>(
             let column = match column {
                 Ok(column) => column,
                 Err(error) => {
-                    let aggregate_error = if error == ZkX509StarkErrorV1::AllocationFailure {
+                    let aggregate_error = if matches!(&error, ZkX509StarkErrorV1::AllocationFailure)
+                    {
                         AggregateStarkErrorV1::AllocationFailure
                     } else {
                         AggregateStarkErrorV1::InvalidLayout
@@ -12574,9 +12663,7 @@ fn commit_main_trace_group_v1<R: TryRngCore>(
                 }
             };
             if column.len() != registration.segment.trace_size()
-                || column
-                    .iter()
-                    .any(|value| F::canonical(value.0).is_none())
+                || column.iter().any(|value| F::canonical(value.0).is_none())
             {
                 return Err(AggregateStarkErrorV1::InvalidLayout);
             }
@@ -12588,6 +12675,553 @@ fn commit_main_trace_group_v1<R: TryRngCore>(
         (Err(_), Some(error)) => Err(error),
         (Err(error), None) => Err(map_aggregate_error_v1(error)),
         (Ok(_), Some(_)) => Err(ZkX509StarkErrorV1::InternalInvariant),
+    }
+}
+
+fn main_trace_group_root_v1(
+    kind: MainTraceColumnKindV1,
+    commitment: &aggregate::StreamingRowCommitmentResultV1,
+) -> TraceGroupProofV1 {
+    match kind {
+        MainTraceColumnKindV1::Base => TraceGroupProofV1 {
+            base_root: commitment.commitment.root,
+            aux_root: [0_u8; 32],
+            base_frontier: Vec::new(),
+            aux_frontier: Vec::new(),
+        },
+        MainTraceColumnKindV1::Aux => TraceGroupProofV1 {
+            base_root: [0_u8; 32],
+            aux_root: commitment.commitment.root,
+            base_frontier: Vec::new(),
+            aux_frontier: Vec::new(),
+        },
+    }
+}
+
+fn map_credential_pre_aux_error_v1(
+    error: super::credential_pre_aux::ZkX509CredentialPreAuxErrorV1,
+) -> ZkX509StarkErrorV1 {
+    use super::credential_pre_aux::ZkX509CredentialPreAuxErrorV1 as Error;
+    match error {
+        Error::Resource => ZkX509StarkErrorV1::AllocationFailure,
+        Error::Transcript | Error::Challenge => ZkX509StarkErrorV1::TranscriptMismatch,
+    }
+}
+
+/// MAIN state after exactly six ordered base commitments and before X5B1.
+///
+/// The type owns every challenge-independent child which must cross the joint
+/// credential phase. It exposes only a consuming transition accepting the
+/// opaque outer credential binding; raw challenge families and auxiliary
+/// commitment APIs are intentionally absent.
+pub(crate) struct ZkX509MainAwaitingCredentialBindingV1<'a> {
+    layout: AggregateProofLayoutV1,
+    assembly: &'a ZkX509MainTraceAssemblyV1,
+    public: ZkX509CredentialPublicBindingV1,
+    p256: P256MainBaseSourceV1,
+    sha: [ZkX509ShaBatchSegmentBaseSourceV1<'a>; ZK_X509_SHA_SEGMENT_COUNT_V1],
+    projection: MainProjectionTraceGroupSourceV1<'a>,
+    io: MainIoTraceGroupSourceV1<'a>,
+    trace_groups: Vec<TraceGroupProofV1>,
+    base_masks: Vec<aggregate::StreamingTraceMaskSetV1>,
+    base_scratch: MainTraceScratchSetV1,
+    transcript: TransparentTranscriptV1,
+    base_transcript_state: [u8; 32],
+    pre_aux: ZkX509CredentialMainPreAuxV1,
+}
+
+impl ZkX509MainAwaitingCredentialBindingV1<'_> {
+    fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
+        self.layout.validate_exact_full_profile_registration_v1()?;
+        validate_zk_x509_main_verifier_profile_v1(self.assembly.verifier_profile)?;
+        self.base_scratch
+            .validate_v1(&self.layout, MainTraceColumnKindV1::Base)?;
+        if self.public.consensus_context_digest == [0_u8; 32]
+            || self.trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
+            || self.base_masks.len() != FULL_PROFILE_TRACE_GROUPS_V1
+            || self.transcript.state() != self.base_transcript_state
+            || self
+                .trace_groups
+                .iter()
+                .any(|group| group.base_root == [0_u8; 32] || group.aux_root != [0_u8; 32])
+            || self
+                .base_masks
+                .iter()
+                .zip(&self.layout.trace_groups)
+                .any(|(masks, group)| masks.width() != group.base_width)
+            || self.projection.aux.is_some()
+            || self.io.bind_attempted
+            || self.io.aux_columns.is_some()
+            || self.io.post_base.is_some()
+        {
+            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+        }
+        validate_p256_main_registration_order_v1(&self.p256.canonical_registrations_v1()?)
+            .map_err(|_| ZkX509StarkErrorV1::P256Witness)
+    }
+}
+
+/// Composition-ready MAIN state after the sole X5B1 transition.
+///
+/// Both trace-mask sets, all six base/aux roots, the exact terminal claims,
+/// and per-registration composition coefficients are retained together. A
+/// future composition/DEEP/FRI continuation cannot resample challenges or
+/// return to either earlier phase.
+pub(crate) struct ZkX509MainCompositionPhaseV1<'a> {
+    layout: AggregateProofLayoutV1,
+    assembly: &'a ZkX509MainTraceAssemblyV1,
+    public: ZkX509CredentialPublicBindingV1,
+    log19: MainLog19BoundTraceGroupSourceV1<'a>,
+    projection: MainProjectionTraceGroupSourceV1<'a>,
+    io: MainIoTraceGroupSourceV1<'a>,
+    trace_groups: Vec<TraceGroupProofV1>,
+    base_masks: Vec<aggregate::StreamingTraceMaskSetV1>,
+    aux_masks: Vec<aggregate::StreamingTraceMaskSetV1>,
+    base_scratch: MainTraceScratchSetV1,
+    aux_scratch: MainTraceScratchSetV1,
+    terminal_claims: ZkX509MainTerminalClaimsV1,
+    alphas: Vec<Vec<Vec<E>>>,
+    transcript: TransparentTranscriptV1,
+    composition_transcript_state: [u8; 32],
+    binding: ZkX509CredentialPreAuxBindingV1,
+}
+
+impl ZkX509MainCompositionPhaseV1<'_> {
+    fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
+        self.layout.validate_exact_full_profile_registration_v1()?;
+        validate_zk_x509_main_verifier_profile_v1(self.assembly.verifier_profile)?;
+        self.base_scratch
+            .validate_v1(&self.layout, MainTraceColumnKindV1::Base)?;
+        self.aux_scratch
+            .validate_v1(&self.layout, MainTraceColumnKindV1::Aux)?;
+        if self.public.consensus_context_digest == [0_u8; 32]
+            || self.trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
+            || self.base_masks.len() != FULL_PROFILE_TRACE_GROUPS_V1
+            || self.aux_masks.len() != FULL_PROFILE_TRACE_GROUPS_V1
+            || self.terminal_claims != self.log19.terminal_claims_v1()
+            || self.log19.post_base != self.binding.main_post_base()
+            || self.transcript.state() != self.composition_transcript_state
+            || self
+                .trace_groups
+                .iter()
+                .any(|group| group.base_root == [0_u8; 32] || group.aux_root == [0_u8; 32])
+            || self
+                .base_masks
+                .iter()
+                .zip(&self.layout.trace_groups)
+                .any(|(masks, group)| masks.width() != group.base_width)
+            || self
+                .aux_masks
+                .iter()
+                .zip(&self.layout.trace_groups)
+                .any(|(masks, group)| masks.width() != group.aux_width)
+            || self.alphas.len() != self.layout.registered_segments.len()
+            || self
+                .alphas
+                .iter()
+                .zip(&self.layout.registered_segments)
+                .any(|(lanes, registration)| {
+                    lanes.len() != SECURITY_LANES
+                        || lanes
+                            .iter()
+                            .any(|lane| lane.len() != registration.segment.constraint_count)
+                })
+        {
+            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+        }
+        self.io.validate_bound_phase_v1()?;
+        if self.projection.aux.is_none() {
+            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+        }
+        Ok(())
+    }
+}
+
+fn record_main_group_commitment_v1(
+    group_index: usize,
+    kind: MainTraceColumnKindV1,
+    commitment: &aggregate::StreamingRowCommitmentResultV1,
+    trace_groups: &mut Vec<TraceGroupProofV1>,
+) -> Result<(), ZkX509StarkErrorV1> {
+    if commitment.commitment.root == [0_u8; 32] {
+        return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+    }
+    match kind {
+        MainTraceColumnKindV1::Base => {
+            if group_index != trace_groups.len() {
+                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+            }
+            trace_groups.push(main_trace_group_root_v1(kind, commitment));
+        }
+        MainTraceColumnKindV1::Aux => {
+            let expected_group = trace_groups
+                .iter()
+                .position(|group| group.aux_root == [0_u8; 32])
+                .unwrap_or(trace_groups.len());
+            if trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1 || group_index != expected_group {
+                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+            }
+            let group = trace_groups
+                .get_mut(group_index)
+                .ok_or(ZkX509StarkErrorV1::TranscriptMismatch)?;
+            if group.base_root == [0_u8; 32] || group.aux_root != [0_u8; 32] {
+                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+            }
+            group.aux_root = commitment.commitment.root;
+        }
+    }
+    Ok(())
+}
+
+/// Commit exactly the six canonical MAIN base groups and yield the sole outer
+/// credential assembly hook.
+///
+/// This is phase one only. The returned state cannot commit auxiliary columns
+/// until the credential layer combines its fixed six roots with the compact-CA
+/// root and supplies the resulting opaque 272-challenge X5B1 binding.
+pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
+    statement: &IrohaZkX509StarkP256StatementV1,
+    assembly: &'a ZkX509MainTraceAssemblyV1,
+    public: ZkX509CredentialPublicBindingV1,
+    rng: &mut R,
+) -> Result<
+    (
+        ZkX509MainAwaitingCredentialBindingV1<'a>,
+        ZkX509CredentialMainPreAuxV1,
+    ),
+    ZkX509StarkErrorV1,
+> {
+    validate_zk_x509_main_verifier_profile_v1(assembly.verifier_profile)?;
+    if public.consensus_context_digest == [0_u8; 32] {
+        return Err(ZkX509StarkErrorV1::InvalidStatement);
+    }
+    if ca_accumulator_stark_public_v1(&assembly.ca_accumulator_trace, &assembly.sha_schedule)?
+        != public.ca_public_v1()
+    {
+        return Err(ZkX509StarkErrorV1::WitnessStatementMismatch);
+    }
+    let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
+    let p256 = P256MainBaseSourceV1::new_v1(assembly)?;
+    let sha = main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses)?;
+    let mut projection = MainProjectionTraceGroupSourceV1::for_main_v1(
+        &layout,
+        statement,
+        &assembly.projection_trace,
+    )?;
+    let mut io = MainIoTraceGroupSourceV1::for_main_v1(&layout, statement, &assembly.io)?;
+    let mut session = ZkX509MainBaseCommitmentSessionV1::new_v1(
+        &layout,
+        public.consensus_context_digest,
+        assembly.verifier_profile,
+    )?;
+    let mut transcript =
+        new_main_transcript_v1(&public.consensus_context_digest, assembly.verifier_profile)?;
+    absorb_aggregate_layout_v1(&mut transcript, MAIN_LAYOUT_DOMAIN_V1, &layout)?;
+
+    let mut trace_groups = Vec::new();
+    let mut base_masks = Vec::new();
+    let mut base_scratch = Vec::new();
+    trace_groups
+        .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    base_masks
+        .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    base_scratch
+        .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+
+    {
+        let mut source = MainP256Log5TraceGroupSourceV1::for_base_v1(&layout, &p256)?;
+        let (commitment, masks, scratch) =
+            commit_main_trace_group_v1(&layout, 0, MainTraceColumnKindV1::Base, &mut source, rng)?;
+        session.accept_streaming_base_commitment_v1(0, &commitment)?;
+        record_main_group_commitment_v1(
+            0,
+            MainTraceColumnKindV1::Base,
+            &commitment,
+            &mut trace_groups,
+        )?;
+        base_masks.push(masks);
+        base_scratch.push(scratch);
+    }
+    {
+        let mut source = MainP256ScalarTraceGroupSourceV1::for_base_v1(&layout, &p256)?;
+        let (commitment, masks, scratch) =
+            commit_main_trace_group_v1(&layout, 1, MainTraceColumnKindV1::Base, &mut source, rng)?;
+        session.accept_streaming_base_commitment_v1(1, &commitment)?;
+        record_main_group_commitment_v1(
+            1,
+            MainTraceColumnKindV1::Base,
+            &commitment,
+            &mut trace_groups,
+        )?;
+        base_masks.push(masks);
+        base_scratch.push(scratch);
+    }
+    {
+        let (commitment, masks, scratch) = commit_main_trace_group_v1(
+            &layout,
+            2,
+            MainTraceColumnKindV1::Base,
+            &mut projection,
+            rng,
+        )?;
+        session.accept_streaming_base_commitment_v1(2, &commitment)?;
+        record_main_group_commitment_v1(
+            2,
+            MainTraceColumnKindV1::Base,
+            &commitment,
+            &mut trace_groups,
+        )?;
+        base_masks.push(masks);
+        base_scratch.push(scratch);
+    }
+    {
+        let mut source = MainP256Log16TraceGroupSourceV1::for_base_v1(&layout, &p256)?;
+        let (commitment, masks, scratch) =
+            commit_main_trace_group_v1(&layout, 3, MainTraceColumnKindV1::Base, &mut source, rng)?;
+        session.accept_streaming_base_commitment_v1(3, &commitment)?;
+        record_main_group_commitment_v1(
+            3,
+            MainTraceColumnKindV1::Base,
+            &commitment,
+            &mut trace_groups,
+        )?;
+        base_masks.push(masks);
+        base_scratch.push(scratch);
+    }
+    {
+        let (commitment, masks, scratch) =
+            commit_main_trace_group_v1(&layout, 4, MainTraceColumnKindV1::Base, &mut io, rng)?;
+        session.accept_streaming_base_commitment_v1(4, &commitment)?;
+        record_main_group_commitment_v1(
+            4,
+            MainTraceColumnKindV1::Base,
+            &commitment,
+            &mut trace_groups,
+        )?;
+        base_masks.push(masks);
+        base_scratch.push(scratch);
+    }
+    {
+        let mut source =
+            MainLog19BaseTraceGroupSourceV1::for_main_v1(&layout, assembly, &sha, &p256)?;
+        let (commitment, masks, scratch) =
+            commit_main_trace_group_v1(&layout, 5, MainTraceColumnKindV1::Base, &mut source, rng)?;
+        session.accept_streaming_base_commitment_v1(5, &commitment)?;
+        record_main_group_commitment_v1(
+            5,
+            MainTraceColumnKindV1::Base,
+            &commitment,
+            &mut trace_groups,
+        )?;
+        base_masks.push(masks);
+        base_scratch.push(scratch);
+    }
+    let base_scratch =
+        MainTraceScratchSetV1::from_ordered_v1(&layout, MainTraceColumnKindV1::Base, base_scratch)?;
+    aggregate::absorb_base_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
+        .map_err(map_aggregate_error_v1)?;
+    let pre_aux = session.finish_pre_aux_v1()?;
+    let base_transcript_state = transcript.state();
+    let phase = ZkX509MainAwaitingCredentialBindingV1 {
+        layout,
+        assembly,
+        public,
+        p256,
+        sha,
+        projection,
+        io,
+        trace_groups,
+        base_masks,
+        base_scratch,
+        transcript,
+        base_transcript_state,
+        pre_aux,
+    };
+    phase.validate_v1()?;
+    Ok((phase, pre_aux))
+}
+
+impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
+    /// Consume phase one, bind all challenge-dependent children with one X5B1
+    /// capability, commit exactly six auxiliary groups, absorb terminal
+    /// claims, and sample the complete per-registration alpha schedule.
+    pub(crate) fn bind_credential_pre_aux_v1_with_rng<R: TryRngCore>(
+        self,
+        binding: ZkX509CredentialPreAuxBindingV1,
+        rng: &mut R,
+    ) -> Result<ZkX509MainCompositionPhaseV1<'a>, ZkX509StarkErrorV1> {
+        self.validate_v1()?;
+        if !binding.matches_main_pre_aux_v1(self.pre_aux) {
+            // Reject substitution before transcript absorption or any
+            // challenge-dependent child transition.
+            return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+        }
+        let ZkX509MainAwaitingCredentialBindingV1 {
+            layout,
+            assembly,
+            public,
+            p256,
+            sha,
+            mut projection,
+            mut io,
+            mut trace_groups,
+            base_masks,
+            base_scratch,
+            mut transcript,
+            base_transcript_state: _,
+            pre_aux: _,
+        } = self;
+        absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
+            .map_err(map_credential_pre_aux_error_v1)?;
+        let post_base = binding.main_post_base();
+        projection.bind_challenges_v1(post_base)?;
+        io.bind_challenges_v1(post_base)?;
+        let mut log19 = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
+            &layout, assembly, sha, p256, binding,
+        )?;
+
+        let mut aux_masks = Vec::new();
+        let mut aux_scratch = Vec::new();
+        aux_masks
+            .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        aux_scratch
+            .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
+            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+        {
+            let mut source = MainP256Log5TraceGroupSourceV1::for_bound_v1(&layout, &log19.p256)?;
+            let (commitment, masks, scratch) = commit_main_trace_group_v1(
+                &layout,
+                0,
+                MainTraceColumnKindV1::Aux,
+                &mut source,
+                rng,
+            )?;
+            record_main_group_commitment_v1(
+                0,
+                MainTraceColumnKindV1::Aux,
+                &commitment,
+                &mut trace_groups,
+            )?;
+            aux_masks.push(masks);
+            aux_scratch.push(scratch);
+        }
+        {
+            let mut source = MainP256ScalarTraceGroupSourceV1::for_bound_v1(&layout, &log19.p256)?;
+            let (commitment, masks, scratch) = commit_main_trace_group_v1(
+                &layout,
+                1,
+                MainTraceColumnKindV1::Aux,
+                &mut source,
+                rng,
+            )?;
+            record_main_group_commitment_v1(
+                1,
+                MainTraceColumnKindV1::Aux,
+                &commitment,
+                &mut trace_groups,
+            )?;
+            aux_masks.push(masks);
+            aux_scratch.push(scratch);
+        }
+        {
+            let (commitment, masks, scratch) = commit_main_trace_group_v1(
+                &layout,
+                2,
+                MainTraceColumnKindV1::Aux,
+                &mut projection,
+                rng,
+            )?;
+            record_main_group_commitment_v1(
+                2,
+                MainTraceColumnKindV1::Aux,
+                &commitment,
+                &mut trace_groups,
+            )?;
+            aux_masks.push(masks);
+            aux_scratch.push(scratch);
+        }
+        {
+            let mut source = MainP256Log16TraceGroupSourceV1::for_bound_v1(&layout, &log19.p256)?;
+            let (commitment, masks, scratch) = commit_main_trace_group_v1(
+                &layout,
+                3,
+                MainTraceColumnKindV1::Aux,
+                &mut source,
+                rng,
+            )?;
+            record_main_group_commitment_v1(
+                3,
+                MainTraceColumnKindV1::Aux,
+                &commitment,
+                &mut trace_groups,
+            )?;
+            aux_masks.push(masks);
+            aux_scratch.push(scratch);
+        }
+        {
+            let (commitment, masks, scratch) =
+                commit_main_trace_group_v1(&layout, 4, MainTraceColumnKindV1::Aux, &mut io, rng)?;
+            record_main_group_commitment_v1(
+                4,
+                MainTraceColumnKindV1::Aux,
+                &commitment,
+                &mut trace_groups,
+            )?;
+            aux_masks.push(masks);
+            aux_scratch.push(scratch);
+        }
+        {
+            let (commitment, masks, scratch) = commit_main_trace_group_v1(
+                &layout,
+                5,
+                MainTraceColumnKindV1::Aux,
+                &mut log19,
+                rng,
+            )?;
+            record_main_group_commitment_v1(
+                5,
+                MainTraceColumnKindV1::Aux,
+                &commitment,
+                &mut trace_groups,
+            )?;
+            aux_masks.push(masks);
+            aux_scratch.push(scratch);
+        }
+        let aux_scratch = MainTraceScratchSetV1::from_ordered_v1(
+            &layout,
+            MainTraceColumnKindV1::Aux,
+            aux_scratch,
+        )?;
+        aggregate::absorb_aux_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
+            .map_err(map_aggregate_error_v1)?;
+        let terminal_claims = log19.terminal_claims_v1();
+        absorb_zk_x509_main_terminal_claims_v1(&mut transcript, terminal_claims)?;
+        let alphas = derive_constraint_alphas_v1(&mut transcript, &layout)?;
+        let composition_transcript_state = transcript.state();
+        let phase = ZkX509MainCompositionPhaseV1 {
+            layout,
+            assembly,
+            public,
+            log19,
+            projection,
+            io,
+            trace_groups,
+            base_masks,
+            aux_masks,
+            base_scratch,
+            aux_scratch,
+            terminal_claims,
+            alphas,
+            transcript,
+            composition_transcript_state,
+            binding,
+        };
+        phase.validate_v1()?;
+        Ok(phase)
     }
 }
 
@@ -23576,6 +24210,352 @@ mod tests {
             corrupted.accept_base_root_v1(0, 5, [0x11; 32]),
             Err(ZkX509StarkErrorV1::ProfileMismatch)
         ));
+    }
+
+    #[test]
+    fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_and_excess() {
+        fn commitment(seed: u8) -> aggregate::StreamingRowCommitmentResultV1 {
+            aggregate::StreamingRowCommitmentResultV1 {
+                commitment: aggregate::StreamingMerkleCommitmentV1 {
+                    root: [seed; 32],
+                    frontier: Vec::new(),
+                },
+                opened_rows: BTreeMap::new(),
+            }
+        }
+
+        let mut groups = Vec::new();
+        assert!(matches!(
+            record_main_group_commitment_v1(
+                1,
+                MainTraceColumnKindV1::Base,
+                &commitment(2),
+                &mut groups,
+            ),
+            Err(ZkX509StarkErrorV1::TranscriptMismatch)
+        ));
+        assert!(
+            groups.is_empty(),
+            "a rejected base reorder is transactional"
+        );
+        assert!(matches!(
+            record_main_group_commitment_v1(
+                0,
+                MainTraceColumnKindV1::Base,
+                &commitment(0),
+                &mut groups,
+            ),
+            Err(ZkX509StarkErrorV1::TranscriptMismatch)
+        ));
+        assert!(
+            groups.is_empty(),
+            "the zero-root sentinel cannot mutate state"
+        );
+
+        record_main_group_commitment_v1(
+            0,
+            MainTraceColumnKindV1::Base,
+            &commitment(1),
+            &mut groups,
+        )
+        .expect("first canonical base root");
+        assert!(matches!(
+            record_main_group_commitment_v1(
+                0,
+                MainTraceColumnKindV1::Base,
+                &commitment(7),
+                &mut groups,
+            ),
+            Err(ZkX509StarkErrorV1::TranscriptMismatch)
+        ));
+        assert!(matches!(
+            record_main_group_commitment_v1(
+                0,
+                MainTraceColumnKindV1::Aux,
+                &commitment(0x41),
+                &mut groups,
+            ),
+            Err(ZkX509StarkErrorV1::TranscriptMismatch)
+        ));
+        assert_eq!(groups.len(), 1, "aux cannot start before all six bases");
+        assert_eq!(groups[0].aux_root, [0_u8; 32]);
+
+        for group in 1..FULL_PROFILE_TRACE_GROUPS_V1 {
+            record_main_group_commitment_v1(
+                group,
+                MainTraceColumnKindV1::Base,
+                &commitment(u8::try_from(group + 1).expect("six roots")),
+                &mut groups,
+            )
+            .expect("remaining canonical base roots");
+        }
+        let base_snapshot = groups.clone();
+        assert!(matches!(
+            record_main_group_commitment_v1(
+                1,
+                MainTraceColumnKindV1::Aux,
+                &commitment(0x42),
+                &mut groups,
+            ),
+            Err(ZkX509StarkErrorV1::TranscriptMismatch)
+        ));
+        assert_eq!(
+            groups, base_snapshot,
+            "a rejected aux reorder is transactional"
+        );
+        assert!(matches!(
+            record_main_group_commitment_v1(
+                0,
+                MainTraceColumnKindV1::Aux,
+                &commitment(0),
+                &mut groups,
+            ),
+            Err(ZkX509StarkErrorV1::TranscriptMismatch)
+        ));
+        assert_eq!(groups, base_snapshot, "a zero aux root is transactional");
+
+        for group in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
+            record_main_group_commitment_v1(
+                group,
+                MainTraceColumnKindV1::Aux,
+                &commitment(u8::try_from(0x41 + group).expect("six aux roots")),
+                &mut groups,
+            )
+            .expect("canonical auxiliary root");
+            assert!(
+                groups[..=group]
+                    .iter()
+                    .all(|recorded| recorded.aux_root != [0_u8; 32])
+            );
+            assert!(
+                groups[group + 1..]
+                    .iter()
+                    .all(|pending| pending.aux_root == [0_u8; 32])
+            );
+        }
+        let complete = groups.clone();
+        for hostile_group in [0, FULL_PROFILE_TRACE_GROUPS_V1] {
+            assert!(matches!(
+                record_main_group_commitment_v1(
+                    hostile_group,
+                    MainTraceColumnKindV1::Aux,
+                    &commitment(0xF1),
+                    &mut groups,
+                ),
+                Err(ZkX509StarkErrorV1::TranscriptMismatch)
+            ));
+            assert_eq!(groups, complete);
+        }
+    }
+
+    fn tiny_authenticated_main_scratch_fixture_v1(
+        seed: u8,
+    ) -> aggregate::EncryptedFieldMatrixScratchV1 {
+        let mut rng = StdRng::from_seed([seed; 32]);
+        let (_, _, scratch) =
+            aggregate::commit_masked_trace_columns_retaining_encrypted_scratch_v1(
+                b"iroha:test:zk-x509:main-scratch-leaf:v1",
+                b"iroha:test:zk-x509:main-scratch-node:v1",
+                usize::from(seed),
+                2,
+                4,
+                1,
+                1,
+                &[],
+                &mut rng,
+                |_| Ok(vec![F(u64::from(seed)); 4]),
+            )
+            .expect("tiny authenticated anonymous scratch");
+        scratch
+    }
+
+    #[test]
+    fn main_scratch_set_fails_closed_on_count_shape_and_phase_lifecycle() {
+        assert!(core::mem::needs_drop::<MainTraceScratchSetV1>());
+        assert!(core::mem::needs_drop::<
+            ZkX509MainAwaitingCredentialBindingV1<'static>,
+        >());
+        assert!(core::mem::needs_drop::<ZkX509MainCompositionPhaseV1<'static>>());
+
+        let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
+        for hostile_count in [
+            FULL_PROFILE_TRACE_GROUPS_V1 - 1,
+            FULL_PROFILE_TRACE_GROUPS_V1 + 1,
+        ] {
+            let scratches = (0..hostile_count)
+                .map(|index| {
+                    tiny_authenticated_main_scratch_fixture_v1(
+                        u8::try_from(index + 1).expect("small hostile count"),
+                    )
+                })
+                .collect();
+            assert!(matches!(
+                MainTraceScratchSetV1::from_ordered_v1(
+                    &layout,
+                    MainTraceColumnKindV1::Base,
+                    scratches,
+                ),
+                Err(ZkX509StarkErrorV1::TranscriptMismatch)
+            ));
+        }
+
+        // Six authenticated matrices are still rejected when any committed
+        // common-domain shape is not the verifier-fixed MAIN shape. The
+        // consuming constructor owns the vector, so every anonymous file and
+        // zeroizing key is dropped on this failure path.
+        let wrong_shape = (0..FULL_PROFILE_TRACE_GROUPS_V1)
+            .map(|index| {
+                tiny_authenticated_main_scratch_fixture_v1(
+                    u8::try_from(index + 0x21).expect("six fixtures"),
+                )
+            })
+            .collect();
+        assert!(matches!(
+            MainTraceScratchSetV1::from_ordered_v1(
+                &layout,
+                MainTraceColumnKindV1::Aux,
+                wrong_shape,
+            ),
+            Err(ZkX509StarkErrorV1::TranscriptMismatch)
+        ));
+    }
+
+    #[test]
+    fn main_phase_source_has_no_root_only_or_reconstruction_commit_path() {
+        let source = include_str!("stark.rs");
+        let helper_start = source
+            .find("fn commit_main_trace_group_v1")
+            .expect("MAIN commitment helper");
+        let helper_end = source[helper_start..]
+            .find("fn main_trace_group_root_v1")
+            .map(|offset| helper_start + offset)
+            .expect("MAIN commitment helper end");
+        let helper = &source[helper_start..helper_end];
+        assert!(
+            helper.contains("commit_masked_trace_columns_retaining_encrypted_scratch_v1"),
+            "MAIN commitments must retain the authenticated masked LDE"
+        );
+        assert!(
+            !helper.contains("commit_masked_trace_columns_v1(")
+                && !helper.contains("spill_replayed_masked_trace_columns_v1")
+                && !helper.contains("replay_masked_trace_columns_via_encrypted_scratch_v1"),
+            "MAIN must not discard or reconstruct a committed masked LDE"
+        );
+
+        let phase_start = source
+            .find("pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng")
+            .expect("typed MAIN phase one");
+        let phase_end = source[phase_start..]
+            .find("/// Exact six-provider registry")
+            .map(|offset| phase_start + offset)
+            .expect("typed MAIN phase end");
+        let phases = &source[phase_start..phase_end];
+        assert_eq!(
+            phases.matches("base_scratch.push(scratch)").count(),
+            FULL_PROFILE_TRACE_GROUPS_V1,
+            "phase one must retain exactly six base matrices"
+        );
+        assert_eq!(
+            phases.matches("aux_scratch.push(scratch)").count(),
+            FULL_PROFILE_TRACE_GROUPS_V1,
+            "phase two must retain exactly six auxiliary matrices"
+        );
+        let provenance = phases
+            .find("matches_main_pre_aux_v1")
+            .expect("provenance check");
+        let absorption = phases
+            .find("absorb_zk_x509_credential_pre_aux_binding_v1")
+            .expect("local binding absorption");
+        let child_bind = phases
+            .find("projection.bind_challenges_v1")
+            .expect("child bind");
+        assert!(
+            provenance < absorption && provenance < child_bind,
+            "cross-phase provenance must fail before transcript or child mutation"
+        );
+    }
+
+    #[test]
+    fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer_root() {
+        let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
+        let base_roots = (0..FULL_PROFILE_TRACE_GROUPS_V1)
+            .map(|index| TraceGroupProofV1 {
+                base_root: [u8::try_from(index + 1).expect("six roots"); 32],
+                aux_root: [u8::try_from(index + 0x41).expect("six roots"); 32],
+                base_frontier: Vec::new(),
+                aux_frontier: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let pre_aux = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
+            [0x81; 32],
+            TEST_COMPILED_PROFILE_DIGEST_V1,
+            base_roots
+                .iter()
+                .map(|group| group.base_root)
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("exact six MAIN roots"),
+        );
+        let binding = derive_zk_x509_credential_pre_aux_binding_v1(
+            pre_aux, [0x91; 32], [0xA1; 32], [0xB1; 32],
+        )
+        .expect("canonical outer binding");
+        let mut changed_pre_aux = pre_aux;
+        changed_pre_aux.main_base_roots_mut_for_test_v1()[5][0] ^= 1;
+        let changed_binding = derive_zk_x509_credential_pre_aux_binding_v1(
+            changed_pre_aux,
+            [0x91; 32],
+            [0xA1; 32],
+            [0xB1; 32],
+        )
+        .expect("binding under a hostile log19 root");
+        let claims = main_log19_terminal_claims_fixture_v1();
+
+        let alpha = |order: u8, binding: ZkX509CredentialPreAuxBindingV1| {
+            let mut transcript = new_main_transcript_after_profile_validation_v1(
+                &[0x81; 32],
+                TEST_COMPILED_PROFILE_DIGEST_V1,
+            )
+            .expect("test MAIN transcript");
+            absorb_aggregate_layout_v1(&mut transcript, MAIN_LAYOUT_DOMAIN_V1, &layout)
+                .expect("MAIN layout");
+            if order == 1 {
+                absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
+                    .expect("premature binding still frames distinctly");
+            }
+            aggregate::absorb_base_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &base_roots)
+                .expect("ordered base roots");
+            if order == 0 {
+                absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
+                    .expect("canonical binding");
+            }
+            aggregate::absorb_aux_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &base_roots)
+                .expect("ordered aux roots");
+            if order == 2 {
+                absorb_zk_x509_credential_pre_aux_binding_v1(&mut transcript, binding)
+                    .expect("late binding still frames distinctly");
+            }
+            absorb_zk_x509_main_terminal_claims_v1(&mut transcript, claims)
+                .expect("terminal claims");
+            derive_constraint_alphas_v1(&mut transcript, &layout).expect("alphas")[0][0][0]
+        };
+
+        let canonical = alpha(0, binding);
+        assert_ne!(
+            canonical,
+            alpha(1, binding),
+            "binding-before-base must separate"
+        );
+        assert_ne!(
+            canonical,
+            alpha(2, binding),
+            "binding-after-aux must separate"
+        );
+        assert_ne!(
+            canonical,
+            alpha(0, changed_binding),
+            "changing only the outer-bound log19 root must separate"
+        );
     }
 
     #[test]

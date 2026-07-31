@@ -251,6 +251,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/build_sorafs_reference_sdk_release_canary.py",
         '- "scripts/build_sorafs_reference_sdk_supply_chain_sources.py"',
         '- "scripts/sorafs_reference_sdk_supply_chain.py"',
+        '- "scripts/sorafs_topology_qualification.py"',
         "scripts/run_sorafs_reference_sdk_release_evidence.py",
         "scripts/check_workflow_action_pins.py",
         '- "Dockerfile"',
@@ -277,6 +278,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py",
         '- "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py"',
         '- "scripts/tests/sorafs_reference_sdk_supply_chain_test.py"',
+        '- "scripts/tests/sorafs_topology_qualification_test.py"',
         "run: bash ci/check_sorafs_cli_release.sh",
         "scripts/package_sorafs_validate_release.sh",
         "scripts/package_sorafs_cli_candidate.py",
@@ -366,11 +368,16 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "needs: [release-gate, package, verify-release-auth]",
         "sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22",
         "name: Verify platform package checksums before signing",
+        "signed_artifact_id: ${{ steps.upload-signed.outputs.artifact-id }}",
+        "signed_artifact_digest: ${{ steps.upload-signed.outputs.artifact-digest }}",
+        "signed_artifact_url: ${{ steps.upload-signed.outputs.artifact-url }}",
+        "id: upload-signed",
         '[[ "${#checksum_files[@]}" -ne 5 ]]',
         "sha256sum --check SHA256SUMS",
         "SHA256SUMS contains duplicate file entries",
         "SHA256SUMS does not cover the exact platform candidate file set",
         "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
+        "name: Attest aggregate signed-input provenance",
         "name: Stage offline provenance bundles",
         '[[ "$attestation_path" != "${RUNNER_TEMP}/"*',
         '[[ "$count" -gt 16 ]]',
@@ -381,6 +388,16 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "id-token: write",
         "name: Assemble and validate the canonical SF-11 source indexes",
         "name: Build and gate source-derived SF-11 supply-chain evidence",
+        "name: Record the immutable signed-input artifact binding",
+        "sorafs.reference_sdk.signed_input_artifact.v1",
+        "artifacts/reference-sdk-evidence/l1-topology-qualification.summary.json",
+        "artifacts/reference-sdk-evidence/l1-topology-qualification.envelope.json",
+        "sorafs.l1.deployment_qualification.trust.v1",
+        "--topology-qualification-verification-public-key-hex",
+        "--topology-qualification-signer-identity",
+        "--topology-qualification-signer-key-revision",
+        "--topology-qualification-signer-policy-digest-hex",
+        "--max-topology-qualification-review-age-secs 1209600",
         "expected one aggregate offline provenance bundle",
         '"signed-input/github-attestations/${target}.json"',
         'gh attestation verify "$provenance_file"',
@@ -396,6 +413,11 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX: ${{ vars.SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX }}",
         "SORAFS_TRUSTED_GH_CLI_SHA256: ${{ vars.SORAFS_TRUSTED_GH_CLI_SHA256 }}",
         "SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH }}",
+        "SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH }}",
+        "SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX }}",
+        "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY }}",
+        "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION }}",
+        "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX }}",
         "--external-receipts-root \"$SORAFS_REFERENCE_SDK_RECEIPTS_ROOT\"",
         "--supply-chain-source-root sf11-source",
         "--provenance-certificate-identity \"$certificate_identity\"",
@@ -1131,6 +1153,16 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 "${{ vars.SORAFS_TRUSTED_GH_CLI_SHA256 }}",
                 "SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH: "
                 "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH }}",
+                "SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH: "
+                "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH }}",
+                "SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX: "
+                "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX }}",
+                "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY: "
+                "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY }}",
+                "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION: "
+                "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION }}",
+                "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX: "
+                "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX }}",
             )
             if promotion_guard not in supply_chain_job:
                 errors.append(
@@ -1331,9 +1363,66 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                     f"{relative}: reference-SDK evidence upload must retain "
                     "the complete replay source tree"
                 )
+            for marker in (
+                "SIGNED_INPUT_ARTIFACT_ID: ${{ needs.sign.outputs.signed_artifact_id }}",
+                "SIGNED_INPUT_ARTIFACT_DIGEST: ${{ needs.sign.outputs.signed_artifact_digest }}",
+                "SIGNED_INPUT_ARTIFACT_URL: ${{ needs.sign.outputs.signed_artifact_url }}",
+                '"schema": "sorafs.reference_sdk.signed_input_artifact.v1"',
+            ):
+                if supply_chain_job.count(marker) != 1:
+                    errors.append(
+                        f"{relative}: reference-SDK evidence must retain the "
+                        "immutable signed-input artifact identity and digest"
+                    )
+            topology_archive = (
+                "artifacts/reference-sdk-evidence/"
+                "l1-topology-qualification.summary.json"
+            )
+            if supply_chain_job.count(topology_archive) != 2:
+                errors.append(
+                    f"{relative}: reference-SDK evidence must gate and archive "
+                    "the exact topology qualification summary"
+                )
+            topology_envelope_archive = (
+                "artifacts/reference-sdk-evidence/"
+                "l1-topology-qualification.envelope.json"
+            )
+            signed_topology_markers = (
+                topology_envelope_archive,
+                "sorafs.l1.deployment_qualification.trust.v1",
+                "--topology-qualification-envelope",
+                "--topology-qualification-verification-public-key-hex",
+                "--topology-qualification-signer-identity",
+                "--topology-qualification-signer-key-revision",
+                "--topology-qualification-signer-policy-digest-hex",
+                "--max-topology-qualification-review-age-secs 1209600",
+            )
+            if (
+                supply_chain_job.count(topology_envelope_archive) != 2
+                or any(
+                    supply_chain_job.count(marker) != 1
+                    for marker in signed_topology_markers[1:]
+                )
+            ):
+                errors.append(
+                    f"{relative}: reference-SDK evidence must authenticate and "
+                    "archive the independently signed topology envelope"
+                )
+            if (
+                '[[ "$SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX" '
+                '== "$SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX" ]]'
+                not in supply_chain_job
+            ):
+                errors.append(
+                    f"{relative}: topology and provenance evidence must use "
+                    "independently administered verification keys"
+                )
             try:
                 download_signed = supply_chain_job.index(
                     "name: Download the authenticated signed release input"
+                )
+                record_signed = supply_chain_job.index(
+                    "name: Record the immutable signed-input artifact binding"
                 )
                 require_external = supply_chain_job.index(
                     "name: Require protected external source-evidence inputs"
@@ -1355,6 +1444,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             else:
                 if not (
                     download_signed
+                    < record_signed
                     < require_external
                     < verify_provenance
                     < assemble_sources
@@ -1413,6 +1503,17 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                     )
             if "if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') || inputs.sign_artifacts }}" not in sign_job:
                 errors.append(f"{relative}: signing job lacks the reviewed trigger guard")
+            for output in (
+                "signed_artifact_id: ${{ steps.upload-signed.outputs.artifact-id }}",
+                "signed_artifact_digest: ${{ steps.upload-signed.outputs.artifact-digest }}",
+                "signed_artifact_url: ${{ steps.upload-signed.outputs.artifact-url }}",
+                "id: upload-signed",
+            ):
+                if sign_job.count(output) != 1:
+                    errors.append(
+                        f"{relative}: signing job must expose the immutable "
+                        "signed-artifact identity, digest, and URL"
+                    )
             required_targets = re.search(
                 r"(?ms)^\s+required_targets=\(\n"
                 r"(?P<targets>.*?)^\s+\)$",
@@ -1443,7 +1544,9 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 verify_checksums = sign_job.index(
                     "name: Verify platform package checksums before signing"
                 )
-                attest = sign_job.index("name: Attest release-candidate build provenance")
+                attest = sign_job.index(
+                    "name: Attest aggregate signed-input provenance"
+                )
                 stage_attestations = sign_job.index("name: Stage offline provenance bundles")
                 sign_blobs = sign_job.index("name: Keyless-sign every release-candidate file")
                 upload_signed = sign_job.index("name: Upload signed release candidate")

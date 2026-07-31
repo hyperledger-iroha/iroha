@@ -200,7 +200,7 @@ seiyaku Hidden {}
                 {
                     "schema": 2,
                     "normative_grammar": "specs/grammar.md",
-                    "source_roots": ["docs"],
+                    "source_roots": ["specs"],
                     "source_documents": [
                         "specs/grammar.md",
                         "specs/examples.md",
@@ -285,7 +285,7 @@ seiyaku Hidden {}
                 {
                     "schema": 2,
                     "normative_grammar": "specs/grammar.md",
-                    "source_roots": ["docs"],
+                    "source_roots": ["specs"],
                     "source_documents": [
                         "specs/grammar.md",
                         "examples/outside.md",
@@ -417,14 +417,20 @@ seiyaku Hidden {}
                 Path("specs/kotodama_examples.md"),
             ),
         )
-        self.assertEqual(document_set.source_roots, (Path("docs"),))
-        # The V1 reset removed the parallel English-syntax copies from every
-        # translated example. Each of the 672 tracked documents still carries
-        # at least one canonical source, while the normative grammar and Numeric
-        # V1 specification contribute the additional distinct examples.
-        self.assertEqual(len(fences), 677)
-        self.assertEqual(len({fence.document for fence in fences}), 672)
-        self.assertEqual(len({(fence.source, fence.zk) for fence in fences}), 15)
+        self.assertEqual(
+            document_set.source_roots,
+            (Path("docs"), Path("specs")),
+        )
+        fence_documents = {fence.document for fence in fences}
+        self.assertEqual(
+            fence_documents,
+            {
+                Path("specs/kotodama_grammar.md"),
+                Path("specs/kotodama_examples.md"),
+                Path("specs/kotodama_numeric_v1.md"),
+            },
+        )
+        self.assertTrue(set(document_set.documents).issubset(fence_documents))
 
 
 if __name__ == "__main__":

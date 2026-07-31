@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import secrets
 import sys
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +27,7 @@ from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
     DEFAULT_MIN_RELEASE_TARGETS,
     DEFAULT_REQUIRED_KINDS,
     EVIDENCE_REQUIRED_FIELDS,
+    INDEPENDENT_VERIFICATION_KEYS_ERROR,
     KIND_BY_NAME,
     SUMMARY_SCHEMA,
 )
@@ -55,7 +58,10 @@ from sorafs_runner_preflight import (  # noqa: E402
 )
 
 
-from sorafs_topology_qualification import add_topology_qualification_argument  # noqa: E402
+from sorafs_topology_qualification import (  # noqa: E402
+    DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
+    add_topology_qualification_argument,
+)
 
 PLAN_SCHEMA = "sorafs.reference_sdk.release_evidence_collection_plan.v1"
 PLAN_FIELDS = frozenset(
@@ -67,6 +73,7 @@ PLAN_FIELDS = frozenset(
         "external_evidence",
         "evidence_contract",
         "supply_chain_source",
+        "topology_qualification",
         "steps",
     }
 )
@@ -79,12 +86,24 @@ SUPPLY_CHAIN_SOURCE_PLAN_FIELDS = frozenset(
         "provenance_verification_key_fingerprint_hex",
     }
 )
+TOPOLOGY_QUALIFICATION_PLAN_FIELDS = frozenset(
+    {
+        "summary_path",
+        "envelope_path",
+        "verification_public_key_fingerprint_hex",
+        "signer_identity",
+        "signer_key_revision",
+        "signer_policy_digest_hex",
+    }
+)
 PLAN_REQUIRED_THRESHOLD_FIELDS = frozenset(
     {
         "max_evidence_age_secs",
+        "max_topology_qualification_review_age_secs",
         "min_release_targets",
         "min_downstream_packages",
         "max_smoke_duration_secs",
+        "now_unix",
     }
 )
 PLAN_POSITIVE_THRESHOLD_FIELDS = frozenset(
@@ -95,7 +114,12 @@ PLAN_POSITIVE_THRESHOLD_FIELDS = frozenset(
         "now_unix",
     }
 )
-PLAN_NON_NEGATIVE_THRESHOLD_FIELDS = frozenset({"max_evidence_age_secs"})
+PLAN_NON_NEGATIVE_THRESHOLD_FIELDS = frozenset(
+    {
+        "max_evidence_age_secs",
+        "max_topology_qualification_review_age_secs",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -160,6 +184,41 @@ def provenance_verification_key_fingerprint(
     if not any(public_key):
         return None
     return hashlib.sha256(public_key).hexdigest()
+
+
+def canonical_nonzero_sha256(value: Any) -> str | None:
+    """Return one canonical non-zero SHA-256 digest without echoing failures."""
+
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or value != value.lower()
+    ):
+        return None
+    try:
+        digest = bytes.fromhex(value)
+    except ValueError:
+        return None
+    return value if any(digest) else None
+
+
+def topology_qualification_plan(args: argparse.Namespace) -> dict[str, object]:
+    """Return the payload-free signed-topology trust binding for a runner plan."""
+
+    return {
+        "summary_path": str(args.topology_qualification_summary),
+        "envelope_path": str(args.topology_qualification_envelope),
+        "verification_public_key_fingerprint_hex": (
+            provenance_verification_key_fingerprint(
+                args.topology_qualification_verification_public_key_hex
+            )
+        ),
+        "signer_identity": args.topology_qualification_signer_identity,
+        "signer_key_revision": args.topology_qualification_signer_key_revision,
+        "signer_policy_digest_hex": (
+            args.topology_qualification_signer_policy_digest_hex
+        ),
+    }
 
 
 def supply_chain_source_plan(args: argparse.Namespace) -> dict[str, object]:
@@ -235,6 +294,53 @@ def validate_supply_chain_source_inputs(
         )
 
 
+def validate_topology_qualification_inputs(
+    args: argparse.Namespace,
+    errors: list[str],
+) -> None:
+    """Require the independent topology signer trust tuple without echoing it."""
+
+    signer_identity = args.topology_qualification_signer_identity
+    if (
+        canonical_runner_plan_string(signer_identity) is None
+        or len(signer_identity) > 256
+        or signer_identity != unicodedata.normalize("NFC", signer_identity)
+    ):
+        errors.append(
+            "--topology-qualification-signer-identity must be canonical"
+        )
+    topology_key_fingerprint = provenance_verification_key_fingerprint(
+        args.topology_qualification_verification_public_key_hex
+    )
+    if topology_key_fingerprint is None:
+        errors.append(
+            "--topology-qualification-verification-public-key-hex must be a "
+            "non-zero raw 32-byte Ed25519 public key in lowercase hex"
+        )
+    if (
+        canonical_nonzero_sha256(
+            args.topology_qualification_signer_policy_digest_hex
+        )
+        is None
+    ):
+        errors.append(
+            "--topology-qualification-signer-policy-digest-hex must be a "
+            "canonical non-zero SHA-256 digest"
+        )
+    provenance_key_fingerprint = provenance_verification_key_fingerprint(
+        args.provenance_verification_public_key_hex
+    )
+    if (
+        topology_key_fingerprint is not None
+        and provenance_key_fingerprint is not None
+        and secrets.compare_digest(
+            topology_key_fingerprint,
+            provenance_key_fingerprint,
+        )
+    ):
+        errors.append(INDEPENDENT_VERIFICATION_KEYS_ERROR)
+
+
 def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors = validate_runner_preflight(
         args,
@@ -259,11 +365,37 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     for kind, paths in paths_by_kind.items():
         errors.extend(require_existing_files(paths, EVIDENCE_FLAGS_BY_KIND[kind], seen=seen_input_files))
 
-    require_runner_positive_int(args, "now_unix", errors, allow_none=True)
+    errors.extend(
+        require_existing_files(
+            [args.topology_qualification_summary],
+            "--topology-qualification-summary",
+            seen=seen_input_files,
+        )
+    )
+    errors.extend(
+        require_existing_files(
+            [args.topology_qualification_envelope],
+            "--topology-qualification-envelope",
+            seen=seen_input_files,
+        )
+    )
+
+    require_runner_positive_int(args, "now_unix", errors)
     require_runner_non_negative_int(args, "max_evidence_age_secs", errors)
+    require_runner_non_negative_int(
+        args,
+        "max_topology_qualification_review_age_secs",
+        errors,
+    )
     require_runner_positive_int(args, "min_release_targets", errors)
     require_runner_positive_int(args, "min_downstream_packages", errors)
     require_runner_positive_int(args, "max_smoke_duration_secs", errors)
+    require_runner_positive_int(
+        args,
+        "topology_qualification_signer_key_revision",
+        errors,
+    )
+    validate_topology_qualification_inputs(args, errors)
     validate_supply_chain_source_inputs(args, errors)
     return errors
 
@@ -285,6 +417,18 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
             str(summary_out),
             "--topology-qualification-summary",
             str(args.topology_qualification_summary),
+            "--topology-qualification-envelope",
+            str(args.topology_qualification_envelope),
+            "--topology-qualification-verification-public-key-hex",
+            args.topology_qualification_verification_public_key_hex,
+            "--topology-qualification-signer-identity",
+            args.topology_qualification_signer_identity,
+            "--topology-qualification-signer-key-revision",
+            str(args.topology_qualification_signer_key_revision),
+            "--topology-qualification-signer-policy-digest-hex",
+            args.topology_qualification_signer_policy_digest_hex,
+            "--max-topology-qualification-review-age-secs",
+            str(args.max_topology_qualification_review_age_secs),
             "--max-evidence-age-secs",
             str(args.max_evidence_age_secs),
             "--min-release-targets",
@@ -295,8 +439,7 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
             str(args.max_smoke_duration_secs),
         ]
     )
-    if args.now_unix is not None:
-        verifier_command.extend(["--now-unix", str(args.now_unix)])
+    verifier_command.extend(["--now-unix", str(args.now_unix)])
     if supply_chain_source_required(args):
         verifier_command.extend(
             [
@@ -319,12 +462,14 @@ def threshold_values(args: argparse.Namespace) -> dict[str, int]:
 
     thresholds: dict[str, int] = {
         "max_evidence_age_secs": args.max_evidence_age_secs,
+        "max_topology_qualification_review_age_secs": (
+            args.max_topology_qualification_review_age_secs
+        ),
         "min_release_targets": args.min_release_targets,
         "min_downstream_packages": args.min_downstream_packages,
         "max_smoke_duration_secs": args.max_smoke_duration_secs,
+        "now_unix": args.now_unix,
     }
-    if args.now_unix is not None:
-        thresholds["now_unix"] = args.now_unix
     return thresholds
 
 
@@ -359,11 +504,12 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
         "external_evidence": external_evidence(args),
         "evidence_contract": evidence_contract(args),
         "supply_chain_source": supply_chain_source_plan(args),
+        "topology_qualification": topology_qualification_plan(args),
         "steps": [
             {
                 "label": step.label,
                 "artifact": None if step.artifact is None else str(step.artifact),
-                "command": step.command,
+                "command": list(step.command),
             }
             for step in plan
         ],
@@ -396,32 +542,95 @@ def validate_plan_json(
     )
     if not isinstance(rendered, Mapping):
         return errors
+    topology = rendered.get("topology_qualification")
+    if not isinstance(topology, Mapping):
+        errors.append(
+            "reference SDK release runner plan topology_qualification "
+            "must be an object"
+        )
+    else:
+        if any(canonical_runner_plan_string(field) is None for field in topology):
+            errors.append(
+                "reference SDK release runner plan topology_qualification "
+                "fields must be canonical strings"
+            )
+        if set(topology) != TOPOLOGY_QUALIFICATION_PLAN_FIELDS:
+            errors.append(
+                "reference SDK release runner plan topology_qualification "
+                "fields must match the schema-closed contract"
+            )
+        for field in ("summary_path", "envelope_path", "signer_identity"):
+            if canonical_runner_plan_string(topology.get(field)) is None:
+                errors.append(
+                    "reference SDK release runner plan topology_qualification "
+                    "string fields must be canonical"
+                )
+                break
+        if (
+            provenance_verification_key_fingerprint(
+                args.topology_qualification_verification_public_key_hex
+            )
+            is None
+            or canonical_nonzero_sha256(
+                topology.get("verification_public_key_fingerprint_hex")
+            )
+            is None
+        ):
+            errors.append(
+                "reference SDK release runner plan topology_qualification "
+                "verification key fingerprint must be canonical"
+            )
+        if (
+            canonical_nonzero_sha256(
+                topology.get("signer_policy_digest_hex")
+            )
+            is None
+        ):
+            errors.append(
+                "reference SDK release runner plan topology_qualification "
+                "signer policy digest must be canonical"
+            )
+        signer_key_revision = topology.get("signer_key_revision")
+        if (
+            not isinstance(signer_key_revision, int)
+            or isinstance(signer_key_revision, bool)
+            or signer_key_revision <= 0
+        ):
+            errors.append(
+                "reference SDK release runner plan topology_qualification "
+                "signer key revision must be positive"
+            )
+        if topology != topology_qualification_plan(args):
+            errors.append(
+                "reference SDK release runner plan topology_qualification "
+                "must match args"
+            )
     source = rendered.get("supply_chain_source")
     if not isinstance(source, Mapping):
         errors.append(
             "reference SDK release runner plan supply_chain_source must be an object"
         )
-        return errors
-    if any(canonical_runner_plan_string(field) is None for field in source):
-        errors.append(
-            "reference SDK release runner plan supply_chain_source fields "
-            "must be canonical strings"
-        )
-    if set(source) != SUPPLY_CHAIN_SOURCE_PLAN_FIELDS:
-        errors.append(
-            "reference SDK release runner plan supply_chain_source fields "
-            "must match the schema-closed contract"
-        )
-    if not isinstance(source.get("required"), bool):
-        errors.append(
-            "reference SDK release runner plan supply_chain_source.required "
-            "must be boolean"
-        )
-    expected = supply_chain_source_plan(args)
-    if source != expected:
-        errors.append(
-            "reference SDK release runner plan supply_chain_source must match args"
-        )
+    else:
+        if any(canonical_runner_plan_string(field) is None for field in source):
+            errors.append(
+                "reference SDK release runner plan supply_chain_source fields "
+                "must be canonical strings"
+            )
+        if set(source) != SUPPLY_CHAIN_SOURCE_PLAN_FIELDS:
+            errors.append(
+                "reference SDK release runner plan supply_chain_source fields "
+                "must match the schema-closed contract"
+            )
+        if not isinstance(source.get("required"), bool):
+            errors.append(
+                "reference SDK release runner plan supply_chain_source.required "
+                "must be boolean"
+            )
+        expected = supply_chain_source_plan(args)
+        if source != expected:
+            errors.append(
+                "reference SDK release runner plan supply_chain_source must match args"
+            )
     return errors
 
 
@@ -468,7 +677,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             default=[],
             help=f"Existing JSON artifact for `{kind}` release evidence.",
         )
-    parser.add_argument("--now-unix", type=positive_int_arg)
+    parser.add_argument("--now-unix", type=positive_int_arg, required=True)
     parser.add_argument(
         "--max-evidence-age-secs",
         type=non_negative_int_arg,
@@ -508,6 +717,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Print the verifier command plan without executing it.",
     )
     add_topology_qualification_argument(parser)
+    parser.add_argument(
+        "--topology-qualification-envelope",
+        type=Path,
+        required=True,
+        help="Existing independently signed companion for the topology summary.",
+    )
+    parser.add_argument(
+        "--topology-qualification-verification-public-key-hex",
+        required=True,
+        help="Operator-trusted raw Ed25519 topology verification public key.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-identity",
+        required=True,
+        help="Operator-trusted topology qualification signer identity.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-key-revision",
+        type=positive_int_arg,
+        required=True,
+        help="Operator-trusted positive topology signer key revision.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-policy-digest-hex",
+        required=True,
+        help="Operator-trusted topology signer policy SHA-256 digest.",
+    )
+    parser.add_argument(
+        "--max-topology-qualification-review-age-secs",
+        type=non_negative_int_arg,
+        default=DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
+        help="Maximum accepted age of the independently signed topology review.",
+    )
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

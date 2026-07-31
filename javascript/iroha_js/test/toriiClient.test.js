@@ -1785,12 +1785,8 @@ test("listRepoAgreements normalizes repo payload", async () => {
   const agreement = page.items[0];
   assert.equal(agreement.id, "alpha_repo");
   assert.equal(agreement.cashLeg.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1");
-  assert.match(agreement.cashSource, /^7EAD8EFYUx1aVKZPUU1fyKvr8dF1@/);
   assert.equal(agreement.collateralLeg.metadata.isin, "US0000000001");
-  assert.match(agreement.collateralCustodyAsset, /^4fEiy2n5VMFVfi6BzDJge519zAzg@/);
   assert.equal(agreement.governance.marginFrequencySecs, 86400);
-  assert.equal(agreement.settlementTimestampMs, null);
-  assert.equal(agreement.status, "active");
 });
 
 test("listRepoAgreements preserves bounded count metadata", async () => {

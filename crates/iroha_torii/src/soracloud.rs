@@ -49,7 +49,6 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     isi::{self, InstructionBox},
     name::Name,
-    prelude::ExposedPrivateKey,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, BfvEvaluationKeyRefreshTranscriptV1,
@@ -331,6 +330,7 @@ enum MutationMode {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedBundleRequest {
     pub bundle: SoraDeploymentBundleV1,
     #[norito(default)]
@@ -338,13 +338,10 @@ pub(crate) struct SignedBundleRequest {
     #[norito(default)]
     pub initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAppInfraRequest {
     #[norito(default)]
     pub deploy_services: Vec<SignedBundleRequest>,
@@ -352,10 +349,6 @@ pub(crate) struct SignedAppInfraRequest {
     pub upgrade_services: Vec<SignedBundleRequest>,
     pub manifest: SoraAppInfraManifestV1,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize)]
@@ -383,13 +376,10 @@ pub(crate) struct RollbackPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedRollbackRequest {
     pub payload: RollbackPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -426,13 +416,10 @@ pub(crate) struct StateMutationRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedStateMutationRequest {
     pub payload: StateMutationRequest,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -443,13 +430,10 @@ pub(crate) struct ServiceConfigSetRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedServiceConfigSetRequest {
     pub payload: ServiceConfigSetRequest,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -459,13 +443,10 @@ pub(crate) struct ServiceConfigDeleteRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedServiceConfigDeleteRequest {
     pub payload: ServiceConfigDeleteRequest,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -476,13 +457,10 @@ pub(crate) struct ServiceSecretSetRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedServiceSecretSetRequest {
     pub payload: ServiceSecretSetRequest,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -492,13 +470,10 @@ pub(crate) struct ServiceSecretDeleteRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedServiceSecretDeleteRequest {
     pub payload: ServiceSecretDeleteRequest,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -530,13 +505,10 @@ pub(crate) struct RolloutAdvancePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedRolloutAdvanceRequest {
     pub payload: RolloutAdvancePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -548,13 +520,10 @@ pub(crate) struct AgentDeployPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentDeployRequest {
     pub payload: AgentDeployPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -564,13 +533,10 @@ pub(crate) struct AgentLeaseRenewPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentLeaseRenewRequest {
     pub payload: AgentLeaseRenewPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
@@ -589,6 +555,7 @@ pub(crate) struct HfDeployPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedHfDeployRequest {
     pub payload: HfDeployPayload,
     pub provenance: ManifestProvenance,
@@ -596,10 +563,6 @@ pub(crate) struct SignedHfDeployRequest {
     pub generated_service_provenance: Option<ManifestProvenance>,
     #[norito(default)]
     pub generated_apartment_provenance: Option<ManifestProvenance>,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -616,13 +579,10 @@ pub(crate) struct HfLeaseLeavePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedHfLeaseLeaveRequest {
     pub payload: HfLeaseLeavePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -641,6 +601,7 @@ pub(crate) struct HfLeaseRenewPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedHfLeaseRenewRequest {
     pub payload: HfLeaseRenewPayload,
     pub provenance: ManifestProvenance,
@@ -648,10 +609,6 @@ pub(crate) struct SignedHfLeaseRenewRequest {
     pub generated_service_provenance: Option<ManifestProvenance>,
     #[norito(default)]
     pub generated_apartment_provenance: Option<ManifestProvenance>,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -660,13 +617,10 @@ pub(crate) struct ModelHostAdvertisePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelHostAdvertiseRequest {
     pub payload: ModelHostAdvertisePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -676,13 +630,10 @@ pub(crate) struct ModelHostHeartbeatPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelHostHeartbeatRequest {
     pub payload: ModelHostHeartbeatPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -691,13 +642,10 @@ pub(crate) struct ModelHostWithdrawPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelHostWithdrawRequest {
     pub payload: ModelHostWithdrawPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -707,13 +655,10 @@ pub(crate) struct AgentRestartPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentRestartRequest {
     pub payload: AgentRestartPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -725,13 +670,10 @@ pub(crate) struct AgentPolicyRevokePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentPolicyRevokeRequest {
     pub payload: AgentPolicyRevokePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
@@ -742,13 +684,10 @@ pub(crate) struct AgentWalletSpendPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentWalletSpendRequest {
     pub payload: AgentWalletSpendPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -758,13 +697,10 @@ pub(crate) struct AgentWalletApprovePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentWalletApproveRequest {
     pub payload: AgentWalletApprovePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -776,13 +712,10 @@ pub(crate) struct AgentMessageSendPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentMessageSendRequest {
     pub payload: AgentMessageSendPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -792,13 +725,10 @@ pub(crate) struct AgentMessageAckPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentMessageAckRequest {
     pub payload: AgentMessageAckPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -810,13 +740,10 @@ pub(crate) struct AgentArtifactAllowPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentArtifactAllowRequest {
     pub payload: AgentArtifactAllowPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -832,13 +759,10 @@ pub(crate) struct AgentAutonomyRunPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentAutonomyRunRequest {
     pub payload: AgentAutonomyRunPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -870,13 +794,10 @@ pub(crate) struct FheJobRunPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedFheJobRunRequest {
     pub payload: FheJobRunPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -894,13 +815,10 @@ pub(crate) struct TrainingJobStartPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedTrainingJobStartRequest {
     pub payload: TrainingJobStartPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -913,13 +831,10 @@ pub(crate) struct TrainingJobCheckpointPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedTrainingJobCheckpointRequest {
     pub payload: TrainingJobCheckpointPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -930,13 +845,10 @@ pub(crate) struct TrainingJobRetryPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedTrainingJobRetryRequest {
     pub payload: TrainingJobRetryPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -955,13 +867,10 @@ pub(crate) struct ModelWeightRegisterPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelWeightRegisterRequest {
     pub payload: ModelWeightRegisterPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -974,13 +883,10 @@ pub(crate) struct ModelWeightPromotePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelWeightPromoteRequest {
     pub payload: ModelWeightPromotePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -992,13 +898,10 @@ pub(crate) struct ModelWeightRollbackPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelWeightRollbackRequest {
     pub payload: ModelWeightRollbackPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -1014,13 +917,10 @@ pub(crate) struct ModelArtifactRegisterPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelArtifactRegisterRequest {
     pub payload: ModelArtifactRegisterPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -1051,14 +951,11 @@ pub(crate) struct UploadedModelRegisterPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedUploadedModelRegisterRequest {
     pub payload: UploadedModelRegisterPayload,
     pub bundle_provenance: ManifestProvenance,
     pub finalize_provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -1069,13 +966,10 @@ pub(crate) struct DecryptionRequestPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedDecryptionRequest {
     pub payload: DecryptionRequestPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -6395,14 +6289,7 @@ fn verified_soracloud_request_identity(
 fn require_soracloud_mutation_signer(
     headers: &HeaderMap,
     provenance: &ManifestProvenance,
-    authority: Option<AccountId>,
-    private_key: Option<ExposedPrivateKey>,
 ) -> Result<SoracloudMutationSigner, SoracloudError> {
-    if authority.is_some() || private_key.is_some() {
-        return Err(SoracloudError::bad_request(
-            "authority/private_key fields are no longer accepted; sign the HTTP request with X-Iroha-Account plus X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce or X-Iroha-Witness",
-        ));
-    }
     let (authority, _request_signer, verified_signers) =
         verified_soracloud_request_identity(headers)?;
     if !verified_signers
@@ -10597,12 +10484,7 @@ pub(crate) async fn handle_deploy(
     if let Err(err) = admit_scr_host_bundle(&request.bundle) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10652,12 +10534,7 @@ pub(crate) async fn handle_upgrade(
     if let Err(err) = admit_scr_host_bundle(&request.bundle) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10709,14 +10586,11 @@ pub(crate) async fn handle_app_deploy(
         upgrade_services,
         manifest,
         provenance,
-        authority,
-        private_key,
     } = request;
-    let signer =
-        match require_soracloud_mutation_signer(&headers, &provenance, authority, private_key) {
-            Ok(signer) => signer,
-            Err(err) => return err.into_response(),
-        };
+    let signer = match require_soracloud_mutation_signer(&headers, &provenance) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
 
     let app_signer = provenance.signer.clone();
     let app_name = manifest.app_name.to_string();
@@ -10777,14 +10651,11 @@ pub(crate) async fn handle_app_upgrade(
         upgrade_services,
         manifest,
         provenance,
-        authority,
-        private_key,
     } = request;
-    let signer =
-        match require_soracloud_mutation_signer(&headers, &provenance, authority, private_key) {
-            Ok(signer) => signer,
-            Err(err) => return err.into_response(),
-        };
+    let signer = match require_soracloud_mutation_signer(&headers, &provenance) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
 
     let app_signer = provenance.signer.clone();
     let app_name = manifest.app_name.to_string();
@@ -10892,12 +10763,7 @@ pub(crate) async fn handle_rollback(
     if let Err(err) = verify_rollback_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10951,12 +10817,7 @@ pub(crate) async fn handle_rollout(
     if let Err(err) = verify_rollout_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11016,12 +10877,7 @@ pub(crate) async fn handle_state_mutation(
     if let Err(err) = verify_state_mutation_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11105,12 +10961,7 @@ pub(crate) async fn handle_service_config_set(
     if let Err(err) = verify_service_config_set_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11168,12 +11019,7 @@ pub(crate) async fn handle_service_config_delete(
     if let Err(err) = verify_service_config_delete_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11326,12 +11172,7 @@ pub(crate) async fn handle_service_secret_set(
     if let Err(err) = verify_service_secret_set_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11389,12 +11230,7 @@ pub(crate) async fn handle_service_secret_delete(
     if let Err(err) = verify_service_secret_delete_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11481,12 +11317,7 @@ pub(crate) async fn handle_fhe_job_run(
     if let Err(err) = validate_fhe_job_run_proof_attachments(&request.payload) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11567,12 +11398,7 @@ pub(crate) async fn handle_decryption_request(
     if let Err(err) = verify_decryption_request_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11632,12 +11458,7 @@ pub(crate) async fn handle_health_access_request(
     if let Err(err) = verify_decryption_request_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11721,12 +11542,7 @@ pub(crate) async fn handle_training_job_start(
     if let Err(err) = verify_training_job_start_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11794,12 +11610,7 @@ pub(crate) async fn handle_training_job_checkpoint(
     if let Err(err) = verify_training_job_checkpoint_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11862,12 +11673,7 @@ pub(crate) async fn handle_training_job_retry(
     if let Err(err) = verify_training_job_retry_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11952,12 +11758,7 @@ pub(crate) async fn handle_model_weight_register(
     if let Err(err) = verify_model_weight_register_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12027,12 +11828,7 @@ pub(crate) async fn handle_model_weight_promote(
     if let Err(err) = verify_model_weight_promote_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12097,12 +11893,7 @@ pub(crate) async fn handle_model_weight_rollback(
     if let Err(err) = verify_model_weight_rollback_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12190,12 +11981,7 @@ pub(crate) async fn handle_model_artifact_register(
     if let Err(err) = verify_model_artifact_register_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12294,12 +12080,7 @@ pub(crate) async fn handle_uploaded_model_register(
     if let Err(err) = require_active_sorafs_uploaded_model_pin(&app, &request.payload.bundle) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.bundle_provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.bundle_provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12477,12 +12258,7 @@ pub(crate) async fn handle_hf_deploy(
     if let Err(err) = verify_hf_deploy_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12692,12 +12468,7 @@ pub(crate) async fn handle_hf_lease_leave(
     if let Err(err) = verify_hf_lease_leave_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12787,12 +12558,7 @@ pub(crate) async fn handle_hf_lease_renew(
     if let Err(err) = verify_hf_lease_renew_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -12977,12 +12743,7 @@ pub(crate) async fn handle_model_host_advertise(
     if let Err(err) = verify_model_host_advertise_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13033,12 +12794,7 @@ pub(crate) async fn handle_model_host_heartbeat(
     if let Err(err) = verify_model_host_heartbeat_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13091,12 +12847,7 @@ pub(crate) async fn handle_model_host_withdraw(
     if let Err(err) = verify_model_host_withdraw_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13142,12 +12893,7 @@ pub(crate) async fn handle_agent_deploy(
     if let Err(err) = verify_agent_deploy_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13198,12 +12944,7 @@ pub(crate) async fn handle_agent_lease_renew(
     if let Err(err) = verify_agent_lease_renew_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13256,12 +12997,7 @@ pub(crate) async fn handle_agent_restart(
     if let Err(err) = verify_agent_restart_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13333,12 +13069,7 @@ pub(crate) async fn handle_agent_wallet_spend(
     if let Err(err) = verify_agent_wallet_spend_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13403,12 +13134,7 @@ pub(crate) async fn handle_agent_wallet_approve(
     if let Err(err) = verify_agent_wallet_approve_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13467,12 +13193,7 @@ pub(crate) async fn handle_agent_policy_revoke(
     if let Err(err) = verify_agent_policy_revoke_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13532,12 +13253,7 @@ pub(crate) async fn handle_agent_message_send(
     if let Err(err) = verify_agent_message_send_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13609,12 +13325,7 @@ pub(crate) async fn handle_agent_message_ack(
     if let Err(err) = verify_agent_message_ack_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13697,12 +13408,7 @@ pub(crate) async fn handle_agent_autonomy_allow(
     if let Err(err) = verify_agent_artifact_allow_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -13947,12 +13653,7 @@ pub(crate) async fn handle_agent_autonomy_run(
     if let Err(err) = verify_agent_autonomy_run_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -15320,8 +15021,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -15342,8 +15041,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -15575,7 +15272,7 @@ mod tests {
     }
 
     #[test]
-    fn require_soracloud_mutation_signer_rejects_inline_signing_material() {
+    fn require_soracloud_mutation_signer_derives_authority_from_verified_headers() {
         let key_pair = checked_test_keypair(0x60);
         let account = AccountId::new(key_pair.public_key().clone());
         let headers = verified_request_headers(&account, key_pair.public_key());
@@ -15584,22 +15281,10 @@ mod tests {
             signature: checked_test_signature(key_pair.private_key(), b"mutation"),
         };
 
-        let error = match require_soracloud_mutation_signer(
-            &headers,
-            &provenance,
-            Some(account),
-            Some(ExposedPrivateKey(key_pair.private_key().clone())),
-        ) {
-            Ok(_) => panic!("inline signing material must be rejected"),
-            Err(error) => error,
-        };
-
-        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            error
-                .message
-                .contains("authority/private_key fields are no longer accepted")
-        );
+        let signer = require_soracloud_mutation_signer(&headers, &provenance)
+            .expect("verified headers and matching provenance must identify the mutation signer");
+        assert_eq!(signer.authority, account);
+        assert_eq!(signer.request_signer, provenance.signer);
     }
 
     #[test]
@@ -15613,7 +15298,7 @@ mod tests {
             signature: checked_test_signature(provenance_keypair.private_key(), b"mutation"),
         };
 
-        let error = match require_soracloud_mutation_signer(&headers, &provenance, None, None) {
+        let error = match require_soracloud_mutation_signer(&headers, &provenance) {
             Ok(_) => panic!("provenance signer mismatch must be rejected"),
             Err(error) => error,
         };
@@ -15639,7 +15324,7 @@ mod tests {
             signature: checked_test_signature(provenance_keypair.private_key(), b"mutation"),
         };
 
-        let signer = require_soracloud_mutation_signer(&headers, &provenance, None, None)
+        let signer = require_soracloud_mutation_signer(&headers, &provenance)
             .expect("multisig member provenance must be accepted");
         assert_eq!(signer.authority, account);
         assert_eq!(signer.request_signer, provenance.signer);
@@ -17527,8 +17212,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17545,8 +17228,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17563,8 +17244,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17581,8 +17260,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17599,8 +17276,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17617,8 +17292,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17635,8 +17308,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17653,8 +17324,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17671,8 +17340,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -17796,8 +17463,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature: checked_test_signature(key_pair.private_key(), &finalize_encoded),
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18182,8 +17847,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature: checked_test_signature(key_pair.private_key(), &bundle_encoded),
             },
-            authority: None,
-            private_key: None,
         };
 
         let err = verify_uploaded_model_register_signature(&request)
@@ -18240,8 +17903,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18284,8 +17945,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18336,8 +17995,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18354,8 +18011,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18372,8 +18027,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18390,8 +18043,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18408,8 +18059,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18426,8 +18075,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18444,8 +18091,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18462,8 +18107,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18480,8 +18123,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 
@@ -18498,8 +18139,6 @@ mod tests {
                 signer: key_pair.public_key().clone(),
                 signature,
             },
-            authority: None,
-            private_key: None,
         }
     }
 

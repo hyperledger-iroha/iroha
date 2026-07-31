@@ -77,8 +77,10 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
 )
 from sorafs_topology_qualification import (  # noqa: E402
+    DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
     add_topology_qualification_argument,
-    bind_lane_summary_to_topology,
+    lane_summary_deployment_context,
+    load_signed_topology_qualification_binding,
 )
 from sccp_release_common import verify_ed25519  # noqa: E402
 from sorafs_reference_sdk_supply_chain import (  # noqa: E402
@@ -94,6 +96,10 @@ DEFAULT_MIN_RELEASE_TARGETS = 5
 DEFAULT_MIN_DOWNSTREAM_PACKAGES = 6
 DEFAULT_MAX_SMOKE_DURATION_SECS = 30 * 60
 HEX64_LEN = 64
+INDEPENDENT_VERIFICATION_KEYS_ERROR = (
+    "topology qualification and provenance verification keys must be "
+    "independently administered"
+)
 
 MANDATORY_RELEASE_TARGETS = (
     "x86_64-apple-darwin",
@@ -452,6 +458,58 @@ def decode_ed25519_public_key(value: str | None) -> bytes | None:
         return None
     public_key = bytes.fromhex(value)
     return public_key if any(public_key) else None
+
+
+def validate_independent_verification_keys(
+    topology_public_key_hex: str | None,
+    provenance_public_key_hex: str | None,
+) -> list[str]:
+    """Reject reuse of one Ed25519 key across independent trust domains."""
+
+    topology_public_key = decode_ed25519_public_key(topology_public_key_hex)
+    provenance_public_key = decode_ed25519_public_key(provenance_public_key_hex)
+    if (
+        topology_public_key is not None
+        and provenance_public_key is not None
+        and secrets.compare_digest(topology_public_key, provenance_public_key)
+    ):
+        return [INDEPENDENT_VERIFICATION_KEYS_ERROR]
+    return []
+
+
+def bind_lane_summary_to_signed_topology(
+    summary: dict[str, Any],
+    qualification_path: Path,
+    envelope_path: Path,
+    *,
+    verification_public_key_hex: str,
+    signer_identity: str,
+    signer_key_revision: int,
+    signer_policy_digest_hex: str,
+    now_unix: int,
+    max_review_age_secs: int,
+) -> list[str]:
+    """Attach one independently authenticated topology binding to an SF-11 summary."""
+
+    deployment_id, environment, errors = lane_summary_deployment_context(summary)
+    trusted_public_key = decode_ed25519_public_key(verification_public_key_hex)
+    binding, binding_errors = load_signed_topology_qualification_binding(
+        qualification_path,
+        envelope_path,
+        trusted_public_key=(
+            trusted_public_key if trusted_public_key is not None else b""
+        ),
+        trusted_signer_identity=signer_identity,
+        trusted_key_revision=signer_key_revision,
+        trusted_policy_digest_hex=signer_policy_digest_hex,
+        now_unix=now_unix,
+        max_review_age_secs=max_review_age_secs,
+        expected_deployment_id=deployment_id,
+        expected_environment=environment,
+    )
+    errors.extend(binding_errors)
+    summary["topology_qualification"] = binding
+    return errors
 
 
 def provenance_receipt_authenticator(
@@ -1119,6 +1177,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     add_topology_qualification_argument(parser)
     parser.add_argument(
+        "--topology-qualification-envelope",
+        required=True,
+        type=Path,
+        help="Independently signed companion for the exact topology summary.",
+    )
+    parser.add_argument(
+        "--topology-qualification-verification-public-key-hex",
+        required=True,
+        help="Operator-trusted non-zero raw Ed25519 topology verification public key.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-identity",
+        required=True,
+        help="Operator-trusted topology qualification signer identity.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-key-revision",
+        required=True,
+        type=positive_int_arg,
+        help="Operator-trusted positive topology signer key revision.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-policy-digest-hex",
+        required=True,
+        help="Operator-trusted topology signer policy SHA-256 digest.",
+    )
+    parser.add_argument(
+        "--max-topology-qualification-review-age-secs",
+        type=non_negative_int_arg,
+        default=DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
+        help="Maximum accepted age of the independently signed topology review.",
+    )
+    parser.add_argument(
         "--evidence-dir",
         action="append",
         type=Path,
@@ -1220,6 +1311,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     preflight_errors = validate_checker_preflight(args)
+    preflight_errors.extend(
+        validate_independent_verification_keys(
+            args.topology_qualification_verification_public_key_hex,
+            args.provenance_verification_public_key_hex,
+        )
+    )
     if preflight_errors:
         emit_checker_error_lines(preflight_errors)
         return 2
@@ -1228,8 +1325,22 @@ def main(argv: list[str] | None = None) -> int:
         args.evidence_dir, args.evidence, required_kinds, options, args.summary_out
     )
     errors.extend(
-        bind_lane_summary_to_topology(
-            summary, args.topology_qualification_summary
+        bind_lane_summary_to_signed_topology(
+            summary,
+            args.topology_qualification_summary,
+            args.topology_qualification_envelope,
+            verification_public_key_hex=(
+                args.topology_qualification_verification_public_key_hex
+            ),
+            signer_identity=args.topology_qualification_signer_identity,
+            signer_key_revision=args.topology_qualification_signer_key_revision,
+            signer_policy_digest_hex=(
+                args.topology_qualification_signer_policy_digest_hex
+            ),
+            now_unix=args.now_unix,
+            max_review_age_secs=(
+                args.max_topology_qualification_review_age_secs
+            ),
         )
     )
     summary["status"] = evidence_gate_status(errors)

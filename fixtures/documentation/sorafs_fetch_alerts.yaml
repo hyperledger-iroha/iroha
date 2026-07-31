@@ -12,7 +12,7 @@ groups:
           team: storage
         annotations:
           summary: "SoraFS orchestrator failure rate above 1%"
-          runbook_url: https://docs.iroha.tech/sorafs/runbooks/orchestrator_failures
+          runbook_url: https://github.com/hyperledger-iroha/iroha/blob/main/specs/sorafs/runbooks/sorafs_orchestrator_ops.md#4-failure-triage
       - alert: SoraFSFetchLatencyHigh
         expr: |
           histogram_quantile(
@@ -25,7 +25,7 @@ groups:
           team: storage
         annotations:
           summary: "SoraFS orchestrator p95 latency exceeds 250ms"
-          runbook_url: https://docs.iroha.tech/sorafs/runbooks/orchestrator_latency
+          runbook_url: https://github.com/hyperledger-iroha/iroha/blob/main/specs/sorafs/runbooks/sorafs_orchestrator_ops.md#7-alert-response--on-call-checklist
       - alert: SoraFSProviderFailureSpike
         expr: |
           topk(
@@ -38,4 +38,4 @@ groups:
           team: storage
         annotations:
           summary: "Provider exhibits sustained orchestrator failures (>10 per 5m)"
-          runbook_url: https://docs.iroha.tech/sorafs/runbooks/orchestrator_provider_health
+          runbook_url: https://github.com/hyperledger-iroha/iroha/blob/main/specs/sorafs/runbooks/sorafs_orchestrator_ops.md#4-failure-triage

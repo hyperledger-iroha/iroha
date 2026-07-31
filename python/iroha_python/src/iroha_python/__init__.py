@@ -1,9 +1,8 @@
-"""Python SDK helpers for interacting with Hyperledger Iroha 3 nodes.
+"""Python SDK for interacting with Hyperledger Iroha 3 nodes.
 
-The package currently focuses on re-exporting stable building blocks—most
-notably the Norito codec and Torii HTTP client—so applications can start
-targeting the upcoming SDK while richer functionality (crypto bindings,
-transaction builders, network pipelines) is implemented.
+The package exposes the Norito codec, Torii client, signing and cryptographic
+helpers, transaction builders, address and data-model types, and SoraFS
+workflows used by first-release Iroha 3 applications.
 """
 
 # ruff: noqa: F401, I001, F821

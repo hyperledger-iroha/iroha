@@ -79,3 +79,26 @@ fn query_registry_rejects_wire_id_and_type_name_collisions() {
         .register_with_id::<DomainQuery>(std::any::type_name::<AccountQuery>())
         .register::<AccountQuery>();
 }
+
+#[test]
+#[should_panic(expected = "query registry key collision")]
+fn installed_query_registry_rejects_builtin_wire_id_collision() {
+    type DomainQuery = ErasedIterQuery<Domain>;
+    type AccountQuery = ErasedIterQuery<crate::account::Account>;
+
+    let builtin = QueryRegistry::new().register_with_id::<DomainQuery>("builtin.domain");
+    let installed = QueryRegistry::new().register_with_id::<AccountQuery>("builtin.domain");
+    builtin.assert_compatible_with(&installed);
+}
+
+#[test]
+#[should_panic(expected = "query registry key collision")]
+fn installed_query_registry_rejects_builtin_type_name_collision() {
+    type DomainQuery = ErasedIterQuery<Domain>;
+    type AccountQuery = ErasedIterQuery<crate::account::Account>;
+
+    let builtin = QueryRegistry::new().register_with_id::<DomainQuery>("builtin.domain");
+    let installed =
+        QueryRegistry::new().register_with_id::<AccountQuery>(std::any::type_name::<DomainQuery>());
+    builtin.assert_compatible_with(&installed);
+}

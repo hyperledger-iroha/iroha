@@ -263,6 +263,66 @@ INFLIGHT_LAYOUT_FORBIDDEN_TOKENS = (
     "MLPutBatchV5BeforeReservationV9",
     "MLReservationV9BeforeKuraActive",
 )
+INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "CheckedReplayAuthorizationDomain::clone",
+        (
+            "self.0.clone()",
+            "Arc::clone(&self.0)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::apply_checked_transition",
+        (
+            "self.clone()",
+            "Clone::clone(self)",
+            "(*self).clone()",
+            "self.to_owned()",
+            "ToOwned::to_owned(self)",
+            "candidate.transition_semantics(",
+            "*self = candidate",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_release_batch",
+        ("remove_live_unchecked",),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_commit",
+        ("remove_live_unchecked",),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_prune",
+        ("remove_live_unchecked",),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_complete_release",
+        ("remove_live_unchecked",),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::remove_preflighted_live",
+        (
+            "expect(",
+            "unwrap(",
+            "panic!(",
+            "unreachable!(",
+        ),
+    ),
+)
 INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
     (
         "crates/iroha_core/src/lane_consensus.rs",
@@ -353,6 +413,394 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         ),
     ),
     (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "CheckedReplayAuthorizationDomain::clone",
+        (
+            "fn clone(&self) -> Self",
+            "Self::default()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "CheckedReplayAuthorizationDomain::authorizes",
+        (
+            "fn authorizes(&self, authorization: &Arc<()>) -> bool",
+            "Arc::ptr_eq(&self.0, authorization)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "CheckedReplayStateShape",
+        (
+            "live: usize",
+            "committed: usize",
+            "release_barriers: usize",
+            "completed_releases: usize",
+            "ownership: usize",
+            "fifo_ordinals: usize",
+            "live_lane_incarnations: usize",
+            "next_order: u64",
+            "CheckedReplayStateShape {\n"
+            "    live: usize,\n"
+            "    committed: usize,\n"
+            "    release_barriers: usize,\n"
+            "    completed_releases: usize,\n"
+            "    ownership: usize,\n"
+            "    fifo_ordinals: usize,\n"
+            "    live_lane_incarnations: usize,\n"
+            "    next_order: u64,\n"
+            "}",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::checked_shape",
+        (
+            "live: self.live.len()",
+            "committed: self.committed.len()",
+            "release_barriers: self.release_barriers.len()",
+            "completed_releases: self.completed_releases.len()",
+            "ownership: self.ownership.len()",
+            "fifo_ordinals: self.fifo_ordinals.len()",
+            "live_lane_incarnations: self.live_by_lane_incarnation.len()",
+            "next_order: self.next_order",
+            "CheckedReplayStateShape {\n"
+            "            live: self.live.len(),\n"
+            "            committed: self.committed.len(),\n"
+            "            release_barriers: self.release_barriers.len(),\n"
+            "            completed_releases: self.completed_releases.len(),\n"
+            "            ownership: self.ownership.len(),\n"
+            "            fifo_ordinals: self.fifo_ordinals.len(),\n"
+            "            live_lane_incarnations: self.live_by_lane_incarnation.len(),\n"
+            "            next_order: self.next_order,\n"
+            "        }",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "PreparedReservationJournalTransition",
+        (
+            "authorization_domain: Arc<()>",
+            "frame_digest: Hash",
+            "maximum_owned_transactions: usize",
+            "expected_generation: u64",
+            "next_generation: u64",
+            "expected_shape: CheckedReplayStateShape",
+            "expected_state_identity: Hash",
+            "resulting_state_identity: Hash",
+            "owner_transition_count: usize",
+            "owner_transition_coverage_identity: Hash",
+            "owner_transitions:",
+            "Vec<CheckedProductionTransition<ProductionInFlightReservationTransitionProjection>>",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::prepare_checked_transition",
+        (
+            "validate_frame_cardinality(frame, maximum)?",
+            "self.transition_semantics(frame, maximum, false)?",
+            ".checked_add(1)",
+            "checked_transition_frame_digest(frame)?",
+            "self.check_in_flight_transition(frame, maximum)?",
+            "checked_transition_coverage_identity(&owner_transitions)?",
+            "resulting_checked_state_identity(",
+            "authorization_domain: self.authorization_domain.authorization()",
+            "expected_shape: self.checked_shape()",
+            "expected_state_identity: self.checked_state_identity",
+            "owner_transition_count: owner_transitions.len()",
+            "owner_transitions",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::check_in_flight_transition",
+        (
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,\n"
+            "                        key,\n"
+            "                        release_digest,\n"
+            "                        self.ownership.get(&hash).copied(),\n"
+            "                        candidate.ownership.get(&hash).copied(),",
+            "let after = before.or(Some(DurableReservationOwnership::Live(key)));",
+            "IN_FLIGHT_RESERVATION_ACTION_RESERVE",
+            "IN_FLIGHT_RESERVATION_ACTION_RESERVE,\n"
+            "                        key,\n"
+            "                        None,\n"
+            "                        before,\n"
+            "                        after,",
+            "let after = if before == Some(DurableReservationOwnership::Live(*key)) {\n"
+            "                        None\n"
+            "                    } else {\n"
+            "                        before\n"
+            "                    };",
+            "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT",
+            "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,\n"
+            "                        *key,\n"
+            "                        None,\n"
+            "                        before,\n"
+            "                        after,",
+            "Some(DurableReservationOwnership::Committed(*key))",
+            "IN_FLIGHT_RESERVATION_ACTION_COMMIT",
+            "IN_FLIGHT_RESERVATION_ACTION_COMMIT,\n"
+            "                    *key,\n"
+            "                    None,\n"
+            "                    before,\n"
+            "                    Some(DurableReservationOwnership::Committed(*key)),",
+            "let after = if before == Some(DurableReservationOwnership::Committed(*key)) {\n"
+            "                    None\n"
+            "                } else {\n"
+            "                    before\n"
+            "                };",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT,\n"
+            "                    *key,\n"
+            "                    None,\n"
+            "                    before,\n"
+            "                    after,",
+            "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED",
+            "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,\n"
+            "                        before.key(),\n"
+            "                        None,\n"
+            "                        Some(before),\n"
+            "                        None,",
+            "Some(DurableReservationOwnership::Live(existing)) if existing == *key => {\n"
+            "                            Some(DurableReservationOwnership::Prepared {\n"
+            "                                key: *key,\n"
+            "                                barrier_digest: release_digest,\n"
+            "                            })\n"
+            "                        }",
+            "owner @ (DurableReservationOwnership::Prepared { .. }\n"
+            "                            | DurableReservationOwnership::Completed { .. })",
+            "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE",
+            "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,\n"
+            "                        *key,\n"
+            "                        Some(release_digest),\n"
+            "                        before,\n"
+            "                        after,",
+            "Some(DurableReservationOwnership::Prepared {\n"
+            "                            key: existing,\n"
+            "                            barrier_digest,\n"
+            "                        }) if existing == key && barrier_digest == release_digest => {\n"
+            "                            Some(DurableReservationOwnership::Completed {\n"
+            "                                key,\n"
+            "                                barrier_digest: release_digest,\n"
+            "                            })\n"
+            "                        }",
+            "Some(owner @ DurableReservationOwnership::Completed { .. }) => Some(owner)",
+            "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE",
+            "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE,\n"
+            "                        key,\n"
+            "                        Some(release_digest),\n"
+            "                        before,\n"
+            "                        after,",
+            "let has_completion = self.completed_releases.contains_key(&release_digest);",
+            "let after = if has_completion\n"
+            "                        && before\n"
+            "                            == Some(DurableReservationOwnership::Completed {\n"
+            "                                key: *key,\n"
+            "                                barrier_digest: release_digest,\n"
+            "                            }) {\n"
+            "                        None\n"
+            "                    } else {\n"
+            "                        before\n"
+            "                    };",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,\n"
+            "                        *key,\n"
+            "                        Some(release_digest),\n"
+            "                        before,\n"
+            "                        after,",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::apply_checked_transition",
+        (
+            "checked_transition_frame_digest(frame)? != prepared.frame_digest",
+            "maximum != prepared.maximum_owned_transactions",
+            ".authorizes(&prepared.authorization_domain)",
+            "self.transition_generation != prepared.expected_generation",
+            "self.checked_shape() != prepared.expected_shape",
+            "self.checked_state_identity != prepared.expected_state_identity",
+            "prepared.expected_generation.checked_add(1)",
+            "prepared.owner_transition_count != prepared.owner_transitions.len()",
+            "checked_transition_coverage_identity(&prepared.owner_transitions)?",
+            "resulting_checked_state_identity(",
+            "self.transition_semantics(frame, maximum, false)?;",
+            "let current_owner_transitions = self.check_in_flight_transition(frame, maximum)?;",
+            "current_owner_transitions.len() != prepared.owner_transition_count",
+            ".map(|checked| checked.accepted_projection())",
+            "for checked in current_owner_transitions",
+            "for checked in prepared.owner_transitions",
+            "checked.into_projection()",
+            "self.transition_semantics(frame, maximum, true)?;",
+            "self.transition_generation = prepared.next_generation;",
+            "self.checked_state_identity = prepared.resulting_state_identity;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_release_batch",
+        (
+            "let mut removals = Vec::new();",
+            ".push(self.validate_live_secondary_indexes(key.signed_transaction_hash, *key)?)",
+            "if apply {",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_commit",
+        (
+            "key.validate().map_err(invalid_data)?;",
+            "let owner = self.ownership.get(&key.signed_transaction_hash).copied();",
+            "reservation commit conflicts with a different live reservation identity",
+            "reservation commit conflicts with an existing commit barrier",
+            "reservation commit overlaps an ordered release claim",
+            "reservation commit requires an exact live reservation",
+            "let live_removal = match owner",
+            "Some(self.validate_live_secondary_indexes(key.signed_transaction_hash, existing)?)",
+            "let needs_commit = !matches!(",
+            "self.ensure_owner_capacity(0, maximum)?;",
+            "self.order_range(if needs_commit { 1 } else { 0 })?;",
+            "if !apply {",
+            "if let Some(record) = &live_removal",
+            "self.remove_preflighted_live(record);",
+            "self.committed.insert(",
+            "DurableReservationOwnership::Committed(key)",
+            "self.next_order = next_order;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_prune",
+        (
+            ".live_by_lane_incarnation",
+            ".get(&lane)",
+            "let mut removals = Vec::with_capacity(hashes.len());",
+            "Some(DurableReservationOwnership::Live(key))",
+            "key.lane_id == lane_id && key.lane_incarnation == lane_incarnation",
+            "removals.push(self.validate_live_secondary_indexes(hash, key)?);",
+            "if apply {",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_complete_release",
+        (
+            "let mut removals = Vec::with_capacity(completion.ordered_records.len());",
+            "let live_record = self.validate_live_secondary_indexes(hash, record.key)?;",
+            "if live_record != *record",
+            "removals.push(live_record);",
+            "self.order_range(1)?;",
+            "if apply {",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+            "DurableReservationOwnership::Completed",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::validate_live_secondary_indexes",
+        (
+            "fn validate_live_secondary_indexes(",
+            ") -> io::Result<LaneQueueReservationRecordV5>",
+            "expected_key.signed_transaction_hash != hash",
+            "live reservation index key differs from the exact reservation hash",
+            ".live",
+            ".get(&hash)",
+            "live reservation index has no exact record",
+            "record.value.key != expected_key",
+            "self.fifo_ordinals.get(&record.value.fifo_order.ordinal) != Some(&hash)",
+            ".live_by_lane_incarnation",
+            ".get(&lane)",
+            ".is_some_and(|hashes| hashes.contains(&hash))",
+            "Ok(record.value.clone())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::remove_preflighted_live",
+        (
+            "fn remove_preflighted_live(&mut self, record: &LaneQueueReservationRecordV5)",
+            "debug_assert_eq!(self.live.get(&hash).map(|entry| &entry.value), Some(record));",
+            "self.fifo_ordinals.get(&record.fifo_order.ordinal)",
+            "debug_assert!(",
+            "self.live_by_lane_incarnation",
+            "self.live.remove(&hash);",
+            "self.fifo_ordinals.remove(&record.fifo_order.ordinal);",
+            "self.ownership.remove(&hash);",
+            ".get_mut(&lane)",
+            "hashes.remove(&hash);",
+            "if remove_lane {",
+            "self.live_by_lane_incarnation.remove(&lane);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::append_durable",
+        (
+            "lane reservation journal is poisoned after a failed durability boundary",
+            "self.verify_cached_storage_unchanged()",
+            "lane reservation bootstrap and snapshots cannot be appended as runtime operations",
+            ".prepare_checked_transition(frame, self.limits.max_owned_transactions)?",
+            "encode_frame_with_limit(frame, self.limits.max_frame_payload_bytes)?",
+            "self.preflight_append_end(&encoded)?",
+            "self.append_staged(&encoded, expected_end, prepared)",
+            "if let Err(error) = self.replay_state.apply_checked_transition(",
+            "replay instead of panicking or attempting an in-process retry.",
+            "self.poisoned = true;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::compact_if_needed",
+        (
+            "let snapshot = canonical_snapshot(",
+            "let mut compacted_replay_state = IndexedReservationReplayState::default();",
+            "validate_snapshot_frame(frame, self.limits)?;",
+            ".prepare_checked_transition(frame, self.limits.max_owned_transactions)",
+            "let canonical_replay = replay_path(&self.path, self.limits)?;",
+            "lane reservation compaction input does not match the exact durable journal state",
+            "persist_atomic_replacement(&tmp, &self.path)",
+            "tmp_file.sync_all()",
+            "self.parent.sync_all()",
+            "compacted_replay_state.apply_checked_transition(",
+            "The replacement is already durable. Keep the previous",
+            "self.replay_state = compacted_replay_state;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "fn",
+        "check_production_in_flight_reservation_transition",
+        (
+            "production_in_flight_reservation_transition_kernel(projection)",
+            "Some(CheckedProductionTransition { projection })",
+            "None",
+        ),
+    ),
+    (
         "crates/iroha_core/src/queue.rs",
         "fn",
         "reserve_transactions_for_lane_bounded",
@@ -419,6 +867,274 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
 )
 INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
     (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "CheckedReplayStateShape",
+        (
+            "live: usize",
+            "committed: usize",
+            "release_barriers: usize",
+            "completed_releases: usize",
+            "ownership: usize",
+            "fifo_ordinals: usize",
+            "live_lane_incarnations: usize",
+            "next_order: u64",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::checked_shape",
+        (
+            "live: self.live.len()",
+            "committed: self.committed.len()",
+            "release_barriers: self.release_barriers.len()",
+            "completed_releases: self.completed_releases.len()",
+            "ownership: self.ownership.len()",
+            "fifo_ordinals: self.fifo_ordinals.len()",
+            "live_lane_incarnations: self.live_by_lane_incarnation.len()",
+            "next_order: self.next_order",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "PreparedReservationJournalTransition",
+        (
+            "authorization_domain: Arc<()>",
+            "frame_digest: Hash",
+            "maximum_owned_transactions: usize",
+            "expected_generation: u64",
+            "next_generation: u64",
+            "expected_shape: CheckedReplayStateShape",
+            "expected_state_identity: Hash",
+            "resulting_state_identity: Hash",
+            "owner_transition_count: usize",
+            "owner_transition_coverage_identity: Hash",
+            "owner_transitions:",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::prepare_checked_transition",
+        (
+            "validate_frame_cardinality(frame, maximum)?",
+            "self.transition_semantics(frame, maximum, false)?",
+            ".checked_add(1)",
+            "checked_transition_frame_digest(frame)?",
+            "self.check_in_flight_transition(frame, maximum)?",
+            "checked_transition_coverage_identity(&owner_transitions)?",
+            "let resulting_state_identity = resulting_checked_state_identity(",
+            "Ok(PreparedReservationJournalTransition {",
+            "authorization_domain: self.authorization_domain.authorization()",
+            "expected_shape: self.checked_shape()",
+            "expected_state_identity: self.checked_state_identity",
+            "owner_transition_count: owner_transitions.len()",
+            "owner_transitions",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::apply_checked_transition",
+        (
+            "checked_transition_frame_digest(frame)? != prepared.frame_digest",
+            "maximum != prepared.maximum_owned_transactions",
+            ".authorizes(&prepared.authorization_domain)",
+            "self.transition_generation != prepared.expected_generation",
+            "self.checked_shape() != prepared.expected_shape",
+            "self.checked_state_identity != prepared.expected_state_identity",
+            "prepared.expected_generation.checked_add(1)",
+            "prepared.owner_transition_count != prepared.owner_transitions.len()",
+            "checked_transition_coverage_identity(&prepared.owner_transitions)?",
+            "resulting_checked_state_identity(",
+            "self.transition_semantics(frame, maximum, false)?;",
+            "let current_owner_transitions = self.check_in_flight_transition(frame, maximum)?;",
+            "current_owner_transitions.len() != prepared.owner_transition_count",
+            ".map(|checked| checked.accepted_projection())",
+            "for checked in current_owner_transitions",
+            "for checked in prepared.owner_transitions",
+            "checked.into_projection()",
+            "self.transition_semantics(frame, maximum, true)?;",
+            "self.transition_generation = prepared.next_generation;",
+            "self.checked_state_identity = prepared.resulting_state_identity;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::check_in_flight_transition",
+        (
+            "LaneQueueReservationJournalFrameV5::Snapshot {",
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+            "self.ownership.get(&hash).copied()",
+            "candidate.ownership.get(&hash).copied()",
+            "LaneQueueReservationJournalFrameV5::PutBatch(records) => {",
+            "let after = before.or(Some(DurableReservationOwnership::Live(key)));",
+            "IN_FLIGHT_RESERVATION_ACTION_RESERVE",
+            "LaneQueueReservationJournalFrameV5::ReleaseBatch(keys) => {",
+            "let after = if before == Some(DurableReservationOwnership::Live(*key)) {",
+            "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT",
+            "LaneQueueReservationJournalFrameV5::Commit(key) => {",
+            "IN_FLIGHT_RESERVATION_ACTION_COMMIT",
+            "Some(DurableReservationOwnership::Committed(*key))",
+            "LaneQueueReservationJournalFrameV5::ForgetCommit(key) => {",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT",
+            "LaneQueueReservationJournalFrameV5::Prune {",
+            "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED",
+            "LaneQueueReservationJournalFrameV5::PrepareRelease(barrier) => {",
+            "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE",
+            "LaneQueueReservationJournalFrameV5::CompleteRelease(completion) => {",
+            "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE",
+            "LaneQueueReservationJournalFrameV5::ForgetRelease(barrier) => {",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_release_batch",
+        (
+            "let mut removals = Vec::new();",
+            ".push(self.validate_live_secondary_indexes(key.signed_transaction_hash, *key)?)",
+            "if apply {",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_commit",
+        (
+            "key.validate().map_err(invalid_data)?;",
+            "let owner = self.ownership.get(&key.signed_transaction_hash).copied();",
+            "reservation commit requires an exact live reservation",
+            "let live_removal = match owner",
+            "Some(self.validate_live_secondary_indexes(key.signed_transaction_hash, existing)?)",
+            "let needs_commit = !matches!(",
+            "self.ensure_owner_capacity(0, maximum)?;",
+            "self.order_range(if needs_commit { 1 } else { 0 })?;",
+            "if !apply {",
+            "if let Some(record) = &live_removal",
+            "self.remove_preflighted_live(record);",
+            "self.committed.insert(",
+            "DurableReservationOwnership::Committed(key)",
+            "self.next_order = next_order;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_prune",
+        (
+            ".live_by_lane_incarnation",
+            ".get(&lane)",
+            "let mut removals = Vec::with_capacity(hashes.len());",
+            "key.lane_id == lane_id && key.lane_incarnation == lane_incarnation",
+            "removals.push(self.validate_live_secondary_indexes(hash, key)?);",
+            "if apply {",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_complete_release",
+        (
+            "let mut removals = Vec::with_capacity(completion.ordered_records.len());",
+            "let live_record = self.validate_live_secondary_indexes(hash, record.key)?;",
+            "if live_record != *record",
+            "removals.push(live_record);",
+            "self.order_range(1)?;",
+            "if apply {",
+            "self.release_barriers.remove(&digest);",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+            "self.completed_releases.insert(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::validate_live_secondary_indexes",
+        (
+            "expected_key.signed_transaction_hash != hash",
+            ".live",
+            ".get(&hash)",
+            "record.value.key != expected_key",
+            "self.fifo_ordinals.get(&record.value.fifo_order.ordinal) != Some(&hash)",
+            "let lane = (expected_key.lane_id, expected_key.lane_incarnation);",
+            ".live_by_lane_incarnation",
+            ".get(&lane)",
+            ".is_some_and(|hashes| hashes.contains(&hash))",
+            "Ok(record.value.clone())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::remove_preflighted_live",
+        (
+            "debug_assert_eq!(self.live.get(&hash).map(|entry| &entry.value), Some(record));",
+            "debug_assert_eq!(",
+            "debug_assert!(",
+            "self.live.remove(&hash);",
+            "self.fifo_ordinals.remove(&record.fifo_order.ordinal);",
+            "self.ownership.remove(&hash);",
+            ".get_mut(&lane)",
+            "hashes.remove(&hash);",
+            "if remove_lane {",
+            "self.live_by_lane_incarnation.remove(&lane);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::append_durable",
+        (
+            ".prepare_checked_transition(frame, self.limits.max_owned_transactions)?",
+            "encode_frame_with_limit(frame, self.limits.max_frame_payload_bytes)?",
+            "self.preflight_append_end(&encoded)?",
+            "self.append_staged(&encoded, expected_end, prepared)",
+            "if let Err(error) = self.replay_state.apply_checked_transition(",
+            "replay instead of panicking or attempting an in-process retry.",
+            "self.poisoned = true;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::compact_if_needed",
+        (
+            "let snapshot = canonical_snapshot(",
+            "let mut compacted_replay_state = IndexedReservationReplayState::default();",
+            "validate_snapshot_frame(frame, self.limits)?;",
+            ".prepare_checked_transition(frame, self.limits.max_owned_transactions)",
+            "let canonical_replay = replay_path(&self.path, self.limits)?;",
+            "lane reservation compaction input does not match the exact durable journal state",
+            "persist_atomic_replacement(&tmp, &self.path)",
+            "tmp_file.sync_all()",
+            "self.parent.sync_all()",
+            "compacted_replay_state.apply_checked_transition(",
+            "The replacement is already durable. Keep the previous",
+            "self.poisoned = true;",
+            "self.replay_state = compacted_replay_state;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "fn",
+        "check_production_in_flight_reservation_transition",
+        (
+            "production_in_flight_reservation_transition_kernel(projection)",
+            "Some(CheckedProductionTransition { projection })",
+            "None",
+        ),
+    ),
+    (
         "crates/iroha_core/src/queue.rs",
         "fn",
         "reserve_transactions_for_lane_bounded",
@@ -468,6 +1184,14 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
             "pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5;",
             "legacy.fifo_order.version = "
             "LANE_QUEUE_RESERVATION_JOURNAL_VERSION - 1;",
+            "fn post_sync_append_publication_failure_is_poisoned_and_replayed_on_reopen()",
+            "fn post_sync_compaction_publication_failure_is_poisoned_and_replayed_on_reopen()",
+            "fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_barrier()",
+            "fn prepared_checked_transition_is_bound_to_frame_and_state_generation()",
+            "fn prepared_checked_transition_rejects_same_generation_cross_state_substitution()",
+            "fn prepared_checked_transition_binds_exact_ordered_owner_token_coverage()",
+            "fn checked_transition_result_identity_and_candidate_application_are_atomic()",
+            "fn checked_transition_generation_overflow_is_rejected_without_mutation()",
         ),
     ),
     (
@@ -1063,8 +1787,15 @@ def _extract_rust_binding_items(
     owner, method = symbol.split("::", 1)
     if not owner or not method:
         return ()
+    # Bind both inherent methods (`impl Owner`) and trait methods
+    # (`impl Trait for Owner`). The latter is required for capability-bearing
+    # implementations such as `CheckedReplayAuthorizationDomain::clone`;
+    # treating that method as an unscoped `fn clone` would allow an unrelated
+    # implementation in the same file to satisfy the binding.
     impl_re = re.compile(
-        rf"(?m)^[ \t]*impl[ \t]+{re.escape(owner)}[ \t]*(?=\{{)"
+        rf"(?m)^[ \t]*impl[ \t]+(?:"
+        rf"{re.escape(owner)}|[^{{\n]+[ \t]+for[ \t]+{re.escape(owner)}"
+        rf")[ \t]*(?=\{{)"
     )
     method_re = re.compile(
         RUST_DECLARATION_TEMPLATES["fn"].format(symbol=re.escape(method))
@@ -1684,6 +2415,7 @@ def _validate_inflight_layout_contract(
         "mutations",
         "production_symbols",
         "ordered_source_checks",
+        "forbidden_source_checks",
         "source_checks",
         "forbidden_tokens",
     }
@@ -1692,7 +2424,8 @@ def _validate_inflight_layout_contract(
             "in-flight layout contract must contain exactly claim, module, "
             "positive_config, runner, evidence, required_actions, "
             "required_invariants, mutations, production_symbols, "
-            "ordered_source_checks, source_checks, and forbidden_tokens"
+            "ordered_source_checks, forbidden_source_checks, source_checks, "
+            "and forbidden_tokens"
         )
         return
     expected_scalars = {
@@ -1791,7 +2524,7 @@ def _validate_inflight_layout_contract(
     if tuple(actual_bindings) != INFLIGHT_LAYOUT_PRODUCTION_BINDINGS:
         errors.append(
             "in-flight production bindings differ from the exact reviewed "
-            "payload/queue/Kura layout contract"
+            "payload/queue/Kura/replay-state layout contract"
         )
 
     ordered_source_checks = contract.get("ordered_source_checks")
@@ -1830,7 +2563,53 @@ def _validate_inflight_layout_contract(
     if tuple(actual_ordered) != INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS:
         errors.append(
             "in-flight ordered source checks differ from the exact reviewed "
-            "durability/publication order contract"
+            "validation/durability/publication order contract"
+        )
+
+    forbidden_source_checks = contract.get("forbidden_source_checks")
+    actual_forbidden_source_checks: list[
+        tuple[str, str, str, tuple[str, ...]]
+    ] = []
+    if not isinstance(forbidden_source_checks, list):
+        errors.append("in-flight forbidden_source_checks must be an array")
+    else:
+        for check in forbidden_source_checks:
+            if not isinstance(check, dict) or set(check) != {
+                "path",
+                "kind",
+                "symbol",
+                "forbidden_tokens",
+            }:
+                errors.append(
+                    "each forbidden in-flight source check must contain only "
+                    "path, kind, symbol, and forbidden_tokens"
+                )
+                continue
+            relative = check.get("path")
+            kind = check.get("kind")
+            symbol = check.get("symbol")
+            tokens = check.get("forbidden_tokens")
+            if (
+                not _nonempty_string(relative)
+                or kind not in RUST_BINDING_KINDS
+                or not _nonempty_string(symbol)
+                or not isinstance(tokens, list)
+                or not tokens
+                or not all(_nonempty_string(token) for token in tokens)
+                or len(tokens) != len(set(tokens))
+            ):
+                errors.append(f"malformed forbidden in-flight source check {check!r}")
+                continue
+            actual_forbidden_source_checks.append(
+                (relative, kind, symbol, tuple(tokens))
+            )
+    if (
+        tuple(actual_forbidden_source_checks)
+        != INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS
+    ):
+        errors.append(
+            "in-flight forbidden source checks differ from the exact reviewed "
+            "bounded-application/capability contract"
         )
 
     source_checks = contract.get("source_checks")
@@ -2095,6 +2874,26 @@ def _validate_inflight_layout_contract(
                 break
             cursor = position
 
+    for relative, kind, symbol, tokens in INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS:
+        item = binding_items.get((relative, kind, symbol))
+        if item is None:
+            item = _rust_binding_item(
+                root,
+                relative,
+                kind,
+                symbol,
+                "forbidden in-flight production source binding",
+                errors,
+            )
+        if item is None:
+            continue
+        for token in tokens:
+            if token in item:
+                errors.append(
+                    f"{root / relative}: in-flight production item {symbol} "
+                    f"contains forbidden source-bound token {token!r}"
+                )
+
     for relative, tokens in INFLIGHT_LAYOUT_SOURCE_CHECKS:
         path = root / relative
         if not _regular_file(path, "in-flight whole-file source binding", errors):
@@ -2138,8 +2937,8 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
             "multilane binding ledger must contain exactly schema_version, "
             "closure_mutations, inflight_first_release_layout_contract, and models",
         )
-    if ledger.get("schema_version") != 3:
-        errors.append("multilane binding ledger schema_version must equal 3")
+    if ledger.get("schema_version") != 4:
+        errors.append("multilane binding ledger schema_version must equal 4")
     models = ledger.get("models")
     if not isinstance(models, list) or len(models) != 4:
         errors.append("multilane binding ledger must contain exactly four models")

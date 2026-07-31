@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "closure_mutations": [
     {
       "id": "ML-MUT-NAT-01",
@@ -556,6 +556,309 @@
         ]
       },
       {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "CheckedReplayAuthorizationDomain::clone",
+        "required_tokens": [
+          "fn clone(&self) -> Self",
+          "Self::default()"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "CheckedReplayAuthorizationDomain::authorizes",
+        "required_tokens": [
+          "fn authorizes(&self, authorization: &Arc<()>) -> bool",
+          "Arc::ptr_eq(&self.0, authorization)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "struct",
+        "symbol": "CheckedReplayStateShape",
+        "required_tokens": [
+          "live: usize",
+          "committed: usize",
+          "release_barriers: usize",
+          "completed_releases: usize",
+          "ownership: usize",
+          "fifo_ordinals: usize",
+          "live_lane_incarnations: usize",
+          "next_order: u64",
+          "CheckedReplayStateShape {\n    live: usize,\n    committed: usize,\n    release_barriers: usize,\n    completed_releases: usize,\n    ownership: usize,\n    fifo_ordinals: usize,\n    live_lane_incarnations: usize,\n    next_order: u64,\n}"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::checked_shape",
+        "required_tokens": [
+          "live: self.live.len()",
+          "committed: self.committed.len()",
+          "release_barriers: self.release_barriers.len()",
+          "completed_releases: self.completed_releases.len()",
+          "ownership: self.ownership.len()",
+          "fifo_ordinals: self.fifo_ordinals.len()",
+          "live_lane_incarnations: self.live_by_lane_incarnation.len()",
+          "next_order: self.next_order",
+          "CheckedReplayStateShape {\n            live: self.live.len(),\n            committed: self.committed.len(),\n            release_barriers: self.release_barriers.len(),\n            completed_releases: self.completed_releases.len(),\n            ownership: self.ownership.len(),\n            fifo_ordinals: self.fifo_ordinals.len(),\n            live_lane_incarnations: self.live_by_lane_incarnation.len(),\n            next_order: self.next_order,\n        }"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "struct",
+        "symbol": "PreparedReservationJournalTransition",
+        "required_tokens": [
+          "authorization_domain: Arc<()>",
+          "frame_digest: Hash",
+          "maximum_owned_transactions: usize",
+          "expected_generation: u64",
+          "next_generation: u64",
+          "expected_shape: CheckedReplayStateShape",
+          "expected_state_identity: Hash",
+          "resulting_state_identity: Hash",
+          "owner_transition_count: usize",
+          "owner_transition_coverage_identity: Hash",
+          "owner_transitions:",
+          "Vec<CheckedProductionTransition<ProductionInFlightReservationTransitionProjection>>"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::prepare_checked_transition",
+        "required_tokens": [
+          "validate_frame_cardinality(frame, maximum)?",
+          "self.transition_semantics(frame, maximum, false)?",
+          ".checked_add(1)",
+          "checked_transition_frame_digest(frame)?",
+          "self.check_in_flight_transition(frame, maximum)?",
+          "checked_transition_coverage_identity(&owner_transitions)?",
+          "resulting_checked_state_identity(",
+          "authorization_domain: self.authorization_domain.authorization()",
+          "expected_shape: self.checked_shape()",
+          "expected_state_identity: self.checked_state_identity",
+          "owner_transition_count: owner_transitions.len()",
+          "owner_transitions"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::check_in_flight_transition",
+        "required_tokens": [
+          "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+          "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,\n                        key,\n                        release_digest,\n                        self.ownership.get(&hash).copied(),\n                        candidate.ownership.get(&hash).copied(),",
+          "let after = before.or(Some(DurableReservationOwnership::Live(key)));",
+          "IN_FLIGHT_RESERVATION_ACTION_RESERVE",
+          "IN_FLIGHT_RESERVATION_ACTION_RESERVE,\n                        key,\n                        None,\n                        before,\n                        after,",
+          "let after = if before == Some(DurableReservationOwnership::Live(*key)) {\n                        None\n                    } else {\n                        before\n                    };",
+          "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT",
+          "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,\n                        *key,\n                        None,\n                        before,\n                        after,",
+          "Some(DurableReservationOwnership::Committed(*key))",
+          "IN_FLIGHT_RESERVATION_ACTION_COMMIT",
+          "IN_FLIGHT_RESERVATION_ACTION_COMMIT,\n                    *key,\n                    None,\n                    before,\n                    Some(DurableReservationOwnership::Committed(*key)),",
+          "let after = if before == Some(DurableReservationOwnership::Committed(*key)) {\n                    None\n                } else {\n                    before\n                };",
+          "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT",
+          "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT,\n                    *key,\n                    None,\n                    before,\n                    after,",
+          "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED",
+          "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,\n                        before.key(),\n                        None,\n                        Some(before),\n                        None,",
+          "Some(DurableReservationOwnership::Live(existing)) if existing == *key => {\n                            Some(DurableReservationOwnership::Prepared {\n                                key: *key,\n                                barrier_digest: release_digest,\n                            })\n                        }",
+          "owner @ (DurableReservationOwnership::Prepared { .. }\n                            | DurableReservationOwnership::Completed { .. })",
+          "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE",
+          "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,\n                        *key,\n                        Some(release_digest),\n                        before,\n                        after,",
+          "Some(DurableReservationOwnership::Prepared {\n                            key: existing,\n                            barrier_digest,\n                        }) if existing == key && barrier_digest == release_digest => {\n                            Some(DurableReservationOwnership::Completed {\n                                key,\n                                barrier_digest: release_digest,\n                            })\n                        }",
+          "Some(owner @ DurableReservationOwnership::Completed { .. }) => Some(owner)",
+          "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE",
+          "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE,\n                        key,\n                        Some(release_digest),\n                        before,\n                        after,",
+          "let has_completion = self.completed_releases.contains_key(&release_digest);",
+          "let after = if has_completion\n                        && before\n                            == Some(DurableReservationOwnership::Completed {\n                                key: *key,\n                                barrier_digest: release_digest,\n                            }) {\n                        None\n                    } else {\n                        before\n                    };",
+          "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE",
+          "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,\n                        *key,\n                        Some(release_digest),\n                        before,\n                        after,"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::apply_checked_transition",
+        "required_tokens": [
+          "checked_transition_frame_digest(frame)? != prepared.frame_digest",
+          "maximum != prepared.maximum_owned_transactions",
+          ".authorizes(&prepared.authorization_domain)",
+          "self.transition_generation != prepared.expected_generation",
+          "self.checked_shape() != prepared.expected_shape",
+          "self.checked_state_identity != prepared.expected_state_identity",
+          "prepared.expected_generation.checked_add(1)",
+          "prepared.owner_transition_count != prepared.owner_transitions.len()",
+          "checked_transition_coverage_identity(&prepared.owner_transitions)?",
+          "resulting_checked_state_identity(",
+          "self.transition_semantics(frame, maximum, false)?;",
+          "let current_owner_transitions = self.check_in_flight_transition(frame, maximum)?;",
+          "current_owner_transitions.len() != prepared.owner_transition_count",
+          ".map(|checked| checked.accepted_projection())",
+          "for checked in current_owner_transitions",
+          "for checked in prepared.owner_transitions",
+          "checked.into_projection()",
+          "self.transition_semantics(frame, maximum, true)?;",
+          "self.transition_generation = prepared.next_generation;",
+          "self.checked_state_identity = prepared.resulting_state_identity;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_release_batch",
+        "required_tokens": [
+          "let mut removals = Vec::new();",
+          ".push(self.validate_live_secondary_indexes(key.signed_transaction_hash, *key)?)",
+          "if apply {",
+          "for record in &removals",
+          "self.remove_preflighted_live(record);"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_commit",
+        "required_tokens": [
+          "key.validate().map_err(invalid_data)?;",
+          "let owner = self.ownership.get(&key.signed_transaction_hash).copied();",
+          "reservation commit conflicts with a different live reservation identity",
+          "reservation commit conflicts with an existing commit barrier",
+          "reservation commit overlaps an ordered release claim",
+          "reservation commit requires an exact live reservation",
+          "let live_removal = match owner",
+          "Some(self.validate_live_secondary_indexes(key.signed_transaction_hash, existing)?)",
+          "let needs_commit = !matches!(",
+          "self.ensure_owner_capacity(0, maximum)?;",
+          "self.order_range(if needs_commit { 1 } else { 0 })?;",
+          "if !apply {",
+          "if let Some(record) = &live_removal",
+          "self.remove_preflighted_live(record);",
+          "self.committed.insert(",
+          "DurableReservationOwnership::Committed(key)",
+          "self.next_order = next_order;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_prune",
+        "required_tokens": [
+          ".live_by_lane_incarnation",
+          ".get(&lane)",
+          "let mut removals = Vec::with_capacity(hashes.len());",
+          "Some(DurableReservationOwnership::Live(key))",
+          "key.lane_id == lane_id && key.lane_incarnation == lane_incarnation",
+          "removals.push(self.validate_live_secondary_indexes(hash, key)?);",
+          "if apply {",
+          "for record in &removals",
+          "self.remove_preflighted_live(record);"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_complete_release",
+        "required_tokens": [
+          "let mut removals = Vec::with_capacity(completion.ordered_records.len());",
+          "let live_record = self.validate_live_secondary_indexes(hash, record.key)?;",
+          "if live_record != *record",
+          "removals.push(live_record);",
+          "self.order_range(1)?;",
+          "if apply {",
+          "for record in &removals",
+          "self.remove_preflighted_live(record);",
+          "DurableReservationOwnership::Completed"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::validate_live_secondary_indexes",
+        "required_tokens": [
+          "fn validate_live_secondary_indexes(",
+          ") -> io::Result<LaneQueueReservationRecordV5>",
+          "expected_key.signed_transaction_hash != hash",
+          "live reservation index key differs from the exact reservation hash",
+          ".live",
+          ".get(&hash)",
+          "live reservation index has no exact record",
+          "record.value.key != expected_key",
+          "self.fifo_ordinals.get(&record.value.fifo_order.ordinal) != Some(&hash)",
+          ".live_by_lane_incarnation",
+          ".get(&lane)",
+          ".is_some_and(|hashes| hashes.contains(&hash))",
+          "Ok(record.value.clone())"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::remove_preflighted_live",
+        "required_tokens": [
+          "fn remove_preflighted_live(&mut self, record: &LaneQueueReservationRecordV5)",
+          "debug_assert_eq!(self.live.get(&hash).map(|entry| &entry.value), Some(record));",
+          "self.fifo_ordinals.get(&record.fifo_order.ordinal)",
+          "debug_assert!(",
+          "self.live_by_lane_incarnation",
+          "self.live.remove(&hash);",
+          "self.fifo_ordinals.remove(&record.fifo_order.ordinal);",
+          "self.ownership.remove(&hash);",
+          ".get_mut(&lane)",
+          "hashes.remove(&hash);",
+          "if remove_lane {",
+          "self.live_by_lane_incarnation.remove(&lane);"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "LaneQueueReservationJournal::append_durable",
+        "required_tokens": [
+          "lane reservation journal is poisoned after a failed durability boundary",
+          "self.verify_cached_storage_unchanged()",
+          "lane reservation bootstrap and snapshots cannot be appended as runtime operations",
+          ".prepare_checked_transition(frame, self.limits.max_owned_transactions)?",
+          "encode_frame_with_limit(frame, self.limits.max_frame_payload_bytes)?",
+          "self.preflight_append_end(&encoded)?",
+          "self.append_staged(&encoded, expected_end, prepared)",
+          "if let Err(error) = self.replay_state.apply_checked_transition(",
+          "replay instead of panicking or attempting an in-process retry.",
+          "self.poisoned = true;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "LaneQueueReservationJournal::compact_if_needed",
+        "required_tokens": [
+          "let snapshot = canonical_snapshot(",
+          "let mut compacted_replay_state = IndexedReservationReplayState::default();",
+          "validate_snapshot_frame(frame, self.limits)?;",
+          ".prepare_checked_transition(frame, self.limits.max_owned_transactions)",
+          "let canonical_replay = replay_path(&self.path, self.limits)?;",
+          "lane reservation compaction input does not match the exact durable journal state",
+          "persist_atomic_replacement(&tmp, &self.path)",
+          "tmp_file.sync_all()",
+          "self.parent.sync_all()",
+          "compacted_replay_state.apply_checked_transition(",
+          "The replacement is already durable. Keep the previous",
+          "self.replay_state = compacted_replay_state;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "fn",
+        "symbol": "check_production_in_flight_reservation_transition",
+        "required_tokens": [
+          "production_in_flight_reservation_transition_kernel(projection)",
+          "Some(CheckedProductionTransition { projection })",
+          "None"
+        ]
+      },
+      {
         "path": "crates/iroha_core/src/queue.rs",
         "kind": "fn",
         "symbol": "reserve_transactions_for_lane_bounded",
@@ -622,6 +925,274 @@
     ],
     "ordered_source_checks": [
       {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "struct",
+        "symbol": "CheckedReplayStateShape",
+        "tokens": [
+          "live: usize",
+          "committed: usize",
+          "release_barriers: usize",
+          "completed_releases: usize",
+          "ownership: usize",
+          "fifo_ordinals: usize",
+          "live_lane_incarnations: usize",
+          "next_order: u64"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::checked_shape",
+        "tokens": [
+          "live: self.live.len()",
+          "committed: self.committed.len()",
+          "release_barriers: self.release_barriers.len()",
+          "completed_releases: self.completed_releases.len()",
+          "ownership: self.ownership.len()",
+          "fifo_ordinals: self.fifo_ordinals.len()",
+          "live_lane_incarnations: self.live_by_lane_incarnation.len()",
+          "next_order: self.next_order"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "struct",
+        "symbol": "PreparedReservationJournalTransition",
+        "tokens": [
+          "authorization_domain: Arc<()>",
+          "frame_digest: Hash",
+          "maximum_owned_transactions: usize",
+          "expected_generation: u64",
+          "next_generation: u64",
+          "expected_shape: CheckedReplayStateShape",
+          "expected_state_identity: Hash",
+          "resulting_state_identity: Hash",
+          "owner_transition_count: usize",
+          "owner_transition_coverage_identity: Hash",
+          "owner_transitions:"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::prepare_checked_transition",
+        "tokens": [
+          "validate_frame_cardinality(frame, maximum)?",
+          "self.transition_semantics(frame, maximum, false)?",
+          ".checked_add(1)",
+          "checked_transition_frame_digest(frame)?",
+          "self.check_in_flight_transition(frame, maximum)?",
+          "checked_transition_coverage_identity(&owner_transitions)?",
+          "let resulting_state_identity = resulting_checked_state_identity(",
+          "Ok(PreparedReservationJournalTransition {",
+          "authorization_domain: self.authorization_domain.authorization()",
+          "expected_shape: self.checked_shape()",
+          "expected_state_identity: self.checked_state_identity",
+          "owner_transition_count: owner_transitions.len()",
+          "owner_transitions"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::apply_checked_transition",
+        "tokens": [
+          "checked_transition_frame_digest(frame)? != prepared.frame_digest",
+          "maximum != prepared.maximum_owned_transactions",
+          ".authorizes(&prepared.authorization_domain)",
+          "self.transition_generation != prepared.expected_generation",
+          "self.checked_shape() != prepared.expected_shape",
+          "self.checked_state_identity != prepared.expected_state_identity",
+          "prepared.expected_generation.checked_add(1)",
+          "prepared.owner_transition_count != prepared.owner_transitions.len()",
+          "checked_transition_coverage_identity(&prepared.owner_transitions)?",
+          "resulting_checked_state_identity(",
+          "self.transition_semantics(frame, maximum, false)?;",
+          "let current_owner_transitions = self.check_in_flight_transition(frame, maximum)?;",
+          "current_owner_transitions.len() != prepared.owner_transition_count",
+          ".map(|checked| checked.accepted_projection())",
+          "for checked in current_owner_transitions",
+          "for checked in prepared.owner_transitions",
+          "checked.into_projection()",
+          "self.transition_semantics(frame, maximum, true)?;",
+          "self.transition_generation = prepared.next_generation;",
+          "self.checked_state_identity = prepared.resulting_state_identity;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::check_in_flight_transition",
+        "tokens": [
+          "LaneQueueReservationJournalFrameV5::Snapshot {",
+          "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+          "self.ownership.get(&hash).copied()",
+          "candidate.ownership.get(&hash).copied()",
+          "LaneQueueReservationJournalFrameV5::PutBatch(records) => {",
+          "let after = before.or(Some(DurableReservationOwnership::Live(key)));",
+          "IN_FLIGHT_RESERVATION_ACTION_RESERVE",
+          "LaneQueueReservationJournalFrameV5::ReleaseBatch(keys) => {",
+          "let after = if before == Some(DurableReservationOwnership::Live(*key)) {",
+          "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT",
+          "LaneQueueReservationJournalFrameV5::Commit(key) => {",
+          "IN_FLIGHT_RESERVATION_ACTION_COMMIT",
+          "Some(DurableReservationOwnership::Committed(*key))",
+          "LaneQueueReservationJournalFrameV5::ForgetCommit(key) => {",
+          "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT",
+          "LaneQueueReservationJournalFrameV5::Prune {",
+          "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED",
+          "LaneQueueReservationJournalFrameV5::PrepareRelease(barrier) => {",
+          "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE",
+          "LaneQueueReservationJournalFrameV5::CompleteRelease(completion) => {",
+          "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE",
+          "LaneQueueReservationJournalFrameV5::ForgetRelease(barrier) => {",
+          "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_release_batch",
+        "tokens": [
+          "let mut removals = Vec::new();",
+          ".push(self.validate_live_secondary_indexes(key.signed_transaction_hash, *key)?)",
+          "if apply {",
+          "for record in &removals",
+          "self.remove_preflighted_live(record);"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_commit",
+        "tokens": [
+          "key.validate().map_err(invalid_data)?;",
+          "let owner = self.ownership.get(&key.signed_transaction_hash).copied();",
+          "reservation commit requires an exact live reservation",
+          "let live_removal = match owner",
+          "Some(self.validate_live_secondary_indexes(key.signed_transaction_hash, existing)?)",
+          "let needs_commit = !matches!(",
+          "self.ensure_owner_capacity(0, maximum)?;",
+          "self.order_range(if needs_commit { 1 } else { 0 })?;",
+          "if !apply {",
+          "if let Some(record) = &live_removal",
+          "self.remove_preflighted_live(record);",
+          "self.committed.insert(",
+          "DurableReservationOwnership::Committed(key)",
+          "self.next_order = next_order;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_prune",
+        "tokens": [
+          ".live_by_lane_incarnation",
+          ".get(&lane)",
+          "let mut removals = Vec::with_capacity(hashes.len());",
+          "key.lane_id == lane_id && key.lane_incarnation == lane_incarnation",
+          "removals.push(self.validate_live_secondary_indexes(hash, key)?);",
+          "if apply {",
+          "for record in &removals",
+          "self.remove_preflighted_live(record);"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_complete_release",
+        "tokens": [
+          "let mut removals = Vec::with_capacity(completion.ordered_records.len());",
+          "let live_record = self.validate_live_secondary_indexes(hash, record.key)?;",
+          "if live_record != *record",
+          "removals.push(live_record);",
+          "self.order_range(1)?;",
+          "if apply {",
+          "self.release_barriers.remove(&digest);",
+          "for record in &removals",
+          "self.remove_preflighted_live(record);",
+          "self.completed_releases.insert("
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::validate_live_secondary_indexes",
+        "tokens": [
+          "expected_key.signed_transaction_hash != hash",
+          ".live",
+          ".get(&hash)",
+          "record.value.key != expected_key",
+          "self.fifo_ordinals.get(&record.value.fifo_order.ordinal) != Some(&hash)",
+          "let lane = (expected_key.lane_id, expected_key.lane_incarnation);",
+          ".live_by_lane_incarnation",
+          ".get(&lane)",
+          ".is_some_and(|hashes| hashes.contains(&hash))",
+          "Ok(record.value.clone())"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::remove_preflighted_live",
+        "tokens": [
+          "debug_assert_eq!(self.live.get(&hash).map(|entry| &entry.value), Some(record));",
+          "debug_assert_eq!(",
+          "debug_assert!(",
+          "self.live.remove(&hash);",
+          "self.fifo_ordinals.remove(&record.fifo_order.ordinal);",
+          "self.ownership.remove(&hash);",
+          ".get_mut(&lane)",
+          "hashes.remove(&hash);",
+          "if remove_lane {",
+          "self.live_by_lane_incarnation.remove(&lane);"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "LaneQueueReservationJournal::append_durable",
+        "tokens": [
+          ".prepare_checked_transition(frame, self.limits.max_owned_transactions)?",
+          "encode_frame_with_limit(frame, self.limits.max_frame_payload_bytes)?",
+          "self.preflight_append_end(&encoded)?",
+          "self.append_staged(&encoded, expected_end, prepared)",
+          "if let Err(error) = self.replay_state.apply_checked_transition(",
+          "replay instead of panicking or attempting an in-process retry.",
+          "self.poisoned = true;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "LaneQueueReservationJournal::compact_if_needed",
+        "tokens": [
+          "let snapshot = canonical_snapshot(",
+          "let mut compacted_replay_state = IndexedReservationReplayState::default();",
+          "validate_snapshot_frame(frame, self.limits)?;",
+          ".prepare_checked_transition(frame, self.limits.max_owned_transactions)",
+          "let canonical_replay = replay_path(&self.path, self.limits)?;",
+          "lane reservation compaction input does not match the exact durable journal state",
+          "persist_atomic_replacement(&tmp, &self.path)",
+          "tmp_file.sync_all()",
+          "self.parent.sync_all()",
+          "compacted_replay_state.apply_checked_transition(",
+          "The replacement is already durable. Keep the previous",
+          "self.poisoned = true;",
+          "self.replay_state = compacted_replay_state;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "kind": "fn",
+        "symbol": "check_production_in_flight_reservation_transition",
+        "tokens": [
+          "production_in_flight_reservation_transition_kernel(projection)",
+          "Some(CheckedProductionTransition { projection })",
+          "None"
+        ]
+      },
+      {
         "path": "crates/iroha_core/src/queue.rs",
         "kind": "fn",
         "symbol": "reserve_transactions_for_lane_bounded",
@@ -641,6 +1212,74 @@
           "if &verified != recovered",
           "LaneBlockExecutionInputArtifact::new(verified)",
           "write_lane_block_execution_input_artifact(&artifact)"
+        ]
+      }
+    ],
+    "forbidden_source_checks": [
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "CheckedReplayAuthorizationDomain::clone",
+        "forbidden_tokens": [
+          "self.0.clone()",
+          "Arc::clone(&self.0)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::apply_checked_transition",
+        "forbidden_tokens": [
+          "self.clone()",
+          "Clone::clone(self)",
+          "(*self).clone()",
+          "self.to_owned()",
+          "ToOwned::to_owned(self)",
+          "candidate.transition_semantics(",
+          "*self = candidate"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_release_batch",
+        "forbidden_tokens": [
+          "remove_live_unchecked"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_commit",
+        "forbidden_tokens": [
+          "remove_live_unchecked"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_prune",
+        "forbidden_tokens": [
+          "remove_live_unchecked"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::transition_complete_release",
+        "forbidden_tokens": [
+          "remove_live_unchecked"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "kind": "method",
+        "symbol": "IndexedReservationReplayState::remove_preflighted_live",
+        "forbidden_tokens": [
+          "expect(",
+          "unwrap(",
+          "panic!(",
+          "unreachable!("
         ]
       }
     ],
@@ -670,7 +1309,15 @@
         "path": "crates/iroha_core/src/queue/reservation_journal.rs",
         "required_tokens": [
           "pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5;",
-          "legacy.fifo_order.version = LANE_QUEUE_RESERVATION_JOURNAL_VERSION - 1;"
+          "legacy.fifo_order.version = LANE_QUEUE_RESERVATION_JOURNAL_VERSION - 1;",
+          "fn post_sync_append_publication_failure_is_poisoned_and_replayed_on_reopen()",
+          "fn post_sync_compaction_publication_failure_is_poisoned_and_replayed_on_reopen()",
+          "fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_barrier()",
+          "fn prepared_checked_transition_is_bound_to_frame_and_state_generation()",
+          "fn prepared_checked_transition_rejects_same_generation_cross_state_substitution()",
+          "fn prepared_checked_transition_binds_exact_ordered_owner_token_coverage()",
+          "fn checked_transition_result_identity_and_candidate_application_are_atomic()",
+          "fn checked_transition_generation_overflow_is_rejected_without_mutation()"
         ]
       },
       {
@@ -3014,14 +3661,14 @@
         {
           "path": "crates/iroha_core/src/queue.rs",
           "kind": "fn",
-          "symbol": "replay_plan_journal",
+          "symbol": "prepare_plan_journal_replay_locked",
           "required_tokens": [
             "recorded_global_admission_identity",
             "queue_plan_admission_registry_match",
             "QueuePlanAdmissionRegistryMatch::Conflict",
             "global_registry_match.is_none()",
             "durable_plan_claim_context_revalidates_in_view",
-            "journal_removals"
+            "terminal_removals"
           ]
         },
         {

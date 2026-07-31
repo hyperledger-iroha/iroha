@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from pathlib import Path
+from typing import Callable, Sequence
 
 from sorafs_topology_qualification import (
     CANONICAL_READINESS_LANES,
@@ -54,3 +56,43 @@ def write_topology_qualification(
         encoding="utf-8",
     )
     return path
+
+
+class TopologyBoundChecker:
+    """Invoke one lane checker with an explicit valid topology test fixture.
+
+    Production parsers still require callers to provide the argument. This
+    harness only keeps payload-validation tests focused on their intended
+    mutations after the first-release topology binding became mandatory.
+    """
+
+    def __init__(
+        self,
+        checker_main: Callable[[list[str] | None], int],
+        *,
+        deployment_id: str,
+        environment: str,
+        name: str,
+    ) -> None:
+        self._checker_main = checker_main
+        self._temporary_directory = tempfile.TemporaryDirectory(
+            prefix=f"sorafs-{name}-topology-"
+        )
+        self.topology_path = write_topology_qualification(
+            Path(self._temporary_directory.name).resolve() / "qualification.json",
+            deployment_id=deployment_id,
+            environment=environment,
+        )
+
+    def __call__(self, arguments: Sequence[str]) -> int:
+        """Run the checker with the exact topology fixture when not supplied."""
+
+        values = list(arguments)
+        if "--topology-qualification-summary" not in values:
+            values.extend(
+                [
+                    "--topology-qualification-summary",
+                    str(self.topology_path),
+                ]
+            )
+        return self._checker_main(values)

@@ -9879,9 +9879,9 @@ const OPENAPI_CARGO_LOCK_PIN: &[u8] = include_bytes!("../../release/openapi-carg
 const OPENAPI_CARGO_LOCK_PIN_PATH: &str = "release/openapi-cargo-lock-v1.txt";
 const OPENAPI_CARGO_LOCK_PIN_SCHEMA: &str = "iroha.openapi.cargo-lock.v1";
 const OPENAPI_CARGO_LOCK_PIN_MAX_BYTES: u64 = 1_024;
-const OPENAPI_CARGO_LOCK_EXPECTED_BYTES: u64 = 315_037;
+const OPENAPI_CARGO_LOCK_EXPECTED_BYTES: u64 = 315_213;
 const OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX: &str =
-    "e4e1c9b8939a9d76f80c593dd0105a4e2783cbc6e3a0020e2ae860d83a5cdc24";
+    "c52a098b84fe27deda651868a87cf0670250a38a999ddf299a1061b2f37fa528";
 const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
     ".github/workflows/openapi.yml",
     "Cargo.lock",
@@ -12023,7 +12023,7 @@ mod openapi_tests {
             ),
             (
                 canonical
-                    .replace("bytes=315037", "bytes=315038")
+                    .replace("bytes=315213", "bytes=315214")
                     .into_bytes(),
                 "exact V1 size",
             ),

@@ -7998,6 +7998,27 @@ mod tests {
                 .iter()
                 .all(|row| row.provider_id == PROVIDER_A)
         );
+        let expected_provider_a = first
+            .providers
+            .iter()
+            .find(|provider| provider.provider_id == PROVIDER_A)
+            .expect("provider A projection");
+        assert_eq!(
+            page_one.rows[0].expected_owner,
+            expected_provider_a.expected_owner
+        );
+        assert_eq!(
+            page_one.rows[0].expected_signer_policy,
+            expected_provider_a.expected_signer_policy
+        );
+        assert_eq!(
+            page_one.rows[0].expected_assignment_revision,
+            page_one.rows[0].replication_order.assignment_revision
+        );
+        assert_eq!(
+            page_one.rows[0].finalized_anchor,
+            first.key.finalized_anchor()
+        );
         let cursor = page_one.next_cursor.clone().expect("second page cursor");
         let page_two = archive
             .read_provider_page(&first.key, PROVIDER_A, Some(&cursor), 1)

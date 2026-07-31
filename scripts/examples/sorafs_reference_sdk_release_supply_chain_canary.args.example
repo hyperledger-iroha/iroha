@@ -1,5 +1,5 @@
-# Replace the source root and public trust tuple with the reviewed deployment
-# values. generated-at-unix must equal the oldest validated source timestamp.
+# Supply the reviewed deployment's source root and public trust tuple.
+# generated-at-unix must equal the oldest validated source timestamp.
 --kind
 supply_chain
 --out

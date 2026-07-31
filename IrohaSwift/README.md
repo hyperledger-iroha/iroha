@@ -18,7 +18,9 @@ Features:
 ## Installation
 
 The current SDK ships in this repository under `IrohaSwift/`. Use the local
-package from the same source revision as the Iroha node you target.
+package from the same source revision as the Iroha node you target until the
+signed first-release cut is promoted. The remote coordinates below are release
+targets, not evidence that the tags are already public.
 
 Build the required native bridge before resolving the package:
 
@@ -28,6 +30,19 @@ make bridge-xcframework
 ```
 
 ### Swift Package Manager (`Package.swift`)
+
+The immutable first-release dependency is:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/hyperledger/iroha-swift",
+        exact: "0.1.0"
+    )
+]
+```
+
+For development against this checkout, use the source-adjacent package:
 
 ```swift
 // Package.swift
@@ -134,7 +149,9 @@ pod 'IrohaSwift', :path => '/path/to/iroha/IrohaSwift'
 
 The podspec pulls sources from this repository and requires `dist/NoritoBridge.xcframework`
 next to the checkout; `pod lib lint` fails fast when the bridge is missing so releases
-bundle the signed xcframework (see `docs/connect_swift_integration.md` for the bundling flow).
+bundle the signed xcframework (see
+[`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md) for the
+bundling flow).
 
 Usage:
 ```swift
@@ -1894,6 +1911,6 @@ For contributor setup and Torii mock ledger instructions, refer to
 ## Documentation & Integration Guides
 
 - SDK overview and APIs: [`specs/sdk/swift/index.md`](../specs/sdk/swift/index.md)
-- Connect quickstart (high-level SDK flow + CryptoKit reference): [`docs/connect_swift_ios.md`](../docs/connect_swift_ios.md)
-- Xcode integration guide (NoritoBridgeKit, ChaChaPoly framing, ConnectSession wiring): [`docs/connect_swift_integration.md`](../docs/connect_swift_integration.md)
+- Public Swift SDK and Connect tutorial: [docs.iroha.tech](https://docs.iroha.tech/guide/tutorials/swift.html)
+- Executable Connect examples: [`examples/ios/NoritoDemo`](../examples/ios/NoritoDemo/README.md) and [`examples/ios/NoritoDemoXcode`](../examples/ios/NoritoDemoXcode/README.md)
 - SwiftUI demo contributor guide (local Torii setup, acceleration toggles): [`docs/norito_demo_contributor.md`](../docs/norito_demo_contributor.md)

@@ -587,25 +587,24 @@ impl QueuePlanJournalReplay {
         self.live_positions.len()
     }
 
-    /// Stream live records in original append order to `handle_record`.
+    /// Authenticate and materialize every live record in original append order.
+    ///
+    /// The complete prepared snapshot, every materialized record, and the complete snapshot
+    /// again are verified before any record leaves this method. This makes the returned vector
+    /// the only externally visible result of replay verification: a malformed later record or
+    /// same-length snapshot drift cannot expose an authenticated-looking prefix.
     ///
     /// # Errors
-    /// Returns I/O errors, malformed-frame errors, snapshot consistency errors, or errors
-    /// returned by `handle_record`.
-    pub fn for_each_record<F>(mut self, mut handle_record: F) -> io::Result<usize>
-    where
-        F: FnMut(QueuePlanJournalRecordV4) -> io::Result<()>,
-    {
+    /// Returns I/O, malformed-frame, materialized-record, or snapshot consistency errors.
+    pub fn into_verified_records(mut self) -> io::Result<Vec<QueuePlanJournalRecordV4>> {
         let records = self.live_positions.len();
         self.verify_snapshot_content()?;
-        if records == 0 {
-            return Ok(0);
-        }
 
         let mut ordered = std::mem::take(&mut self.live_positions)
             .into_iter()
             .collect::<Vec<_>>();
         ordered.sort_unstable_by_key(|(_key, live)| live.ownership_position);
+        let mut verified = Vec::with_capacity(records);
         for (entrypoint_hash, live) in ordered {
             self.verify_snapshot_storage()?;
             let record = live.record;
@@ -622,10 +621,31 @@ impl QueuePlanJournalReplay {
                     "queue plan journal materialized live frame identity, plan digest, or claim changed",
                 ));
             }
-            handle_record(record)?;
+            verified.push(record);
         }
         self.verify_snapshot_content()?;
-        Ok(records)
+        Ok(verified)
+    }
+
+    /// Visit verified live records in original append order with `handle_record`.
+    ///
+    /// Replay authenticates and materializes the complete bounded snapshot before the first
+    /// callback. Errors returned by the callback can still occur after an earlier callback has
+    /// completed.
+    ///
+    /// # Errors
+    /// Returns I/O errors, malformed-frame errors, snapshot consistency errors, or errors
+    /// returned by `handle_record`.
+    pub fn for_each_record<F>(self, mut handle_record: F) -> io::Result<usize>
+    where
+        F: FnMut(QueuePlanJournalRecordV4) -> io::Result<()>,
+    {
+        let records = self.into_verified_records()?;
+        let record_count = records.len();
+        for record in records {
+            handle_record(record)?;
+        }
+        Ok(record_count)
     }
 }
 
@@ -989,6 +1009,162 @@ impl QueuePlanJournal {
         Ok(results)
     }
 
+    /// Atomically and durably tombstone a bounded batch of exact queue-plan claims.
+    ///
+    /// Every `(entrypoint, plan, claim)` identity is checked against one complete,
+    /// content-bound replay snapshot before append. A target must be either the exact currently
+    /// live claim or the exact claim retained by its latest tombstone; an unproven absence,
+    /// duplicate, mismatch, or ABA replacement rejects the complete batch without appending.
+    /// All currently live targets are encoded in one staged `RemoveBatch` frame and that complete
+    /// frame is synchronously persisted before success is returned. Replay therefore observes
+    /// either every new tombstone or none of them, never a durable member prefix.
+    ///
+    /// # Errors
+    /// Returns malformed-target, duplicate, absent, mismatched, snapshot, capacity, compaction,
+    /// append, or synchronization errors. Any ambiguous append or synchronization boundary
+    /// poisons this open journal.
+    pub fn remove_many_exact_atomic_strict_durable(
+        &mut self,
+        removals: &[(HashOf<TransactionEntrypoint>, Hash, Hash)],
+    ) -> io::Result<Vec<QueuePlanJournalExactRemoveResult>> {
+        self.remove_many_exact_atomic_strict_durable_inner(removals, false)
+    }
+
+    /// Atomically and durably tombstone a bounded batch that must be wholly live.
+    ///
+    /// Unlike [`Self::remove_many_exact_atomic_strict_durable`], this startup-publication form
+    /// rejects an exactly retained tombstone before append. Success therefore proves that every
+    /// requested live claim participated in the one durable `RemoveBatch`; the caller has no
+    /// post-durability outcome vector to interpret.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::remove_many_exact_atomic_strict_durable`], and rejects
+    /// any target that is already absent before writing.
+    pub fn remove_all_live_exact_atomic_strict_durable(
+        &mut self,
+        removals: &[(HashOf<TransactionEntrypoint>, Hash, Hash)],
+    ) -> io::Result<()> {
+        let _ = self.remove_many_exact_atomic_strict_durable_inner(removals, true)?;
+        Ok(())
+    }
+
+    fn remove_many_exact_atomic_strict_durable_inner(
+        &mut self,
+        removals: &[(HashOf<TransactionEntrypoint>, Hash, Hash)],
+        require_all_live: bool,
+    ) -> io::Result<Vec<QueuePlanJournalExactRemoveResult>> {
+        self.ensure_healthy()?;
+        if removals.is_empty() {
+            return Ok(Vec::new());
+        }
+        if removals.len() > self.limits.max_live_records {
+            return Err(invalid_input(
+                "queue plan journal atomic exact-removal batch exceeds the live-record limit",
+            ));
+        }
+
+        let requested = removals
+            .iter()
+            .map(
+                |(entrypoint_hash, plan_digest, claim_digest)| QueuePlanJournalRemovalV4 {
+                    entrypoint_hash: *entrypoint_hash,
+                    plan_digest: *plan_digest,
+                    claim_digest: *claim_digest,
+                },
+            )
+            .collect::<Vec<_>>();
+        validate_frame(&QueuePlanJournalFrameV4::RemoveBatch(requested.clone()))?;
+        let entrypoints = requested
+            .iter()
+            .map(|removal| removal.entrypoint_hash)
+            .collect::<BTreeSet<_>>();
+
+        let classify = |mut replay: QueuePlanJournalReplay| -> io::Result<(
+            Vec<QueuePlanJournalExactRemoveResult>,
+            Vec<QueuePlanJournalRemovalV4>,
+        )> {
+            replay.verify_snapshot_content()?;
+            let mut outcomes = Vec::with_capacity(requested.len());
+            let mut live_removals = Vec::with_capacity(requested.len());
+            for requested in &requested {
+                if let Some(live) = replay.live_positions.get(&requested.entrypoint_hash) {
+                    if live.plan_digest != requested.plan_digest
+                        || live.claim_digest != requested.claim_digest
+                    {
+                        return Err(invalid_data(
+                            "queue plan journal atomic exact-removal target does not match the currently live claim",
+                        ));
+                    }
+                    outcomes.push(QueuePlanJournalExactRemoveResult::Removed);
+                    live_removals.push(requested.clone());
+                    continue;
+                }
+                let Some(removed) = replay.removed_positions.get(&requested.entrypoint_hash) else {
+                    return Err(invalid_data(
+                        "queue plan journal atomic exact-removal target is neither live nor exactly tombstoned",
+                    ));
+                };
+                if removed.plan_digest != requested.plan_digest
+                    || removed.claim_digest != requested.claim_digest
+                {
+                    return Err(invalid_data(
+                        "queue plan journal atomic exact-removal target does not match its retained tombstone",
+                    ));
+                }
+                outcomes.push(QueuePlanJournalExactRemoveResult::AlreadyAbsent);
+            }
+            replay.verify_snapshot_content()?;
+            Ok((outcomes, live_removals))
+        };
+
+        let (outcomes, live_removals) =
+            classify(self.prepare_replay_with_removed_entrypoints(Some(&entrypoints))?)?;
+        if require_all_live
+            && (live_removals.len() != requested.len()
+                || outcomes
+                    .iter()
+                    .any(|outcome| *outcome != QueuePlanJournalExactRemoveResult::Removed))
+        {
+            return Err(invalid_data(
+                "queue plan journal atomic live-removal batch contains an already-absent target",
+            ));
+        }
+        if live_removals.is_empty() {
+            return Ok(outcomes);
+        }
+        let encoded = encode_frame(
+            &QueuePlanJournalFrameV4::RemoveBatch(live_removals.clone()),
+            self.limits,
+        )?;
+        if let Err(initial_capacity_error) = self.ensure_append_capacity(encoded.len()) {
+            if self.poisoned {
+                return Err(initial_capacity_error);
+            }
+            if outcomes.contains(&QueuePlanJournalExactRemoveResult::AlreadyAbsent) {
+                // Compaction intentionally drops tombstone history. Preserve exact retry
+                // provenance for the already-absent members instead of weakening their claims.
+                return Err(initial_capacity_error);
+            }
+            self.compact(true)?;
+            let compacted =
+                classify(self.prepare_replay_with_removed_entrypoints(Some(&entrypoints))?)?;
+            if compacted != (outcomes.clone(), live_removals.clone()) {
+                return Err(invalid_data(
+                    "queue plan journal atomic exact-removal batch changed during preflight compaction",
+                ));
+            }
+            self.ensure_append_capacity(encoded.len())?;
+        }
+
+        self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)
+            .map_err(|failure| failure.source)?;
+        self.tombstones = self
+            .tombstones
+            .saturating_add(u64::try_from(live_removals.len()).unwrap_or(u64::MAX));
+        self.sync_all_raw(SyncPhase::General)?;
+        Ok(outcomes)
+    }
+
     /// Durably tombstone one live global admission using its externally committed binding hash.
     ///
     /// This restart-safe form does not trust the caller to retain the process-local journal claim
@@ -1316,13 +1492,7 @@ impl QueuePlanJournal {
     /// Returns I/O, bound, consistency, or malformed-frame errors.
     #[cfg(test)]
     pub fn replay(&self) -> io::Result<Vec<QueuePlanJournalRecordV4>> {
-        let replay = self.prepare_replay()?;
-        let mut records = Vec::with_capacity(replay.len());
-        replay.for_each_record(|record| {
-            records.push(record);
-            Ok(())
-        })?;
-        Ok(records)
+        self.prepare_replay()?.into_verified_records()
     }
 
     /// Prepare an inode- and length-stable replay snapshot.
@@ -4651,6 +4821,256 @@ mod tests {
     }
 
     #[test]
+    fn exact_atomic_tombstone_batch_is_one_frame_and_restart_idempotent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("exact-atomic-remove-batch.norito");
+        let records = [
+            record("exact-atomic-remove-first"),
+            record("exact-atomic-remove-second"),
+            record("exact-atomic-remove-third"),
+        ];
+        let removals = records
+            .iter()
+            .map(|record| {
+                (
+                    record.entrypoint_hash,
+                    record.plan_digest(),
+                    record.claim_digest().expect("hash atomic removal claim"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut journal = open(&path).expect("open");
+        for record in &records {
+            journal
+                .replace_strict_durable(record.clone())
+                .expect("install atomic removal owner");
+        }
+        let frame_count_before = read_frames(&path, limits(64))
+            .expect("read live frames")
+            .len();
+        journal.reset_replay_scan_count();
+
+        assert_eq!(
+            journal
+                .remove_many_exact_atomic_strict_durable(&removals)
+                .expect("atomically tombstone exact owners"),
+            vec![QueuePlanJournalExactRemoveResult::Removed; records.len()],
+        );
+        assert_eq!(
+            journal.replay_scan_count(),
+            1,
+            "atomic exact-removal preflight must use one bounded snapshot",
+        );
+        let frames = read_frames(&path, limits(64)).expect("read atomic removal frames");
+        assert_eq!(
+            frames.len(),
+            frame_count_before + 1,
+            "the complete removal set must append exactly one frame",
+        );
+        let Some(QueuePlanJournalFrameV4::RemoveBatch(persisted)) = frames.last() else {
+            panic!("the complete exact removal set must be one RemoveBatch frame");
+        };
+        assert_eq!(
+            persisted,
+            &removals
+                .iter()
+                .map(
+                    |(entrypoint_hash, plan_digest, claim_digest)| QueuePlanJournalRemovalV4 {
+                        entrypoint_hash: *entrypoint_hash,
+                        plan_digest: *plan_digest,
+                        claim_digest: *claim_digest,
+                    },
+                )
+                .collect::<Vec<_>>(),
+        );
+        let removed_len = path.metadata().expect("atomic removal metadata").len();
+        drop(journal);
+
+        let mut journal = open(&path).expect("restart after atomic removal");
+        journal.reset_replay_scan_count();
+        assert_eq!(
+            journal
+                .remove_many_exact_atomic_strict_durable(&removals)
+                .expect("retry exact atomic removal"),
+            vec![QueuePlanJournalExactRemoveResult::AlreadyAbsent; records.len()],
+        );
+        assert_eq!(
+            journal.replay_scan_count(),
+            1,
+            "an exact atomic retry must use one bounded snapshot",
+        );
+        assert_eq!(
+            path.metadata().expect("atomic retry metadata").len(),
+            removed_len,
+            "an exact atomic retry must append no second RemoveBatch",
+        );
+        assert!(journal.replay().expect("replay atomic removal").is_empty());
+    }
+
+    #[test]
+    fn exact_atomic_live_tombstone_batch_rejects_retry_before_append() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("exact-atomic-live-remove-batch.norito");
+        let records = [
+            record("exact-atomic-live-remove-first"),
+            record("exact-atomic-live-remove-second"),
+        ];
+        let removals = records
+            .iter()
+            .map(|record| {
+                (
+                    record.entrypoint_hash,
+                    record.plan_digest(),
+                    record.claim_digest().expect("hash live removal claim"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut journal = open(&path).expect("open");
+        for record in records {
+            journal
+                .replace_strict_durable(record)
+                .expect("install live atomic removal owner");
+        }
+
+        journal
+            .remove_all_live_exact_atomic_strict_durable(&removals)
+            .expect("atomically remove the wholly live batch");
+        let removed = fs::read(&path).expect("read wholly live removal journal");
+        let error = journal
+            .remove_all_live_exact_atomic_strict_durable(&removals)
+            .expect_err("the startup publication form must reject an already-absent retry");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("already-absent target"));
+        assert_eq!(
+            fs::read(&path).expect("read rejected live-removal retry"),
+            removed,
+            "the all-live precondition must reject before another frame is appended",
+        );
+    }
+
+    #[test]
+    fn exact_atomic_tombstone_batch_rejects_every_later_mismatch_without_append() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir
+            .path()
+            .join("exact-atomic-remove-batch-rejections.norito");
+        let first = record("exact-atomic-rejection-first");
+        let second = record("exact-atomic-rejection-second");
+        let absent = record("exact-atomic-rejection-absent");
+        let first_removal = (
+            first.entrypoint_hash,
+            first.plan_digest(),
+            first.claim_digest().expect("hash first atomic claim"),
+        );
+        let second_removal = (
+            second.entrypoint_hash,
+            second.plan_digest(),
+            second.claim_digest().expect("hash second atomic claim"),
+        );
+        let absent_removal = (
+            absent.entrypoint_hash,
+            absent.plan_digest(),
+            absent.claim_digest().expect("hash absent atomic claim"),
+        );
+        let mut journal = open(&path).expect("open");
+        journal
+            .replace_strict_durable(first.clone())
+            .expect("install first atomic owner");
+        journal
+            .replace_strict_durable(second.clone())
+            .expect("install second atomic owner");
+        let baseline = fs::read(&path).expect("read atomic rejection baseline");
+
+        let stale_claim = (
+            second.entrypoint_hash,
+            second.plan_digest(),
+            Hash::new(b"stale later exact atomic claim"),
+        );
+        let error = journal
+            .remove_many_exact_atomic_strict_durable(&[first_removal, stale_claim])
+            .expect_err("a stale later claim must reject the complete atomic batch");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&path).expect("read stale-claim rejection"),
+            baseline,
+            "a valid first member must not escape before a later claim rejects",
+        );
+
+        let error = journal
+            .remove_many_exact_atomic_strict_durable(&[first_removal, absent_removal])
+            .expect_err("an unproven later absence must reject the complete atomic batch");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&path).expect("read absent-member rejection"),
+            baseline,
+            "an unproven later absence must append no member prefix",
+        );
+
+        let error = journal
+            .remove_many_exact_atomic_strict_durable(&[second_removal, second_removal])
+            .expect_err("a duplicate exact atomic target must reject");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&path).expect("read duplicate rejection"),
+            baseline,
+            "a duplicate target must append no batch",
+        );
+        assert_eq!(
+            journal.replay().expect("replay rejected atomic batches"),
+            vec![first, second],
+        );
+    }
+
+    #[test]
+    fn exact_atomic_tombstone_batch_parent_sync_failure_replays_whole_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("exact-atomic-remove-parent-sync.norito");
+        let records = [
+            record("exact-atomic-parent-sync-first"),
+            record("exact-atomic-parent-sync-second"),
+        ];
+        let removals = records
+            .iter()
+            .map(|record| {
+                (
+                    record.entrypoint_hash,
+                    record.plan_digest(),
+                    record.claim_digest().expect("hash parent-sync claim"),
+                )
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut journal = open(&path).expect("open");
+            for record in &records {
+                journal
+                    .replace_strict_durable(record.clone())
+                    .expect("install parent-sync owner");
+            }
+            journal.inject_fault(QueuePlanJournalTestFault::GeneralParentSync);
+
+            let error = journal
+                .remove_many_exact_atomic_strict_durable(&removals)
+                .expect_err("parent synchronization ambiguity must fail closed");
+            assert_eq!(error.kind(), io::ErrorKind::Other);
+            assert!(journal.is_poisoned());
+        }
+
+        let journal = open(&path).expect("restart after parent-sync ambiguity");
+        assert!(
+            journal
+                .replay()
+                .expect("replay parent-sync ambiguity")
+                .is_empty(),
+            "one fully staged RemoveBatch must remove either every member or none",
+        );
+        let frames = read_frames(&path, limits(64)).expect("read parent-sync frames");
+        let Some(QueuePlanJournalFrameV4::RemoveBatch(persisted)) = frames.last() else {
+            panic!("the parent-sync ambiguity must retain one whole RemoveBatch");
+        };
+        assert_eq!(persisted.len(), records.len());
+    }
+
+    #[test]
     fn exact_strict_tombstone_rejects_same_plan_aba_claim_after_compaction_and_restart() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("exact-strict-remove-same-plan-aba.norito");
@@ -6733,7 +7153,12 @@ mod tests {
                 .expect("append tamper fixture");
         }
         journal.sync_all_with_parent().expect("sync tamper fixture");
-        let replay = journal.prepare_replay().expect("prepare replay snapshot");
+        let verified_replay = journal
+            .prepare_replay()
+            .expect("prepare owned replay snapshot");
+        let callback_replay = journal
+            .prepare_replay()
+            .expect("prepare callback replay snapshot");
 
         let replacement_position = u64::try_from(
             raw_bootstrap_frame().len()
@@ -6761,8 +7186,17 @@ mod tests {
         tamper.write_all(&byte).expect("tamper payload byte");
         tamper.sync_all().expect("publish in-place tamper");
 
+        let error = verified_replay
+            .into_verified_records()
+            .expect_err("tampered latest frame must return no owned replay");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("snapshot content changed"),
+            "unexpected owned-replay tamper error: {error}",
+        );
+
         let mut callbacks = 0_usize;
-        let error = replay
+        let error = callback_replay
             .for_each_record(|_record| {
                 callbacks = callbacks.saturating_add(1);
                 Ok(())
@@ -6814,6 +7248,46 @@ mod tests {
         assert_eq!(
             callbacks, 0,
             "wrong materialized Put must not reach callback"
+        );
+    }
+
+    #[test]
+    fn materialized_replay_rejects_later_record_corruption_before_any_callback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("wrong-later-indexed-put.norito");
+        let first = record("wrong-later-index-first");
+        let second = record("wrong-later-index-second");
+        let second_key = second.entrypoint_hash;
+        let mut journal = QueuePlanJournal::open_with_limits(&path, limits(2), true).expect("open");
+        journal
+            .put_deferred_flush(first.clone())
+            .expect("append first");
+        journal.put_deferred_flush(second).expect("append second");
+        journal.sync_all_with_parent().expect("sync fixture");
+        let mut replay = journal.prepare_replay().expect("prepare replay snapshot");
+        replay
+            .live_positions
+            .get_mut(&second_key)
+            .expect("later live index")
+            .record = first;
+
+        let mut callbacks = 0_usize;
+        let error = replay
+            .for_each_record(|_record| {
+                callbacks = callbacks.saturating_add(1);
+                Ok(())
+            })
+            .expect_err("wrong later materialized Put identity must fail");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("materialized live frame identity"),
+            "unexpected later materialized-identity error: {error}",
+        );
+        assert_eq!(
+            callbacks, 0,
+            "a valid earlier record must remain private when a later record is corrupt",
         );
     }
 
@@ -7561,10 +8035,18 @@ mod tests {
 
         fs::rename(&path, &displaced).expect("displace replay pathname");
         fs::write(&path, []).expect("install replacement replay pathname");
+        let mut callbacks = 0_usize;
         let error = replay
-            .for_each_record(|_| Ok(()))
+            .for_each_record(|_| {
+                callbacks = callbacks.saturating_add(1);
+                Ok(())
+            })
             .expect_err("prepared replay must reject a different path identity");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            callbacks, 0,
+            "path replacement must fail before any callback",
+        );
     }
 
     #[test]

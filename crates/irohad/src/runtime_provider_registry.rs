@@ -125,6 +125,12 @@ pub enum IrohaRuntimeProviderSlotV1 {
     SoracloudRuntimeMutationSigner = 49,
     /// Reputation journal externally sealed monotonic checkpoint provider.
     ReputationJournalCheckpoint = 50,
+    /// Authenticated Hugging Face inference credential provider.
+    SoracloudHfInferenceCredentialProvider = 51,
+    /// Moderation sealed predecessor-bound monotonic checkpoint store.
+    ModerationCheckpointStore = 52,
+    /// Evidence-viewer signed monotonic transparency-head publisher.
+    EvidenceViewerTransparencyPublisher = 53,
 }
 
 impl IrohaRuntimeProviderSlotV1 {
@@ -162,7 +168,9 @@ pub struct IrohaRuntimeProviderBindingV1 {
     evidence_viewer_webauthn_binding: Option<EvidenceViewerWebAuthnBindingV1>,
     evidence_viewer_grant_ttl_ms: Option<u64>,
     evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>,
+    evidence_viewer_transparency_publisher_public_key: Option<[u8; 32]>,
     evidence_viewer_checkpoint_max_bytes: Option<u64>,
+    moderation_checkpoint_max_bytes: Option<u64>,
     evidence_viewer_archive_id: Option<[u8; 32]>,
     evidence_viewer_archive_public_key: Option<[u8; 32]>,
     evidence_viewer_archive_max_bytes: Option<u64>,
@@ -218,6 +226,8 @@ pub(crate) struct PopCredentialRuntimeBindingV1 {
     pub issuer_public_key: [u8; 32],
     /// Exact non-secret encrypted-enrollment recipient handle.
     pub enrollment_recipient_key_id: String,
+    /// Exact digest of the hybrid enrollment-recipient public key.
+    pub enrollment_recipient_public_key_digest: [u8; 32],
     /// Exact non-secret wallet wrapping-key handle.
     pub wallet_wrapping_key_id: String,
 }
@@ -264,7 +274,9 @@ impl IrohaRuntimeProviderBindingV1 {
             evidence_viewer_webauthn_binding: None,
             evidence_viewer_grant_ttl_ms: None,
             evidence_viewer_receipt_signer_public_key: None,
+            evidence_viewer_transparency_publisher_public_key: None,
             evidence_viewer_checkpoint_max_bytes: None,
+            moderation_checkpoint_max_bytes: None,
             evidence_viewer_archive_id: None,
             evidence_viewer_archive_public_key: None,
             evidence_viewer_archive_max_bytes: None,
@@ -330,6 +342,23 @@ impl IrohaRuntimeProviderBindingV1 {
         Ok(projected)
     }
 
+    fn try_new_moderation_checkpoint_store(
+        moderation: &iroha_config::parameters::actual::SorafsModerationOrchestrator,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let slot = IrohaRuntimeProviderSlotV1::ModerationCheckpointStore;
+        if moderation.checkpoint_max_bytes.0 == 0 {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
+        }
+        let mut projected = Self::try_new(
+            slot,
+            moderation.checkpoint_store_handle.clone(),
+            Some(moderation.checkpoint_store_revision),
+            Some(moderation.checkpoint_store_policy_digest),
+        )?;
+        projected.moderation_checkpoint_max_bytes = Some(moderation.checkpoint_max_bytes.0);
+        Ok(projected)
+    }
+
     fn try_new_pop_credential_registry(
         pop: &iroha_config::parameters::actual::SorafsPopCredentialService,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
@@ -344,6 +373,7 @@ impl IrohaRuntimeProviderBindingV1 {
             || !is_production_runtime_handle(&pop.issuer_hsm_key_id)
             || !is_production_runtime_handle(&pop.enrollment_recipient_key_id)
             || !is_production_runtime_handle(&pop.wallet_wrapping_key_id)
+            || pop.enrollment_recipient_public_key_digest == [0; 32]
             || pop.issuer_public_key == [0; 32]
             || iroha_crypto::ed25519_parse_public_key(&pop.issuer_public_key).is_err()
         {
@@ -361,6 +391,7 @@ impl IrohaRuntimeProviderBindingV1 {
             issuer_hsm_key_id: pop.issuer_hsm_key_id.clone(),
             issuer_public_key: pop.issuer_public_key,
             enrollment_recipient_key_id: pop.enrollment_recipient_key_id.clone(),
+            enrollment_recipient_public_key_digest: pop.enrollment_recipient_public_key_digest,
             wallet_wrapping_key_id: pop.wallet_wrapping_key_id.clone(),
         });
         Ok(projected)
@@ -634,6 +665,30 @@ impl IrohaRuntimeProviderBindingV1 {
         Ok(projected)
     }
 
+    fn try_new_evidence_viewer_transparency_publisher(
+        viewer: &iroha_config::parameters::actual::SorafsEvidenceViewer,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let slot = IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher;
+        if viewer.transparency_publisher_public_key == [0; 32]
+            || iroha_crypto::PublicKey::from_bytes(
+                iroha_crypto::Algorithm::Ed25519,
+                &viewer.transparency_publisher_public_key,
+            )
+            .is_err()
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
+        }
+        let mut projected = Self::try_new(
+            slot,
+            viewer.transparency_publisher_handle.clone(),
+            Some(viewer.transparency_publisher_revision),
+            Some(viewer.transparency_publisher_policy_digest),
+        )?;
+        projected.evidence_viewer_transparency_publisher_public_key =
+            Some(viewer.transparency_publisher_public_key);
+        Ok(projected)
+    }
+
     fn try_new_por_replay_archive(
         archive: &iroha_config::parameters::actual::SorafsPorReplayArchive,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
@@ -727,6 +782,23 @@ impl IrohaRuntimeProviderBindingV1 {
         )?;
         projected.soracloud_runtime_signer_binding = Some(exact);
         Ok(projected)
+    }
+
+    fn try_new_soracloud_hf_credential_provider(
+        binding: &iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let slot = IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider;
+        let exact =
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1::try_from_config(
+                binding,
+            )
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+        Self::try_new(
+            slot,
+            exact.handle(),
+            Some(exact.qualification().revision()),
+            Some(exact.qualification().policy_digest()),
+        )
     }
 
     fn try_new_provider_ingest_signer(
@@ -933,9 +1005,21 @@ impl IrohaRuntimeProviderBindingV1 {
         self.evidence_viewer_receipt_signer_public_key
     }
 
+    /// Return the exact governed transparency-publisher verification key.
+    pub(crate) const fn evidence_viewer_transparency_publisher_public_key(
+        &self,
+    ) -> Option<[u8; 32]> {
+        self.evidence_viewer_transparency_publisher_public_key
+    }
+
     /// Return the exact configured evidence-viewer checkpoint byte bound.
     pub(crate) const fn evidence_viewer_checkpoint_max_bytes(&self) -> Option<u64> {
         self.evidence_viewer_checkpoint_max_bytes
+    }
+
+    /// Return the configured moderation checkpoint byte bound.
+    pub(crate) const fn moderation_checkpoint_max_bytes(&self) -> Option<u64> {
+        self.moderation_checkpoint_max_bytes
     }
 
     /// Return the exact non-secret evidence-viewer archive namespace.
@@ -989,6 +1073,22 @@ pub struct IrohaRuntimeProviderBindingsV1 {
     bindings: Vec<IrohaRuntimeProviderBindingV1>,
 }
 
+#[derive(Clone, Copy)]
+struct GovernanceDagRequestAuthBindingProjectionV1<'a> {
+    handle: &'a str,
+    qualification: sorafs_node::GovernanceDagRuntimeProviderQualificationV1,
+    public_key: [u8; 32],
+}
+
+#[derive(Clone, Copy)]
+struct GovernanceDagServiceBindingProjectionV1<'a> {
+    ipfs_authenticator: GovernanceDagRequestAuthBindingProjectionV1<'a>,
+    head_authenticator: Option<GovernanceDagRequestAuthBindingProjectionV1<'a>>,
+    request_auth_max_body_bytes: u64,
+    checkpoint_store_handle: &'a str,
+    checkpoint_store_qualification: sorafs_node::GovernanceDagRuntimeProviderQualificationV1,
+}
+
 impl IrohaRuntimeProviderBindingsV1 {
     /// Project only stable public provider identities from validated node
     /// configuration.
@@ -1008,6 +1108,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         collect_reputation_billing_bindings(config, &mut bindings)?;
         collect_provider_ingest_bindings(config, &mut bindings)?;
         collect_soracloud_runtime_signer_binding(config, &mut bindings)?;
+        collect_soracloud_hf_credential_provider_binding(config, &mut bindings)?;
 
         // Moderation strict ingress does not yet have a concrete
         // `IrohaRuntimeDeps` slot. Its service-owned startup validator, rather
@@ -1023,6 +1124,102 @@ impl IrohaRuntimeProviderBindingsV1 {
         });
         Ok(Self {
             chain_id: config.common.chain.to_string(),
+            bindings,
+        })
+    }
+
+    /// Project the exact public provider catalog requested by the standalone
+    /// Governance DAG service.
+    ///
+    /// The standalone service does not execute producer signing. This catalog
+    /// therefore contains only its IPFS authenticator, optional signed-head
+    /// authenticator, and sealed checkpoint store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a service binding is incomplete, noncanonical,
+    /// zero-qualified, test-marked, or carries an invalid Ed25519 public key or
+    /// request-size bound.
+    pub fn try_from_governance_dag_service(
+        chain_id: &iroha_data_model::ChainId,
+        service: &sorafs_node::GovernanceDagServiceRuntimeProviderBindingsV1,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let head_authenticator = match (
+            service.head_authenticator_handle(),
+            service.head_authenticator_qualification(),
+            service.head_request_auth_public_key(),
+        ) {
+            (Some(handle), Some(qualification), Some(public_key)) => {
+                Some(GovernanceDagRequestAuthBindingProjectionV1 {
+                    handle,
+                    qualification,
+                    public_key,
+                })
+            }
+            (None, None, None) => None,
+            _ => {
+                return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                    IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+                ));
+            }
+        };
+        Self::try_from_governance_dag_service_projection(
+            chain_id,
+            GovernanceDagServiceBindingProjectionV1 {
+                ipfs_authenticator: GovernanceDagRequestAuthBindingProjectionV1 {
+                    handle: service.ipfs_authenticator_handle(),
+                    qualification: service.ipfs_authenticator_qualification(),
+                    public_key: service.ipfs_request_auth_public_key(),
+                },
+                head_authenticator,
+                request_auth_max_body_bytes: service.request_auth_max_body_bytes(),
+                checkpoint_store_handle: service.checkpoint_store_handle(),
+                checkpoint_store_qualification: service.checkpoint_store_qualification(),
+            },
+        )
+    }
+
+    fn try_from_governance_dag_service_projection(
+        chain_id: &iroha_data_model::ChainId,
+        service: GovernanceDagServiceBindingProjectionV1<'_>,
+    ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
+        let mut bindings = Vec::with_capacity(3);
+        append_required_governance_request_auth_binding(
+            &mut bindings,
+            IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+            Some(service.ipfs_authenticator.handle),
+            Some(service.ipfs_authenticator.qualification.revision),
+            Some(service.ipfs_authenticator.qualification.policy_digest),
+            Some(service.ipfs_authenticator.public_key),
+            service.request_auth_max_body_bytes,
+        )?;
+        if let Some(head_authenticator) = service.head_authenticator {
+            append_required_governance_request_auth_binding(
+                &mut bindings,
+                IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+                Some(head_authenticator.handle),
+                Some(head_authenticator.qualification.revision),
+                Some(head_authenticator.qualification.policy_digest),
+                Some(head_authenticator.public_key),
+                service.request_auth_max_body_bytes,
+            )?;
+        }
+        append_required_governance_service_binding(
+            &mut bindings,
+            IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+            Some(service.checkpoint_store_handle),
+            Some(service.checkpoint_store_qualification.revision),
+            Some(service.checkpoint_store_qualification.policy_digest),
+        )?;
+        bindings.sort_unstable_by(|left, right| {
+            left.slot
+                .cmp(&right.slot)
+                .then_with(|| left.handle.cmp(&right.handle))
+                .then_with(|| left.revision.cmp(&right.revision))
+                .then_with(|| left.policy_digest.cmp(&right.policy_digest))
+        });
+        Ok(Self {
+            chain_id: chain_id.to_string(),
             bindings,
         })
     }
@@ -1080,6 +1277,30 @@ impl IrohaRuntimeProviderBindingsV1 {
                 )
                 .expect("test binding must be production-shaped"),
             ],
+        }
+    }
+
+    /// Construct one exactly qualified evidence-viewer transparency publisher
+    /// test catalog.
+    #[cfg(test)]
+    pub(crate) fn qualified_evidence_viewer_transparency_publisher_for_test(
+        chain_id: impl Into<String>,
+        handle: impl Into<String>,
+        revision: u64,
+        policy_digest: [u8; 32],
+        public_key: [u8; 32],
+    ) -> Self {
+        let mut binding = IrohaRuntimeProviderBindingV1::try_new(
+            IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher,
+            handle,
+            Some(revision),
+            Some(policy_digest),
+        )
+        .expect("test transparency-publisher binding must be production-shaped");
+        binding.evidence_viewer_transparency_publisher_public_key = Some(public_key);
+        Self {
+            chain_id: chain_id.into(),
+            bindings: vec![binding],
         }
     }
 
@@ -1169,6 +1390,28 @@ fn collect_soracloud_runtime_signer_binding(
             bindings.push(IrohaRuntimeProviderBindingV1::try_new_soracloud_runtime_signer(binding)?)
         }
         None if config.soracloud_runtime.production_mode => {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+fn collect_soracloud_hf_credential_provider_binding(
+    config: &Config,
+    bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    let slot = IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider;
+    match config
+        .soracloud_runtime
+        .hf
+        .inference_credential_provider
+        .as_ref()
+    {
+        Some(binding) => bindings.push(
+            IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(binding)?,
+        ),
+        None if config.soracloud_runtime.hf.allow_inference_bridge_fallback => {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
         }
         None => {}
@@ -1498,6 +1741,7 @@ fn collect_moderation_viewer_bindings(
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
     let storage = &config.torii.sorafs_storage;
     if let Some(runtime) = storage.moderation_orchestrator.as_ref() {
+        bindings.push(IrohaRuntimeProviderBindingV1::try_new_moderation_checkpoint_store(runtime)?);
         for (slot, handle, revision, policy_digest) in [
             (
                 IrohaRuntimeProviderSlotV1::ModerationTransactionSigner,
@@ -1542,6 +1786,9 @@ fn collect_moderation_viewer_bindings(
         bindings
             .push(IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_checkpoint_store(viewer)?);
         bindings.push(IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_archive(viewer)?);
+        bindings.push(
+            IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_transparency_publisher(viewer)?,
+        );
     }
     Ok(())
 }
@@ -1896,7 +2143,7 @@ pub(crate) fn resolve_runtime_deps(
     resolve_runtime_deps_from_bindings(&bindings, registry)
 }
 
-fn resolve_runtime_deps_from_bindings(
+pub(crate) fn resolve_runtime_deps_from_bindings(
     bindings: &IrohaRuntimeProviderBindingsV1,
     registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
 ) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
@@ -1924,11 +2171,14 @@ fn resolve_runtime_deps_from_bindings(
     qualify_governance_request_auth_dependencies(bindings, &dependencies)?;
     qualify_native_transaction_signers(bindings, &mut dependencies)?;
     qualify_soracloud_runtime_signer(bindings, &mut dependencies)?;
+    qualify_soracloud_hf_credential_provider(bindings, &mut dependencies)?;
+    qualify_moderation_checkpoint_dependency(bindings, &dependencies)?;
     qualify_provider_ingest_dependencies(bindings, &dependencies)?;
     qualify_reputation_journal_checkpoint_dependency(bindings, &dependencies)?;
     qualify_reputation_retention_dependency(bindings, &dependencies)?;
     qualify_por_replay_archive_dependency(bindings, &dependencies)?;
     qualify_evidence_viewer_archive_dependency(bindings, &dependencies)?;
+    qualify_evidence_viewer_transparency_publisher_dependency(bindings, &dependencies)?;
     Ok(dependencies)
 }
 
@@ -1957,6 +2207,75 @@ fn map_soracloud_runtime_signer_qualification_error(
     }
 }
 
+fn qualify_moderation_checkpoint_dependency(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &IrohaRuntimeDeps,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    let Some(expected) = bindings
+        .iter()
+        .find(|binding| binding.slot() == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore)
+    else {
+        return Ok(());
+    };
+    let store = dependencies
+        .sorafs_moderation_checkpoint_store
+        .as_ref()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    let revision =
+        expected
+            .revision()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                expected.slot(),
+            ))?;
+    let policy_digest =
+        expected
+            .policy_digest()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                expected.slot(),
+            ))?;
+    let qualification =
+        sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
+            revision,
+            policy_digest,
+        );
+    sorafs_node::moderation_orchestrator::qualify_moderation_runtime_provider_v1(
+        expected.handle(),
+        qualification,
+        store.as_ref(),
+    )
+    .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+    let latest = store.load_latest().map_err(|error| match error {
+        sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1::Unavailable => {
+            IrohaRuntimeProviderRegistryErrorV1::Unavailable
+        }
+        sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1::Rejected
+        | sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1::Ambiguous => {
+            IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+        }
+    })?;
+    if let Some(record) = latest {
+        let max_bytes = expected.moderation_checkpoint_max_bytes().ok_or(
+            IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()),
+        )?;
+        let encoded = norito::to_bytes(&record)
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+        if !record.has_valid_provider_envelope(expected.handle(), qualification, max_bytes)
+            || encoded.len()
+                > usize::try_from(max_bytes)
+                    .unwrap_or(usize::MAX)
+                    .saturating_add(4 * 1024)
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+        }
+    }
+    sorafs_node::moderation_orchestrator::revalidate_moderation_runtime_provider_v1(
+        expected.handle(),
+        qualification,
+        store.as_ref(),
+    )
+    .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+}
+
 fn qualify_soracloud_runtime_signer(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &mut IrohaRuntimeDeps,
@@ -1978,6 +2297,60 @@ fn qualify_soracloud_runtime_signer(
             provider,
         )
         .map_err(map_soracloud_runtime_signer_qualification_error)?,
+    );
+    Ok(())
+}
+
+fn map_soracloud_hf_credential_qualification_error(
+    error: crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationErrorV1,
+) -> IrohaRuntimeProviderRegistryErrorV1 {
+    use crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationErrorV1 as Error;
+
+    match error {
+        Error::ProviderUnavailable => IrohaRuntimeProviderRegistryErrorV1::Unavailable,
+        Error::InvalidProviderHandle | Error::TestProviderRejected => {
+            IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected
+        }
+        Error::InvalidProviderQualification
+        | Error::ProviderInactive
+        | Error::RevisionMismatch
+        | Error::PolicyDigestMismatch
+        | Error::ProviderDrift => IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked,
+        Error::HandleMismatch => IrohaRuntimeProviderRegistryErrorV1::BindingMismatch,
+    }
+}
+
+fn qualify_soracloud_hf_credential_provider(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &mut IrohaRuntimeDeps,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    let slot = IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider;
+    let Some(binding) = bindings.iter().find(|binding| binding.slot() == slot) else {
+        return Ok(());
+    };
+    let exact = crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1::try_new(
+        binding.handle(),
+        crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1::new(
+            binding
+                .revision()
+                .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
+            binding
+                .policy_digest()
+                .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?,
+            true,
+            false,
+        ),
+    )
+    .map_err(map_soracloud_hf_credential_qualification_error)?;
+    let provider = dependencies
+        .soracloud_hf_inference_credential_provider
+        .take()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    dependencies.soracloud_hf_inference_credential_provider = Some(
+        crate::soracloud_hf_credential::qualify_soracloud_hf_inference_credential_provider_v1(
+            exact, provider,
+        )
+        .map_err(map_soracloud_hf_credential_qualification_error)?,
     );
     Ok(())
 }
@@ -2845,6 +3218,66 @@ fn qualify_evidence_viewer_archive_dependency(
     Ok(())
 }
 
+fn qualify_evidence_viewer_transparency_publisher_dependency(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    dependencies: &IrohaRuntimeDeps,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    let Some(expected) = bindings.iter().find(|binding| {
+        binding.slot() == IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
+    }) else {
+        return Ok(());
+    };
+    let publisher = dependencies
+        .sorafs_evidence_viewer_transparency_publisher
+        .as_ref()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
+    if !is_production_runtime_handle(publisher.handle()) {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected);
+    }
+    let expected_revision =
+        expected
+            .revision()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                expected.slot(),
+            ))?;
+    let expected_policy_digest =
+        expected
+            .policy_digest()
+            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                expected.slot(),
+            ))?;
+    let expected_public_key = expected
+        .evidence_viewer_transparency_publisher_public_key()
+        .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+            expected.slot(),
+        ))?;
+    let observe = || {
+        let qualification = publisher.qualification().map_err(|error| match error {
+            sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1::Unavailable => {
+                IrohaRuntimeProviderRegistryErrorV1::Unavailable
+            }
+            sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1::Rejected => {
+                IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+            }
+        })?;
+        if publisher.handle() != expected.handle()
+            || qualification.revision() != expected_revision
+            || qualification.policy_digest() != expected_policy_digest
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+        }
+        Ok((qualification, publisher.public_key()))
+    };
+    let first = observe()?;
+    if first.1 != expected_public_key {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
+    }
+    if observe()? != first {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+    }
+    Ok(())
+}
+
 fn dependency_is_present(
     dependencies: &IrohaRuntimeDeps,
     slot: IrohaRuntimeProviderSlotV1,
@@ -2880,6 +3313,7 @@ fn dependency_is_present(
         Slot::ModerationSettlementHandoff => deps.sorafs_moderation_settlement_handoff.is_some(),
         Slot::ModerationPublicationHandoff => deps.sorafs_moderation_publication_handoff.is_some(),
         Slot::ModerationPanelNotification => deps.sorafs_moderation_panel_notification.is_some(),
+        Slot::ModerationCheckpointStore => deps.sorafs_moderation_checkpoint_store.is_some(),
         Slot::EvidenceViewerWebAuthn => deps.sorafs_evidence_viewer_webauthn.is_some(),
         Slot::EvidenceViewerGrantAuthority => deps.sorafs_evidence_viewer_grants.is_some(),
         Slot::EvidenceViewerReceiptSigner => deps.sorafs_evidence_viewer_receipt_signer.is_some(),
@@ -2932,7 +3366,13 @@ fn dependency_is_present(
         Slot::EvidenceViewerCompactionArchive => {
             deps.sorafs_evidence_viewer_compaction_archive.is_some()
         }
+        Slot::EvidenceViewerTransparencyPublisher => {
+            deps.sorafs_evidence_viewer_transparency_publisher.is_some()
+        }
         Slot::SoracloudRuntimeMutationSigner => deps.soracloud_runtime_mutation_signer.is_some(),
+        Slot::SoracloudHfInferenceCredentialProvider => {
+            deps.soracloud_hf_inference_credential_provider.is_some()
+        }
     }
 }
 
@@ -2950,6 +3390,13 @@ fn has_unrequested_dependency(
             bindings,
             IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner,
             dependencies.soracloud_runtime_mutation_signer.is_some(),
+        )
+        || dependency_is_unrequested(
+            bindings,
+            IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider,
+            dependencies
+                .soracloud_hf_inference_credential_provider
+                .is_some(),
         )
 }
 
@@ -3097,6 +3544,10 @@ fn has_unrequested_moderation_viewer_dependency(
         dependencies.sorafs_moderation_panel_notification.is_some(),
     ) || dependency_is_unrequested(
         bindings,
+        Slot::ModerationCheckpointStore,
+        dependencies.sorafs_moderation_checkpoint_store.is_some(),
+    ) || dependency_is_unrequested(
+        bindings,
         Slot::EvidenceViewerWebAuthn,
         dependencies.sorafs_evidence_viewer_webauthn.is_some(),
     ) || dependency_is_unrequested(
@@ -3122,6 +3573,12 @@ fn has_unrequested_moderation_viewer_dependency(
         Slot::EvidenceViewerCompactionArchive,
         dependencies
             .sorafs_evidence_viewer_compaction_archive
+            .is_some(),
+    ) || dependency_is_unrequested(
+        bindings,
+        Slot::EvidenceViewerTransparencyPublisher,
+        dependencies
+            .sorafs_evidence_viewer_transparency_publisher
             .is_some(),
     )
 }
@@ -3311,6 +3768,13 @@ mod tests {
         sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderQualificationV1 =
         sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderQualificationV1::new(
             16, [0xA8; 32],
+        );
+    const EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE: &str =
+        "transparency://sorafs/evidence-viewer/publisher-primary";
+    const EVIDENCE_TRANSPARENCY_PUBLISHER_QUALIFICATION:
+        sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderQualificationV1 =
+        sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderQualificationV1::new(
+            17, [0xA9; 32],
         );
     const TRANSPARENCY_LEADER_LEASE_HANDLE: &str = "sealed-cas:transparency:leader-primary";
     const TRANSPARENCY_LEADER_LEASE_QUALIFICATION:
@@ -3598,6 +4062,9 @@ mod tests {
             Slot::ReputationFinalizedArchiveRetentionAuthority,
             Slot::SoracloudRuntimeMutationSigner,
             Slot::ReputationJournalCheckpoint,
+            Slot::SoracloudHfInferenceCredentialProvider,
+            Slot::ModerationCheckpointStore,
+            Slot::EvidenceViewerTransparencyPublisher,
         ];
         for (index, slot) in slots.into_iter().enumerate() {
             assert_eq!(
@@ -3649,6 +4116,147 @@ mod tests {
         );
     }
 
+    #[derive(Debug)]
+    struct HfCredentialProvider {
+        handle: &'static str,
+        qualification: crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1,
+    }
+
+    impl crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1
+        for HfCredentialProvider
+    {
+        fn handle(&self) -> &str {
+            self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1,
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1,
+        > {
+            Ok(self.qualification)
+        }
+
+        fn check_readiness(
+            &self,
+        ) -> Result<(), crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1>
+        {
+            Ok(())
+        }
+
+        fn execute_authenticated(
+            &self,
+            request: &crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceRequestV1,
+        ) -> Result<
+            crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1,
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
+        > {
+            crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+                200,
+                Some("application/json".to_owned()),
+                None,
+                request.body().to_vec(),
+                request.maximum_response_bytes(),
+            )
+        }
+    }
+
+    fn hf_credential_config()
+    -> iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding {
+        iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding {
+            handle: "kms://soracloud/hf-inference-primary".to_owned(),
+            revision: 7,
+            policy_digest: [0xA7; 32],
+        }
+    }
+
+    fn hf_credential_catalog(
+        configured: &iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding,
+    ) -> IrohaRuntimeProviderBindingsV1 {
+        IrohaRuntimeProviderBindingsV1 {
+            chain_id: "hf-credential-registry-test".to_owned(),
+            bindings: vec![
+                IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(configured)
+                    .expect("valid HF credential-provider binding"),
+            ],
+        }
+    }
+
+    #[test]
+    fn hf_credential_provider_projects_only_public_identity() {
+        let configured = hf_credential_config();
+        let projected =
+            IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(&configured)
+                .expect("valid HF credential-provider binding");
+
+        assert_eq!(
+            projected.slot(),
+            IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
+        );
+        assert_eq!(projected.handle(), configured.handle);
+        assert_eq!(projected.revision(), Some(configured.revision));
+        assert_eq!(projected.policy_digest(), Some(configured.policy_digest));
+    }
+
+    #[test]
+    fn registry_rejects_missing_substituted_stale_and_test_hf_credential_providers() {
+        let configured = hf_credential_config();
+        let catalog = hf_credential_catalog(&configured);
+        assert!(matches!(
+            resolve_runtime_deps_from_bindings(&catalog, Some(&EmptyRegistry)),
+            Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
+        ));
+
+        let provider = |handle, revision, test_only| {
+            Arc::new(HfCredentialProvider {
+                handle,
+                qualification: crate::soracloud_hf_credential::
+                    SoracloudHfCredentialProviderQualificationV1::new(
+                        revision,
+                        configured.policy_digest,
+                        true,
+                        test_only,
+                    ),
+            })
+        };
+        let substituted = FixedRegistry(
+            IrohaRuntimeDeps::default().with_soracloud_hf_inference_credential_provider(provider(
+                "kms://soracloud/hf-inference-secondary",
+                configured.revision,
+                false,
+            )),
+        );
+        assert!(matches!(
+            resolve_runtime_deps_from_bindings(&catalog, Some(&substituted)),
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+        ));
+
+        let stale = FixedRegistry(
+            IrohaRuntimeDeps::default().with_soracloud_hf_inference_credential_provider(provider(
+                "kms://soracloud/hf-inference-primary",
+                configured.revision + 1,
+                false,
+            )),
+        );
+        assert!(matches!(
+            resolve_runtime_deps_from_bindings(&catalog, Some(&stale)),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+
+        let test_marked = FixedRegistry(
+            IrohaRuntimeDeps::default().with_soracloud_hf_inference_credential_provider(provider(
+                "kms://soracloud/hf-inference-primary",
+                configured.revision,
+                true,
+            )),
+        );
+        assert!(matches!(
+            resolve_runtime_deps_from_bindings(&catalog, Some(&test_marked)),
+            Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected)
+        ));
+    }
+
     fn pop_registry_config() -> iroha_config::parameters::actual::SorafsPopCredentialService {
         let issuer = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
             .expect("derive PoP issuer test key");
@@ -3666,6 +4274,7 @@ mod tests {
             issuer_hsm_key_id: "pkcs11:pop/issuer:primary".to_owned(),
             issuer_public_key,
             enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
+            enrollment_recipient_public_key_digest: [0x94; 32],
             wallet_wrapping_key_id: "kms:pop/wallet:primary".to_owned(),
             runtime_provider_registry_handle: "runtime://sorafs/pop/provider-registry-primary"
                 .to_owned(),
@@ -3709,6 +4318,7 @@ mod tests {
             exact.enrollment_recipient_key_id,
             "kms:pop/enrollment:primary"
         );
+        assert_eq!(exact.enrollment_recipient_public_key_digest, [0x94; 32]);
         assert_eq!(exact.wallet_wrapping_key_id, "kms:pop/wallet:primary");
 
         for invalid in [
@@ -3730,6 +4340,11 @@ mod tests {
             {
                 let mut value = config.clone();
                 value.enrollment_recipient_key_id = "kms://pop/mock/enrollment".to_owned();
+                value
+            },
+            {
+                let mut value = config.clone();
+                value.enrollment_recipient_public_key_digest = [0; 32];
                 value
             },
             {
@@ -4653,6 +5268,80 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct EvidenceViewerTransparencyPublisher {
+        handle: &'static str,
+        public_key: [u8; 32],
+        qualification: sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderQualificationV1,
+        qualification_error:
+            Option<sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1>,
+    }
+
+    impl EvidenceViewerTransparencyPublisher {
+        fn exact() -> Self {
+            Self {
+                handle: EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE,
+                public_key: evidence_archive_public_key(),
+                qualification: EVIDENCE_TRANSPARENCY_PUBLISHER_QUALIFICATION,
+                qualification_error: None,
+            }
+        }
+    }
+
+    impl sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderV1
+        for EvidenceViewerTransparencyPublisher
+    {
+        fn handle(&self) -> &str {
+            self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderQualificationV1,
+            sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1,
+        > {
+            if let Some(error) = self.qualification_error {
+                Err(error)
+            } else {
+                Ok(self.qualification)
+            }
+        }
+    }
+
+    impl sorafs_node::evidence_viewer::transparency_producer::EvidenceViewerTransparencyPublisherV1
+        for EvidenceViewerTransparencyPublisher
+    {
+        fn public_key(&self) -> [u8; 32] {
+            self.public_key
+        }
+
+        fn load_head(
+            &self,
+        ) -> Result<
+            Option<
+                sorafs_node::evidence_viewer::transparency_producer::
+                    EvidenceViewerSignedTransparencyHeadV1,
+            >,
+            sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyPublisherExternalErrorV1,
+        >{
+            Ok(None)
+        }
+
+        fn compare_and_publish(
+            &self,
+            _body: &sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyHeadBodyV1,
+        ) -> Result<
+            (),
+            sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyPublisherExternalErrorV1,
+        >{
+            Ok(())
+        }
+    }
+
     fn configure_governance_service(config: &mut Config, head_mode: &str) {
         let service = &mut config.torii.sorafs_storage.governance_dag_service;
         service.enabled = true;
@@ -4676,6 +5365,26 @@ mod tests {
             service.head_authenticator_revision = None;
             service.head_authenticator_policy_digest = None;
             service.head_request_auth_public_key = None;
+        }
+    }
+
+    fn governance_service_projection(
+        signed_head: bool,
+    ) -> GovernanceDagServiceBindingProjectionV1<'static> {
+        GovernanceDagServiceBindingProjectionV1 {
+            ipfs_authenticator: GovernanceDagRequestAuthBindingProjectionV1 {
+                handle: GOVERNANCE_IPFS_HANDLE,
+                qualification: GOVERNANCE_QUALIFICATION,
+                public_key: governance_auth_public_key(GOVERNANCE_IPFS_HANDLE),
+            },
+            head_authenticator: signed_head.then(|| GovernanceDagRequestAuthBindingProjectionV1 {
+                handle: GOVERNANCE_HEAD_HANDLE,
+                qualification: GOVERNANCE_QUALIFICATION,
+                public_key: governance_auth_public_key(GOVERNANCE_HEAD_HANDLE),
+            }),
+            request_auth_max_body_bytes: 65_536,
+            checkpoint_store_handle: GOVERNANCE_CHECKPOINT_HANDLE,
+            checkpoint_store_qualification: GOVERNANCE_QUALIFICATION,
         }
     }
 
@@ -5050,6 +5759,12 @@ mod tests {
                 receipt_signer_revision: 14,
                 receipt_signer_policy_digest: [0xA4; 32],
                 receipt_signer_public_key: evidence_archive_public_key(),
+                transparency_publisher_handle: EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE.to_owned(),
+                transparency_publisher_revision: EVIDENCE_TRANSPARENCY_PUBLISHER_QUALIFICATION
+                    .revision(),
+                transparency_publisher_policy_digest: EVIDENCE_TRANSPARENCY_PUBLISHER_QUALIFICATION
+                    .policy_digest(),
+                transparency_publisher_public_key: evidence_archive_public_key(),
             });
     }
 
@@ -5067,6 +5782,26 @@ mod tests {
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_archive(viewer)
                     .expect("valid evidence-viewer archive request"),
+            ],
+        }
+    }
+
+    fn evidence_transparency_publisher_request() -> IrohaRuntimeProviderBindingsV1 {
+        let mut config = default_runtime_config();
+        configure_evidence_viewer(&mut config);
+        let viewer = config
+            .torii
+            .sorafs_storage
+            .evidence_viewer
+            .as_ref()
+            .expect("configured evidence viewer");
+        IrohaRuntimeProviderBindingsV1 {
+            chain_id: "evidence-viewer-transparency-test-chain".to_owned(),
+            bindings: vec![
+                IrohaRuntimeProviderBindingV1::try_new_evidence_viewer_transparency_publisher(
+                    viewer,
+                )
+                .expect("valid evidence-viewer transparency publisher request"),
             ],
         }
     }
@@ -5251,9 +5986,10 @@ mod tests {
                         | IrohaRuntimeProviderSlotV1::EvidenceViewerErasure
                         | IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore
                         | IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive
+                        | IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
                 ))
                 .count(),
-            6
+            7
         );
         let webauthn = bindings
             .iter()
@@ -5330,6 +6066,28 @@ mod tests {
         assert_eq!(
             archive.evidence_viewer_archive_max_bytes(),
             Some(64 * 1024 * 1024 + 16 * 1024)
+        );
+        let transparency_publisher = bindings
+            .iter()
+            .find(|binding| {
+                binding.slot() == IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
+            })
+            .expect("transparency-publisher binding");
+        assert_eq!(
+            transparency_publisher.handle(),
+            EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE
+        );
+        assert_eq!(
+            transparency_publisher.revision(),
+            Some(EVIDENCE_TRANSPARENCY_PUBLISHER_QUALIFICATION.revision())
+        );
+        assert_eq!(
+            transparency_publisher.policy_digest(),
+            Some(EVIDENCE_TRANSPARENCY_PUBLISHER_QUALIFICATION.policy_digest())
+        );
+        assert_eq!(
+            transparency_publisher.evidence_viewer_transparency_publisher_public_key(),
+            Some(evidence_archive_public_key())
         );
     }
 
@@ -5467,6 +6225,65 @@ mod tests {
             resolve_runtime_deps_from_bindings(&requested, Some(&registry)),
             Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
                 | Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+        ));
+    }
+
+    #[test]
+    fn evidence_viewer_transparency_publisher_resolution_is_exact_and_fail_closed() {
+        let requested = evidence_transparency_publisher_request();
+        assert!(matches!(
+            resolve_runtime_deps_from_bindings(&requested, Some(&EmptyRegistry)),
+            Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
+        ));
+
+        let publisher = Arc::new(EvidenceViewerTransparencyPublisher::exact());
+        let registry = FixedRegistry(
+            IrohaRuntimeDeps::default()
+                .with_sorafs_evidence_viewer_transparency_publisher(publisher.clone()),
+        );
+        let resolved = resolve_runtime_deps_from_bindings(&requested, Some(&registry))
+            .expect("resolve exact evidence-viewer transparency publisher");
+        assert!(
+            resolved
+                .sorafs_evidence_viewer_transparency_publisher
+                .is_some()
+        );
+
+        let unrequested = IrohaRuntimeProviderBindingsV1 {
+            chain_id: "production-chain".to_owned(),
+            bindings: Vec::new(),
+        };
+        let registry = FixedRegistry(
+            IrohaRuntimeDeps::default()
+                .with_sorafs_evidence_viewer_transparency_publisher(publisher),
+        );
+        assert!(matches!(
+            resolve_runtime_deps_from_bindings(&unrequested, Some(&registry)),
+            Err(IrohaRuntimeProviderRegistryErrorV1::UnexpectedProviders)
+        ));
+
+        let mut substituted = EvidenceViewerTransparencyPublisher::exact();
+        substituted.public_key = [0xF1; 32];
+        let registry = FixedRegistry(
+            IrohaRuntimeDeps::default()
+                .with_sorafs_evidence_viewer_transparency_publisher(Arc::new(substituted)),
+        );
+        assert!(matches!(
+            resolve_runtime_deps_from_bindings(&requested, Some(&registry)),
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+        ));
+
+        let mut stale = EvidenceViewerTransparencyPublisher::exact();
+        stale.qualification_error = Some(
+            sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1::Rejected,
+        );
+        let registry = FixedRegistry(
+            IrohaRuntimeDeps::default()
+                .with_sorafs_evidence_viewer_transparency_publisher(Arc::new(stale)),
+        );
+        assert!(matches!(
+            resolve_runtime_deps_from_bindings(&requested, Some(&registry)),
+            Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
         ));
     }
 
@@ -6407,6 +7224,71 @@ mod tests {
                 assert_eq!(binding.governance_request_auth_max_body_bytes(), None);
             }
         }
+    }
+
+    #[test]
+    fn standalone_governance_service_projection_is_exact_and_mode_scoped() {
+        let chain_id = iroha_data_model::ChainId::from("governance-service-projection");
+        let signed_head =
+            IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_projection(
+                &chain_id,
+                governance_service_projection(true),
+            )
+            .expect("project signed-head standalone service bindings");
+        assert_eq!(signed_head.chain_id(), chain_id.to_string());
+        assert_eq!(
+            signed_head
+                .iter()
+                .map(IrohaRuntimeProviderBindingV1::slot)
+                .collect::<Vec<_>>(),
+            vec![
+                IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+                IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+                IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+            ]
+        );
+        for binding in signed_head.iter().take(2) {
+            assert_eq!(
+                binding.governance_request_auth_max_body_bytes(),
+                Some(65_536)
+            );
+            assert!(binding.governance_request_auth_public_key().is_some());
+        }
+        assert!(
+            signed_head.iter().all(|binding| {
+                binding.slot() != IrohaRuntimeProviderSlotV1::GovernanceDagSigner
+            })
+        );
+
+        let ipns = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_projection(
+            &chain_id,
+            governance_service_projection(false),
+        )
+        .expect("project IPNS standalone service bindings");
+        assert_eq!(
+            ipns.iter()
+                .map(IrohaRuntimeProviderBindingV1::slot)
+                .collect::<Vec<_>>(),
+            vec![
+                IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+                IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
+            ]
+        );
+    }
+
+    #[test]
+    fn standalone_governance_service_projection_rejects_invalid_public_bounds() {
+        let chain_id = iroha_data_model::ChainId::from("governance-service-projection");
+        let mut projection = governance_service_projection(true);
+        projection.request_auth_max_body_bytes = 0;
+        assert_eq!(
+            IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service_projection(
+                &chain_id, projection,
+            ),
+            Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+            ))
+        );
     }
 
     #[test]

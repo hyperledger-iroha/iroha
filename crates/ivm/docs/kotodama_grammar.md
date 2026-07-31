@@ -9,5 +9,5 @@ features use the paired canonical spellings `seiyaku`/`誓約`,
 `kotoage`/`言挙げ`, `hajimari`/`始まり`, and `kaizen`/`改善`. English
 `contract`, `entry`, `init`, and `upgrade` are rejected as declaration
 keywords; other translated aliases are rejected too. Editor support, examples,
-and translated documentation are generated from or checked against the
-normative specification.
+and generated language tables derive from the V1 grammar sources, while
+repository-local examples are checked against the normative specification.

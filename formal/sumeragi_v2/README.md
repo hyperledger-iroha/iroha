@@ -1301,8 +1301,10 @@ saturates the 256 certified-request owners, 640 Normal ingress slots, and the
 128-slot reserved Progress increment while retaining the 256-slot Completion
 reserve; an exact authenticated `CertifiedBodyResponse` with a still-live
 matching logical request registration retires its old request owner. The
-durable reducer source then retransmits the still-reconstructible Fetch, which
-acquires both owners atomically without an executor-retained partial owner.
+executor then retries the same retained FIFO occurrence, atomically acquiring
+pending-work and certified-request ownership without a partial owner. A new
+Fetch removes that head; an existing ordinary Fetch retains it as the exact
+completion barrier after upgrading certified authority.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence
@@ -1501,22 +1503,30 @@ catch-up. These executable contracts remain `specified_unproved`; they do not
 promote the production refinement or starvation obligations.
 
 The gate next runs the separately source-sealed effect-capacity ownership
-matrix: 6 compact models, 28 exact configurations, and one standalone runner.
-The 10 repaired configurations finish with TLC status 0; the 18 mutants must
-fail with their pinned invariant or temporal status. Across the complete
-matrix TLC generates 147 states and finds 146 distinct states. The cases cover
+matrix: 6 compact models, 33 exact configurations, and one standalone runner.
+The runner requires 10 repaired configurations to finish with TLC status 0 and
+23 mutants to fail with their pinned invariant or temporal status. The 22
+unchanged configurations retain exact aggregate markers for 131 generated and
+130 distinct states; the revised eleven-case certified-request model pins
+semantic actions and violations rather than stale state totals. The cases cover
 the two-Fetch/full-capacity TimeoutVote-Sign prefix, protected and terminating
 owner retirement, reconstructible full-capacity Fetch rejection, stable
 `(class, work_id)` preemption with decided-owner exclusion, and retained-suffix
 FIFO/bound/overtaking/Decision filtering. The fifth model separates the sole
 certified-request slot from two general work slots. A `FetchBody` blocked only
-by that independent request capacity retains its exact causal owner and is the
-only producer for which that capacity result is retryable; the failed attempt
-allocates neither partial work nor partial request ownership. An authenticated
-exact `CertifiedBodyResponse` with a still-live matching logical request
-registration remains transport-only and may cross retained reducer-effect debt
-to retire the blocking request, after which the durable producer reconstructs
-and retransmits the Fetch so it atomically acquires both owners.
+by that independent request capacity is the only producer for which the result
+is retryable. It retains the exact task, authority, and lifecycle occurrence as
+one bounded FIFO owner; the failed attempt allocates no partial pending-work,
+request, or transport ownership. Separate mutants drop, substitute, duplicate,
+overtake, partially install P/Q, or drop the existing-owner completion barrier.
+An authenticated exact
+`CertifiedBodyResponse` with a still-live matching logical request registration
+remains transport-only and may cross retained reducer-effect debt to retire the
+blocking request. Once the required capacity releases, retrying the exact
+retained FIFO head atomically acquires pending-work and certified-request
+ownership. A new
+Fetch drains that successful head; an existing ordinary Fetch retains it as
+the exact retry barrier until asynchronous completion.
 `CommitCertificateResponse` remains
 reducer-ordered because it unwraps a CommitQC into reducer ingress. The sixth
 model starts both a certified response and a payload chunk behind saturated
@@ -1530,6 +1540,24 @@ part of these live-process models. This
 exhaustive finite matrix is mutation and regression evidence only. It supplies
 no deductive liveness proof, changes no proof-ledger status, and promotes no
 obligation.
+
+A separate source-sealed applied-phase admission runner covers one model and
+six configurations. Its TLA+ configuration ranges over the evidence-bearing
+`BodyStored` and `ValidationSucceeded` phases. Five mutants allocate a
+post-apply ordinal, retain a physical owner after apply, coalesce conflicting
+validation evidence, hide a malformed callback behind stale-tag coalescing, or
+admit a well-formed stale callback as current. The source seal binds the model
+to `preflight_runtime_command_admission`,
+`command_admission_is_suppressed`, both serialized enqueue paths, and the exact
+Busy-owner regression for those two phases. Complete callback validation
+precedes stale-tag coalescing; conflicting validation evidence rejects; an
+exact applied retry stutters before tagged-command construction or ordinal
+allocation. The source seal separately pins the four-phase Rust exact-retry
+regression for `BodyAvailable`, `BodyStored`, `ValidationSucceeded`, and
+`SignatureCompleted`, without extending the TLA+ conflict/Busy claim to
+`BodyAvailable` or `SignatureCompleted`. Busy, unapplied callbacks in the two
+modeled phases retain one serviceable owner. This bounded matrix neither proves
+crash/restart refinement nor changes a proof-ledger status.
 
 An exhaustive one-validator ownership configuration separately checks
 `AsyncTypeInvariant` and `AsyncProgressOwnershipInvariant` over 616,705

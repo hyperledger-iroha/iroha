@@ -995,22 +995,30 @@ remaining cryptographic, deterministic-execution, operating-system durability,
 post-GST transport, and host-service premises are listed explicitly in the
 ledger and formal README.
 
-The formal gate also seals and executes a dedicated effect-capacity ownership
-matrix consisting of 6 models and 28 configurations. Its 10 repaired cases
-complete, while all 18 mutants fail at their named invariant or temporal
-witness; together they generate 147 states and reach 146 distinct states. The
-matrix exercises persisted TimeoutVote-Sign ownership at capacity two,
-deterministic Fetch preemption and decided-owner exclusion, fair
+The formal gate also seals a dedicated effect-capacity ownership matrix
+consisting of 6 models and 33 configurations. Its runner requires 10 repaired
+cases to complete and all 23 mutants to fail at their named invariant or
+temporal witness. The 22 unchanged cases retain exact aggregate markers for
+131 generated and 130 distinct states; the revised eleven-case certified-request
+model pins semantic actions and violations rather than carrying forward stale
+state totals. The matrix exercises persisted TimeoutVote-Sign ownership at
+capacity two, deterministic Fetch preemption and decided-owner exclusion, fair
 non-preemptible retirement, reconstructible full-capacity Fetch rejection, and
 bounded retained-effect FIFO behavior. Its certified-request seam separates a
-one-entry request bound from two general work slots. Only a `FetchBody` producer
-may retain and retry an independent request-capacity rejection, and that
-rejection leaves both work and request allocation unchanged. The exact
-authenticated `CertifiedBodyResponse` with a still-live matching logical
-request registration is transport-only, so it may cross the retained
-reducer-effect suffix and atomically retire the old Fetch/request pair. The
-durable producer then reconstructs and retransmits the Fetch so it acquires
-both owners without an observable partial state.
+one-entry request bound from two general work slots. Only a `FetchBody`
+capacity rejection is retryable. The executor retains that exact
+task/authority/lifecycle occurrence as one bounded FIFO owner, without partial
+pending-work, request, or transport ownership; drop, substitution, duplication,
+overtaking, partial P/Q install, and loss of the existing-owner retry barrier
+are separate mutants. An exact authenticated
+`CertifiedBodyResponse` with a still-live matching logical request registration
+is transport-only, so it may cross retained reducer-effect debt and retire the
+blocking request. After the required capacity is released, retrying the
+retained FIFO head atomically installs both pending-work and certified-request
+owners.
+A genuinely new Fetch then drains that successful head; an existing ordinary
+Fetch retains the exact head as its completion barrier after the authority
+upgrade.
 `CommitCertificateResponse` remains reducer-ordered because its
 authenticated CommitQC is submitted to the reducer before discovery ownership
 retires. A sixth model selects either a certified response or payload chunk
@@ -1024,6 +1032,25 @@ explicitly delegated to `SumeragiV2CrashReplayMutation`. These are finite TLC
 regression witnesses, not a deductive proof or promotion, and therefore do not
 alter any proof-coverage status, promote a ledger obligation, or change
 `machine_checked_completion`.
+
+A separate source-sealed applied-phase admission matrix contains one model and
+six configurations. The TLA+ matrix deliberately covers the evidence-bearing
+`BodyStored` and `ValidationSucceeded` phases; five mutants allocate a new
+post-apply ordinal, retain a physical owner after apply, coalesce conflicting
+validation evidence, hide a malformed callback behind stale-tag coalescing, or
+admit a well-formed stale callback as current. The seal binds those cases to
+`preflight_runtime_command_admission`, both serialized enqueue paths, and the
+matching Busy-owner regression. Production validates the complete callback
+before treating a stale incarnation as a stutter, reports conflicting
+validation evidence or polarity as fail-closed, and suppresses an exact applied
+retry before constructing a tagged command or allocating an admission ordinal.
+The source seal separately pins a Rust regression for exact post-apply
+suppression of `BodyAvailable`, `BodyStored`, `ValidationSucceeded`, and
+`SignatureCompleted`; it makes no conflicting-evidence or Busy-owner claim for
+the first or last of those phases. Busy, unapplied callbacks in the two modeled
+phases retain exactly one serviceable owner. This finite model is mutation
+evidence only; it does not establish crash/restart refinement or promote a
+proof-ledger obligation.
 
 A separate source-sealed post-Decision timeout/TC matrix contains one model
 and nine configurations. The repaired deterministic trace completes with TLC
@@ -1306,13 +1333,13 @@ production-default saturation regression fills all 256 certified-request
 owners, 640 Normal ingress slots, and the 128-slot reserved Progress increment
 while preserving the 256-slot Completion reserve, then proves that an exact
 authenticated `CertifiedBodyResponse` with a still-live matching logical
-request registration can retire the old request; durable reducer
-retransmission then reconstructs the blocked Fetch and lets it acquire both
-owners atomically. The
+request registration can retire the old request; the executor then retries the
+same retained FIFO occurrence and acquires pending-work and request ownership
+atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
+as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
-earlier 168-name inventory. Fresh 701-name
-discovery/execution and the clean committed, detached, source-sealed serial
-release leg remain pending. An
+earlier 168-name inventory. Fresh 738-name discovery is green; the clean
+committed, detached, source-sealed serial release execution remains pending. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
 inventory presence nor regression evidence is a machine proof.

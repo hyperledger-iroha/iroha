@@ -1,10 +1,10 @@
 # Iroha JS SDK
 
 `@iroha/iroha-js` is a JavaScript/TypeScript SDK for interacting
-with Hyperledger Iroha nodes from Node.js runtimes. The initial focus mirrors
-the Python helper coverage so developers can manage attachments, prover
-reports, Ed25519 signing, and Norito payloads as manifest builders and gRPC
-transports land in the maintained SDK surface.
+with Hyperledger Iroha nodes from Node.js runtimes. It provides Norito codecs,
+Ed25519 signing, transaction and instruction builders, Torii query and
+transaction clients, event streaming, and helpers for Connect, SoraFS, and DA
+workflows.
 
 TypeScript consumers can import the bundled `index.d.ts` definitions for the
 SDK surface.
@@ -984,8 +984,8 @@ await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
 await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
 // Note: raw `getTransactionStatus` options support only
 // { allowShortHash, signal, scope }, where scope is the explicit diagnostic
-// choice "local" or "global" and defaults to "global". The pre-release "auto"
-// mode and cross-endpoint status fallback list are not part of the API.
+// choice "local" or "global" and defaults to "global". An "auto" mode and
+// cross-endpoint status fallback lists are not part of the API.
 // Polling helper options support only { signal, intervalMs, timeoutMs, maxAttempts,
 // failureStatuses, onStatus }. Success is fixed to exact canonical `Applied`;
 // every finality wait is global-only. State-resolved Applied succeeds,
@@ -1431,10 +1431,10 @@ console.log(Buffer.from(genericTx.hash).toString("hex"));
 console.log(Buffer.from(kaigiCreateTx.hash).toString("hex"));
 console.log(Buffer.from(kaigiJoinTx.hash).toString("hex"));
 
-// NOTE: Instruction coverage currently includes `Register` (domain/account/asset
-// definition), `Mint::Asset`, `Mint::TriggerRepetitions`, `Transfer`
-// variants for assets, asset definitions, domains, NFTs, and the Kaigi instruction
-// family (create/join/leave/end/usage/relay). See the roadmap for upcoming extensions.
+// The exported instruction builders cover register, mint/burn, transfer,
+// permission and key/value, trigger, governance, RWA, confidential-asset,
+// smart-contract deployment, and Kaigi families. `buildTransaction()` also
+// accepts canonical instruction payloads supplied as JSON strings or objects.
 ```
 
 ## Norito RPC client
@@ -4321,12 +4321,3 @@ const torii = new ToriiClient(config?.torii?.address ?? "http://localhost:8080",
   timeoutMs: clientConfig.timeoutMs,
 });
 ```
-
-## Roadmap
-
-- Transaction signing pipelines and manifest helpers backed by `iroha_crypto`.
-- Full Torii transaction/query clients, streaming support, and developer
-  documentation with runnable samples.
-
-> **Status:** Preview-only. Expect frequent breaking changes until the roadmap
-> milestones in `roadmap.md` reach completion.

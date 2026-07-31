@@ -246,7 +246,7 @@ Sample response:
 - `status` filters help operators focus on active manifests. `inactive` returns
 
 The endpoint shares the same access controls as `/v1/accounts/{uaid}/portfolio`
-and `/v1/space-directory/uaids/{uaid}`. See `docs/space-directory.md` for the
+and `/v1/space-directory/uaids/{uaid}`. See `specs/space_directory.md` for the
 operational playbooks tied to these responses.
 
 ## Manifest Publish Endpoint
@@ -336,7 +336,7 @@ returned. The same CIDR/API-token/fee-policy gates applied to the read
 endpoints protect this route as well. When the transaction executes the node
 emits `SpaceDirectoryEvent::ManifestRevoked`, rebuilds UAID bindings
 automatically, and the read APIs immediately reflect the revoked status. See
-`docs/space-directory.md` for the operator runbook and evidence expectations.
+`specs/space_directory.md` for the operator runbook and evidence expectations.
 Python automation can call `ToriiClient.revoke_space_directory_manifest` to
 mirror the Norito payload without hand-rolling JSON serialisation or key
 formatting.

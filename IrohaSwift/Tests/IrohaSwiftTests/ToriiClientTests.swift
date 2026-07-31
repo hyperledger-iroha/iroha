@@ -5860,10 +5860,10 @@ final class ToriiClientTests: XCTestCase {
         return Data(SHA256.hash(data: preimage)).hexEncodedString()
     }
 
-    private func expectedProductionBackendRejection(_ backend: String) -> String {
+    private func expectedVerifierRegistryBackendRejection(_ backend: String) -> String {
         backend.trimmingCharacters(in: .whitespacesAndNewlines) == backend
-            ? "unsupported production verifier backend"
-            : "surrounding whitespace"
+            ? "backend is not an exact supported verifier-registry label: \(backend)."
+            : "backend must not contain surrounding whitespace."
     }
 
     private func u64BigEndianData(_ value: UInt64) -> Data {
@@ -14569,7 +14569,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload, got \(error)")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
             await XCTAssertThrowsErrorAsync(
                 try await makeClient().listVerifyingKeys(query: ToriiVerifyingKeyListQuery(backend: backend))
@@ -14577,13 +14577,13 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload, got \(error)")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
             XCTAssertThrowsError(try ToriiVerifyingKeyListQuery(backend: backend).queryItems()) { error in
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload, got \(error)")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
         }
         XCTAssertEqual(requests, 0)
@@ -14641,15 +14641,17 @@ final class ToriiClientHeaderTests: XCTestCase {
             }]
             """
         ]
+        let canonicalDiagnostics = [
+            "backend is not an exact supported verifier-registry label:",
+            "backend must not contain surrounding whitespace"
+        ]
         for payload in payloads {
             let data = payload.data(using: .utf8)!
             XCTAssertThrowsError(try JSONDecoder().decode([ToriiVerifyingKeyListItem].self, from: data)) { error in
                 let description = String(describing: error)
-                XCTAssertTrue(
-                    description.contains("unsupported production verifier backend")
-                        || description.contains("surrounding whitespace")
-                        || description.contains("stored key backend must match record backend")
-                        || description.contains("vk_len must match stored key byte length"),
+                XCTAssertEqual(
+                    canonicalDiagnostics.filter { description.contains($0) }.count,
+                    1,
                     description
                 )
             }
@@ -15006,7 +15008,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
 
             let updateRequest = ToriiVerifyingKeyUpdateRequest(
@@ -15022,7 +15024,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
         }
     }
@@ -16575,9 +16577,7 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains("unsupported production verifier backend")
-                              || reason.contains("surrounding whitespace")
-                              || reason.contains("must be a non-empty string"))
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
         }
 
@@ -17176,7 +17176,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
         }
 

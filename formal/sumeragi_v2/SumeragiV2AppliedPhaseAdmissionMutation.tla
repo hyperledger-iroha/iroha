@@ -2,11 +2,13 @@
 EXTENDS Naturals
 
 (***************************************************************************
-Bounded mutation model for runtime completion admission after reducer apply.
+Bounded mutation model for evidence-bearing completion admission after reducer
+apply.
 
-The four production body-pipeline phases are modeled independently:
+The finite model deliberately covers only the two phases for which the sealed
+production Busy-owner regression retains complete callback evidence:
 
-  BodyAvailable, BodyStored, ValidationSucceeded, SignatureCompleted.
+  BodyStored, ValidationSucceeded.
 
 For an arbitrary active phase, the finite prefix is:
 
@@ -14,19 +16,28 @@ For an arbitrary active phase, the finite prefix is:
      physically_owned with exactly one serviceable owner and one ordinal;
   2. an exact Busy retry coalesces with that owner;
   3. service applies the callback and retires physical ownership; and
-  4. one adversarial probe retries the applied callback, conflicts in payload
-     or validation polarity, or supplies a malformed/stale phase tag.
+  4. one adversarial probe retries the applied callback, conflicts in
+     validation evidence/polarity, supplies a malformed callback under a
+     current or stale tag, or supplies a well-formed stale callback.
 
 `step` and the `*Observed` variables are trace instrumentation only.  An exact
 post-apply retry changes those trace variables so TLC can cover the edge, but
 leaves every variable in `semanticVars` unchanged when
 SuppressAppliedBeforeOrdinalAllocation is TRUE.
 
-The tag probe separates two production outcomes.  A malformed current tag
-fails closed even when an exact applied identity exists.  A well-formed stale
-tag is discarded before admission and is marker-free.  Looking in the applied
-phase ledger before validating the tag can therefore neither hide malformed
-input nor turn stale input into a current physical owner.
+`callbackWellFormed` and `tagClass` describe only the step-four adversarial
+probe and make the validation-order cross product explicit.  A malformed
+callback fails closed under both current and stale tags.  A well-formed stale
+callback is discarded before admission and is marker-free.  Looking at the
+stale tag before validating the complete callback would hide the
+malformed-plus-stale case; looking past a stale tag would turn well-formed
+obsolete input into a current physical owner.
+
+The production source seal separately retains a four-phase Rust regression for
+exact post-apply suppression of BodyAvailable, BodyStored,
+ValidationSucceeded, and SignatureCompleted.  This TLA+ matrix makes no
+conflicting-evidence or Busy-owner claim for BodyAvailable or
+SignatureCompleted.
 
 This is a compact live-process admission obligation.  It does not claim a
 crash/restart refinement, Byzantine wire validation, or a deductive proof of
@@ -37,13 +48,14 @@ CONSTANTS EnabledScenarios,
           SuppressAppliedBeforeOrdinalAllocation,
           ClearPhysicalOwnerOnApply,
           RejectConflictingEvidence,
-          ValidatePhaseTagBeforeLookup
+          ValidateCallbackBeforeStaleTagCoalescing,
+          CoalesceStaleTagBeforeAdmission
 
-Phases ==
-  {"BodyAvailable",
-   "BodyStored",
-   "ValidationSucceeded",
-   "SignatureCompleted"}
+Phases == {"BodyStored", "ValidationSucceeded"}
+
+CurrentTag == "CurrentTag"
+StaleTag == "StaleTag"
+TagClasses == {CurrentTag, StaleTag}
 
 Unseen == "unseen"
 PhysicallyOwned == "physically_owned"
@@ -51,25 +63,30 @@ Applied == "applied"
 PhaseStates == {Unseen, PhysicallyOwned, Applied}
 
 ExactAppliedRetry == "ExactAppliedRetry"
-ConflictPayload == "ConflictPayload"
+ConflictEvidence == "ConflictEvidence"
 ConflictPolarity == "ConflictPolarity"
-MalformedPhaseTag == "MalformedPhaseTag"
-StalePhaseTag == "StalePhaseTag"
+MalformedCallbackCurrentTag == "MalformedCallbackCurrentTag"
+MalformedCallbackStaleTag == "MalformedCallbackStaleTag"
+WellFormedStaleTag == "WellFormedStaleTag"
 
-ConflictScenarios == {ConflictPayload, ConflictPolarity}
+ConflictScenarios == {ConflictEvidence, ConflictPolarity}
+MalformedCallbackScenarios ==
+  {MalformedCallbackCurrentTag, MalformedCallbackStaleTag}
 Scenarios ==
   {ExactAppliedRetry,
-   ConflictPayload,
+   ConflictEvidence,
    ConflictPolarity,
-   MalformedPhaseTag,
-   StalePhaseTag}
+   MalformedCallbackCurrentTag,
+   MalformedCallbackStaleTag,
+   WellFormedStaleTag}
 
 ASSUME /\ EnabledScenarios \in (SUBSET Scenarios)
        /\ EnabledScenarios # {}
        /\ SuppressAppliedBeforeOrdinalAllocation \in BOOLEAN
        /\ ClearPhysicalOwnerOnApply \in BOOLEAN
        /\ RejectConflictingEvidence \in BOOLEAN
-       /\ ValidatePhaseTagBeforeLookup \in BOOLEAN
+       /\ ValidateCallbackBeforeStaleTagCoalescing \in BOOLEAN
+       /\ CoalesceStaleTagBeforeAdmission \in BOOLEAN
 
 CanonicalPayload == "CanonicalPayload"
 ConflictingPayload == "ConflictingPayload"
@@ -99,7 +116,7 @@ CanonicalEvidence(phase) ==
    polarity |-> PositivePolarity]
 
 ConflictingEvidence(phase, conflictScenario) ==
-  CASE conflictScenario = ConflictPayload ->
+  CASE conflictScenario = ConflictEvidence ->
          [phase |-> phase,
           payload |-> ConflictingPayload,
           polarity |-> PositivePolarity]
@@ -114,6 +131,8 @@ OrdinalCeiling == 3
 
 VARIABLES activePhase,
           scenario,
+          callbackWellFormed,
+          tagClass,
           step,
           phaseState,
           physicalOwnerCount,
@@ -128,11 +147,13 @@ VARIABLES activePhase,
           busyRetryObserved,
           appliedRetryObserved,
           conflictObserved,
-          malformedTagObserved,
+          malformedCallbackObserved,
           staleTagObserved
 
 semanticVars ==
-  <<phaseState,
+  <<callbackWellFormed,
+    tagClass,
+    phaseState,
     physicalOwnerCount,
     ownerServiceable,
     phaseEvidence,
@@ -146,6 +167,8 @@ semanticVars ==
 vars ==
   <<activePhase,
     scenario,
+    callbackWellFormed,
+    tagClass,
     step,
     phaseState,
     physicalOwnerCount,
@@ -160,12 +183,14 @@ vars ==
     busyRetryObserved,
     appliedRetryObserved,
     conflictObserved,
-    malformedTagObserved,
+    malformedCallbackObserved,
     staleTagObserved>>
 
 TypeInvariant ==
   /\ activePhase \in Phases
   /\ scenario \in EnabledScenarios
+  /\ callbackWellFormed \in BOOLEAN
+  /\ tagClass \in TagClasses
   /\ step \in 0..4
   /\ phaseState \in [Phases -> PhaseStates]
   /\ physicalOwnerCount \in [Phases -> 0..1]
@@ -180,7 +205,7 @@ TypeInvariant ==
   /\ busyRetryObserved \in BOOLEAN
   /\ appliedRetryObserved \in BOOLEAN
   /\ conflictObserved \in BOOLEAN
-  /\ malformedTagObserved \in BOOLEAN
+  /\ malformedCallbackObserved \in BOOLEAN
   /\ staleTagObserved \in BOOLEAN
 
 PhaseEvidenceTracksIdentity ==
@@ -234,16 +259,16 @@ AppliedExactRetryDoesNotInsert ==
 ConflictingEvidenceFailsClosed ==
   conflictObserved => failClosed
 
-MalformedPhaseTagFailsClosed ==
-  malformedTagObserved => failClosed
+MalformedCallbackFailsClosed ==
+  malformedCallbackObserved => failClosed
 
-StalePhaseTagIsMarkerFree ==
+WellFormedStaleTagIsMarkerFree ==
   staleTagObserved =>
     /\ stalePhysicalOwnerCount[activePhase] = 0
     /\ ~staleOwnerServiceable[activePhase]
     /\ stalePhaseEvidence[activePhase] = NoEvidence
 
-StalePhaseTagPreservesOrdinal ==
+WellFormedStaleTagPreservesOrdinal ==
   staleTagObserved =>
     /\ nextAdmissionOrdinal = InitialAdmissionOrdinal + 1
     /\ queueInsertions = 1
@@ -251,8 +276,13 @@ StalePhaseTagPreservesOrdinal ==
 Init ==
   /\ activePhase \in Phases
   /\ scenario \in EnabledScenarios
-  /\ (scenario = ConflictPolarity =>
+  /\ (scenario \in ConflictScenarios =>
         activePhase = "ValidationSucceeded")
+  /\ callbackWellFormed = ~(scenario \in MalformedCallbackScenarios)
+  /\ tagClass =
+       IF scenario \in {MalformedCallbackStaleTag, WellFormedStaleTag}
+       THEN StaleTag
+       ELSE CurrentTag
   /\ step = 0
   /\ phaseState = [phase \in Phases |-> Unseen]
   /\ physicalOwnerCount = [phase \in Phases |-> 0]
@@ -267,7 +297,7 @@ Init ==
   /\ busyRetryObserved = FALSE
   /\ appliedRetryObserved = FALSE
   /\ conflictObserved = FALSE
-  /\ malformedTagObserved = FALSE
+  /\ malformedCallbackObserved = FALSE
   /\ staleTagObserved = FALSE
 
 AdmitExactCallbackWhileBusy ==
@@ -288,6 +318,8 @@ AdmitExactCallbackWhileBusy ==
   /\ UNCHANGED
        <<activePhase,
          scenario,
+         callbackWellFormed,
+         tagClass,
          stalePhysicalOwnerCount,
          staleOwnerServiceable,
          stalePhaseEvidence,
@@ -295,7 +327,7 @@ AdmitExactCallbackWhileBusy ==
          busyRetryObserved,
          appliedRetryObserved,
          conflictObserved,
-         malformedTagObserved,
+         malformedCallbackObserved,
          staleTagObserved>>
 
 CoalesceExactBusyRetry ==
@@ -313,7 +345,7 @@ CoalesceExactBusyRetry ==
          scenario,
          appliedRetryObserved,
          conflictObserved,
-         malformedTagObserved,
+         malformedCallbackObserved,
          staleTagObserved>>
 
 ApplyOwnedCallback ==
@@ -333,6 +365,8 @@ ApplyOwnedCallback ==
   /\ UNCHANGED
        <<activePhase,
          scenario,
+         callbackWellFormed,
+         tagClass,
          phaseEvidence,
          stalePhysicalOwnerCount,
          staleOwnerServiceable,
@@ -343,13 +377,15 @@ ApplyOwnedCallback ==
          busyRetryObserved,
          appliedRetryObserved,
          conflictObserved,
-         malformedTagObserved,
+         malformedCallbackObserved,
          staleTagObserved>>
 
 SuppressExactAppliedRetry ==
   /\ ~failClosed
   /\ step = 3
   /\ scenario = ExactAppliedRetry
+  /\ callbackWellFormed
+  /\ tagClass = CurrentTag
   /\ phaseState[activePhase] = Applied
   /\ phaseEvidence[activePhase] = CanonicalEvidence(activePhase)
   /\ nextAdmissionOrdinal' =
@@ -361,6 +397,8 @@ SuppressExactAppliedRetry ==
   /\ UNCHANGED
        <<activePhase,
          scenario,
+         callbackWellFormed,
+         tagClass,
          phaseState,
          physicalOwnerCount,
          ownerServiceable,
@@ -372,7 +410,7 @@ SuppressExactAppliedRetry ==
          failClosed,
          busyRetryObserved,
          conflictObserved,
-         malformedTagObserved,
+         malformedCallbackObserved,
          staleTagObserved>>
 
 ObserveConflictingEvidence ==
@@ -380,6 +418,8 @@ ObserveConflictingEvidence ==
   IN /\ ~failClosed
      /\ step = 3
      /\ scenario \in ConflictScenarios
+     /\ callbackWellFormed
+     /\ tagClass = CurrentTag
      /\ phaseState[activePhase] = Applied
      /\ phaseEvidence[activePhase] = CanonicalEvidence(activePhase)
      /\ candidate # phaseEvidence[activePhase]
@@ -389,6 +429,8 @@ ObserveConflictingEvidence ==
      /\ UNCHANGED
           <<activePhase,
             scenario,
+            callbackWellFormed,
+            tagClass,
             phaseState,
             physicalOwnerCount,
             ownerServiceable,
@@ -400,21 +442,29 @@ ObserveConflictingEvidence ==
             queueInsertions,
             busyRetryObserved,
             appliedRetryObserved,
-            malformedTagObserved,
+            malformedCallbackObserved,
             staleTagObserved>>
 
-ObserveMalformedPhaseTag ==
+ObserveMalformedCallback ==
   /\ ~failClosed
   /\ step = 3
-  /\ scenario = MalformedPhaseTag
+  /\ scenario \in MalformedCallbackScenarios
+  /\ ~callbackWellFormed
+  /\ tagClass =
+       IF scenario = MalformedCallbackStaleTag THEN StaleTag ELSE CurrentTag
   /\ phaseState[activePhase] = Applied
   /\ phaseEvidence[activePhase] = CanonicalEvidence(activePhase)
-  /\ failClosed' = IF ValidatePhaseTagBeforeLookup THEN TRUE ELSE FALSE
-  /\ malformedTagObserved' = TRUE
+  /\ failClosed' =
+       IF tagClass = CurrentTag \/ ValidateCallbackBeforeStaleTagCoalescing
+       THEN TRUE
+       ELSE FALSE
+  /\ malformedCallbackObserved' = TRUE
   /\ step' = 4
   /\ UNCHANGED
        <<activePhase,
          scenario,
+         callbackWellFormed,
+         tagClass,
          phaseState,
          physicalOwnerCount,
          ownerServiceable,
@@ -429,31 +479,35 @@ ObserveMalformedPhaseTag ==
          conflictObserved,
          staleTagObserved>>
 
-ObserveStalePhaseTag ==
+ObserveWellFormedStaleTag ==
   /\ ~failClosed
   /\ step = 3
-  /\ scenario = StalePhaseTag
+  /\ scenario = WellFormedStaleTag
+  /\ callbackWellFormed
+  /\ tagClass = StaleTag
+  /\ phaseState[activePhase] = Applied
+  /\ phaseEvidence[activePhase] = CanonicalEvidence(activePhase)
   /\ stalePhysicalOwnerCount[activePhase] = 0
   /\ stalePhaseEvidence[activePhase] = NoEvidence
   /\ stalePhysicalOwnerCount' =
-       IF ValidatePhaseTagBeforeLookup
+       IF CoalesceStaleTagBeforeAdmission
        THEN stalePhysicalOwnerCount
        ELSE [stalePhysicalOwnerCount EXCEPT ![activePhase] = 1]
   /\ staleOwnerServiceable' =
-       IF ValidatePhaseTagBeforeLookup
+       IF CoalesceStaleTagBeforeAdmission
        THEN staleOwnerServiceable
        ELSE [staleOwnerServiceable EXCEPT ![activePhase] = TRUE]
   /\ stalePhaseEvidence' =
-       IF ValidatePhaseTagBeforeLookup
+       IF CoalesceStaleTagBeforeAdmission
        THEN stalePhaseEvidence
        ELSE [stalePhaseEvidence EXCEPT
                ![activePhase] = CanonicalEvidence(activePhase)]
   /\ nextAdmissionOrdinal' =
-       IF ValidatePhaseTagBeforeLookup
+       IF CoalesceStaleTagBeforeAdmission
        THEN nextAdmissionOrdinal
        ELSE nextAdmissionOrdinal + 1
   /\ queueInsertions' =
-       IF ValidatePhaseTagBeforeLookup
+       IF CoalesceStaleTagBeforeAdmission
        THEN queueInsertions
        ELSE queueInsertions + 1
   /\ staleTagObserved' = TRUE
@@ -461,6 +515,8 @@ ObserveStalePhaseTag ==
   /\ UNCHANGED
        <<activePhase,
          scenario,
+         callbackWellFormed,
+         tagClass,
          phaseState,
          physicalOwnerCount,
          ownerServiceable,
@@ -469,7 +525,7 @@ ObserveStalePhaseTag ==
          busyRetryObserved,
          appliedRetryObserved,
          conflictObserved,
-         malformedTagObserved>>
+         malformedCallbackObserved>>
 
 Next ==
   \/ AdmitExactCallbackWhileBusy
@@ -477,7 +533,7 @@ Next ==
   \/ ApplyOwnedCallback
   \/ SuppressExactAppliedRetry
   \/ ObserveConflictingEvidence
-  \/ ObserveMalformedPhaseTag
-  \/ ObserveStalePhaseTag
+  \/ ObserveMalformedCallback
+  \/ ObserveWellFormedStaleTag
 
 =============================================================================

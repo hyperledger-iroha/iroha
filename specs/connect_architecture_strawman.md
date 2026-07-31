@@ -1,12 +1,7 @@
-# Connect Session Architecture Strawman (Swift / Android / JS)
+# Connect Session Architecture (Swift / Android / JS)
 
-This strawman proposal outlines the shared design for Nexus Connect workflows
-across the Swift, Android, and JavaScript SDKs. It is intended to support the
-Feb 2026 cross-SDK workshop and capture open questions before implementation.
-
-> Last updated: 2026-01-29
-> Authors: Swift SDK Lead, Android Networking TL, JS Lead
-> Status: Draft for council review (threat model + data retention alignment added 2026-03-12)
+This specification records the implemented Connect V1 contract shared by the
+Swift, Android, and JavaScript SDKs.
 
 ## Goals
 
@@ -56,9 +51,7 @@ All SDKs MUST use the canonical Norito schema defined in `connect_norito_bridge`
   - `approve_ext` (account, permissions, proofs, signature)
   - `reject`, `close`, `ping/pong`, `error`
 
-Swift previously shipped placeholder JSON encoders (`ConnectCodec.swift`). As of Apr 2026 the SDK
-always uses the Norito bridge and fails closed when the XCFramework is missing, but this strawman
-still captures the mandate that led to the bridge integration:
+Swift uses the Norito bridge and fails closed when the XCFramework is missing:
 
 | Function | Description | Status |
 |----------|-------------|--------|
@@ -68,13 +61,14 @@ still captures the mandate that led to the bridge integration:
 | `connect_norito_encode_envelope_sign_result_ok/err` | Sign results | Implemented |
 | `connect_norito_decode_*` | Parsing for wallets/dApps | Implemented |
 
-### Required Work
+### SDK parity contract
 
-- Swift: Replace placeholder `ConnectCodec` JSON helpers with bridge calls and surface
-  typed wrappers (`ConnectFrame`, `ConnectEnvelope`) using the shared Norito types. ✅ (Apr 2026)
-- Android/JS: Ensure the same wrappers exist; align error codes and metadata keys.
-- Shared: Document encryption (X25519 key exchange, AEAD) with consistent key derivation
-  per Norito spec, and provide sample integration tests using the Rust bridge.
+- Swift exposes typed `ConnectFrame` and `ConnectEnvelope` wrappers backed by
+  the shared bridge.
+- Android and JavaScript expose the same envelope families, error codes, and
+  metadata keys.
+- Cross-SDK fixtures and integration tests keep X25519 key exchange, AEAD,
+  sequence, and Norito behaviour aligned.
 
 ## Transport Contract
 
@@ -87,7 +81,7 @@ still captures the mandate that led to the bridge integration:
   `/v1/connect/status.policy.relay_strategy` (configured),
   `/v1/connect/status.policy.relay_effective_strategy` (effective), and
   `/v1/connect/status.policy.relay_p2p_attached` (P2P relay availability).
-- Optional future: WebRTC (TBD) – out of scope for initial strawman.
+- WebSocket is the only Connect V1 client transport; WebRTC is unsupported.
 - Reconnect strategy: exponential back-off with full jitter (base 5 s, max 60 s); shared constants across Swift, Android, and JS so retries remain predictable.
 - Ping/pong cadence: 30 s heartbeat with tolerance for three missed pongs before reconnect; JS clamps minimum interval to 15 s to satisfy browser throttling rules.
 - Push hooks: Android wallet SDK exposes optional FCM integration for wake-ups, while JS stays polling-based (documented limitations for browser push permissions).
@@ -131,7 +125,10 @@ still captures the mandate that led to the bridge integration:
 - Rotation remains optional but the protocol is defined: dApps emit a `Control::RotateKeys` frame when sequence counters approach the wrap guard, wallets respond with the new public key plus a signed acknowledgement, and both sides immediately derive new directional keys without closing the session.
 - Wallet-side key loss triggers the same handshake followed by a `resume` control so dApps know to flush cached ciphertext that targeted the retired key.
 
-For historic CryptoKit fallbacks see `docs/connect_swift_ios.md`; Kotlin and JS have matching references under `docs/connect_kotlin_ws*.md`.
+The maintained Swift, Kotlin, and JavaScript SDK facades implement the same
+Connect V1 directional-key and AEAD contract. Public integration walkthroughs
+live in the sibling `iroha-docs` repository at
+<https://docs.iroha.tech/guide/tutorials/>.
 
 ## Permissions & Proofs
 
@@ -201,9 +198,8 @@ For historic CryptoKit fallbacks see `docs/connect_swift_ios.md`; Kotlin and JS 
   - Bridge API misuse (missing bindings, corrupt ciphertext, invalid sequence)
     returns typed errors without echoing raw payloads or keys.
 
-Pending questions from review are tracked in `specs/sdk/swift/connect_workshop.md`
-and will be resolved in the council minutes; once closed the strawman will be
-promoted from draft to accepted.
+SDK-specific parity evidence is recorded in
+`specs/sdk/swift/connect_workshop.md`.
 
 ## Offline Buffering & Reconnections
 
@@ -359,7 +355,7 @@ telemetry so the SDK team can reproduce and patch the exporter.
 
 ### Telemetry hooks & governance evidence
 
-- `connect.queue_state` doubles as the roadmap risk indicator. Dashboards group
+- `connect.queue_state` is the primary offline-buffer risk signal. Dashboards group
   by `{platform, sdk_version}` and render time-in-state so governance can sample
   monthly drill evidence before approving staged rollouts.
 - `connect.queue_watermark` and `connect.queue_bytes` feed the Connect risk score
@@ -368,8 +364,8 @@ telemetry so the SDK team can reproduce and patch the exporter.
 - Exporters attach `feature_hash` to every event so auditor tooling can confirm
   that the Norito codec + offline plan match the reviewed build. SDK CI fails
   fast when telemetry reports an unknown hash.
-- The strawman still requires a threat-model appendix; when metrics exceed the
-  policy thresholds, SDKs emit `connect.policy_violation` events summarising the
+- The threat model and retention requirements are defined above. When metrics
+  exceed policy thresholds, SDKs emit `connect.policy_violation` events summarising the
   offending sid (hashed), state, and resolved action (`drain|purge|quarantine`).
 - Evidence captured via `exportQueueMetrics` lands in the same SoraFS namespace
   as the Connect runbook artefacts so council reviewers can trace every drill
@@ -399,17 +395,3 @@ telemetry so the SDK team can reproduce and patch the exporter.
   incremented `metadata_version`.
 - Ownership matrix above is referenced from SDK docs so CLI/web/automation
   clients follow the same contract and instrumentation defaults.
-
-## Open Questions
-
-1. **Session discovery**: Do we need QR codes / out-of-band handshake like WalletConnect? (Future work.)
-2. **Multisig**: How are multi-sign approvals represented? (Extend sign result to support multiple signatures.)
-3. **Compliance**: Which fields are mandatory for regulated flows (per roadmap)? (Await compliance team guidance.)
-4. **SDK packaging**: Should we factor shared code (e.g., Norito Connect codecs) into a cross-platform crate? (TBD.)
-
-## Next Steps
-
-- Circulate this strawman to the SDK council (Feb 2026 meeting).
-- Collect feedback on open questions and update doc accordingly.
-- Schedule implementation breakdown per SDK (Swift IOS7, Android AND7, JS Connect milestones).
-- Track progress via roadmap hot list; update `status.md` once strawman is ratified.

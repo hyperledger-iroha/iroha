@@ -599,7 +599,7 @@ mod tests {
 
         let response = super::handle_v1_sumeragi_status(
             axum::extract::State(std::sync::Arc::clone(&state)),
-            None,
+            Some(axum::http::HeaderValue::from_static("application/json")),
             true,
             false,
         )
@@ -608,10 +608,14 @@ mod tests {
         // Simulate Kura/snapshot activating the shared process output guard
         // after the reducer's last publication. Serving must monotonically
         // overlay that state without waiting for another reducer event.
-        let restart_response =
-            super::handle_v1_sumeragi_status(axum::extract::State(state), None, true, true)
-                .await
-                .expect("restart-required status handler");
+        let restart_response = super::handle_v1_sumeragi_status(
+            axum::extract::State(state),
+            Some(axum::http::HeaderValue::from_static("application/json")),
+            true,
+            true,
+        )
+        .await
+        .expect("restart-required status handler");
         status::clear_v2_status();
 
         assert_eq!(response.status(), StatusCode::OK);
@@ -623,7 +627,9 @@ mod tests {
             .to_bytes();
         let decoded: SumeragiV2Status =
             norito::json::from_slice(&body).expect("decode authoritative v2 status");
-        assert_eq!(decoded, expected);
+        let mut expected_at_first_read = expected.clone();
+        expected_at_first_read.liveness.no_progress_age_ms = decoded.liveness.no_progress_age_ms;
+        assert_eq!(decoded, expected_at_first_read);
         let restart_body = restart_response
             .into_body()
             .collect()
@@ -632,7 +638,16 @@ mod tests {
             .to_bytes();
         let restart_decoded: SumeragiV2Status = norito::json::from_slice(&restart_body)
             .expect("decode restart-required authoritative status");
-        assert!(restart_decoded.restart_required);
+        assert!(
+            restart_decoded.liveness.no_progress_age_ms
+                >= decoded.liveness.no_progress_age_ms,
+            "read-time liveness age must be monotonic"
+        );
+        let mut expected_at_restart_read = expected;
+        expected_at_restart_read.restart_required = true;
+        expected_at_restart_read.liveness.no_progress_age_ms =
+            restart_decoded.liveness.no_progress_age_ms;
+        assert_eq!(restart_decoded, expected_at_restart_read);
         assert_eq!(
             status::v2_status(),
             None,

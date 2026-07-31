@@ -246,8 +246,9 @@ impl SoracloudRuntime {
             "soracloud_runtime.production_mode requires soracloud_runtime.egress.max_bytes_per_minute"
         );
         assert!(
-            !self.hf.allow_inference_bridge_fallback,
-            "soracloud_runtime.production_mode forbids soracloud_runtime.hf.allow_inference_bridge_fallback"
+            !self.hf.allow_inference_bridge_fallback
+                || self.hf.inference_credential_provider.is_some(),
+            "soracloud_runtime.hf.allow_inference_bridge_fallback requires soracloud_runtime.hf.inference_credential_provider"
         );
         assert!(
             self.submission.signer.is_some(),
@@ -489,8 +490,23 @@ pub struct SoracloudRuntimeHuggingFace {
     pub inference_max_response_bytes: u64,
     /// File-selection allowlist used by the local importer.
     pub import_file_allowlist: Vec<String>,
-    /// Optional bearer token used for the HF Inference bridge.
-    pub inference_token: Option<String>,
+    /// Exact public binding for the deployment-owned inference credential provider.
+    pub inference_credential_provider: Option<SoracloudRuntimeHfCredentialProviderBinding>,
+}
+
+/// Public identity and qualification of the Hugging Face credential provider.
+///
+/// The provider retains bearer credentials and vendor connection material
+/// outside configuration and executes authenticated inference requests through
+/// runtime injection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoracloudRuntimeHfCredentialProviderBinding {
+    /// Stable opaque production provider handle.
+    pub handle: String,
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
 }
 
 impl Default for SoracloudRuntimeHuggingFace {
@@ -520,7 +536,7 @@ impl Default for SoracloudRuntimeHuggingFace {
             inference_max_response_bytes:
                 defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES,
             import_file_allowlist: defaults::soracloud_runtime::hf::import_file_allowlist(),
-            inference_token: None,
+            inference_credential_provider: None,
         }
     }
 }
@@ -9381,6 +9397,8 @@ pub struct SorafsPopCredentialService {
     pub issuer_public_key: [u8; 32],
     /// Non-secret runtime hybrid recipient-key handle.
     pub enrollment_recipient_key_id: String,
+    /// Digest of the exact hybrid enrollment-recipient public key.
+    pub enrollment_recipient_public_key_digest: [u8; 32],
     /// Non-secret runtime wallet wrapping-key handle.
     pub wallet_wrapping_key_id: String,
     /// Non-secret deployment runtime-provider registry handle.
@@ -9414,6 +9432,12 @@ pub struct SorafsPopCredentialService {
 pub struct SorafsModerationOrchestrator {
     /// Private local checkpoint-cache path.
     pub checkpoint_path: PathBuf,
+    /// Identity-pinned authoritative sealed checkpoint-store handle.
+    pub checkpoint_store_handle: String,
+    /// Exact non-zero checkpoint-store adapter and public-policy revision.
+    pub checkpoint_store_revision: u64,
+    /// Exact checkpoint-store public-policy digest.
+    pub checkpoint_store_policy_digest: [u8; 32],
     /// Governance authority used only for deterministic deadline maintenance.
     pub maintenance_authority: AccountId,
     /// Identity-pinned runtime-only moderation transaction signer handle.
@@ -9541,6 +9565,14 @@ pub struct SorafsEvidenceViewer {
     pub receipt_signer_policy_digest: [u8; 32],
     /// Exact receipt-verification key.
     pub receipt_signer_public_key: [u8; 32],
+    /// Identity-pinned external transparency-publisher runtime handle.
+    pub transparency_publisher_handle: String,
+    /// Exact non-zero transparency-publisher adapter and public-policy revision.
+    pub transparency_publisher_revision: u64,
+    /// Exact transparency-publisher adapter public-policy digest.
+    pub transparency_publisher_policy_digest: [u8; 32],
+    /// Exact Ed25519 transparency-head verification key.
+    pub transparency_publisher_public_key: [u8; 32],
 }
 
 /// Public binding for the reputation finalized-archive retention authority.

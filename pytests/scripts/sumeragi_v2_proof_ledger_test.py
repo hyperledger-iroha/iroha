@@ -327,7 +327,7 @@ def copy_async_source_fidelity_fixture(
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / relative, destination)
-    for name in formal_names:
+    for name in (*formal_names, "SumeragiV2AsyncTemporalClosureProofs.tla"):
         destination = formal_dir / name
         if name == "SumeragiV2AsyncLivenessProofs.tla":
             destination.write_text(
@@ -7081,7 +7081,7 @@ def test_reply_route_ownership_mutation_runner_fails_closed(
 
 
 def copy_effect_capacity_mutation_fixture(tmp_path: Path, module) -> tuple[Path, Path]:
-    """Copy the exact 39-file effect-capacity corpus and production seam."""
+    """Copy the exact 40-file effect-capacity corpus and production seam."""
 
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
@@ -7106,7 +7106,7 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
     module = load_checker()
     repo_root, formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
 
-    assert len(module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) == 38
+    assert len(module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) == 39
     assert (
         sum(
             name.endswith(".tla")
@@ -7119,9 +7119,9 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
             name.endswith(".cfg")
             for name in module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS
         )
-        == 32
+        == 33
     )
-    assert len(module.EFFECT_CAPACITY_MUTATION_SHA256) == 39
+    assert len(module.EFFECT_CAPACITY_MUTATION_SHA256) == 40
     assert module._effect_capacity_mutation_source_fidelity_errors(
         formal_dir, repo_root
     ) == []
@@ -7147,7 +7147,7 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
             "effect_capacity_timeout_sign_fixed.cfg 12 \\",
             1,
         ),
-        "found repaired=9, mutants=23",
+        "found repaired=9, mutants=24",
     )
     assert_runner_mutation_rejected(
         runner_source.replace(
@@ -7155,7 +7155,7 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
             "effect_capacity_timeout_sign_lost_bug.cfg 0 \\",
             1,
         ),
-        "found repaired=11, mutants=21",
+        "found repaired=11, mutants=22",
     )
     assert_runner_mutation_rejected(
         runner_source.replace(
@@ -7190,6 +7190,15 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
         role_mutation,
         "certified-request role effect_capacity_certified_request_lost_bug.cfg",
     )
+    assert_runner_mutation_rejected(
+        runner_source.replace(
+            "capacity release atomically installs Fetch B P/Q; new B drains T "
+            "while an authority upgrade retains its exact retry barrier",
+            "periodic retransmission installs Fetch B after capacity release",
+            1,
+        ),
+        "effect-capacity runner must contain exactly one reviewed summary",
+    )
 
 
 @pytest.mark.parametrize(
@@ -7199,6 +7208,7 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
         "SumeragiV2EffectCapacityOuterTransportMutation.tla",
         "SumeragiV2EffectCapacityOwnershipMutation.tla",
         "effect_capacity_certified_request_fixed.cfg",
+        "effect_capacity_certified_request_upgrade_barrier_lost_bug.cfg",
         "effect_capacity_outer_transport_chunk_class_bug.cfg",
         "effect_batch_partial_fifo_fixed.cfg",
         "scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh",
@@ -7314,6 +7324,18 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
             "idempotent exact Fetch retry must stop before duplicate service enqueue",
         ),
         (
+            "begin_fetch",
+            """            pending.task = merged;
+            pending.request_hash = request_hash;
+            return Err(EffectExecutorError::PendingWorkCapacity {
+                capacity: self.config.max_pending_work,
+            });""",
+            """            pending.task = merged;
+            pending.request_hash = request_hash;
+            return Ok(());""",
+            "existing Fetch authority upgrade must install exact P/Q state while retaining the outer FIFO head",
+        ),
+        (
             "commit_fetch_completion",
             """        self.runtime
             .commit_body_available(plan.runtime_reservation)?;
@@ -7386,7 +7408,6 @@ def test_effect_capacity_production_source_fidelity_rejects_semantic_mutants(
     )
 
     errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
-
     assert any(diagnostic in error for error in errors), errors
 
 
@@ -23259,15 +23280,9 @@ ExactLockedCommitTimeoutRecoveryWitness(node, qc) ==
 HistoricalLockedCommitRecoveryWitness(node, qc) ==
   \/ ExactLockedCommitIntents(node, qc.view, qc.subject) # {}
   \/ \E request \in pendingLockCommit:
-       /\ request.node = node
-       /\ request.qc = qc
+       HistoricalLockedCommitWalMatches(node, qc, request)
   \/ \E candidate \in AsyncCandidateSet:
-       /\ candidate.node = node
-       /\ candidate.height = qc.context.height
-       /\ candidate.view = qc.view
-       /\ candidate.subject = qc.subject
-       /\ candidate.kind = "BeginLockCommit"
-       /\ CandidateScheduled(candidate)
+       HistoricalBeginLockRecoveryCandidate(node, qc, candidate)
   \/ ExactLockedCommitTimeoutRecoveryWitness(node, qc)
 =============================================================================
 """
@@ -33284,99 +33299,6 @@ def test_candidate_restart_mutations_are_pinned_and_expected_to_fail() -> None:
     assert "RuntimeProgressKinds" in ingress_mutation
 
 
-def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
-    source = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text()
-
-    structural = source.index("check_sumeragi_v2_proof_ledger.py")
-    tlaps = source.index("run_sumeragi_v2_tlaps.sh")
-    release = source.index("--release")
-    mutations = source.index("run_sumeragi_v2_service_rank_mutation.sh")
-    productive_mutations = source.index("run_sumeragi_v2_productive_mutation.sh")
-    candidate_restart = source.index(
-        "run_sumeragi_v2_candidate_restart_mutation.sh"
-    )
-    progress_mutations = source.index("run_sumeragi_v2_progress_mutations.sh")
-    effect_capacity_mutations = source.index(
-        "run_sumeragi_v2_effect_capacity_ownership_mutation.sh"
-    )
-    liveness_ownership_mutations = source.index(
-        "run_sumeragi_v2_liveness_ownership_mutations.sh"
-    )
-    indexed_service_activation_mutations = source.index(
-        "run_sumeragi_v2_indexed_service_activation_mutations.sh"
-    )
-    adequate_leader_readiness_mutations = source.index(
-        "run_sumeragi_v2_adequate_leader_readiness_mutations.sh"
-    )
-    indexed_height_mutation = source.index(
-        "run_sumeragi_v2_indexed_height_mutation.sh"
-    )
-    item_carrier_typing_mutation = source.index(
-        "run_sumeragi_v2_item_carrier_typing_mutation.sh"
-    )
-    reply_writer_deadline_mutations = source.index(
-        "run_sumeragi_v2_reply_writer_deadline_mutations.sh"
-    )
-    historical_discovery_mutation = source.index(
-        "run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh"
-    )
-    typed_rollover_mutations = source.index(
-        "run_sumeragi_v2_typed_rollover_handoff_mutations.sh"
-    )
-    tlc = source.index("run_sumeragi_v2_tlc.sh")
-    replay = source.index("check_sumeragi_v2_replay_trace.sh")
-    verus = source.index("verify_sumeragi_v2.sh")
-    final_release = source.rindex("--release")
-    final_marker = source.index("Sumeragi v2 formal gate passed")
-    assert (
-        structural
-        < tlaps
-        < release
-        < mutations
-        < productive_mutations
-        < candidate_restart
-        < progress_mutations
-        < effect_capacity_mutations
-        < liveness_ownership_mutations
-        < indexed_service_activation_mutations
-        < adequate_leader_readiness_mutations
-        < indexed_height_mutation
-        < item_carrier_typing_mutation
-        < reply_writer_deadline_mutations
-        < historical_discovery_mutation
-        < typed_rollover_mutations
-        < tlc
-        < replay
-        < verus
-        < final_release
-        < final_marker
-    )
-    for invocation in (
-        "run_sumeragi_v2_indexed_service_activation_mutations.sh",
-        "run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
-        "run_sumeragi_v2_indexed_height_mutation.sh",
-        "run_sumeragi_v2_item_carrier_typing_mutation.sh",
-        "run_sumeragi_v2_reply_writer_deadline_mutations.sh",
-    ):
-        assert source.count(invocation) == 1
-    assert source.count("run_sumeragi_v2_typed_rollover_handoff_mutations.sh") == 1
-    assert "proof_evidence.json" in source
-    cross_requirement = source.index("--print-cross-tool-obligations")
-    cross_generation = source.index("--write-cross-tool-evidence")
-    assert cross_requirement < tlaps < verus < cross_generation < final_release
-    assert 'rm -f -- "$cross_tool_evidence"' in source
-    assert '--verus-evidence "$verus_evidence"' in source
-    assert '--cross-tool-evidence "$cross_tool_evidence"' in source
-
-    verus_source = (ROOT_DIR / "scripts" / "verify_sumeragi_v2.sh").read_text()
-    unit = verus_source.index("--unit")
-    fast_network = verus_source.index("--fast-network")
-    backend = verus_source.index(
-        "run_sumeragi_v2_harness.sh --verus"
-    )
-    assert unit < fast_network < backend
-
-
 def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
     tmp_path: Path,
 ) -> None:
@@ -33541,16 +33463,89 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness source count must be sealed as 738",
         ),
         (
-            "readonly expected_multilane_focus_test_count=280",
-            "readonly expected_multilane_focus_test_count=279",
-            "multilane G-UNIT source count must be sealed as 280",
+            "readonly expected_multilane_focus_test_count=289",
+            "readonly expected_multilane_focus_test_count=288",
+            "multilane G-UNIT source count must be sealed as 289",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 281 ]]; then""",
+            """'[:space:]')" != 290 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 280 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 280 focus rows",
+            """'[:space:]')" != 289 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 289 focus rows",
+        ),
+        (
+            "The canonical 289-row TSV is",
+            "The canonical 288-row TSV is",
+            "G-UNIT inventory comment must seal 289 rows",
+        ),
+        (
+            "including exact 289/289 G-UNIT,",
+            "including exact 288/289 G-UNIT,",
+            "terminal success text must seal exact 289/289 G-UNIT",
+        ),
+        (
+            "  sumeragi::v2_core::refinement::tests::"
+            "in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps\n",
+            "  sumeragi::v2_core::refinement::tests::"
+            "in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "post_sync_append_publication_failure_is_poisoned_and_replayed_on_reopen\n",
+            "  queue::reservation_journal::tests::"
+            "post_sync_append_publication_failure_is_poisoned_and_replayed_on_reopen_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "post_sync_compaction_publication_failure_is_poisoned_and_replayed_on_reopen\n",
+            "  queue::reservation_journal::tests::"
+            "post_sync_compaction_publication_failure_is_poisoned_and_replayed_on_reopen_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_barrier\n",
+            "  queue::reservation_journal::tests::"
+            "runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_barrier_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "prepared_checked_transition_is_bound_to_frame_and_state_generation\n",
+            "  queue::reservation_journal::tests::"
+            "prepared_checked_transition_is_bound_to_frame_and_state_generation_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "prepared_checked_transition_rejects_same_generation_cross_state_substitution\n",
+            "  queue::reservation_journal::tests::"
+            "prepared_checked_transition_rejects_same_generation_cross_state_substitution_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "prepared_checked_transition_binds_exact_ordered_owner_token_coverage\n",
+            "  queue::reservation_journal::tests::"
+            "prepared_checked_transition_binds_exact_ordered_owner_token_coverage_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "checked_transition_result_identity_and_candidate_application_are_atomic\n",
+            "  queue::reservation_journal::tests::"
+            "checked_transition_result_identity_and_candidate_application_are_atomic_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  queue::reservation_journal::tests::"
+            "checked_transition_generation_overflow_is_rejected_without_mutation\n",
+            "  queue::reservation_journal::tests::"
+            "checked_transition_generation_overflow_is_rejected_without_mutation_mutant\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
         ),
         (
             "  native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation\n"

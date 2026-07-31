@@ -163,6 +163,18 @@ def reference_sdk_supply_chain_fingerprint() -> dict[str, object]:
     }
 
 
+def test_reference_sdk_supply_chain_inventory_contracts_are_schema_closed() -> None:
+    """Pin the structured source rows and reviewed public-provenance fields."""
+
+    assert MODULE.REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_FIELDS == frozenset(
+        {"kind", "artifact_path", "sha256"}
+    )
+    assert MODULE.REFERENCE_SDK_PUBLIC_PROVENANCE_FINGERPRINT_FIELDS == (
+        "provenance_certificate_identity",
+        "provenance_oidc_issuer",
+    )
+
+
 def ed25519_public_key_from_seed(seed: bytes) -> bytes:
     """Derive a deterministic test-only Ed25519 public key."""
 
@@ -1473,6 +1485,22 @@ def write_complete_lane_fixture_summary(
             "provider-a",
             "--summary-out",
             str(summary),
+        )
+    elif gate_name == "reference_sdk_release":
+        # SF-11 requires an independently authenticated topology companion.
+        # Build its envelope from the same qualification bytes passed to the
+        # lane checker; appending the aggregate's summary-only argument would
+        # correctly fail because it has no matching signed companion here.
+        signed_topology = fixture_module.write_topology_qualification(
+            evidence_root,
+            deployment_id=DEPLOYMENT_ID,
+            environment=ENVIRONMENT,
+        )
+        exit_code = fixture_module.run_gate(
+            evidence_root,
+            "--summary-out",
+            str(summary),
+            topology=signed_topology,
         )
     elif gate_name == "gateway_compliance":
         exit_code = fixture_module.MODULE.main(

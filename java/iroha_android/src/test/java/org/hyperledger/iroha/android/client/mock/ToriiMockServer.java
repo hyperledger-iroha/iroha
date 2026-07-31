@@ -40,6 +40,12 @@ public final class ToriiMockServer implements AutoCloseable {
           new byte[] {0x01},
           Map.of("Content-Type", "application/x-norito"));
   private static final MockResponse DEFAULT_STATUS_RESPONSE = MockResponse.empty(404);
+  private static final MockResponse DEFAULT_CAPABILITIES_RESPONSE =
+      MockResponse.json(
+          200,
+          "{\"data_model_version\":4,"
+              + "\"signed_transaction_schema_hash_hex\":"
+              + "\"7ab5ff9c572efb316deac478f19209c5\"}");
 
   private final HttpServer server;
   private final ExecutorService executor;
@@ -66,6 +72,7 @@ public final class ToriiMockServer implements AutoCloseable {
     server.setExecutor(executor);
     server.createContext("/v1/pipeline/transactions", this::handleSubmit);
     server.createContext("/v1/pipeline/transactions/status", this::handleStatus);
+    server.createContext("/v1/node/capabilities", this::handleCapabilities);
     server.createContext("/v1/events/sse", this::handleEventsSse);
     server.start();
     final InetSocketAddress address = server.getAddress();
@@ -206,6 +213,18 @@ public final class ToriiMockServer implements AutoCloseable {
               hash, exchange.getRequestURI().getPath(), copyHeaders(exchange.getRequestHeaders())));
       final MockResponse response = pollStatusResponse(hash);
       respond(exchange, response != null ? response : defaultStatusResponse);
+    } catch (final IOException ex) {
+      throw new UncheckedIOException(ex);
+    }
+  }
+
+  private void handleCapabilities(final HttpExchange exchange) {
+    try {
+      if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+        respond(exchange, MockResponse.empty(405));
+        return;
+      }
+      respond(exchange, DEFAULT_CAPABILITIES_RESPONSE);
     } catch (final IOException ex) {
       throw new UncheckedIOException(ex);
     }

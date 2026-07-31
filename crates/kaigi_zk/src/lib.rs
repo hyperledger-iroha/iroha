@@ -2,22 +2,29 @@
 
 //! Halo2 circuits and helpers for Kaigi privacy proofs.
 //!
-//! The current milestone ships the roster join circuit, which checks that the
-//! public commitment and nullifier correspond to the prover-supplied account,
-//! domain salt, and nullifier seed. Future work will extend the circuit with
-//! Merkle binding and additional flows (leave, usage), but the helpers exposed
-//! here already provide deterministic compressors shared between host code and
-//! the circuit.
+//! The roster join circuit checks that the public commitment and nullifier are
+//! domain-separated Poseidon hashes of one prover-supplied account and its
+//! private salts. The current roster root is a separate public state binding:
+//! a join creates a new roster leaf, so it is deliberately not a membership
+//! claim about the pre-join tree. Private leave remains disabled until a
+//! dedicated Merkle-membership circuit is available.
 
 use core::array;
+use std::sync::OnceLock;
 
 use halo2_proofs::{
-    circuit::{Layouter, SimpleFloorPlanner, Value},
-    halo2curves::{ff::PrimeField, pasta::Fp},
-    plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Expression, Instance, Selector},
+    circuit::{Cell, Layouter, Region, SimpleFloorPlanner, Value},
+    halo2curves::{
+        ff::{Field, PrimeField},
+        pasta::Fp,
+    },
+    plonk::{
+        Advice, Circuit, Column, ConstraintSystem, Error, Fixed, Instance, Selector,
+    },
     poly::Rotation,
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree};
+use poseidon_primitives::poseidon::primitives::Spec;
 
 /// Scalar field used by the Kaigi Halo2 circuits (Pasta Fp).
 pub type Scalar = Fp;
@@ -27,9 +34,9 @@ pub const KAIGI_ROSTER_BACKEND: &str = "halo2/pasta/kaigi-roster-v1";
 
 /// Default log2 domain size used when instantiating the roster join circuit.
 ///
-/// `k = 6` gives a 64-row domain, which is ample for the two-row layout used by
-/// the initial circuit while keeping parameter generation inexpensive.
-pub const KAIGI_ROSTER_CIRCUIT_K: u32 = 6;
+/// `k = 8` gives a 256-row domain, which accommodates two complete
+/// domain-separated Poseidon permutations plus the public roster-root binding.
+pub const KAIGI_ROSTER_CIRCUIT_K: u32 = 8;
 
 /// Number of little-endian 64-bit limbs used to expose the roster root.
 pub const KAIGI_ROSTER_ROOT_LIMBS: usize = 4;
@@ -38,15 +45,75 @@ pub const KAIGI_ROSTER_ROOT_LIMBS: usize = 4;
 pub const KAIGI_USAGE_BACKEND: &str = "halo2/pasta/kaigi-usage-v1";
 
 /// Default log2 domain size for the usage commitment circuit.
-pub const KAIGI_USAGE_CIRCUIT_K: u32 = 6;
+pub const KAIGI_USAGE_CIRCUIT_K: u32 = 8;
+
+const POSEIDON_WIDTH: usize = 3;
+const POSEIDON_RATE: usize = 2;
+const POSEIDON_FULL_ROUNDS: usize = 8;
+const POSEIDON_PARTIAL_ROUNDS: usize = 56;
+const POSEIDON_ROUNDS: usize = POSEIDON_FULL_ROUNDS + POSEIDON_PARTIAL_ROUNDS;
+
+// These capacity words are part of the first-release circuit statement. They
+// keep commitments from being replayed as nullifiers or usage commitments.
+const DOMAIN_ROSTER_COMMITMENT: u64 = 0x4b41_4947_4943_4d54;
+const DOMAIN_ROSTER_NULLIFIER: u64 = 0x4b41_4947_494e_554c;
+const DOMAIN_USAGE_STAGE: u64 = 0x4b41_4947_5553_4731;
+const DOMAIN_USAGE_COMMITMENT: u64 = 0x4b41_4947_5553_4732;
+
+#[derive(Debug)]
+struct KaigiPoseidonSpec;
+
+impl Spec<Scalar, POSEIDON_WIDTH, POSEIDON_RATE> for KaigiPoseidonSpec {
+    fn full_rounds() -> usize {
+        POSEIDON_FULL_ROUNDS
+    }
+
+    fn partial_rounds() -> usize {
+        POSEIDON_PARTIAL_ROUNDS
+    }
+
+    fn sbox(value: Scalar) -> Scalar {
+        value.pow_vartime([5])
+    }
+
+    fn secure_mds() -> usize {
+        0
+    }
+}
+
+struct PoseidonConstants {
+    round_constants: Vec<[Scalar; POSEIDON_WIDTH]>,
+    mds: [[Scalar; POSEIDON_WIDTH]; POSEIDON_WIDTH],
+}
+
+fn poseidon_constants() -> &'static PoseidonConstants {
+    static CONSTANTS: OnceLock<PoseidonConstants> = OnceLock::new();
+    CONSTANTS.get_or_init(|| {
+        let (round_constants, mds, _) =
+            <KaigiPoseidonSpec as Spec<Scalar, POSEIDON_WIDTH, POSEIDON_RATE>>::constants();
+        assert_eq!(round_constants.len(), POSEIDON_ROUNDS);
+        PoseidonConstants {
+            round_constants,
+            mds,
+        }
+    })
+}
+
+/// Shared configuration for the fixed Poseidon permutation.
+#[derive(Clone, Debug)]
+struct KaigiPoseidonConfig {
+    state: [Column<Advice>; POSEIDON_WIDTH],
+    round_constants: [Column<Fixed>; POSEIDON_WIDTH],
+    domain: Column<Fixed>,
+    q_init: Selector,
+    q_full_round: Selector,
+    q_partial_round: Selector,
+}
 
 /// Configuration for the roster join Halo2 circuit.
 #[derive(Clone, Debug)]
 pub struct KaigiRosterConfig {
-    account: Column<Advice>,
-    parameter: Column<Advice>,
-    output: Column<Advice>,
-    selector: Selector,
+    poseidon: KaigiPoseidonConfig,
     instance_commitment: Column<Instance>,
     instance_nullifier: Column<Instance>,
     roster_root_limbs: [Column<Advice>; KAIGI_ROSTER_ROOT_LIMBS],
@@ -81,6 +148,76 @@ impl KaigiRosterJoinCircuit {
     }
 }
 
+fn configure_poseidon(meta: &mut ConstraintSystem<Scalar>) -> KaigiPoseidonConfig {
+    let state = array::from_fn(|_| {
+        let column = meta.advice_column();
+        meta.enable_equality(column);
+        column
+    });
+    let round_constants = array::from_fn(|_| meta.fixed_column());
+    let domain = meta.fixed_column();
+    let q_init = meta.selector();
+    let q_full_round = meta.selector();
+    let q_partial_round = meta.selector();
+
+    meta.create_gate("kaigi Poseidon domain", |meta| {
+        let enabled = meta.query_selector(q_init);
+        let capacity = meta.query_advice(state[2], Rotation::cur());
+        let expected_domain = meta.query_fixed(domain, Rotation::cur());
+        vec![enabled * (capacity - expected_domain)]
+    });
+
+    let constants = poseidon_constants();
+    meta.create_gate("kaigi Poseidon full round", |meta| {
+        let enabled = meta.query_selector(q_full_round);
+        (0..POSEIDON_WIDTH)
+            .map(|row| {
+                let expected = (0..POSEIDON_WIDTH).fold(
+                    halo2_proofs::plonk::Expression::Constant(Scalar::ZERO),
+                    |accumulator, column| {
+                        let current = meta.query_advice(state[column], Rotation::cur());
+                        let round_constant =
+                            meta.query_fixed(round_constants[column], Rotation::cur());
+                        let shifted = current + round_constant;
+                        let square = shifted.clone() * shifted.clone();
+                        let fifth = square.clone() * square * shifted;
+                        accumulator + fifth * constants.mds[row][column]
+                    },
+                );
+                let next = meta.query_advice(state[row], Rotation::next());
+                enabled.clone() * (expected - next)
+            })
+            .collect::<Vec<_>>()
+    });
+    meta.create_gate("kaigi Poseidon partial round", |meta| {
+        let enabled = meta.query_selector(q_partial_round);
+        let shifted = array::from_fn::<_, POSEIDON_WIDTH, _>(|column| {
+            meta.query_advice(state[column], Rotation::cur())
+                + meta.query_fixed(round_constants[column], Rotation::cur())
+        });
+        let square = shifted[0].clone() * shifted[0].clone();
+        let first_fifth = square.clone() * square * shifted[0].clone();
+        (0..POSEIDON_WIDTH)
+            .map(|row| {
+                let expected = first_fifth.clone() * constants.mds[row][0]
+                    + shifted[1].clone() * constants.mds[row][1]
+                    + shifted[2].clone() * constants.mds[row][2];
+                let next = meta.query_advice(state[row], Rotation::next());
+                enabled.clone() * (expected - next)
+            })
+            .collect::<Vec<_>>()
+    });
+
+    KaigiPoseidonConfig {
+        state,
+        round_constants,
+        domain,
+        q_init,
+        q_full_round,
+        q_partial_round,
+    }
+}
+
 impl Circuit<Scalar> for KaigiRosterJoinCircuit {
     type Config = KaigiRosterConfig;
     type FloorPlanner = SimpleFloorPlanner;
@@ -91,12 +228,7 @@ impl Circuit<Scalar> for KaigiRosterJoinCircuit {
     }
 
     fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        let account = meta.advice_column();
-        let parameter = meta.advice_column();
-        let output = meta.advice_column();
-
-        meta.enable_equality(account);
-        meta.enable_equality(output);
+        let poseidon = configure_poseidon(meta);
 
         let instance_commitment = meta.instance_column();
         let instance_nullifier = meta.instance_column();
@@ -114,22 +246,8 @@ impl Circuit<Scalar> for KaigiRosterJoinCircuit {
             column
         });
 
-        let selector = meta.selector();
-        meta.create_gate("kaigi_roster_compress", |meta| {
-            let q = meta.query_selector(selector);
-            let left = meta.query_advice(account, Rotation::cur());
-            let right = meta.query_advice(parameter, Rotation::cur());
-            let out = meta.query_advice(output, Rotation::cur());
-
-            let expected = compress_expression(left, right);
-            vec![q * (out - expected)]
-        });
-
         KaigiRosterConfig {
-            account,
-            parameter,
-            output,
-            selector,
+            poseidon,
             instance_commitment,
             instance_nullifier,
             roster_root_limbs,
@@ -147,29 +265,33 @@ impl Circuit<Scalar> for KaigiRosterJoinCircuit {
         let nullifier_seed_value = to_value(self.nullifier_seed);
         let roster_root_values = self.roster_root_limbs.map(to_value);
 
-        let commitment_value = compress_value(account_value, domain_value);
-        let nullifier_value = compress_value(account_value, nullifier_seed_value);
-
         let (commitment_cell, nullifier_cell) = layouter.assign_region(
-            || "kaigi roster rows",
+            || "kaigi roster Poseidon commitments",
             |mut region| {
-                config.selector.enable(&mut region, 0)?;
-                let account_cell = region.assign_advice(config.account, 0, account_value);
-                region.assign_advice(config.parameter, 0, domain_value);
-                let commitment_cell = region.assign_advice(config.output, 0, commitment_value);
-
-                config.selector.enable(&mut region, 1)?;
-                let account_again = region.assign_advice(config.account, 1, account_value);
-                region.constrain_equal(account_cell.cell(), account_again.cell());
-                region.assign_advice(config.parameter, 1, nullifier_seed_value);
-                let nullifier_cell = region.assign_advice(config.output, 1, nullifier_value);
+                let (commitment_account, commitment_cell) = assign_poseidon_permutation(
+                    &mut region,
+                    &config.poseidon,
+                    0,
+                    DOMAIN_ROSTER_COMMITMENT,
+                    account_value,
+                    domain_value,
+                )?;
+                let (nullifier_account, nullifier_cell) = assign_poseidon_permutation(
+                    &mut region,
+                    &config.poseidon,
+                    POSEIDON_ROUNDS + 1,
+                    DOMAIN_ROSTER_NULLIFIER,
+                    account_value,
+                    nullifier_seed_value,
+                )?;
+                region.constrain_equal(commitment_account, nullifier_account);
 
                 Ok((commitment_cell, nullifier_cell))
             },
         )?;
 
-        layouter.constrain_instance(commitment_cell.cell(), config.instance_commitment, 0);
-        layouter.constrain_instance(nullifier_cell.cell(), config.instance_nullifier, 0);
+        layouter.constrain_instance(commitment_cell, config.instance_commitment, 0);
+        layouter.constrain_instance(nullifier_cell, config.instance_nullifier, 0);
 
         let root_cells = layouter.assign_region(
             || "kaigi roster root limbs",
@@ -191,16 +313,125 @@ impl Circuit<Scalar> for KaigiRosterJoinCircuit {
     }
 }
 
+fn value_pow5(value: Value<Scalar>) -> Value<Scalar> {
+    let square = value * value;
+    square * square * value
+}
+
+fn poseidon_round(mut state: [Scalar; POSEIDON_WIDTH], round: usize) -> [Scalar; POSEIDON_WIDTH] {
+    let constants = poseidon_constants();
+    for (word, round_constant) in state
+        .iter_mut()
+        .zip(constants.round_constants[round].iter())
+    {
+        *word += round_constant;
+    }
+    let half_full_rounds = POSEIDON_FULL_ROUNDS / 2;
+    if round < half_full_rounds || round >= half_full_rounds + POSEIDON_PARTIAL_ROUNDS {
+        for word in &mut state {
+            *word = word.pow_vartime([5]);
+        }
+    } else {
+        state[0] = state[0].pow_vartime([5]);
+    }
+    array::from_fn(|row| {
+        (0..POSEIDON_WIDTH).fold(Scalar::ZERO, |accumulator, column| {
+            accumulator + constants.mds[row][column] * state[column]
+        })
+    })
+}
+
+fn poseidon_round_value(
+    mut state: [Value<Scalar>; POSEIDON_WIDTH],
+    round: usize,
+) -> [Value<Scalar>; POSEIDON_WIDTH] {
+    let constants = poseidon_constants();
+    for (word, round_constant) in state
+        .iter_mut()
+        .zip(constants.round_constants[round].iter())
+    {
+        *word = *word + Value::known(*round_constant);
+    }
+    let half_full_rounds = POSEIDON_FULL_ROUNDS / 2;
+    if round < half_full_rounds || round >= half_full_rounds + POSEIDON_PARTIAL_ROUNDS {
+        for word in &mut state {
+            *word = value_pow5(*word);
+        }
+    } else {
+        state[0] = value_pow5(state[0]);
+    }
+    array::from_fn(|row| {
+        (0..POSEIDON_WIDTH).fold(Value::known(Scalar::ZERO), |accumulator, column| {
+            accumulator + state[column] * Value::known(constants.mds[row][column])
+        })
+    })
+}
+
+fn poseidon_compress(domain: u64, left: Scalar, right: Scalar) -> Scalar {
+    let mut state = [left, right, Scalar::from(domain)];
+    for round in 0..POSEIDON_ROUNDS {
+        state = poseidon_round(state, round);
+    }
+    state[0]
+}
+
+fn assign_poseidon_permutation(
+    region: &mut Region<'_, Scalar>,
+    config: &KaigiPoseidonConfig,
+    start_row: usize,
+    domain: u64,
+    left: Value<Scalar>,
+    right: Value<Scalar>,
+) -> Result<(Cell, Cell), Error> {
+    config.q_init.enable(region, start_row)?;
+    region.assign_fixed(config.domain, start_row, Scalar::from(domain));
+
+    let mut state_values = [left, right, Value::known(Scalar::from(domain))];
+    let mut state_cells: [_; POSEIDON_WIDTH] = array::from_fn(|column| {
+        region.assign_advice(config.state[column], start_row, state_values[column])
+    });
+    let left_cell = state_cells[0].cell();
+
+    for round in 0..POSEIDON_ROUNDS {
+        for column in 0..POSEIDON_WIDTH {
+            region.assign_fixed(
+                config.round_constants[column],
+                start_row + round,
+                poseidon_constants().round_constants[round][column],
+            );
+        }
+        let half_full_rounds = POSEIDON_FULL_ROUNDS / 2;
+        if round < half_full_rounds || round >= half_full_rounds + POSEIDON_PARTIAL_ROUNDS {
+            config.q_full_round.enable(region, start_row + round)?;
+        } else {
+            config
+                .q_partial_round
+                .enable(region, start_row + round)?;
+        }
+
+        state_values = poseidon_round_value(state_values, round);
+        state_cells = array::from_fn(|column| {
+            region.assign_advice(
+                config.state[column],
+                start_row + round + 1,
+                state_values[column],
+            )
+        });
+    }
+
+    Ok((left_cell, state_cells[0].cell()))
+}
+
 /// Compute the roster commitment as a Pasta field element.
 #[must_use]
 pub fn compute_commitment(account: Scalar, domain_salt: Scalar) -> Scalar {
-    compress_scalar(account, domain_salt)
+    poseidon_compress(DOMAIN_ROSTER_COMMITMENT, account, domain_salt)
 }
 
 /// Compute the roster nullifier as a Pasta field element.
 #[must_use]
 pub fn compute_nullifier(account: Scalar, nullifier_seed: Scalar) -> Scalar {
-    compress_scalar(account, nullifier_seed)
+    poseidon_compress(DOMAIN_ROSTER_NULLIFIER, account, nullifier_seed)
 }
 
 /// Compute the usage commitment (duration, gas, segment) as a Pasta field element.
@@ -210,8 +441,8 @@ pub fn compute_usage_commitment(
     billed_gas: Scalar,
     segment_index: Scalar,
 ) -> Scalar {
-    let stage = compress_scalar(duration_ms, billed_gas);
-    compress_scalar(stage, segment_index)
+    let stage = poseidon_compress(DOMAIN_USAGE_STAGE, duration_ms, billed_gas);
+    poseidon_compress(DOMAIN_USAGE_COMMITMENT, stage, segment_index)
 }
 
 /// Compute the roster commitment as a byte array matching the circuit output.
@@ -268,49 +499,22 @@ fn to_value(input: Option<Scalar>) -> Value<Scalar> {
     input.map(Value::known).unwrap_or_else(Value::unknown)
 }
 
-fn compress_value(left: Value<Scalar>, right: Value<Scalar>) -> Value<Scalar> {
-    left.zip(right).map(|(l, r)| compress_scalar(l, r))
-}
-
-fn compress_scalar(left: Scalar, right: Scalar) -> Scalar {
-    let a = left + Scalar::from(7u64);
-    let b = right + Scalar::from(13u64);
-
-    let a2 = a * a;
-    let a4 = a2 * a2;
-    let a5 = a4 * a;
-
-    let b2 = b * b;
-    let b4 = b2 * b2;
-    let b5 = b4 * b;
-
-    Scalar::from(2u64) * a5 + Scalar::from(3u64) * b5
-}
-
-fn compress_expression(left: Expression<Scalar>, right: Expression<Scalar>) -> Expression<Scalar> {
-    let seven = Expression::Constant(Scalar::from(7u64));
-    let thirteen = Expression::Constant(Scalar::from(13u64));
-    let two = Expression::Constant(Scalar::from(2u64));
-    let three = Expression::Constant(Scalar::from(3u64));
-
-    let a = left + seven;
-    let b = right + thirteen;
-
-    let a2 = a.clone() * a.clone();
-    let a4 = a2.clone() * a2.clone();
-    let a5 = a4 * a.clone();
-
-    let b2 = b.clone() * b.clone();
-    let b4 = b2.clone() * b2.clone();
-    let b5 = b4 * b;
-
-    two * a5 + three * b5
-}
-
 fn scalar_to_bytes(value: Scalar) -> [u8; Hash::LENGTH] {
     let mut out = [0u8; Hash::LENGTH];
     out.copy_from_slice(value.to_repr().as_ref());
     out
+}
+
+/// Decode a canonical Pasta scalar stored in a Kaigi commitment hash.
+///
+/// Kaigi commitments and nullifiers use [`Hash::prehashed`] as a typed
+/// 32-byte container for the circuit output. Values at or above the Pasta
+/// modulus are therefore rejected instead of being reduced modulo the field.
+#[must_use]
+pub fn scalar_from_hash(hash: &Hash) -> Option<Scalar> {
+    let mut representation = <Scalar as PrimeField>::Repr::default();
+    representation.as_mut().copy_from_slice(hash.as_ref());
+    Option::from(Scalar::from_repr(representation))
 }
 
 /// Domain separation tag for Kaigi roster commitment leaves.
@@ -377,10 +581,7 @@ pub fn compute_usage_commitment_hash(
 /// Configuration for the Kaigi usage commitment circuit.
 #[derive(Clone, Debug)]
 pub struct KaigiUsageConfig {
-    lhs: Column<Advice>,
-    rhs: Column<Advice>,
-    output: Column<Advice>,
-    selector: Selector,
+    poseidon: KaigiPoseidonConfig,
     instance_commitment: Column<Instance>,
 }
 
@@ -414,32 +615,13 @@ impl Circuit<Scalar> for KaigiUsageCommitmentCircuit {
     }
 
     fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        let lhs = meta.advice_column();
-        let rhs = meta.advice_column();
-        let output = meta.advice_column();
-
-        meta.enable_equality(lhs);
-        meta.enable_equality(output);
+        let poseidon = configure_poseidon(meta);
 
         let instance_commitment = meta.instance_column();
         meta.enable_equality(instance_commitment);
 
-        let selector = meta.selector();
-        meta.create_gate("kaigi_usage_compress", |meta| {
-            let q = meta.query_selector(selector);
-            let left = meta.query_advice(lhs, Rotation::cur());
-            let right = meta.query_advice(rhs, Rotation::cur());
-            let out = meta.query_advice(output, Rotation::cur());
-
-            let expected = compress_expression(left, right);
-            vec![q * (out - expected)]
-        });
-
         KaigiUsageConfig {
-            lhs,
-            rhs,
-            output,
-            selector,
+            poseidon,
             instance_commitment,
         }
     }
@@ -453,28 +635,37 @@ impl Circuit<Scalar> for KaigiUsageCommitmentCircuit {
         let billed_value = to_value(self.billed_gas);
         let segment_value = to_value(self.segment_index);
 
-        let stage_value = compress_value(duration_value, billed_value);
-        let commitment_value = compress_value(stage_value, segment_value);
-
         let commitment_cell = layouter.assign_region(
-            || "kaigi usage rows",
+            || "kaigi usage Poseidon commitment",
             |mut region| {
-                config.selector.enable(&mut region, 0)?;
-                region.assign_advice(config.lhs, 0, duration_value);
-                region.assign_advice(config.rhs, 0, billed_value);
-                let stage_cell = region.assign_advice(config.output, 0, stage_value);
-
-                config.selector.enable(&mut region, 1)?;
-                let stage_again = region.assign_advice(config.lhs, 1, stage_value);
-                region.constrain_equal(stage_cell.cell(), stage_again.cell());
-                region.assign_advice(config.rhs, 1, segment_value);
-                let commitment_cell = region.assign_advice(config.output, 1, commitment_value);
+                let (_, stage_cell) = assign_poseidon_permutation(
+                    &mut region,
+                    &config.poseidon,
+                    0,
+                    DOMAIN_USAGE_STAGE,
+                    duration_value,
+                    billed_value,
+                )?;
+                let stage_value = duration_value
+                    .zip(billed_value)
+                    .map(|(duration, billed)| {
+                        poseidon_compress(DOMAIN_USAGE_STAGE, duration, billed)
+                    });
+                let (stage_again, commitment_cell) = assign_poseidon_permutation(
+                    &mut region,
+                    &config.poseidon,
+                    POSEIDON_ROUNDS + 1,
+                    DOMAIN_USAGE_COMMITMENT,
+                    stage_value,
+                    segment_value,
+                )?;
+                region.constrain_equal(stage_cell, stage_again);
 
                 Ok(commitment_cell)
             },
         )?;
 
-        layouter.constrain_instance(commitment_cell.cell(), config.instance_commitment, 0);
+        layouter.constrain_instance(commitment_cell, config.instance_commitment, 0);
         Ok(())
     }
 }
@@ -482,6 +673,7 @@ impl Circuit<Scalar> for KaigiUsageCommitmentCircuit {
 #[cfg(test)]
 mod tests {
     use halo2_proofs::{
+        dev::MockProver,
         halo2curves::pasta::{EqAffine as Curve, Fp as FieldScalar},
         plonk::{keygen_pk, keygen_vk},
         poly::{commitment::ParamsProver, ipa::commitment::ParamsIPA},
@@ -501,6 +693,52 @@ mod tests {
     }
 
     #[test]
+    fn poseidon_rejects_a_collision_in_the_retired_quintic_compressor() {
+        // x -> x^5 is a permutation in Pasta Fp. The retired separable
+        // compressor therefore made chosen-input collisions directly
+        // constructible by solving one fifth root.
+        let inverse_five_exponent = [
+            0xe0f0_f3f0_cccc_cccd,
+            0x4e9e_e0c9_a10a_60e2,
+            0x3333_3333_3333_3333,
+            0x3333_3333_3333_3333,
+        ];
+        let inverse_three =
+            Option::<Scalar>::from(Scalar::from(3u64).invert()).expect("three is non-zero");
+        let fifth_root = (Scalar::from(2u64) * inverse_three)
+            .pow_vartime(inverse_five_exponent);
+
+        let first = (Scalar::ONE - Scalar::from(7u64), -Scalar::from(13u64));
+        let second = (
+            -Scalar::from(7u64),
+            fifth_root - Scalar::from(13u64),
+        );
+        let retired_compressor = |left: Scalar, right: Scalar| {
+            Scalar::from(2u64) * (left + Scalar::from(7u64)).pow_vartime([5])
+                + Scalar::from(3u64) * (right + Scalar::from(13u64)).pow_vartime([5])
+        };
+
+        assert_eq!(
+            retired_compressor(first.0, first.1),
+            retired_compressor(second.0, second.1)
+        );
+        assert_ne!(
+            compute_commitment(first.0, first.1),
+            compute_commitment(second.0, second.1)
+        );
+    }
+
+    #[test]
+    fn commitment_hash_scalar_decoding_is_canonical() {
+        let scalar = compute_commitment(Scalar::from(11u64), Scalar::from(31u64));
+        let hash = Hash::prehashed(scalar_to_bytes(scalar));
+        assert_eq!(scalar_from_hash(&hash), Some(scalar));
+
+        let non_canonical = Hash::prehashed([u8::MAX; Hash::LENGTH]);
+        assert_eq!(scalar_from_hash(&non_canonical), None);
+    }
+
+    #[test]
     fn roster_circuit_keygen_succeeds() {
         let params: ParamsIPA<Curve> = ParamsIPA::new(KAIGI_ROSTER_CIRCUIT_K);
         let account = FieldScalar::from(3u64);
@@ -512,6 +750,34 @@ mod tests {
 
         let vk = keygen_vk(&params, &circuit).expect("vk");
         let _pk = keygen_pk(&params, vk, &circuit).expect("pk");
+    }
+
+    #[test]
+    fn roster_circuit_binds_every_public_root_limb() {
+        let account = FieldScalar::from(3u64);
+        let domain_salt = FieldScalar::from(17u64);
+        let nullifier_seed = FieldScalar::from(25u64);
+        let root_hash = empty_roster_root_hash();
+        let root_limbs = roster_root_limbs(&root_hash);
+        let circuit =
+            KaigiRosterJoinCircuit::new(account, domain_salt, nullifier_seed, root_limbs);
+        let commitment = compute_commitment(account, domain_salt);
+        let nullifier = compute_nullifier(account, nullifier_seed);
+        let mut public_inputs = vec![vec![commitment], vec![nullifier]];
+        public_inputs.extend(root_limbs.map(|limb| vec![limb]));
+
+        MockProver::run(KAIGI_ROSTER_CIRCUIT_K, &circuit, public_inputs.clone())
+            .expect("valid roster circuit")
+            .assert_satisfied();
+
+        public_inputs[2][0] += FieldScalar::ONE;
+        let mismatched =
+            MockProver::run(KAIGI_ROSTER_CIRCUIT_K, &circuit, public_inputs)
+                .expect("mismatched public root still constructs");
+        assert!(
+            mismatched.verify().is_err(),
+            "the proof statement must bind the advertised roster root"
+        );
     }
 
     #[test]
@@ -547,5 +813,30 @@ mod tests {
 
         let vk = keygen_vk(&params, &circuit).expect("vk");
         let _pk = keygen_pk(&params, vk, &circuit).expect("pk");
+    }
+
+    #[test]
+    fn usage_circuit_enforces_the_domain_separated_poseidon_commitment() {
+        let duration = FieldScalar::from(1_200u64);
+        let billed = FieldScalar::from(345u64);
+        let segment = FieldScalar::from(2u64);
+        let circuit = KaigiUsageCommitmentCircuit::new(duration, billed, segment);
+        let commitment = compute_usage_commitment(duration, billed, segment);
+
+        MockProver::run(
+            KAIGI_USAGE_CIRCUIT_K,
+            &circuit,
+            vec![vec![commitment]],
+        )
+        .expect("valid usage circuit")
+        .assert_satisfied();
+
+        let mismatched = MockProver::run(
+            KAIGI_USAGE_CIRCUIT_K,
+            &circuit,
+            vec![vec![commitment + FieldScalar::ONE]],
+        )
+        .expect("mismatched public commitment still constructs");
+        assert!(mismatched.verify().is_err());
     }
 }

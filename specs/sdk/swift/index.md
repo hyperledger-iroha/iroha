@@ -609,9 +609,10 @@ you need the full decrypted payload (sign results, encrypted controls), or
 
 For higher-level walkthroughs, see:
 
-- `docs/connect_swift_integration.md` — full Xcode integration guide covering NoritoBridgeKit,
-  ConnectClient/ConnectSession wiring, and ChaChaPoly envelope handling.
-- `docs/norito_demo_contributor.md` — SwiftUI demo setup (local Torii), acceleration toggles, and telemetry tips.
+- the [public Swift SDK tutorial](https://docs.iroha.tech/guide/tutorials/swift.html)
+  for application integration and Connect flows;
+- `docs/norito_demo_contributor.md` for the source-adjacent SwiftUI demo setup,
+  acceleration toggles, and telemetry tips.
 
 ## Torii REST Coverage
 

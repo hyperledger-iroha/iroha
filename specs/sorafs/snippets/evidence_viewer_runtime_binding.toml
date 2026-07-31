@@ -71,3 +71,8 @@ receipt_signer_handle = "hsm.evidence.receipts.primary"
 receipt_signer_revision = 14
 receipt_signer_policy_digest_hex = "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4"
 receipt_signer_public_key_hex = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+
+transparency_publisher_handle = "transparency.evidence.publisher.primary"
+transparency_publisher_revision = 17
+transparency_publisher_policy_digest_hex = "a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8"
+transparency_publisher_public_key_hex = "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025"

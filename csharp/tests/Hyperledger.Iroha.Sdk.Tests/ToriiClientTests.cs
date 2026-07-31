@@ -13120,39 +13120,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task SubmitTransactionAsyncPostsNoritoPayload()
-    {
-        var transaction = new TransactionBuilder(
-            "00000042",
-            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
-            EmptyAuthorityFeePayment)
-            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.75", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
-            .SetCreationTimeMilliseconds(1736000000000)
-            .SetTimeToLiveMilliseconds(3500)
-            .SetNonce(17)
-            .BuildSigned(Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032"));
-
-        using var handler = new RecordingHandler(request =>
-        {
-            Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/transaction", request.RequestUri!.AbsolutePath);
-            Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
-            using var stream = request.Content.ReadAsStream();
-            using var buffer = new MemoryStream();
-            stream.CopyTo(buffer);
-            Assert.Equal(transaction.NoritoBytes, buffer.ToArray());
-
-            return new HttpResponseMessage(HttpStatusCode.Accepted)
-            {
-                Content = new ByteArrayContent(Array.Empty<byte>()),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        await client.SubmitTransactionAsync(transaction, cancellationToken: TestContext.Current.CancellationToken);
-    }
-
-    [Fact]
     public async Task SubmitTransactionAsyncRejectsEmptyNoritoPayloadBeforeDispatch()
     {
         using var handler = new RecordingHandler(_ =>
@@ -22969,6 +22936,18 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown node capabilities field.");
         }
 
+        return response.ToJsonString();
+    }
+
+    internal static string TransactionSubmissionCapabilitiesJson(
+        int dataModelVersion = ToriiNodeCapabilities.ExpectedDataModelVersion,
+        string signedTransactionSchemaHashHex =
+            ToriiNodeCapabilities.ExpectedSignedTransactionSchemaHashHex)
+    {
+        var response = JsonNode.Parse(
+            NodeCapabilitiesResponseJson("data_model_version", dataModelVersion))!
+            .AsObject();
+        response["signed_transaction_schema_hash_hex"] = signedTransactionSchemaHashHex;
         return response.ToJsonString();
     }
 

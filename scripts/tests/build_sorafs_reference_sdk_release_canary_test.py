@@ -33,11 +33,15 @@ assert CHECKER_SPEC and CHECKER_SPEC.loader  # pragma: no cover - defensive
 sys.modules[CHECKER_SPEC.name] = CHECKER
 CHECKER_SPEC.loader.exec_module(CHECKER)
 
-from sorafs_topology_qualification import CANONICAL_READINESS_LANES  # noqa: E402
+import sorafs_topology_qualification as TOPOLOGY  # noqa: E402
 from sorafs_reference_sdk_supply_chain import (  # noqa: E402
     SourceArtifactBinding,
     SupplyChainSourceResult,
     SupplyChainTargetResult,
+)
+from sorafs_resilience_test_support import (  # noqa: E402
+    public_key_from_seed,
+    sign,
 )
 
 
@@ -73,6 +77,17 @@ PROVENANCE_VERIFICATION_SIGNATURE = bytes.fromhex(
     "5fb8821590a33bacc61e39701cf9b46b"
     "d25bf5f0595bbe24655141438e7a100b"
 )
+TOPOLOGY_SIGNER_IDENTITY = "sorafs-sf11-topology-qualification-hsm"
+TOPOLOGY_SIGNER_KEY_REVISION = 7
+TOPOLOGY_SIGNER_POLICY_DIGEST_HEX = hashlib.sha256(
+    b"sorafs-sf11-topology-signer-policy-v1"
+).hexdigest()
+TOPOLOGY_SIGNING_SEED = hashlib.sha256(
+    b"sorafs-sf11-topology-qualification-builder-test-key"
+).digest()
+TOPOLOGY_VERIFICATION_PUBLIC_KEY = public_key_from_seed(TOPOLOGY_SIGNING_SEED)
+TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX = TOPOLOGY_VERIFICATION_PUBLIC_KEY.hex()
+TOPOLOGY_MAX_REVIEW_AGE_SECS = 3_600
 
 
 def supply_chain_result(
@@ -259,12 +274,46 @@ def write_topology_qualification(path: Path) -> Path:
         "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
         "runtime_material_policy_valid": True,
         "signed_model_artifact_count": 1,
-        "required_lane_slots": list(CANONICAL_READINESS_LANES),
-        "recognized_lane_slot_count": len(CANONICAL_READINESS_LANES),
+        "required_lane_slots": list(TOPOLOGY.CANONICAL_READINESS_LANES),
+        "recognized_lane_slot_count": len(TOPOLOGY.CANONICAL_READINESS_LANES),
         "errors": [],
     }
     path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    binding, errors = TOPOLOGY.load_topology_qualification_binding(
+        path,
+        expected_deployment_id="reference-sdk-release-20260701",
+        expected_environment="production",
+    )
+    assert errors == []
+    assert binding is not None
+    envelope = {
+        "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
+        **binding,
+        "signer_identity": TOPOLOGY_SIGNER_IDENTITY,
+        "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
+        "signer_key_fingerprint_hex": hashlib.sha256(
+            TOPOLOGY_VERIFICATION_PUBLIC_KEY
+        ).hexdigest(),
+        "signer_policy_digest_hex": TOPOLOGY_SIGNER_POLICY_DIGEST_HEX,
+        "reviewed_at_unix": NOW_UNIX - 60,
+        "signature_algorithm": "ed25519",
+        "signature_hex": "00" * 64,
+    }
+    envelope["signature_hex"] = sign(
+        TOPOLOGY_SIGNING_SEED,
+        TOPOLOGY.topology_qualification_envelope_signing_bytes(envelope),
+    ).hex()
+    topology_envelope_path(path).write_text(
+        json.dumps(envelope, sort_keys=True),
+        encoding="utf-8",
+    )
     return path
+
+
+def topology_envelope_path(qualification_path: Path) -> Path:
+    """Return the deterministic signed companion for a topology summary."""
+
+    return qualification_path.with_name(f"{qualification_path.name}.ed25519")
 
 
 def assert_rejected_without_artifact(
@@ -308,11 +357,26 @@ def test_generated_canaries_pass_full_reference_sdk_release_gate(
         evidence_paths.append(canary_path(tmp_path, kind))
     summary = tmp_path / "summary.json"
 
+    topology_summary = write_topology_qualification(
+        tmp_path / "l1-topology.summary"
+    )
     command = [
         "--now-unix",
         str(NOW_UNIX),
         "--topology-qualification-summary",
-        str(write_topology_qualification(tmp_path / "l1-topology.summary")),
+        str(topology_summary),
+        "--topology-qualification-envelope",
+        str(topology_envelope_path(topology_summary)),
+        "--topology-qualification-verification-public-key-hex",
+        TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX,
+        "--topology-qualification-signer-identity",
+        TOPOLOGY_SIGNER_IDENTITY,
+        "--topology-qualification-signer-key-revision",
+        str(TOPOLOGY_SIGNER_KEY_REVISION),
+        "--topology-qualification-signer-policy-digest-hex",
+        TOPOLOGY_SIGNER_POLICY_DIGEST_HEX,
+        "--max-topology-qualification-review-age-secs",
+        str(TOPOLOGY_MAX_REVIEW_AGE_SECS),
         "--supply-chain-source-root",
         str(tmp_path / "supply-chain-sources"),
         "--provenance-certificate-identity",

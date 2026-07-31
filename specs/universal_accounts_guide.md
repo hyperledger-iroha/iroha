@@ -4,11 +4,11 @@
 
 # Universal Account Guide
 
-This guide distils the UAID (Universal Account ID) rollout requirements from
-the Nexus roadmap and packages them into an operator + SDK focused walkthrough.
+This guide packages the implemented UAID (Universal Account ID) surfaces into
+an operator- and SDK-focused source reference.
 It covers UAID derivation, portfolio/manifest inspection, regulator templates,
 and the evidence that must accompany every `iroha app space-directory manifest
-publish` run (roadmap reference: `roadmap.md:2209`).
+publish` run.
 
 ## 1. UAID quick reference
 
@@ -240,12 +240,12 @@ There are three supported ways to obtain a UAID:
 2. **Query the UAID registries.** Torii exposes
    `GET /v1/space-directory/uaids/{uaid}` which returns the dataspace bindings
    and manifest metadata the Space Directory host persists (see
-   `docs/space-directory.md` §3 for payload samples).
+   `specs/space_directory.md` §3 for payload samples).
 3. **Derive it deterministically.** When bootstrapping new UAIDs offline, hash
    the canonical participant seed with Blake2b-256, set the final byte's least
    significant bit to `1`, and prefix the result with `uaid:`. The snippet
    below mirrors the helper documented in
-   `docs/space-directory.md` §3.3:
+   `specs/space_directory.md` §3.3:
 
    ```python
    import hashlib
@@ -341,7 +341,7 @@ Evidence checklist:
 - [ ] Audit bundle directory with dataspace profile, hooks, and manifest copy.
 - [ ] Bindings + manifest snapshots fetched from Torii post-activation.
 
-This mirrors the requirements in `docs/space-directory.md` §3.2 while giving SDK
+This mirrors the requirements in `specs/space_directory.md` §3.2 while giving SDK
 owners a single page to point to during release reviews.
 
 ## 5. Regulator/regional manifest templates
@@ -390,7 +390,7 @@ the UAID-centric surfaces described above. Use this checklist during upgrades:
 
 ## 7. References
 
-- `docs/space-directory.md` — operator playbook with deeper lifecycle detail.
+- `specs/space_directory.md` — source-adjacent operator and lifecycle reference.
 - `specs/torii/portfolio_api.md` — REST schema for UAID portfolio and
   manifest endpoints.
 - `crates/iroha_cli/src/space_directory.rs` — CLI implementation referenced in

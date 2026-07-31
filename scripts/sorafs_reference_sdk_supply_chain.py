@@ -17,11 +17,18 @@ import math
 import os
 import re
 import stat
+import sys
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from sorafs_path_identity import resolve_path_identity
 
 
 REQUIRED_RELEASE_TARGETS = (
@@ -493,7 +500,16 @@ def _prepare_source_root(
         if not source_root.is_dir():
             errors.append("supply-chain source root must be an existing directory")
             return None
-        resolved = source_root.resolve(strict=True)
+        identity_errors: list[str] = []
+        resolved = resolve_path_identity(
+            source_root,
+            identity_errors,
+            label="supply-chain source root",
+            failure_template="{label} `{path}` cannot be resolved safely: {error}",
+        )
+        if resolved is None:
+            errors.append("supply-chain source root cannot be inspected")
+            return None
         before = resolved.lstat()
         if _is_link_like(before) or not stat.S_ISDIR(before.st_mode):
             errors.append(

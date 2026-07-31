@@ -2,7 +2,7 @@
   "status": "Error",
   "code": "SFS-SIG-007",
   "category": "signature",
-  "message": "OrderRequestV1 validation failed: orderbook signature verification failed: signature R is small-order (weak); rejected: Signature verification failed",
+  "message": "OrderRequestV1 validation failed: orderbook signature verification failed: signature error: Verification equation was not satisfied",
   "action": "Regenerate the orderbook payload from canonical orderbook or settlement state and retry validation.",
   "docs_url": "https://docs.iroha.tech/",
   "telemetry_tags": [
@@ -77,7 +77,7 @@
     },
     {
       "key": "validation_error",
-      "value": "orderbook signature verification failed: signature R is small-order (weak); rejected: Signature verification failed"
+      "value": "orderbook signature verification failed: signature error: Verification equation was not satisfied"
     }
   ],
   "inputs": [

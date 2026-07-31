@@ -20,16 +20,27 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+TEST_DIR = Path(__file__).resolve().parent
+if str(TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(TEST_DIR))
+from sorafs_rollout_runner_test_support import TopologyBoundChecker  # noqa: E402
+
 
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
 MANIFEST_ID = "12" * 16
 QUARANTINE_ID = "34" * 16
 SUBJECT_REFERENCE = "cid:bafyprodmoderation20260701"
-DEPLOYMENT_ID = "ai-prescreen-staging-a"
-ENVIRONMENT = "staging"
+DEPLOYMENT_ID = "ai-prescreen-production-a"
+ENVIRONMENT = "production"
 GENERATED_AT = 1_800_000_200
 NOW_UNIX = GENERATED_AT
+CHECKER = TopologyBoundChecker(
+    MODULE.main,
+    deployment_id=DEPLOYMENT_ID,
+    environment=ENVIRONMENT,
+    name="ai-prescreen-checker",
+)
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -564,7 +575,7 @@ POLICY_BOUND_FIXTURES = (
 
 
 def run_gate(root: Path, *extra: str) -> int:
-    return MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(root), *extra])
+    return CHECKER(["--now-unix", str(NOW_UNIX), "--evidence-dir", str(root), *extra])
 
 
 def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
@@ -3048,7 +3059,7 @@ def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
         {"schema": "sorafs.moderation.unexpected.v1", "status": "passed"},
     )
 
-    assert MODULE.main(["--now-unix", str(NOW_UNIX), "--evidence", str(path)]) == 1
+    assert CHECKER(["--now-unix", str(NOW_UNIX), "--evidence", str(path)]) == 1
 
 
 def test_unknown_schema_in_directory_is_ignored_for_subset_gate(tmp_path: Path) -> None:
@@ -3076,7 +3087,7 @@ def test_response_file_arguments_are_supported(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert MODULE.main(["--now-unix", str(NOW_UNIX), f"@{args_file}"]) == 0
+    assert CHECKER(["--now-unix", str(NOW_UNIX), f"@{args_file}"]) == 0
 
 
 def test_invalid_optional_recognized_artifact_fails_subset_gate(tmp_path: Path) -> None:

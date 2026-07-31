@@ -20,6 +20,30 @@ Completed history lives in [`status.md`](./status.md).
   until every documented and CI caller has migrated, then remove only the
   adapters whose replacement paths have parity evidence.
 
+## Taira testnet recovery and offline-cash release closure
+
+The source-side consensus-stall, exact `/status.blocks`, restart-cost,
+supervisor-loop, and canonical offline-cash ingress repairs are complete, but
+public Taira remains on the old deployment. Do not expose it as a ready offline
+cash lane until the guarded reset reports `mandatory: true`, `ready: true` and
+passes the signed public canary.
+
+Remaining work stays ordered and fail-closed:
+
+- Seal the reviewed r5 source closure anchored to signed commit
+  `41287ed727addc87418c1a0878f7bd97c7cce83b`, then build and hash the candidate,
+  runtime, configuration, and eight-artifact release bundle from that one
+  provenance set.
+- Capture fresh signed physical-device evidence on exact `iPhone18,2` / `V54AP`
+  hardware and collect all six independent review categories. Unavailable
+  devices and the incomplete review set remain hard promotion gates; simulator,
+  stale, or partially reviewed evidence is not a substitute.
+- Perform the authorized guarded reset across all four validators, deploy the
+  sealed binary/configuration/artifact set, and prove advancing consensus,
+  query-visible `/status.blocks` equality, mandatory offline readiness, signed
+  canary operation, a restart below 45 seconds, and continued advancement after
+  restart.
+
 ## ZK-ACE JavaScript signed-transaction parity
 
 - Design and implement a new typed JavaScript API for the canonical governed
@@ -67,24 +91,32 @@ semantic request-kernel validation, atomic constant-scan batch cleanup,
 mandatory first-release journaling, and successful backpressure refresh are
 now pinned across restart. Three additional Native latest-index regressions
 reject a legacy V1 pointer filename, a fully unbacked pointer, and
-receipt-absent executed-wire/finality/manifest binding drift. They raise the
-pending G-UNIT execution inventory to 280 exact tests. The fresh 24-test
-queue/configuration slice and 130-test Native AMX slice are green; the complete
-280-test archived execution receipt is still outstanding.
+receipt-absent executed-wire/finality/manifest binding drift. They establish
+the prior 280-test G-UNIT checkpoint. One exact in-flight refinement-kernel
+regression and eight reservation-journal checked-application/adversarial
+regressions now raise the current source inventory to 289 tests. The fresh
+24-test queue/configuration slice and 130-test Native AMX slice are green; the
+exact-source isolated reservation-journal slice is green at `65/65`, and the
+identity-bound in-flight refinement regression is green at `1/1`. The complete
+289-test archived execution receipt is still outstanding.
 
 The in-flight carrier formal corpus is now bound to the versions that
 production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
-container, QueuePlan journal V4, and reservation journal V5. Schema 3 of the
+container, QueuePlan journal V4, and reservation journal V5. Schema 4 of the
 multilane binding ledger keeps this as
 `layout_only_no_transition_refinement`, source-binds exact payload,
 reservation, queue-order, Kura persistence/recovery, runner, and release
 receipt consumers, and requires a distinct fifth layout-only Apalache result
-after the four refinement rows. The structural checker, exact 738-test/280
-G-UNIT inventory, 12 fail-closed layout tests, two receipt parser tests, and
-12 Apalache-runner contract controls are fresh and green. The TLC trace
-normalizer also imports on the supported Xcode Python 3.9 runtime again and
-passes all 15 focused tests. No TLC or Apalache execution is claimed by those
-static checks, and the total Rust transition projection remains open.
+after the four refinement rows. The schema-4 structural/source-binding checks,
+exact 738-test production inventory, 289-test G-UNIT source inventory, 12
+fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
+contract controls are fresh and green. The G-UNIT inventory has 290 TSV lines
+and SHA-256
+`1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733`.
+The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
+again and passes all 15 focused tests. No TLC or Apalache engine execution is
+claimed by those static checks, and the total Rust transition projection
+remains open.
 
 The remaining work is evidence-driven and must stay in order:
 
@@ -121,19 +153,20 @@ The remaining work is evidence-driven and must stay in order:
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 280 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 289 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
-  `ML-API-04`/`G-SDK`. The standalone OpenAPI replay is already fresh at
-  `4/4`; it is not the remaining SDK blocker. The standalone Swift replay is
-  now also fresh at `3/3` with a source-built external ABI-21 macOS bridge,
-  fixture SHA-256
+  `ML-API-04`/`G-SDK`. The current harness contract requires OpenAPI `7`,
+  Python `56`, JavaScript `54`, Swift `3`, Kotlin `6`, and Java `5` cases. Its
+  exact fixture SHA-256 is
   `ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`,
-  and suite-source manifest SHA-256
-  `52a6348576719497fd160379e7bae7c06482575a7fde0251ec18bc177f13bdeb`.
-  The remaining SDK blocker is one archived release replay of every required
+  and its suite-source manifest SHA-256 is
+  `ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
+  Current standalone OpenAPI and installed-package Python runs pass `7/7` and
+  `56/56`, respectively. Those results are not an archived all-surface replay;
+  the remaining SDK blocker is one archived release replay of every required
   language surface together.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.

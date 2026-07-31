@@ -7,12 +7,13 @@
 //! only: earlier or unknown frame envelopes are retained and rejected without legacy decoding.
 
 #[cfg(test)]
-use std::sync::{Arc, Barrier};
+use std::sync::Barrier;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use iroha_crypto::{Hash, HashOf, sha256_reader_bounded};
@@ -20,6 +21,21 @@ use iroha_data_model::{
     merge::MAX_MERGE_EXECUTION_ENTRYPOINTS, nexus::LaneId, transaction::SignedTransaction,
 };
 use norito::codec::{Decode, Encode};
+
+use crate::sumeragi::v2_core::{
+    CanonicalIdentityProjection, CheckedProductionTransition, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+    IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER, IDENTITY_KIND_LANE_QUEUE_RESERVATION,
+    IN_FLIGHT_RESERVATION_ACTION_COMMIT, IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE,
+    IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT, IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,
+    IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE, IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,
+    IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT, IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,
+    IN_FLIGHT_RESERVATION_ACTION_RESERVE, IN_FLIGHT_RESERVATION_STATE_ABSENT,
+    IN_FLIGHT_RESERVATION_STATE_COMMITTED, IN_FLIGHT_RESERVATION_STATE_LIVE,
+    IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED, IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED,
+    ProductionInFlightReservationOwnerProjection,
+    ProductionInFlightReservationTransitionProjection,
+    check_production_in_flight_reservation_transition,
+};
 
 #[cfg(test)]
 use super::LaneQueueFifoOrderV5;
@@ -38,6 +54,20 @@ const FRAME_TRAILER_BYTES: u64 = Hash::LENGTH as u64 + 8;
 const FRAME_DECODE_ELEMENT_AMPLIFICATION_LIMIT: usize = 1;
 const FRAME_DECODE_ALLOCATION_AMPLIFICATION_LIMIT: usize = 26;
 const FRAME_DECODE_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 64 * 1024;
+const CHECKED_STATE_EMPTY_DOMAIN: &[u8] = b"iroha:queue-lane-reservation-checked-state-empty:v1\0";
+const CHECKED_STATE_STEP_DOMAIN: &[u8] = b"iroha:queue-lane-reservation-checked-state-step:v1\0";
+const CHECKED_IDENTITY_PROJECTION_DOMAIN: &[u8] =
+    b"iroha:queue-lane-reservation-checked-identity-projection:v1\0";
+const CHECKED_OWNER_PROJECTION_DOMAIN: &[u8] =
+    b"iroha:queue-lane-reservation-checked-owner-projection:v1\0";
+const CHECKED_TRANSITION_PROJECTION_DOMAIN: &[u8] =
+    b"iroha:queue-lane-reservation-checked-transition-projection:v1\0";
+const CHECKED_TRANSITION_COVERAGE_EMPTY_DOMAIN: &[u8] =
+    b"iroha:queue-lane-reservation-checked-transition-coverage-empty:v1\0";
+const CHECKED_TRANSITION_COVERAGE_STEP_DOMAIN: &[u8] =
+    b"iroha:queue-lane-reservation-checked-transition-coverage-step:v1\0";
+const CHECKED_TRANSITION_COVERAGE_FINAL_DOMAIN: &[u8] =
+    b"iroha:queue-lane-reservation-checked-transition-coverage-final:v1\0";
 
 /// Version of the durable lane queue reservation journal and its retained records.
 pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5;
@@ -125,6 +155,8 @@ pub(super) enum ReservationJournalAppendFault {
     PartialWrite,
     /// Persist the complete frame, then report the same ambiguity as a failed `sync_all`.
     SyncAfterFullWrite,
+    /// Persist and synchronize the complete frame, then fail checked replay publication.
+    AfterSyncBeforeReplayPublication,
 }
 
 /// Test-only durability boundary injected into the next compaction.
@@ -133,6 +165,8 @@ pub(super) enum ReservationJournalAppendFault {
 pub(super) enum ReservationJournalCompactionFault {
     /// Replace the journal inode, then fail before the parent-directory sync is acknowledged.
     AfterRenameBeforeParentSync,
+    /// Synchronize the replacement, then fail checked replay publication.
+    AfterSyncBeforeReplayPublication,
 }
 
 /// One append-only reservation journal operation.
@@ -225,13 +259,184 @@ enum DurableReservationOwnership {
 }
 
 impl DurableReservationOwnership {
-    #[cfg(test)]
     const fn key(self) -> LaneQueueReservationKeyV2 {
         match self {
             Self::Live(key) | Self::Committed(key) => key,
             Self::Prepared { key, .. } | Self::Completed { key, .. } => key,
         }
     }
+
+    fn refinement_projection(self) -> ProductionInFlightReservationOwnerProjection {
+        let (state, key, release_identity) = match self {
+            Self::Live(key) => (
+                IN_FLIGHT_RESERVATION_STATE_LIVE,
+                key,
+                CanonicalIdentityProjection::zero(),
+            ),
+            Self::Committed(key) => (
+                IN_FLIGHT_RESERVATION_STATE_COMMITTED,
+                key,
+                CanonicalIdentityProjection::zero(),
+            ),
+            Self::Prepared {
+                key,
+                barrier_digest,
+            } => (
+                IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED,
+                key,
+                release_refinement_identity(barrier_digest),
+            ),
+            Self::Completed {
+                key,
+                barrier_digest,
+            } => (
+                IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED,
+                key,
+                release_refinement_identity(barrier_digest),
+            ),
+        };
+        ProductionInFlightReservationOwnerProjection {
+            state,
+            reservation_identity: reservation_refinement_identity(key),
+            release_identity,
+        }
+    }
+
+    const fn release_digest(self) -> Option<Hash> {
+        match self {
+            Self::Live(_) | Self::Committed(_) => None,
+            Self::Prepared { barrier_digest, .. } | Self::Completed { barrier_digest, .. } => {
+                Some(barrier_digest)
+            }
+        }
+    }
+}
+
+fn reservation_refinement_identity(key: LaneQueueReservationKeyV2) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(
+        IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+        IDENTITY_KIND_LANE_QUEUE_RESERVATION,
+        *key.digest().as_ref(),
+    )
+}
+
+fn release_refinement_identity(digest: Hash) -> CanonicalIdentityProjection {
+    CanonicalIdentityProjection::from_bytes(
+        IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+        IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER,
+        *digest.as_ref(),
+    )
+}
+
+fn checked_transition_frame_digest(frame: &LaneQueueReservationJournalFrameV5) -> io::Result<Hash> {
+    let encoded = norito::encode_canonical(frame).map_err(|error| {
+        invalid_data(format!(
+            "lane reservation journal checked frame cannot encode: {error}"
+        ))
+    })?;
+    Ok(Hash::new_from_chunks(&[
+        b"iroha:queue-lane-reservation-checked-transition:v1\0",
+        &encoded,
+    ]))
+}
+
+fn checked_identity_projection_digest(identity: CanonicalIdentityProjection) -> Hash {
+    let tags = [identity.domain, identity.kind];
+    let word0 = identity.word0.to_be_bytes();
+    let word1 = identity.word1.to_be_bytes();
+    let word2 = identity.word2.to_be_bytes();
+    let word3 = identity.word3.to_be_bytes();
+    Hash::new_from_chunks(&[
+        CHECKED_IDENTITY_PROJECTION_DOMAIN,
+        &tags,
+        &word0,
+        &word1,
+        &word2,
+        &word3,
+    ])
+}
+
+fn checked_owner_projection_digest(owner: ProductionInFlightReservationOwnerProjection) -> Hash {
+    let state = [owner.state];
+    let reservation = checked_identity_projection_digest(owner.reservation_identity);
+    let release = checked_identity_projection_digest(owner.release_identity);
+    Hash::new_from_chunks(&[
+        CHECKED_OWNER_PROJECTION_DOMAIN,
+        &state,
+        reservation.as_ref(),
+        release.as_ref(),
+    ])
+}
+
+fn checked_transition_projection_digest(
+    transition: ProductionInFlightReservationTransitionProjection,
+) -> Hash {
+    let action = [transition.action];
+    let requested_reservation =
+        checked_identity_projection_digest(transition.requested_reservation_identity);
+    let requested_release =
+        checked_identity_projection_digest(transition.requested_release_identity);
+    let before = checked_owner_projection_digest(transition.before);
+    let after = checked_owner_projection_digest(transition.after);
+    Hash::new_from_chunks(&[
+        CHECKED_TRANSITION_PROJECTION_DOMAIN,
+        &action,
+        requested_reservation.as_ref(),
+        requested_release.as_ref(),
+        before.as_ref(),
+        after.as_ref(),
+    ])
+}
+
+fn checked_transition_coverage_identity(
+    transitions: &[CheckedProductionTransition<
+        ProductionInFlightReservationTransitionProjection,
+    >],
+) -> io::Result<Hash> {
+    let mut rolling = Hash::new(CHECKED_TRANSITION_COVERAGE_EMPTY_DOMAIN);
+    for transition in transitions {
+        let transition = checked_transition_projection_digest(*transition.accepted_projection());
+        rolling = Hash::new_from_chunks(&[
+            CHECKED_TRANSITION_COVERAGE_STEP_DOMAIN,
+            rolling.as_ref(),
+            transition.as_ref(),
+        ]);
+    }
+    let count = u64::try_from(transitions.len())
+        .map_err(|_| invalid_data("checked reservation transition count exceeds u64"))?;
+    Ok(Hash::new_from_chunks(&[
+        CHECKED_TRANSITION_COVERAGE_FINAL_DOMAIN,
+        rolling.as_ref(),
+        &count.to_be_bytes(),
+    ]))
+}
+
+fn resulting_checked_state_identity(
+    expected_state_identity: Hash,
+    frame_digest: Hash,
+    transition_coverage_identity: Hash,
+    next_generation: u64,
+) -> Hash {
+    Hash::new_from_chunks(&[
+        CHECKED_STATE_STEP_DOMAIN,
+        expected_state_identity.as_ref(),
+        frame_digest.as_ref(),
+        transition_coverage_identity.as_ref(),
+        &next_generation.to_be_bytes(),
+    ])
+}
+
+fn optional_owner_refinement_projection(
+    owner: Option<DurableReservationOwnership>,
+) -> ProductionInFlightReservationOwnerProjection {
+    owner.map_or(
+        ProductionInFlightReservationOwnerProjection {
+            state: IN_FLIGHT_RESERVATION_STATE_ABSENT,
+            reservation_identity: CanonicalIdentityProjection::zero(),
+            release_identity: CanonicalIdentityProjection::zero(),
+        },
+        DurableReservationOwnership::refinement_projection,
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,12 +445,93 @@ struct OrderedReplayValue<T> {
     value: T,
 }
 
+/// In-memory identity of one exact replay-state instance.
+///
+/// Cloning an indexed state deliberately creates a fresh domain. Logical state
+/// equality ignores the domain, while checked authorizations use pointer
+/// identity so a token cannot cross into an independently mutable clone with
+/// an equal generation and history root. The domain is never serialized and
+/// cannot affect deterministic replay output.
+#[derive(Debug)]
+struct CheckedReplayAuthorizationDomain(Arc<()>);
+
+impl Default for CheckedReplayAuthorizationDomain {
+    fn default() -> Self {
+        Self(Arc::new(()))
+    }
+}
+
+impl Clone for CheckedReplayAuthorizationDomain {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for CheckedReplayAuthorizationDomain {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for CheckedReplayAuthorizationDomain {}
+
+impl CheckedReplayAuthorizationDomain {
+    fn authorization(&self) -> Arc<()> {
+        Arc::clone(&self.0)
+    }
+
+    fn authorizes(&self, authorization: &Arc<()>) -> bool {
+        Arc::ptr_eq(&self.0, authorization)
+    }
+}
+
+/// O(1) structural witness supplementing the exact checked history root.
+///
+/// Every supported state mutation advances the generation and history root.
+/// These cardinalities and the next replay order additionally fail closed if
+/// an internal caller corrupts a collection shape without crossing that
+/// mutation boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CheckedReplayStateShape {
+    live: usize,
+    committed: usize,
+    release_barriers: usize,
+    completed_releases: usize,
+    ownership: usize,
+    fifo_ordinals: usize,
+    live_lane_incarnations: usize,
+    next_order: u64,
+}
+
+/// Move-only authorization for one exact validated journal frame.
+///
+/// The canonical frame digest and ordered owner-token coverage prevent using
+/// the authorization for a different group/action. The state-instance domain,
+/// structural shape, generation, and expected/resulting checked-history roots
+/// prevent exchange between independently mutable or divergent states. This is
+/// in-memory authorization only and does not change the V5 persistence layout.
+#[must_use = "checked journal authorization must reach its exact mutation boundary"]
+struct PreparedReservationJournalTransition {
+    authorization_domain: Arc<()>,
+    frame_digest: Hash,
+    maximum_owned_transactions: usize,
+    expected_generation: u64,
+    next_generation: u64,
+    expected_shape: CheckedReplayStateShape,
+    expected_state_identity: Hash,
+    resulting_state_identity: Hash,
+    owner_transition_count: usize,
+    owner_transition_coverage_identity: Hash,
+    owner_transitions:
+        Vec<CheckedProductionTransition<ProductionInFlightReservationTransitionProjection>>,
+}
+
 /// Indexed retained journal state.
 ///
 /// Every transition is validated against these indexes before any mutation. The order tags
 /// preserve the historical vector ordering exposed by [`LaneQueueReservationReplay`] without
 /// making replay scan the retained vectors for every frame.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct IndexedReservationReplayState {
     live: BTreeMap<HashOf<SignedTransaction>, OrderedReplayValue<LaneQueueReservationRecordV5>>,
     committed: BTreeMap<HashOf<SignedTransaction>, OrderedReplayValue<LaneQueueReservationKeyV2>>,
@@ -255,9 +541,45 @@ struct IndexedReservationReplayState {
     fifo_ordinals: BTreeMap<u64, HashOf<SignedTransaction>>,
     live_by_lane_incarnation: BTreeMap<(LaneId, Hash), BTreeSet<HashOf<SignedTransaction>>>,
     next_order: u64,
+    transition_generation: u64,
+    /// O(1) hash-chain root of canonical checked transitions since reconstruction.
+    checked_state_identity: Hash,
+    /// Unique in-memory domain preventing authorization exchange between clones.
+    authorization_domain: CheckedReplayAuthorizationDomain,
+}
+
+impl Default for IndexedReservationReplayState {
+    fn default() -> Self {
+        Self {
+            live: BTreeMap::new(),
+            committed: BTreeMap::new(),
+            release_barriers: BTreeMap::new(),
+            completed_releases: BTreeMap::new(),
+            ownership: BTreeMap::new(),
+            fifo_ordinals: BTreeMap::new(),
+            live_by_lane_incarnation: BTreeMap::new(),
+            next_order: 0,
+            transition_generation: 0,
+            checked_state_identity: Hash::new(CHECKED_STATE_EMPTY_DOMAIN),
+            authorization_domain: CheckedReplayAuthorizationDomain::default(),
+        }
+    }
 }
 
 impl IndexedReservationReplayState {
+    fn checked_shape(&self) -> CheckedReplayStateShape {
+        CheckedReplayStateShape {
+            live: self.live.len(),
+            committed: self.committed.len(),
+            release_barriers: self.release_barriers.len(),
+            completed_releases: self.completed_releases.len(),
+            ownership: self.ownership.len(),
+            fifo_ordinals: self.fifo_ordinals.len(),
+            live_lane_incarnations: self.live_by_lane_incarnation.len(),
+            next_order: self.next_order,
+        }
+    }
+
     fn from_replay(replay: &LaneQueueReservationReplay, maximum: usize) -> io::Result<Self> {
         if replay.records.is_empty()
             && replay.committed.is_empty()
@@ -275,7 +597,6 @@ impl IndexedReservationReplayState {
                 completed_releases: replay.completed_releases.clone(),
             },
             maximum,
-            true,
         )?;
         Ok(state)
     }
@@ -293,9 +614,159 @@ impl IndexedReservationReplayState {
         &mut self,
         frame: &LaneQueueReservationJournalFrameV5,
         maximum: usize,
+    ) -> io::Result<()> {
+        let prepared = self.prepare_checked_transition(frame, maximum)?;
+        self.apply_checked_transition(frame, maximum, prepared)
+    }
+
+    fn prepare_checked_transition(
+        &mut self,
+        frame: &LaneQueueReservationJournalFrameV5,
+        maximum: usize,
+    ) -> io::Result<PreparedReservationJournalTransition> {
+        validate_frame_cardinality(frame, maximum)?;
+        self.transition_semantics(frame, maximum, false)?;
+        let next_generation = self
+            .transition_generation
+            .checked_add(1)
+            .ok_or_else(|| invalid_data("lane reservation transition generation overflow"))?;
+        let frame_digest = checked_transition_frame_digest(frame)?;
+        let owner_transitions = self.check_in_flight_transition(frame, maximum)?;
+        let owner_transition_coverage_identity =
+            checked_transition_coverage_identity(&owner_transitions)?;
+        let resulting_state_identity = resulting_checked_state_identity(
+            self.checked_state_identity,
+            frame_digest,
+            owner_transition_coverage_identity,
+            next_generation,
+        );
+        Ok(PreparedReservationJournalTransition {
+            authorization_domain: self.authorization_domain.authorization(),
+            frame_digest,
+            maximum_owned_transactions: maximum,
+            expected_generation: self.transition_generation,
+            next_generation,
+            expected_shape: self.checked_shape(),
+            expected_state_identity: self.checked_state_identity,
+            resulting_state_identity,
+            owner_transition_count: owner_transitions.len(),
+            owner_transition_coverage_identity,
+            owner_transitions,
+        })
+    }
+
+    fn apply_checked_transition(
+        &mut self,
+        frame: &LaneQueueReservationJournalFrameV5,
+        maximum: usize,
+        prepared: PreparedReservationJournalTransition,
+    ) -> io::Result<()> {
+        if checked_transition_frame_digest(frame)? != prepared.frame_digest {
+            return Err(invalid_data(
+                "checked lane reservation transition does not authorize this exact frame",
+            ));
+        }
+        if maximum != prepared.maximum_owned_transactions {
+            return Err(invalid_data(
+                "checked lane reservation transition uses a different ownership bound",
+            ));
+        }
+        if !self
+            .authorization_domain
+            .authorizes(&prepared.authorization_domain)
+        {
+            return Err(invalid_data(
+                "checked lane reservation transition belongs to a different exact state instance",
+            ));
+        }
+        if self.transition_generation != prepared.expected_generation {
+            return Err(invalid_data(
+                "checked lane reservation transition is stale after another state operation",
+            ));
+        }
+        if self.checked_shape() != prepared.expected_shape {
+            return Err(invalid_data(
+                "checked lane reservation transition belongs to a different exact pre-state shape",
+            ));
+        }
+        if self.checked_state_identity != prepared.expected_state_identity {
+            return Err(invalid_data(
+                "checked lane reservation transition belongs to a different exact pre-state",
+            ));
+        }
+        let expected_next_generation =
+            prepared.expected_generation.checked_add(1).ok_or_else(|| {
+                invalid_data("checked lane reservation transition generation overflow")
+            })?;
+        if prepared.next_generation != expected_next_generation {
+            return Err(invalid_data(
+                "checked lane reservation transition has a non-contiguous generation",
+            ));
+        }
+        if prepared.owner_transition_count != prepared.owner_transitions.len()
+            || checked_transition_coverage_identity(&prepared.owner_transitions)?
+                != prepared.owner_transition_coverage_identity
+        {
+            return Err(invalid_data(
+                "checked lane reservation transition has altered, missing, or reordered owner evidence",
+            ));
+        }
+        if resulting_checked_state_identity(
+            prepared.expected_state_identity,
+            prepared.frame_digest,
+            prepared.owner_transition_coverage_identity,
+            prepared.next_generation,
+        ) != prepared.resulting_state_identity
+        {
+            return Err(invalid_data(
+                "checked lane reservation transition has a mismatched resulting state identity",
+            ));
+        }
+
+        // Revalidate full semantics and derive the exact owner projections from
+        // the still-unmodified state after the durable-I/O handoff. Comparing
+        // projections, rather than only their digest, connects every move-only
+        // token to the actual mutation pre-state without a full-state clone.
+        self.transition_semantics(frame, maximum, false)?;
+        let current_owner_transitions = self.check_in_flight_transition(frame, maximum)?;
+        if current_owner_transitions.len() != prepared.owner_transition_count
+            || current_owner_transitions
+                .iter()
+                .map(|checked| checked.accepted_projection())
+                .ne(prepared
+                    .owner_transitions
+                    .iter()
+                    .map(|checked| checked.accepted_projection()))
+        {
+            return Err(invalid_data(
+                "checked lane reservation transition owner evidence no longer matches the exact pre-state",
+            ));
+        }
+
+        // The transition helpers validate every fallible condition before
+        // entering their `apply` blocks. We just performed that validation on
+        // this exact, exclusively borrowed state. Consume both independently
+        // checked token sets at the linearization point, then apply in
+        // O(changed entries * log(retained entries)) rather than cloning all
+        // retained indexes for every append and replayed frame.
+        for checked in current_owner_transitions {
+            let _accepted_projection = checked.into_projection();
+        }
+        for checked in prepared.owner_transitions {
+            let _accepted_projection = checked.into_projection();
+        }
+        self.transition_semantics(frame, maximum, true)?;
+        self.transition_generation = prepared.next_generation;
+        self.checked_state_identity = prepared.resulting_state_identity;
+        Ok(())
+    }
+
+    fn transition_semantics(
+        &mut self,
+        frame: &LaneQueueReservationJournalFrameV5,
+        maximum: usize,
         apply: bool,
     ) -> io::Result<()> {
-        validate_frame_cardinality(frame, maximum)?;
         match frame {
             LaneQueueReservationJournalFrameV5::Bootstrap { .. } => Err(invalid_data(
                 "lane reservation journal bootstrap cannot appear as a state operation",
@@ -339,6 +810,299 @@ impl IndexedReservationReplayState {
                 self.transition_forget_release(barrier, apply)
             }
         }
+    }
+
+    fn authorize_in_flight_owner_transition(
+        &self,
+        action: u8,
+        key: LaneQueueReservationKeyV2,
+        release_digest: Option<Hash>,
+        before: Option<DurableReservationOwnership>,
+        after: Option<DurableReservationOwnership>,
+    ) -> io::Result<CheckedProductionTransition<ProductionInFlightReservationTransitionProjection>>
+    {
+        let projection = ProductionInFlightReservationTransitionProjection {
+            action,
+            requested_reservation_identity: reservation_refinement_identity(key),
+            requested_release_identity: release_digest.map_or(
+                CanonicalIdentityProjection::zero(),
+                release_refinement_identity,
+            ),
+            before: optional_owner_refinement_projection(before),
+            after: optional_owner_refinement_projection(after),
+        };
+        check_production_in_flight_reservation_transition(projection).ok_or_else(|| {
+            invalid_data(
+                "lane reservation journal transition violates the checked primitive \
+                 identity/state relation",
+            )
+        })
+    }
+
+    fn retain_in_flight_owner_transition(
+        &self,
+        retained: &mut Vec<
+            CheckedProductionTransition<ProductionInFlightReservationTransitionProjection>,
+        >,
+        action: u8,
+        key: LaneQueueReservationKeyV2,
+        release_digest: Option<Hash>,
+        before: Option<DurableReservationOwnership>,
+        after: Option<DurableReservationOwnership>,
+    ) -> io::Result<()> {
+        retained.push(self.authorize_in_flight_owner_transition(
+            action,
+            key,
+            release_digest,
+            before,
+            after,
+        )?);
+        Ok(())
+    }
+
+    fn check_in_flight_transition(
+        &self,
+        frame: &LaneQueueReservationJournalFrameV5,
+        maximum: usize,
+    ) -> io::Result<
+        Vec<CheckedProductionTransition<ProductionInFlightReservationTransitionProjection>>,
+    > {
+        let mut retained = Vec::new();
+        match frame {
+            LaneQueueReservationJournalFrameV5::Bootstrap { .. } => Err(invalid_data(
+                "lane reservation journal bootstrap cannot appear as a state operation",
+            )),
+            LaneQueueReservationJournalFrameV5::Snapshot {
+                live,
+                committed,
+                release_barriers,
+                completed_releases,
+            } => {
+                let mut candidate = Self::default();
+                candidate.transition_snapshot(
+                    live,
+                    committed,
+                    release_barriers,
+                    completed_releases,
+                    maximum,
+                    true,
+                )?;
+                let mut targets = BTreeMap::<
+                    HashOf<SignedTransaction>,
+                    (LaneQueueReservationKeyV2, Option<Hash>),
+                >::new();
+                for owner in self
+                    .ownership
+                    .values()
+                    .chain(candidate.ownership.values())
+                    .copied()
+                {
+                    let key = owner.key();
+                    let target = (key, owner.release_digest());
+                    if let Some(existing) = targets.insert(key.signed_transaction_hash, target)
+                        && existing != target
+                    {
+                        return Err(invalid_data(
+                            "reservation snapshot changes an existing primitive owner identity",
+                        ));
+                    }
+                }
+                for (hash, (key, release_digest)) in targets {
+                    self.retain_in_flight_owner_transition(
+                        &mut retained,
+                        IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,
+                        key,
+                        release_digest,
+                        self.ownership.get(&hash).copied(),
+                        candidate.ownership.get(&hash).copied(),
+                    )?;
+                }
+                Ok(())
+            }
+            LaneQueueReservationJournalFrameV5::PutBatch(records) => {
+                let mut seen = BTreeSet::new();
+                for record in records {
+                    let key = record.key;
+                    if !seen.insert(key.signed_transaction_hash) {
+                        continue;
+                    }
+                    let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                    let after = before.or(Some(DurableReservationOwnership::Live(key)));
+                    self.retain_in_flight_owner_transition(
+                        &mut retained,
+                        IN_FLIGHT_RESERVATION_ACTION_RESERVE,
+                        key,
+                        None,
+                        before,
+                        after,
+                    )?;
+                }
+                Ok(())
+            }
+            LaneQueueReservationJournalFrameV5::ReleaseBatch(keys) => {
+                for key in keys {
+                    let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                    let after = if before == Some(DurableReservationOwnership::Live(*key)) {
+                        None
+                    } else {
+                        before
+                    };
+                    self.retain_in_flight_owner_transition(
+                        &mut retained,
+                        IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,
+                        *key,
+                        None,
+                        before,
+                        after,
+                    )?;
+                }
+                Ok(())
+            }
+            LaneQueueReservationJournalFrameV5::Commit(key) => {
+                let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                self.retain_in_flight_owner_transition(
+                    &mut retained,
+                    IN_FLIGHT_RESERVATION_ACTION_COMMIT,
+                    *key,
+                    None,
+                    before,
+                    Some(DurableReservationOwnership::Committed(*key)),
+                )
+            }
+            LaneQueueReservationJournalFrameV5::ForgetCommit(key) => {
+                let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                let after = if before == Some(DurableReservationOwnership::Committed(*key)) {
+                    None
+                } else {
+                    before
+                };
+                self.retain_in_flight_owner_transition(
+                    &mut retained,
+                    IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT,
+                    *key,
+                    None,
+                    before,
+                    after,
+                )
+            }
+            LaneQueueReservationJournalFrameV5::Prune {
+                lane_id,
+                lane_incarnation,
+            } => {
+                let lane = (*lane_id, *lane_incarnation);
+                for hash in self
+                    .live_by_lane_incarnation
+                    .get(&lane)
+                    .into_iter()
+                    .flatten()
+                {
+                    let before = self.ownership.get(hash).copied().ok_or_else(|| {
+                        invalid_data("lane reservation prune index has no primitive owner")
+                    })?;
+                    self.retain_in_flight_owner_transition(
+                        &mut retained,
+                        IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,
+                        before.key(),
+                        None,
+                        Some(before),
+                        None,
+                    )?;
+                }
+                Ok(())
+            }
+            LaneQueueReservationJournalFrameV5::PrepareRelease(barrier) => {
+                let release_digest = barrier.digest();
+                for key in &barrier.ordered_keys {
+                    let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                    let after = match before {
+                        Some(DurableReservationOwnership::Live(existing)) if existing == *key => {
+                            Some(DurableReservationOwnership::Prepared {
+                                key: *key,
+                                barrier_digest: release_digest,
+                            })
+                        }
+                        Some(
+                            owner @ (DurableReservationOwnership::Prepared { .. }
+                            | DurableReservationOwnership::Completed { .. }),
+                        ) => Some(owner),
+                        _ => {
+                            return Err(invalid_data(
+                                "prepared release has no checked primitive owner transition",
+                            ));
+                        }
+                    };
+                    self.retain_in_flight_owner_transition(
+                        &mut retained,
+                        IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,
+                        *key,
+                        Some(release_digest),
+                        before,
+                        after,
+                    )?;
+                }
+                Ok(())
+            }
+            LaneQueueReservationJournalFrameV5::CompleteRelease(completion) => {
+                let release_digest = completion.barrier.digest();
+                for record in &completion.ordered_records {
+                    let key = record.key;
+                    let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                    let after = match before {
+                        Some(DurableReservationOwnership::Prepared {
+                            key: existing,
+                            barrier_digest,
+                        }) if existing == key && barrier_digest == release_digest => {
+                            Some(DurableReservationOwnership::Completed {
+                                key,
+                                barrier_digest: release_digest,
+                            })
+                        }
+                        Some(owner @ DurableReservationOwnership::Completed { .. }) => Some(owner),
+                        _ => {
+                            return Err(invalid_data(
+                                "completed release has no checked primitive owner transition",
+                            ));
+                        }
+                    };
+                    self.retain_in_flight_owner_transition(
+                        &mut retained,
+                        IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE,
+                        key,
+                        Some(release_digest),
+                        before,
+                        after,
+                    )?;
+                }
+                Ok(())
+            }
+            LaneQueueReservationJournalFrameV5::ForgetRelease(barrier) => {
+                let release_digest = barrier.digest();
+                let has_completion = self.completed_releases.contains_key(&release_digest);
+                for key in &barrier.ordered_keys {
+                    let before = self.ownership.get(&key.signed_transaction_hash).copied();
+                    let after = if has_completion
+                        && before
+                            == Some(DurableReservationOwnership::Completed {
+                                key: *key,
+                                barrier_digest: release_digest,
+                            }) {
+                        None
+                    } else {
+                        before
+                    };
+                    self.retain_in_flight_owner_transition(
+                        &mut retained,
+                        IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,
+                        *key,
+                        Some(release_digest),
+                        before,
+                        after,
+                    )?;
+                }
+                Ok(())
+            }
+        }?;
+        Ok(retained)
     }
 
     fn transition_snapshot(
@@ -508,6 +1272,7 @@ impl IndexedReservationReplayState {
         apply: bool,
     ) -> io::Result<()> {
         let mut hashes = BTreeSet::new();
+        let mut removals = Vec::new();
         for key in keys {
             key.validate().map_err(invalid_data)?;
             if !hashes.insert(key.signed_transaction_hash) {
@@ -523,16 +1288,18 @@ impl IndexedReservationReplayState {
                     "immediate release overlaps a prepared ordered release barrier",
                 ));
             }
+            if self
+                .ownership
+                .get(&key.signed_transaction_hash)
+                .is_some_and(|owner| *owner == DurableReservationOwnership::Live(*key))
+            {
+                removals
+                    .push(self.validate_live_secondary_indexes(key.signed_transaction_hash, *key)?);
+            }
         }
         if apply {
-            for key in keys {
-                if self
-                    .ownership
-                    .get(&key.signed_transaction_hash)
-                    .is_some_and(|owner| *owner == DurableReservationOwnership::Live(*key))
-                {
-                    self.remove_live_unchecked(key.signed_transaction_hash);
-                }
+            for record in &removals {
+                self.remove_preflighted_live(record);
             }
         }
         Ok(())
@@ -565,20 +1332,30 @@ impl IndexedReservationReplayState {
                     "reservation commit overlaps an ordered release claim",
                 ));
             }
+            None => {
+                return Err(invalid_data(
+                    "reservation commit requires an exact live reservation",
+                ));
+            }
             _ => {}
         }
+        let live_removal = match owner {
+            Some(DurableReservationOwnership::Live(existing)) => {
+                Some(self.validate_live_secondary_indexes(key.signed_transaction_hash, existing)?)
+            }
+            _ => None,
+        };
         let needs_commit = !matches!(
             owner,
             Some(DurableReservationOwnership::Committed(existing)) if existing == key
         );
-        let additional = if owner.is_none() { 1 } else { 0 };
-        self.ensure_owner_capacity(additional, maximum)?;
+        self.ensure_owner_capacity(0, maximum)?;
         let (order, next_order) = self.order_range(if needs_commit { 1 } else { 0 })?;
         if !apply {
             return Ok(());
         }
-        if matches!(owner, Some(DurableReservationOwnership::Live(_))) {
-            self.remove_live_unchecked(key.signed_transaction_hash);
+        if let Some(record) = &live_removal {
+            self.remove_preflighted_live(record);
         }
         if needs_commit {
             self.committed.insert(
@@ -624,19 +1401,35 @@ impl IndexedReservationReplayState {
             .get(&lane)
             .cloned()
             .unwrap_or_default();
-        if hashes.iter().any(|hash| {
-            matches!(
-                self.ownership.get(hash),
-                Some(DurableReservationOwnership::Prepared { .. })
-            )
-        }) {
-            return Err(invalid_data(
-                "lane reservation prune overlaps a prepared ordered release barrier",
-            ));
+        let mut removals = Vec::with_capacity(hashes.len());
+        for hash in hashes {
+            let key = match self.ownership.get(&hash).copied() {
+                Some(DurableReservationOwnership::Live(key))
+                    if key.lane_id == lane_id && key.lane_incarnation == lane_incarnation =>
+                {
+                    key
+                }
+                Some(DurableReservationOwnership::Prepared { .. }) => {
+                    return Err(invalid_data(
+                        "lane reservation prune overlaps a prepared ordered release barrier",
+                    ));
+                }
+                Some(_) => {
+                    return Err(invalid_data(
+                        "lane reservation prune index overlaps conflicting durable ownership",
+                    ));
+                }
+                None => {
+                    return Err(invalid_data(
+                        "lane reservation prune index has no primitive owner",
+                    ));
+                }
+            };
+            removals.push(self.validate_live_secondary_indexes(hash, key)?);
         }
         if apply {
-            for hash in hashes {
-                self.remove_live_unchecked(hash);
+            for record in &removals {
+                self.remove_preflighted_live(record);
             }
         }
         Ok(())
@@ -764,6 +1557,7 @@ impl IndexedReservationReplayState {
                 "ordered release completion conflicts with its prepared barrier digest",
             ));
         }
+        let mut removals = Vec::with_capacity(completion.ordered_records.len());
         for record in &completion.ordered_records {
             let hash = record.key.signed_transaction_hash;
             if !self.ownership.get(&hash).is_some_and(|owner| {
@@ -777,27 +1571,20 @@ impl IndexedReservationReplayState {
                     "ordered release completion overlaps conflicting durable ownership",
                 ));
             }
-            if self.live.get(&hash).map(|entry| &entry.value) != Some(record) {
+            let live_record = self.validate_live_secondary_indexes(hash, record.key)?;
+            if live_record != *record {
                 return Err(invalid_data(
                     "ordered release completion record differs from exact live ownership",
                 ));
             }
-            if self
-                .fifo_ordinals
-                .get(&record.fifo_order.ordinal)
-                .is_some_and(|existing| *existing != hash)
-            {
-                return Err(invalid_data(
-                    "completed releases reuse one durable FIFO ordinal",
-                ));
-            }
+            removals.push(live_record);
         }
         let (order, next_order) = self.order_range(1)?;
         if apply {
             self.release_barriers.remove(&digest);
-            for record in &completion.ordered_records {
+            for record in &removals {
                 let hash = record.key.signed_transaction_hash;
-                self.remove_live_unchecked(hash);
+                self.remove_preflighted_live(record);
                 self.fifo_ordinals.insert(record.fifo_order.ordinal, hash);
                 self.ownership.insert(
                     hash,
@@ -962,29 +1749,66 @@ impl IndexedReservationReplayState {
         Ok((self.next_order, next))
     }
 
-    fn remove_live_unchecked(&mut self, hash: HashOf<SignedTransaction>) {
+    fn validate_live_secondary_indexes(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        expected_key: LaneQueueReservationKeyV2,
+    ) -> io::Result<LaneQueueReservationRecordV5> {
+        if expected_key.signed_transaction_hash != hash {
+            return Err(invalid_data(
+                "live reservation index key differs from the exact reservation hash",
+            ));
+        }
         let record = self
             .live
-            .remove(&hash)
-            .expect("validated live reservation")
-            .value;
-        if self
-            .fifo_ordinals
-            .get(&record.fifo_order.ordinal)
-            .is_some_and(|existing| *existing == hash)
-        {
-            self.fifo_ordinals.remove(&record.fifo_order.ordinal);
+            .get(&hash)
+            .ok_or_else(|| invalid_data("live reservation index has no exact record"))?;
+        if record.value.key != expected_key {
+            return Err(invalid_data(
+                "live reservation index has a conflicting reservation identity",
+            ));
         }
-        self.ownership.remove(&hash);
+        if self.fifo_ordinals.get(&record.value.fifo_order.ordinal) != Some(&hash) {
+            return Err(invalid_data(
+                "live reservation FIFO index differs from the exact record",
+            ));
+        }
+        let lane = (expected_key.lane_id, expected_key.lane_incarnation);
+        if !self
+            .live_by_lane_incarnation
+            .get(&lane)
+            .is_some_and(|hashes| hashes.contains(&hash))
+        {
+            return Err(invalid_data(
+                "live reservation lane-incarnation index differs from the exact record",
+            ));
+        }
+        Ok(record.value.clone())
+    }
+
+    fn remove_preflighted_live(&mut self, record: &LaneQueueReservationRecordV5) {
+        let hash = record.key.signed_transaction_hash;
         let lane = (record.key.lane_id, record.key.lane_incarnation);
-        let remove_lane = {
-            let hashes = self
-                .live_by_lane_incarnation
-                .get_mut(&lane)
-                .expect("validated live lane index");
-            hashes.remove(&hash);
-            hashes.is_empty()
-        };
+        debug_assert_eq!(self.live.get(&hash).map(|entry| &entry.value), Some(record));
+        debug_assert_eq!(
+            self.fifo_ordinals.get(&record.fifo_order.ordinal),
+            Some(&hash)
+        );
+        debug_assert!(
+            self.live_by_lane_incarnation
+                .get(&lane)
+                .is_some_and(|hashes| hashes.contains(&hash))
+        );
+        self.live.remove(&hash);
+        self.fifo_ordinals.remove(&record.fifo_order.ordinal);
+        self.ownership.remove(&hash);
+        let remove_lane = self
+            .live_by_lane_incarnation
+            .get_mut(&lane)
+            .is_some_and(|hashes| {
+                hashes.remove(&hash);
+                hashes.is_empty()
+            });
         if remove_lane {
             self.live_by_lane_incarnation.remove(&lane);
         }
@@ -1210,21 +2034,34 @@ impl LaneQueueReservationJournal {
             ));
         }
         // Validate the complete semantic transition against the same persistent indexes used by
-        // startup replay before encoding or touching storage.
-        self.replay_state
-            .transition(frame, self.limits.max_owned_transactions, false)?;
+        // startup replay before encoding or touching storage. Retain the move-only checked
+        // identity/frame authorization across the complete staged append and synchronization.
+        let prepared = self
+            .replay_state
+            .prepare_checked_transition(frame, self.limits.max_owned_transactions)?;
         let encoded = encode_frame_with_limit(frame, self.limits.max_frame_payload_bytes)?;
         // Exhausting a configured file budget is deterministic and happens before storage is
         // touched. Keep the journal usable (for example, so the caller can compact it) rather
         // than misclassifying that admission rejection as an ambiguous durability boundary.
         let expected_end = self.preflight_append_end(&encoded)?;
-        if let Err(error) = self.append_staged(&encoded, expected_end) {
+        let prepared = match self.append_staged(&encoded, expected_end, prepared) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.replay_state.apply_checked_transition(
+            frame,
+            self.limits.max_owned_transactions,
+            prepared,
+        ) {
+            // The complete frame may already be durable while memory still
+            // reflects its predecessor. Latch ambiguity and require startup
+            // replay instead of panicking or attempting an in-process retry.
             self.poisoned = true;
             return Err(error);
         }
-        self.replay_state
-            .transition(frame, self.limits.max_owned_transactions, true)
-            .expect("preflighted lane reservation transition remains valid");
         Ok(())
     }
 
@@ -1239,7 +2076,12 @@ impl LaneQueueReservationJournal {
         Ok(expected_end)
     }
 
-    fn append_staged(&mut self, encoded: &[u8], expected_end: u64) -> io::Result<()> {
+    fn append_staged(
+        &mut self,
+        encoded: &[u8],
+        expected_end: u64,
+        authorization: PreparedReservationJournalTransition,
+    ) -> io::Result<PreparedReservationJournalTransition> {
         let header_end_in_frame = usize::try_from(FRAME_HEADER_BYTES)
             .expect("reservation frame header length fits usize");
         let commit_len = RESERVATION_JOURNAL_FRAME_COMMIT.len();
@@ -1292,6 +2134,11 @@ impl LaneQueueReservationJournal {
         );
         #[cfg(not(test))]
         let inject_after_full_write = false;
+        #[cfg(test)]
+        let inject_after_sync_before_replay_publication = matches!(
+            injected_fault,
+            Some(ReservationJournalAppendFault::AfterSyncBeforeReplayPublication)
+        );
 
         if inject_partial {
             // The durable header establishes that any following short body is one interrupted
@@ -1331,7 +2178,16 @@ impl LaneQueueReservationJournal {
         self.verify_cached_storage_at_len(expected_end)?;
         self.known_len = expected_end;
         self.file_revision = journal_file_revision(&self.file.metadata()?);
-        Ok(())
+        #[cfg(test)]
+        let authorization = if inject_after_sync_before_replay_publication {
+            let mut authorization = authorization;
+            authorization.expected_state_identity =
+                Hash::new(b"injected checked replay publication failure");
+            authorization
+        } else {
+            authorization
+        };
+        Ok(authorization)
     }
 
     fn verify_cached_storage_at_len(&self, expected_len: u64) -> io::Result<()> {
@@ -1376,7 +2232,7 @@ impl LaneQueueReservationJournal {
         self.next_compaction_fault = Some(fault);
     }
 
-    /// Whether an append may have crossed the durability boundary without acknowledgement.
+    /// Whether an append or replacement may be disk-ahead of published memory.
     pub(super) const fn durability_ambiguous(&self) -> bool {
         self.poisoned
     }
@@ -1414,9 +2270,15 @@ impl LaneQueueReservationJournal {
         if let Some(frame) = snapshot.clone() {
             validate_snapshot_frame(frame, self.limits)?;
         }
-        if let Some(frame) = snapshot.as_ref() {
-            compacted_replay_state.transition(frame, self.limits.max_owned_transactions, true)?;
-        }
+        let prepared_compacted_transition = snapshot
+            .as_ref()
+            .map(|frame| {
+                compacted_replay_state
+                    .prepare_checked_transition(frame, self.limits.max_owned_transactions)
+            })
+            .transpose()?;
+        #[cfg(test)]
+        let mut prepared_compacted_transition = prepared_compacted_transition;
         let canonical_replay = replay_path(&self.path, self.limits)?;
         if canonical_snapshot(
             canonical_replay.records(),
@@ -1431,11 +2293,9 @@ impl LaneQueueReservationJournal {
         }
         self.verify_cached_storage_unchanged()?;
         let compacted = encode_compacted_journal_with_limits(snapshot.as_ref(), self.limits)?;
-        ensure_file_bound(
-            u64::try_from(compacted.len())
-                .map_err(|_| invalid_data("lane reservation compacted journal exceeds u64"))?,
-            self.limits,
-        )?;
+        let compacted_len = u64::try_from(compacted.len())
+            .map_err(|_| invalid_data("lane reservation compacted journal exceeds u64"))?;
+        ensure_file_bound(compacted_len, self.limits)?;
         let tmp_file = {
             let mut file = OpenOptions::new()
                 .create_new(true)
@@ -1447,10 +2307,7 @@ impl LaneQueueReservationJournal {
             write_staged_bytes(&mut file, &compacted)?;
             file.sync_all()?;
             if verify_open_regular_path(&tmp, &file)? != tmp_identity
-                || file.metadata()?.len()
-                    != u64::try_from(compacted.len()).map_err(|_| {
-                        invalid_data("lane reservation compacted journal exceeds u64")
-                    })?
+                || file.metadata()?.len() != compacted_len
                 || verify_open_regular_parent(&tmp, &self.parent)? != self.parent_identity
             {
                 return Err(invalid_data(
@@ -1460,22 +2317,37 @@ impl LaneQueueReservationJournal {
             file
         };
         let tmp_identity = verify_open_regular_path(&tmp, &tmp_file)?;
-        persist_atomic_replacement(&tmp, &self.path)?;
-        if verify_open_regular_path(&self.path, &tmp_file)? != tmp_identity
-            || tmp_file.metadata()?.len()
-                != u64::try_from(compacted.len())
-                    .map_err(|_| invalid_data("compacted journal exceeds u64"))?
-            || verify_open_regular_parent(&self.path, &self.parent)? != self.parent_identity
-        {
+        #[cfg(test)]
+        let injected_compaction_fault = self.next_compaction_fault.take();
+        if let Err(error) = persist_atomic_replacement(&tmp, &self.path) {
+            self.poisoned = true;
+            return Err(error);
+        }
+        let replacement_is_exact = match (|| -> io::Result<bool> {
+            Ok(
+                verify_open_regular_path(&self.path, &tmp_file)? == tmp_identity
+                    && tmp_file.metadata()?.len() == compacted_len
+                    && verify_open_regular_parent(&self.path, &self.parent)?
+                        == self.parent_identity,
+            )
+        })() {
+            Ok(is_exact) => is_exact,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        if !replacement_is_exact {
             self.poisoned = true;
             return Err(invalid_data(
                 "lane reservation compaction replacement changed during promotion",
             ));
         }
         #[cfg(test)]
-        if let Some(ReservationJournalCompactionFault::AfterRenameBeforeParentSync) =
-            self.next_compaction_fault.take()
-        {
+        if matches!(
+            injected_compaction_fault,
+            Some(ReservationJournalCompactionFault::AfterRenameBeforeParentSync)
+        ) {
             self.poisoned = true;
             return Err(io::Error::other(
                 "injected lane reservation journal compaction failure after rename",
@@ -1498,13 +2370,55 @@ impl LaneQueueReservationJournal {
         };
         self.file = tmp_file;
         self.file_identity = reopened_identity;
-        self.known_len = u64::try_from(compacted.len())
-            .map_err(|_| invalid_data("compacted journal exceeds u64"))?;
+        self.known_len = compacted_len;
         if let Err(error) = self.verify_cached_storage_at_len(self.known_len) {
             self.poisoned = true;
             return Err(error);
         }
-        self.file_revision = journal_file_revision(&self.file.metadata()?);
+        let replacement_metadata = match self.file.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                self.poisoned = true;
+                return Err(error);
+            }
+        };
+        self.file_revision = journal_file_revision(&replacement_metadata);
+        #[cfg(test)]
+        if matches!(
+            injected_compaction_fault,
+            Some(ReservationJournalCompactionFault::AfterSyncBeforeReplayPublication)
+        ) {
+            let Some(prepared) = prepared_compacted_transition.as_mut() else {
+                self.poisoned = true;
+                return Err(io::Error::other(
+                    "injected checked compaction publication failure without a snapshot",
+                ));
+            };
+            prepared.expected_state_identity =
+                Hash::new(b"injected checked compaction publication failure");
+        }
+        match (snapshot.as_ref(), prepared_compacted_transition) {
+            (Some(frame), Some(prepared)) => {
+                if let Err(error) = compacted_replay_state.apply_checked_transition(
+                    frame,
+                    self.limits.max_owned_transactions,
+                    prepared,
+                ) {
+                    // The replacement is already durable. Keep the previous
+                    // in-memory replay state, poison this owner, and require
+                    // restart reconstruction from the canonical file.
+                    self.poisoned = true;
+                    return Err(error);
+                }
+            }
+            (None, None) => {}
+            _ => {
+                self.poisoned = true;
+                return Err(invalid_data(
+                    "checked compaction snapshot authorization is internally inconsistent",
+                ));
+            }
+        }
         self.replay_state = compacted_replay_state;
         self.terminal_frames = 0;
         Ok(true)
@@ -1526,7 +2440,7 @@ fn validate_snapshot_frame(
     limits: LaneQueueReservationJournalLimits,
 ) -> io::Result<()> {
     let mut state = IndexedReservationReplayState::default();
-    state.transition(&frame, limits.max_owned_transactions, true)
+    state.transition(&frame, limits.max_owned_transactions)
 }
 
 fn replay_path(
@@ -1597,7 +2511,7 @@ where
     let mut state = IndexedReservationReplayState::default();
     let scanned_len = scan_frames(file, len, limits, None, |frame| {
         if !matches!(frame, LaneQueueReservationJournalFrameV5::Bootstrap { .. }) {
-            state.transition(&frame, limits.max_owned_transactions, true)?;
+            state.transition(&frame, limits.max_owned_transactions)?;
         }
         Ok(())
     })?;
@@ -1858,23 +2772,11 @@ fn preflight_frame_ownership_bound(
                 }
             }
         }
-        LaneQueueReservationJournalFrameV5::Commit(key) => {
-            let mut owned = collect_owned_hashes_bounded(
-                records,
-                committed,
-                release_barriers,
-                completed_releases,
-                maximum,
-            )?;
-            owned.insert(key.signed_transaction_hash);
-            if owned.len() > maximum {
-                return Err(ownership_bound_error(owned.len(), maximum));
-            }
-        }
         // These transitions only remove ownership or move an already-owned identity between
         // representations. The preceding successful replay prefix is therefore still bounded.
         LaneQueueReservationJournalFrameV5::Bootstrap { .. }
         | LaneQueueReservationJournalFrameV5::ReleaseBatch(_)
+        | LaneQueueReservationJournalFrameV5::Commit(_)
         | LaneQueueReservationJournalFrameV5::ForgetCommit(_)
         | LaneQueueReservationJournalFrameV5::Prune { .. }
         | LaneQueueReservationJournalFrameV5::PrepareRelease(_)
@@ -2234,6 +3136,11 @@ fn apply_commit(
         }
         records.retain(|record| record.key != key);
         return Ok(());
+    }
+    if !records.iter().any(|record| record.key == key) {
+        return Err(invalid_data(
+            "reservation commit requires an exact live reservation",
+        ));
     }
     records.retain(|record| record.key != key);
     committed.push(key);
@@ -4128,8 +5035,12 @@ mod tests {
             LaneQueueReservationJournalFrameV5::Commit(second.key),
             1,
         )
-        .expect_err("a missing-key commit tombstone is a distinct owner");
-        assert!(error.to_string().contains("above configured limit 1"));
+        .expect_err("a runtime commit cannot create a missing owner");
+        assert!(
+            error
+                .to_string()
+                .contains("requires an exact live reservation")
+        );
         assert_eq!(live, vec![first.clone()]);
         assert!(committed.is_empty());
 
@@ -4509,7 +5420,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("does not match its entrypoint compatibility hash"),
+                .contains("compatibility transaction hash does not match its entrypoint"),
             "unexpected mismatched-identity rejection: {error}",
         );
         assert_eq!(
@@ -5037,6 +5948,76 @@ mod tests {
     }
 
     #[test]
+    fn post_sync_append_publication_failure_is_poisoned_and_replayed_on_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("post-sync-append-publication.norito");
+        let record = indexed_record(0);
+        let (mut journal, replay) =
+            LaneQueueReservationJournal::open(&path, u64::MAX).expect("open journal");
+        assert!(replay.records().is_empty());
+        let memory_before = journal.replay_state.clone();
+        journal.inject_next_append_fault(
+            ReservationJournalAppendFault::AfterSyncBeforeReplayPublication,
+        );
+
+        let error = journal
+            .put_batch(vec![record.clone()])
+            .expect_err("checked publication failure after sync must fail closed");
+        assert!(
+            error.to_string().contains("different exact pre-state"),
+            "unexpected checked publication rejection: {error}"
+        );
+        assert!(journal.durability_ambiguous());
+        assert_eq!(
+            journal.replay_state, memory_before,
+            "disk-ahead failure must leave the predecessor memory state unpublished"
+        );
+        assert_eq!(
+            journal.known_len,
+            fs::metadata(&path).expect("durable journal metadata").len(),
+            "the complete synchronized frame must remain visible for restart repair"
+        );
+        drop(journal);
+
+        let (_journal, replay) =
+            LaneQueueReservationJournal::open(&path, u64::MAX).expect("replay disk-ahead frame");
+        assert_eq!(replay.records(), &[record]);
+    }
+
+    #[test]
+    fn post_sync_compaction_publication_failure_is_poisoned_and_replayed_on_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("post-sync-compaction-publication.norito");
+        let record = indexed_record(0);
+        let (mut journal, _) = LaneQueueReservationJournal::open(&path, 1).expect("open journal");
+        journal
+            .put_batch(vec![record.clone()])
+            .expect("persist compaction fixture");
+        let memory_before = journal.replay_state.clone();
+        journal.inject_next_compaction_fault(
+            ReservationJournalCompactionFault::AfterSyncBeforeReplayPublication,
+        );
+
+        let error = journal
+            .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[])
+            .expect_err("checked compaction publication failure must fail closed");
+        assert!(
+            error.to_string().contains("different exact pre-state"),
+            "unexpected checked compaction rejection: {error}"
+        );
+        assert!(journal.durability_ambiguous());
+        assert_eq!(
+            journal.replay_state, memory_before,
+            "durable replacement must not partially publish candidate memory state"
+        );
+        drop(journal);
+
+        let (_journal, replay) =
+            LaneQueueReservationJournal::open(&path, 1).expect("replay durable replacement");
+        assert_eq!(replay.records(), &[record]);
+    }
+
+    #[test]
     fn compaction_preserves_prepared_and_completed_release_state() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("release-compaction.norito");
@@ -5510,6 +6491,625 @@ mod tests {
     }
 
     #[test]
+    fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_barrier() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("checked-commit-owner.norito");
+        let record = indexed_record(0);
+        let (mut journal, _) =
+            LaneQueueReservationJournal::open(&path, 1).expect("open checked journal");
+        let before_len = journal.known_len;
+
+        let error = journal
+            .commit(record.key)
+            .expect_err("runtime Absent-to-Committed must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            journal.known_len, before_len,
+            "rejected commit must not append any frame"
+        );
+        assert!(
+            !journal.poisoned,
+            "semantic rejection before storage must leave the journal usable"
+        );
+
+        journal
+            .put_batch(vec![record.clone()])
+            .expect("install exact live owner");
+        journal
+            .commit(record.key)
+            .expect("exact Live-to-Committed remains valid");
+
+        let mut recovered = IndexedReservationReplayState::default();
+        recovered
+            .transition(
+                &LaneQueueReservationJournalFrameV5::Snapshot {
+                    live: Vec::new(),
+                    committed: vec![record.key],
+                    release_barriers: Vec::new(),
+                    completed_releases: Vec::new(),
+                },
+                8,
+            )
+            .expect("snapshot recovery has a distinct checked reconstruction action");
+        assert_eq!(recovered.replay().committed(), &[record.key]);
+
+        let invalid_replay_path = dir.path().join("absent-commit-replay.norito");
+        let mut invalid_replay =
+            encode_frame(&bootstrap_frame()).expect("encode exact V5 bootstrap");
+        invalid_replay.extend(
+            encode_frame(&LaneQueueReservationJournalFrameV5::Commit(record.key))
+                .expect("encode structurally valid absent-owner commit"),
+        );
+        fs::write(&invalid_replay_path, &invalid_replay)
+            .expect("write exact invalid replay prefix");
+        let replay_error = LaneQueueReservationJournal::open(&invalid_replay_path, 1)
+            .err()
+            .expect("startup replay must reject Absent-to-Committed");
+        assert_eq!(replay_error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&invalid_replay_path).expect("retain rejected replay evidence"),
+            invalid_replay,
+            "semantic replay rejection must not rewrite complete retained evidence"
+        );
+    }
+
+    #[test]
+    fn prepared_checked_transition_is_bound_to_frame_and_state_generation() {
+        let first = indexed_record(0);
+        let second = indexed_record(1);
+        let first_frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]);
+        let second_frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![second.clone()]);
+
+        let mut wrong_frame_state = IndexedReservationReplayState::default();
+        let wrong_frame_authorization = wrong_frame_state
+            .prepare_checked_transition(&first_frame, 8)
+            .expect("prepare exact first frame");
+        assert!(
+            wrong_frame_state
+                .apply_checked_transition(&second_frame, 8, wrong_frame_authorization)
+                .is_err(),
+            "one frame's move-only authorization must not apply another frame"
+        );
+        assert!(wrong_frame_state.replay().records().is_empty());
+
+        let mut wrong_bound_state = IndexedReservationReplayState::default();
+        let wrong_bound_authorization = wrong_bound_state
+            .prepare_checked_transition(&first_frame, 8)
+            .expect("prepare transition with exact ownership bound");
+        assert!(
+            wrong_bound_state
+                .apply_checked_transition(&first_frame, 9, wrong_bound_authorization)
+                .is_err(),
+            "authorization must not cross configured ownership bounds"
+        );
+        assert!(wrong_bound_state.replay().records().is_empty());
+
+        let mut stale_state = IndexedReservationReplayState::default();
+        let stale_authorization = stale_state
+            .prepare_checked_transition(&first_frame, 8)
+            .expect("prepare transition at generation zero");
+        stale_state
+            .transition(&second_frame, 8)
+            .expect("advance retained-prefix generation");
+        let before_stale_attempt = stale_state.clone();
+        assert!(
+            stale_state
+                .apply_checked_transition(&first_frame, 8, stale_authorization)
+                .is_err(),
+            "authorization must become stale after another state operation"
+        );
+        assert_eq!(stale_state, before_stale_attempt);
+        assert_eq!(stale_state.replay().records(), &[second]);
+    }
+
+    #[test]
+    fn prepared_checked_transition_rejects_same_generation_cross_state_substitution() {
+        let first = indexed_record(0);
+        let second = indexed_record(1);
+        let absent = indexed_record(2);
+        let common_frame = LaneQueueReservationJournalFrameV5::ForgetCommit(absent.key);
+
+        let mut identical_left = IndexedReservationReplayState::default();
+        identical_left
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+                8,
+            )
+            .expect("seed the exact left state");
+        let mut identical_right = identical_left.clone();
+        assert_eq!(identical_left, identical_right);
+        assert_eq!(
+            identical_left.transition_generation,
+            identical_right.transition_generation
+        );
+        assert_eq!(
+            identical_left.checked_state_identity,
+            identical_right.checked_state_identity
+        );
+        let identical_left_authorization = identical_left
+            .prepare_checked_transition(&common_frame, 8)
+            .expect("prepare on one of two logically identical state instances");
+        let identical_right_before = identical_right.clone();
+        let error = identical_right
+            .apply_checked_transition(&common_frame, 8, identical_left_authorization)
+            .expect_err("authorization must not cross an independently mutable clone");
+        assert!(
+            error.to_string().contains("different exact state instance"),
+            "unexpected state-instance rejection: {error}"
+        );
+        assert_eq!(identical_right, identical_right_before);
+
+        let mut left = IndexedReservationReplayState::default();
+        let mut right = IndexedReservationReplayState::default();
+        left.transition(
+            &LaneQueueReservationJournalFrameV5::PutBatch(vec![first]),
+            8,
+        )
+        .expect("advance left checked state");
+        right
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PutBatch(vec![second]),
+                8,
+            )
+            .expect("advance right checked state");
+        assert_eq!(left.transition_generation, right.transition_generation);
+        assert_ne!(
+            left.checked_state_identity, right.checked_state_identity,
+            "divergent canonical frames at one generation need distinct state identities"
+        );
+
+        let left_authorization = left
+            .prepare_checked_transition(&common_frame, 8)
+            .expect("prepare a stuttering transition on the left state");
+        let right_before = right.clone();
+        let error = right
+            .apply_checked_transition(&common_frame, 8, left_authorization)
+            .expect_err("same-generation authorization must not cross divergent states");
+        assert!(
+            error.to_string().contains("different exact state instance"),
+            "unexpected cross-state rejection: {error}"
+        );
+        assert_eq!(right, right_before);
+    }
+
+    #[test]
+    fn prepared_checked_transition_binds_exact_ordered_owner_token_coverage() {
+        let first = indexed_record(0);
+        let second = indexed_record(1);
+        let third = indexed_record(2);
+        let fourth = indexed_record(3);
+        let frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![
+            first.clone(),
+            second.clone(),
+            third,
+        ]);
+
+        let mut missing_state = IndexedReservationReplayState::default();
+        let mut missing = missing_state
+            .prepare_checked_transition(&frame, 8)
+            .expect("prepare exact three-owner transition");
+        let _missing_token = missing
+            .owner_transitions
+            .pop()
+            .expect("three-owner transition has a final token");
+        let missing_before = missing_state.clone();
+        assert!(
+            missing_state
+                .apply_checked_transition(&frame, 8, missing)
+                .is_err(),
+            "missing owner evidence must fail closed"
+        );
+        assert_eq!(missing_state, missing_before);
+
+        let mut reordered_state = IndexedReservationReplayState::default();
+        let mut reordered = reordered_state
+            .prepare_checked_transition(&frame, 8)
+            .expect("prepare exact ordered transition");
+        reordered.owner_transitions.reverse();
+        let reordered_before = reordered_state.clone();
+        assert!(
+            reordered_state
+                .apply_checked_transition(&frame, 8, reordered)
+                .is_err(),
+            "reordered owner evidence must fail closed"
+        );
+        assert_eq!(reordered_state, reordered_before);
+
+        let mut altered_state = IndexedReservationReplayState::default();
+        let mut altered = altered_state
+            .prepare_checked_transition(&frame, 8)
+            .expect("prepare original owner transition");
+        let alternate_frame =
+            LaneQueueReservationJournalFrameV5::PutBatch(vec![first, second, fourth]);
+        let mut alternate_state = IndexedReservationReplayState::default();
+        let mut alternate = alternate_state
+            .prepare_checked_transition(&alternate_frame, 8)
+            .expect("prepare alternate owner transition");
+        let replacement = alternate
+            .owner_transitions
+            .pop()
+            .expect("alternate transition has a final token");
+        let _replaced_token = altered
+            .owner_transitions
+            .pop()
+            .expect("original transition has a final token");
+        altered.owner_transitions.push(replacement);
+        let altered_before = altered_state.clone();
+        assert!(
+            altered_state
+                .apply_checked_transition(&frame, 8, altered)
+                .is_err(),
+            "substituted owner evidence must fail closed"
+        );
+        assert_eq!(altered_state, altered_before);
+    }
+
+    #[test]
+    fn checked_transition_result_identity_and_candidate_application_are_atomic() {
+        let first = indexed_record(0);
+        let second = indexed_record(1);
+        let frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]);
+
+        let mut wrong_result_state = IndexedReservationReplayState::default();
+        let mut wrong_result = wrong_result_state
+            .prepare_checked_transition(&frame, 8)
+            .expect("prepare exact resulting identity");
+        wrong_result.resulting_state_identity =
+            Hash::new(b"altered checked reservation result identity");
+        let wrong_result_before = wrong_result_state.clone();
+        assert!(
+            wrong_result_state
+                .apply_checked_transition(&frame, 8, wrong_result)
+                .is_err(),
+            "altered resulting identity must fail closed"
+        );
+        assert_eq!(wrong_result_state, wrong_result_before);
+
+        let absent_frame = LaneQueueReservationJournalFrameV5::ForgetCommit(second.key);
+        let mut shape_state = IndexedReservationReplayState::default();
+        let shape_authorization = shape_state
+            .prepare_checked_transition(&absent_frame, 8)
+            .expect("prepare an absent no-op before shape drift");
+        shape_state.next_order = 1;
+        let shape_before = shape_state.clone();
+        let error = shape_state
+            .apply_checked_transition(&absent_frame, 8, shape_authorization)
+            .expect_err("next-order drift must invalidate the exact pre-state witness");
+        assert!(
+            error
+                .to_string()
+                .contains("different exact pre-state shape"),
+            "unexpected shape-drift rejection: {error}"
+        );
+        assert_eq!(shape_state, shape_before);
+
+        let mut owner_state = IndexedReservationReplayState::default();
+        owner_state.ownership.insert(
+            second.key.signed_transaction_hash,
+            DurableReservationOwnership::Live(second.key),
+        );
+        let owner_authorization = owner_state
+            .prepare_checked_transition(&absent_frame, 8)
+            .expect("prepare against one exact owner projection");
+        owner_state.ownership.insert(
+            second.key.signed_transaction_hash,
+            DurableReservationOwnership::Committed(second.key),
+        );
+        let owner_before = owner_state.clone();
+        let error = owner_state
+            .apply_checked_transition(&absent_frame, 8, owner_authorization)
+            .expect_err("same-shape owner substitution must invalidate checked evidence");
+        assert!(
+            error
+                .to_string()
+                .contains("owner evidence no longer matches the exact pre-state"),
+            "unexpected owner-evidence rejection: {error}"
+        );
+        assert_eq!(owner_state, owner_before);
+
+        let mut candidate_state = IndexedReservationReplayState::default();
+        let candidate_authorization = candidate_state
+            .prepare_checked_transition(&frame, 8)
+            .expect("prepare before injecting a semantic pre-state failure");
+        candidate_state
+            .fifo_ordinals
+            .insert(first.fifo_order.ordinal, second.key.signed_transaction_hash);
+        let candidate_before = candidate_state.clone();
+        assert!(
+            candidate_state
+                .apply_checked_transition(&frame, 8, candidate_authorization)
+                .is_err(),
+            "checked application must reject the injected index conflict before mutation"
+        );
+        assert_eq!(
+            candidate_state, candidate_before,
+            "failed semantic revalidation must not partially mutate the published state"
+        );
+
+        let removal_frame = LaneQueueReservationJournalFrameV5::ReleaseBatch(vec![first.key]);
+        let exact_lane = (first.key.lane_id, first.key.lane_incarnation);
+
+        let mut lane_key_state = IndexedReservationReplayState::default();
+        lane_key_state
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+                8,
+            )
+            .expect("seed exact live reservation before lane-key substitution");
+        let lane_key_authorization = lane_key_state
+            .prepare_checked_transition(&removal_frame, 8)
+            .expect("prepare release before same-shape lane-key substitution");
+        let indexed_hashes = lane_key_state
+            .live_by_lane_incarnation
+            .remove(&exact_lane)
+            .expect("seeded reservation has an exact lane-incarnation index");
+        assert!(
+            lane_key_state
+                .live_by_lane_incarnation
+                .insert(
+                    (LaneId::new(99), first.key.lane_incarnation),
+                    indexed_hashes
+                )
+                .is_none()
+        );
+        let lane_key_before = lane_key_state.clone();
+        let error = lane_key_state
+            .apply_checked_transition(&removal_frame, 8, lane_key_authorization)
+            .expect_err("same-shape lane-key substitution must fail before removal");
+        assert!(
+            error.to_string().contains("lane-incarnation index"),
+            "unexpected lane-key substitution rejection: {error}"
+        );
+        assert_eq!(
+            lane_key_state, lane_key_before,
+            "lane-key corruption must not permit partial removal"
+        );
+
+        let mut lane_member_state = IndexedReservationReplayState::default();
+        lane_member_state
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+                8,
+            )
+            .expect("seed exact live reservation before lane-member substitution");
+        let lane_member_authorization = lane_member_state
+            .prepare_checked_transition(&removal_frame, 8)
+            .expect("prepare release before same-shape lane-member substitution");
+        let lane_hashes = lane_member_state
+            .live_by_lane_incarnation
+            .get_mut(&exact_lane)
+            .expect("seeded reservation has an exact lane-incarnation set");
+        assert!(lane_hashes.remove(&first.key.signed_transaction_hash));
+        assert!(lane_hashes.insert(second.key.signed_transaction_hash));
+        let lane_member_before = lane_member_state.clone();
+        let error = lane_member_state
+            .apply_checked_transition(&removal_frame, 8, lane_member_authorization)
+            .expect_err("same-shape lane-member substitution must fail before removal");
+        assert!(
+            error.to_string().contains("lane-incarnation index"),
+            "unexpected lane-member substitution rejection: {error}"
+        );
+        assert_eq!(
+            lane_member_state, lane_member_before,
+            "lane-member corruption must not permit partial removal"
+        );
+
+        let mut fifo_member_state = IndexedReservationReplayState::default();
+        fifo_member_state
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+                8,
+            )
+            .expect("seed exact live reservation before FIFO substitution");
+        let fifo_member_authorization = fifo_member_state
+            .prepare_checked_transition(&removal_frame, 8)
+            .expect("prepare release before same-shape FIFO substitution");
+        assert_eq!(
+            fifo_member_state
+                .fifo_ordinals
+                .insert(first.fifo_order.ordinal, second.key.signed_transaction_hash),
+            Some(first.key.signed_transaction_hash)
+        );
+        let fifo_member_before = fifo_member_state.clone();
+        let error = fifo_member_state
+            .apply_checked_transition(&removal_frame, 8, fifo_member_authorization)
+            .expect_err("same-shape FIFO substitution must fail before removal");
+        assert!(
+            error.to_string().contains("FIFO index"),
+            "unexpected FIFO substitution rejection: {error}"
+        );
+        assert_eq!(
+            fifo_member_state, fifo_member_before,
+            "FIFO corruption must not permit partial removal"
+        );
+
+        let multi_removal_frame =
+            LaneQueueReservationJournalFrameV5::ReleaseBatch(vec![first.key, second.key]);
+        let mut later_target_state = IndexedReservationReplayState::default();
+        later_target_state
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone(), second.clone()]),
+                8,
+            )
+            .expect("seed two exact live reservations before later-target corruption");
+        let later_target_authorization = later_target_state
+            .prepare_checked_transition(&multi_removal_frame, 8)
+            .expect("prepare two-owner release before corrupting its later target");
+        assert_eq!(
+            later_target_state
+                .fifo_ordinals
+                .insert(second.fifo_order.ordinal, first.key.signed_transaction_hash),
+            Some(second.key.signed_transaction_hash)
+        );
+        let later_target_before = later_target_state.clone();
+        let error = later_target_state
+            .apply_checked_transition(&multi_removal_frame, 8, later_target_authorization)
+            .expect_err("a corrupt later target must fail before the first removal");
+        assert!(
+            error.to_string().contains("FIFO index"),
+            "unexpected later-target rejection: {error}"
+        );
+        assert_eq!(
+            later_target_state, later_target_before,
+            "all removals must be preflighted before the first indexed mutation"
+        );
+
+        let mut commit_state = IndexedReservationReplayState::default();
+        commit_state
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+                8,
+            )
+            .expect("seed an exact live reservation before commit corruption");
+        let commit_frame = LaneQueueReservationJournalFrameV5::Commit(first.key);
+        let commit_authorization = commit_state
+            .prepare_checked_transition(&commit_frame, 8)
+            .expect("prepare commit before same-shape FIFO corruption");
+        assert_eq!(
+            commit_state
+                .fifo_ordinals
+                .insert(first.fifo_order.ordinal, second.key.signed_transaction_hash),
+            Some(first.key.signed_transaction_hash)
+        );
+        let commit_before = commit_state.clone();
+        let error = commit_state
+            .apply_checked_transition(&commit_frame, 8, commit_authorization)
+            .expect_err("commit must reject secondary-index corruption before removal");
+        assert!(
+            error.to_string().contains("FIFO index"),
+            "unexpected commit-index rejection: {error}"
+        );
+        assert_eq!(
+            commit_state, commit_before,
+            "failed commit preflight must preserve live and committed ownership"
+        );
+
+        let prune_frame = LaneQueueReservationJournalFrameV5::Prune {
+            lane_id: first.key.lane_id,
+            lane_incarnation: first.key.lane_incarnation,
+        };
+        let mut prune_state = IndexedReservationReplayState::default();
+        prune_state
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone(), second.clone()]),
+                8,
+            )
+            .expect("seed two exact live reservations before prune corruption");
+        let prune_authorization = prune_state
+            .prepare_checked_transition(&prune_frame, 8)
+            .expect("prepare multi-record prune before corrupting its later target");
+        assert_eq!(
+            prune_state
+                .fifo_ordinals
+                .insert(second.fifo_order.ordinal, first.key.signed_transaction_hash),
+            Some(second.key.signed_transaction_hash)
+        );
+        let prune_before = prune_state.clone();
+        let error = prune_state
+            .apply_checked_transition(&prune_frame, 8, prune_authorization)
+            .expect_err("multi-record prune must preflight every target before removal");
+        assert!(
+            error.to_string().contains("FIFO index"),
+            "unexpected prune-index rejection: {error}"
+        );
+        assert_eq!(
+            prune_state, prune_before,
+            "failed prune preflight must preserve every indexed live reservation"
+        );
+
+        let release = release_barrier(&[first.clone(), second.clone()], 91);
+        let release_digest = release.digest();
+        let completion = release_completion(&[first.clone(), second.clone()], 91);
+        let completion_frame = LaneQueueReservationJournalFrameV5::CompleteRelease(completion);
+        let mut completion_state = IndexedReservationReplayState::default();
+        completion_state
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone(), second.clone()]),
+                8,
+            )
+            .expect("seed two exact live reservations before ordered completion");
+        completion_state
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PrepareRelease(release),
+                8,
+            )
+            .expect("prepare the exact two-record release barrier");
+        let completion_authorization = completion_state
+            .prepare_checked_transition(&completion_frame, 8)
+            .expect("prepare completion before corrupting its later target");
+        assert_eq!(
+            completion_state
+                .fifo_ordinals
+                .insert(second.fifo_order.ordinal, first.key.signed_transaction_hash),
+            Some(second.key.signed_transaction_hash)
+        );
+        let completion_before = completion_state.clone();
+        let error = completion_state
+            .apply_checked_transition(&completion_frame, 8, completion_authorization)
+            .expect_err("completion must preflight every member before removing its barrier");
+        assert!(
+            error.to_string().contains("FIFO index"),
+            "unexpected completion-index rejection: {error}"
+        );
+        assert!(
+            completion_state
+                .release_barriers
+                .contains_key(&release_digest),
+            "failed completion preflight must preserve its prepared release barrier"
+        );
+        assert_eq!(
+            completion_state, completion_before,
+            "failed completion preflight must preserve the barrier and every live record"
+        );
+
+        let mut hash_binding_state = IndexedReservationReplayState::default();
+        hash_binding_state
+            .transition(
+                &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone()]),
+                8,
+            )
+            .expect("seed an exact live reservation before key/hash substitution");
+        let hash_binding_authorization = hash_binding_state
+            .prepare_checked_transition(&prune_frame, 8)
+            .expect("prepare prune before key/hash substitution");
+        hash_binding_state.ownership.insert(
+            first.key.signed_transaction_hash,
+            DurableReservationOwnership::Live(second.key),
+        );
+        let hash_binding_before = hash_binding_state.clone();
+        let error = hash_binding_state
+            .apply_checked_transition(&prune_frame, 8, hash_binding_authorization)
+            .expect_err("preflight must bind the lane-index lookup hash to the exact owner key");
+        assert!(
+            error.to_string().contains("exact reservation hash"),
+            "unexpected key/hash rejection: {error}"
+        );
+        assert_eq!(
+            hash_binding_state, hash_binding_before,
+            "key/hash rejection must occur before indexed mutation"
+        );
+    }
+
+    #[test]
+    fn checked_transition_generation_overflow_is_rejected_without_mutation() {
+        let first = indexed_record(0);
+        let frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![first]);
+        let mut state = IndexedReservationReplayState::default();
+        state.transition_generation = u64::MAX;
+        let before = state.clone();
+
+        let error = state
+            .prepare_checked_transition(&frame, 8)
+            .err()
+            .expect("generation overflow must fail before authorization");
+        assert!(
+            error.to_string().contains("generation overflow"),
+            "unexpected generation overflow rejection: {error}"
+        );
+        assert_eq!(state, before);
+    }
+
+    #[test]
     fn indexed_replay_matches_reference_vector_transitions_and_ordering() {
         let first = indexed_record(0);
         let second = indexed_record(1);
@@ -5562,9 +7162,7 @@ mod tests {
                 32,
             )
             .expect("reference transition");
-            indexed
-                .transition(&frame, 32, true)
-                .expect("indexed transition");
+            indexed.transition(&frame, 32).expect("indexed transition");
             let replay = indexed.replay();
             assert_eq!(replay.records(), live);
             assert_eq!(replay.committed(), committed);
@@ -5587,14 +7185,12 @@ mod tests {
             .transition(
                 &LaneQueueReservationJournalFrameV5::PutBatch(vec![first.clone(), second.clone()]),
                 8,
-                true,
             )
             .expect("seed indexed state");
         indexed
             .transition(
                 &LaneQueueReservationJournalFrameV5::PrepareRelease(release.clone()),
                 8,
-                true,
             )
             .expect("seed prepared release");
         let replay = indexed.replay();
@@ -5641,7 +7237,7 @@ mod tests {
                 "reference replay must reject adversarial frame {frame:?}"
             );
             assert!(
-                indexed.transition(&frame, 8, true).is_err(),
+                indexed.transition(&frame, 8).is_err(),
                 "indexed replay must reject adversarial frame {frame:?}"
             );
             assert_eq!(

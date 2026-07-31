@@ -3995,6 +3995,24 @@ pub struct ProductionTerminalApplicationWithoutSuccessorActivationProjection {
     pub pending_successor_activation_present: bool,
 }
 
+/// Verus-side primitive durable owner of one exact lane queue reservation.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightReservationOwnerProjection {
+    pub state: u8,
+    pub reservation_identity: CanonicalIdentityProjection,
+    pub release_identity: CanonicalIdentityProjection,
+}
+
+/// Verus-side mirror of one primitive reservation-journal owner transition.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightReservationTransitionProjection {
+    pub action: u8,
+    pub requested_reservation_identity: CanonicalIdentityProjection,
+    pub requested_release_identity: CanonicalIdentityProjection,
+    pub before: ProductionInFlightReservationOwnerProjection,
+    pub after: ProductionInFlightReservationOwnerProjection,
+}
+
 /// Verus-side complete immutable identity of one durable predecessor.
 #[derive(Copy, Clone)]
 pub struct ProductionDurablePredecessorIdentityProjection {
@@ -4287,6 +4305,20 @@ pub closed spec fn check_production_terminal_application_transition(
     }
 }
 
+/// Total gate over the primitive reservation-owner projection mirrored by production.
+///
+/// This is intentionally not a total refinement checker for the surrounding
+/// QueuePlan/Kura/carrier/WSV/FIFO lifecycle.
+pub closed spec fn check_production_in_flight_reservation_transition(
+    projection: ProductionInFlightReservationTransitionProjection,
+) -> Option<ProductionInFlightReservationTransitionProjection> {
+    if production_in_flight_reservation_transition_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
+}
+
 /// Exact Verus mirror of the durable predecessor production gate.
 pub closed spec fn production_durable_predecessor_identity_kernel(
     projection: ProductionDurablePredecessorIdentityProjection,
@@ -4412,6 +4444,13 @@ pub closed spec fn production_terminal_application_without_successor_activation_
     projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
 ) -> bool {
     production_terminal_application_without_successor_activation_body!(projection)
+}
+
+/// Exact Verus mirror of the primitive reservation-owner production kernel.
+pub closed spec fn production_in_flight_reservation_transition_kernel(
+    projection: ProductionInFlightReservationTransitionProjection,
+) -> bool {
+    production_in_flight_reservation_transition_body!(projection)
 }
 
 /// Exact applied predecessor ownership and the prepared successor marker admit
@@ -4991,6 +5030,32 @@ pub proof fn production_terminal_application_without_successor_activation_refine
 {
     reveal(check_production_terminal_application_transition);
     reveal(production_terminal_application_without_successor_activation_kernel);
+}
+
+/// A successful primitive checker result is exactly the shared executable
+/// identity/state relation. Collection extraction and cross-store ordering are
+/// deliberately outside this theorem.
+pub proof fn production_in_flight_reservation_transition_preserves_primitive_identity(
+    projection: ProductionInFlightReservationTransitionProjection,
+)
+    ensures
+        check_production_in_flight_reservation_transition(projection) == Some(projection)
+            ==> production_in_flight_reservation_transition_kernel(projection),
+{
+    reveal(check_production_in_flight_reservation_transition);
+}
+
+/// Runtime commit cannot fabricate a commit barrier from absent ownership.
+pub proof fn production_in_flight_reservation_commit_rejects_absent_owner(
+    projection: ProductionInFlightReservationTransitionProjection,
+)
+    requires
+        projection.action == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_COMMIT),
+        projection.before.state == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT),
+    ensures
+        !production_in_flight_reservation_transition_kernel(projection),
+{
+    reveal(production_in_flight_reservation_transition_kernel);
 }
 
 /// Verus-side shape of one fixed-width effect capability key.

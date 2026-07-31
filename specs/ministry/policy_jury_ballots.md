@@ -17,8 +17,12 @@ cover the entire voting workflow:
    snapshot + beacon.
 2. **`PolicyJuryBallotCommitV1`** – sealed commitment written before ballots
    are revealed.  It stores the round/proposal/juror identifiers, the
-   Blake2b‑256 digest of the juror id + vote choice + nonce tuple, the capture
-   timestamp, and the canonical ballot mode (`plaintext` or `zk-envelope`).
+   Blake2b‑256 digest of the round + proposal + juror + vote choice + nonce
+   tuple, the capture timestamp, and the canonical ballot mode (`plaintext` or
+   `zk-envelope`). The hash preimage starts with the fixed
+   `iroha.ministry.policy-jury.ballot.commitment.v1` domain and length-prefixes
+   every variable-length field; embedded NUL bytes cannot shift field
+   boundaries.
    `PolicyJuryBallotCommitV1::verify_reveal`
    ensures the stored digest matches the reveal payload.
 3. **`PolicyJuryBallotRevealV1`** – the public reveal object containing the

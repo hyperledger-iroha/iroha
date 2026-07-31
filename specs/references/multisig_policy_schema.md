@@ -5,8 +5,8 @@
 # Multisignature Controller Schema v1 (ADDR‑1c)
 
 This note is the canonical reference for the multisignature controller payload
-used by the Sora Name Service roadmap (**ADDR‑1c**). It formalises the CTAP2
-CBOR map, documents the validation rules enforced by
+used by the Sora Name Service. It formalises the CTAP2 CBOR map and documents
+the validation rules enforced by
 `MultisigPolicy::validate()`, and records the golden fixtures that SDKs and
 operations teams rely on when reproducing controller hashes.
 
@@ -54,9 +54,9 @@ account address:
 |------|----------------|--------------|
 | `version == MultisigPolicy::CURRENT_VERSION (1)` | Ensures all nodes agree on semantics before accepting a policy. | `MultisigPolicyError::UnsupportedVersion` |
 | `1 <= threshold <= Σ member.weight` | Enforcement happens after deduplication so callers cannot bypass the check by repeating members. | `ZeroThreshold` or `ThresholdExceedsTotal` |
-| `1 <= members.len() <= CONTROLLER_MULTISIG_MEMBER_MAX (255)` | `CONTROLLER_MULTISIG_MEMBER_MAX` is shared with the binary controller encoding documented in `docs/account_structure.md`. | `EmptyMembers` or `AccountAddressError::MultisigMemberOverflow` |
+| `1 <= members.len() <= CONTROLLER_MULTISIG_MEMBER_MAX (65,535)` | `CONTROLLER_MULTISIG_MEMBER_MAX` is the `u16` member-count limit shared with the binary controller encoding documented in `specs/account_structure.md`. | `EmptyMembers` or `AccountAddressError::MultisigMemberOverflow` |
 | Member weight ≥ 1 | Enforced inside `MultisigMember::new`. | `MemberWeightZero` |
-| Curves must exist in `address_curve_registry.md` **and** be enabled in `crypto.allowed_signing` | Guarantees deterministic rejection when future curves are advertised but not enabled on a cluster. | `UnsupportedCurve` / `AccountAddressError::UnknownCurve` |
+| Curves must exist in `address_curve_registry.md` **and** be enabled in `crypto.allowed_signing` | Guarantees deterministic rejection when a registered curve is not enabled on a cluster. | `UnsupportedCurve` / `AccountAddressError::UnknownCurve` |
 | Members are deduplicated after canonical sorting by `(algorithm_string || 0x00 || key_bytes)` | Prevents equivalent public keys from inflating total weight; the canonical order feeds directly into CTAP2 encoding. | `DuplicateMember` |
 
 These invariants ensure every controller hash is deterministic regardless of the
@@ -133,7 +133,7 @@ admission suites.
 
 ## References
 
-- Binary controller encoding: [`docs/account_structure.md`](../../docs/account_structure.md#23-controller-payload-encodings-addr-1a)
+- Binary controller encoding: [`specs/account_structure.md`](../account_structure.md#23-controller-payload-encodings-addr-1a)
 - Canonical curve registry: [`specs/references/address_curve_registry.md`](address_curve_registry.md)
 - Implementation: [`crates/iroha_data_model/src/account/controller.rs`](../../crates/iroha_data_model/src/account/controller.rs)
 - Compliance fixtures: [`fixtures/account/address_vectors.json`](../../fixtures/account/address_vectors.json)

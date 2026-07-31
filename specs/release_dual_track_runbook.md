@@ -1,280 +1,249 @@
-//! Dual-track (Iroha 2 / Iroha 3) release runbook.
+# Dual-Track Release Procedure
 
-# Dual-Track Release Runbook (Iroha 2 / Iroha 3)
+This is the repository-local procedure for producing the current Iroha release
+artifacts. It covers the implemented `iroha2=single` and `iroha3=nexus`
+packaging profiles. It does not prescribe a calendar, branch naming scheme,
+upload destination, or approval hierarchy that is not encoded in this
+repository.
 
-This runbook captures the branching, build, validation, and publication flow required to ship simultaneous Iroha 2 (self-hosted) and Iroha 3 (Sora Nexus) releases. It complements `specs/release_procedure.org` and `specs/release_artifact_selection.md`, focusing on the dual-artifact specifics that surfaced in the roadmap Milestone R3.
+Public installation and operator documentation belongs in the sibling
+`iroha-docs` repository. This file stays here because it is coupled directly to
+the release scripts, profile manifest, and workflows.
 
-## Scope & Roles
-- **Release Manager** — coordinates the schedule, drives the checklist, owns branching/tagging.
-- **Core Engineering Lead** — approves code freeze and validates consensus/perf gates.
-- **Ops / DevRel** — verify packaging, update operator docs, announce availability.
-- **Security Review** — approves the Ed25519 public-key fingerprint, HSM
-  ceremony, signer rotation/revocation, and aggregate-manifest signature.
+## Automated boundary
 
-## Branching & Tagging Strategy
-| Step | Branch/Tag | Purpose |
-|------|------------|---------|
-| D‑7 | `release/iroha2/vX.Y.Z-rc` & `release/iroha3/vX.Y.Z-rc` branched from `main` | Freeze candidate commits for each track. |
-| D‑5 | `release/iroha2/vX.Y.Z` & `release/iroha3/vX.Y.Z` (fast-forward) | Promote RC branch after smoke fixes, keep RC branch for hotfixes. |
-| D‑2 | `stable/iroha2` & `stable/iroha3` (fast-forward) | Update long-lived stable tips; use for hotfix cherry-picks. |
-| Release | Tags `iroha2-vX.Y.Z` & `iroha3-vX.Y.Z` on respective release branches | Immutable snapshot referenced by manifests and SDKs. |
-| Post | Merge `release/*` back to `main` via PR | Ensure fixes land on trunk; resolve conflicts immediately. |
+The checked-in automation has distinct responsibilities:
 
-**Notes**
-- Keep branch protection in place (CI + review) even for release branches.
-- Tag ordering: create `iroha2-v…` first, validate Sora Nexus gating before pushing `iroha3-v…`.
-- If an emergency fix is required, cherry-pick onto both release branches and regenerate tags (`git tag -f` + `git push --force --tags`) only after stakeholder approval.
+| Surface | Current responsibility |
+| --- | --- |
+| `.github/workflows/workspace_release.yml` | Exact-SHA workspace release gate. It runs nightly, on `main`, on `v*` tags, by manual dispatch, and as a reusable workflow. Its jobs check formatting, build the workspace, build Rustdoc, run the workspace tests and compile-unit guard, collect coverage, and run strict Clippy. |
+| `scripts/run_release_pipeline.py` | Local dual-profile coordinator. It builds from reviewed prebuilt binaries, produces matrices and checksums, creates the aggregate manifest, optionally signs it through an external signer, and creates and validates a publication plan. |
+| `.github/workflows/publish.yml` | Existing `v2*` container publication workflow. It is not the generic dual-track coordinator. |
+| `.github/workflows/sorafs-cli-release.yml` | Separate SoraFS CLI/reference-validator release workflow for `sorafs-cli-v*`. Its evidence does not certify the generic Iroha bundles. |
+| `.github/workflows/mobile_sdk_artifacts.yml` | Separate mobile SDK artifact workflow. |
 
-## Release Timeline (Relative to Target Release Date)
-| Day | Event | Owner | Checks |
-|-----|-------|-------|--------|
-| D‑7 | Code freeze + release planning call | Release Manager | Outstanding PR triage, roadmap review. |
-| D‑6 | Branch cut (see above) | Release Manager | CI green on `main`, feature flags documented. |
-| D‑5 | Profile build smoke (`ci/dual_profile_smoke.sh`) | Core Lead | Build logs archived in `artifacts/smoke/`. |
-| D‑3 | Chaos/perf deltas (NPoS, Nexus) | SRE / Core | Attach metrics to release ticket. |
-| D‑2 | Final validation matrix (see below) | Release Manager | All rows pass; blockers escalated. |
-| D‑1 | HSM-sign the aggregate manifest, stage images | Security / Core | Checksums, aggregate Ed25519 signature, and reviewed fingerprint recorded. |
-| R0 | Publish artefacts, cut GitHub releases, send announcements | Ops / DevRel | Release notes merged. |
-| R+1 | Post-release retrospective + tracker updates | All | Update `status.md`, roadmap, incident log. |
+No checked-in workflow invokes `scripts/run_release_pipeline.py`. A local run
+therefore stages release artifacts and a publication plan; it does not prove
+that anything was uploaded, promoted, or released.
 
-### Release ticket template
+## 1. Fix the candidate identity
 
-Attach the following artefacts to every release ticket (per track) before seeking approval:
+Choose one reviewed source commit, release version, and
+`SOURCE_DATE_EPOCH`. Use a fresh checkout and a fresh output directory. The
+coordinator rejects:
 
-- **Validation matrix & manifests** — `dual_profile_matrix.json`, `artifacts/release_manifest.json`, and any profile diffs noted in `artifacts/network_profiles.json`. Run `ci/dual_profile_matrix.sh --output artifacts/dual_profile_matrix.json dist/iroha2-<ver>-linux.tar.zst dist/iroha3-<ver>-linux.tar.zst` once the tarballs are produced. The helper unwraps each bundle, verifies the executables/configuration set, records SHA256 + size metadata, and captures the stdout from `irohad --version` / `kagami --help` so reviewers can diff the evidence without manually unpacking artifacts. Attach the JSON output together with the manifest files in every approval ticket.
-- **FASTPQ Stage 6/7 evidence** — the latest `fastpq_metal_bench_*.json` capture (20 k rows padded to 32,768) showing `gpu_mean_ms ≤ 950` for the LDE entry, the paired stdout/trace log, and the signed `fastpq_bench_manifest.{json,sig}` bundle produced by `cargo xtask fastpq-bench-manifest`. Stage 7 adds the operator artefacts captured in `specs/fastpq_rollout_playbook.md`: the Grafana `fastpq-acceleration` export with rollout annotations, the alert pack snapshot, and the rollback drill logs/metrics. Bundle everything under `artifacts/fastpq_rollouts/<stamp>/` and link the directory in the ticket so reviewers can replay the evidence. `scripts/run_release_pipeline.py --export-fastpq-grafana --grafana-url <URL>` (token via `GRAFANA_TOKEN`) writes the Grafana export + alert pack into the bundle automatically, and `ci/check_fastpq_rollout.sh` validates the bundle before attaching it to the ticket.【specs/fastpq_plan.md:270】【specs/fastpq_rollout_playbook.md:1】
-- **Security review + compliance artefacts** — latest SM/SoraFS memos, approval hashes, and any export filings referenced in the rollout ticket (see `specs/crypto/sm_operator_rollout.md` and `specs/sorafs/developer/releases.md`).
-- **Android SDK Maven/SBOM bundle** — run `scripts/run_release_pipeline.py --publish-android-sdk [--android-sdk-repo-url …]` so the release output includes `android/maven/`, `android/sbom/`, `android/README.txt`, `publish_summary.json`, and `checksums.txt`. Attach the README and summary to the ticket and reference any remote Maven promotion URL used for publication.
+- a short or malformed source commit
+- a source commit that differs from `git rev-parse HEAD`
+- a version that differs from the version declared by the workspace
+- an output directory for that version that already exists
 
-### SM Feature Gating & Readiness Reviews
-| Stage | Milestone | Required artefacts |
-|-------|-----------|--------------------|
-| SM-RR1 (Verify-only) | Prior to enabling SM signing (adding `sm2` to `crypto.allowed_signing`) on mainnet validators | Approved checklist in rollout ticket referencing `specs/crypto/sm_operator_rollout.md`, compliance/export brief updated in current cycle, logs from `scripts/sm_openssl_smoke.sh` and `scripts/sm_interop_matrix.sh`, manifests/config snapshots showing `allowed_signing = ["ed25519"]` and `default_hash = "sm3-256"`. |
-| SM-RR2 (Signing pilot) | Before adding `Sm2` to `allowed_signing` for the pilot cohort | Closed external-audit finding or compensating control, pilot manifest allowlist, operator rollback playbook, telemetry baseline diff from verify-only stage. |
-| SM-RR3 (GA signing) | Before GA release notes advertise SM signing support | Positive pilot report, updated jurisdiction filings, Release Eng + Crypto WG + Ops/Legal sign-off recorded in release ticket, manifests/configs for all lanes refreshed, SDK parity review completed. |
+Record the full source commit and epoch with the release evidence. Do not reuse
+an output directory from an earlier attempt.
 
-Record the outcome of each review in the release tracker and refuse promotion to the next stage until every artefact is attached. This gating replaces ad-hoc approvals for SM enablement.
+Before building artifacts, obtain a successful exact-SHA run of
+`.github/workflows/workspace_release.yml` for the candidate. The workflow is
+the source-backed full-workspace gate; a green pull-request subset is not a
+substitute.
 
-## Cadence & Ownership
-- **Monthly release heartbeat:** Continue the existing cadence (week containing the 28th). Calendar invite covers Core Engineering, Nexus Program, SDK leads, Security, and DevRel. Agenda: freeze status, validation progress, SDK blockers, and sign-off readiness.
-- **Bi-weekly readiness huddle:** Optional 30‑minute sync during crunch (D‑14, D‑7) to burn down checklist; chaired by the Release Manager, alternating focus on Iroha 2 vs. Iroha 3 risk items.
+## 2. Resolve the packaging profiles
 
-| Track | Primary Sign-off Owner | Backup | Responsibilities |
-|-------|-----------------------|--------|------------------|
-| Iroha 2 (self-hosted) | Core Release TL (Core Engineering) | On-call Core Engineer | Approve validation matrix, ensure single-lane smoke/chaos tests pass, sign configuration manifests. |
-| Iroha 3 (Sora Nexus) | Nexus Program Ops Lead | Nexus Reliability Engineer | Approve Nexus lane tests, DA manifests, Connect/ISO bridge readiness, coordinate Sora council acknowledgements. |
-| Cross-cutting | Security Review Board Rep | Release Manager | Sign hash manifests, audit key custody, approve publication timing. |
-| Communications | DevRel Lead | Product Marketing | Publish release notes, stakeholder updates, and SDK parity status. |
+`release/network_profiles.toml` is the source of truth for network-to-artifact
+selection. The current mapping sends Sora Nexus aliases and chain ID
+`sora:nexus:global` to `iroha3`; unmatched networks use the `iroha2` default.
 
-- **Escalation path:** Any blocker discovered during validation escalates to Release Manager → Core Lead → Exec sponsor within 24 hours. Document decisions in the release ticket.
-- **Post-release review:** Schedule at R+7 with all owners to confirm metrics, log follow-up actions, and reassess role assignments after the first combined release. The inaugural dual-track review (2026-03-08, release ticket RLS-102) confirmed the frozen validation matrix, reassigned the SDK parity checklist to DevRel, and closed the telemetry dashboard backlog; repeat the same agenda for future cycles.
-
-## Build Matrix & Commands
-
-Set the non-secret signing inputs from the reviewed release ticket:
+Review the committed mapping and resolve the intended network:
 
 ```bash
-EXTERNAL_SIGNER=/opt/iroha/bin/pkcs11-ed25519-sign
-SIGNING_PUBLIC_KEY=/run/iroha-release/ed25519-public.raw
-TRUSTED_SIGNING_FINGERPRINT=<reviewed-lowercase-sha256>
-RELEASE_MANIFEST_VERIFIER=/opt/iroha/bin/sorafs-validate
-TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256=<reviewed-lowercase-sha256>
+python3 scripts/select_release_profile.py --list
+python3 scripts/select_release_profile.py --network sora-nexus
+python3 scripts/select_release_profile.py --network <network-alias>
+```
+
+The coordinator defaults to:
+
+```text
+iroha2=single
+iroha3=nexus
+```
+
+Use repeated `--profile name=config` arguments only when the reviewed profile
+manifest and release scope require an explicit override.
+
+## 3. Prepare reviewed build inputs
+
+Run:
+
+```bash
+python3 scripts/run_release_pipeline.py --help
+scripts/build_release_bundle.sh --help
+scripts/build_release_image.sh --help
+```
+
+The coordinator requires the following input groups for an ordinary
+dual-profile build:
+
+- the full source commit, canonical epoch, release version, and a fresh output
+  root
+- an absolute, reviewed `git-cliff` executable and its SHA-256
+- reviewed prebuilt binaries for every profile and mandatory
+  Linux/macOS/Windows bundle target
+- an absolute, reviewed `zstd` executable and its SHA-256
+- reviewed prebuilt Linux binaries for both `linux/amd64` and `linux/arm64`
+  image platforms
+- digest-pinned builder and runtime images
+- exact reviewed Docker and Buildx executables, their SHA-256 values, the
+  reviewed Buildx version string, and a bounded reviewed builder instance
+- the required local evidence inputs, including a CBDC rollout directory
+  unless the corresponding check is explicitly skipped
+
+Skip flags are useful for bounded development runs. A summary that records a
+skipped production gate is not promotion evidence.
+
+The direct bundle and image builders are deterministic unsigned artifact
+producers. Builders do not invoke signers, accept private-key material, or emit
+per-artifact signature keys. The coordinator signs only the final closed
+aggregate manifest.
+
+## 4. Run the coordinator
+
+Supply every reviewed input required by `--help`. This command outline shows
+the identity, profile, signing, and publication controls; the target and tool
+matrix arguments are intentionally represented by named placeholders so they
+cannot be mistaken for reviewed values:
+
+```bash
+python3 scripts/run_release_pipeline.py \
+  --version <X.Y.Z> \
+  --source-commit <FULL_COMMIT> \
+  --source-date-epoch <EPOCH> \
+  --output-dir artifacts/releases \
+  --profile iroha2=single \
+  --profile iroha3=nexus \
+  --git-cliff <ABSOLUTE_REVIEWED_GIT_CLIFF> \
+  --trusted-git-cliff-sha256 <SHA256> \
+  <REVIEWED_BUNDLE_AND_IMAGE_MATRIX_ARGUMENTS> \
+  <REQUIRED_EVIDENCE_ARGUMENTS> \
+  --external-signer <ABSOLUTE_REVIEWED_HSM_WRAPPER> \
+  --signing-public-key <RAW_ED25519_PUBLIC_KEY_FILE> \
+  --trusted-signing-fingerprint <REVIEWED_SHA256> \
+  --release-manifest-verifier <ABSOLUTE_REVIEWED_SORAFS_VALIDATE> \
+  --trusted-release-manifest-verifier-sha256 <REVIEWED_SHA256> \
+  --publish-target iroha2=<REVIEWED_TARGET_URI> \
+  --publish-target iroha3=<REVIEWED_TARGET_URI>
 ```
 
 The signer executable obtains its private-key handle and authentication from
-the runtime PKCS#11/HSM environment. Never pass private key bytes, a PIN, or a
-bearer token on the command line. The verifier path must identify the packaged
-candidate reviewed for this release, and its digest must be approved through an
-independent channel.
+its runtime PKCS#11/HSM environment. Never place private keys, PINs, bearer
+tokens, or forwarded authentication headers in repository files, command
+arguments, or release artifacts.
 
-Build the binary bundles:
+The output is created at `artifacts/releases/<X.Y.Z>/` unless another output
+root is supplied. Review at least:
 
-```bash
-scripts/build_release_bundle.sh \
-  --profile iroha2 --config single --artifacts-dir dist
+- `artifacts/` with each bundle, OCI archive, checksum sidecar, per-build
+  manifest, `SHA256SUMS`, and per-target `dual_profile_matrix-*.json`
+- `release_manifest.json`
+- `release_manifest.json.sig`
+- `release_manifest.json.pub`
+- `publish_plan.json`, `publish_plan.sh`, and `publish_plan.txt` when targets
+  were supplied
+- `publish_plan_report.json` and `publish_plan_report.txt`
+- `SUMMARY.txt`
 
-scripts/build_release_bundle.sh \
-  --profile iroha3 --config nexus --artifacts-dir dist
-```
+## 5. Verify the closed artifact set
 
-Use `scripts/build_release_image.sh` with the same profile/config pairs for the
-two container-image archives. Both builders reject the retired per-artifact
-signing options; the coordinator uses the signing inputs only after it has
-generated the final aggregate manifest.
-
-To run the complete local coordinator, including `git-cliff`, bundles, images,
-aggregated checksums, manifest generation, and SoraFS publication-plan
-validation:
+The pipeline runs `ci/dual_profile_matrix.sh` for every mandatory bundle
+target. For a direct or diagnostic bundle build, run:
 
 ```bash
-scripts/run_release_pipeline.py \
-  --version <X.Y.Z> \
-  --previous-tag <prior-tag> \
-  --external-signer "$EXTERNAL_SIGNER" \
-  --signing-public-key "$SIGNING_PUBLIC_KEY" \
-  --trusted-signing-fingerprint "$TRUSTED_SIGNING_FINGERPRINT" \
-  --release-manifest-verifier "$RELEASE_MANIFEST_VERIFIER" \
-  --trusted-release-manifest-verifier-sha256 \
-    "$TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
-  --publish-target iroha2=sorafs://staging/iroha2/v<X.Y.Z> \
-  --publish-target iroha3=sorafs://staging/iroha3/v<X.Y.Z>
+ci/dual_profile_smoke.sh <iroha2-bundle> <iroha3-bundle>
+ci/dual_profile_matrix.sh \
+  --output <dual_profile_matrix.json> \
+  --expect-version <X.Y.Z> \
+  <iroha2-bundle> <iroha3-bundle>
 ```
 
-Outputs land under `artifacts/releases/<X.Y.Z>/`. No checked-in workflow
-currently invokes this generic coordinator. `.github/workflows/workspace_release.yml`
-is the workspace release gate, while `.github/workflows/sorafs-cli-release.yml`
-is the separate canonical SoraFS CLI/reference-validator workflow.
+The matrix verifies the bundle layout, executable inventory, profile metadata,
+version, checksums, and basic `irohad --version`/`kagami --help` execution.
+Treat each target-specific matrix as part of the aggregate inventory.
 
-### Packaging Outputs & Determinism
-- **Tarballs:** `iroha{2,3}-<version>-<os>.tar.zst` produced via deploy profile binaries + profile configs. Bundles always include `PROFILE.toml` (metadata), `config/` tree, and `bin/` executables. Compression is fixed (`zstd -19 --long=31`) for deterministic bytes.
-- **Container images:** `iroha{2,3}-<version>-<os>-image.tar` generated from the Dockerfile using the same deploy binaries. Naming does not embed the registry tag, ensuring reproducible tarball names.
-- **Hashes:** Each artifact emits `<name>.sha256`; `scripts/run_release_pipeline.py` collates them into `SHA256SUMS` and `release_manifest.json`, which downstream signing/publication systems use verbatim.
-- **Signatures:** Builders do not invoke signers or emit per-artifact
-  signature/key sidecars. After the final evidence update, the pipeline invokes
-  the reviewed PKCS#11/HSM wrapper once for the deterministic aggregate
-  `release_manifest.json`. Its `release_manifest.json.sig` is exactly 64
-  canonical raw Ed25519 bytes and `release_manifest.json.pub` is exactly 32 raw
-  Ed25519 public-key bytes. The pinned native verifier rejects incompatible or
-  weak keys, malformed/noncanonical signatures, unsafe permissions, links, and
-  fingerprint mismatches.
-- **Manifests:** `generate_release_manifest.py` records profile, format, path,
-  and SHA256 for every bundle/AppImage encountered using stable key ordering.
-  `scripts/run_release_pipeline.py` may then append an `evidence` block for
-  archived rollout artefacts (for example FASTPQ rollout bundles, their
-  reviewer-facing summaries, Grafana exports, and CBDC rollout validation
-  paths). It signs only after that update. `scripts/publish_plan.py` rejects a
-  production plan unless the aggregate Ed25519 signature, raw public key,
-  reviewed signing fingerprint, and independently pinned native verifier path
-  and SHA-256 all verify through `sorafs-validate release-manifest`. Keep the
-  JSON, `.sig`, `.pub`, verifier digest, and candidate identity attached to the
-  release checklist and status updates.
-- **Deterministic directories:** All artifacts live under `artifacts/releases/<version>/artifacts/`; rerunning the pipeline after a clean build should overwrite the same filenames, enabling reproducibility checks (diff of tarball hashes, manifest comparison).
+Follow the artifact-to-profile verification procedure in
+[`release_artifact_selection.md`](release_artifact_selection.md) before
+unpacking or loading a candidate.
 
-**Build prerequisites**
-- Ensure `cargo xtask gen-version --write` has been run so version metadata matches the target tag.
-- Provision the reviewed aggregate-manifest signer executable, raw 32-byte
-  Ed25519 public key, and independently approved lowercase SHA-256 fingerprint.
-  Signing credentials remain runtime-only in the PKCS#11/HSM session.
-- Provision the packaged `sorafs-validate` candidate by direct path and obtain
-  independent approval of the exact executable's lowercase SHA-256 digest.
-- Use the same toolchain/container across both builds to maintain deterministic binaries.
+## 6. Authenticate the aggregate manifest
 
-## Validation Matrix
-| Category | Iroha 2 Checks | Iroha 3 Checks |
-|----------|----------------|----------------|
-| Core CI | `cargo test --workspace --locked`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`. | Same. |
-| Integration | `cargo test -p integration_tests -- --ignored --nocapture`; `ci/dual_profile_smoke.sh`. | `ci/dual_profile_smoke.sh`; `ci/check_nexus_lane_smoke.sh`; Nexus lane replay tests. |
-| Torii | `cargo test -p iroha_torii --features "app_api,transparent_api"` | Same plus Nexus Connect smoke (`IROHA_NEXUS_PROFILE=1`). |
-| Config | `scripts/select_release_profile.py --network self-hosted --emit-manifest artifacts/network_profiles.json` | `scripts/select_release_profile.py --network sora-nexus --emit-manifest artifacts/network_profiles_nexus.json`. |
-| SDK Parity | Attach the workspace SDK test results and clean-consumer smoke record for the exact bundle commit. | Attach the same results plus Nexus configuration/query parity evidence. |
-| Telemetry | Attach the deployment `/metrics` and `/status` verification record. | Include Nexus lane-count and DA telemetry evidence. |
+Production authentication uses one external Ed25519 signature over the final
+canonical `release_manifest.json`:
 
-Record pass/fail in the release ticket. Any ❌ requires engineering sign-off before release proceeds.
+- `release_manifest.json.sig` contains exactly 64 canonical raw Ed25519 bytes
+- `release_manifest.json.pub` contains exactly 32 raw Ed25519 public-key bytes
+- `--trusted-signing-fingerprint` comes from an authenticated review channel,
+  not from the downloaded artifact set
+- `--release-manifest-verifier` identifies the reviewed
+  `sorafs-validate` executable
+- `--trusted-release-manifest-verifier-sha256` independently pins that exact
+  executable
 
-## Configuration & Manifest Checks
-- Run `scripts/select_release_profile.py --list` to confirm network profile mappings.
-- Verify `release/network_profiles.toml` includes the new version numbers, lane counts, and default artifact names.
-- Attach the generated `artifacts/release_manifest.json`,
-  `release_manifest.json.sig`, `release_manifest.json.pub`, and
-  `artifacts/network_profiles.json` to the release PR checklist. When FASTPQ or
-  CBDC rollout bundles are archived as part of the same run, verify that
-  `release_manifest.json.evidence` points at the copied rollout bundle roots
-  and any FASTPQ `fastpq_rollout_summary.{json,md}` files before verifying the
-  aggregate signature.
-- Ensure `defaults/` templates in the bundles match their target (single vs. nexus). If not, regenerate with `cargo xtask gen-config --profile <...>`.
+Verify the tuple with `scripts/release_manifest_signing.py verify`; the native
+contract invoked is `sorafs-validate release-manifest`. Then verify every
+candidate against both its checksum sidecar and the authenticated aggregate
+manifest as described in `release_artifact_selection.md`.
 
-## Approvals & Sign-off
-| Gate | Required Approvers | Evidence |
-|------|-------------------|----------|
-| Freeze Confirmation | Release Manager + Core Lead | Meeting notes in tracker ticket. |
-| Validation Matrix | Release Manager + relevant domain owners | Checklist in release PR/checklist. |
-| Security/Signing | Security Review + Core Lead | Verified Ed25519 signatures, reviewed raw-key fingerprint, HSM ceremony and rotation/revocation record. |
-| Publication | Release Manager + Ops | Bucket upload log, GitHub release draft. |
+The release pipeline accepts the signer contract through:
 
-Document approvals in the release ticket or the `release/YYYY-MM/notes.md` record.
+```text
+--external-signer
+--signing-public-key
+--trusted-signing-fingerprint
+--release-manifest-verifier
+--trusted-release-manifest-verifier-sha256
+```
 
-## Publication Flow
-1. Generate tarballs/images (Build Matrix).
-2. Upload artefacts to the staging buckets (`s3://releases-staging/iroha2/`, `s3://releases-staging/iroha3/`) and container registries (`registry.sora.org/iroha2`, `registry.sora.org/iroha3`).
-3. Re-run the complete verification procedure in
-   `specs/release_artifact_selection.md`: verify the aggregate raw-key
-   signature through the pinned `sorafs-validate release-manifest` contract,
-   then check every artifact against the authenticated manifest and its
-   checksum sidecar.
-4. Promote from staging to the production buckets (`s3://releases/iroha2/`, `s3://releases/iroha3/`) once approval is logged.
-5. Create GitHub releases `iroha2-vX.Y.Z` / `iroha3-vX.Y.Z`, attaching:
-   - Tarballs, manifests, the aggregate signature, and raw public key.
-   - SBOM and a vulnerability report with no critical/high findings.
-   - OIDC/cosign provenance bundle and verification receipt.
-   - Release notes sections linking to status/roadmap updates.
-6. Update `specs/release_artifact_selection.md` if artifact layout changes.
+There is no private-key or in-process signing fallback.
 
-## SoraFS/SoraNet endpoints, layout, and validation
+## 7. Generate and replay the publication plan
 
-| Track | Staging root (example) | Production root (example) | Object layout |
-|-------|------------------------|---------------------------|---------------|
-| Iroha 2 | `sorafs://staging/iroha2/v<ver>` | `sorafs://prod/iroha2/v<ver>` | Payloads at `<root>/iroha2-<ver>-<os>.tar.zst`, `<root>/iroha2-<ver>-<arch>.AppImage`, `<root>/SHA256SUMS`, `<root>/release_manifest.json`, `<root>/release_manifest.json.sig`, `<root>/release_manifest.json.pub`, and `<root>/dual_profile_matrix.json`. |
-| Iroha 3 (Nexus) | `sorafs://staging/iroha3/v<ver>` | `sorafs://prod/iroha3/v<ver>` | Same layout as Iroha 2 with `iroha3-*` artefacts. |
+When `--publish-target` is supplied, the coordinator generates the plan and
+immediately reconstructs it from the manifest, artifact directory, target map,
+signature tuple, fingerprint, and verifier pins. A production plan is valid
+only when `publish_plan_report.json` has status `ok`.
 
-Generate and validate publish plans before any upload/promotion:
+For independent replay, call `scripts/publish_plan.py validate` with the plan
+and the same independent inputs. The validation command requires
+`--manifest-signature`, the public key, `--trusted-signing-fingerprint`,
+`--release-manifest-verifier`, and
+`--trusted-release-manifest-verifier-sha256`. Use `--previous-plan` to make a
+target or layout change visible, and use the remote probe options only after
+the candidate has actually been staged.
 
-1. Create the plan and shell wrapper from the release output (supply the SoraFS/SoraNet roots you intend to publish to):
+`--development-allow-unsigned-manifest` and the coordinator's corresponding
+development-only option may be used for tests. They are never valid for
+promotion.
 
-   ```bash
-   scripts/publish_plan.py generate \
-     --manifest artifacts/releases/<ver>/release_manifest.json \
-     --manifest-signature artifacts/releases/<ver>/release_manifest.json.sig \
-     --manifest-public-key artifacts/releases/<ver>/release_manifest.json.pub \
-     --trusted-signing-fingerprint "$TRUSTED_SIGNING_FINGERPRINT" \
-     --release-manifest-verifier "$RELEASE_MANIFEST_VERIFIER" \
-     --trusted-release-manifest-verifier-sha256 \
-       "$TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
-     --artifacts-dir artifacts/releases/<ver>/artifacts \
-     --target iroha2=sorafs://staging/iroha2/v<ver> \
-     --target iroha3=sorafs://staging/iroha3/v<ver> \
-     --output-dir artifacts/releases/<ver>
-   ```
+The plan is an authenticated upload inventory, not an uploader. Publication
+requires separately authorized infrastructure and must produce independent
+registry, bucket, gateway, or package-repository receipts.
 
-2. Validate the plan locally (size/sha parity) and optionally probe staged HTTP(S) gateways after upload. Attach both `publish_plan.json` and `publish_plan_report.json` to the release ticket:
+## 8. Close the release record
 
-   ```bash
-   scripts/publish_plan.py validate \
-     --plan artifacts/releases/<ver>/publish_plan.json \
-     --trusted-signing-fingerprint "$TRUSTED_SIGNING_FINGERPRINT" \
-     --release-manifest-verifier "$RELEASE_MANIFEST_VERIFIER" \
-     --trusted-release-manifest-verifier-sha256 \
-       "$TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
-     --previous-plan artifacts/releases/<prev>/publish_plan.json \
-     --probe-remote \
-     --probe-command "sorafs_cli head --json {destination}" \
-     --output artifacts/releases/<ver>/publish_plan_report.json
-   ```
+Keep the following evidence together for the exact candidate:
 
-3. Both generation and validation reverify the aggregate Ed25519 signature and
-   bind `publish_plan.json` to the exact manifest SHA-256. Both require the
-   independently reviewed signing fingerprint and native-verifier path/digest;
-   values copied only from the plan are not trust anchors. An unsigned plan is
-   rejected unless the explicit `--development-allow-unsigned-manifest` flag
-   is supplied to both commands; that escape hatch is test/development-only
-   and is never valid for promotion.
-4. Any change to the SoraFS/SoraNet roots or object layout requires an explicit approval note in the release ticket. Include the diff emitted by `--previous-plan` when proposing a change; the generator/validator fail fast when required paths are missing or hashes deviate from the manifest.
+- full source commit, release version, and canonical epoch
+- successful exact-SHA workspace release workflow run
+- all target-specific profile matrices and builder manifests
+- aggregate manifest, signature, raw public key, authenticated fingerprint,
+  and pinned verifier identity
+- validated publication plan and report
+- hosted SBOM and vulnerability scan
+- OIDC/cosign provenance bundle and verification receipt, when produced by the
+  authorized hosted release environment
+- actual publication receipts
+- rollback or yank rehearsal/record for the publication surface
 
-## Post-Release Actions
-- Merge release branches back into `main`, resolve conflicts promptly.
-- Update `status.md` with validation highlights and artefact pointers.
-- Close roadmap items (Milestone R3 tasks) and move completed work to `status.md`.
-- Schedule retrospective; capture lessons learned and backlog action items for the next cycle.
-- Archive artefacts (logs, manifests) under `artifacts/releases/vX.Y.Z/`.
+The generic local pipeline does not create hosted SBOM, vulnerability,
+OIDC/cosign, upload, promotion, or rollback evidence. Do not mark the release
+published from `SUMMARY.txt` alone.
 
-## Outstanding actions
-- **Validation matrix automation** — Owner: Release Engineering. Target: 2026-04-30.
-  - Local state: `ci/dual_profile_matrix.sh` emits the required JSON.
-  - External state: no checked-in workflow invokes the generic coordinator;
-    hosted build/upload evidence is still required.
-- **Signing and provenance evidence** — Owner: Security Review board liaison.
-  - Local state: the builders expose no signing path; the coordinator enforces
-    the external aggregate Ed25519 signer contract and verifies the signature
-    and reviewed fingerprint through the pinned native verifier.
-  - External state: attach the PKCS#11/HSM ceremony, rotation/revocation record,
-    OIDC/cosign provenance, registry/publication receipts, and rollback/yank
-    rehearsal before promotion.
+For an LTS designation, complete the additional selection and backport policy
+in [`lts_selection.org`](lts_selection.org) after this procedure.

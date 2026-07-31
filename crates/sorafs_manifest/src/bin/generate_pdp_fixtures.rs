@@ -1,10 +1,18 @@
 //! Generates deterministic PDP commitment, challenge, and proof fixtures.
+//!
+//! By default outputs are written to the checked-in PDP fixture directory.
+//! `--output-dir PATH` targets one existing isolated PDP directory instead.
 
 use std::{
+    env,
     error::Error,
-    fs,
-    path::{Path, PathBuf},
+    ffi::OsString,
+    fs::{self, File},
+    path::{Component, Path, PathBuf},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
 
 use ed25519_dalek::SigningKey;
 use hex::encode;
@@ -24,12 +32,271 @@ use sorafs_manifest::{
 };
 
 const VALIDATION_GENERATED_AT: u64 = 123;
+const DEFAULT_FIXTURE_DIR: &str = "fixtures/sorafs_manifest/pdp";
+const MAX_OUTPUT_PATH_BYTES: usize = 4 << 10;
+const MAX_OUTPUT_PATH_COMPONENTS: usize = 64;
+
+#[derive(Debug, Eq, PartialEq)]
+struct Args {
+    fixture_dir: PathBuf,
+    help: bool,
+}
+
+struct BoundOutputDirectory {
+    display_path: PathBuf,
+    canonical_path: PathBuf,
+    handle: File,
+}
+
+impl BoundOutputDirectory {
+    fn open(path: &Path, label: &str) -> Result<Self, Box<dyn Error>> {
+        require_real_directory_ancestry(path, label)?;
+        let before = fs::symlink_metadata(path)
+            .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
+        if before.file_type().is_symlink() || !before.is_dir() {
+            return Err(format!("{label} must be an existing non-symlink directory").into());
+        }
+        let handle = File::open(path)
+            .map_err(|error| format!("failed to open {label} `{}`: {error}", path.display()))?;
+        let opened = handle.metadata().map_err(|error| {
+            format!(
+                "failed to inspect opened {label} `{}`: {error}",
+                path.display()
+            )
+        })?;
+        let after = fs::symlink_metadata(path).map_err(|error| {
+            format!(
+                "failed to reinspect {label} `{}` after opening: {error}",
+                path.display()
+            )
+        })?;
+        require_real_directory_ancestry(path, label)?;
+        if after.file_type().is_symlink()
+            || !after.is_dir()
+            || !same_directory_identity(&before, &opened)
+            || !same_directory_identity(&before, &after)
+        {
+            return Err(format!("{label} changed identity while it was bound").into());
+        }
+        let canonical_path = fs::canonicalize(path).map_err(|error| {
+            format!(
+                "failed to canonicalize {label} `{}`: {error}",
+                path.display()
+            )
+        })?;
+        Ok(Self {
+            display_path: path.to_path_buf(),
+            canonical_path,
+            handle,
+        })
+    }
+
+    fn verify(&self, label: &str) -> Result<(), Box<dyn Error>> {
+        require_real_directory_ancestry(&self.display_path, label)?;
+        let lexical = fs::symlink_metadata(&self.display_path).map_err(|error| {
+            format!(
+                "failed to reinspect {label} `{}`: {error}",
+                self.display_path.display()
+            )
+        })?;
+        let opened = self.handle.metadata().map_err(|error| {
+            format!(
+                "failed to reinspect bound {label} `{}`: {error}",
+                self.display_path.display()
+            )
+        })?;
+        let canonical = fs::canonicalize(&self.display_path).map_err(|error| {
+            format!(
+                "failed to recanonicalize {label} `{}`: {error}",
+                self.display_path.display()
+            )
+        })?;
+        if lexical.file_type().is_symlink()
+            || !lexical.is_dir()
+            || !same_directory_identity(&lexical, &opened)
+            || canonical != self.canonical_path
+        {
+            return Err(format!("{label} changed identity during fixture generation").into());
+        }
+        Ok(())
+    }
+}
+
+fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn Error>> {
+    const USAGE: &str = "usage: generate_pdp_fixtures [--output-dir PATH]";
+
+    let args = args.into_iter().collect::<Vec<_>>();
+    if args.len() == 1 && matches!(args[0].to_str(), Some("--help" | "-h")) {
+        return Ok(Args {
+            fixture_dir: PathBuf::from(DEFAULT_FIXTURE_DIR),
+            help: true,
+        });
+    }
+    if args
+        .iter()
+        .any(|argument| matches!(argument.to_str(), Some("--help" | "-h")))
+    {
+        return Err("`--help` must be used by itself".into());
+    }
+
+    let mut fixture_dir = None;
+    let mut args = args.into_iter();
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("--output-dir") => {
+                if fixture_dir.is_some() {
+                    return Err("`--output-dir` may be specified only once".into());
+                }
+                let value = args
+                    .next()
+                    .ok_or("`--output-dir` requires a separate path argument")?;
+                let value_text = value
+                    .to_str()
+                    .ok_or("`--output-dir` path must be valid UTF-8")?;
+                if value_text.is_empty() {
+                    return Err("`--output-dir` path must not be empty".into());
+                }
+                if value_text.starts_with('-') {
+                    return Err("`--output-dir` path must not be ambiguous with an option".into());
+                }
+                if value_text
+                    .split(['/', '\\'])
+                    .any(|component| component == ".")
+                {
+                    return Err("`--output-dir` path must not contain `.` components".into());
+                }
+                if value_text
+                    .split(['/', '\\'])
+                    .any(|component| component == "..")
+                {
+                    return Err("`--output-dir` path must not contain `..` components".into());
+                }
+                let path = PathBuf::from(value);
+                validate_output_dir(&path)?;
+                fixture_dir = Some(path);
+            }
+            Some(other) => {
+                return Err(format!("{USAGE}; unrecognized argument `{other}`").into());
+            }
+            None => return Err(format!("{USAGE}; arguments must be valid UTF-8").into()),
+        }
+    }
+
+    Ok(Args {
+        fixture_dir: fixture_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_FIXTURE_DIR)),
+        help: false,
+    })
+}
+
+fn validate_output_dir(path: &Path) -> Result<(), Box<dyn Error>> {
+    let path_text = path
+        .to_str()
+        .ok_or("`--output-dir` path must be valid UTF-8")?;
+    if path_text.len() > MAX_OUTPUT_PATH_BYTES {
+        return Err(
+            format!("`--output-dir` path exceeds the {MAX_OUTPUT_PATH_BYTES}-byte bound").into(),
+        );
+    }
+
+    let mut has_normal_component = false;
+    let mut component_count = 0_usize;
+    for component in path.components() {
+        component_count = component_count
+            .checked_add(1)
+            .ok_or("`--output-dir` path component count overflowed")?;
+        match component {
+            Component::Normal(_) => has_normal_component = true,
+            Component::CurDir => {
+                return Err("`--output-dir` path must not contain `.` components".into());
+            }
+            Component::ParentDir => {
+                return Err("`--output-dir` path must not contain `..` components".into());
+            }
+            Component::Prefix(_) | Component::RootDir => {}
+        }
+    }
+    if component_count > MAX_OUTPUT_PATH_COMPONENTS {
+        return Err(format!(
+            "`--output-dir` path exceeds the {MAX_OUTPUT_PATH_COMPONENTS}-component bound"
+        )
+        .into());
+    }
+    if !has_normal_component {
+        return Err("`--output-dir` must name a bounded PDP fixture directory".into());
+    }
+    Ok(())
+}
+
+fn require_real_directory_ancestry(path: &Path, label: &str) -> Result<(), Box<dyn Error>> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .map_err(|error| format!("failed to resolve current directory: {error}"))?
+            .join(path)
+    };
+    let mut current = PathBuf::new();
+    for component in absolute.components() {
+        current.push(component);
+        let metadata = fs::symlink_metadata(&current).map_err(|error| {
+            format!(
+                "failed to inspect {label} ancestry `{}`: {error}",
+                current.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{label} ancestry must not contain a symbolic link: {}",
+                current.display()
+            )
+            .into());
+        }
+        if !metadata.is_dir() {
+            return Err(format!(
+                "{label} ancestry must contain directories only: {}",
+                current.display()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_dir() && right.is_dir() && left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_dir()
+        && right.is_dir()
+        && left.created().ok() == right.created().ok()
+        && left.modified().ok() == right.modified().ok()
+}
+
+fn print_usage() {
+    println!(
+        "Usage: generate_pdp_fixtures [--output-dir PATH]\n\
+         \n\
+         Generate the canonical SoraFS PDP commitment, challenge, proof, and\n\
+         negative fixtures. PATH must be an existing bounded non-symlink PDP\n\
+         fixture directory with an existing real `negative` child directory."
+    );
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let fixture_dir = PathBuf::from("fixtures/sorafs_manifest/pdp");
+    let args = parse_args(env::args_os().skip(1))?;
+    if args.help {
+        print_usage();
+        return Ok(());
+    }
+    let fixture_binding =
+        BoundOutputDirectory::open(&args.fixture_dir, "PDP fixture output directory")?;
+    let fixture_dir = fixture_binding.display_path.clone();
     let negative_dir = fixture_dir.join("negative");
-    fs::create_dir_all(&fixture_dir)?;
-    fs::create_dir_all(&negative_dir)?;
+    let negative_binding =
+        BoundOutputDirectory::open(&negative_dir, "negative PDP fixture output directory")?;
 
     let manifest_digest = [0x42; 32];
     let provider_id = [0x10; 32];
@@ -265,7 +532,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "SFS-PDP-003",
     )?;
 
-    Ok(())
+    negative_binding.verify("negative PDP fixture output directory")?;
+    fixture_binding.verify("PDP fixture output directory")
 }
 
 fn chunk_profile() -> Result<ChunkingProfileV1, Box<dyn Error>> {
@@ -349,8 +617,7 @@ fn write_expected_outcome(
         )
         .into());
     }
-    fs::write(path, format!("{}\n", to_string_pretty(outcome)?))?;
-    Ok(())
+    write_fixture_file(path, format!("{}\n", to_string_pretty(outcome)?).as_bytes())
 }
 
 fn write_norito_pair<T>(
@@ -362,12 +629,59 @@ where
     T: NoritoSerialize,
 {
     let bytes = norito::to_bytes(value)?;
-    fs::write(base_path.with_extension("to"), &bytes)?;
+    write_fixture_file(&base_path.with_extension("to"), &bytes)?;
     if let Value::Object(map) = &mut json_value {
         map.insert("norito_bytes_hex".to_owned(), Value::from(encode(&bytes)));
     }
     let json = to_string_pretty(&json_value)?;
-    fs::write(base_path.with_extension("json"), json)?;
+    write_fixture_file(&base_path.with_extension("json"), json.as_bytes())?;
+    Ok(())
+}
+
+fn write_fixture_file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("fixture output `{}` must have a parent", path.display()))?;
+    require_real_directory_ancestry(parent, "PDP fixture output parent")?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(format!(
+                    "fixture output `{}` must be a regular non-symlink file",
+                    path.display()
+                )
+                .into());
+            }
+            #[cfg(unix)]
+            if metadata.nlink() != 1 {
+                return Err(format!(
+                    "fixture output `{}` must have exactly one hard link",
+                    path.display()
+                )
+                .into());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    fs::write(path, bytes)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "fixture output `{}` changed type while it was written",
+            path.display()
+        )
+        .into());
+    }
+    #[cfg(unix)]
+    if metadata.nlink() != 1 {
+        return Err(format!(
+            "fixture output `{}` changed hard-link count while it was written",
+            path.display()
+        )
+        .into());
+    }
     Ok(())
 }
 

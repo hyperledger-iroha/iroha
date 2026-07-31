@@ -690,6 +690,28 @@ digests, an explicit `external_ed25519_hsm` provider and positive revision,
 governance approval policy and `--public-key-fingerprint-hex` inputs,
 governed-release approval markers, and checker-backed validation before
 atomically writing JSON without following output symlinks or output directories.
+The SF-11 checker additionally requires the exact L1 topology summary and a
+separately administered, domain-separated Ed25519 qualification envelope. The
+operator trust tuple fixes the topology signer identity, positive key revision,
+public-key fingerprint, policy digest, and review-age bound; unsigned, stale,
+mutated, or provenance-key-reused topology inputs fail closed.
+
+The four published source indexes and final lane summary remain payload-free.
+Source-index assembly is a one-shot operation inside a protected, disposable
+workspace. The builder uses descriptor-relative, no-follow access and
+exclusive creation, then reopens and revalidates every generated file and
+directory binding before success. On failure it closes its descriptors but
+does not delete any generated name: portable POSIX deletion cannot be made
+conditional on the inode identity that was created. Operators must discard the
+entire failed workspace and retry in a fresh one; an in-place rerun rejects the
+retained partial names. Safe automatic recovery remains a TODO for a future
+reserved-namespace transaction/journal protocol.
+For deterministic replay, the protected release workflow retains a separate
+replay-complete source tree containing the public release archives, SBOM/SARIF
+inputs, authenticated manifest tuple, aggregate GitHub attestation, per-file
+cosign bundles, externally signed rehearsal/provenance receipts, and the signed
+topology summary/envelope/trust tuple. Runtime credentials, private keys,
+bearer tokens, and private evidence are never copied into that artifact.
 The release-archive, signed-manifest, and supply-chain response-file examples are
 `scripts/examples/sorafs_reference_sdk_release_archive_canary.args.example`,
 `scripts/examples/sorafs_reference_sdk_release_signed_manifest_canary.args.example`,

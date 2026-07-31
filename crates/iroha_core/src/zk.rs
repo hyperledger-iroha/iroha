@@ -1179,6 +1179,27 @@ fn normalized_ivm_execution_stark_circuit_id_for_backend(backend: &str) -> Optio
     normalize_stark_fri_circuit_id_for_backend(backend, IVM_EXECUTION_V1_CIRCUIT_ID)
 }
 
+/// Return whether a normalized circuit id names a typed Soracloud FHE relation.
+///
+/// These circuit ids must never fall back to the generic binding AIR: that AIR
+/// only authenticates public metadata and does not prove any of the private FHE
+/// witness relations advertised by the typed Soracloud protocols.
+fn normalized_circuit_is_soracloud_fhe_relation_for_backend(
+    backend: &str,
+    normalized_circuit_id: &str,
+) -> bool {
+    [
+        iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+        iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+    ]
+    .into_iter()
+    .filter_map(|circuit_id| normalize_stark_fri_circuit_id_for_backend(backend, circuit_id))
+    .any(|circuit_id| circuit_id == normalized_circuit_id)
+}
+
 #[cfg(feature = "zk-stark")]
 pub(crate) fn stark_open_verify_domain_tag_current(
     backend: &str,
@@ -1417,6 +1438,14 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
     {
         return Err(
             "generic STARK OpenVerify proof cannot target the BFV full-bootstrap circuit; use the BFV full-bootstrap STARK prover"
+                .to_owned(),
+        );
+    }
+    if circuit_policy == StarkOpenVerifyCircuitPolicy::Generic
+        && normalized_circuit_is_soracloud_fhe_relation_for_backend(backend, &env_circuit_id)
+    {
+        return Err(
+            "generic STARK OpenVerify proof cannot target a Soracloud FHE relation; a dedicated typed Soracloud verifier is required"
                 .to_owned(),
         );
     }
@@ -5570,6 +5599,10 @@ fn preverify_open_verify_envelope_metadata(
         {
             return Err(PreverifyResult::MalformedProof);
         }
+        if normalized_circuit_is_soracloud_fhe_relation_for_backend(&proof.backend, &env_circuit_id)
+        {
+            return Err(PreverifyResult::MalformedProof);
+        }
         if normalized_ivm_execution_stark_circuit_id_for_backend(&proof.backend).as_deref()
             == Some(env_circuit_id.as_str())
         {
@@ -5923,6 +5956,9 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     }
     if is_bfv_full_bootstrap_circuit {
         return reject("BFV full-bootstrap STARK circuit requires BFV-specific verification");
+    }
+    if normalized_circuit_is_soracloud_fhe_relation_for_backend(backend, &env_circuit_id) {
+        return reject("Soracloud FHE relation requires dedicated typed Soracloud verification");
     }
 
     // Decode the STARK wrapper payload.
@@ -6988,7 +7024,8 @@ mod stark_prover_tests {
             Err(err)
                 if err.contains("BFV full-bootstrap")
                     || err.contains("ZK-ACE")
-                    || err.contains("IVM execution") =>
+                    || err.contains("IVM execution")
+                    || err.contains("Soracloud") =>
             {
                 let fixture_air_circuit_id = format!("{env_circuit_id}:generic-binding-fixture");
                 let envelope_bytes = crate::zk_stark::prove_stark_fri_air_envelope_bytes(
@@ -7562,6 +7599,120 @@ mod stark_prover_tests {
                     "BFV full-bootstrap alias {backend} / {circuit_id} must not verify as generic binding AIR"
                 );
             }
+        }
+    }
+
+    fn soracloud_fhe_proof_relations() -> [(&'static str, &'static [u8]); 5] {
+        use iroha_data_model::soracloud::{
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        };
+
+        [
+            (
+                SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+            (
+                SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+            (
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+            (
+                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+            (
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            ),
+        ]
+    }
+
+    #[test]
+    fn generic_stark_prover_rejects_every_soracloud_fhe_relation_alias() {
+        let backend = "stark/fri/sha256-goldilocks";
+        for (canonical, schema) in soracloud_fhe_proof_relations() {
+            for circuit_id in [
+                canonical.to_owned(),
+                format!("{backend}:{canonical}"),
+                format!("{backend}/{canonical}"),
+            ] {
+                let vk_payload = StarkFriVerifyingKeyV1 {
+                    version: 1,
+                    circuit_id: circuit_id.clone(),
+                    n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                    blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                    fold_arity: 2,
+                    queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+                    merkle_arity: 2,
+                    hash_fn: STARK_HASH_SHA256_V1,
+                };
+                let vk_box = VerifyingKeyBox::new(
+                    backend.to_owned(),
+                    norito::to_bytes(&vk_payload).expect("encode Soracloud STARK VK payload"),
+                );
+                let err = prove_stark_fri_open_verify_envelope(
+                    backend,
+                    &circuit_id,
+                    &vk_box,
+                    schema,
+                    vec![vec![[0xA7; 32]]],
+                )
+                .expect_err("generic STARK prover must not target a Soracloud FHE relation");
+                assert!(
+                    err.contains("Soracloud") || err.contains("BFV full-bootstrap"),
+                    "unexpected Soracloud relation rejection for {circuit_id}: {err}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generic_stark_verifier_rejects_public_metadata_only_soracloud_fhe_proofs() {
+        let backend = "stark/fri/sha256-goldilocks";
+        for (circuit_id, schema) in soracloud_fhe_proof_relations() {
+            let vk_payload = StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: circuit_id.to_owned(),
+                n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                fold_arity: 2,
+                queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+                merkle_arity: 2,
+                hash_fn: STARK_HASH_SHA256_V1,
+            };
+            let vk_box = VerifyingKeyBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&vk_payload).expect("encode Soracloud STARK VK payload"),
+            );
+
+            // This is exactly the vacuous construction under regression: it
+            // carries a claimed public statement hash and the public schema,
+            // but no ciphertext, key, refresh, material, or execution witness.
+            let proof = weak_stark_open_verify_proof(
+                backend,
+                circuit_id,
+                &vk_box,
+                schema.to_vec(),
+                vec![vec![[0xA7; 32]]],
+            );
+            let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+            assert!(
+                !report.ok,
+                "public metadata alone must not prove Soracloud FHE relation {circuit_id}"
+            );
         }
     }
 
@@ -14832,6 +14983,74 @@ mod preverified_key_tests {
                 PreverifyResult::Accepted,
                 "case {case} must not poison dedup"
             );
+        }
+    }
+
+    #[test]
+    fn preverify_rejects_every_generic_soracloud_fhe_relation_alias_before_dedup() {
+        use iroha_data_model::soracloud::{
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+        };
+
+        let backend = "stark/fri/sha256-goldilocks";
+        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0x3C, 0xA5, 0x5A]);
+        let expected = hash_vk(&vk);
+        let accepted = preverify_enveloped_proof_for_backend(
+            backend,
+            BackendTag::Stark,
+            &format!("{backend}:soracloud-near-miss"),
+            expected,
+        );
+        for canonical in [
+            SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+        ] {
+            for circuit_id in [
+                canonical.to_owned(),
+                format!("{backend}:{canonical}"),
+                format!("{backend}/{canonical}"),
+            ] {
+                let proof = preverify_enveloped_proof_for_backend(
+                    backend,
+                    BackendTag::Stark,
+                    &circuit_id,
+                    expected,
+                );
+                let mut dedup = DedupCache::new();
+                assert_eq!(
+                    preverify_with_budget(
+                        &proof,
+                        Some(&vk),
+                        &mut dedup,
+                        0,
+                        Some(expected),
+                        Some(expected),
+                        true,
+                    ),
+                    PreverifyResult::MalformedProof,
+                    "generic Soracloud relation alias {circuit_id}"
+                );
+                assert_eq!(
+                    preverify_with_budget(
+                        &accepted,
+                        Some(&vk),
+                        &mut dedup,
+                        0,
+                        Some(expected),
+                        Some(expected),
+                        true,
+                    ),
+                    PreverifyResult::Accepted,
+                    "rejected alias {circuit_id} must not poison dedup"
+                );
+            }
         }
     }
 

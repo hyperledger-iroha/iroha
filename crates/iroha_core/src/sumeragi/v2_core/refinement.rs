@@ -256,8 +256,42 @@ pub(crate) const IDENTITY_KIND_DURABLE_BODY_FRAME: u8 = 1;
 pub(crate) const IDENTITY_KIND_FINALITY_ARTIFACT: u8 = 2;
 /// Canonical identity kind for one authenticated snapshot-bootstrap record.
 pub(crate) const IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD: u8 = 3;
+/// Canonical identity kind for one exact lane queue reservation key.
+pub(crate) const IDENTITY_KIND_LANE_QUEUE_RESERVATION: u8 = 4;
+/// Canonical identity kind for one exact ordered lane-release barrier.
+pub(crate) const IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER: u8 = 5;
 /// Canonical identity kind for one authenticated peer.
 pub(crate) const IDENTITY_KIND_PEER: u8 = 1;
+
+/// No durable queue owner exists for the projected reservation.
+pub(crate) const IN_FLIGHT_RESERVATION_STATE_ABSENT: u8 = 0;
+/// The exact reservation owns its transaction outside the ordinary queue.
+pub(crate) const IN_FLIGHT_RESERVATION_STATE_LIVE: u8 = 1;
+/// The exact reservation is committed pending QueuePlan tombstone durability.
+pub(crate) const IN_FLIGHT_RESERVATION_STATE_COMMITTED: u8 = 2;
+/// The exact reservation is held by an ordered release barrier.
+pub(crate) const IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED: u8 = 3;
+/// The exact released record is retained pending FIFO restoration cleanup.
+pub(crate) const IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED: u8 = 4;
+
+/// Install retained ownership from one validated checksummed V5 journal snapshot.
+pub(crate) const IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT: u8 = 1;
+/// Persist one exact live reservation.
+pub(crate) const IN_FLIGHT_RESERVATION_ACTION_RESERVE: u8 = 2;
+/// Directly release exact aborted or recovery-orphaned work to the queue.
+pub(crate) const IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT: u8 = 3;
+/// Persist one exact live reservation as committed.
+pub(crate) const IN_FLIGHT_RESERVATION_ACTION_COMMIT: u8 = 4;
+/// Forget an exact commit barrier after independent QueuePlan cleanup.
+pub(crate) const IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT: u8 = 5;
+/// Remove exact live ownership for one retired lane incarnation.
+pub(crate) const IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED: u8 = 6;
+/// Bind an exact live reservation to an ordered release barrier.
+pub(crate) const IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE: u8 = 7;
+/// Move an exact prepared reservation to restartable release completion.
+pub(crate) const IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE: u8 = 8;
+/// Forget an exact completed release after FIFO restoration.
+pub(crate) const IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE: u8 = 9;
 
 /// Successor authority derived from an applied predecessor in this process.
 pub(crate) const SUCCESSOR_AUTHORITY_APPLIED: u8 = 1;
@@ -483,8 +517,56 @@ macro_rules! refinement_tag_value {
     (IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD) => {
         3u8
     };
+    (IDENTITY_KIND_LANE_QUEUE_RESERVATION) => {
+        4u8
+    };
+    (IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER) => {
+        5u8
+    };
     (IDENTITY_KIND_PEER) => {
         1u8
+    };
+    (IN_FLIGHT_RESERVATION_STATE_ABSENT) => {
+        0u8
+    };
+    (IN_FLIGHT_RESERVATION_STATE_LIVE) => {
+        1u8
+    };
+    (IN_FLIGHT_RESERVATION_STATE_COMMITTED) => {
+        2u8
+    };
+    (IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED) => {
+        3u8
+    };
+    (IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED) => {
+        4u8
+    };
+    (IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT) => {
+        1u8
+    };
+    (IN_FLIGHT_RESERVATION_ACTION_RESERVE) => {
+        2u8
+    };
+    (IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT) => {
+        3u8
+    };
+    (IN_FLIGHT_RESERVATION_ACTION_COMMIT) => {
+        4u8
+    };
+    (IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT) => {
+        5u8
+    };
+    (IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED) => {
+        6u8
+    };
+    (IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE) => {
+        7u8
+    };
+    (IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE) => {
+        8u8
+    };
+    (IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE) => {
+        9u8
     };
     (SUCCESSOR_AUTHORITY_APPLIED) => {
         1u8
@@ -594,7 +676,23 @@ assert_refinement_tag_values!(
     IDENTITY_KIND_DURABLE_BODY_FRAME,
     IDENTITY_KIND_FINALITY_ARTIFACT,
     IDENTITY_KIND_SNAPSHOT_BOOTSTRAP_RECORD,
+    IDENTITY_KIND_LANE_QUEUE_RESERVATION,
+    IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER,
     IDENTITY_KIND_PEER,
+    IN_FLIGHT_RESERVATION_STATE_ABSENT,
+    IN_FLIGHT_RESERVATION_STATE_LIVE,
+    IN_FLIGHT_RESERVATION_STATE_COMMITTED,
+    IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED,
+    IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED,
+    IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,
+    IN_FLIGHT_RESERVATION_ACTION_RESERVE,
+    IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,
+    IN_FLIGHT_RESERVATION_ACTION_COMMIT,
+    IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT,
+    IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,
+    IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,
+    IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE,
+    IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,
     SUCCESSOR_AUTHORITY_APPLIED,
     SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
     SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
@@ -3115,6 +3213,303 @@ macro_rules! production_terminal_application_without_successor_activation_body {
     }};
 }
 
+// Primitive reservation ownership is deliberately narrower than the
+// first-release in-flight TLA+ state. It binds one journal-owned transaction
+// identity to one local durable state and, for ordered release, to one exact
+// barrier identity. QueuePlan, Kura, carrier/WSV, FIFO collection extraction,
+// and action ordering remain independent adapter obligations.
+macro_rules! in_flight_reservation_owner_is_well_formed_body {
+    ($owner:expr) => {{
+        let owner = $owner;
+        (owner.state == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT)
+            && canonical_identity_is_zero_body!(owner.reservation_identity)
+            && canonical_identity_is_zero_body!(owner.release_identity))
+            || ((owner.state == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_LIVE)
+                || owner.state == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_COMMITTED))
+                && canonical_identity_is_typed_body!(
+                    owner.reservation_identity,
+                    refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                    refinement_tag_value!(IDENTITY_KIND_LANE_QUEUE_RESERVATION)
+                )
+                && canonical_identity_is_zero_body!(owner.release_identity))
+            || ((owner.state
+                == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED)
+                || owner.state
+                    == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED))
+                && canonical_identity_is_typed_body!(
+                    owner.reservation_identity,
+                    refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                    refinement_tag_value!(IDENTITY_KIND_LANE_QUEUE_RESERVATION)
+                )
+                && canonical_identity_is_typed_body!(
+                    owner.release_identity,
+                    refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                    refinement_tag_value!(IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER)
+                ))
+    }};
+}
+
+macro_rules! in_flight_reservation_owner_equal_body {
+    ($left:expr, $right:expr) => {{
+        $left.state == $right.state
+            && canonical_identity_equal_body!(
+                $left.reservation_identity,
+                $right.reservation_identity
+            )
+            && canonical_identity_equal_body!($left.release_identity, $right.release_identity)
+    }};
+}
+
+macro_rules! in_flight_reservation_owner_names_request_body {
+    ($owner:expr, $projection:expr) => {{
+        canonical_identity_equal_body!(
+            $owner.reservation_identity,
+            $projection.requested_reservation_identity
+        )
+    }};
+}
+
+macro_rules! in_flight_reservation_owner_names_release_request_body {
+    ($owner:expr, $projection:expr) => {{
+        in_flight_reservation_owner_names_request_body!($owner, $projection)
+            && canonical_identity_equal_body!(
+                $owner.release_identity,
+                $projection.requested_release_identity
+            )
+    }};
+}
+
+// This is an identity-preserving primitive journal relation, not a total
+// forward or reverse simulation of `SumeragiV2InFlightFirstRelease.tla`.
+// Direct release, `PruneRetired`, and snapshot recovery are real
+// production operations outside that abstract action set and are kept
+// explicit instead of being mislabeled as abstract release/commit actions.
+macro_rules! production_in_flight_reservation_transition_body {
+    ($projection:expr) => {{
+        let projection = $projection;
+        canonical_identity_is_typed_body!(
+            projection.requested_reservation_identity,
+            refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+            refinement_tag_value!(IDENTITY_KIND_LANE_QUEUE_RESERVATION)
+        ) && in_flight_reservation_owner_is_well_formed_body!(projection.before)
+            && in_flight_reservation_owner_is_well_formed_body!(projection.after)
+            && if projection.action
+                == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT)
+            {
+                projection.before.state == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT)
+                    && projection.after.state
+                        != refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT)
+                    && in_flight_reservation_owner_names_request_body!(projection.after, projection)
+                    && if projection.after.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED)
+                        || projection.after.state
+                            == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED)
+                    {
+                        canonical_identity_is_typed_body!(
+                            projection.requested_release_identity,
+                            refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                            refinement_tag_value!(IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER)
+                        ) && in_flight_reservation_owner_names_release_request_body!(
+                            projection.after,
+                            projection
+                        )
+                    } else {
+                        canonical_identity_is_zero_body!(projection.requested_release_identity)
+                    }
+            } else if projection.action
+                == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_RESERVE)
+            {
+                canonical_identity_is_zero_body!(projection.requested_release_identity)
+                    && ((projection.before.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT)
+                        && projection.after.state
+                            == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_LIVE)
+                        && in_flight_reservation_owner_names_request_body!(
+                            projection.after,
+                            projection
+                        ))
+                        || (projection.before.state
+                            == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_LIVE)
+                            && in_flight_reservation_owner_names_request_body!(
+                                projection.before,
+                                projection
+                            )
+                            && in_flight_reservation_owner_equal_body!(
+                                projection.before,
+                                projection.after
+                            )))
+            } else if projection.action
+                == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT)
+            {
+                canonical_identity_is_zero_body!(projection.requested_release_identity)
+                    && ((projection.before.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_LIVE)
+                        && in_flight_reservation_owner_names_request_body!(
+                            projection.before,
+                            projection
+                        )
+                        && projection.after.state
+                            == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT))
+                        || (projection.before.state
+                            != refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED)
+                            && !(projection.before.state
+                                == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_LIVE)
+                                && in_flight_reservation_owner_names_request_body!(
+                                    projection.before,
+                                    projection
+                                ))
+                            && in_flight_reservation_owner_equal_body!(
+                                projection.before,
+                                projection.after
+                            )))
+            } else if projection.action
+                == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_COMMIT)
+            {
+                canonical_identity_is_zero_body!(projection.requested_release_identity)
+                    && projection.after.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_COMMITTED)
+                    && in_flight_reservation_owner_names_request_body!(projection.after, projection)
+                    && ((projection.before.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_LIVE)
+                        && in_flight_reservation_owner_names_request_body!(
+                            projection.before,
+                            projection
+                        ))
+                        || (projection.before.state
+                            == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_COMMITTED)
+                            && in_flight_reservation_owner_names_request_body!(
+                                projection.before,
+                                projection
+                            )
+                            && in_flight_reservation_owner_equal_body!(
+                                projection.before,
+                                projection.after
+                            )))
+            } else if projection.action
+                == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT)
+            {
+                canonical_identity_is_zero_body!(projection.requested_release_identity)
+                    && ((projection.before.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_COMMITTED)
+                        && in_flight_reservation_owner_names_request_body!(
+                            projection.before,
+                            projection
+                        )
+                        && projection.after.state
+                            == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT))
+                        || (in_flight_reservation_owner_equal_body!(
+                            projection.before,
+                            projection.after
+                        ) && !(projection.before.state
+                            == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_COMMITTED)
+                            && in_flight_reservation_owner_names_request_body!(
+                                projection.before,
+                                projection
+                            ))))
+            } else if projection.action
+                == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED)
+            {
+                canonical_identity_is_zero_body!(projection.requested_release_identity)
+                    && projection.before.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_LIVE)
+                    && in_flight_reservation_owner_names_request_body!(
+                        projection.before,
+                        projection
+                    )
+                    && projection.after.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT)
+            } else if projection.action
+                == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE)
+            {
+                canonical_identity_is_typed_body!(
+                    projection.requested_release_identity,
+                    refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                    refinement_tag_value!(IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER)
+                ) && ((projection.before.state
+                    == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_LIVE)
+                    && in_flight_reservation_owner_names_request_body!(
+                        projection.before,
+                        projection
+                    )
+                    && projection.after.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED)
+                    && in_flight_reservation_owner_names_release_request_body!(
+                        projection.after,
+                        projection
+                    ))
+                    || ((projection.before.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED)
+                        || projection.before.state
+                            == refinement_tag_value!(
+                                IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED
+                            ))
+                        && in_flight_reservation_owner_names_release_request_body!(
+                            projection.before,
+                            projection
+                        )
+                        && in_flight_reservation_owner_equal_body!(
+                            projection.before,
+                            projection.after
+                        )))
+            } else if projection.action
+                == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE)
+            {
+                canonical_identity_is_typed_body!(
+                    projection.requested_release_identity,
+                    refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                    refinement_tag_value!(IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER)
+                ) && ((projection.before.state
+                    == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED)
+                    && in_flight_reservation_owner_names_release_request_body!(
+                        projection.before,
+                        projection
+                    )
+                    && projection.after.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED)
+                    && in_flight_reservation_owner_names_release_request_body!(
+                        projection.after,
+                        projection
+                    ))
+                    || (projection.before.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED)
+                        && in_flight_reservation_owner_names_release_request_body!(
+                            projection.before,
+                            projection
+                        )
+                        && in_flight_reservation_owner_equal_body!(
+                            projection.before,
+                            projection.after
+                        )))
+            } else if projection.action
+                == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE)
+            {
+                canonical_identity_is_typed_body!(
+                    projection.requested_release_identity,
+                    refinement_tag_value!(IDENTITY_DOMAIN_DURABLE_ARTIFACT),
+                    refinement_tag_value!(IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER)
+                ) && ((projection.before.state
+                    == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED)
+                    && in_flight_reservation_owner_names_release_request_body!(
+                        projection.before,
+                        projection
+                    )
+                    && projection.after.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT))
+                    || (in_flight_reservation_owner_equal_body!(
+                        projection.before,
+                        projection.after
+                    ) && !(projection.before.state
+                        == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED)
+                        && in_flight_reservation_owner_names_release_request_body!(
+                            projection.before,
+                            projection
+                        ))))
+            } else {
+                false
+            }
+    }};
+}
+
 // Keep the durability acknowledgement predicate shared between the ordinary
 // Rust WAL lifecycle and its Verus proof.  An append receipt is minted only
 // after all three adapter completions have happened in this order; the
@@ -3965,8 +4360,36 @@ pub struct ProductionTerminalApplicationWithoutSuccessorActivationProjection {
     pub(crate) pending_successor_activation_present: bool,
 }
 
-/// Opaque evidence that a total production transition gate accepted a
-/// projection.
+/// Primitive durable owner of one exact lane queue reservation.
+///
+/// The zero identity is permitted only for [`IN_FLIGHT_RESERVATION_STATE_ABSENT`].
+/// Prepared/completed owners additionally carry the exact ordered-release
+/// barrier digest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProductionInFlightReservationOwnerProjection {
+    pub(crate) state: u8,
+    pub(crate) reservation_identity: CanonicalIdentityProjection,
+    pub(crate) release_identity: CanonicalIdentityProjection,
+}
+
+/// One exact reservation-journal action and its primitive owner transition.
+///
+/// This projection intentionally excludes the queue collection, QueuePlan,
+/// Kura, carrier/WSV, and FIFO-order witnesses. It is the checked local
+/// identity seam used by the production journal, not a claim of complete
+/// forward or reverse adequacy with the first-release TLA+ model. Local
+/// ForgetCommit/ForgetRelease both end at `Absent`; the abstract model's
+/// distinct forgotten states require the excluded QueuePlan/FIFO evidence.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProductionInFlightReservationTransitionProjection {
+    pub(crate) action: u8,
+    pub(crate) requested_reservation_identity: CanonicalIdentityProjection,
+    pub(crate) requested_release_identity: CanonicalIdentityProjection,
+    pub(crate) before: ProductionInFlightReservationOwnerProjection,
+    pub(crate) after: ProductionInFlightReservationOwnerProjection,
+}
+
+/// Opaque evidence that one production transition gate accepted a projection.
 ///
 /// The field is private so callers cannot manufacture authorization from a
 /// projection they already hold. Every constructor below evaluates the
@@ -3979,6 +4402,15 @@ pub struct CheckedProductionTransition<P> {
 }
 
 impl<P> CheckedProductionTransition<P> {
+    /// Borrow the exact accepted projection without consuming its authority.
+    ///
+    /// This supports deterministic composition checks while retaining the
+    /// move-only token for the authorized mutation boundary.
+    #[must_use]
+    pub(crate) const fn accepted_projection(&self) -> &P {
+        &self.projection
+    }
+
     /// Consume the checked token and recover the exact accepted projection.
     #[must_use]
     pub fn into_projection(self) -> P {
@@ -6081,6 +6513,16 @@ pub(crate) const fn production_terminal_application_without_successor_activation
     production_terminal_application_without_successor_activation_body!(projection)
 }
 
+/// Validate one exact primitive reservation-journal owner transition.
+///
+/// This kernel does not establish the surrounding QueuePlan, Kura, carrier,
+/// WSV, FIFO, or lifecycle action-order obligations.
+pub(crate) const fn production_in_flight_reservation_transition_kernel(
+    projection: ProductionInFlightReservationTransitionProjection,
+) -> bool {
+    production_in_flight_reservation_transition_body!(projection)
+}
+
 /// Check an applied-predecessor successor transition and mint opaque evidence
 /// only for an accepted projection.
 #[must_use]
@@ -6268,6 +6710,18 @@ pub(crate) fn check_production_terminal_application_transition(
     CheckedProductionTransition<ProductionTerminalApplicationWithoutSuccessorActivationProjection>,
 > {
     if production_terminal_application_without_successor_activation_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one primitive reservation-journal owner transition.
+#[must_use]
+pub(crate) fn check_production_in_flight_reservation_transition(
+    projection: ProductionInFlightReservationTransitionProjection,
+) -> Option<CheckedProductionTransition<ProductionInFlightReservationTransitionProjection>> {
+    if production_in_flight_reservation_transition_kernel(projection) {
         Some(CheckedProductionTransition { projection })
     } else {
         None
@@ -6576,6 +7030,280 @@ mod tests {
 
     fn successor_identity(domain: u8, kind: u8, byte: u8) -> CanonicalIdentityProjection {
         CanonicalIdentityProjection::from_bytes(domain, kind, [byte; 32])
+    }
+
+    fn in_flight_reservation_identity(byte: u8) -> CanonicalIdentityProjection {
+        successor_identity(
+            IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+            IDENTITY_KIND_LANE_QUEUE_RESERVATION,
+            byte,
+        )
+    }
+
+    fn in_flight_release_identity(byte: u8) -> CanonicalIdentityProjection {
+        successor_identity(
+            IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+            IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER,
+            byte,
+        )
+    }
+
+    fn in_flight_owner(
+        state: u8,
+        reservation_identity: CanonicalIdentityProjection,
+        release_identity: CanonicalIdentityProjection,
+    ) -> ProductionInFlightReservationOwnerProjection {
+        ProductionInFlightReservationOwnerProjection {
+            state,
+            reservation_identity,
+            release_identity,
+        }
+    }
+
+    #[test]
+    fn in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps() {
+        let absent = ProductionInFlightReservationOwnerProjection::default();
+        let reservation = in_flight_reservation_identity(0x41);
+        let foreign_reservation = in_flight_reservation_identity(0x42);
+        let release = in_flight_release_identity(0x51);
+        let live = in_flight_owner(
+            IN_FLIGHT_RESERVATION_STATE_LIVE,
+            reservation,
+            CanonicalIdentityProjection::zero(),
+        );
+        let foreign_live = in_flight_owner(
+            IN_FLIGHT_RESERVATION_STATE_LIVE,
+            foreign_reservation,
+            CanonicalIdentityProjection::zero(),
+        );
+        let committed = in_flight_owner(
+            IN_FLIGHT_RESERVATION_STATE_COMMITTED,
+            reservation,
+            CanonicalIdentityProjection::zero(),
+        );
+        let prepared = in_flight_owner(
+            IN_FLIGHT_RESERVATION_STATE_RELEASE_PREPARED,
+            reservation,
+            release,
+        );
+        let completed = in_flight_owner(
+            IN_FLIGHT_RESERVATION_STATE_RELEASE_COMPLETED,
+            reservation,
+            release,
+        );
+        let transition = |action, requested_release_identity, before, after| {
+            ProductionInFlightReservationTransitionProjection {
+                action,
+                requested_reservation_identity: reservation,
+                requested_release_identity,
+                before,
+                after,
+            }
+        };
+
+        let reserve = transition(
+            IN_FLIGHT_RESERVATION_ACTION_RESERVE,
+            CanonicalIdentityProjection::zero(),
+            absent,
+            live,
+        );
+        assert_eq!(
+            check_production_in_flight_reservation_transition(reserve)
+                .expect("exact reserve must mint checked evidence")
+                .into_projection(),
+            reserve
+        );
+
+        for accepted in [
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_RESERVE,
+                CanonicalIdentityProjection::zero(),
+                live,
+                live,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,
+                CanonicalIdentityProjection::zero(),
+                live,
+                absent,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,
+                CanonicalIdentityProjection::zero(),
+                absent,
+                absent,
+            ),
+            ProductionInFlightReservationTransitionProjection {
+                requested_reservation_identity: reservation,
+                ..transition(
+                    IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,
+                    CanonicalIdentityProjection::zero(),
+                    foreign_live,
+                    foreign_live,
+                )
+            },
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_COMMIT,
+                CanonicalIdentityProjection::zero(),
+                live,
+                committed,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_COMMIT,
+                CanonicalIdentityProjection::zero(),
+                committed,
+                committed,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT,
+                CanonicalIdentityProjection::zero(),
+                committed,
+                absent,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT,
+                CanonicalIdentityProjection::zero(),
+                absent,
+                absent,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,
+                CanonicalIdentityProjection::zero(),
+                live,
+                absent,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,
+                release,
+                live,
+                prepared,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,
+                release,
+                prepared,
+                prepared,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,
+                release,
+                completed,
+                completed,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE,
+                release,
+                prepared,
+                completed,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE,
+                release,
+                completed,
+                completed,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,
+                release,
+                completed,
+                absent,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,
+                release,
+                absent,
+                absent,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,
+                CanonicalIdentityProjection::zero(),
+                absent,
+                live,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,
+                CanonicalIdentityProjection::zero(),
+                absent,
+                committed,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,
+                release,
+                absent,
+                prepared,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,
+                release,
+                absent,
+                completed,
+            ),
+        ] {
+            assert!(
+                production_in_flight_reservation_transition_kernel(accepted),
+                "expected accepted primitive transition: {accepted:?}"
+            );
+        }
+
+        for rejected in [
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_COMMIT,
+                CanonicalIdentityProjection::zero(),
+                absent,
+                committed,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,
+                in_flight_release_identity(0x52),
+                live,
+                prepared,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,
+                CanonicalIdentityProjection::zero(),
+                prepared,
+                prepared,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,
+                CanonicalIdentityProjection::zero(),
+                live,
+                live,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT,
+                CanonicalIdentityProjection::zero(),
+                committed,
+                committed,
+            ),
+            transition(
+                IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,
+                release,
+                completed,
+                completed,
+            ),
+            ProductionInFlightReservationTransitionProjection {
+                action: 0xff,
+                ..reserve
+            },
+            ProductionInFlightReservationTransitionProjection {
+                requested_reservation_identity: foreign_reservation,
+                ..reserve
+            },
+            ProductionInFlightReservationTransitionProjection {
+                after: foreign_live,
+                ..reserve
+            },
+            ProductionInFlightReservationTransitionProjection {
+                before: in_flight_owner(IN_FLIGHT_RESERVATION_STATE_LIVE, reservation, release),
+                ..reserve
+            },
+        ] {
+            assert!(
+                check_production_in_flight_reservation_transition(rejected).is_none(),
+                "expected rejected primitive transition: {rejected:?}"
+            );
+        }
     }
 
     fn retirement_projection_accepts(

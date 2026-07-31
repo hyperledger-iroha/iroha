@@ -279,7 +279,19 @@ success/failure polarity. A retry coalesces only when that complete evidence
 is equal; conflicting evidence or more than one owner fails closed. The check
 runs before a `BodyAvailable` completion can prune conflicting queued
 proposals, so a non-exact retry cannot mutate consumer state and then hide as
-a duplicate.
+a duplicate. Before either serialized enqueue path can construct a tagged
+command or allocate an admission ordinal,
+`preflight_runtime_command_admission` validates the complete callback and
+classifies its phase. Exact already-applied `BodyAvailable`, `BodyStored`,
+`ValidationSucceeded`, and `SignatureCompleted` retries stutter without a
+physical owner or new ordinal. Conflicting validation evidence or opposite
+success/failure polarity fails closed. A malformed callback rejects even when
+it carries a stale tag, because complete callback validation precedes
+stale-tag coalescing; a well-formed stale incarnation is discarded without
+installing a marker. The finite TLA+ mutation matrix covers only the
+evidence-bearing `BodyStored` and `ValidationSucceeded` Busy/applied phases.
+The four-phase Rust test extends exact-retry suppression—not the matrix's
+conflict or Busy-owner claim—to `BodyAvailable` and `SignatureCompleted`.
 
 Authenticated consensus-message ownership likewise spans the runtime queue and
 the adapter's Busy-deferred lanes through one generic production path. The
@@ -410,22 +422,31 @@ during sequential catch-up without creating permanent normal-height fanout.
 
 Certified-body request capacity is independent from the retryable general
 pending-work boundary. When that request bound alone is full, only a
-`FetchBody` producer may retain the exact causal suffix and retry; the rejected
-attempt changes neither work nor request ownership, and a later successful
-drain acquires both without exposing a partial allocation. An authenticated
-exact `CertifiedBodyResponse` is transport-only and may cross that retained
-reducer-effect debt to retire the blocking Fetch/request pair. A
+`FetchBody` producer may retain the exact causal suffix and retry. The executor
+installs one bounded FIFO owner for the exact task, authority, and lifecycle
+ordinal, while the rejected attempt acquires no partial pending-work, request,
+or transport ownership. After capacity releases, retrying that same FIFO head
+acquires pending-work and request ownership atomically. A genuinely new Fetch
+then drains the successful head; an existing ordinary Fetch retains it as the
+exact completion barrier after the request-authority upgrade. An authenticated exact
+`CertifiedBodyResponse` is transport-only and may cross retained
+reducer-effect debt to retire the exact blocking work/request pair. A
 `CommitCertificateResponse` is different: it exposes its authenticated
 CommitQC to reducer ingress and therefore remains reducer-ordered. Before the
 executor boundary, each validator has one shared outer TransportCompletion
 slot and full-envelope byte reserve for either a `CertifiedBodyResponse` or a
 `PayloadChunk`; generic reducer traffic and TimeoutVote ownership cannot spend
 either reserve. The source-sealed finite matrix for this boundary now contains
-6 models and 28 configurations: 10 repaired cases and 18 mutants, producing
-147 generated and 146 distinct states. Its weak-fairness result requires a
-responsive certified source plus terminating transport and body work. Those
-are explicit premises; the finite evidence promotes no proof-ledger
-obligation.
+6 models and 33 configurations: 10 repaired cases and 23 mutants. The 22
+unchanged cases pin 131 generated and 130 distinct states; the revised
+certified-request cases pin their semantic actions and violations without
+preserving stale aggregate state counts. The retained owner binds exact task,
+authority, and lifecycle ordinal; drop, substitution, duplication, overtaking,
+partial P/Q install, and loss of the existing-owner retry barrier each have a
+dedicated mutant. Its weak-fairness result
+requires a responsive certified source plus terminating transport and body
+work. Those are explicit premises; the finite evidence promotes no
+proof-ledger obligation.
 
 The adapter's deferred Progress reserve is partitioned by consumer ownership:
 one locked-Commit slot and one independent TimeoutVote slot per frozen
@@ -1104,9 +1125,9 @@ The current source-bound inventory therefore contains 738 exact tests across
 38 modules and 81 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
 `328352eac7b03ac4453475fe62d4c0545ee90fd2dfdeaf36731a13f86f32cd17`.
-Nine of those legs execute the separate 277-test G-UNIT focus inventory; its
-canonical source-derived TSV SHA-256 is
-`dc6e4c3eece63441e9ba5ffdf6b603665e21cf6086a3a6a1307b45829a678510`.
+Nine of those legs execute the separate 289-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 290 TSV lines and has SHA-256
+`1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733`.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1538,7 +1559,7 @@ bash scripts/run_sumeragi_v2_release_gates.sh --pr
 
 Before those longer scenarios, the PR gate inventories 738 exact production
 liveness tests and executes all 38 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 277-test
+profile additionally records nine G-UNIT legs executing a separate 289-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1592,7 +1613,7 @@ regressions pin post-WAL oversized-continuation fail-close and exact replay,
 terminal readiness with queued Busy-deferred work, signature completion before
 a deferred timeout and newer ingress, and production Completion-reserve
 saturation in which an exact certified response releases one request before
-durable reducer retransmission reconstructs the blocked Fetch. They raised the
+the same retained FIFO Fetch acquires both owners atomically. They raised the
 preceding inventory to 222.
 Six outer TransportCompletion-corridor regressions raise it to 228; explicitly
 pinning the then-current four-per-validator plus two shared relay-lane owners
@@ -1942,7 +1963,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 81 pre-network corridor legs and
-their exact 738-test production inventory, the separate 277-test G-UNIT
+their exact 738-test production inventory, the separate 289-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos

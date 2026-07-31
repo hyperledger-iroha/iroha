@@ -5,21 +5,15 @@
 # Domain Normalisation v1 (Norm v1)
 
 This note captures the canonical domain-name normalisation pipeline for the
-account address envelope. It corresponds to roadmap item **ADDR‑1b** and
-documents exactly how Torii, the data model, SDKs, and tooling normalise domain
-labels before they are encoded into an `AccountAddress`.
+low-level account address envelope helpers.
 
-Norm v1 applies to every place where [`Name`](../../crates/iroha_data_model/src/name.rs)
-is parsed under a domain context:
+Norm v1 applies when `name::canonicalize_domain_label` is called for an explicit
+`AccountDomainSelector`. Canonical `AccountId` values are domainless and do not
+run this pipeline. General [`Name`](../../crates/iroha_data_model/src/name.rs)
+parsing enforces its own validation and NFC policy.
 
-- domain registration (`RegisterDomain` / `NewDomain`);
-- implicit-domain address handling (default domain binding);
-- manifest and metadata tooling that publish domain references;
-- CLI, SDK, and governance interfaces that accept domain identifiers.
-
-The goal is to guarantee that a given Unicode input string always maps to a
-single canonical byte representation. Any string that fails one of the steps
-below must be rejected deterministically at the boundary where it is provided.
+The selector helper guarantees that a given Unicode label maps to one canonical
+byte representation or is rejected deterministically.
 
 ## Configuration summary
 
@@ -58,10 +52,9 @@ manifests all observe the same canonical bytes.
    through `U+1EFF`) to avoid obscure ASCII look-alikes (“ḷ”, “ṅ”, etc.) in
    mixed-script labels. These limits align with DNS expectations and keep the
    Local digest consistent.
-5. **Script policy (future).** UTS‑39 confusable checks and explicit script
-   policies remain optional in v1. When enabled, they are applied after UTS‑46
-   and before the digest step; failure is fatal. Their rollout is tracked under
-   ADDR‑1 follow-ups and will ship with Norm v2 once available.
+5. **Script policy.** V1 does not run a separate UTS‑39 confusable or
+   per-script stage. The NFC, UTS‑46, ASCII output, DNS length, and explicit
+   Latin Extended Additional rejection above are the complete V1 policy.
 
 If every stage succeeds, the normalised domain string is cached as the canonical
 value for on-chain storage and address encoding. Any deviation at step 3 or 4
@@ -166,15 +159,15 @@ golden vector exercised in
   `javascript/iroha_js/test/address.test.js`, Android/Swift SDK suites, and
   `crates/iroha_torii/tests/address_parsing.rs` (added as part of ADDR‑5) keep
   the pipeline honest in CI.
-- **Docs:** This note and §3 of `docs/account_structure.md` are the canonical
-  references cited by the roadmap entry **ADDR‑1b**.
+- **Docs:** This note and §3 of `specs/account_structure.md` are the canonical
+  source-adjacent references.
 
 ## Implementation notes
 
-- `Name` currently performs steps 1–2. UTS‑46 and length enforcement are being
-  threaded into Torii and SDK boundaries; once the rollout completes,
-  `Name::from_str` will enforce the same rules so every entry point shares a
-  single policy.
+- `Name::from_str` performs input validation and NFC normalization.
+  `canonicalize_domain_label` adds UTS‑46, lowercase ASCII output, DNS length,
+  and selector-specific character checks for callers that explicitly need a
+  domain selector.
 - `AccountAddress::from_account_id` relies on the digest step above; altering
   Norm v1 requires regenerating the golden compressed vectors in
   `crates/iroha_data_model/src/account/address.rs` tests and updating the

@@ -11,6 +11,10 @@ from pathlib import Path
 import pytest
 
 
+TEST_DIR = Path(__file__).resolve().parent
+if str(TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(TEST_DIR))
+
 MODULE_PATH = (
     Path(__file__).resolve().parents[1] / "check_sorafs_reference_sdk_release_evidence.py"
 )
@@ -28,7 +32,11 @@ from sorafs_reference_sdk_supply_chain import (  # noqa: E402
     SupplyChainSourceResult,
     SupplyChainTargetResult,
 )
-from sorafs_topology_qualification import CANONICAL_READINESS_LANES  # noqa: E402
+import sorafs_topology_qualification as TOPOLOGY  # noqa: E402
+from sorafs_resilience_test_support import (  # noqa: E402
+    public_key_from_seed,
+    sign,
+)
 
 
 NOW_UNIX = 1_800_700_000
@@ -49,6 +57,18 @@ PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX = (
 PROVENANCE_VERIFICATION_KEY_FINGERPRINT_HEX = hashlib.sha256(
     bytes.fromhex(PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX)
 ).hexdigest()
+TOPOLOGY_SIGNER_IDENTITY = "sorafs-sf11-topology-qualification-hsm"
+TOPOLOGY_SIGNER_KEY_REVISION = 7
+TOPOLOGY_SIGNER_POLICY_DIGEST_HEX = hashlib.sha256(
+    b"sorafs-sf11-topology-signer-policy-v1"
+).hexdigest()
+TOPOLOGY_SIGNING_SEED = hashlib.sha256(
+    b"sorafs-sf11-topology-qualification-test-key"
+).digest()
+TOPOLOGY_VERIFICATION_PUBLIC_KEY = public_key_from_seed(TOPOLOGY_SIGNING_SEED)
+TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX = TOPOLOGY_VERIFICATION_PUBLIC_KEY.hex()
+TOPOLOGY_MAX_REVIEW_AGE_SECS = 3_600
+TOPOLOGY_REVIEWED_AT_UNIX = NOW_UNIX - 60
 SOURCE_ARTIFACT_PATHS = {
     "release_rehearsal": "release-rehearsal.json",
     "sbom_index": "sbom-index.json",
@@ -405,6 +425,7 @@ def write_topology_qualification(
     *,
     deployment_id: str = DEPLOYMENT_ID,
     environment: str = ENVIRONMENT,
+    reviewed_at_unix: int = TOPOLOGY_REVIEWED_AT_UNIX,
 ) -> Path:
     path = root / "l1-topology-qualification.summary"
     payload = {
@@ -428,12 +449,85 @@ def write_topology_qualification(
         "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
         "runtime_material_policy_valid": True,
         "signed_model_artifact_count": 1,
-        "required_lane_slots": list(CANONICAL_READINESS_LANES),
-        "recognized_lane_slot_count": len(CANONICAL_READINESS_LANES),
+        "required_lane_slots": list(TOPOLOGY.CANONICAL_READINESS_LANES),
+        "recognized_lane_slot_count": len(TOPOLOGY.CANONICAL_READINESS_LANES),
         "errors": [],
     }
     path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    binding, errors = TOPOLOGY.load_topology_qualification_binding(
+        path,
+        expected_deployment_id=deployment_id,
+        expected_environment=environment,
+    )
+    assert errors == []
+    assert binding is not None
+    envelope = {
+        "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
+        **binding,
+        "signer_identity": TOPOLOGY_SIGNER_IDENTITY,
+        "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
+        "signer_key_fingerprint_hex": hashlib.sha256(
+            TOPOLOGY_VERIFICATION_PUBLIC_KEY
+        ).hexdigest(),
+        "signer_policy_digest_hex": TOPOLOGY_SIGNER_POLICY_DIGEST_HEX,
+        "reviewed_at_unix": reviewed_at_unix,
+        "signature_algorithm": "ed25519",
+        "signature_hex": "00" * 64,
+    }
+    envelope["signature_hex"] = sign(
+        TOPOLOGY_SIGNING_SEED,
+        TOPOLOGY.topology_qualification_envelope_signing_bytes(envelope),
+    ).hex()
+    write_json(topology_envelope_path(path), envelope)
     return path
+
+
+def topology_envelope_path(qualification_path: Path) -> Path:
+    """Return the deterministic signed companion path for a topology summary."""
+
+    return qualification_path.with_name(f"{qualification_path.name}.ed25519")
+
+
+def topology_cli_args(
+    qualification_path: Path,
+    *,
+    omit: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Return the independently trusted signed-topology checker arguments."""
+
+    options = (
+        ("--topology-qualification-summary", str(qualification_path)),
+        (
+            "--topology-qualification-envelope",
+            str(topology_envelope_path(qualification_path)),
+        ),
+        (
+            "--topology-qualification-verification-public-key-hex",
+            TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX,
+        ),
+        (
+            "--topology-qualification-signer-identity",
+            TOPOLOGY_SIGNER_IDENTITY,
+        ),
+        (
+            "--topology-qualification-signer-key-revision",
+            str(TOPOLOGY_SIGNER_KEY_REVISION),
+        ),
+        (
+            "--topology-qualification-signer-policy-digest-hex",
+            TOPOLOGY_SIGNER_POLICY_DIGEST_HEX,
+        ),
+        (
+            "--max-topology-qualification-review-age-secs",
+            str(TOPOLOGY_MAX_REVIEW_AGE_SECS),
+        ),
+    )
+    return [
+        argument
+        for option, value in options
+        if option not in omit
+        for argument in (option, value)
+    ]
 
 
 def supply_chain_cli_args(
@@ -463,15 +557,21 @@ def supply_chain_cli_args(
     ]
 
 
-def run_gate(root: Path, *extra: str) -> int:
+def run_gate(
+    root: Path,
+    *extra: str,
+    topology: Path | None = None,
+) -> int:
+    qualification_path = (
+        write_topology_qualification(root) if topology is None else topology
+    )
     return MODULE.main(
         [
             "--evidence-dir",
             str(root),
             "--now-unix",
             str(NOW_UNIX),
-            "--topology-qualification-summary",
-            str(write_topology_qualification(root)),
+            *topology_cli_args(qualification_path),
             *supply_chain_cli_args(root),
             *extra,
         ]
@@ -485,14 +585,14 @@ def run_gate_omitting_supply_chain_args(
 ) -> int:
     """Run the checker without selected source/trust arguments."""
 
+    qualification_path = write_topology_qualification(root)
     return MODULE.main(
         [
             "--evidence-dir",
             str(root),
             "--now-unix",
             str(NOW_UNIX),
-            "--topology-qualification-summary",
-            str(write_topology_qualification(root)),
+            *topology_cli_args(qualification_path),
             *supply_chain_cli_args(root, omit=omitted),
             *extra,
         ]
@@ -573,8 +673,7 @@ def test_release_lane_rejects_mismatched_topology_context(tmp_path: Path) -> Non
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
-                "--topology-qualification-summary",
-                str(topology),
+                *topology_cli_args(topology),
                 *supply_chain_cli_args(tmp_path),
             ]
         )
@@ -587,6 +686,234 @@ def test_release_lane_rejects_mismatched_topology_context(tmp_path: Path) -> Non
         "topology qualification deployment_id must match the reviewed lane context"
         in payload["errors"]
     )
+
+
+@pytest.mark.parametrize(
+    "omitted",
+    [
+        "--topology-qualification-envelope",
+        "--topology-qualification-verification-public-key-hex",
+        "--topology-qualification-signer-identity",
+        "--topology-qualification-signer-key-revision",
+        "--topology-qualification-signer-policy-digest-hex",
+    ],
+)
+def test_signed_topology_trust_arguments_are_mandatory(
+    tmp_path: Path,
+    omitted: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_complete_evidence(tmp_path)
+    topology = write_topology_qualification(tmp_path)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--now-unix",
+                str(NOW_UNIX),
+                *topology_cli_args(topology, omit=frozenset({omitted})),
+                *supply_chain_cli_args(tmp_path),
+            ]
+        )
+        == 2
+    )
+    assert omitted in capsys.readouterr().err
+
+
+def test_checker_preflight_rejects_reused_topology_and_provenance_key(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_complete_evidence(tmp_path)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--provenance-verification-public-key-hex",
+            TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX,
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert MODULE.INDEPENDENT_VERIFICATION_KEYS_ERROR in captured.err
+    assert TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX not in captured.err
+    assert captured.out == ""
+
+
+def test_release_only_subset_does_not_require_provenance_key(
+    tmp_path: Path,
+) -> None:
+    release_path = write_json(
+        tmp_path / "release-archive.json",
+        release_archive(),
+    )
+    topology = write_topology_qualification(tmp_path)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(release_path),
+                "--require-kind",
+                "release_archive",
+                "--now-unix",
+                str(NOW_UNIX),
+                *topology_cli_args(topology),
+            ]
+        )
+        == 0
+    )
+
+
+def test_release_lane_rejects_mutated_topology_signature_without_leaking_it(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_complete_evidence(tmp_path)
+    topology = write_topology_qualification(tmp_path)
+    envelope_path = topology_envelope_path(topology)
+    envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+    signature = envelope["signature_hex"]
+    replacement_prefix = "00" if signature[:2] != "00" else "01"
+    envelope["signature_hex"] = replacement_prefix + signature[2:]
+    write_json(envelope_path, envelope)
+    summary = tmp_path / "sf11-summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--summary-out",
+            str(summary),
+            topology=topology,
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["topology_qualification"] is None
+    assert any("signature must authenticate" in error for error in payload["errors"])
+    diagnostics = capsys.readouterr().err
+    rendered_errors = json.dumps(payload["errors"])
+    assert signature not in diagnostics
+    assert envelope["signature_hex"] not in diagnostics
+    assert signature not in rendered_errors
+    assert envelope["signature_hex"] not in rendered_errors
+
+
+def test_release_lane_rejects_tampered_topology_payload_without_leaking_it(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_complete_evidence(tmp_path)
+    topology = write_topology_qualification(tmp_path)
+    topology_payload = json.loads(topology.read_text(encoding="utf-8"))
+    secret_marker = "topology-private-payload-must-not-escape"
+    topology_payload["private_key"] = secret_marker
+    write_json(topology, topology_payload)
+    summary = tmp_path / "sf11-summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--summary-out",
+            str(summary),
+            topology=topology,
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["topology_qualification"] is None
+    assert any("schema-closed contract" in error for error in payload["errors"])
+    assert secret_marker not in json.dumps(payload["errors"])
+    assert secret_marker not in capsys.readouterr().err
+
+
+def test_release_lane_rejects_stale_signed_topology_review(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    topology = write_topology_qualification(
+        tmp_path,
+        reviewed_at_unix=(
+            NOW_UNIX - TOPOLOGY_MAX_REVIEW_AGE_SECS - 1
+        ),
+    )
+    summary = tmp_path / "sf11-summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--summary-out",
+            str(summary),
+            topology=topology,
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["topology_qualification"] is None
+    assert any(
+        "review exceeds the maximum age" in error for error in payload["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("flag", "replacement", "error_fragment"),
+    [
+        (
+            "--topology-qualification-verification-public-key-hex",
+            public_key_from_seed(
+                hashlib.sha256(b"substituted-sf11-topology-key").digest()
+            ).hex(),
+            "signer_key_fingerprint_hex must match the trusted public key",
+        ),
+        (
+            "--topology-qualification-signer-identity",
+            "substituted-sf11-topology-signer",
+            "signer_identity must match the trusted signer",
+        ),
+        (
+            "--topology-qualification-signer-key-revision",
+            str(TOPOLOGY_SIGNER_KEY_REVISION + 1),
+            "signer_key_revision must match the trusted revision",
+        ),
+        (
+            "--topology-qualification-signer-policy-digest-hex",
+            hashlib.sha256(b"substituted-sf11-topology-policy").hexdigest(),
+            "signer_policy_digest_hex must match the trusted signer policy",
+        ),
+    ],
+)
+def test_release_lane_rejects_substituted_topology_trust(
+    tmp_path: Path,
+    flag: str,
+    replacement: str,
+    error_fragment: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_complete_evidence(tmp_path)
+    topology = write_topology_qualification(tmp_path)
+    summary = tmp_path / "sf11-summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--summary-out",
+            str(summary),
+            flag,
+            replacement,
+            topology=topology,
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["topology_qualification"] is None
+    assert any(error_fragment in error for error in payload["errors"])
+    assert replacement not in json.dumps(payload["errors"])
+    assert replacement not in capsys.readouterr().err
 
 
 def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
@@ -759,6 +1086,18 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
             f"--evidence-dir {tmp_path}\n"
             f"--now-unix {NOW_UNIX}\n"
             f"--topology-qualification-summary {topology}\n"
+            "--topology-qualification-envelope "
+            f"{topology_envelope_path(topology)}\n"
+            "--topology-qualification-verification-public-key-hex "
+            f"{TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX}\n"
+            "--topology-qualification-signer-identity "
+            f"{TOPOLOGY_SIGNER_IDENTITY}\n"
+            "--topology-qualification-signer-key-revision "
+            f"{TOPOLOGY_SIGNER_KEY_REVISION}\n"
+            "--topology-qualification-signer-policy-digest-hex "
+            f"{TOPOLOGY_SIGNER_POLICY_DIGEST_HEX}\n"
+            "--max-topology-qualification-review-age-secs "
+            f"{TOPOLOGY_MAX_REVIEW_AGE_SECS}\n"
             f"--supply-chain-source-root {tmp_path}\n"
             "--provenance-certificate-identity "
             f"{PROVENANCE_CERTIFICATE_IDENTITY}\n"
@@ -1424,8 +1763,7 @@ def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
                 str(path),
                 "--now-unix",
                 str(NOW_UNIX),
-                "--topology-qualification-summary",
-                str(write_topology_qualification(tmp_path)),
+                *topology_cli_args(write_topology_qualification(tmp_path)),
             ]
         )
         == 1
@@ -1456,8 +1794,7 @@ def test_unknown_required_kind_returns_usage_error(tmp_path: Path) -> None:
                 "unknown",
                 "--now-unix",
                 str(NOW_UNIX),
-                "--topology-qualification-summary",
-                str(write_topology_qualification(tmp_path)),
+                *topology_cli_args(write_topology_qualification(tmp_path)),
             ]
         )
         == 2

@@ -269,9 +269,10 @@ Action items tracked under SM-5a/SM-4c.1 ensure that CI captures parity proofs f
 
 ### Operator Documentation & Evidence
 - Pair this architecture brief with the rollout checklist in `specs/crypto/sm_operator_rollout.md` and the compliance filing guide in `specs/crypto/sm_compliance_brief.md`.
-- Keep the source-adjacent genesis notes in `docs/genesis.md` aligned with the
-  current implementation. Maintain the public operator quickstart and its
-  translations in the sibling `iroha-docs` repository.
+- Keep code-adjacent genesis specifications and examples aligned with the
+  implementation. Maintain the
+  [public genesis reference](https://docs.iroha.tech/reference/genesis.html)
+  and operator guidance in the sibling `iroha-docs` repository.
 - Archive OpenSSL/Tongsuo provenance, `scripts/sm_openssl_smoke.sh` output, and `scripts/sm_interop_matrix.sh` parity logs with every release bundle so compliance and audit partners have deterministic artefacts.
 - Update `status.md` whenever compliance scope changes (new jurisdictions, filing completions, or export decisions) to keep programme state discoverable.
 - Follow the staged readiness reviews (`SM-RR1`–`SM-RR3`) captured in `specs/release_dual_track_runbook.md`; promotion between verify-only, pilot, and GA signing phases requires the artefacts enumerated there.

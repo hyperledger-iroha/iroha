@@ -785,6 +785,7 @@ EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS = (
     "effect_capacity_certified_request_overtake_bug.cfg",
     "effect_capacity_certified_request_partial_pq_bug.cfg",
     "effect_capacity_certified_request_substitute_bug.cfg",
+    "effect_capacity_certified_request_upgrade_barrier_lost_bug.cfg",
     "effect_capacity_certified_response_blocked_bug.cfg",
     "effect_capacity_certified_response_byte_reserve_bug.cfg",
     "effect_capacity_certified_response_count_reserve_bug.cfg",
@@ -808,7 +809,7 @@ EFFECT_CAPACITY_MUTATION_RUNNER = (
 )
 EFFECT_CAPACITY_MUTATION_SHA256 = {
     "SumeragiV2CertifiedRequestCapacityMutation.tla": (
-        "2544bbf64cbf065c521c5fb4d72c6b141711994ddb712a6609a5d0f043df3a3d"
+        "00a69a2a34a7971de3eee14d6e2bb3391913c321922ee46a161d96c626d26483"
     ),
     "SumeragiV2EffectCapacityOwnershipMutation.tla": (
         "de3b89fc0946f138f3ed9d62505f8aab592b907fd8e97b13f3056086edf051d9"
@@ -850,34 +851,37 @@ EFFECT_CAPACITY_MUTATION_SHA256 = {
         "463cc383fe9230f44c7f8d78c13acaa1d31994a797d33a37890167a834bc600e"
     ),
     "effect_capacity_certified_request_duplicate_bug.cfg": (
-        "65f5e9f5ea6e7aebaa295948630edfeed0f83abce1c28c08589b1b339095419e"
+        "cd2af5a19d292fd35eb8daa57d3dffcb2997538dc7bb84ab8d1d34b6774e43d7"
     ),
     "effect_capacity_certified_request_fatal_bug.cfg": (
-        "8e3c58d61972c8dab86a453543adcad9271c03e4caebbe8fa748bc255a6c5b8b"
+        "75f3bd2428d7c42cb9f668277d8dbd6110cc8be15b85b229665c3d2ae0a500b5"
     ),
     "effect_capacity_certified_request_fixed.cfg": (
-        "c84dcd6d45e8814d742a13f4b912bda2c33f393fa59efee1fef31815e904aca2"
+        "3d587733d4bb7f2f91eb893e68dcc337ccfc265dcc510e6c9c1b35821e8626e1"
     ),
     "effect_capacity_certified_request_lost_bug.cfg": (
-        "271a09aefa7988a7773e5517a5ba1d71bd7d97da32c325a3dd5aa5ddc84e6048"
+        "7615c216abb2cc48e43ae09614a96ae4565bb1a0c712a54d34d2d0f7fdad101e"
     ),
     "effect_capacity_certified_request_overtake_bug.cfg": (
-        "1b0dc2a7fe49f70775b56aa9f175d5b41d9174198bb0b099bad01bc03994ffb3"
+        "156273e8686d77e26d831d184164f4061fe26512efc24f076975eb6d24a39835"
     ),
     "effect_capacity_certified_request_partial_pq_bug.cfg": (
-        "f750e4462ebe390003b0f208c81447ce33ef6e0384c42313ff7b38ed6fdb0260"
+        "f5f81bcb147702596cf90f60501854b9a1bd191dd4192784937f33f7ea6e913b"
     ),
     "effect_capacity_certified_request_substitute_bug.cfg": (
-        "2f439cf603afa6bf2d53f3f1d62bac9987bcd8a0f2de942c80d4cf7617f2c875"
+        "f0eb876446f3d56712a27eaa43e651ef1c4709d37e20f16074d25f5b0ce85fcb"
+        ),
+    "effect_capacity_certified_request_upgrade_barrier_lost_bug.cfg": (
+        "69c307645f56571da5ec8b96b5561b241db66f634639dab6b55d427d87902d25"
     ),
     "effect_capacity_certified_response_blocked_bug.cfg": (
-        "efa49fe595b673da31f8d20ee4d264121bddc5756de9ba1d1751a3909ba747bc"
+        "0c1b416d6b8ec459944d202d221470cdbb4b7d1bb2c7e3ae302161dd026b411a"
     ),
     "effect_capacity_certified_response_byte_reserve_bug.cfg": (
-        "8fe029ff770a637b3c858e155fbefe1ebd553133828a3e51be2b4ce988147c38"
+        "dcc3cfbed7fe7318f96db0b165d6ad8d44f114d3988a9b925751bb0e6a5cc987"
     ),
     "effect_capacity_certified_response_count_reserve_bug.cfg": (
-        "075ec11417edc3ece66d64f794b7aaddb0f24c93140ac32a0c46e7b46fc41f95"
+        "2c7b0cac92afcbf612577e3af0662bafc1b6803f2d2ba1ac97bb3472d68b9b2f"
     ),
     "effect_capacity_decided_retirement_fixed.cfg": (
         "5a340c3f1bfe9b2f626781994e2b449117f02f3f70ef08a42cb132dfa960de8e"
@@ -922,7 +926,7 @@ EFFECT_CAPACITY_MUTATION_SHA256 = {
         "15cded2fae4c33a3276314718793e9a46b1f59571c8f2501f49eae114cc67524"
     ),
     EFFECT_CAPACITY_MUTATION_RUNNER: (
-        "6a33ab18e232bd1f390e2103de85bd46f436a4b6f940cb8eaea001695cd3d91c"
+        "e89b0abf648979dcf7a3263c787e848bc3a7248c461c798d65c247f3b0d431a1"
     ),
 }
 EFFECT_CAPACITY_MUTATION_FORMAL_GLOBS = (
@@ -935,109 +939,32 @@ EFFECT_CAPACITY_MUTATION_FORMAL_GLOBS = (
     "effect_batch_*.cfg",
 )
 
-# Exact source seal for the finite post-Decision timeout/TC mutation matrix.
-# The matrix guards production/formal refinement seams; it remains bounded TLC
-# evidence and must never promote a deductive proof-ledger obligation.
-POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS = (
-    "SumeragiV2PostDecisionTimeoutMutation.tla",
-    "post_decision_begin_install_tc_guard_bug.cfg",
-    "post_decision_begin_timeout_guard_bug.cfg",
-    "post_decision_complete_timeout_guard_bug.cfg",
-    "post_decision_local_timeout_successor_bug.cfg",
-    "post_decision_resume_timeout_guard_bug.cfg",
-    "post_decision_tc_receive_bug.cfg",
-    "post_decision_tc_successor_bug.cfg",
-    "post_decision_timeout_fixed.cfg",
-    "post_decision_timeout_receive_bug.cfg",
-    "post_decision_timeout_successor_bug.cfg",
-)
-POST_DECISION_TIMEOUT_MUTATION_RUNNER = (
-    "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh"
-)
-POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
-    "SumeragiV2PostDecisionTimeoutMutation.tla": (
-        "384128c67519a351edd23b7fe01ba5e67439b1dfa2ab9b8b5dfa3db703f94b61"
-    ),
-    "post_decision_begin_install_tc_guard_bug.cfg": (
-        "815e41cd50d0078be2590574eb9f044d8aff8f808d93d17df4f723f1d1ccf018"
-    ),
-    "post_decision_begin_timeout_guard_bug.cfg": (
-        "1a640160d6eef841c7b9daf67bc19adec07b8119e256d320a10c65760d3bc971"
-    ),
-    "post_decision_complete_timeout_guard_bug.cfg": (
-        "c89abe5f7002a75398ab629c29d44bf1ecaabdf88d89e699b09c390126350cf6"
-    ),
-    "post_decision_local_timeout_successor_bug.cfg": (
-        "664cc1b0835249bf00c9c11850ca71ec1f44d535521b94c1255639e33c3d6f8d"
-    ),
-    "post_decision_resume_timeout_guard_bug.cfg": (
-        "ca0829121c8670f62dde0e45c66d3f25a29823e11c2a043ad406ab436e3eb471"
-    ),
-    "post_decision_tc_receive_bug.cfg": (
-        "617949a3724958bf59159bdc68c72a80ee8923cc05beccbe8d93001691ebfcdd"
-    ),
-    "post_decision_tc_successor_bug.cfg": (
-        "ff012051c21e24f9cdddf0195aa8aaa04a77ba74dc3230bf940569c9fcbcd4cf"
-    ),
-    "post_decision_timeout_fixed.cfg": (
-        "f609d628853ce714bea15f8a0311cccf4c01cc3984fb9f1ae2112ca2ed44ee73"
-    ),
-    "post_decision_timeout_receive_bug.cfg": (
-        "5570219ab51b8e1fea28c45c18115466130c7c656f090f96df74f1fa5caf3c1d"
-    ),
-    "post_decision_timeout_successor_bug.cfg": (
-        "a045606b2b34d755ab9e5fff0b486562a2193a2085ef24dc7252a55bfb2d9e3d"
-    ),
-    POST_DECISION_TIMEOUT_MUTATION_RUNNER: (
-        "465d3818a9767d033362278940e4057dd67ff32b927e65b1f671678b5ec53d34"
-    ),
-}
+# Load the bounded admission and recovery mutation source contracts by path.
+def _load_admission_mutation_contracts() -> Any:
+    """Load the internal admission mutation contract component."""
+    path = Path(__file__).with_name("sumeragi_v2_admission_mutation_contracts.py")
+    spec = importlib.util.spec_from_file_location(
+        "_sumeragi_v2_admission_mutation_contracts", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load admission mutation contracts: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-# Exact source seal for the finite certified-response registration matrix.
-# This corpus distinguishes requested certified-body responses from valid but
-# unsolicited or replayed responses.  It is bounded regression evidence only.
-CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS = (
-    "SumeragiV2CertifiedResponseRegistrationMutation.tla",
-    "certified_response_registration_duplicate_fixed.cfg",
-    "certified_response_registration_commit_fanout_fixed.cfg",
-    "certified_response_registration_duplicate_missing_guard.cfg",
-    "certified_response_registration_historical_fixed.cfg",
-    "certified_response_registration_restart_fixed.cfg",
-    "certified_response_registration_commit_fanout_route_only_bug.cfg",
-    "certified_response_registration_restart_missing_guard.cfg",
-)
-CERTIFIED_RESPONSE_REGISTRATION_RUNNER = (
-    "scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh"
-)
-CERTIFIED_RESPONSE_REGISTRATION_SHA256 = {
-    "SumeragiV2CertifiedResponseRegistrationMutation.tla": (
-        "748ba311a119e3c925f22474a16f04df554c4d5d91be57fa4fb6dbe1e01e923e"
-    ),
-    "certified_response_registration_duplicate_fixed.cfg": (
-        "a8fb966b97bc7c4398a8ed49f23417a82369252802fe6b8ce1c4b28b886d3d71"
-    ),
-    "certified_response_registration_commit_fanout_fixed.cfg": (
-        "761195e50a0d09b9ef88563f70f6ca44c130f420d061363b31766155aeb18bac"
-    ),
-    "certified_response_registration_duplicate_missing_guard.cfg": (
-        "d3a76a8c91bf425d20d79eff29863d5e116a22c8fde79b98dc1f2c711d5b350d"
-    ),
-    "certified_response_registration_historical_fixed.cfg": (
-        "edd47670a5e7badb402095ed668b41b4582523997a2a0d7d9cb826e4324963cc"
-    ),
-    "certified_response_registration_restart_fixed.cfg": (
-        "5490a870ba6902d211b92f6bbc12258ace06239c09cd71b2581564554d7f7cdc"
-    ),
-    "certified_response_registration_commit_fanout_route_only_bug.cfg": (
-        "364d236e0751f878704aafb32e72d09704a844061ba21ecbfa29bff5c277c1f6"
-    ),
-    "certified_response_registration_restart_missing_guard.cfg": (
-        "bd71a1ba2684f95127d4244eb9b45ab63f1c982374c4b258318368f8611df0fe"
-    ),
-    CERTIFIED_RESPONSE_REGISTRATION_RUNNER: (
-        "acc87e8f9a6939cc7ea1effbc5ea5560d6399abf811a03d8c67fa4974a6f0b05"
-    ),
-}
+
+_ADMISSION_MUTATION_CONTRACTS = _load_admission_mutation_contracts()
+APPLIED_PHASE_ADMISSION_MUTATION_FORMAL_ARTIFACTS = _ADMISSION_MUTATION_CONTRACTS.APPLIED_PHASE_ADMISSION_MUTATION_FORMAL_ARTIFACTS
+APPLIED_PHASE_ADMISSION_MUTATION_RUNNER = _ADMISSION_MUTATION_CONTRACTS.APPLIED_PHASE_ADMISSION_MUTATION_RUNNER
+APPLIED_PHASE_ADMISSION_MUTATION_SHA256 = _ADMISSION_MUTATION_CONTRACTS.APPLIED_PHASE_ADMISSION_MUTATION_SHA256
+APPLIED_PHASE_ADMISSION_MUTATION_FORMAL_GLOBS = _ADMISSION_MUTATION_CONTRACTS.APPLIED_PHASE_ADMISSION_MUTATION_FORMAL_GLOBS
+_APPLIED_PHASE_ADMISSION_RUST_ITEM_SHA256 = _ADMISSION_MUTATION_CONTRACTS._APPLIED_PHASE_ADMISSION_RUST_ITEM_SHA256
+POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS = _ADMISSION_MUTATION_CONTRACTS.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS
+POST_DECISION_TIMEOUT_MUTATION_RUNNER = _ADMISSION_MUTATION_CONTRACTS.POST_DECISION_TIMEOUT_MUTATION_RUNNER
+POST_DECISION_TIMEOUT_MUTATION_SHA256 = _ADMISSION_MUTATION_CONTRACTS.POST_DECISION_TIMEOUT_MUTATION_SHA256
+CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS = _ADMISSION_MUTATION_CONTRACTS.CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS
+CERTIFIED_RESPONSE_REGISTRATION_RUNNER = _ADMISSION_MUTATION_CONTRACTS.CERTIFIED_RESPONSE_REGISTRATION_RUNNER
+CERTIFIED_RESPONSE_REGISTRATION_SHA256 = _ADMISSION_MUTATION_CONTRACTS.CERTIFIED_RESPONSE_REGISTRATION_SHA256
 
 # Exact source seal for the bounded durable Decision recovery lifecycle matrix.
 # The corpus distinguishes generation-free durable authority from the current
@@ -1089,7 +1016,7 @@ DECISION_RECOVERY_LIFECYCLE_SHA256 = {
         "eb588df10921974613f708c3af6efa6a0b2e1e54de7db276ad50cd4f124b71e2"
     ),
     DECISION_RECOVERY_LIFECYCLE_RUNNER: (
-        "e44def67d2442401d806d21213cf5974dbec85a80b7151b18f368fd18b15e4c0"
+        "5962d0ac5b981c7a0a07d74a8d8598d109c81e72aeb77b97054e98b93634e32a"
     ),
 }
 
@@ -1622,7 +1549,7 @@ _HISTORICAL_BODY_SOURCE_ITEM_SEALS = _SUCCESSOR_IDENTITY_CONSTANT_SOURCE_ITEM_SE
 )
 
 _SUCCESSOR_APPLIED_SHARED_MACROS = (
-    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
+    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("durable_predecessor_is_canonical_body", "2a069095fb4ff28848a8a44a60ec3e61cfc4cb6dd142962349a9facbe426a601"),
@@ -1633,7 +1560,7 @@ _SUCCESSOR_APPLIED_SHARED_MACROS = (
 )
 
 _SUCCESSOR_TERMINAL_APPLICATION_SHARED_MACROS = (
-    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
+    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("durable_predecessor_is_canonical_body", "2a069095fb4ff28848a8a44a60ec3e61cfc4cb6dd142962349a9facbe426a601"),
@@ -1641,7 +1568,7 @@ _SUCCESSOR_TERMINAL_APPLICATION_SHARED_MACROS = (
 )
 
 _SUCCESSOR_RECOVERED_SHARED_MACROS = (
-    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
+    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("canonical_identity_is_zero_body", "659e4ab0b79335d08311a07134239aa7338818f507fb721b71c336fc65a52f6d"),
@@ -1652,22 +1579,22 @@ _SUCCESSOR_RECOVERED_SHARED_MACROS = (
 )
 
 _SUCCESSOR_LIFECYCLE_SHARED_MACROS = (
-    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
+    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
     ("production_startup_failure_and_restart_trace_body", "5aa2d29e594aef4f585c74cf2c6875f5d7f98f8b04a6fb597657bc62a8d42eb7"),
 )
 
 _HISTORICAL_CERTIFICATE_SHARED_MACROS = (
-    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
+    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("production_historical_certificate_trace_body", "1b004a044c33700c93a06a9684a21559c64c25e5eae42b337866ed0f5cd26b4e"),
 )
 
 _HISTORICAL_BODY_SHARED_MACROS = (
-    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
+    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
-    ("production_historical_body_pipeline_trace_body", "82089956e9bc4b50a46c3e8fbcea5b9ef83a43ab5b408eb04fa122f1154eba84"),
+    ("production_historical_body_pipeline_trace_body", "c999442642f008ace2e73caf53cd2f18af1732dd06638b8d86ae3e17ba7a3ead"),
 )
 
 
@@ -2497,13 +2424,13 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_const=False,
                 verified_kernel_shared_macro_sha256=(
-                    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
-                    ("production_durable_intent_trace_body", "6c6e9eee17b1784b92d40295b63404ca0fee62d56790919cc06cd7c46f0ce24f"),
+                    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
+                    ("production_durable_intent_trace_body", "8bc5f5f07d5d188dc48e6cbc02f0c43d67af2591a8cf5f379e11b39fd0013e4c"),
                     ("pending_projection_is_absent_body", "1ee3ae9d3fa183f21f330af54f681f77c7c54300b6c436f34ff47fca238871ac"),
                     ("pending_projection_equal_body", "76c11e957c8c596fed3caa5b3685c25b1fdd3511b82ebdbb9b12c10cd30577f8"),
                     ("pending_projection_matches_boundary_body", "5cc9a32b9cbe39fa8eb953596b684503b349ea2bb7e7b8a4771465f040478772"),
                     ("pending_round_can_begin_body", "382f5b2b4d7ab9fa32b8c9784e6ac71055c0935904f30e16cf86f31f6a147125"),
-                    ("pending_round_can_acknowledge_body", "021be2defb51215c450d02671ada160c70d92697f2e702bfc8e7e1c91b016b39"),
+                    ("pending_round_can_acknowledge_body", "c0a038824177fa5ea68ab7ceff3af3bd16691395521132dca1e2d51a0ac65b4e"),
                     ("wal_record_proposal_round_is_exact_body", "2d0dcc4843df453a63f1a085b2ae7d515cf655ec6080f5f57bd0d5631948ef22"),
                     ("wal_record_round_matches_owner_body", "9ae760541518b7040a1b85a9399732ea494daaeeac74c686cf07809683c825dc"),
                     ("persist_slot_matches_boundary_body", "b5f99d1ada38d831dd5dc57759d11f02af735c4b5b7a8631f4256f67282a668d"),
@@ -2633,7 +2560,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "production_decision_recovery_trace_body!(projection)"
                 ),
                 verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
+    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
                     ("production_decision_recovery_trace_body", "8c0db740cb3c62621e42f7ed6fa3db06c2926f11e530d7549b07efda2b5bf64d"),
                 ),
                 theorem_kernel_projection=(
@@ -3344,7 +3271,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "production_reliable_flush_trace_body!(projection)"
                 ),
                 verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
+    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
                     ("production_reliable_flush_trace_body", "7b830dafccef15b33a2966e57e2fccd18c6f6ce3e454831cb7378d12ae2db1d5"),
                 ),
                 theorem_kernel_projection=(
@@ -3423,7 +3350,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             "production_reliable_flush_application_body!(projection)"
                         ),
                         verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
+    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
                             ("production_reliable_flush_application_body", "49559bef138c5b61161d45ca264e50a35e4c6f48d76d517b289b4f5e6fa64b80"),
                         ),
                         theorem_kernel_projection=(
@@ -3590,7 +3517,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_body="production_application_trace_body!(projection)",
                 verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
+    ("refinement_tag_value", "bcd13273ef5abdfff15cc338403bc87dc55b060fda85256d875deebf2245c9a4"),
                     ("production_application_trace_body", "c2a02aabdd24ec9d7a2f23d57cf0cf59514e1c6928105dd5d3617d47a55dc719"),
                 ),
                 theorem_kernel_projection=(
@@ -17482,10 +17409,10 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 280
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 281
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 289
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 290
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "b8f15e29a9d3176413c6696393f3b7209f1e88f08cfc74b182f93b6685283462"
+    "1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -17548,7 +17475,7 @@ _SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
         "43ac1f9d461eaebc54570a59b0846abadaa9e8791a8bfc89e02a234e99276555"
     ),
     "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter": (
-        "aea80dabf6ded49bc809d46aea57d438caacdc7df61c1197ec1ce0e2f307abb4"
+        "414c5f5bf9c7156f38222f256673c42e1ce2394293193487fe9d5d2d24044286"
     ),
 }
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
@@ -20400,6 +20327,13 @@ def verus_shortcut_errors(path: Path, source: str) -> list[str]:
 
 def _nonempty_string(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _formal_repo_root(formal_dir: Path) -> Path:
+    """Resolve canonical, legacy, and flat formal-fixture repository roots."""
+    if formal_dir.name == "sumeragi_v2":
+        return formal_dir.parents[2 if formal_dir.parent.parent.name == "docs" else 1]
+    return formal_dir.parent
 
 
 def _symbol_names(symbol_field: str) -> tuple[str, ...]:
@@ -31812,7 +31746,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
 
     if not (formal_dir / "proof_coverage.json").is_file():
         return []
-    repo_root = formal_dir.parents[2]
+    repo_root = _formal_repo_root(formal_dir)
     path = formal_dir / "SumeragiV2LivenessProofs.tla"
     if not path.is_file():
         return []
@@ -31901,8 +31835,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ tc.view + 1 = nodeView[node] "
                 "/\\ NodeInstalledTC(node, tc.view) "
                 "/\\ TcHighRank(tc) > highestRank[node] "
-                "/\\ TcHighRank(tc) > lockRank[node] "
-                "/\\ generation[node] < MaxGeneration"
+                "/\\ TcHighRank(tc) > lockRank[node]"
             ),
             "TimeoutReceiptAdmitted": (
                 "/\\ NoDecisionForNode(node) "
@@ -32022,9 +31955,10 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         required_persist_install_fragments = (
             "sameRoundUpgrade == StrictSameRoundTcUpgrade(node, tc)",
             "/\\ \\/ tc.view >= nodeView[node] \\/ sameRoundUpgrade",
+            "(sameRoundUpgrade => GenerationCanIncrement(generation[node]))",
             "IF sameRoundUpgrade THEN @ ELSE tc.view + 1",
             "generation' = [generation EXCEPT ![node] = "
-            "IF @ < MaxGeneration THEN @ + 1 ELSE @]",
+            "IF sameRoundUpgrade THEN @ + 1 ELSE 0]",
             "receivedTimeoutVotes' = {received \\in receivedTimeoutVotes: "
             "TimeoutReceiptSurvivesInstall(received, node, tc)}",
         )
@@ -33261,7 +33195,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ \\A node, qc: "
             "/\\ DurableDecisionRecoveryAuthority(node, qc) "
             "/\\ PreGstResponsiveRestart "
-            "=> /\\ generation'[node] = generation[node] + 1 "
+            "=> /\\ generation'[node] = 0 "
             "/\\ DurableDecisionRecoveryAuthority(node, qc)' "
             "/\\ DurableDecisionRecoveryExecutorCurrent(node)' "
             "/\\ (DecisionRawHashRegistered(node, qc) "
@@ -33459,8 +33393,8 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "AsyncCandidateAtConsumer",
             "AsyncCandidateWithIdentity",
         ),
-        "AuthenticatedRestartRetagsSourceConsumerGeneration": (
-            "RestartIncrementsSelectedGeneration",
+        "AuthenticatedRestartStartsFreshSourceConsumerGeneration": (
+            "RestartResetsSelectedGeneration",
             "CurrentDecisionRequestConsumerGeneration",
         ),
         "ResponsiveReplayQueuesFreshGenerationDecisionFetch": (
@@ -33649,7 +33583,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "ExactDurableDecisionRecoveryLifecycleTransition": (
             "ResponsiveCrashInstallsExactDurableDecisionAuthority",
             "ResponsiveCrashPreservesExactDecisionRegistrations",
-            "ResponsiveRestartAdvancesExactDurableDecisionAuthority",
+            "ResponsiveRestartRebindsExactDurableDecisionAuthority",
             "ResponsiveRestartPreservesExactDecisionRegistrations",
             "ResponsiveReplayInstallsExactCurrentDecisionFetchUpdate",
         ),
@@ -39777,6 +39711,15 @@ def _effect_capacity_mutation_runner_errors(
     source = path.read_text(encoding="utf-8")
     normalized_source = re.sub(r"[ \t]*\\\r?\n[ \t]*", " ", source)
     errors: list[str] = []
+    for summary in (
+        "capacity-blocked Fetch B keeps one exact task/authority/lifecycle FIFO owner without partial P/Q installation",
+        "capacity release atomically installs Fetch B P/Q; new B drains T while an authority upgrade retains its exact retry barrier",
+    ):
+        if source.count(summary) != 1:
+            errors.append(
+                f"{path}: effect-capacity runner must contain exactly one "
+                f"reviewed summary {summary!r}"
+            )
 
     expected_models = {
         name
@@ -39837,6 +39780,7 @@ def _effect_capacity_mutation_runner_errors(
                 "effect_capacity_certified_request_overtake_bug.cfg",
                 "effect_capacity_certified_request_partial_pq_bug.cfg",
                 "effect_capacity_certified_request_substitute_bug.cfg",
+                "effect_capacity_certified_request_upgrade_barrier_lost_bug.cfg",
                 "effect_capacity_certified_response_blocked_bug.cfg",
                 "effect_capacity_certified_response_byte_reserve_bug.cfg",
                 "effect_capacity_certified_response_count_reserve_bug.cfg",
@@ -39888,7 +39832,7 @@ def _effect_capacity_mutation_runner_errors(
     if set(expected_model_by_config) != expected_configs:
         errors.append(
             f"{path}: semantic config/model inventory differs from the sealed "
-            "thirty-two-config corpus"
+            "thirty-three-config corpus"
         )
     if {model for model, _ in config_groups} != expected_models:
         errors.append(
@@ -39983,12 +39927,12 @@ def _effect_capacity_mutation_runner_errors(
         if observed_configs.count(config) != 1
     )
     if (
-        len(cases) != 32
+        len(cases) != 33
         or observed_config_set != expected_configs
         or duplicate_configs
     ):
         errors.append(
-            f"{path}: runner must execute each of the thirty-two sealed "
+            f"{path}: runner must execute each of the thirty-three sealed "
             "configurations exactly once; "
             f"cases={len(cases)}, missing={sorted(expected_configs - observed_config_set)}, "
             f"extra={sorted(observed_config_set - expected_configs)}, "
@@ -39997,9 +39941,9 @@ def _effect_capacity_mutation_runner_errors(
 
     repaired_count = sum(case["status"] == 0 for case in cases)
     mutant_count = sum(case["status"] != 0 for case in cases)
-    if repaired_count != 10 or mutant_count != 22:
+    if repaired_count != 10 or mutant_count != 23:
         errors.append(
-            f"{path}: runner must contain exactly 10 repaired cases and 22 "
+            f"{path}: runner must contain exactly 10 repaired cases and 23 "
             f"mutant cases; found repaired={repaired_count}, mutants={mutant_count}"
         )
 
@@ -40154,12 +40098,20 @@ def _effect_capacity_mutation_runner_errors(
             "certified-request-partial-pq-drain",
             12,
             (
-                "Invariant DrainRetainedFetchBIsAtomic is violated.",
-                "<DrainRetainedFetchB",
+                "Invariant RetainedFetchBInstallsExactPQAtomically is violated.",
+                "<AdmitRetainedFetchBAtReleasedCapacity",
+            ),
+        ),
+        "effect_capacity_certified_request_upgrade_barrier_lost_bug.cfg": (
+            "certified-request-upgrade-barrier-lost",
+            12,
+            (
+                "Invariant UpgradeFetchBKeepsExactRetryBarrier is violated.",
+                "<AdmitRetainedFetchBAtReleasedCapacity",
             ),
         ),
         "effect_capacity_certified_request_fixed.cfg": (
-            "certified-request-retained-owner-drains-atomically",
+            "certified-request-retained-owner-installs-atomically",
             0,
             (
                 "Finished computing initial states: 3 distinct states generated",
@@ -40168,7 +40120,7 @@ def _effect_capacity_mutation_runner_errors(
                 "<AdmitOuterTransportResponseA",
                 "<ConsumeTransportOnlyResponseA",
                 "<ReleaseOrdinaryWorkCapacityA",
-                "<DrainRetainedFetchB",
+                "<AdmitRetainedFetchBAtReleasedCapacity",
             ),
         ),
     }
@@ -40418,6 +40370,31 @@ services
         "idempotent exact Fetch retry must stop before duplicate service enqueue",
         errors,
     )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+services
+    .enqueue_body_fetch(merged.clone())
+    .map_err(service_error)?;
+if let Some(plan) = request_plan {
+    self.commit_certified_fetch_request(plan);
+}
+self.commit_body_pipeline_owner(owner_plan);
+let pending = self
+    .pending_fetches
+    .get_mut(&existing_id)
+    .expect("serialized body-fetch owner remains present after admission");
+pending.task = merged;
+pending.request_hash = request_hash;
+return Err(EffectExecutorError::PendingWorkCapacity {
+    capacity: self.config.max_pending_work,
+});
+""",
+        "existing Fetch authority upgrade must install exact P/Q state while "
+        "retaining the outer FIFO head as its completion barrier",
+        errors,
+    )
     if begin_fetch is not None:
         _require_rust_item_token_sha256(
             effects_path,
@@ -40587,7 +40564,9 @@ fn network_ingress_requires_reducer_order(
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
-        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_) => false,
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
     }
 }
 """,
@@ -49059,20 +49038,20 @@ def _effect_capacity_mutation_source_fidelity_errors(
     model_count = sum(name.endswith(".tla") for name in expected_formal)
     config_count = sum(name.endswith(".cfg") for name in expected_formal)
     if (
-        len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) != 38
+        len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) != 39
         or model_count != 6
-        or config_count != 32
+        or config_count != 33
     ):
         errors.append(
             "effect-capacity mutation source seal must name exactly six models "
-            "and thirty-two configurations; found "
+            "and thirty-three configurations; found "
             f"models={model_count}, configurations={config_count}, "
             f"total={len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS)}"
         )
     if digest_names != expected_all:
         errors.append(
             "effect-capacity mutation digest inventory must equal the exact "
-            f"39-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"40-artifact corpus; missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
         )
 
@@ -49124,86 +49103,11 @@ def _effect_capacity_mutation_source_fidelity_errors(
     return errors
 
 
-def _post_decision_timeout_mutation_source_fidelity_errors(
-    formal_dir: Path = FORMAL_DIR,
-    repo_root: Path = ROOT_DIR,
-) -> list[str]:
-    """Seal the complete bounded post-Decision timeout mutation corpus."""
-
-    errors: list[str] = []
-    expected_formal = set(POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS)
-    expected_all = expected_formal | {POST_DECISION_TIMEOUT_MUTATION_RUNNER}
-    digest_names = set(POST_DECISION_TIMEOUT_MUTATION_SHA256)
-    model_count = sum(name.endswith(".tla") for name in expected_formal)
-    config_count = sum(name.endswith(".cfg") for name in expected_formal)
-    if (
-        len(POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) != 11
-        or model_count != 1
-        or config_count != 10
-    ):
-        errors.append(
-            "post-Decision timeout mutation source seal must name exactly one "
-            "model and ten configurations; found "
-            f"models={model_count}, configurations={config_count}, "
-            f"total={len(POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS)}"
-        )
-    if digest_names != expected_all:
-        errors.append(
-            "post-Decision timeout mutation digest inventory must equal the "
-            f"exact 12-artifact corpus; missing={sorted(expected_all - digest_names)}, "
-            f"extra={sorted(digest_names - expected_all)}"
-        )
-
-    observed_formal = {
-        path.name
-        for pattern in (
-            "SumeragiV2PostDecision*.tla",
-            "post_decision_*.cfg",
-        )
-        for path in formal_dir.glob(pattern)
-    }
-    for name in sorted(expected_formal - observed_formal):
-        errors.append(
-            f"{formal_dir / name}: missing post-Decision timeout mutation artifact"
-        )
-    for name in sorted(observed_formal - expected_formal):
-        errors.append(
-            f"{formal_dir / name}: extra post-Decision timeout mutation artifact"
-        )
-
-    runner_dir = repo_root / "scripts" / "formal"
-    observed_runners = {
-        path.relative_to(repo_root).as_posix()
-        for path in runner_dir.glob(
-            "run_sumeragi_v2_post_decision*_mutation.sh"
-        )
-    }
-    expected_runners = {POST_DECISION_TIMEOUT_MUTATION_RUNNER}
-    for name in sorted(expected_runners - observed_runners):
-        errors.append(
-            f"{repo_root / name}: missing post-Decision timeout mutation runner"
-        )
-    for name in sorted(observed_runners - expected_runners):
-        errors.append(
-            f"{repo_root / name}: extra post-Decision timeout mutation runner"
-        )
-
-    for name, expected_sha256 in POST_DECISION_TIMEOUT_MUTATION_SHA256.items():
-        path = repo_root / name if "/" in name else formal_dir / name
-        if not path.is_file() or path.is_symlink():
-            if path.exists() or path.is_symlink():
-                errors.append(
-                    f"{path}: post-Decision timeout mutation artifact must be a "
-                    "regular file"
-                )
-            continue
-        observed_sha256 = _sha256_file(path)
-        if observed_sha256 != expected_sha256:
-            errors.append(
-                f"{path}: post-Decision timeout mutation artifact must match "
-                f"exact reviewed SHA-256 {expected_sha256}; found {observed_sha256}"
-            )
-    return errors
+_ADMISSION_MUTATION_CONTRACTS.bind_checker(globals())
+_applied_phase_admission_mutation_runner_errors = _ADMISSION_MUTATION_CONTRACTS._applied_phase_admission_mutation_runner_errors
+_applied_phase_admission_production_source_fidelity_errors = _ADMISSION_MUTATION_CONTRACTS._applied_phase_admission_production_source_fidelity_errors
+_applied_phase_admission_mutation_source_fidelity_errors = _ADMISSION_MUTATION_CONTRACTS._applied_phase_admission_mutation_source_fidelity_errors
+_post_decision_timeout_mutation_source_fidelity_errors = _ADMISSION_MUTATION_CONTRACTS._post_decision_timeout_mutation_source_fidelity_errors
 
 
 def _certified_response_registration_runner_errors(
@@ -49951,7 +49855,7 @@ def _production_causal_fifo_source_fidelity_errors(
 ) -> list[str]:
     """Pin the real persisted-continuation and projected causal-FIFO seam."""
 
-    repo_root = formal_dir.parents[2]
+    repo_root = _formal_repo_root(formal_dir)
     errors: list[str] = []
 
     adapter_path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
@@ -52114,7 +52018,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "PersistInstallTCReady",
         (
             "request \\in pendingInstallTC",
-            "generation[request.node] < MaxGeneration",
+            "StrictSameRoundTcUpgrade(request.node, request.tc)",
+            "GenerationCanIncrement(generation[request.node])",
         ),
     )
     require_generation_operator_fragments(
@@ -52122,7 +52027,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         source,
         "AsyncInstallGenerationBudget",
         (
-            "\\A request \\in pendingInstallTC: generation[request.node] < MaxGeneration",
+            "\\A request \\in pendingInstallTC: "
+            "(StrictSameRoundTcUpgrade(request.node, request.tc) "
+            "=> GenerationCanIncrement(generation[request.node]))",
         ),
     )
     require_generation_operator_fragments(
@@ -52140,8 +52047,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             core_source,
             "PersistInstallTC",
             (
-                "generation[node] < MaxGeneration",
-                "/\\ generation' = [generation EXCEPT ![node] = @ + 1]",
+                "sameRoundUpgrade == StrictSameRoundTcUpgrade(node, tc)",
+                "(sameRoundUpgrade => GenerationCanIncrement(generation[node]))",
+                "generation' = [generation EXCEPT ![node] = "
+                "IF sameRoundUpgrade THEN @ + 1 ELSE 0]",
             ),
             (
                 "IF @ < MaxGeneration THEN @ + 1 ELSE @",
@@ -56564,7 +56473,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             'asyncRecoveryPhase = "Eligible"',
             "node \\in AsyncActiveServiceNodes",
             "node \\in Responsive \\cap up",
-            "generation[node] < MaxGeneration",
+            "Crash(node)",
             'asyncRecoveryPhase\' = "RestartRequired"',
             "asyncRecoveryNode' = node",
             "asyncRecoveryGeneration' = generation[node]",
@@ -56575,10 +56484,11 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             'asyncRecoveryPhase = "RestartRequired"',
             "generation[node] = asyncRecoveryGeneration",
             "Restart(node)",
-            "UNCHANGED AsyncSchedulerVars",
+            "ResetNodeSchedulerForRestart(node, <<>>)",
             'asyncRecoveryPhase\' = "ReplayRequired"',
-            "asyncRecoveryGeneration' = generation[node] + 1",
+            "asyncRecoveryGeneration' = 0",
             "asyncRecoveryReplayQueue' = asyncRecoveryReplayQueue",
+            "AsyncCoreOuterFrame",
         ),
         "PreGstResponsiveReplay": (
             "signatures == RestartSignatureReplay(node)",
@@ -56994,12 +56904,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             )
 
     runner_path = (
-        formal_dir.parents[2]
-        / "crates"
-        / "iroha_core"
-        / "src"
-        / "sumeragi"
-        / "v2_runner.rs"
+        _formal_repo_root(formal_dir)
+        / "crates/iroha_core/src/sumeragi/v2_runner.rs"
     )
     if not runner_path.is_file():
         errors.append(
@@ -57063,12 +56969,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             )
 
     adapter_path = (
-        formal_dir.parents[2]
-        / "crates"
-        / "iroha_core"
-        / "src"
-        / "sumeragi"
-        / "v2.rs"
+        _formal_repo_root(formal_dir) / "crates/iroha_core/src/sumeragi/v2.rs"
     )
     if not adapter_path.is_file():
         errors.append(
@@ -57118,12 +57019,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     errors.extend(_production_causal_fifo_source_fidelity_errors(formal_dir))
 
     effects_path = (
-        formal_dir.parents[2]
-        / "crates"
-        / "iroha_core"
-        / "src"
-        / "sumeragi"
-        / "v2_effects.rs"
+        _formal_repo_root(formal_dir)
+        / "crates/iroha_core/src/sumeragi/v2_effects.rs"
     )
     if not effects_path.is_file():
         errors.append(
@@ -57767,9 +57664,8 @@ if self.retained_effect_batch.is_some() {
                 )
             restart_tokens = (
                 "node \\in ValidatorIds \\ up",
-                "generation[node] < MaxGeneration",
                 "up' = up \\cup {node}",
-                "generation' = [generation EXCEPT ![node] = @ + 1]",
+                "generation' = [generation EXCEPT ![node] = 0]",
                 "durableBodies",
                 "proposalIntents",
                 "prepareIntents",
@@ -57950,7 +57846,7 @@ if self.retained_effect_batch.is_some() {
                     "authenticated Commit-certificate import arm"
                 )
 
-    repo_root = formal_dir.parents[2]
+    repo_root = _formal_repo_root(formal_dir)
     errors.extend(
         _timeout_vote_semantic_capacity_source_fidelity_errors(repo_root)
     )
@@ -79872,6 +79768,25 @@ def _production_liveness_release_inventory_errors(
             f"({_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT} total lines)"
         )
 
+    expected_g_unit_inventory_comment = (
+        f"The canonical {_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row TSV is"
+    )
+    if source.count(expected_g_unit_inventory_comment) != 1:
+        errors.append(
+            f"{release_path}: G-UNIT inventory comment must seal "
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} rows"
+        )
+    expected_g_unit_success_fragment = (
+        f"including exact {_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}/"
+        f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT,"
+    )
+    if source.count(expected_g_unit_success_fragment) != 1:
+        errors.append(
+            f"{release_path}: terminal success text must seal exact "
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}/"
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
+        )
+
     if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 337:
         errors.append("internal release-regression seal must contain exactly 337 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
@@ -83853,6 +83768,11 @@ def validate_ledger(
     )
     errors.extend(
         _effect_capacity_mutation_source_fidelity_errors(formal_dir, ROOT_DIR)
+    )
+    errors.extend(
+        _applied_phase_admission_mutation_source_fidelity_errors(
+            formal_dir, ROOT_DIR
+        )
     )
     errors.extend(
         _post_decision_timeout_mutation_source_fidelity_errors(

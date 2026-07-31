@@ -94,7 +94,7 @@
     "crates/iroha_data_model/src/block/consensus_v2.rs": 6487,
     "crates/iroha_data_model/src/isi/mod.rs": 5583,
     "crates/iroha_data_model/src/offline/mod.rs": 12391,
-    "crates/iroha_data_model/src/query/mod.rs": 8102,
+    "crates/iroha_data_model/src/query/mod.rs": 8136,
     "crates/iroha_data_model/src/sorafs/moderation.rs": 5117,
     "crates/iroha_data_model/src/transaction/signed.rs": 5941,
     "crates/iroha_executor/src/default/mod.rs": 7544,

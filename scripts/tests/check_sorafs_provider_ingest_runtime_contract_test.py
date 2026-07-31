@@ -37,8 +37,8 @@ PROVIDER_ARCHIVE = (
     / "query"
     / "provider_ingest_finalized.rs"
 )
-STORAGE_DOC = REPO_ROOT / "docs" / "source" / "sorafs" / "sorafs_node_storage.md"
-CLOSURE_LEDGER = REPO_ROOT / "docs" / "source" / "sorafs" / "v1_closure_ledger.md"
+STORAGE_DOC = REPO_ROOT / "specs" / "sorafs" / "sorafs_node_storage.md"
+CLOSURE_LEDGER = REPO_ROOT / "specs" / "sorafs" / "v1_closure_ledger.md"
 
 
 def _read(path: Path) -> str:

@@ -20,6 +20,8 @@ pub const POLICY_JURY_BALLOT_COMMIT_VERSION_V1: u16 = 1;
 pub const POLICY_JURY_BALLOT_REVEAL_VERSION_V1: u16 = 1;
 /// Schema version tag for [`PolicyJurySortitionV1`].
 pub const POLICY_JURY_SORTITION_VERSION_V1: u16 = 1;
+const POLICY_JURY_BALLOT_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"iroha.ministry.policy-jury.ballot.commitment.v1";
 
 /// Vote options available to policy juries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -534,17 +536,19 @@ fn canonical_commitment(
     nonce: &[u8],
 ) -> [u8; 32] {
     let mut hasher = Blake2b256::new();
-    hasher.update(round_id.as_bytes());
-    hasher.update([0u8]);
-    hasher.update(proposal_id.as_bytes());
-    hasher.update([0u8]);
-    hasher.update(juror_id.as_bytes());
-    hasher.update([0u8]);
+    hasher.update(POLICY_JURY_BALLOT_COMMITMENT_DOMAIN_V1);
+    update_hash_bytes(&mut hasher, round_id.as_bytes());
+    update_hash_bytes(&mut hasher, proposal_id.as_bytes());
+    update_hash_bytes(&mut hasher, juror_id.as_bytes());
     hasher.update([choice.discriminant()]);
-    hasher.update([0u8]);
-    hasher.update(nonce);
+    update_hash_bytes(&mut hasher, nonce);
     let digest = hasher.finalize();
     digest.into()
+}
+
+fn update_hash_bytes(hasher: &mut Blake2b256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
 }
 
 #[cfg(test)]
@@ -582,6 +586,33 @@ mod tests {
         let commit = sample_commit(PolicyJuryBallotMode::Plaintext);
         let reveal = sample_reveal(PolicyJuryVoteChoice::Approve);
         commit.verify_reveal(&reveal).expect("roundtrip succeeds");
+    }
+
+    #[test]
+    fn ballot_commitment_length_prefixes_defeat_nul_delimiter_collision() {
+        fn legacy_commitment(reveal: &PolicyJuryBallotRevealV1) -> [u8; 32] {
+            let mut hasher = Blake2b256::new();
+            hasher.update(reveal.round_id.as_bytes());
+            hasher.update([0u8]);
+            hasher.update(reveal.proposal_id.as_bytes());
+            hasher.update([0u8]);
+            hasher.update(reveal.juror_id.as_bytes());
+            hasher.update([0u8]);
+            hasher.update([reveal.choice.discriminant()]);
+            hasher.update([0u8]);
+            hasher.update(&reveal.nonce);
+            hasher.finalize().into()
+        }
+
+        let mut first = sample_reveal(PolicyJuryVoteChoice::Approve);
+        first.round_id = "R\0P".into();
+        first.proposal_id = "Q".into();
+        let mut second = first.clone();
+        second.round_id = "R".into();
+        second.proposal_id = "P\0Q".into();
+
+        assert_eq!(legacy_commitment(&first), legacy_commitment(&second));
+        assert_ne!(first.compute_commitment(), second.compute_commitment());
     }
 
     #[test]

@@ -49218,6 +49218,7 @@ fn sorafs_evidence_viewer_dependency_error(
     erasure_supplied: bool,
     checkpoint_store_supplied: bool,
     compaction_archive_supplied: bool,
+    transparency_publisher_supplied: bool,
 ) -> Option<&'static str> {
     let supplied = [
         webauthn_supplied,
@@ -49226,6 +49227,7 @@ fn sorafs_evidence_viewer_dependency_error(
         erasure_supplied,
         checkpoint_store_supplied,
         compaction_archive_supplied,
+        transparency_publisher_supplied,
     ];
     if policy_configured {
         (!supplied.iter().all(|present| *present))
@@ -49244,8 +49246,8 @@ mod sorafs_evidence_viewer_startup_tests {
 
     #[test]
     fn runtime_dependency_shape_is_fail_closed() {
-        for supplied_mask in 0_u8..64 {
-            let supplied = |bit| (supplied_mask & (1_u8 << bit)) != 0_u8;
+        for supplied_mask in 0_u16..128 {
+            let supplied = |bit| (supplied_mask & (1_u16 << bit)) != 0_u16;
             let enabled_error = sorafs_evidence_viewer_dependency_error(
                 true,
                 supplied(0),
@@ -49254,10 +49256,11 @@ mod sorafs_evidence_viewer_startup_tests {
                 supplied(3),
                 supplied(4),
                 supplied(5),
+                supplied(6),
             );
             assert_eq!(
                 enabled_error,
-                (supplied_mask != 0b11_1111)
+                (supplied_mask != 0b111_1111)
                     .then_some(SORAFS_EVIDENCE_VIEWER_MISSING_RUNTIME_DEPENDENCIES)
             );
 
@@ -49269,6 +49272,7 @@ mod sorafs_evidence_viewer_startup_tests {
                 supplied(3),
                 supplied(4),
                 supplied(5),
+                supplied(6),
             );
             assert_eq!(
                 disabled_error,
@@ -49298,6 +49302,10 @@ mod sorafs_evidence_viewer_startup_tests {
         let archive_policy_pin = ["policy.", "compaction_archive_policy_digest"].concat();
         let archive_id_pin = ["policy.", "compaction_archive_id"].concat();
         let archive_key_pin = ["policy.", "compaction_archive_public_key"].concat();
+        let publisher_handle_pin = ["policy.", "transparency_publisher_handle"].concat();
+        let publisher_revision_pin = ["policy.", "transparency_publisher_revision"].concat();
+        let publisher_policy_pin = ["policy.", "transparency_publisher_policy_digest"].concat();
+        let publisher_key_pin = ["policy.", "transparency_publisher_public_key"].concat();
         let providerless_open = [
             "EvidenceViewerServiceV1::",
             "open(service_config,service_deps,sorafs_node.clone())",
@@ -49312,7 +49320,15 @@ mod sorafs_evidence_viewer_startup_tests {
         assert!(compact_source.contains(&archive_policy_pin));
         assert!(compact_source.contains(&archive_id_pin));
         assert!(compact_source.contains(&archive_key_pin));
+        assert!(compact_source.contains(&publisher_handle_pin));
+        assert!(compact_source.contains(&publisher_revision_pin));
+        assert!(compact_source.contains(&publisher_policy_pin));
+        assert!(compact_source.contains(&publisher_key_pin));
         assert!(compact_source.contains("compaction_archive,"));
+        assert!(compact_source.contains(
+            "EvidenceViewerTransparencyProducerV1::try_new(producer_config,transparency_publisher)"
+        ));
+        assert!(compact_source.contains("producer.reconcile().is_ok()"));
         assert!(!compact_source.contains(&providerless_open));
     }
 
@@ -49322,14 +49338,29 @@ mod sorafs_evidence_viewer_startup_tests {
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect();
+        let mock_archive_constructor = ["MockCompactionArchive", "::new"].concat();
 
         assert!(
             compact_source
                 .contains("self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone())")
         );
         assert!(compact_source.contains("service.compact_expired_tick(now_unix_ms)"));
+        assert!(compact_source.contains(
+            "publish_evidence_viewer_transparency_tick(service.as_ref(),transparency_producer.as_ref())"
+        ));
         assert!(compact_source.contains("Duration::from_millis(service.compaction_interval_ms())"));
-        assert!(!compact_source.contains("MockCompactionArchive::new"));
+        assert!(!compact_source.contains(&mock_archive_constructor));
+    }
+
+    #[test]
+    fn transparency_retry_backoff_is_bounded_and_deterministic() {
+        assert_eq!(evidence_viewer_transparency_backoff_ticks(0), 0);
+        assert_eq!(evidence_viewer_transparency_backoff_ticks(1), 1);
+        assert_eq!(evidence_viewer_transparency_backoff_ticks(2), 3);
+        assert_eq!(evidence_viewer_transparency_backoff_ticks(3), 7);
+        assert_eq!(evidence_viewer_transparency_backoff_ticks(u8::MAX), 7);
+        assert_eq!(EVIDENCE_VIEWER_TRANSPARENCY_PAGE_ITEMS_V1, 256);
+        assert_eq!(EVIDENCE_VIEWER_TRANSPARENCY_MAX_PAGES_PER_TICK_V1, 16);
     }
 
     #[tokio::test]
@@ -49591,6 +49622,13 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_evidence_viewer: Option<Arc<sorafs_node::evidence_viewer::EvidenceViewerServiceV1>>,
     #[cfg(feature = "app_api")]
+    sorafs_evidence_viewer_transparency_producer: Option<
+        Arc<
+            sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyProducerV1,
+        >,
+    >,
+    #[cfg(feature = "app_api")]
     sorafs_evidence_viewer_startup_error: Option<&'static str>,
     #[cfg(feature = "app_api")]
     sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
@@ -49687,6 +49725,9 @@ pub struct ToriiRuntimeDeps {
     sorafs_moderation_panel_notification:
         Option<Arc<dyn sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1>>,
     #[cfg(feature = "app_api")]
+    sorafs_moderation_checkpoint_store:
+        Option<Arc<dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1>>,
+    #[cfg(feature = "app_api")]
     sorafs_evidence_viewer_webauthn:
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>>,
     #[cfg(feature = "app_api")]
@@ -49704,6 +49745,13 @@ pub struct ToriiRuntimeDeps {
     #[cfg(feature = "app_api")]
     sorafs_evidence_viewer_compaction_archive:
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_evidence_viewer_transparency_publisher: Option<
+        Arc<
+            dyn sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyPublisherV1,
+        >,
+    >,
     #[cfg(feature = "app_api")]
     sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
@@ -49776,6 +49824,8 @@ impl ToriiRuntimeDeps {
             #[cfg(feature = "app_api")]
             sorafs_moderation_panel_notification: None,
             #[cfg(feature = "app_api")]
+            sorafs_moderation_checkpoint_store: None,
+            #[cfg(feature = "app_api")]
             sorafs_evidence_viewer_webauthn: None,
             #[cfg(feature = "app_api")]
             sorafs_evidence_viewer_grants: None,
@@ -49787,6 +49837,8 @@ impl ToriiRuntimeDeps {
             sorafs_evidence_viewer_checkpoint_store: None,
             #[cfg(feature = "app_api")]
             sorafs_evidence_viewer_compaction_archive: None,
+            #[cfg(feature = "app_api")]
+            sorafs_evidence_viewer_transparency_publisher: None,
             #[cfg(feature = "app_api")]
             sorafs_pop_credentials: None,
             #[cfg(feature = "app_api")]
@@ -50027,6 +50079,19 @@ impl ToriiRuntimeDeps {
         self
     }
 
+    /// Attach the deployment-owned sealed monotonic moderation checkpoint authority.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_moderation_checkpoint_store(
+        mut self,
+        checkpoint_store: Arc<
+            dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1,
+        >,
+    ) -> Self {
+        self.sorafs_moderation_checkpoint_store = Some(checkpoint_store);
+        self
+    }
+
     /// Attach the runtime-only WebAuthn challenge and verification boundary
     /// used by the case-bound evidence viewer.
     #[cfg(feature = "app_api")]
@@ -50096,6 +50161,21 @@ impl ToriiRuntimeDeps {
         archive: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>,
     ) -> Self {
         self.sorafs_evidence_viewer_compaction_archive = Some(archive);
+        self
+    }
+
+    /// Attach the deployment-owned signed monotonic transparency-head publisher
+    /// used by the evidence viewer.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_transparency_publisher(
+        mut self,
+        publisher: Arc<
+            dyn sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyPublisherV1,
+        >,
+    ) -> Self {
+        self.sorafs_evidence_viewer_transparency_publisher = Some(publisher);
         self
     }
 
@@ -50938,6 +51018,96 @@ impl Drop for EvidenceViewerCompactionWorkerHandle {
 }
 
 #[cfg(feature = "app_api")]
+const EVIDENCE_VIEWER_TRANSPARENCY_PAGE_ITEMS_V1: usize = 256;
+#[cfg(feature = "app_api")]
+const EVIDENCE_VIEWER_TRANSPARENCY_MAX_PAGES_PER_TICK_V1: usize = 16;
+#[cfg(feature = "app_api")]
+const EVIDENCE_VIEWER_TRANSPARENCY_MAX_BACKOFF_EXPONENT_V1: u8 = 3;
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvidenceViewerTransparencyTickFailureV1 {
+    ServiceUnavailable,
+    PublisherUnavailable,
+    CursorDidNotAdvance,
+}
+
+#[cfg(feature = "app_api")]
+impl EvidenceViewerTransparencyTickFailureV1 {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::ServiceUnavailable => "service_unavailable",
+            Self::PublisherUnavailable => "publisher_unavailable",
+            Self::CursorDidNotAdvance => "cursor_did_not_advance",
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+const fn evidence_viewer_transparency_backoff_ticks(failure_streak: u8) -> u8 {
+    if failure_streak == 0 {
+        return 0;
+    }
+    let exponent = if failure_streak < EVIDENCE_VIEWER_TRANSPARENCY_MAX_BACKOFF_EXPONENT_V1 {
+        failure_streak
+    } else {
+        EVIDENCE_VIEWER_TRANSPARENCY_MAX_BACKOFF_EXPONENT_V1
+    };
+    (1_u8 << exponent) - 1
+}
+
+#[cfg(feature = "app_api")]
+fn publish_evidence_viewer_transparency_tick(
+    service: &sorafs_node::evidence_viewer::EvidenceViewerServiceV1,
+    producer: &sorafs_node::evidence_viewer::transparency_producer::
+        EvidenceViewerTransparencyProducerV1,
+) -> Result<(), EvidenceViewerTransparencyTickFailureV1> {
+    let current = producer
+        .reconcile()
+        .map_err(|_| EvidenceViewerTransparencyTickFailureV1::PublisherUnavailable)?;
+    let status = service
+        .audit_status()
+        .map_err(|_| EvidenceViewerTransparencyTickFailureV1::ServiceUnavailable)?;
+    if current.as_ref().is_some_and(|head| {
+        !head.body.source_has_more
+            && head.body.receipt_cursor == status.checkpoint_anchor.chain_head
+            && head.body.source_checkpoint_anchor == status.checkpoint_anchor
+    }) {
+        return Ok(());
+    }
+    let mut predecessor = current.and_then(|head| head.body.receipt_cursor);
+
+    for _ in 0..EVIDENCE_VIEWER_TRANSPARENCY_MAX_PAGES_PER_TICK_V1 {
+        let projection = service
+            .transparency_projection(
+                status.checkpoint_anchor.checkpoint_digest,
+                predecessor,
+                EVIDENCE_VIEWER_TRANSPARENCY_PAGE_ITEMS_V1,
+            )
+            .map_err(|_| EvidenceViewerTransparencyTickFailureV1::ServiceUnavailable)?;
+        let has_more = projection.has_more;
+        let outcome = producer
+            .publish_projection(&projection)
+            .map_err(|_| EvidenceViewerTransparencyTickFailureV1::PublisherUnavailable)?;
+        let head = match outcome {
+            sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyProducerOutcomeV1::Published(head)
+            | sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyProducerOutcomeV1::AlreadyCurrent(head) => head,
+        };
+        let next = head.body.receipt_cursor;
+        if has_more && next == predecessor {
+            return Err(EvidenceViewerTransparencyTickFailureV1::CursorDidNotAdvance);
+        }
+        predecessor = next;
+        if !has_more {
+            break;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvidenceViewerCompactionSupervisionFailure {
     WorkerExitedUnexpectedly,
@@ -50951,12 +51121,16 @@ impl EvidenceViewerCompactionSupervisionFailure {
     const fn diagnostic(self) -> &'static str {
         match self {
             Self::WorkerExitedUnexpectedly => {
-                "SoraFS evidence-viewer compaction worker exited unexpectedly"
+                "SoraFS evidence-viewer compaction/transparency worker exited unexpectedly"
             }
-            Self::WorkerPanicked => "SoraFS evidence-viewer compaction worker panicked",
-            Self::WorkerCancelled => "SoraFS evidence-viewer compaction worker was cancelled",
+            Self::WorkerPanicked => {
+                "SoraFS evidence-viewer compaction/transparency worker panicked"
+            }
+            Self::WorkerCancelled => {
+                "SoraFS evidence-viewer compaction/transparency worker was cancelled"
+            }
             Self::ServerExitedUnexpectedly => {
-                "Torii server exited before evidence-viewer compaction shutdown"
+                "Torii server exited before evidence-viewer worker shutdown"
             }
         }
     }
@@ -51174,16 +51348,47 @@ impl Torii {
         let Some(service) = self.sorafs_evidence_viewer.clone() else {
             return None;
         };
+        let Some(transparency_producer) = self.sorafs_evidence_viewer_transparency_producer.clone()
+        else {
+            return None;
+        };
 
         let task = tokio::spawn(async move {
             let mut ticker =
                 tokio::time::interval(Duration::from_millis(service.compaction_interval_ms()));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut transparency_failure_streak = 0_u8;
+            let mut transparency_backoff_ticks = 0_u8;
 
             loop {
                 tokio::select! {
                     _ = shutdown_signal.receive() => break,
                     _ = ticker.tick() => {
+                        if transparency_backoff_ticks > 0 {
+                            transparency_backoff_ticks -= 1;
+                        } else {
+                            match publish_evidence_viewer_transparency_tick(
+                                service.as_ref(),
+                                transparency_producer.as_ref(),
+                            ) {
+                                Ok(()) => {
+                                    transparency_failure_streak = 0;
+                                }
+                                Err(failure) => {
+                                    transparency_failure_streak =
+                                        transparency_failure_streak.saturating_add(1);
+                                    transparency_backoff_ticks =
+                                        evidence_viewer_transparency_backoff_ticks(
+                                            transparency_failure_streak,
+                                        );
+                                    iroha_logger::warn!(
+                                        code = failure.code(),
+                                        retry_after_ticks = transparency_backoff_ticks,
+                                        "bounded evidence-viewer transparency publication tick failed"
+                                    );
+                                }
+                            }
+                        }
                         let now_unix_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
                             Ok(duration) => match u64::try_from(duration.as_millis()) {
                                 Ok(timestamp) => timestamp,
@@ -54312,6 +54517,9 @@ impl Torii {
         let shared_sorafs_moderation_panel_notification =
             runtime_deps.sorafs_moderation_panel_notification.clone();
         #[cfg(feature = "app_api")]
+        let shared_sorafs_moderation_checkpoint_store =
+            runtime_deps.sorafs_moderation_checkpoint_store.clone();
+        #[cfg(feature = "app_api")]
         let shared_sorafs_evidence_viewer_webauthn =
             runtime_deps.sorafs_evidence_viewer_webauthn.clone();
         #[cfg(feature = "app_api")]
@@ -54329,6 +54537,10 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let shared_sorafs_evidence_viewer_compaction_archive = runtime_deps
             .sorafs_evidence_viewer_compaction_archive
+            .clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_evidence_viewer_transparency_publisher = runtime_deps
+            .sorafs_evidence_viewer_transparency_publisher
             .clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_pop_credentials = runtime_deps.sorafs_pop_credentials.clone();
@@ -54898,9 +55110,14 @@ impl Torii {
             shared_sorafs_evidence_viewer_erasure.is_some(),
             shared_sorafs_evidence_viewer_checkpoint_store.is_some(),
             shared_sorafs_evidence_viewer_compaction_archive.is_some(),
+            shared_sorafs_evidence_viewer_transparency_publisher.is_some(),
         );
         #[cfg(feature = "app_api")]
-        let (sorafs_evidence_viewer, sorafs_evidence_viewer_startup_error) = match (
+        let (
+            sorafs_evidence_viewer,
+            sorafs_evidence_viewer_transparency_producer,
+            sorafs_evidence_viewer_startup_error,
+        ) = match (
             config.sorafs_storage.evidence_viewer.as_ref(),
             shared_sorafs_evidence_viewer_webauthn,
             shared_sorafs_evidence_viewer_grants,
@@ -54908,8 +55125,9 @@ impl Torii {
             shared_sorafs_evidence_viewer_erasure,
             shared_sorafs_evidence_viewer_checkpoint_store,
             shared_sorafs_evidence_viewer_compaction_archive,
+            shared_sorafs_evidence_viewer_transparency_publisher,
         ) {
-            (None, None, None, None, None, None, None) => (None, None),
+            (None, None, None, None, None, None, None, None) => (None, None, None),
             (
                 Some(policy),
                 Some(webauthn),
@@ -54918,6 +55136,7 @@ impl Torii {
                 Some(erasure),
                 Some(checkpoint_store),
                 Some(compaction_archive),
+                Some(transparency_publisher),
             ) => {
                 let millis = |duration: std::time::Duration| {
                     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
@@ -54989,6 +55208,31 @@ impl Torii {
                     erasure,
                     compaction_archive,
                 };
+                let producer_config = sorafs_node::evidence_viewer::transparency_producer::
+                    EvidenceViewerTransparencyProducerConfigV1 {
+                        receipt_signer_handle: policy.receipt_signer_handle.clone(),
+                        receipt_signer_public_key: policy.receipt_signer_public_key,
+                        checkpoint_store_handle: policy.checkpoint_store_handle.clone(),
+                        checkpoint_store_revision: policy.checkpoint_store_revision,
+                        checkpoint_store_policy_digest: policy.checkpoint_store_policy_digest,
+                        compaction_archive_handle: policy.compaction_archive_handle.clone(),
+                        compaction_archive_qualification:
+                            sorafs_node::evidence_viewer::
+                                EvidenceViewerRuntimeProviderQualificationV1::new(
+                                    policy.compaction_archive_revision,
+                                    policy.compaction_archive_policy_digest,
+                                ),
+                        compaction_archive_id: policy.compaction_archive_id,
+                        compaction_archive_public_key: policy.compaction_archive_public_key,
+                        publisher_handle: policy.transparency_publisher_handle.clone(),
+                        publisher_qualification:
+                            sorafs_node::evidence_viewer::
+                                EvidenceViewerRuntimeProviderQualificationV1::new(
+                                    policy.transparency_publisher_revision,
+                                    policy.transparency_publisher_policy_digest,
+                                ),
+                        publisher_public_key: policy.transparency_publisher_public_key,
+                    };
                 match sorafs_node::evidence_viewer::EvidenceViewerServiceV1::open_with_checkpoint_store(
                     service_config,
                     service_deps,
@@ -55001,11 +55245,33 @@ impl Torii {
                         ),
                     checkpoint_store,
                 ) {
-                    Ok(service) => (Some(Arc::new(service)), None),
-                    Err(_) => (None, Some(SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED)),
+                    Ok(service) => {
+                        match sorafs_node::evidence_viewer::transparency_producer::
+                            EvidenceViewerTransparencyProducerV1::try_new(
+                                producer_config,
+                                transparency_publisher,
+                            )
+                        {
+                            Ok(producer) if producer.reconcile().is_ok() => (
+                                Some(Arc::new(service)),
+                                Some(Arc::new(producer)),
+                                None,
+                            ),
+                            Ok(_) | Err(_) => (
+                                None,
+                                None,
+                                Some(SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED),
+                            ),
+                        }
+                    }
+                    Err(_) => (
+                        None,
+                        None,
+                        Some(SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED),
+                    ),
                 }
             }
-            _ => (None, sorafs_evidence_viewer_dependency_error),
+            _ => (None, None, sorafs_evidence_viewer_dependency_error),
         };
         #[cfg(feature = "app_api")]
         let (sorafs_moderation_orchestrator, sorafs_moderation_startup_error) = match (
@@ -55014,14 +55280,16 @@ impl Torii {
             shared_sorafs_moderation_settlement_handoff,
             shared_sorafs_moderation_publication_handoff,
             shared_sorafs_moderation_panel_notification,
+            shared_sorafs_moderation_checkpoint_store,
         ) {
-            (None, None, None, None, None) => (None, None),
+            (None, None, None, None, None, None) => (None, None),
             (
                 Some(config),
                 Some(transaction_signer),
                 Some(settlement_handoff),
                 Some(publication_handoff),
                 Some(panel_notification),
+                Some(checkpoint_store),
             ) => {
                 let runtime = (|| {
                     use sorafs_node::moderation_orchestrator::{
@@ -55053,8 +55321,15 @@ impl Torii {
                             config.panel_notification_revision,
                             config.panel_notification_policy_digest,
                         );
+                    let checkpoint_store_qualification =
+                        ModerationRuntimeProviderQualificationV1::new(
+                            config.checkpoint_store_revision,
+                            config.checkpoint_store_policy_digest,
+                        );
                     let orchestrator_config = ModerationOrchestratorConfigV1 {
                         checkpoint_path: config.checkpoint_path.clone(),
+                        checkpoint_store_handle: config.checkpoint_store_handle.clone(),
+                        expected_checkpoint_store_qualification: checkpoint_store_qualification,
                         max_cases: config.max_cases,
                         max_events: config.max_events,
                         max_outbox_entries: config.max_outbox_entries,
@@ -55136,6 +55411,7 @@ impl Torii {
                             .map_err(|_| ())?,
                     );
                     let deps = sorafs_node::moderation_orchestrator::ModerationOrchestratorDepsV1 {
+                        checkpoint_store,
                         submitter,
                         snapshot_reader,
                         settlement_sink,
@@ -55162,8 +55438,8 @@ impl Torii {
                     Err(()) => (None, Some("initialization_failed")),
                 }
             }
-            (Some(_), _, _, _, _) => (None, Some("missing_runtime_dependencies")),
-            (None, _, _, _, _) => (None, Some("unexpected_runtime_dependencies")),
+            (Some(_), _, _, _, _, _) => (None, Some("missing_runtime_dependencies")),
+            (None, _, _, _, _, _) => (None, Some("unexpected_runtime_dependencies")),
         };
         #[cfg(feature = "app_api")]
         let sorafs_pop_credentials = match (
@@ -55537,6 +55813,8 @@ impl Torii {
             sorafs_moderation_startup_error,
             #[cfg(feature = "app_api")]
             sorafs_evidence_viewer,
+            #[cfg(feature = "app_api")]
+            sorafs_evidence_viewer_transparency_producer,
             #[cfg(feature = "app_api")]
             sorafs_evidence_viewer_startup_error,
             #[cfg(feature = "app_api")]
@@ -56629,7 +56907,7 @@ impl Torii {
         .map_err(|failure| {
             iroha_logger::error!(
                 ?failure,
-                "SoraFS evidence-viewer compaction lifecycle failed closed"
+                "SoraFS evidence-viewer compaction/transparency lifecycle failed closed"
             );
             Report::new(Error::FailedExit).attach(failure.diagnostic())
         })?;

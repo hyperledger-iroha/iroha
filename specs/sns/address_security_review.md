@@ -4,9 +4,8 @@
 
 # Sora Address Security Review (ADDR-7)
 
-Roadmap link: **ADDR-7 — Security Review & Collision Monitoring**
-
-This note captures the security review requested in roadmap item ADDR-7:
+This note records the implemented address security and collision-monitoring
+controls:
 
 - quantify the collision probability for the Local digest selectors and
   document why Local‑12 (12-byte digest) is acceptable while Local‑8 is not;
@@ -81,10 +80,10 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
 
 ## 3. Checksum, kana, and parser hardening
 
-- i105 literals use the `i105` alphabet and the Bech32m checksum described in
-  the Account Structure RFC (§2.2, `docs/account_structure.md:124`).
+- I105 literals use the I105 alphabet and Bech32m checksum described in
+  the Account Structure RFC (§2.2, `specs/account_structure.md`).
 - The canonical I105 representation appends the half-width Iroha poem to
-  the same alphabet (`docs/account_structure.md:125`) so IME/Kana inputs can be
+  the same alphabet (`specs/account_structure.md`) so IME/Kana inputs can be
   rendered deterministically across locales.
 - All domain labels (for both Local selectors and Global registry entries) run
   through Norm v1 (NFC + strict UTS‑46 + ASCII policy)
@@ -132,5 +131,5 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
    suffixes) via the registrar API and verify that tombstoned entries remain
    immutable in both storage and replay events.
 6. **Record governance approval:** link this document and the captured artefacts
-   in the SNS governance tracker so future audits can trace how Local‑8 was
+   in the SNS governance tracker so auditors can trace how Local‑8 was
    disabled and how address spoofing risks are mitigated.

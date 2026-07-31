@@ -27,10 +27,10 @@ operator panel, or documented in OpenAPI.
 
 The two legacy aggregate-audit POST routes remain only as authenticated and
 operator-authorized retirement tombstones. They return HTTP `410 Gone` without
-parsing the retired request body or mutating the former local registry. There is
-no Torii evidence-viewer audit scheduler. The signed receipt checkpoint and the
-exact `(sequence, receipt_digest)` transparency projection derived from it are
-the sole audit authority.
+parsing the retired request body or mutating the former local registry. They do
+not control or trigger the supervised transparency worker. The signed receipt
+checkpoint and the exact `(sequence, receipt_digest)` transparency projection
+derived from it are the sole audit authority.
 
 The surrounding finalized moderation workflow now has a supervised,
 payload-free panel-notification path. It durably claims a finalized-event
@@ -94,36 +94,43 @@ all of these non-secret policy values:
 - an authenticated range limit and bounded collection limits;
 - the WebAuthn relying-party id and exact canonical HTTPS origins;
 - opaque production handles for the authoritative checkpoint store, WebAuthn,
-  grant, erasure, Ed25519 receipt-signing, and immutable compaction-archive
-  services;
+  grant, erasure, Ed25519 receipt-signing, immutable compaction-archive, and
+  external transparency-publisher services;
 - the independently governed non-zero revision and 32-byte public policy digest
-  for each of those six runtime providers;
+  for each of those seven runtime providers;
 - the archive's stable non-zero namespace id, exact Ed25519 verification key,
   `1000..=86400000` millisecond worker cadence, and `1..=1024` record tick
   bound; and
-- the exact governed Ed25519 receipt-verification key.
+- the exact governed Ed25519 receipt-verification key and transparency-head
+  verification key.
 
 The qualification keys are the exact
 `checkpoint_store_revision`/`checkpoint_store_policy_digest_hex`,
 `webauthn_revision`/`webauthn_policy_digest_hex`,
 `grant_revision`/`grant_policy_digest_hex`,
 `erasure_revision`/`erasure_policy_digest_hex`,
-`compaction_archive_revision`/`compaction_archive_policy_digest_hex`, and
-`receipt_signer_revision`/`receipt_signer_policy_digest_hex` pairs. They are
-required when the service is enabled, forbidden as stale bindings when it is
-disabled, and accept only non-zero revisions plus canonical lowercase non-zero
-32-byte digests.
+`compaction_archive_revision`/`compaction_archive_policy_digest_hex`,
+`receipt_signer_revision`/`receipt_signer_policy_digest_hex`, and
+`transparency_publisher_revision`/`transparency_publisher_policy_digest_hex`
+pairs. The publisher's complete public pin is
+`transparency_publisher_handle`, non-zero
+`transparency_publisher_revision`, canonical lowercase non-zero
+`transparency_publisher_policy_digest_hex`, and canonical Ed25519
+`transparency_publisher_public_key_hex`. These values are required when the
+service is enabled, forbidden as stale bindings when it is disabled, and accept
+only non-zero revisions plus canonical lowercase non-zero 32-byte digests.
 
 The sanitized daemon registry and Torii expose runtime injection seams whose
 opaque handles, archive namespace, and public keys must match configuration
 exactly. Startup fails closed for missing, partial, unrequested, or mismatched
-dependencies. There is no file key, environment secret, `KeyPair`, or
-in-process production fallback.
+dependencies, and enabled startup also requires authoritative signed
+transparency-head reconciliation through the qualified publisher. There is no
+file key, environment secret, `KeyPair`, or in-process production fallback.
 The local checkpoint cache is not an authority fallback. The standard launcher
 intentionally does not construct a real external CAS, WebAuthn, grant, HSM
-signer, KMS, or immutable object-lock implementation; deployment owners must
-construct and inject those runtime dependencies. The complete non-secret shape
-is shown in
+signer, KMS, immutable object-lock, or durable transparency-publisher
+implementation; deployment owners must construct and inject those runtime
+dependencies. The complete non-secret shape is shown in
 [`sorafs/snippets/evidence_viewer_runtime_binding.toml`](sorafs/snippets/evidence_viewer_runtime_binding.toml).
 
 Each external security provider must expose its active non-zero
@@ -156,9 +163,11 @@ The injected boundaries are:
 - rotating-grant issuer, verifier, and revoker;
 - PKCS#11/HSM Ed25519 receipt signer;
 - KMS or cryptographic-erasure service;
-- linearizable signed checkpoint-store CAS authority; and
+- linearizable signed checkpoint-store CAS authority;
 - immutable object-lock archive returning an Ed25519-authenticated exact
-  readback receipt.
+  readback receipt; and
+- externally durable signed transparency-head publisher supporting exact
+  predecessor compare-and-publish and authoritative readback.
 
 The shutdown-aware Torii worker takes the current signed checkpoint and archive
 head as its fence, archives at most `compaction_max_records`, and uses a stable
@@ -172,10 +181,32 @@ readback never authorizes pruning. A completed erasure remains terminal even
 when an older expired session is compacted later: compaction must not recreate
 a default retention floor for that quarantine object.
 
-Transparency publication is a separate deployment boundary. The node provides
-a bounded, signed `EvidenceViewerTransparencyProjectionV1`, but the repository
-does not yet construct or run a deployment-owned producer adapter that consumes
-it and durably advances its exact cursor.
+External transparency durability remains a deployment-owned boundary. The node
+binds the authoritative checkpoint-store generation/predecessor, exact
+compaction-archive head digest, and public store policy into each signed
+checkpoint anchor. `EvidenceViewerTransparencyProjectionV1` carries that exact
+signed archive head and commits it into the projection digest. The standard
+launcher resolves the seventh provider through broker slot 53, constructs the
+in-tree `evidence_viewer::transparency_producer`, and fails enabled-service
+startup unless the publisher matches the configured public binding and its
+current signed authoritative head reconciles. The broker-backed publisher is
+requalified around every bounded load or compare-and-publish operation.
+
+Torii owns the supervised transparency worker only when the evidence viewer and
+its qualified publisher are enabled. Startup constructs the producer and fails
+closed unless its first authoritative signed-head reconciliation succeeds. At
+the configured compaction cadence, the worker fresh-reconciles the signed
+external head, reads a fresh service audit checkpoint, and walks no more than 16
+signed payload-free projection pages of 256 receipts each. The producer advances
+the monotonic public head by exact predecessor CAS and reconciles rejected or
+ambiguous completion only by authoritative signed readback, without replaying
+the mutation. Transport uncertainty retires the affected broker connection and
+uses a fresh same-UID, exact-catalog session only for requalification and
+readback. Consecutive failures skip 1, 3, then at most 7 cadence ticks and use
+payload-free logging; shutdown signals, stops, and joins the worker. There is no
+credential loader, private-key fallback, endpoint discovery, or filesystem
+authority, and the repository does not implement the external durable
+publisher.
 
 ## API Surface
 
@@ -314,23 +345,27 @@ events to `/v1/evidence/log/{session_id_hex}`.
 
 - Package and operate a deployment-owned executable around the in-tree
   `serve_runtime_provider_broker_v1` injected server-library boundary. No
-  checked-in executable calls it, and no credential loader, HSM/KMS/sealed-store
-  implementation, or vendor backend is packaged. Its bounded canonical
-  client/server protocol covers all six viewer slots (22–26 and 47), including
-  exact public qualification metadata, replay-safe operation identities,
-  ambiguity typing, signed readback, and authoritative CAS/archive
-  verification.
+  checked-in broker-server executable calls it, and no credential loader,
+  HSM/KMS/sealed-store implementation, or vendor backend is packaged. Its
+  bounded canonical client/server protocol covers all seven viewer slots
+  (22–26, 47, and 53), including exact public qualification metadata,
+  replay-safe operation identities, ambiguity typing, signed readback, and
+  authoritative CAS/archive/transparency-head verification.
 - Construct and inject deployment-owned WebAuthn, rotating-grant, PKCS#11/HSM
   receipt-signer, KMS/erasure, linearizable sealed-CAS checkpoint-store, and
   immutable object-lock/archive implementations that satisfy the shipped
   qualification and exact-readback contracts; collect external readiness,
   rotation, revocation, CAS, archive durability, rollback, and recovery
   evidence for those real services.
-- Build a deployment-owned transparency producer adapter that consumes only
-  `EvidenceViewerTransparencyProjectionV1`, durably acknowledges the exact
-  signed checkpoint anchor and `(sequence, digest)` cursor, anchors a monotonic
-  public head for first-contact freshness, and reconciles publication. A
-  Torii-local scheduler is not part of this design.
+- Inject a genuine externally durable transparency-head
+  compare-and-publish/readback provider matching the configured handle,
+  revision, policy digest, and Ed25519 key. The standard Torii launcher owns the
+  in-tree `EvidenceViewerTransparencyProducerV1` and its supervised bounded
+  worker, but does not supply the external adapter. Prove multi-replica CAS,
+  ambiguous-result reconciliation, bounded-page catch-up, bounded retry,
+  shutdown/join behavior, checkpoint/archive generation gaps, signer and policy
+  rotation, public mirror freshness, rollback rejection, failover, and recovery.
+  The repository does not contain vendor credentials or claim this deployment.
 - Deploy and qualify a real messaging/portal provider for the shipped
   retry-safe surrounding panel-notification path, then exercise reconciliation,
   dead-letter handling, outage, restart, and failover with the protected viewer.

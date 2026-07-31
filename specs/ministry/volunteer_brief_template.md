@@ -9,7 +9,7 @@ Roadmap reference: **MINFO-3a — Balanced brief templates & conflict disclosure
 
 Volunteer brief submissions summarise positions that citizen panels want governance to review when blacklist changes or other Ministry enforcement motions are proposed. MINFO-3a requires that every brief follows a deterministic structure so the transparency pipeline can (1) render comparable fact tables, (2) confirm that conflicts-of-interest are disclosed, and (3) drop or flag off-topic submissions automatically. This page defines the canonical fields, CSV-style fact table layout, and moderation tags expected by the tooling shipped in `cargo xtask ministry-transparency`.
 
-> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is now the authoritative schema for all submissions. Tooling and portal validators call `VolunteerBriefV1::validate` before publishing a brief or referencing it in panel summaries.
+> **Norito schema:** the `iroha_data_model::ministry::VolunteerBriefV1` struct (version `1`) is the authoritative schema for all submissions. Repository-local validators call `VolunteerBriefV1::validate` before accepting a brief or referencing it in panel summaries.
 
 ## Submission payload structure
 
@@ -77,9 +77,9 @@ Key behaviour:
 - Accepts individual JSON objects *or* arrays of briefs; pass `--input` multiple times to lint several files in one run.
 - Emits a per-brief summary showing the number of errors and warnings; warnings highlight empty citation lists or overlong notes, while errors block publication.
 - Ensures required fields (`brief_id`, `proposal_id`, `stance`, fact table contents, disclosures or `no_conflicts_certified`) match this template and that enum values stay within the documented vocabularies.
-- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). The portal’s `npm run generate:volunteer-lint` command consumes this manifest to display lint status next to each proposal page.
+- When `--json-output <path>` is set the validator writes a machine-readable manifest summarising every brief (proposal id, stance, status, errors/warnings). Store this report with the governed intake and release evidence so reviewers can reproduce the validation result.
 
-Integrate the command into portal workflows or CI to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
+Run the command in repository-local CI or governed intake workflows to keep volunteer submissions compliant with **MINFO-3** before they reach the transparency ingest job.
 
 ## Example payload
 
@@ -92,12 +92,23 @@ See `fixtures/documentation/ministry/volunteer_brief_template.json` for a fully 
 
 If new fields are required, update this document and the ingest summariser (`xtask/src/ministry.rs`) in the same change so the governance evidence remains reproducible.
 
-## Publication SLA & portal surfacing (MINFO-3)
+## Publication and evidence handoff (MINFO-3)
 
-To keep citizen submissions transparent, the portal now publishes briefs on a fixed cadence once they pass validation:
+This repository owns the schema, validation, ingest tooling, sanitized metrics,
+and governed release evidence. It does not contain a documentation site or
+per-proposal web publisher. After validation:
 
-1. **T+0–6 hours:** submissions land via the volunteer intake form or `cargo xtask ministry-transparency ingest`. Validators run `VolunteerBriefV1::validate`, reject malformed payloads, and emit lint reports (missing disclosures, duplicate fact IDs, etc.).
-2. **T+6–24 hours:** accepted briefs are queued for translation/triage. Moderation tags (`needs-translation`, `duplicate`, `policy-escalation`, …) are applied, and off-topic entries are archived but excluded from aggregate counts.
-3. **T+24–48 hours:** the portal publishes the brief alongside the corresponding proposal page. Each published proposal now links to “Volunteer Opinions” so reviewers can read support/oppose/context briefs without opening raw JSON.
+1. Archive the input and optional JSON validation report with the governed
+   intake evidence.
+2. Supply accepted briefs with `--volunteer <file>` when running
+   `cargo xtask ministry-transparency ingest`; off-topic entries remain
+   auditable but do not contribute to aggregate counts.
+3. Build, sanitize, and package the quarterly transparency release using the
+   workflow in [`transparency_plan.md`](./transparency_plan.md). That workflow
+   publishes the governed artifacts through SoraFS and the governance DAG.
 
-If a submission is marked `policy-escalation` or `astroturf`, the SLA tightens to **12 hours** so governance can respond quickly. Public guidance and publication summaries belong in `iroha-docs`; operational SLA evidence remains in the governed repository-local artefacts described above.
+Public user and operator guidance belongs in the sibling
+[`hyperledger-iroha/iroha-docs`](https://github.com/hyperledger-iroha/iroha-docs)
+repository and is published at <https://docs.iroha.tech/>. Keep repository-local
+evidence and public guidance aligned without duplicating a site publisher
+here.
