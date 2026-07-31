@@ -5721,10 +5721,11 @@ mod tests {
             ownership.leader_wire_runtime_receipt().is_some(),
             "the synthetic stale Coalesce result carries a fresh runtime receipt"
         );
-        assert!(
+        assert_eq!(
             gate.earliest_ingress_scheduler_ordinal()
-                .expect("read runner leader-wire minimum")
-                .is_some()
+                .expect("read runner leader-wire minimum"),
+            None,
+            "a runtime-bound owner has already left the durable Ingress selector"
         );
 
         assert!(matches!(

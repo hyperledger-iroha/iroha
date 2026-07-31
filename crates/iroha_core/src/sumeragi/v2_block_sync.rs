@@ -1652,8 +1652,7 @@ pub(super) mod tests {
 
         let mut prepare_qc = history.artifact.commit_qc.clone();
         prepare_qc.phase = wire::GlobalPhase::Prepare;
-        prepare_qc.aggregate_signature =
-            aggregate_certificate(&prepare_qc, &history.validators);
+        prepare_qc.aggregate_signature = aggregate_certificate(&prepare_qc, &history.validators);
         let request = sign_body_request(prepare_qc.clone());
         let request_hash = HashOf::new(&request);
         let mut server = V2BlockSyncServer::new(context.chain_id.clone(), 1).expect("body server");
