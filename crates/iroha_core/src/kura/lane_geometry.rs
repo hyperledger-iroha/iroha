@@ -106,8 +106,7 @@ const LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE: usize = 2;
 // the certified frontier, Native latest index, and merge-application frontier.
 const LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE: usize = 3;
 const LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE: usize =
-    LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE * 2
-        + LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE;
+    LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE * 2 + LANE_RETIREMENT_FIXED_FRONTIERS_PER_ROUTE;
 
 /// Bound the aggregate retirement scan without treating legitimate route
 /// multiplicity as corruption.

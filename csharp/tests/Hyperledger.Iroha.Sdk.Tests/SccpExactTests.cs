@@ -912,6 +912,8 @@ public sealed class SccpExactTests
     {
         var valid = ProofRequestObject();
         var parsed = SccpGroth16ProofRequestV1.Parse(Json(valid));
+        Assert.Fail(
+            $"ANCHOR={Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash)} STATEMENT={parsed.StatementHash} REQUEST={parsed.RequestHash}");
         Assert.Equal(SccpDestinationProofBackendV1.EvmGroth16Bn254, parsed.Backend);
         Assert.Equal(SccpNetworkV1.BscMainnet, parsed.TargetNetwork);
         Assert.Equal((ushort)4, parsed.SoraFinalityAnchor.ProtocolVersion);
