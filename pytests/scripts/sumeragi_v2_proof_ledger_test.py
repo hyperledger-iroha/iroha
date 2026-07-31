@@ -19587,6 +19587,22 @@ def test_exact_target_neutral_theorem_statements_reject_weakening(
         ),
         (
             "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "CandidateProducerContinuationActionInertDormantHasZeroFrozenStage",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
+            "CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame",
+        ),
+        (
+            "ExactDecisionTargetNeutralProoflessProducerStepIsDescentOrFrame",
             "ExactDecisionTargetNeutralFrozenActiveLeaderWireCandidatesCannotReplenish",
         ),
         (
@@ -22056,6 +22072,36 @@ def test_async_candidate_producer_continuation_contract_rejects_rank_and_action_
         (
             "CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst",
             "   CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell,\n",
+            "",
+            "producer-continuation dependencies",
+        ),
+        (
+            "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
+            "   CandidateProducerContinuationFrozenLeaderWireChargeCannotAppearAtGst,\n",
+            "",
+            "producer-continuation dependencies",
+        ),
+        (
+            "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
+            "   CandidateProducerContinuationActionInertDormantHasZeroFrozenStage,\n",
+            "",
+            "producer-continuation dependencies",
+        ),
+        (
+            "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
+            "   CandidateProducerContinuationPostCutAdmissionCannotEnterFrozenPrefix,\n",
+            "",
+            "producer-continuation dependencies",
+        ),
+        (
+            "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
+            "   CandidateProducerContinuationDropPolicyRejectedIsFrozenPhysicalPrefixFrame,\n",
+            "",
+            "producer-continuation dependencies",
+        ),
+        (
+            "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
+            "   CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage,\n",
             "",
             "producer-continuation dependencies",
         ),
