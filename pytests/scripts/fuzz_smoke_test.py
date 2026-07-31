@@ -218,7 +218,7 @@ class FuzzSmokeTests(unittest.TestCase):
             '"crates/ivm/spec/syscalls.toml"',
             '"crates/ivm/tests/**"',
             '"crates/ivm_abi/src/**"',
-            '"docs/source/kotodama_numeric_v1.md"',
+            '"specs/kotodama_numeric_v1.md"',
             '"fixtures/numeric_v1_golden.json"',
         )
         for path in required_paths:

@@ -1,7 +1,6 @@
 //! Example of custom expression system.
 //!
 //! Only few expressions are implemented to show proof-of-concept.
-//! See `crates/ivm/target/prebuilt/samples/executor_custom_instructions_complex`.
 //! This is simplified version of expression system from Iroha v2.0.0-pre-rc.20
 
 pub use evaluate::*;

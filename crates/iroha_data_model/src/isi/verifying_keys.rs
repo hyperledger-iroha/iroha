@@ -12,11 +12,14 @@ isi! {
 }
 
 isi! {
-    /// Update an existing verifying key record (monotonic version).
+    /// Rotate an existing verifying key record to a higher version.
+    ///
+    /// The record remains bound to its originally registered circuit identifier.
+    /// Register a distinct [`VerifyingKeyId`] when introducing a different circuit.
     pub struct UpdateVerifyingKey {
         /// Identifier of the verifying key to update.
         pub id: VerifyingKeyId,
-        /// New record with strictly greater version.
+        /// New record with a strictly greater version and the same circuit identifier.
         pub record: VerifyingKeyRecord,
     }
 }

@@ -139,9 +139,8 @@ use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, 
 pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree};
 #[cfg(not(feature = "ffi_import"))]
 pub use privacy::{
-    CommitmentScheme, CommitmentSchemeKind, LaneCommitmentId, LanePrivacyCommitment,
-    MerkleCommitment, MerkleWitness, PrivacyError, PrivacyWitness, PrivacyWitnessKind,
-    SnarkCircuit, SnarkCircuitId, SnarkWitness, hash_proof, hash_public_inputs,
+    CommitmentScheme, LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness,
+    PrivacyError, PrivacyWitness, lane_merkle_leaf_hash, lane_merkle_node_hash,
 };
 #[cfg(not(feature = "ffi_import"))]
 pub use ram_lfe::*;
@@ -2716,13 +2715,17 @@ impl norito::json::JsonSerialize for PrivateKey {
     }
 }
 
-/// Use when you need to format/serialize private key (e.g in kagami)
+/// Explicit wrapper for formatting or serializing private-key material (for example, in kagami).
 ///
 /// [`FromStr`] accepts both a bare multihash hex string and an algorithm-prefixed
 /// variant such as `"ml-dsa:<multihash-hex>"`. The default [`Display`] formatting returns
 /// the bare multihash hex. Multihash hex is canonical: varint bytes are lowercase hex
 /// and payload bytes are uppercase hex; parsing rejects non-canonical casing and
 /// `0x` prefixes.
+///
+/// [`Debug`] is always redacted so that embedding this type in another debug-formatted
+/// value cannot disclose key material. [`Display`], JSON/Norito serialization, and the
+/// named export methods expose the private key deliberately and must not be used in logs.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ExposedPrivateKey(pub PrivateKey);
 
@@ -2788,8 +2791,9 @@ impl ExposedPrivateKey {
 #[cfg(not(feature = "ffi_import"))]
 impl fmt::Debug for ExposedPrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple(self.0.algorithm().as_static_str())
-            .field(&self.normalize())
+        f.debug_struct("ExposedPrivateKey")
+            .field("algorithm", &self.0.algorithm())
+            .field("private_key", &self.0)
             .finish()
     }
 }
@@ -4367,10 +4371,14 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "ffi_import"))]
-    fn exposed_private_key_compat_formatters_match_checked_outputs() {
+    fn exposed_private_key_explicit_exports_roundtrip_and_debug_is_redacted() {
         let (_, private_key) = KeyPair::try_from_seed(vec![0x55; 32], Algorithm::Ed25519)
             .expect("checked Ed25519 seeded keypair")
             .into_parts();
+        let (algorithm, payload) = private_key
+            .try_to_bytes()
+            .expect("checked private payload extraction");
+        let payload_hex = hex::encode_upper(payload);
         let exposed = ExposedPrivateKey(private_key);
         let canonical = exposed
             .try_to_multihash_string()
@@ -4381,7 +4389,30 @@ mod tests {
 
         assert_eq!(exposed.to_string(), canonical);
         assert_eq!(exposed.to_prefixed_string(), prefixed);
-        assert!(format!("{exposed:?}").contains(&canonical));
+        assert_eq!(
+            norito::json::to_json(&exposed).expect("serialize explicitly exposed private key"),
+            format!("\"{canonical}\"")
+        );
+        assert_eq!(
+            canonical
+                .parse::<ExposedPrivateKey>()
+                .expect("parse bare private-key multihash"),
+            exposed
+        );
+        assert_eq!(
+            prefixed
+                .parse::<ExposedPrivateKey>()
+                .expect("parse prefixed private-key multihash"),
+            exposed
+        );
+
+        let debug = format!("{exposed:?}");
+        assert!(debug.contains("ExposedPrivateKey"));
+        assert!(debug.contains(&format!("{algorithm:?}")));
+        assert!(debug.contains(PRIVATE_KEY_REDACTED));
+        assert!(!debug.contains(&canonical));
+        assert!(!debug.contains(&prefixed));
+        assert!(!debug.contains(&payload_hex));
     }
 
     #[test]

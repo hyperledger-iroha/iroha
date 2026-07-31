@@ -6,7 +6,7 @@ Pass the `--language <code>` flag to override automatic language detection for i
 
 ## Build
 
-**Requirements:** a working [Rust toolchain](https://www.rust-lang.org/learn/get-started) (version 1.62.1), installed and configured.
+**Requirements:** a working [Rust toolchain](https://www.rust-lang.org/learn/get-started) (version 1.93.1), installed and configured.
 
 Optionally, [Docker](https://www.docker.com/) can be used to build images containing any of the provided binaries. Using [Docker buildx](https://docs.docker.com/buildx/working-with-buildx/) is recommended, but not required.
 
@@ -177,7 +177,8 @@ Refer to [generating key pairs with `kagami`](../iroha_kagami/CommandLineHelp.md
 
 ### Configuration file
 
-**Note:** this section is under development. You can track it in the [issue](https://github.com/hyperledger-iroha/iroha-2-docs/issues/392).
+See the current [peer configuration reference](https://docs.iroha.tech/reference/peer-config/params.html)
+for the complete parameter list and examples.
 
 ## Deployment
 
@@ -257,8 +258,9 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       public_key = "<PEER_PUBLIC_KEY>"
       ```
 
-      See `crates/iroha_kagami/CommandLineHelp.md` and `docs/genesis*.md` for
-      additional subcommands such as `validate` and `embed-pop`.
+      See `crates/iroha_kagami/CommandLineHelp.md` and the
+      [public genesis reference](https://docs.iroha.tech/reference/genesis.html)
+      for additional subcommands such as `validate` and `embed-pop`.
 
 5. **Start an Iroha peer.** Point the daemon at your staged configuration (add
    `--sora` when using the Nexus profile from `defaults/nexus/`):
@@ -276,36 +278,37 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
 
 ### Docker
 
-We provide a sample configuration for Docker in [`docker-compose.yml`](../../defaults/docker-compose.yml). We highly recommend that you adjust the `config.json` to include a set of new key pairs.
+We provide a development-only sample configuration in
+[`docker-compose.yml`](../../defaults/docker-compose.yml). It contains no
+genesis signing key. Create fresh owner-only custody and export only its paths
+before evaluating the manifest:
 
-[Generate the keys](#generating-keys) and put them into `services.*.environment` in `docker-compose.yml`. Update `TRUSTED_PEERS` **and** provide matching `TRUSTED_PEERS_POP` entries (PoPs for every validator key, including the local one).
+```bash
+cargo run --bin kagami -- keys --out-dir target/compose-genesis
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/public.key"
+export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/compose-genesis/private.key"
+docker compose -f defaults/docker-compose.yml up --build
+```
 
-- Build images:
+Compose mounts the verifier key into every peer and the signing key into only
+the genesis-submitting peer. Missing files and mismatched keys fail closed. For
+a deployed network, generate validator identities and matching
+`TRUSTED_PEERS_POP` entries with Kagami rather than inheriting the sample
+validator credentials. To keep containers running after closing the terminal,
+use the `-d` (*detached*) flag:
 
-    ```bash
-    docker-compose build
-    ```
-
-- Run containers:
-
-    ```bash
-    docker-compose up
-    ```
-
-  To keep containers up and running after closing the terminal, use the `-d` (*detached*) flag:
-
-    ```bash
-    docker-compose up -d
-    ```
+```bash
+docker compose -f defaults/docker-compose.yml up --build -d
+```
 
 - Stop containers:
 
     ```bash
-    docker-compose stop
+    docker compose -f defaults/docker-compose.yml stop
     ```
 
 - Remove containers:
 
     ```bash
-    docker-compose down
+    docker compose -f defaults/docker-compose.yml down
     ```

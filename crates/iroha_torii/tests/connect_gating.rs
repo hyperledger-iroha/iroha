@@ -27,6 +27,7 @@ fn request_with_loopback_connect_info(
     request
 }
 
+#[cfg(feature = "ws_integration_tests")]
 fn spawn_test_server(listener: tokio::net::TcpListener, app: axum::Router) {
     tokio::spawn(async move {
         axum::serve(
@@ -435,6 +436,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             connect,
             iso_bridge: iroha_config::parameters::actual::IsoBridge {
                 enabled: false,
+                max_body_bytes:
+                    iroha_config::parameters::defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
                 dedupe_ttl_secs:
                     iroha_config::parameters::defaults::torii::ISO_BRIDGE_DEDUPE_TTL_SECS,
                 default_profile: iroha_config::parameters::defaults::torii::ISO_BRIDGE_DEFAULT_PROFILE
@@ -577,8 +580,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
             quarantine_tx_max_cycles:
                 iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-            quarantine_tx_max_millis:
-                iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
             query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
             query_max_fetch_size: iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
             query_stored_min_gas_units: 0,
@@ -1045,7 +1046,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             },
         },
         settlement: iroha_config::parameters::actual::Settlement {
-            repo: iroha_config::parameters::actual::Repo::default(),
             offline: iroha_config::parameters::actual::Offline::default(),
             router: iroha_config::parameters::actual::Router::default(),
         },

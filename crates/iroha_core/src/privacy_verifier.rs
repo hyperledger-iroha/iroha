@@ -30,11 +30,15 @@ use iroha_data_model::{
         PrivacyZkAmsActionV1, VegaExistingCredentialStatementV1,
     },
 };
-use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 #[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{ZkAceNativeErrorV1, verify_zk_ace_privacy_v1};
+#[cfg(feature = "privacy-release-evidence")]
+use crate::privacy_profiles::{
+    validate_compiled_privacy_activation_against_profile_v1,
+    zk_x509_release_candidate_profile_material_v1,
+};
 use crate::{
     privacy_engines::{
         anonymous_pgc::{
@@ -48,7 +52,8 @@ use crate::{
             transcript::TranscriptErrorV1, verify_bound_presentation_encoded_v1,
         },
         fcmp_plus_plus::{
-            FcmpNativeErrorV1, FcmpOutputTupleV1, FcmpProofInputPublicV1, FcmpTreeRootV1,
+            FcmpNativeErrorV1, FcmpOutputTupleV1, FcmpProofInputPublicV1,
+            FcmpRuntimeContextBindingV1, FcmpTreeRootV1, derive_fcmp_runtime_context_hash_v1,
             validate_fcmp_encrypted_output_v1, verify_fcmp_transaction_v1,
         },
         ivm_private_note::{
@@ -559,7 +564,41 @@ pub(crate) fn verify_privacy_envelope_v1(
             PrivacyCompiledActivationFailureV1 { source },
         ))
     })?;
+    verify_privacy_envelope_after_compiled_activation_v1(envelope, context)
+}
 
+/// Verify an X.509 release candidate through the production envelope path
+/// before governance availability is enabled.
+///
+/// This entry point exists only in release-evidence builds. It derives the
+/// pinned candidate profile internally, applies the same exact activation
+/// binding comparison as consensus admission, and then joins the common
+/// verifier below. It cannot expose a compiled profile to governance.
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) fn verify_zk_x509_release_candidate_envelope_v1(
+    envelope: &PrivacyProofEnvelopeV1,
+    context: PrivacyVerificationContextV1<'_>,
+) -> Result<VerifiedPrivacyEffectsV1, PrivacyVerificationErrorV1> {
+    let candidate = zk_x509_release_candidate_profile_material_v1().map_err(|source| {
+        PrivacyVerificationErrorV1::CompiledActivation(Box::new(
+            PrivacyCompiledActivationFailureV1 {
+                source: CompiledPrivacyProfileValidationErrorV1::Profile(source),
+            },
+        ))
+    })?;
+    validate_compiled_privacy_activation_against_profile_v1(context.activation, &candidate)
+        .map_err(|source| {
+            PrivacyVerificationErrorV1::CompiledActivation(Box::new(
+                PrivacyCompiledActivationFailureV1 { source },
+            ))
+        })?;
+    verify_privacy_envelope_after_compiled_activation_v1(envelope, context)
+}
+
+fn verify_privacy_envelope_after_compiled_activation_v1(
+    envelope: &PrivacyProofEnvelopeV1,
+    context: PrivacyVerificationContextV1<'_>,
+) -> Result<VerifiedPrivacyEffectsV1, PrivacyVerificationErrorV1> {
     envelope
         .validate_against_activation(
             context.activation,
@@ -1202,25 +1241,19 @@ fn fcmp_runtime_context_hash_v1(
     envelope: &PrivacyProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<[u8; 32], PrivacyVerificationErrorV1> {
-    const DOMAIN: &[u8] = b"iroha.privacy.fcmp-plus-plus.runtime-context.v1";
-
-    let chain_id = context.chain_id.as_str().as_bytes();
-    let chain_id_len = u64::try_from(chain_id.len()).map_err(|_| {
-        PrivacyVerificationErrorV1::CanonicalEncoding(Box::new(PrivacyCanonicalEncodingFailureV1))
-    })?;
-    let mut hash = Sha256::new();
-    hash.update(DOMAIN);
-    hash.update(chain_id_len.to_be_bytes());
-    hash.update(chain_id);
-    hash.update(context.genesis_hash);
-    hash.update(context.expected_action_index.to_be_bytes());
-    hash.update(envelope.statement_digest.as_bytes());
-    hash.update(envelope.parameter_id.as_bytes());
-    hash.update(envelope.parameter_digest.as_bytes());
-    hash.update(envelope.verifier_digest.as_bytes());
-    hash.update(envelope.statement_schema_digest.as_bytes());
-    hash.update(envelope.engine_manifest_digest.as_bytes());
-    Ok(hash.finalize().into())
+    Ok(derive_fcmp_runtime_context_hash_v1(
+        &FcmpRuntimeContextBindingV1 {
+            chain_id: context.chain_id,
+            genesis_hash: context.genesis_hash,
+            action_index: context.expected_action_index,
+            statement_digest: envelope.statement_digest,
+            parameter_id: envelope.parameter_id,
+            parameter_digest: envelope.parameter_digest,
+            verifier_digest: envelope.verifier_digest,
+            statement_schema_digest: envelope.statement_schema_digest,
+            engine_manifest_digest: envelope.engine_manifest_digest,
+        },
+    ))
 }
 
 fn verify_fcmp_plus_plus_action_v1(
@@ -2407,12 +2440,18 @@ mod tests {
                 sign_zk_ams_provision_statement_v1, zk_ams_generator_digest_v1,
                 zk_ams_key_image_v1, zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
             },
-            zk_x509::credential_stark::{
-                ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
-                encode_zk_x509_credential_envelope_v1,
+            zk_x509::{
+                credential_stark::{
+                    ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
+                    encode_zk_x509_credential_envelope_v1,
+                },
+                relation::release_fixture::build_zk_x509_release_fixture_v1,
             },
         },
-        privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
+        privacy_profiles::{
+            CompiledPrivacyProfileV1, compiled_privacy_profile_v1,
+            zk_x509_release_candidate_profile_material_v1,
+        },
         privacy_state::{
             PrivacyCommitmentKeyV1, PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1,
             PrivacyRootKeyV1, PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
@@ -2487,17 +2526,46 @@ mod tests {
         (profile, activation)
     }
 
+    fn active_zk_x509_profile() -> (CompiledPrivacyProfileV1, PrivacyProtocolActivationRecordV1) {
+        let profile = zk_x509_release_candidate_profile_material_v1()
+            .expect("release-pinned zk-X.509 candidate profile");
+        let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
+            PrivacyActiveLifecycleV1 {
+                proposed_at_height: 1,
+                activated_at_height: 2,
+                state_since_height: 2,
+            },
+        ));
+        (profile, activation)
+    }
+
     fn zk_x509_dispatch_fixture_with_crl_v1(
         current_crl: Option<PrivacyZkX509CrlRecordV1>,
     ) -> (
         iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1,
         PrivacyZkX509AuthoritativeStateV1,
     ) {
-        let fixture = crate::privacy_engines::zk_x509::relation::tests::fixture();
+        let (profile, _) = active_zk_x509_profile();
+        let fixture = build_zk_x509_release_fixture_v1(
+            PrivacyStatementContextV1 {
+                chain_id: ChainId::from("taira-zk-x509-dispatch-test"),
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x62; 32]),
+                parameter_id: profile.parameter_id,
+                parameter_digest: profile.parameter_digest,
+                verifier_digest: profile.verifier_digest,
+                statement_schema_digest: profile.statement_schema_digest,
+                engine_manifest_digest: profile.engine_manifest_digest,
+            },
+            false,
+        )
+        .expect("canonical zk-X.509 release fixture");
+        let Some(crl) = current_crl else {
+            return (fixture.statement, fixture.authoritative_state);
+        };
         let statement = fixture.statement;
-        let trust_anchor = fixture.trust_anchor;
-        let certificate_policy = fixture.policy;
-        let crl = current_crl.unwrap_or(fixture.crl);
+        let trust_anchor = fixture.authoritative_state.trust_anchor();
+        let certificate_policy = fixture.authoritative_state.certificate_policy().clone();
 
         let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
         commitments.insert(
@@ -2592,8 +2660,8 @@ mod tests {
         iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1,
         PrivacyZkX509AuthoritativeStateV1,
     ) {
-        let fixture = crate::privacy_engines::zk_x509::relation::tests::fixture();
-        let current = fixture.crl;
+        let (_, authoritative_state) = zk_x509_dispatch_fixture_for_test();
+        let current = authoritative_state.crl_record();
         let successor = PrivacyZkX509CrlRecordV1::new(
             current.trust_anchor_id,
             current.certificate_policy_id,
@@ -2648,160 +2716,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
-        let (statement, authoritative_state) = zk_x509_dispatch_fixture_for_test();
-        let (_, activation) = active_profile();
-        let genesis_hash = [0x91; 32];
-        let public =
-            ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, genesis_hash)
-                .expect("canonical X.509 consensus binding");
-        let canonical_proof = PrivacyProofBytesV1::new(
-            encode_zk_x509_credential_envelope_v1(public, b"X5M1main-aggregate", b"X5C1compact-ca")
-                .expect("canonical X.509 credential envelope"),
-        );
-        let malformed_proof = PrivacyProofBytesV1::new(Vec::new());
-
-        assert!(matches!(
-            verify_zk_x509_certificate_v1(
-                &statement,
-                &malformed_proof,
-                &zk_x509_context(&statement, &activation, None, false, genesis_hash),
-            ),
-            Err(PrivacyVerificationErrorV1::ZkX509State(detail))
-                if detail.code == PrivacyZkX509StateFailureCodeV1::MissingTrustedState
-        ));
-
-        let mut wrong_record = statement.clone();
-        wrong_record.trust_anchor_record_digest =
-            iroha_data_model::privacy::PrivacyZkX509TrustAnchorRecordDigestV1::new([0xB1; 32]);
-        let mut wrong_root = statement.clone();
-        wrong_root.ca_membership_root = PrivacyRootV1::new([0xB2; 32]);
-        let mut wrong_predicate = statement.clone();
-        wrong_predicate.key_usage.content_commitment =
-            (!wrong_predicate.key_usage.content_commitment.is_required()).into();
-        for (label, candidate) in [
-            ("record substitution", wrong_record),
-            ("root substitution", wrong_root),
-            ("predicate substitution", wrong_predicate),
-        ] {
-            assert!(
-                matches!(
-                    verify_zk_x509_certificate_v1(
-                        &candidate,
-                        &malformed_proof,
-                        &zk_x509_context(
-                            &candidate,
-                            &activation,
-                            Some(&authoritative_state),
-                            false,
-                            genesis_hash,
-                        ),
-                    ),
-                    Err(PrivacyVerificationErrorV1::ZkX509State(detail))
-                        if detail.code
-                            == PrivacyZkX509StateFailureCodeV1::AuthoritativeStateMismatch
-                ),
-                "{label} did not fail at the authoritative-state boundary"
-            );
-        }
-
-        let (_, successor_crl_state) = zk_x509_dispatch_fixture_with_successor_crl_v1();
-        assert_eq!(
-            successor_crl_state.crl_record().record_epoch,
-            authoritative_state
-                .crl_record()
-                .record_epoch
-                .checked_add(1)
-                .expect("fixture epoch has a successor")
-        );
-        assert_ne!(
-            successor_crl_state.crl_record().record_digest,
-            statement.crl_record_digest
-        );
-        assert!(matches!(
-            verify_zk_x509_certificate_v1(
-                &statement,
-                &malformed_proof,
-                &zk_x509_context(
-                    &statement,
-                    &activation,
-                    Some(&successor_crl_state),
-                    false,
-                    genesis_hash,
-                ),
-            ),
-            Err(PrivacyVerificationErrorV1::ZkX509State(detail))
-                if detail.code
-                    == PrivacyZkX509StateFailureCodeV1::AuthoritativeStateMismatch
-        ));
-
-        assert!(matches!(
-            verify_zk_x509_certificate_v1(
-                &statement,
-                &malformed_proof,
-                &zk_x509_context(
-                    &statement,
-                    &activation,
-                    Some(&authoritative_state),
-                    true,
-                    genesis_hash,
-                ),
-            ),
-            Err(PrivacyVerificationErrorV1::ZkX509State(detail))
-                if detail.code
-                    == PrivacyZkX509StateFailureCodeV1::DuplicateCertificateNullifier
-        ));
-
-        assert!(matches!(
-            verify_zk_x509_certificate_v1(
-                &statement,
-                &canonical_proof,
-                &zk_x509_context(
-                    &statement,
-                    &activation,
-                    Some(&authoritative_state),
-                    false,
-                    genesis_hash,
-                ),
-            ),
-            Err(PrivacyVerificationErrorV1::NativeZkX509(detail))
-                if detail.source == ZkX509EngineErrorV1::AirIncomplete
-        ));
-
-        let mut wrong_intent = statement.clone();
-        wrong_intent.context.transaction_intent_digest =
-            PrivacyTransactionIntentDigestV1::new([0xC1; 32]);
-        let mut wrong_profile = statement.clone();
-        wrong_profile.context.parameter_digest = PrivacyParameterDigestV1::new([0xC2; 32]);
-        for (label, candidate, candidate_genesis) in [
-            ("transaction intent", wrong_intent, genesis_hash),
-            ("governed profile", wrong_profile, genesis_hash),
-            ("committed genesis", statement.clone(), [0x92; 32]),
-        ] {
-            assert!(
-                matches!(
-                    verify_zk_x509_certificate_v1(
-                        &candidate,
-                        &canonical_proof,
-                        &zk_x509_context(
-                            &candidate,
-                            &activation,
-                            Some(&authoritative_state),
-                            false,
-                            candidate_genesis,
-                        ),
-                    ),
-                    Err(PrivacyVerificationErrorV1::NativeZkX509(detail))
-                        if detail.source
-                            == ZkX509EngineErrorV1::CredentialProof(
-                                ZkX509CredentialProofErrorV1::PublicBindingMismatch
-                            )
-                ),
-                "{label} substitution was not rejected by X5S1 public binding"
-            );
-        }
-    }
+    #[path = "zk_x509_tests.rs"]
+    mod zk_x509_tests;
 
     fn valid_envelope() -> (
         PrivacyProofEnvelopeV1,

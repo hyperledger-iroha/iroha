@@ -81,7 +81,7 @@ public final class AccountAddress {
 
   /**
    * Convenience helper that surfaces canonical I105 alongside the shared warning string.
-   * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
+   * Follow {@code specs/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats() throws AccountAddressException {
     return displayFormats(DEFAULT_I105_DISCRIMINANT);
@@ -89,7 +89,7 @@ public final class AccountAddress {
 
   /**
    * Convenience helper that surfaces canonical I105 alongside the shared warning string.
-   * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
+   * Follow {@code specs/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats(final int discriminant) throws AccountAddressException {
     final String i105 = toI105(discriminant);

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -32,6 +33,15 @@ assert CHECKER_SPEC and CHECKER_SPEC.loader  # pragma: no cover - defensive
 sys.modules[CHECKER_SPEC.name] = CHECKER
 CHECKER_SPEC.loader.exec_module(CHECKER)
 
+import sorafs_topology_qualification as TOPOLOGY  # noqa: E402
+from sorafs_resilience_test_support import (  # noqa: E402
+    public_key_from_seed,
+    sign,
+)
+from sorafs_rollout_runner_test_support import (  # noqa: E402
+    write_topology_qualification,
+)
+
 
 CASE_DIGEST = "a" * 64
 ROSTER_HASH = "b" * 64
@@ -41,6 +51,18 @@ SORTITION_SEED = "e" * 64
 POLICY_DIGEST = "f" * 64
 ROUTE_BODY_DIGEST = "9" * 64
 GENERATED_AT = 1_800_300_000
+DEPLOYMENT_ID = "moderation-panel-prod-20260701"
+ENVIRONMENT = "production"
+TOPOLOGY_SIGNER_IDENTITY = "sorafs-moderation-topology-qualification-hsm"
+TOPOLOGY_SIGNER_KEY_REVISION = 7
+TOPOLOGY_SIGNER_POLICY_DIGEST = hashlib.sha256(
+    b"sorafs-moderation-topology-signer-policy-v1"
+).hexdigest()
+TOPOLOGY_SIGNING_SEED = hashlib.sha256(
+    b"sorafs-moderation-topology-qualification-test-key"
+).digest()
+TOPOLOGY_VERIFICATION_PUBLIC_KEY = public_key_from_seed(TOPOLOGY_SIGNING_SEED)
+TOPOLOGY_MAX_REVIEW_AGE_SECS = 3_600
 
 
 def canary_path(tmp_path: Path, kind: str) -> Path:
@@ -58,6 +80,64 @@ def checker_options() -> object:
     )
 
 
+def write_signed_topology_qualification(tmp_path: Path) -> Path:
+    """Write and authenticate the exact topology summary supplied to the lane."""
+
+    summary_path = write_topology_qualification(
+        tmp_path / "topology-qualification.json",
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+    )
+    binding, binding_errors = TOPOLOGY.load_topology_qualification_binding(
+        summary_path,
+        expected_deployment_id=DEPLOYMENT_ID,
+        expected_environment=ENVIRONMENT,
+    )
+    assert binding_errors == []
+    assert binding is not None
+
+    envelope_path = summary_path.with_name(f"{summary_path.name}.ed25519")
+    envelope = {
+        "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
+        **binding,
+        "signer_identity": TOPOLOGY_SIGNER_IDENTITY,
+        "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
+        "signer_key_fingerprint_hex": hashlib.sha256(
+            TOPOLOGY_VERIFICATION_PUBLIC_KEY
+        ).hexdigest(),
+        "signer_policy_digest_hex": TOPOLOGY_SIGNER_POLICY_DIGEST,
+        "reviewed_at_unix": GENERATED_AT - 60,
+        "signature_algorithm": "ed25519",
+        "signature_hex": "00" * 64,
+    }
+    envelope["signature_hex"] = sign(
+        TOPOLOGY_SIGNING_SEED,
+        TOPOLOGY.topology_qualification_envelope_signing_bytes(envelope),
+    ).hex()
+    envelope_path.write_text(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    authenticated, authentication_errors = (
+        TOPOLOGY.load_signed_topology_qualification_binding(
+            summary_path,
+            envelope_path,
+            trusted_public_key=TOPOLOGY_VERIFICATION_PUBLIC_KEY,
+            trusted_signer_identity=TOPOLOGY_SIGNER_IDENTITY,
+            trusted_key_revision=TOPOLOGY_SIGNER_KEY_REVISION,
+            trusted_policy_digest_hex=TOPOLOGY_SIGNER_POLICY_DIGEST,
+            now_unix=GENERATED_AT,
+            max_review_age_secs=TOPOLOGY_MAX_REVIEW_AGE_SECS,
+            expected_deployment_id=DEPLOYMENT_ID,
+            expected_environment=ENVIRONMENT,
+        )
+    )
+    assert authentication_errors == []
+    assert authenticated == binding
+    return summary_path
+
+
 def args_for(kind: str, tmp_path: Path) -> list[str]:
     args = [
         "--kind",
@@ -65,9 +145,9 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         "--out",
         str(canary_path(tmp_path, kind)),
         "--deployment-id",
-        "moderation-panel-prod-20260701",
+        DEPLOYMENT_ID,
         "--environment",
-        "production",
+        ENVIRONMENT,
         "--generated-at-unix",
         str(GENERATED_AT),
         "--now-unix",
@@ -483,7 +563,11 @@ def test_generated_canaries_pass_full_moderation_panel_gate(tmp_path: Path) -> N
         evidence_paths.append(canary_path(tmp_path, kind))
     summary = tmp_path / "summary.json"
 
-    command = []
+    topology_summary = write_signed_topology_qualification(tmp_path)
+    command = [
+        "--topology-qualification-summary",
+        str(topology_summary),
+    ]
     for path in evidence_paths:
         command.extend(["--evidence", str(path)])
     command.extend(["--summary-out", str(summary), "--now-unix", str(GENERATED_AT)])

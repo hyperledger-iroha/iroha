@@ -1,6 +1,6 @@
 use core::cmp::Ordering;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -11,13 +11,16 @@ use norito::{
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
-    da::{commitment::DaCommitmentLocation, types::StorageTicketId},
+    da::{
+        commitment::{DaCommitmentLocation, MerklePathItem},
+        types::StorageTicketId,
+    },
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
 
 /// Pin intent emitted by the DA ingest pipeline to seed the `SoraFS` registry.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct DaPinIntent {
     /// Lane associated with the blob.
@@ -112,22 +115,16 @@ impl DaPinIntentBundle {
 
     /// Canonical Merkle root over the bundled pin intents.
     ///
-    /// Leaves are `hash(norito::to_bytes(DaPinIntent))`. Odd leaves are
-    /// promoted unchanged to the next layer instead of being duplicated.
+    /// Leaves and internal nodes use distinct, versioned hash domains. Odd
+    /// leaves are promoted unchanged to the next layer instead of being
+    /// duplicated.
     #[must_use]
     pub fn merkle_root(&self) -> Option<Hash> {
         if self.intents.is_empty() {
             return None;
         }
 
-        let mut layer: Vec<Hash> = self
-            .intents
-            .iter()
-            .map(|intent| {
-                let encoded = to_bytes(intent).expect("DaPinIntent Norito encoding must succeed");
-                Hash::new(encoded)
-            })
-            .collect();
+        let mut layer: Vec<Hash> = self.intents.iter().map(pin_intent_leaf_hash).collect();
 
         while layer.len() > 1 {
             let mut next = Vec::with_capacity(layer.len().div_ceil(2));
@@ -136,10 +133,7 @@ impl DaPinIntentBundle {
                 let combined = if pair.len() == 1 {
                     pair[0]
                 } else {
-                    let mut buf = Vec::with_capacity(Hash::LENGTH * 2);
-                    buf.extend_from_slice(pair[0].as_ref());
-                    buf.extend_from_slice(pair[1].as_ref());
-                    Hash::new(buf)
+                    pin_intent_internal_hash(&pair[0], &pair[1])
                 };
                 next.push(combined);
             }
@@ -147,6 +141,18 @@ impl DaPinIntentBundle {
         }
 
         layer.pop()
+    }
+
+    /// Header commitment to the V1 tree shape, leaf count, and Merkle root.
+    #[must_use]
+    pub fn merkle_commitment(&self) -> Option<HashOf<Self>> {
+        let leaf_count = u32::try_from(self.intents.len()).ok()?;
+        let root = self.merkle_root()?;
+        Some(pin_intent_merkle_commitment(
+            self.version,
+            leaf_count,
+            &root,
+        ))
     }
 }
 
@@ -178,6 +184,71 @@ pub struct DaPinIntentWithLocation {
     pub intent: DaPinIntent,
     /// Block height and index of the intent within the bundled payload.
     pub location: DaCommitmentLocation,
+}
+
+/// Merkle membership proof for a DA pin intent inside a committed block bundle.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct DaPinIntentProof {
+    /// Pin intent covered by the proof.
+    pub intent: DaPinIntent,
+    /// Position of the intent inside the block bundle.
+    pub location: DaCommitmentLocation,
+    /// Header commitment to the tree version, leaf count, and Merkle root.
+    pub bundle_hash: HashOf<DaPinIntentBundle>,
+    /// Total number of intents in the bundle.
+    pub bundle_len: u32,
+    /// Merkle root derived from the ordered intent list.
+    pub root: Hash,
+    /// Merkle path connecting the intent leaf to `root`.
+    pub path: Vec<MerklePathItem>,
+}
+
+const DA_PIN_INTENT_MERKLE_LEAF_DOMAIN_V1: &[u8] = b"iroha:da:pin-intent-merkle:leaf:v1\0";
+const DA_PIN_INTENT_MERKLE_INTERNAL_DOMAIN_V1: &[u8] = b"iroha:da:pin-intent-merkle:internal:v1\0";
+const DA_PIN_INTENT_MERKLE_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"iroha:da:pin-intent-merkle:commitment:v1\0";
+
+/// Hash a pin intent into its domain-separated Merkle leaf value.
+#[must_use]
+pub fn pin_intent_leaf_hash(intent: &DaPinIntent) -> Hash {
+    let encoded = to_bytes(intent).expect("DaPinIntent Norito encoding must succeed");
+    let mut preimage =
+        Vec::with_capacity(DA_PIN_INTENT_MERKLE_LEAF_DOMAIN_V1.len() + encoded.len());
+    preimage.extend_from_slice(DA_PIN_INTENT_MERKLE_LEAF_DOMAIN_V1);
+    preimage.extend_from_slice(&encoded);
+    Hash::new(preimage)
+}
+
+/// Hash two child nodes into a domain-separated pin-intent Merkle node.
+#[must_use]
+pub fn pin_intent_internal_hash(left: &Hash, right: &Hash) -> Hash {
+    let mut preimage =
+        Vec::with_capacity(DA_PIN_INTENT_MERKLE_INTERNAL_DOMAIN_V1.len() + Hash::LENGTH * 2);
+    preimage.extend_from_slice(DA_PIN_INTENT_MERKLE_INTERNAL_DOMAIN_V1);
+    preimage.extend_from_slice(left.as_ref());
+    preimage.extend_from_slice(right.as_ref());
+    Hash::new(preimage)
+}
+
+/// Reconstruct the header commitment for a DA pin-intent Merkle tree.
+#[must_use]
+pub fn pin_intent_merkle_commitment(
+    version: u16,
+    leaf_count: u32,
+    root: &Hash,
+) -> HashOf<DaPinIntentBundle> {
+    let mut preimage = Vec::with_capacity(
+        DA_PIN_INTENT_MERKLE_COMMITMENT_DOMAIN_V1.len()
+            + core::mem::size_of::<u16>()
+            + core::mem::size_of::<u32>()
+            + Hash::LENGTH,
+    );
+    preimage.extend_from_slice(DA_PIN_INTENT_MERKLE_COMMITMENT_DOMAIN_V1);
+    preimage.extend_from_slice(&version.to_le_bytes());
+    preimage.extend_from_slice(&leaf_count.to_le_bytes());
+    preimage.extend_from_slice(root.as_ref());
+    HashOf::from_untyped_unchecked(Hash::new(preimage))
 }
 
 #[cfg(test)]
@@ -248,5 +319,49 @@ mod tests {
                 )
             ]
         );
+    }
+
+    #[test]
+    fn pin_intent_merkle_domains_are_disjoint() {
+        let intent = DaPinIntent::new(
+            LaneId::new(1),
+            1,
+            1,
+            StorageTicketId::new([1; 32]),
+            ManifestDigest::new([2; 32]),
+        );
+        let encoded = to_bytes(&intent).expect("encode pin intent");
+        assert_ne!(pin_intent_leaf_hash(&intent), Hash::new(encoded));
+
+        let left = Hash::new(b"left");
+        let right = Hash::new(b"right");
+        let mut untagged = Vec::with_capacity(Hash::LENGTH * 2);
+        untagged.extend_from_slice(left.as_ref());
+        untagged.extend_from_slice(right.as_ref());
+        assert_ne!(pin_intent_internal_hash(&left, &right), Hash::new(untagged));
+    }
+
+    #[test]
+    fn pin_intent_merkle_commitment_binds_version_leaf_count_and_root() {
+        let root = Hash::new(b"root");
+        let baseline = pin_intent_merkle_commitment(DaPinIntentBundle::VERSION_V1, 3, &root);
+
+        assert_ne!(
+            baseline,
+            pin_intent_merkle_commitment(DaPinIntentBundle::VERSION_V1 + 1, 3, &root)
+        );
+        assert_ne!(
+            baseline,
+            pin_intent_merkle_commitment(DaPinIntentBundle::VERSION_V1, 4, &root)
+        );
+        assert_ne!(
+            baseline,
+            pin_intent_merkle_commitment(
+                DaPinIntentBundle::VERSION_V1,
+                3,
+                &Hash::new(b"other-root"),
+            )
+        );
+        assert!(DaPinIntentBundle::default().merkle_commitment().is_none());
     }
 }

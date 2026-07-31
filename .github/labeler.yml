@@ -3,7 +3,7 @@ api-changes:
     - base-branch: 'main'
     - changed-files:
       - any-glob-to-any-file:
-        - 'docs/source/references/schema.json'
+        - 'specs/references/schema.json'
         - 'crates/iroha_torii/src/**'
         - 'crates/iroha_torii_shared/src/**'
 
@@ -14,4 +14,4 @@ config-changes:
       - any-glob-to-any-file:
         - 'configs/**'
         - 'defaults/**'
-        - 'docs/source/references/*.template.*'
+        - 'specs/references/*.template.*'

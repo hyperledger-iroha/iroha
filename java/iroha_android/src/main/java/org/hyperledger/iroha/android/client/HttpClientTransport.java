@@ -43,6 +43,7 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingResponseV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingResponseVerifier;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
@@ -110,7 +111,10 @@ public final class HttpClientTransport implements IrohaClient {
     final String hashHex = SignedTransactionHasher.hashHex(transaction);
     return flushPendingQueue()
         .exceptionally(ex -> null)
-        .thenCompose(ignored -> submitWithRetryInternal(transaction, hashHex, 1, true));
+        .thenCompose(
+            ignored ->
+                submitWithRetryInternal(
+                    transaction, hashHex, 1, false));
   }
 
   @Override
@@ -123,7 +127,9 @@ public final class HttpClientTransport implements IrohaClient {
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader());
-    return executeAccepted(request, "transaction JSON submit", 202);
+    return ensureTransactionSubmissionCompatibility()
+        .thenCompose(
+            ignored -> executeAccepted(request, "transaction JSON submit", 202));
   }
 
   @Override
@@ -154,37 +160,43 @@ public final class HttpClientTransport implements IrohaClient {
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader());
-    notifyRequest(request);
-    return executor
-        .execute(request)
-        .handle(
-            (response, throwable) -> {
-              if (throwable != null) {
-                final Throwable cause =
-                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
-                notifyFailure(request, cause);
-                final CompletableFuture<ClientResponse> failed = new CompletableFuture<>();
-                failed.completeExceptionally(cause);
-                return failed;
-              }
-              final ClientResponse clientResponse =
-                  new ClientResponse(
-                      response.statusCode(),
-                      response.body(),
-                      response.message(),
-                      extractTransactionHash(response).orElse(null),
-                      extractRejectCode(response));
-              if (clientResponse.statusCode() < 200 || clientResponse.statusCode() >= 300) {
-                notifyFailure(
-                    request,
-                    new RuntimeException(
-                        "Torii request failed with status " + clientResponse.statusCode()));
-              } else {
-                notifyResponse(request, clientResponse);
-              }
-              return CompletableFuture.completedFuture(clientResponse);
-            })
-        .thenCompose(future -> future);
+    return ensureTransactionSubmissionCompatibility()
+        .thenCompose(
+            ignored -> {
+              notifyRequest(request);
+              return executor
+                  .execute(request)
+                  .handle(
+                      (response, throwable) -> {
+                        if (throwable != null) {
+                          final Throwable cause = unwrapCompletion(throwable);
+                          notifyFailure(request, cause);
+                          final CompletableFuture<ClientResponse> failed =
+                              new CompletableFuture<>();
+                          failed.completeExceptionally(cause);
+                          return failed;
+                        }
+                        final ClientResponse clientResponse =
+                            new ClientResponse(
+                                response.statusCode(),
+                                response.body(),
+                                response.message(),
+                                extractTransactionHash(response).orElse(null),
+                                extractRejectCode(response));
+                        if (clientResponse.statusCode() < 200
+                            || clientResponse.statusCode() >= 300) {
+                          notifyFailure(
+                              request,
+                              new RuntimeException(
+                                  "Torii request failed with status "
+                                      + clientResponse.statusCode()));
+                        } else {
+                          notifyResponse(request, clientResponse);
+                        }
+                        return CompletableFuture.completedFuture(clientResponse);
+                      })
+                  .thenCompose(future -> future);
+            });
   }
 
   @Override
@@ -197,7 +209,11 @@ public final class HttpClientTransport implements IrohaClient {
             config.requestTimeout(),
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader());
-    return executeAccepted(request, "transaction entrypoint JSON submit", 202);
+    return ensureTransactionSubmissionCompatibility()
+        .thenCompose(
+            ignored ->
+                executeAccepted(
+                    request, "transaction entrypoint JSON submit", 202));
   }
 
   private CompletableFuture<ClientResponse> executeAccepted(
@@ -308,6 +324,17 @@ public final class HttpClientTransport implements IrohaClient {
         .setTransportExecutor(executor)
         .defaultHeaders(config.defaultHeaders())
         .observers(config.observers())
+        .build();
+  }
+
+  /** Creates a typed DA proof client that reuses this transport's configuration. */
+  public DaToriiClient newDaToriiClient() {
+    return DaToriiClient.builder()
+        .setExecutor(executor)
+        .setBaseUri(config.baseUri())
+        .setTimeout(config.requestTimeout())
+        .setDefaultHeaders(config.defaultHeaders())
+        .setObservers(config.observers())
         .build();
   }
 
@@ -735,20 +762,44 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(request, VpnJsonParser::parseReceiptList, "vpn receipt list", 200);
   }
 
-  /** Registers verifier metadata via {@code POST /v1/zk/vk/register}. */
-  public CompletableFuture<ClientResponse> registerVerifyingKey(
+  /**
+   * Prepares an unsigned verifier registration transaction for local signing.
+   *
+   * <p>Requires {@link ClientConfig#localSigningContext()} and rejects any draft not bound to that
+   * chain, the requested authority, and the exact requested registry record.
+   */
+  public CompletableFuture<VerifyingKeyTransactionDraft> registerVerifyingKey(
       final VerifyingKeyRegisterRequest requestBody) {
-    final byte[] body = encodeJsonBody(buildVerifyingKeyRegisterPayload(requestBody));
+    final LocalSigningContext signingContext = config.requireLocalSigningContext();
+    final Map<String, Object> payload = buildVerifyingKeyRegisterPayload(requestBody);
+    final byte[] body = encodeJsonBody(payload);
     final TransportRequest request = buildJsonPostRequest("/v1/zk/vk/register", body);
-    return executeAccepted(request, "verifying key register", 202);
+    return fetchJson(
+        request,
+        bytes -> VerifyingKeyTransactionDraft.parseRegister(
+            bytes, signingContext.chainId(), payload),
+        "verifying key register draft",
+        200);
   }
 
-  /** Updates verifier metadata via {@code POST /v1/zk/vk/update}. */
-  public CompletableFuture<ClientResponse> updateVerifyingKey(
+  /**
+   * Prepares an unsigned verifier update transaction for local signing.
+   *
+   * <p>Requires {@link ClientConfig#localSigningContext()} and rejects any draft not bound to that
+   * chain, the requested authority, and the exact requested registry record.
+   */
+  public CompletableFuture<VerifyingKeyTransactionDraft> updateVerifyingKey(
       final VerifyingKeyUpdateRequest requestBody) {
-    final byte[] body = encodeJsonBody(buildVerifyingKeyUpdatePayload(requestBody));
+    final LocalSigningContext signingContext = config.requireLocalSigningContext();
+    final Map<String, Object> payload = buildVerifyingKeyUpdatePayload(requestBody);
+    final byte[] body = encodeJsonBody(payload);
     final TransportRequest request = buildJsonPostRequest("/v1/zk/vk/update", body);
-    return executeAccepted(request, "verifying key update", 202);
+    return fetchJson(
+        request,
+        bytes -> VerifyingKeyTransactionDraft.parseUpdate(
+            bytes, signingContext.chainId(), payload),
+        "verifying key update draft",
+        200);
   }
 
   /** Quotes the exact unsigned transaction payload before signing. */
@@ -806,27 +857,32 @@ public final class HttpClientTransport implements IrohaClient {
             });
   }
 
-  /** Calls a deployed contract via `POST /v1/contracts/call`. */
-  public CompletableFuture<ContractCallResponse> callContract(
+  /**
+   * Prepares an unsigned contract-call transaction for local signing.
+   *
+   * <p>Private signing material is never accepted by or sent to Torii. Sign the returned
+   * transaction scaffold locally and submit the resulting signed transaction through {@link
+   * #submitTransaction(SignedTransaction)}.
+   */
+  public CompletableFuture<ContractCallResponse> prepareContractCall(
       final String authority,
-      final String privateKey,
       final FeePaymentIntent feePayment,
       final String contractAddress,
       final String contractAlias,
       final String entrypoint,
       final Object payload) {
-    final byte[] body =
-        encodeJsonBody(
-            buildContractCallPayload(
-                authority,
-                privateKey,
-                feePayment,
-                contractAddress,
-                contractAlias,
-                entrypoint,
-                payload));
+    final Map<String, Object> requestPayload =
+        buildContractCallDraftPayload(
+            authority,
+            feePayment,
+            contractAddress,
+            contractAlias,
+            entrypoint,
+            payload);
+    final byte[] body = encodeJsonBody(requestPayload);
     final TransportRequest request = buildJsonPostRequest("/v1/contracts/call", body);
-    return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call");
+    return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call draft")
+        .thenApply(response -> validateContractCallDraft(response, requestPayload));
   }
 
   /** Proposes a generic multisig instruction batch via `POST /v1/multisig/propose`. */
@@ -1178,10 +1234,14 @@ public final class HttpClientTransport implements IrohaClient {
       chain = chain.thenCompose(
           ignored -> {
             final CompletableFuture<ClientResponse> submission =
-                submitWithRetryInternal(queuedTx, SignedTransactionHasher.hashHex(queuedTx), 1, true);
+                submitWithRetryInternal(
+                    queuedTx, SignedTransactionHasher.hashHex(queuedTx), 1, true);
             CompletableFuture<Void> stage = submission.thenApply(response -> null);
             stage = stage.exceptionally(ex -> {
-              requeueRemaining(pending, index + 1);
+              final Throwable cause = unwrapCompletion(ex);
+              final int requeueFrom =
+                  cause instanceof ToriiTransactionCompatibilityException ? index : index + 1;
+              requeueRemaining(pending, requeueFrom);
               throw ex instanceof CompletionException
                   ? (CompletionException) ex
                   : new CompletionException(ex);
@@ -1196,13 +1256,7 @@ public final class HttpClientTransport implements IrohaClient {
       final SignedTransaction transaction,
       final String hashHex,
       final int attempt,
-      final boolean skipFlush) {
-    if (!skipFlush) {
-      return flushPendingQueue()
-          .exceptionally(ex -> null)
-          .thenCompose(ignored -> submitWithRetryInternal(transaction, hashHex, attempt, true));
-    }
-
+      final boolean queuedReplay) {
     final TransportRequest request =
         ToriiRequestBuilder.buildSubmitRequest(
             config.baseUri(),
@@ -1211,50 +1265,88 @@ public final class HttpClientTransport implements IrohaClient {
             config.defaultHeaders(),
             config.wireFormatPreference().acceptHeader());
 
-    notifyRequest(request);
-    return executor
-        .execute(request)
-        .handle((response, throwable) -> {
-          if (throwable != null) {
-            final Throwable cause =
-                throwable instanceof CompletionException ? throwable.getCause() : throwable;
-            notifyFailure(request, cause);
-            return scheduleRetry(transaction, hashHex, attempt, request, null, cause);
-          }
-          final ClientResponse clientResponse =
-              new ClientResponse(
-                  response.statusCode(),
-                  response.body(),
-                  response.message(),
-                  extractTransactionHash(response).orElse(hashHex),
-                  extractRejectCode(response));
-          if (clientResponse.statusCode() < 200 || clientResponse.statusCode() >= 300) {
-            if (config.retryPolicy().shouldRetryResponse(attempt, clientResponse)) {
-              return scheduleRetry(transaction, hashHex, attempt, request, clientResponse, null);
-            }
-            if (config.retryPolicy().isRetryableStatus(clientResponse.statusCode())) {
-              final RuntimeException error =
-                  new RuntimeException(
-                      "Torii request failed with status " + clientResponse.statusCode());
-              notifyFailure(request, error);
-              enqueuePending(transaction);
-              final CompletableFuture<ClientResponse> failed = new CompletableFuture<>();
-              failed.completeExceptionally(error);
-              return failed;
-            }
-            notifyResponse(request, clientResponse);
-            return CompletableFuture.completedFuture(clientResponse);
-          }
-          notifyResponse(request, clientResponse);
-          return CompletableFuture.completedFuture(clientResponse);
-        })
-        .thenCompose(future -> future);
+    return ensureTransactionSubmissionCompatibility()
+        .handle(
+            (ignored, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause = unwrapCompletion(throwable);
+                if (!queuedReplay
+                    && cause instanceof ToriiTransactionCompatibilityProbeException) {
+                  enqueuePending(transaction);
+                }
+                throw new CompletionException(cause);
+              }
+              return null;
+            })
+        .thenCompose(
+            ignored -> {
+              notifyRequest(request);
+              return executor
+                  .execute(request)
+                  .handle(
+                      (response, throwable) -> {
+                        if (throwable != null) {
+                          final Throwable cause = unwrapCompletion(throwable);
+                          notifyFailure(request, cause);
+                          return scheduleRetry(
+                              transaction,
+                              hashHex,
+                              attempt,
+                              queuedReplay,
+                              request,
+                              null,
+                              cause);
+                        }
+                        final ClientResponse clientResponse =
+                            new ClientResponse(
+                                response.statusCode(),
+                                response.body(),
+                                response.message(),
+                                extractTransactionHash(response).orElse(hashHex),
+                                extractRejectCode(response));
+                        if (clientResponse.statusCode() < 200
+                            || clientResponse.statusCode() >= 300) {
+                          if (config
+                              .retryPolicy()
+                              .shouldRetryResponse(attempt, clientResponse)) {
+                            return scheduleRetry(
+                                transaction,
+                                hashHex,
+                                attempt,
+                                queuedReplay,
+                                request,
+                                clientResponse,
+                                null);
+                          }
+                          if (config
+                              .retryPolicy()
+                              .isRetryableStatus(clientResponse.statusCode())) {
+                            final RuntimeException error =
+                                new RuntimeException(
+                                    "Torii request failed with status "
+                                        + clientResponse.statusCode());
+                            notifyFailure(request, error);
+                            enqueuePending(transaction);
+                            final CompletableFuture<ClientResponse> failed =
+                                new CompletableFuture<>();
+                            failed.completeExceptionally(error);
+                            return failed;
+                          }
+                          notifyResponse(request, clientResponse);
+                          return CompletableFuture.completedFuture(clientResponse);
+                        }
+                        notifyResponse(request, clientResponse);
+                        return CompletableFuture.completedFuture(clientResponse);
+                      })
+                  .thenCompose(future -> future);
+            });
   }
 
   private CompletableFuture<ClientResponse> scheduleRetry(
       final SignedTransaction transaction,
       final String hashHex,
       final int attempt,
+      final boolean queuedReplay,
       final TransportRequest request,
       final ClientResponse lastResponse,
       final Throwable lastError) {
@@ -1287,7 +1379,10 @@ public final class HttpClientTransport implements IrohaClient {
     return CompletableFuture
         .supplyAsync(
             () -> null, CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS))
-        .thenCompose(ignored -> submitWithRetryInternal(transaction, hashHex, attempt + 1, true));
+        .thenCompose(
+            ignored ->
+                submitWithRetryInternal(
+                    transaction, hashHex, attempt + 1, queuedReplay));
   }
 
   private void enqueuePending(final SignedTransaction transaction) {
@@ -2006,6 +2101,34 @@ public final class HttpClientTransport implements IrohaClient {
     return current;
   }
 
+  private CompletableFuture<Void> ensureTransactionSubmissionCompatibility() {
+    final TransportRequest request =
+        buildJsonGetRequest(
+            "/v1/node/capabilities",
+            Collections.emptyMap(),
+            NODE_CAPABILITIES_RESPONSE_MAX_BYTES);
+    return fetchJson(
+            request,
+            payload -> {
+              ToriiTransactionCompatibility.requireCompatible(payload);
+              return Boolean.TRUE;
+            },
+            "transaction submission compatibility",
+            200)
+        .handle(
+            (ignored, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause = unwrapCompletion(throwable);
+                if (cause instanceof ToriiTransactionCompatibilityException) {
+                  throw new CompletionException(cause);
+                }
+                throw new CompletionException(
+                    new ToriiTransactionCompatibilityProbeException(cause));
+              }
+              return null;
+            });
+  }
+
   private <T> CompletableFuture<T> fetchJson(
       final TransportRequest request,
       final Function<byte[], T> parser,
@@ -2375,9 +2498,9 @@ public final class HttpClientTransport implements IrohaClient {
     return payload;
   }
 
-  static Map<String, Object> buildContractCallPayload(
+  /** Builds the secret-free request used to prepare a contract-call draft. */
+  static Map<String, Object> buildContractCallDraftPayload(
       final String authority,
-      final String privateKey,
       final FeePaymentIntent feePayment,
       final String contractAddress,
       final String contractAlias,
@@ -2388,7 +2511,6 @@ public final class HttpClientTransport implements IrohaClient {
     }
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("authority", normalizeNonBlank(authority, "authority"));
-    payload.put("private_key", normalizeNonBlank(privateKey, "privateKey"));
     payload.putAll(buildContractTargetSelector(contractAddress, contractAlias));
     payload.put("entrypoint", normalizeNonBlank(entrypoint, "entrypoint"));
     if (payloadValue != null) {
@@ -2396,6 +2518,56 @@ public final class HttpClientTransport implements IrohaClient {
     }
     payload.put("fee_payment", feePayment.toJsonMap());
     return payload;
+  }
+
+  /** Validates that Torii returned a secret-free draft bound to the requested call. */
+  static ContractCallResponse validateContractCallDraft(
+      final ContractCallResponse response, final Map<String, Object> request) {
+    if (!response.ok()) {
+      throw new IllegalStateException("contract call draft.ok must be true");
+    }
+    if (response.submitted()) {
+      throw new IllegalStateException("contract call draft must not be submitted");
+    }
+    if (response.txHashHex() != null || response.pipelineStatus() != null) {
+      throw new IllegalStateException("contract call draft must not contain submission state");
+    }
+    if (!Objects.equals(response.entrypoint(), request.get("entrypoint"))) {
+      throw new IllegalStateException(
+          "contract call draft entrypoint is not bound to the request");
+    }
+    final ContractOperationReceipt receipt = response.operationReceipt();
+    if (!"contract_call".equals(receipt.operationKind())
+        || !"pending_signature".equals(receipt.status())) {
+      throw new IllegalStateException(
+          "contract call draft receipt must be pending_signature");
+    }
+    if (!Objects.equals(receipt.entrypoint(), response.entrypoint())
+        || receipt.txHashHex() != null) {
+      throw new IllegalStateException("contract call draft receipt is inconsistent");
+    }
+    if (response.transactionScaffoldB64() == null
+        || !response.transactionScaffoldB64().equals(response.signedTransactionB64())) {
+      throw new IllegalStateException(
+          "contract call draft must contain one exact transaction scaffold");
+    }
+    if (response.signingMessageB64() == null) {
+      throw new IllegalStateException("contract call draft must contain a signing message");
+    }
+    if (Base64.getDecoder().decode(response.signingMessageB64()).length != 32) {
+      throw new IllegalStateException("contract call draft signing message must be 32 bytes");
+    }
+    final Object expectedAddress = request.get("contract_address");
+    if (expectedAddress != null
+        && (!expectedAddress.equals(response.contractAddress())
+            || !expectedAddress.equals(receipt.contractAddress()))) {
+      throw new IllegalStateException("contract call draft address is not bound to the request");
+    }
+    final Object expectedAlias = request.get("contract_alias");
+    if (expectedAlias != null && !expectedAlias.equals(receipt.contractAlias())) {
+      throw new IllegalStateException("contract call draft alias is not bound to the request");
+    }
+    return response;
   }
 
   static Map<String, Object> buildMultisigProposePayload(
@@ -2525,8 +2697,7 @@ public final class HttpClientTransport implements IrohaClient {
     validateVerifyingKeyHeightRange(request.activationHeight(), request.withdrawHeight());
 
     final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("authority", normalizeNonBlank(request.authority(), "authority"));
-    payload.put("private_key", normalizeNonBlank(request.privateKey(), "privateKey"));
+    payload.put("authority", normalizeVerifyingKeyAuthority(request.authority()));
     payload.put("backend", backend);
     payload.put("name", normalizeVerifyingKeyName(request.name()));
     payload.put("version", normalizePositiveU32(request.version(), "version"));
@@ -2563,8 +2734,7 @@ public final class HttpClientTransport implements IrohaClient {
     validateVerifyingKeyHeightRange(request.activationHeight(), request.withdrawHeight());
 
     final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("authority", normalizeNonBlank(request.authority(), "authority"));
-    payload.put("private_key", normalizeNonBlank(request.privateKey(), "privateKey"));
+    payload.put("authority", normalizeVerifyingKeyAuthority(request.authority()));
     payload.put("backend", backend);
     payload.put("name", normalizeVerifyingKeyName(request.name()));
     payload.put("version", normalizePositiveU32(request.version(), "version"));
@@ -2659,6 +2829,26 @@ public final class HttpClientTransport implements IrohaClient {
     final String normalized = normalizeNonBlank(value, "name");
     if (normalized.indexOf(':') >= 0) {
       throw new IllegalArgumentException("name must not contain ':' characters");
+    }
+    return normalized;
+  }
+
+  static String normalizeVerifyingKeyAuthority(final String value) {
+    final String normalized = normalizeNonBlank(value, "authority");
+    final Integer discriminant = AccountAddress.detectI105Discriminant(normalized);
+    if (discriminant == null) {
+      throw new IllegalArgumentException(
+          "authority must be a canonical I105 account literal");
+    }
+    try {
+      final AccountAddress address = AccountAddress.fromI105(normalized, discriminant);
+      if (!normalized.equals(address.toI105(discriminant))) {
+        throw new IllegalArgumentException(
+            "authority must be a canonical I105 account literal");
+      }
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalArgumentException(
+          "authority must be a canonical I105 account literal", ex);
     }
     return normalized;
   }
@@ -3023,7 +3213,7 @@ public final class HttpClientTransport implements IrohaClient {
     }
   }
 
-  private static String verifyingKeyCommitmentHex(final String backend, final byte[] bytes) {
+  static String verifyingKeyCommitmentHex(final String backend, final byte[] bytes) {
     try {
       final MessageDigest digest = MessageDigest.getInstance("SHA-256");
       final byte[] backendBytes = backend.getBytes(StandardCharsets.UTF_8);
@@ -3144,6 +3334,7 @@ public final class HttpClientTransport implements IrohaClient {
           "native_proof_b64",
           "creation_time_ms");
   private static final long SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
+  private static final long NODE_CAPABILITIES_RESPONSE_MAX_BYTES = 64L * 1024L;
   private static final long SCCP_RECENT_RESPONSE_MAX_BYTES = 8L * 1024L * 1024L;
   private static final long SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L;
 

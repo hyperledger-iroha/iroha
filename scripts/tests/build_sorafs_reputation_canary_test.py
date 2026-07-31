@@ -29,6 +29,8 @@ assert CHECKER_SPEC and CHECKER_SPEC.loader  # pragma: no cover - defensive
 sys.modules[CHECKER_SPEC.name] = CHECKER
 CHECKER_SPEC.loader.exec_module(CHECKER)
 
+from sorafs_rollout_runner_test_support import write_topology_qualification  # noqa: E402
+
 
 NOW_UNIX = 1_800_100_000
 GENERATED_AT = NOW_UNIX - 120
@@ -354,6 +356,11 @@ def test_generated_canaries_pass_full_reputation_gate(tmp_path: Path) -> None:
     for path in evidence_paths:
         command.extend(["--evidence", str(path)])
     command.extend(["--summary-out", str(summary)])
+    topology_summary = write_topology_qualification(
+        tmp_path / "topology-qualification.json",
+        deployment_id="sorafs-mainnet-20260701",
+    )
+    command.extend(["--topology-qualification-summary", str(topology_summary)])
 
     assert CHECKER.main(command) == 0
 
@@ -449,6 +456,17 @@ def test_source_bound_cli_artifacts_pass_full_reputation_gate(tmp_path: Path) ->
     ):
         checker_args.extend(["--evidence", f"{kind}={path}"])
     checker_args.extend(["--summary-out", str(summary)])
+    checker_args.extend(
+        [
+            "--topology-qualification-summary",
+            str(
+                write_topology_qualification(
+                    tmp_path / "source-topology-qualification.json",
+                    deployment_id="sorafs-mainnet-20260701",
+                )
+            ),
+        ]
+    )
 
     assert CHECKER.main(checker_args) == 0
     assert json.loads(summary.read_text(encoding="utf-8"))["status"] == "ready"

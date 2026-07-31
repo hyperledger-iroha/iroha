@@ -37,11 +37,9 @@ RETIRED_SCHEMAS = (
     "DealSettlementResponse",
 )
 OPENAPI_COPIES = (
-    REPO_ROOT / "docs" / "portal" / "static" / "openapi" / "torii.json",
+    REPO_ROOT / "artifacts" / "openapi" / "torii.json",
     REPO_ROOT
-    / "docs"
-    / "portal"
-    / "static"
+    / "artifacts"
     / "openapi"
     / "versions"
     / "current"

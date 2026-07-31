@@ -1,0 +1,24 @@
+{
+  "id": "sorafs/reports/sf2c-capacity-soak",
+  "title": "SF-2c Capacity Accrual Soak Report",
+  "description": "Date: 2026-03-21",
+  "source": "@site/docs/sorafs/reports/sf2c-capacity-soak.md",
+  "sourceDirName": "sorafs/reports",
+  "slug": "/sorafs/reports/sf2c-capacity-soak",
+  "permalink": "/next/sorafs/reports/sf2c-capacity-soak",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/reports/sf2c-capacity-soak.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "SoraFS SF1 Determinism Dry-Run",
+    "permalink": "/next/sorafs/reports/sf1-determinism"
+  },
+  "next": {
+    "title": "SF-6 Security Review",
+    "permalink": "/next/sorafs/reports/sf6-security-review"
+  }
+}

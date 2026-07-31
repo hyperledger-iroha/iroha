@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/observability-plan",
+  "title": "SoraFS Observability & SLO Plan",
+  "description": "Telemetry schema, dashboards, and error-budget policy for SoraFS gateways, nodes, and the multi-source orchestrator.",
+  "source": "@site/docs/sorafs/observability-plan.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/observability-plan",
+  "permalink": "/next/sorafs/observability-plan",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/observability-plan.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "observability-plan",
+    "title": "SoraFS Observability & SLO Plan",
+    "sidebar_label": "Observability & SLOs",
+    "description": "Telemetry schema, dashboards, and error-budget policy for SoraFS gateways, nodes, and the multi-source orchestrator."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Chunker Rollout Checklist",
+    "permalink": "/next/sorafs/chunker-registry-rollout-checklist"
+  },
+  "next": {
+    "title": "Operations Playbook",
+    "permalink": "/next/sorafs/operations-playbook"
+  }
+}

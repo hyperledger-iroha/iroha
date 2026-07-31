@@ -29,7 +29,7 @@ impl<'a> DecodeFromSlice<'a> for TrailingDecoder {
 }
 
 fn header_padding_for<T>() -> usize {
-    let align = std::mem::align_of::<norito::Archived<T>>();
+    let align = norito::core::archived_payload_align::<T>();
     if align <= 1 {
         return 0;
     }

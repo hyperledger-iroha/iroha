@@ -7,7 +7,6 @@ License: Apache-2.0
 Project-URL: Homepage, https://github.com/hyperledger/iroha
 Project-URL: Repository, https://github.com/hyperledger/iroha
 Keywords: iroha,torii,sdk,blockchain
-Classifier: Development Status :: 2 - Pre-Alpha
 Classifier: Intended Audience :: Developers
 Classifier: License :: OSI Approved :: Apache Software License
 Classifier: Programming Language :: Python

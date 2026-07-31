@@ -1,0 +1,27 @@
+{
+  "id": "sorafs/reports/ai-moderation-calibration-202602",
+  "title": "AI Moderation Calibration Report (2026-02)",
+  "description": "This report packages the inaugural calibration artefacts for MINFO-1. The",
+  "source": "@site/docs/sorafs/reports/ai-moderation-calibration-202602.md",
+  "sourceDirName": "sorafs/reports",
+  "slug": "/sorafs/reports/ai-moderation-calibration-202602",
+  "permalink": "/next/sorafs/reports/ai-moderation-calibration-202602",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "AI Moderation Calibration Report (2026-02)",
+    "summary": "Baseline calibration dataset, thresholds, and scoreboard for the first MINFO-1 governance release."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Pin Registry Operations",
+    "permalink": "/next/sorafs/pin-registry-ops"
+  },
+  "next": {
+    "title": "SoraFS Capacity Marketplace Validation",
+    "permalink": "/next/sorafs/reports/capacity-marketplace-validation"
+  }
+}

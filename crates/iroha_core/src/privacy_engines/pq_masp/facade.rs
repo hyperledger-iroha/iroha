@@ -132,11 +132,10 @@ fn statement_digest_v1(
 /// Construct a complete STARK-plus-ML-DSA PQ-MASP proof with injected entropy.
 ///
 /// The function preflights the exact one-to-two relation and ML-DSA secret-key
-/// binding before proof allocation. It builds the inner STARK, independently
-/// derives a health-checked authorization hedge from fresh source bytes, signs
-/// the canonical protocol-tagged statement digest, native consensus-binding
-/// digest, and exact inner-proof digest, then verifies the complete outer wire
-/// before returning it.
+/// binding before proof allocation. It reserves canonical source block two for
+/// the independent authorization hedge, replays block one to the STARK before
+/// continuing at block three, signs the protocol-tagged statement and exact
+/// inner-proof digest, then verifies the complete outer wire before returning.
 ///
 /// # Errors
 ///
@@ -160,19 +159,19 @@ pub fn prove_pq_masp_v1_with_rng<R: TryCryptoRng + ?Sized>(
         authorization_secret_key,
     )?;
     let statement_digest = statement_digest_v1(statement)?;
-    let mut checked_randomness =
+    let checked_randomness =
         HealthCheckedTryCryptoRngV1::new(randomness).map_err(map_entropy_error_v1)?;
+    let (mut stark_randomness, authorization_seed) = checked_randomness
+        .partition_initial_block_with_independent_seed_v1(PQ_MASP_AUTHORIZATION_HEDGE_PURPOSE_V1)
+        .map_err(map_entropy_error_v1)?;
     let stark_proof = prove_pq_masp_stark_v1_with_rng(
         statement,
         consensus_binding,
         consensus_limits,
         witness,
-        &mut checked_randomness,
+        &mut stark_randomness,
     )
     .map_err(map_prover_error_v1)?;
-    let authorization_seed = checked_randomness
-        .derive_independent_seed_v1(PQ_MASP_AUTHORIZATION_HEDGE_PURPOSE_V1)
-        .map_err(map_entropy_error_v1)?;
     let proof = authorize_pq_masp_stark_proof_v1(
         statement_digest,
         consensus_binding_digest,
@@ -295,7 +294,7 @@ mod tests {
     use super::*;
     use crate::privacy_engines::pq_masp::{
         PQ_MASP_TREE_DEPTH_V1, PqMaspInputWitnessV1, PqMaspOutputWitnessV1, PqMaspWitnessV1,
-        derive_pq_masp_nullifier_key_digest_v1,
+        derive_pq_masp_authorization_key_digest_v1, derive_pq_masp_nullifier_key_digest_v1,
     };
 
     #[derive(Debug)]
@@ -348,6 +347,87 @@ mod tests {
     }
 
     impl TryCryptoRng for AdversarialRng {}
+
+    #[derive(Clone, Copy, Debug)]
+    enum PartitionFaultV1 {
+        FirstPartialFailure,
+        FirstConstant,
+        FirstPeriodic,
+        SecondPartialFailure,
+        SecondConstant,
+        SecondPeriodic,
+        SecondRepeatsFirst,
+    }
+
+    struct PartitionFaultRngV1 {
+        fault: PartitionFaultV1,
+        requests: usize,
+    }
+
+    impl PartitionFaultRngV1 {
+        const fn new(fault: PartitionFaultV1) -> Self {
+            Self { fault, requests: 0 }
+        }
+
+        fn fill_healthy_block_v1(destination: &mut [u8]) {
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = u8::try_from(index)
+                    .expect("canonical entropy block index fits u8")
+                    .wrapping_mul(73)
+                    .wrapping_add(19);
+            }
+        }
+
+        fn fill_periodic_block_v1(destination: &mut [u8]) {
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = [1, 3, 7, 9][index % 4];
+            }
+        }
+    }
+
+    impl TryRngCore for PartitionFaultRngV1 {
+        type Error = InjectedEntropyError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(InjectedEntropyError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(InjectedEntropyError)
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            self.requests += 1;
+            assert_eq!(
+                destination.len(),
+                64,
+                "the PQ-MASP source boundary must remain canonical"
+            );
+            match (self.requests, self.fault) {
+                (1, PartitionFaultV1::FirstPartialFailure)
+                | (2, PartitionFaultV1::SecondPartialFailure) => {
+                    let midpoint = destination.len() / 2;
+                    destination[..midpoint].fill(0x51);
+                    Err(InjectedEntropyError)
+                }
+                (1, PartitionFaultV1::FirstConstant) | (2, PartitionFaultV1::SecondConstant) => {
+                    destination.fill(0x61);
+                    Ok(())
+                }
+                (1, PartitionFaultV1::FirstPeriodic) | (2, PartitionFaultV1::SecondPeriodic) => {
+                    Self::fill_periodic_block_v1(destination);
+                    Ok(())
+                }
+                (1, _) | (2, PartitionFaultV1::SecondRepeatsFirst) => {
+                    Self::fill_healthy_block_v1(destination);
+                    Ok(())
+                }
+                _ => panic!("PQ-MASP reached the expensive prover after entropy preflight failed"),
+            }
+        }
+    }
+
+    impl TryCryptoRng for PartitionFaultRngV1 {}
 
     fn consensus_material(
         statement: &PqMaspStarkStatementV1,
@@ -438,6 +518,155 @@ mod tests {
             .map(|_| ()),
             Err(TryCryptoProverRandomnessErrorV1::Unhealthy)
         );
+    }
+
+    #[test]
+    fn authorized_facade_maps_every_partition_entropy_failure_before_proving() {
+        use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
+
+        let authorization_keys = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0xA6; 32]),
+            b"pq-masp-partition-failure-tests-v1",
+        )
+        .expect("ML-DSA authorization key");
+        let key_digest =
+            derive_pq_masp_authorization_key_digest_v1(authorization_keys.public_key())
+                .expect("authorization key digest");
+        let (statement, witness) =
+            crate::privacy_engines::pq_masp::relation::tests::
+                valid_fixture_with_authorization_key_digest(key_digest);
+        let (binding, limits) = consensus_material(&statement);
+        let cases = [
+            (
+                PartitionFaultV1::FirstPartialFailure,
+                PqMaspProofErrorV1::RandomnessUnavailable,
+                1,
+            ),
+            (
+                PartitionFaultV1::FirstConstant,
+                PqMaspProofErrorV1::UnhealthyRandomness,
+                1,
+            ),
+            (
+                PartitionFaultV1::FirstPeriodic,
+                PqMaspProofErrorV1::UnhealthyRandomness,
+                1,
+            ),
+            (
+                PartitionFaultV1::SecondPartialFailure,
+                PqMaspProofErrorV1::RandomnessUnavailable,
+                2,
+            ),
+            (
+                PartitionFaultV1::SecondConstant,
+                PqMaspProofErrorV1::UnhealthyRandomness,
+                2,
+            ),
+            (
+                PartitionFaultV1::SecondPeriodic,
+                PqMaspProofErrorV1::UnhealthyRandomness,
+                2,
+            ),
+            (
+                PartitionFaultV1::SecondRepeatsFirst,
+                PqMaspProofErrorV1::UnhealthyRandomness,
+                2,
+            ),
+        ];
+        for (fault, expected, expected_requests) in cases {
+            let mut randomness = PartitionFaultRngV1::new(fault);
+            assert_eq!(
+                prove_pq_masp_v1_with_rng(
+                    &statement,
+                    &binding,
+                    &limits,
+                    &witness,
+                    authorization_keys.secret_key(),
+                    &mut randomness,
+                ),
+                Err(expected),
+                "incorrect typed facade failure for {fault:?}"
+            );
+            assert_eq!(
+                randomness.requests, expected_requests,
+                "entropy fault {fault:?} crossed its fail-closed request boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn authorized_facade_rejects_relation_binding_and_key_before_entropy() {
+        use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
+
+        let authorization_keys = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0xA7; 32]),
+            b"pq-masp-pre-entropy-order-tests-v1",
+        )
+        .expect("ML-DSA authorization key");
+        let key_digest =
+            derive_pq_masp_authorization_key_digest_v1(authorization_keys.public_key())
+                .expect("authorization key digest");
+        let (statement, witness) =
+            crate::privacy_engines::pq_masp::relation::tests::
+                valid_fixture_with_authorization_key_digest(key_digest);
+        let (binding, limits) = consensus_material(&statement);
+
+        let mut invalid_statement = statement.clone();
+        invalid_statement.nullifiers[0] =
+            iroha_data_model::privacy::PrivacyNullifierV1::new([0xF1; 32]);
+        let mut relation_rng = PartitionFaultRngV1::new(PartitionFaultV1::SecondPartialFailure);
+        assert!(matches!(
+            prove_pq_masp_v1_with_rng(
+                &invalid_statement,
+                &binding,
+                &limits,
+                &witness,
+                authorization_keys.secret_key(),
+                &mut relation_rng,
+            ),
+            Err(PqMaspProofErrorV1::Relation(_))
+        ));
+        assert_eq!(relation_rng.requests, 0);
+
+        let mut invalid_binding = binding.clone();
+        invalid_binding.genesis_hash = [0; 32];
+        let mut binding_rng = PartitionFaultRngV1::new(PartitionFaultV1::SecondPartialFailure);
+        assert!(matches!(
+            prove_pq_masp_v1_with_rng(
+                &statement,
+                &invalid_binding,
+                &limits,
+                &witness,
+                authorization_keys.secret_key(),
+                &mut binding_rng,
+            ),
+            Err(PqMaspProofErrorV1::ConsensusBinding(_))
+        ));
+        assert_eq!(binding_rng.requests, 0);
+
+        let wrong_keys = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0xA8; 32]),
+            b"pq-masp-pre-entropy-wrong-key-v1",
+        )
+        .expect("wrong ML-DSA authorization key");
+        let mut key_rng = PartitionFaultRngV1::new(PartitionFaultV1::SecondPartialFailure);
+        assert_eq!(
+            prove_pq_masp_v1_with_rng(
+                &statement,
+                &binding,
+                &limits,
+                &witness,
+                wrong_keys.secret_key(),
+                &mut key_rng,
+            ),
+            Err(PqMaspProofErrorV1::Authorization(
+                PqMaspWireErrorV1::AuthorizationKeyMismatch,
+            ))
+        );
+        assert_eq!(key_rng.requests, 0);
     }
 
     #[test]

@@ -95,6 +95,16 @@ fn registry() -> &'static Mutex<RegistryInner> {
     REG.get_or_init(|| Mutex::new(RegistryInner::default()))
 }
 
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn lock_registry() -> std::sync::MutexGuard<'static, RegistryInner> {
+    lock_unpoisoned(registry())
+}
+
 fn data_dir() -> PathBuf {
     crate::data_dir::base_dir()
 }
@@ -228,13 +238,13 @@ fn http_timeout_state() -> &'static Mutex<HttpTimeoutConfig> {
 pub fn http_timeout_config() -> HttpTimeoutConfig {
     *http_timeout_state()
         .lock()
-        .expect("http timeout config lock")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub fn set_http_timeout_config(config: HttpTimeoutConfig) {
     *http_timeout_state()
         .lock()
-        .expect("http timeout config lock") = config;
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -276,11 +286,15 @@ fn webhook_policy_writer_lock() -> &'static Mutex<()> {
 }
 
 fn webhook_policy() -> WebhookPolicy {
-    *webhook_policy_state().lock().expect("webhook policy lock")
+    *webhook_policy_state()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn apply_webhook_policy(policy: WebhookPolicy) {
-    *webhook_policy_state().lock().expect("webhook policy lock") = policy;
+    *webhook_policy_state()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = policy;
     set_http_timeout_config(HttpTimeoutConfig {
         connect: policy.connect_timeout,
         write: policy.write_timeout,
@@ -323,14 +337,14 @@ fn webhook_security_policy_state() -> &'static Mutex<WebhookSecurityPolicy> {
 fn webhook_security_policy() -> WebhookSecurityPolicy {
     webhook_security_policy_state()
         .lock()
-        .expect("webhook security policy lock")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
 }
 
 pub fn set_webhook_security_policy(policy: WebhookSecurityPolicy) {
     *webhook_security_policy_state()
         .lock()
-        .expect("webhook security policy lock") = policy;
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = policy;
 }
 
 #[cfg(test)]
@@ -394,7 +408,8 @@ fn persist_registry() {
     if let Ok(mut tmp) =
         tempfile::NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))
     {
-        if let Ok(guard) = registry().lock() {
+        {
+            let guard = lock_registry();
             let mut arr = Vec::new();
             for (_, e) in guard.items.iter() {
                 let mut m = norito::json::Map::new();
@@ -433,7 +448,7 @@ fn load_registry() {
                 if let Ok(norito::json::Value::Array(arr)) =
                     norito::json::from_str::<norito::json::Value>(&s)
                 {
-                    let mut guard = registry().lock().expect("poisoned");
+                    let mut guard = lock_registry();
                     guard.items.clear();
                     let mut max_id = 0u64;
                     for v in arr {
@@ -639,7 +654,7 @@ pub async fn handle_create_webhook(
     if let Err((status, message)) = validate_webhook_url_for_create(&req.url, &policy) {
         return (status, message).into_response();
     }
-    let mut guard = registry().lock().expect("poisoned");
+    let mut guard = lock_registry();
     guard.next_id += 1;
     let id = guard.next_id;
     let entry = WebhookEntry {
@@ -660,7 +675,7 @@ pub async fn handle_create_webhook(
 
 /// GET /v1/webhooks – list current webhook entries.
 pub async fn handle_list_webhooks() -> impl IntoResponse {
-    let guard = registry().lock().expect("poisoned");
+    let guard = lock_registry();
     let mut entries: Vec<_> = guard.items.values().cloned().collect();
     entries.sort_by_key(|w| w.id);
     let mut arr = Vec::with_capacity(entries.len());
@@ -677,7 +692,7 @@ pub async fn handle_list_webhooks() -> impl IntoResponse {
 
 /// DELETE /v1/webhooks/{id} – delete a webhook.
 pub async fn handle_delete_webhook(AxumPath(id): AxumPath<u64>) -> impl IntoResponse {
-    let mut guard = registry().lock().expect("poisoned");
+    let mut guard = lock_registry();
     let removed = guard.items.remove(&id).is_some();
     drop(guard);
     if removed {
@@ -742,10 +757,7 @@ pub fn enqueue_delivery_for_all(body: Vec<u8>, content_type: &str) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let guard = match registry().lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
+    let guard = lock_registry();
     for (id, w) in guard.items.iter() {
         if !w.active {
             continue;
@@ -787,10 +799,11 @@ pub fn enqueue_event_for_matching_webhooks(
         .as_millis() as u64;
 
     // Snapshot registry to minimize lock duration
-    let entries: Vec<(u64, WebhookEntry)> = match registry().lock() {
-        Ok(g) => g.items.iter().map(|(k, v)| (*k, v.clone())).collect(),
-        Err(_) => return,
-    };
+    let entries: Vec<(u64, WebhookEntry)> = lock_registry()
+        .items
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
 
     let json_val = crate::routing::event_to_json_value(event);
     let body = match norito::json::to_json(&json_val) {
@@ -2304,10 +2317,10 @@ async fn process_queue_once() -> Duration {
             continue;
         }
         // Lookup secret (if present)
-        let secret = registry()
-            .lock()
-            .ok()
-            .and_then(|g| g.items.get(&pd.webhook_id).cloned())
+        let secret = lock_registry()
+            .items
+            .get(&pd.webhook_id)
+            .cloned()
             .and_then(|w| w.secret);
         if try_deliver(&mut pd, secret.as_deref()).await {
             if let Err(e) = tokio_fs::remove_file(&path).await {
@@ -2435,6 +2448,21 @@ mod tests {
             norito::json::Value::Object(map) => map,
             _ => panic!("expected object for {context}", context = context),
         }
+    }
+
+    #[test]
+    fn registry_lock_recovers_after_a_guard_unwinds() {
+        let mutex = Mutex::new(0_u8);
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut guard = mutex.lock().expect("fresh test mutex");
+            *guard = 7;
+            panic!("poison the local test mutex");
+        }));
+        assert!(unwind.is_err());
+
+        let mut recovered = super::lock_unpoisoned(&mutex);
+        assert_eq!(*recovered, 7);
+        *recovered = 8;
     }
 
     #[test]

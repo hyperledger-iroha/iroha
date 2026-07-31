@@ -193,6 +193,7 @@ IN /\ command.kind = "FormPrepareQC"
         r"""
 LET item == command.item
 IN /\ item \in asyncSentItems
+   /\ AsyncControlServiceOccurrenceIsCurrentOwner(item)
    /\ command.node = item.envelope.recipient
    /\ \/ /\ command.kind = "DeliverProposal"
           /\ item.kind = "Proposal"

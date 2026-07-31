@@ -15,10 +15,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _copy_workflows(target: Path) -> None:
+    (target / "docs").mkdir(parents=True, exist_ok=True)
     for relative in (
         *automation.WORKFLOWS,
         *automation.RELEASE_DOCUMENTS,
         *automation.RELEASE_AUTH_HISTORICAL_FINDINGS,
+        *automation.REFERENCE_SDK_RELEASE_EXAMPLE_REQUIRED_MARKERS,
         *automation.NATIVE_GOVERNANCE_SDK_CONTRACTS,
         automation.PACKAGE_RELEASE_SMOKE_SCRIPT,
     ):
@@ -226,7 +228,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
-            "docs/portal/docs/sorafs/release-rollback-yank.md "
+            "specs/sorafs/runbooks/release_rollback_yank.md "
             "artifacts/sorafs-cli/ROLLBACK-YANK.md",
         ),
         (
@@ -247,7 +249,59 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
-            '- "docs/source/release_dual_track_automation_plan*.md"',
+            '- "scripts/build_sorafs_reference_sdk_supply_chain_sources.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/sorafs_topology_qualification.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/tests/sorafs_topology_qualification_test.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "name: Assemble and validate the canonical SF-11 source indexes",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "name: Build and gate source-derived SF-11 supply-chain evidence",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "expected one aggregate offline provenance bundle",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "name: Attest aggregate signed-input provenance",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '"signed-input/github-attestations/${target}.json"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            'gh attestation verify "$provenance_file"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "realpath -e --",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "SORAFS_TRUSTED_GH_CLI_SHA256: ${{ vars.SORAFS_TRUSTED_GH_CLI_SHA256 }}",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "name: Upload replay-complete SF-11 supply-chain evidence",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "specs/release_dual_track_automation_plan*.md"',
         ),
         (
             ".github/workflows/sorafs-fixtures-nightly.yml",
@@ -453,6 +507,298 @@ def test_validate_release_automation_rejects_alternate_promotion_job(
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="job inventory must be exactly"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("binding", "message"),
+    [
+        (
+            "SORAFS_REFERENCE_SDK_DEPLOYMENT_ID: "
+            "${{ vars.SORAFS_REFERENCE_SDK_DEPLOYMENT_ID }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_REFERENCE_SDK_RECEIPTS_ROOT: "
+            "${{ vars.SORAFS_REFERENCE_SDK_RECEIPTS_ROOT }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX: "
+            "${{ vars.SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_TRUSTED_GH_CLI_SHA256: "
+            "${{ vars.SORAFS_TRUSTED_GH_CLI_SHA256 }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "--supply-chain-source-root sf11-source",
+            "source root and exact public provenance trust tuple",
+        ),
+        (
+            '--provenance-certificate-identity "$certificate_identity"',
+            "source root and exact public provenance trust tuple",
+        ),
+        (
+            '--provenance-oidc-issuer "$oidc_issuer"',
+            "source root and exact public provenance trust tuple",
+        ),
+    ],
+)
+def test_validate_release_automation_rejects_source_evidence_binding_drift(
+    tmp_path: Path,
+    binding: str,
+    message: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    assert binding in source
+    workflow.write_text(
+        source.replace(binding, "REMOVED_SOURCE_BINDING", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_source_evidence_job_reordering(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    original = (
+        "name: Reverify exact target provenance before source assembly"
+    )
+    replacement = (
+        "name: Temporarily moved target provenance verification"
+    )
+    source = source.replace(original, replacement, 1)
+    source = source.replace(
+        "name: Assemble and validate the canonical SF-11 source indexes",
+        "name: Assemble and validate the canonical SF-11 source indexes\n"
+        f"      - name: {original}",
+        1,
+    )
+    workflow.write_text(source, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="out of order"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_source_target_order_drift(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    job_start = source.index("  reference-sdk-supply-chain-evidence:\n")
+    job = source[job_start:]
+    original = (
+        "            x86_64-apple-darwin\n"
+        "            aarch64-apple-darwin\n"
+    )
+    replacement = (
+        "            aarch64-apple-darwin\n"
+        "            x86_64-apple-darwin\n"
+    )
+    assert original in job
+    workflow.write_text(
+        source[:job_start] + job.replace(original, replacement, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="canonical source order"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "provenance_file",
+    [
+        '"${candidate}/SHA256SUMS"',
+        '"${candidate}/sorafs-release.spdx.json"',
+        '"${candidate}/sorafs-release-vulnerabilities.sarif"',
+        '"${candidate}/sorafs-cli-${target}.spdx.json"',
+        '"${candidate}/sorafs-cli-${target}-vulnerabilities.sarif"',
+    ],
+)
+def test_validate_release_automation_rejects_incomplete_provenance_file_inventory(
+    tmp_path: Path,
+    provenance_file: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    assert source.count(provenance_file) == 1
+    workflow.write_text(
+        source.replace(f"              {provenance_file}\n", "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact checksum, archive, and scan files"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "! -name '*.sigstore.json'",
+        "signed candidate SHA256SUMS contains duplicate entries",
+        "signed candidate SHA256SUMS does not cover the exact candidate file set",
+    ],
+)
+def test_validate_release_automation_requires_signed_checksum_reconciliation(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    job_start = source.index("  reference-sdk-supply-chain-evidence:\n")
+    job = source[job_start:]
+    assert job.count(marker) == 1
+    workflow.write_text(
+        source[:job_start] + job.replace(marker, "REMOVED_CHECKSUM_GUARD", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="signed checksum manifest"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_unpinned_gh_verifier(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    original = '[[ "$actual_gh_sha256" != "$SORAFS_TRUSTED_GH_CLI_SHA256" ]]'
+    assert original in source
+    workflow.write_text(
+        source.replace(original, '[[ "$actual_gh_sha256" == "" ]]', 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="protected SHA-256"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_independent_topology_key(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    original = (
+        '[[ "$SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX" '
+        '== "$SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX" ]]'
+    )
+    assert original in source
+    workflow.write_text(
+        source.replace(
+            original,
+            '[[ "$SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX" == "" ]]',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="independently administered"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_lexical_external_path_check(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    original = '[[ "$path" != "$path_real" ]]'
+    assert source.count(original) == 2
+    workflow.write_text(
+        source.replace(original, '[[ "$path" == "" ]]'),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="canonicalized before workspace exclusion"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_replay_complete_source_upload(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    upload_line = "            sf11-source/\n"
+    assert source.count(upload_line) == 1
+    workflow.write_text(
+        source.replace(
+            upload_line,
+            "            sf11-source/release-rehearsal.json\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="complete replay source tree"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_source_job_oidc_authority(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    job_start = source.index("  reference-sdk-supply-chain-evidence:\n")
+    job = source[job_start:]
+    assert "    permissions:\n      contents: read\n" in job
+    workflow.write_text(
+        source[:job_start]
+        + job.replace(
+            "    permissions:\n      contents: read\n",
+            "    permissions:\n      contents: read\n      id-token: write\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="verification-only"):
         automation.validate_release_automation(tmp_path)
 
 
@@ -846,31 +1192,27 @@ def test_validate_release_automation_rejects_checksum_verification_after_signing
     ("relative", "marker"),
     [
         (
-            "docs/portal/sidebars.js",
-            "'sorafs/release-rollback-yank'",
+            "specs/sorafs/runbooks/index.md",
+            "[Release rollback and yank](./release_rollback_yank.md)",
         ),
         (
-            "docs/portal/docs/sorafs/runbooks-index.md",
-            "[`sorafs/release-rollback-yank`](./release-rollback-yank.md)",
-        ),
-        (
-            "docs/source/sorafs_release_pipeline_plan.md",
+            "specs/sorafs_release_pipeline_plan.md",
             "exactly the five expected target-triple checksum manifests",
         ),
         (
-            "docs/portal/docs/sorafs/release-rollback-yank.md",
+            "specs/sorafs/runbooks/release_rollback_yank.md",
             "`cargo yank --vers <version> <crate>`",
         ),
         (
-            "docs/portal/docs/sorafs/release-rollback-yank.md",
+            "specs/sorafs/runbooks/release_rollback_yank.md",
             "GitHub CLI artifacts",
         ),
         (
-            "docs/portal/docs/sorafs/developer-releases.md",
+            "specs/sorafs/developer/releases.md",
             "all five native candidate archives",
         ),
         (
-            "docs/examples/sorafs_release_notes.md",
+            "fixtures/documentation/sorafs_release_notes.md",
             "## Rollback / Yank Record",
         ),
     ],
@@ -888,19 +1230,85 @@ def test_validate_release_automation_rejects_release_document_drift(
 
 
 @pytest.mark.parametrize(
+    ("relative", "marker"),
+    [
+        (
+            "scripts/examples/"
+            "sorafs_reference_sdk_release_supply_chain_canary.args.example",
+            "--supply-chain-source-root",
+        ),
+        (
+            "scripts/examples/"
+            "sorafs_reference_sdk_release_collection.args.example",
+            "--provenance-certificate-identity",
+        ),
+        (
+            "scripts/examples/"
+            "sorafs_reference_sdk_release_evidence.args.example",
+            "--provenance-verification-public-key-hex",
+        ),
+    ],
+)
+def test_validate_release_automation_rejects_stale_source_examples(
+    tmp_path: Path,
+    relative: str,
+    marker: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    example = tmp_path / relative
+    source = example.read_text(encoding="utf-8")
+    assert marker in source
+    example.write_text(
+        source.replace(marker, "REMOVED_SOURCE_INPUT", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing source-bound example marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "retired",
+    (
+        "--target",
+        "--sbom-index-digest-hex",
+        "--vulnerability-report-digest-hex",
+        "--provenance-bundle-digest-hex",
+    ),
+)
+def test_validate_release_automation_rejects_retired_supply_chain_example_flags(
+    tmp_path: Path,
+    retired: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    relative = (
+        "scripts/examples/"
+        "sorafs_reference_sdk_release_supply_chain_canary.args.example"
+    )
+    example = tmp_path / relative
+    example.write_text(
+        example.read_text(encoding="utf-8") + f"{retired}\nretired-value\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="retired manual supply-chain marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
     ("relative", "stale_claim"),
     [
-        ("docs/source/sorafs_release_pipeline_plan.md", "via cross"),
+        ("specs/sorafs_release_pipeline_plan.md", "via cross"),
         (
-            "docs/source/sorafs_release_pipeline_plan.md",
+            "specs/sorafs_release_pipeline_plan.md",
             "exactly the three expected platform checksum manifests",
         ),
         (
-            "docs/portal/docs/sorafs/developer-releases.md",
+            "specs/sorafs/developer/releases.md",
             "git tag -s sorafs-v",
         ),
         (
-            "docs/portal/docs/sorafs/developer-releases.md",
+            "specs/sorafs/developer/releases.md",
             "invokes the script above",
         ),
     ],
@@ -986,7 +1394,7 @@ def test_release_auth_document_discovery_ignores_generated_node_dependencies(
     tmp_path: Path,
 ) -> None:
     _copy_workflows(tmp_path)
-    generated = tmp_path / "docs/portal/node_modules/package"
+    generated = tmp_path / "tools/openapi/node_modules/package"
     generated.mkdir(parents=True)
     (generated / "stale-release-auth.md").write_text(
         "openssl pkeyutl -sign -inkey release.pem -in manifest.json\n",
@@ -1017,6 +1425,11 @@ def test_release_auth_document_discovery_enforces_entry_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _copy_workflows(tmp_path)
+    for index in range(2):
+        (tmp_path / "docs" / f"budget-{index}.md").write_text(
+            "# Release-auth entry-budget fixture\n",
+            encoding="utf-8",
+        )
     monkeypatch.setattr(automation, "MAX_RELEASE_AUTH_TREE_ENTRIES", 1)
 
     with pytest.raises(ValueError, match="exceeds its entry limit"):
@@ -1027,7 +1440,7 @@ def test_validate_release_automation_requires_historical_oidc_finding_remediatio
     tmp_path: Path,
 ) -> None:
     _copy_workflows(tmp_path)
-    relative = "docs/source/sorafs/reports/sf6_security_review.md"
+    relative = "specs/sorafs/reports/sf6_security_review.md"
     document = tmp_path / relative
     source = document.read_text(encoding="utf-8")
     marker = "Removed that CLI surface and all production callers"

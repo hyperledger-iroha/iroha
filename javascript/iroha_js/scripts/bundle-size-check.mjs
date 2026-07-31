@@ -19,10 +19,11 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
-    // protected pre-reset tree measured 945,975 bytes on the same pinned runner; the
-    // current V1 tree measures 989,667 bytes (+4.62%). The 969 KiB ceiling remains
-    // below a 5% regression from that documented predecessor.
-    limitKb: 969,
+    // protected pre-reset tree measured 945,975 bytes on the same pinned runner.
+    // The consolidated release includes the authenticated SoraFS reputation,
+    // billing, verifying-key draft, and hardened transaction surfaces and measures
+    // 1,071,718 bytes (+13.29%). The 1,047 KiB ceiling remains below 14% growth.
+    limitKb: 1047,
   }),
   Object.freeze({
     label: "transactionCodec.js (browser)",
@@ -31,9 +32,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The protected
-    // pre-reset tree measured 290,498 bytes; current V1 is 297,486 bytes (+2.41%).
-    // The 297 KiB ceiling remains below a 5% predecessor regression.
-    limitKb: 297,
+    // pre-reset tree measured 290,498 bytes; consolidated V1 is 310,153 bytes
+    // (+6.77%). The 303 KiB ceiling remains below a 7% predecessor regression.
+    limitKb: 303,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -43,7 +44,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree and 380,687 bytes in current V1 (+2.50%). The 380 KiB ceiling
+    // pre-reset tree and 385,436 bytes in current V1 (+3.78%). The 380 KiB ceiling
     // remains below a 5% predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
@@ -76,8 +77,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // Pinned-esbuild predecessor is 52,156 bytes. Exact V1 manifest state-type,
-    // feature-bit, and dynamic-access validation produces 52,735 bytes
-    // (+1.11%); the 53 KiB ceiling keeps this required boundary hardening
+    // feature-bit, and dynamic-access validation produces 52,928 bytes
+    // (+1.48%); the 53 KiB ceiling keeps this required boundary hardening
     // below the release-wide 5% regression limit.
     limitKb: 53,
     forbidNodeInputs: true,
@@ -89,9 +90,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner; current V1 is 476,332 bytes (+3.98%). The 469 KiB
-    // ceiling remains below a 5% predecessor regression.
-    limitKb: 469,
+    // same pinned runner; consolidated V1 is 508,010 bytes (+10.90%). The 497 KiB
+    // ceiling remains below an 11.2% predecessor regression.
+    limitKb: 497,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),

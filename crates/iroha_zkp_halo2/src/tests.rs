@@ -83,6 +83,7 @@ fn absorb_pallas_poly_statement(
             .to_le_bytes(),
     );
     transcript.absorb("poly.n", &(params.n() as u32).to_le_bytes());
+    transcript.absorb("poly.params_fingerprint", &params.fingerprint());
     transcript.absorb("poly.z", &z.to_bytes());
     transcript.absorb("poly.t", &t.to_bytes());
     transcript.absorb("poly.p_g", &commitment.to_bytes());
@@ -151,6 +152,44 @@ fn params_power_of_two() {
         assert_eq!(gold_params.g(), gold_again.g());
         assert_eq!(gold_params.h(), gold_again.h());
     }
+}
+
+#[test]
+fn polynomial_transcript_binds_the_complete_parameter_set() {
+    let canonical = pallas::Params::new(8).expect("canonical parameters");
+    let mut custom_g = canonical.g().to_vec();
+    let mut custom_h = canonical.h().to_vec();
+    custom_g.rotate_left(1);
+    custom_h.rotate_right(1);
+    let custom = pallas::Params::from_generators(8, custom_g, custom_h, canonical.u())
+        .expect("valid points");
+    let z = pallas::Scalar::from(3_u64);
+    let t = pallas::Scalar::from(5_u64);
+    let commitment = canonical.g()[0];
+
+    let mut canonical_transcript = Transcript::new("parameter-binding");
+    absorb_pallas_poly_statement(
+        &mut canonical_transcript,
+        &canonical,
+        z,
+        commitment,
+        t,
+        PolyOpenTranscriptMetadata::default(),
+    );
+    let mut custom_transcript = Transcript::new("parameter-binding");
+    absorb_pallas_poly_statement(
+        &mut custom_transcript,
+        &custom,
+        z,
+        commitment,
+        t,
+        PolyOpenTranscriptMetadata::default(),
+    );
+
+    assert_ne!(
+        canonical_transcript.cur_digest(),
+        custom_transcript.cur_digest()
+    );
 }
 
 #[test]
@@ -360,7 +399,7 @@ fn assert_checked_bare_decoder<T>(
         norito::Error::LengthMismatch | norito::Error::NonCanonicalEncoding
     ));
 
-    let align = core::mem::align_of::<norito::core::Archived<T>>();
+    let align = norito::core::archived_payload_align::<T>();
     if align > 1 {
         let mut storage = vec![0_u8; bytes.len() + align];
         let base = storage.as_ptr() as usize;
@@ -483,6 +522,17 @@ fn params_from_wire_rejects_tampered_pallas_generators() {
 }
 
 #[test]
+fn params_from_wire_rejects_structurally_valid_noncanonical_generators() {
+    let params = pallas::Params::new(8).unwrap();
+    let mut wire = nh::params_to_wire(&params);
+    wire.g.rotate_left(1);
+    wire.h.rotate_right(1);
+
+    let err = nh::params_from_wire::<PallasBackend>(&wire).unwrap_err();
+    assert!(matches!(err, Error::UnknownParams));
+}
+
+#[test]
 fn params_from_wire_rejects_bad_generator_lengths_before_curve_decoding() {
     let params = pallas::Params::new(8).unwrap();
     let mut wire = nh::params_to_wire(&params);
@@ -498,47 +548,27 @@ fn params_from_wire_rejects_bad_generator_lengths_before_curve_decoding() {
 }
 
 #[test]
-fn params_registry_is_bounded_and_refreshes_recent_entries() {
+fn params_registry_rejects_noncanonical_sets_without_cache_pollution() {
     let _guard = PARAMS_REGISTRY_TEST_LOCK.lock().unwrap();
     crate::params::clear_params_registry_for_tests();
 
-    let n = (crate::params::PARAMS_REGISTRY_MAX_ENTRIES + 2).next_power_of_two();
-    let base = pallas::Params::new(n).unwrap();
-    let mut wires = Vec::new();
-    for rotation in 0..=crate::params::PARAMS_REGISTRY_MAX_ENTRIES {
-        let mut wire = nh::params_to_wire(&base);
-        wire.g.rotate_left(rotation % n);
-        wire.h.rotate_right(rotation % n);
-        wires.push(wire);
-    }
+    let base = pallas::Params::new(8).unwrap();
+    let canonical = nh::params_to_wire(&base);
+    nh::params_from_wire::<PallasBackend>(&canonical).unwrap();
+    assert_eq!(crate::params::params_registry_len_for_tests(), 1);
 
-    for wire in wires
-        .iter()
-        .take(crate::params::PARAMS_REGISTRY_MAX_ENTRIES)
-    {
-        nh::params_from_wire::<PallasBackend>(wire).unwrap();
-    }
+    let mut noncanonical = canonical;
+    noncanonical.g.rotate_left(1);
+    noncanonical.h.rotate_right(1);
+    assert!(matches!(
+        nh::params_from_wire::<PallasBackend>(&noncanonical),
+        Err(Error::UnknownParams)
+    ));
     assert_eq!(
         crate::params::params_registry_len_for_tests(),
-        crate::params::PARAMS_REGISTRY_MAX_ENTRIES
+        1,
+        "rejected generator sets must not enter the cache"
     );
-
-    let first_fp = wires[0].fingerprint();
-    let second_fp = wires[1].fingerprint();
-    nh::params_from_wire::<PallasBackend>(&wires[0]).unwrap();
-    nh::params_from_wire::<PallasBackend>(&wires[crate::params::PARAMS_REGISTRY_MAX_ENTRIES])
-        .unwrap();
-
-    assert_eq!(
-        crate::params::params_registry_len_for_tests(),
-        crate::params::PARAMS_REGISTRY_MAX_ENTRIES
-    );
-    assert!(crate::params::params_registry_contains_for_tests::<
-        PallasBackend,
-    >(&first_fp));
-    assert!(!crate::params::params_registry_contains_for_tests::<
-        PallasBackend,
-    >(&second_fp));
 
     crate::params::clear_params_registry_for_tests();
 }
@@ -567,12 +597,12 @@ fn params_registry_keys_include_backend_curve() {
 }
 
 #[test]
-fn params_registry_reuses_registered_wire_params() {
+fn params_registry_reuses_canonical_wire_params() {
     let _guard = PARAMS_REGISTRY_TEST_LOCK.lock().unwrap();
     crate::params::clear_params_registry_for_tests();
 
     let wire = nh::params_to_wire(&pallas::Params::new(8).unwrap());
-    let registered = nh::register_params_from_wire::<PallasBackend>(&wire).unwrap();
+    let registered = nh::params_from_wire::<PallasBackend>(&wire).unwrap();
     let decoded = nh::params_from_wire::<PallasBackend>(&wire).unwrap();
 
     assert!(std::sync::Arc::ptr_eq(&registered, &decoded));
@@ -912,15 +942,24 @@ fn decode_envelope_reports_unknown_backend_id() {
 #[test]
 fn decode_envelope_accepts_exact_resource_limits() {
     let envelope = sample_pallas_envelope(8, "four");
-    let decoded = nh::decode_envelope_with_limits(
-        &envelope,
-        OpenVerifyLimits {
-            max_k: Some(3),
-            max_transcript_label_len: Some(4),
-        },
-    )
-    .unwrap();
+    let decoded = nh::decode_envelope_with_limits(&envelope, OpenVerifyLimits::new(3, 4)).unwrap();
     assert!(matches!(decoded, nh::DecodedEnvelope::Pallas { .. }));
+}
+
+#[test]
+fn default_open_verify_limits_are_finite_v1_bounds() {
+    assert_eq!(
+        OpenVerifyLimits::default(),
+        OpenVerifyLimits::new(
+            OpenVerifyLimits::DEFAULT_MAX_K,
+            OpenVerifyLimits::DEFAULT_MAX_TRANSCRIPT_LABEL_LEN,
+        )
+    );
+    assert_ne!(OpenVerifyLimits::DEFAULT_MAX_K, u32::MAX);
+    assert_ne!(
+        OpenVerifyLimits::DEFAULT_MAX_TRANSCRIPT_LABEL_LEN,
+        usize::MAX
+    );
 }
 
 #[test]
@@ -928,10 +967,7 @@ fn decode_envelope_accepts_large_max_k_limit() {
     let envelope = sample_pallas_envelope(8, "large-max-k");
     let decoded = nh::decode_envelope_with_limits(
         &envelope,
-        OpenVerifyLimits {
-            max_k: Some(usize::BITS),
-            max_transcript_label_len: Some("large-max-k".len()),
-        },
+        OpenVerifyLimits::new(usize::BITS, "large-max-k".len()),
     )
     .unwrap();
     assert!(matches!(decoded, nh::DecodedEnvelope::Pallas { .. }));
@@ -939,10 +975,7 @@ fn decode_envelope_accepts_large_max_k_limit() {
 
 #[test]
 fn decode_envelope_limits_reject_oversized_vectors_before_dispatch() {
-    let limits = OpenVerifyLimits {
-        max_k: Some(2),
-        max_transcript_label_len: None,
-    };
+    let limits = OpenVerifyLimits::new(2, usize::MAX);
 
     let mut oversized_g = sample_pallas_envelope(4, "limit-oversized-g");
     oversized_g.params.g.push(oversized_g.params.g[0]);
@@ -1076,10 +1109,7 @@ fn proof_from_wire_reports_invalid_group_encoding() {
 
 #[test]
 fn batch_verify_empty_inputs_return_empty_for_all_options() {
-    let limits = OpenVerifyLimits {
-        max_k: Some(0),
-        max_transcript_label_len: Some(0),
-    };
+    let limits = OpenVerifyLimits::new(0, 0);
 
     assert!(crate::batch::verify_open_batch(&[]).is_empty());
     assert!(
@@ -1105,10 +1135,7 @@ fn batch_verify_enforces_open_verify_limits_before_param_registration() {
     let results = crate::batch::verify_open_batch_with_limits(
         std::slice::from_ref(&envelope),
         &crate::batch::BatchOptions::sequential(),
-        OpenVerifyLimits {
-            max_k: Some(2),
-            max_transcript_label_len: Some(64),
-        },
+        OpenVerifyLimits::new(2, 64),
     );
     assert!(matches!(
         results[0],
@@ -1118,10 +1145,7 @@ fn batch_verify_enforces_open_verify_limits_before_param_registration() {
     let results = crate::batch::verify_open_batch_with_limits(
         std::slice::from_ref(&envelope),
         &crate::batch::BatchOptions::sequential(),
-        OpenVerifyLimits {
-            max_k: Some(3),
-            max_transcript_label_len: Some(4),
-        },
+        OpenVerifyLimits::new(3, 4),
     );
     assert!(matches!(
         results[0],
@@ -2553,19 +2577,13 @@ fn pallas_open_envelope_witness_derivation_honors_limits() {
     let envelope = sample_pallas_envelope(8, "derive-envelope-witness-limits");
     nh::derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
         &envelope,
-        OpenVerifyLimits {
-            max_k: Some(3),
-            max_transcript_label_len: None,
-        },
+        OpenVerifyLimits::new(3, usize::MAX),
     )
     .expect("n=8 envelope is inside max_k=3");
 
     let err = nh::derive_pallas_ipa_verifier_witness_from_envelope_with_limits(
         &envelope,
-        OpenVerifyLimits {
-            max_k: Some(2),
-            max_transcript_label_len: None,
-        },
+        OpenVerifyLimits::new(2, usize::MAX),
     )
     .expect_err("n=8 envelope exceeds max_k=2");
     assert!(matches!(

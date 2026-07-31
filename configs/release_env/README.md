@@ -21,4 +21,4 @@ Create `configs/release_env/<profile>.env` (git-ignored) or drop the file under
 eval "$(scripts/release/load_env.sh <profile>)"
 ```
 
-Profiles are referenced in `docs/source/sdk/android/maven_staging_plan.md`.
+Profiles are referenced in `specs/sdk/android/maven_staging_plan.md`.

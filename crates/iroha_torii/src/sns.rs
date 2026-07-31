@@ -1,11 +1,10 @@
 //! Ledger-backed Sora Name Service (SNS) HTTP handlers.
 
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Path, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use dashmap::DashMap;
 use iroha_core::{
     sns::{
         SnsError as CoreSnsError, SnsNamespace, get_name_record_by_selector, policy_by_id,
@@ -14,7 +13,8 @@ use iroha_core::{
     state::{StateReadOnly, StateReadOnlyWithTransactions},
 };
 use iroha_data_model::sns::{NameRecordV1, NameSelectorV1, NameStatus, SuffixId};
-use std::sync::Arc;
+use parking_lot::Mutex;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use crate::{JsonBody, SharedAppState};
 
@@ -31,6 +31,8 @@ pub enum SnsError {
     Conflict(String),
     /// Internal state mutation failed.
     Internal(String),
+    /// Torii access or request-rate policy rejected the request.
+    Access(crate::Error),
 }
 
 impl From<CoreSnsError> for SnsError {
@@ -51,6 +53,7 @@ impl IntoResponse for SnsError {
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             Self::Conflict(msg) => (StatusCode::CONFLICT, msg),
             Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            Self::Access(error) => return error.into_response(),
         };
         (status, message).into_response()
     }
@@ -109,7 +112,12 @@ struct SnsNameRecordCacheEntry {
 /// expire at the next lifecycle deadline.
 #[derive(Debug, Default)]
 pub(crate) struct SnsNameRecordCache {
-    entries: DashMap<SnsNameRecordCacheKey, SnsNameRecordCacheEntry>,
+    inner: Mutex<SnsNameRecordCacheInner>,
+}
+
+#[derive(Debug, Default)]
+struct SnsNameRecordCacheInner {
+    entries: HashMap<SnsNameRecordCacheKey, SnsNameRecordCacheEntry>,
 }
 
 impl SnsNameRecordCache {
@@ -124,21 +132,7 @@ impl SnsNameRecordCache {
         block_hash: Option<&str>,
         now_ms: u64,
     ) -> Option<Result<NameRecordV1, SnsError>> {
-        let entry = self.entries.get(key)?;
-        if entry.block_height != block_height || entry.block_hash.as_deref() != block_hash {
-            return None;
-        }
-        if matches!(&entry.outcome, CachedSnsNameRecord::Found(_))
-            && entry
-                .valid_until_ms
-                .is_some_and(|valid_until_ms| now_ms >= valid_until_ms)
-        {
-            return None;
-        }
-        Some(match &entry.outcome {
-            CachedSnsNameRecord::Found(record) => Ok(record.clone()),
-            CachedSnsNameRecord::NotFound(message) => Err(SnsError::NotFound(message.clone())),
-        })
+        self.inner.lock().get(key, block_height, block_hash, now_ms)
     }
 
     fn insert_found(
@@ -182,10 +176,7 @@ impl SnsNameRecordCache {
         valid_until_ms: Option<u64>,
         outcome: CachedSnsNameRecord,
     ) {
-        if self.entries.len() >= SNS_NAME_CACHE_MAX_ENTRIES {
-            self.entries.clear();
-        }
-        self.entries.insert(
+        self.inner.lock().insert(
             key,
             SnsNameRecordCacheEntry {
                 block_height,
@@ -198,7 +189,53 @@ impl SnsNameRecordCache {
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.entries.len()
+        self.inner.lock().entries.len()
+    }
+}
+
+impl SnsNameRecordCacheInner {
+    fn get(
+        &mut self,
+        key: &SnsNameRecordCacheKey,
+        block_height: u64,
+        block_hash: Option<&str>,
+        now_ms: u64,
+    ) -> Option<Result<NameRecordV1, SnsError>> {
+        let entry = self.entries.get(key)?;
+        if entry.block_height != block_height || entry.block_hash.as_deref() != block_hash {
+            self.entries.remove(key);
+            return None;
+        }
+        if matches!(&entry.outcome, CachedSnsNameRecord::Found(_))
+            && entry
+                .valid_until_ms
+                .is_some_and(|valid_until_ms| now_ms >= valid_until_ms)
+        {
+            self.entries.remove(key);
+            return None;
+        }
+        Some(match entry.outcome.clone() {
+            CachedSnsNameRecord::Found(record) => Ok(record),
+            CachedSnsNameRecord::NotFound(message) => Err(SnsError::NotFound(message)),
+        })
+    }
+
+    fn insert(&mut self, key: SnsNameRecordCacheKey, entry: SnsNameRecordCacheEntry) {
+        let evicted = if !self.entries.contains_key(&key)
+            && self.entries.len() >= SNS_NAME_CACHE_MAX_ENTRIES
+        {
+            self.entries.keys().next().cloned()
+        } else {
+            None
+        };
+        if let Some(evicted) = evicted {
+            // Replace one entry instead of flushing the whole cache. The
+            // process-local hash seed makes targeted victim selection
+            // impractical, and a miss cannot invalidate unrelated hot keys en
+            // masse.
+            self.entries.remove(&evicted);
+        }
+        self.entries.insert(key, entry);
     }
 }
 
@@ -218,7 +255,17 @@ where
 pub async fn handle_get_name(
     Path((namespace, literal)): Path<(String, String)>,
     State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, SnsError> {
+    crate::check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/sns/names/{namespace}/{literal}",
+    )
+    .await
+    .map_err(SnsError::Access)?;
     let app_for_job = Arc::clone(&app);
     let cache = Arc::clone(&app.sns_name_cache);
     let started_at = std::time::Instant::now();
@@ -268,7 +315,12 @@ pub async fn handle_get_name(
                     message.clone(),
                 );
             }
-            Err(SnsError::BadRequest(_) | SnsError::Conflict(_) | SnsError::Internal(_)) => {}
+            Err(
+                SnsError::BadRequest(_)
+                | SnsError::Conflict(_)
+                | SnsError::Internal(_)
+                | SnsError::Access(_),
+            ) => {}
         }
         iroha_logger::debug!(
             namespace = %namespace_path,
@@ -289,7 +341,17 @@ pub async fn handle_get_name(
 pub async fn handle_get_policy(
     Path(suffix_id): Path<SuffixId>,
     State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, SnsError> {
+    crate::check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/sns/policies/{suffix_id}",
+    )
+    .await
+    .map_err(SnsError::Access)?;
     let app_for_job = Arc::clone(&app);
     let policy = run_blocking_sns("get_policy", move || {
         let view = app_for_job.state.view();
@@ -350,6 +412,13 @@ mod tests {
         let internal: SnsError = CoreSnsError::Internal("boom".to_owned()).into();
         let response = internal.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let access = SnsError::Access(crate::Error::AppUnauthorized {
+            code: "sns_auth_required",
+            message: "authentication required".to_owned(),
+        });
+        let response = access.into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
@@ -502,5 +571,60 @@ mod tests {
             .expect("record");
         assert_eq!(cached, record);
         assert!(cache.get(&key, 12, Some("block-a"), 50).is_none());
+    }
+
+    #[test]
+    fn sns_name_cache_replaces_one_entry_at_capacity_without_global_flush() {
+        let cache = SnsNameRecordCache::new();
+        for index in 0..SNS_NAME_CACHE_MAX_ENTRIES {
+            cache.insert_not_found(
+                cache_key(&format!("cache-entry-{index}")),
+                12,
+                Some("block-a".to_owned()),
+                "not found".to_owned(),
+            );
+        }
+        assert_eq!(cache.len(), SNS_NAME_CACHE_MAX_ENTRIES);
+
+        let newest = cache_key("newest-cache-entry");
+        cache.insert_not_found(
+            newest.clone(),
+            12,
+            Some("block-a".to_owned()),
+            "not found".to_owned(),
+        );
+
+        assert_eq!(cache.len(), SNS_NAME_CACHE_MAX_ENTRIES);
+        assert!(
+            cache
+                .get(&newest, 12, Some("block-a"), 0)
+                .expect("new entry retained")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn sns_name_cache_concurrent_inserts_remain_strictly_bounded() {
+        const WORKERS: usize = 8;
+        const INSERTS_PER_WORKER: usize = SNS_NAME_CACHE_MAX_ENTRIES / 4;
+
+        let cache = Arc::new(SnsNameRecordCache::new());
+        std::thread::scope(|scope| {
+            for worker in 0..WORKERS {
+                let cache = Arc::clone(&cache);
+                scope.spawn(move || {
+                    for index in 0..INSERTS_PER_WORKER {
+                        cache.insert_not_found(
+                            cache_key(&format!("concurrent-cache-entry-{worker}-{index}")),
+                            12,
+                            Some("block-a".to_owned()),
+                            "not found".to_owned(),
+                        );
+                    }
+                });
+            }
+        });
+
+        assert_eq!(cache.len(), SNS_NAME_CACHE_MAX_ENTRIES);
     }
 }

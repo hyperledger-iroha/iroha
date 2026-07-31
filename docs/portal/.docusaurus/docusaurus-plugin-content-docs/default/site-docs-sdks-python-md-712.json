@@ -1,0 +1,24 @@
+{
+  "id": "sdks/python",
+  "title": "Python SDK Quickstart",
+  "description": "The Python SDK (iroha-python) mirrors the Rust client helpers so you can",
+  "source": "@site/docs/sdks/python.md",
+  "sourceDirName": "sdks",
+  "slug": "/sdks/python",
+  "permalink": "/next/sdks/python",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sdks/python.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "Rust SDK Quickstart",
+    "permalink": "/next/sdks/rust"
+  },
+  "next": {
+    "title": "Android Telemetry",
+    "permalink": "/next/sdks/android-telemetry"
+  }
+}

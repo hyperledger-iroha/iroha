@@ -5,7 +5,7 @@ targets:
   NoritoDemo:
     type: application
     platform: iOS
-    deploymentTarget: "13.0"
+    deploymentTarget: "15.0"
     sources:
       - Sources
     resources:
@@ -23,7 +23,7 @@ targets:
   NoritoDemoTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "13.0"
+    deploymentTarget: "15.0"
     sources:
       - Tests
     info:

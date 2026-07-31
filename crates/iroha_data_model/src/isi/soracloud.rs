@@ -1339,6 +1339,9 @@ impl PartialOrd for AdvanceSoracloudRollout {
 }
 
 /// Upsert authoritative node/runtime state for a Soracloud service.
+///
+/// `CanManageSoracloud` holders may reconcile any service. Other callers must
+/// be active public-lane validators assigned to the exact service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1400,6 +1403,9 @@ impl PartialOrd for ClearSoracloudInrouReplicaRuntimeState {
 }
 
 /// Report authoritative leased-service usage observed by the runtime.
+///
+/// `CanManageSoracloud` holders may reconcile any service. Other callers must
+/// be active public-lane validators assigned to the exact service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1423,6 +1429,11 @@ impl PartialOrd for ReportSoracloudServiceLeaseUsage {
 }
 
 /// Persist an ordered Soracloud mailbox message.
+///
+/// The source service must be deployed. `CanManageSoracloud` holders may
+/// reconcile any source; other callers must be active public-lane validators
+/// assigned to the source service's active revision. Recorded message
+/// identifiers are immutable and cannot be replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1442,6 +1453,11 @@ impl PartialOrd for RecordSoracloudMailboxMessage {
 }
 
 /// Persist an authoritative Soracloud runtime receipt.
+///
+/// `CanManageSoracloud` holders may reconcile any service. Other callers must
+/// be active public-lane validators assigned to the exact service revision and
+/// must identify themselves as the selected validator in the receipt. Recorded
+/// receipt identifiers are immutable and cannot be replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1461,6 +1477,10 @@ impl PartialOrd for RecordSoracloudRuntimeReceipt {
 }
 
 /// Persist an authoritative private uploaded-model execution receipt.
+///
+/// This privileged ledger projection is restricted to
+/// `CanManageSoracloud` holders. Recorded receipt identifiers are immutable and
+/// cannot be replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",

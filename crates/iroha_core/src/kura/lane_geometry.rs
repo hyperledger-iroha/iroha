@@ -18,8 +18,8 @@ use iroha_data_model::{
         execution_context::{ExternalExecutionContext, ExternalExecutionRouteRole},
     },
     merge::{LaneDrainFrontierV1, MergeLedgerEntry},
-    name::Name,
     nexus::{DataSpaceId, LaneId},
+    state_path::StatePath,
     transaction::signed::TransactionEntrypoint,
 };
 use norito::codec::{Decode, DecodeAll, Encode};
@@ -51,18 +51,19 @@ use super::{
     LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
     LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact,
     LaneMergeApplicationFrontierV1, MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES,
-    MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES,
-    MergeLedgerCarrierRecord, NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
-    NativeAmxEvidenceKind, NativeAmxParticipantApplicationManifestArtifactV1,
+    MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MergeLedgerCarrierRecord,
+    NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE, NativeAmxEvidenceKind,
+    NativeAmxParticipantApplicationManifestArtifactV1,
     NativeAmxParticipantApplicationReceiptArtifact, RecoveredLaneBlockPayload, Result,
     STRICT_INIT_MAX_BLOCK_BYTES, create_dir_all_with_context, sync_dir,
 };
 #[cfg(test)]
 use super::{
-    AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX, NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX,
-    NATIVE_AMX_EVIDENCE_FILE_SUFFIX, NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS,
-    OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE, OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
-    SidecarIndexEntry, V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
+    AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX, DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES,
+    NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX, NATIVE_AMX_EVIDENCE_FILE_SUFFIX,
+    NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS, OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
+    OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE, SidecarIndexEntry,
+    V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
 };
 
 const JOURNAL_VERSION: u8 = 6;
@@ -108,8 +109,8 @@ const LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE: usize =
 /// multiplicity as corruption.
 ///
 /// Each route can retain five ordinary histories (autonomous payload, input,
-/// preflight, certificate, and application receipt), plus two independently
-/// byte-bounded Native evidence histories. Ordinary histories may also contain
+/// preflight, certificate, and application receipt), plus two Native evidence
+/// artifact families sharing one configured byte bound. Ordinary histories may also contain
 /// the globally bounded pending-merge depth beyond their terminal frontier.
 /// Startup recovery may admit one entry beyond the compact Native window, but
 /// retirement runs only after startup repair and therefore accepts exactly the
@@ -128,24 +129,23 @@ fn lane_retirement_aggregate_work_item_limit(
     route_count.checked_mul(regular_per_route.checked_add(native_per_route)?)
 }
 
-/// Return whether independently byte-pruned Native manifest and receipt
-/// windows still contain a complete receipt suffix.
+/// Return whether Native manifest and receipt windows are the same complete,
+/// contiguous retained suffix.
 ///
-/// Manifests are published before receipts and may be smaller, so the retained
-/// manifest window may legitimately include older history. Every retained
-/// receipt must still have its exact manifest, while a newer or interleaved
-/// manifest without a receipt is repair-pending and must block retirement.
+/// Publication may transiently leave one highest half-pair, but retirement
+/// and archive validation run only after repair and pair pruning. Neither path
+/// may accept family-skewed or punctured evidence.
 fn native_amx_retained_windows_are_complete(
     manifest_heights: &BTreeSet<u64>,
     receipt_heights: &BTreeSet<u64>,
 ) -> bool {
-    let Some(oldest_receipt_height) = receipt_heights.iter().next().copied() else {
-        return manifest_heights.is_empty();
-    };
-    receipt_heights.is_subset(manifest_heights)
+    manifest_heights == receipt_heights
         && manifest_heights
             .iter()
-            .all(|height| receipt_heights.contains(height) || *height < oldest_receipt_height)
+            .copied()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .all(|pair| pair[0].checked_add(1) == Some(pair[1]))
 }
 
 #[cfg(test)]
@@ -3352,6 +3352,64 @@ impl Kura {
         )
     }
 
+    /// Verify that compacted geometry can still reach the configured-primary replay floor.
+    ///
+    /// This is a read-only startup preflight. It deliberately does not finish pending GC, move
+    /// lane paths, repair markers, or rewrite the journal; callers use it before deciding that an
+    /// unusable snapshot may safely fall back to genesis-height Kura replay.
+    pub(crate) fn preflight_lane_geometry_recovery_floor_with_lineage_root(
+        &self,
+        authoritative: &LaneConfig,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        activation_heights: &BTreeMap<LaneId, u64>,
+        lineage_root: Hash,
+    ) -> Result<()> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(());
+        }
+        self.ensure_nonzero_lineage_root(lineage_root)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let bindings = self.geometry_bindings(authoritative, incarnations, activation_heights)?;
+        let fingerprint = geometry_catalog_fingerprint(&bindings);
+        let journal = self.read_lane_geometry_journal()?;
+        let primary_binding = bindings.first().ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured-primary replay geometry has no primary binding",
+            )
+        })?;
+        if journal
+            .configured_primary_binding
+            .as_ref()
+            .is_some_and(|expected| expected != primary_binding)
+        {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured-primary geometry binding differs from its durable anchor",
+            ));
+        }
+        let recovery_floor = Self::lane_geometry_identity_at_applied_count(&journal, 0);
+        if recovery_floor.is_some_and(|identity| identity != (fingerprint, lineage_root)) {
+            if let Some(checkpoint) = journal.checkpoint.as_ref() {
+                return Err(self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "state snapshot at height {} is required because the configured-primary lane-geometry recovery floor was compacted",
+                        checkpoint.snapshot_height
+                    ),
+                ));
+            }
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured-primary geometry identity does not match the retained recovery floor",
+            ));
+        }
+        Ok(())
+    }
+
     fn recover_lane_geometry_journal_with_lineage_root_inner(
         &self,
         authoritative: &LaneConfig,
@@ -3448,11 +3506,12 @@ impl Kura {
 
     /// Checkpoint recoverable lane geometry after a complete snapshot bundle is durable.
     ///
-    /// The caller must invoke this only after the snapshot data, digest, signature, Merkle
-    /// metadata, and snapshot directory entry have all been synchronized. Kura independently
-    /// joins the supplied snapshot identity to its canonical block hash and WSV checkpoint before
-    /// compacting any transition history. Archive deletion is then replayable from the compacted
-    /// journal and can never run ahead of that checkpoint.
+    /// The caller must invoke this only after the payload has passed the semantic restart reader
+    /// and the snapshot data, digest, signature, Merkle metadata, and snapshot directory entry
+    /// have all been synchronized. Kura independently joins the supplied snapshot identity to its
+    /// canonical block hash and WSV checkpoint before compacting any transition history. Archive
+    /// deletion is then replayable from the compacted journal and can never run ahead of that
+    /// checkpoint.
     ///
     /// # Errors
     /// Returns an error without deleting recovery evidence when the snapshot identity is stale,
@@ -3467,7 +3526,7 @@ impl Kura {
         snapshot_height: u64,
         snapshot_block_hash: Option<HashOf<BlockHeader>>,
         snapshot_state_hash: Hash,
-        snapshot_smart_contract_state: &BTreeMap<Name, Vec<u8>>,
+        snapshot_smart_contract_state: &BTreeMap<StatePath, Vec<u8>>,
     ) -> Result<LaneGeometryGcSummary> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(LaneGeometryGcSummary::default());
@@ -3485,7 +3544,11 @@ impl Kura {
         )
     }
 
-    /// Checkpoint recoverable geometry against an exact retained-lineage identity.
+    /// Checkpoint restart-validated geometry against an exact retained-lineage identity.
+    ///
+    /// Callers must prove the snapshot can pass semantic restart initialization before invoking
+    /// this compaction boundary; durable bytes and canonical block/WSV identity alone are not
+    /// sufficient recovery evidence.
     pub(crate) fn checkpoint_lane_geometry_after_durable_snapshot_with_lineage_root(
         &self,
         authoritative: &LaneConfig,
@@ -3495,7 +3558,7 @@ impl Kura {
         snapshot_height: u64,
         snapshot_block_hash: Option<HashOf<BlockHeader>>,
         snapshot_state_hash: Hash,
-        snapshot_smart_contract_state: &BTreeMap<Name, Vec<u8>>,
+        snapshot_smart_contract_state: &BTreeMap<StatePath, Vec<u8>>,
     ) -> Result<LaneGeometryGcSummary> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(LaneGeometryGcSummary::default());
@@ -3867,7 +3930,7 @@ impl Kura {
     fn geometry_merge_releases_proven_by_snapshot(
         &self,
         snapshot_height: u64,
-        snapshot_smart_contract_state: &BTreeMap<Name, Vec<u8>>,
+        snapshot_smart_contract_state: &BTreeMap<StatePath, Vec<u8>>,
     ) -> Result<Vec<LaneGeometryMergeRelease>> {
         let entries = self.merge_ledger_all_entries()?;
         let carriers = self.geometry_merge_carrier_map()?;
@@ -4288,23 +4351,8 @@ impl Kura {
                 ));
             }
         }
-        let identity_at_cursor = if desired_applied_count == 0 {
-            journal
-                .records
-                .first()
-                .map(|record| (record.previous_catalog, record.previous_lineage_root))
-                .or_else(|| {
-                    journal
-                        .checkpoint
-                        .as_ref()
-                        .map(|checkpoint| (checkpoint.catalog, checkpoint.lineage_root))
-                })
-        } else {
-            journal
-                .records
-                .get(desired_applied_count - 1)
-                .map(|record| (record.updated_catalog, record.updated_lineage_root))
-        };
+        let identity_at_cursor =
+            Self::lane_geometry_identity_at_applied_count(journal, desired_applied_count);
         if identity_at_cursor
             .is_some_and(|identity| identity != (authoritative_catalog, authoritative_lineage_root))
         {
@@ -4394,6 +4442,29 @@ impl Kura {
         Ok(())
     }
 
+    fn lane_geometry_identity_at_applied_count(
+        journal: &LaneGeometryJournal,
+        desired_applied_count: usize,
+    ) -> Option<(Hash, Hash)> {
+        if desired_applied_count == 0 {
+            journal
+                .records
+                .first()
+                .map(|record| (record.previous_catalog, record.previous_lineage_root))
+                .or_else(|| {
+                    journal
+                        .checkpoint
+                        .as_ref()
+                        .map(|checkpoint| (checkpoint.catalog, checkpoint.lineage_root))
+                })
+        } else {
+            journal
+                .records
+                .get(desired_applied_count - 1)
+                .map(|record| (record.updated_catalog, record.updated_lineage_root))
+        }
+    }
+
     fn geometry_retirement_identities(
         &self,
         previous: &LaneConfig,
@@ -4466,8 +4537,7 @@ impl Kura {
         let payload_limit = usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES)?;
         let mut manifests = BTreeMap::new();
         let mut receipts = BTreeMap::new();
-        let mut manifest_bytes = 0_u64;
-        let mut receipt_bytes = 0_u64;
+        let mut evidence_bytes = 0_u64;
 
         for (raw_name, entry_snapshot) in artifact_snapshot {
             let path = lane_artifacts.join(raw_name);
@@ -4527,11 +4597,7 @@ impl Kura {
                         )
                     })?;
             let encoded_len = metadata.file.len();
-            let aggregate_bytes = match kind {
-                NativeAmxEvidenceKind::Manifest => &mut manifest_bytes,
-                NativeAmxEvidenceKind::Receipt => &mut receipt_bytes,
-            };
-            *aggregate_bytes = aggregate_bytes.checked_add(encoded_len).ok_or_else(|| {
+            evidence_bytes = evidence_bytes.checked_add(encoded_len).ok_or_else(|| {
                 Error::IO(
                     std::io::Error::new(
                         ErrorKind::InvalidData,
@@ -4540,11 +4606,13 @@ impl Kura {
                     path.clone(),
                 )
             })?;
-            if *aggregate_bytes > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES {
+            if evidence_bytes > self.native_amx_participant_evidence_file_bytes() {
                 return Err(Error::IO(
                     std::io::Error::new(
                         ErrorKind::InvalidData,
-                        format!("{context} Native AMX evidence exceeds its aggregate byte bound"),
+                        format!(
+                            "{context} Native AMX manifests and receipts exceed their shared aggregate byte bound"
+                        ),
                     ),
                     path,
                 ));
@@ -5286,6 +5354,26 @@ impl Kura {
                 .collect::<BTreeSet<_>>();
             count_work_items(&mut work_items_seen, native_manifest_heights.len())?;
             count_work_items(&mut work_items_seen, native_receipt_heights.len())?;
+            if !native_amx_retained_windows_are_complete(
+                &native_manifest_heights,
+                &native_receipt_heights,
+            ) {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane retirement Native AMX manifest/receipt evidence is not an exact contiguous retained suffix",
+                ));
+            }
+            Self::validate_native_amx_retained_history_continuity(
+                &retained_native_manifests,
+                &retained_native_receipts,
+                false,
+            )
+            .map_err(|message| {
+                self.geometry_error_owned(
+                    ErrorKind::InvalidData,
+                    format!("lane retirement Native AMX retained history is invalid: {message}"),
+                )
+            })?;
             for (lane_block_height, manifest) in retained_native_manifests {
                 if manifest.leaf.lane_id != entry.lane_id
                     || manifest.leaf.dataspace_id != entry.dataspace_id
@@ -5332,15 +5420,6 @@ impl Kura {
                         "lane retirement scan found a stale or duplicate Native AMX participant receipt identity",
                     ));
                 }
-            }
-            if !native_amx_retained_windows_are_complete(
-                &native_manifest_heights,
-                &native_receipt_heights,
-            ) {
-                return Err(self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "lane retirement Native AMX manifest/receipt evidence is not a complete retained suffix",
-                ));
             }
             let latest_native_receipt = self
                 .decode_native_amx_participant_receipt_latest_index(&entry, &native_receipt_latest)
@@ -8417,6 +8496,26 @@ impl Kura {
             .keys()
             .copied()
             .collect::<BTreeSet<_>>();
+        if !native_amx_retained_windows_are_complete(
+            &native_manifest_heights,
+            &native_receipt_heights,
+        ) {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "retired Native AMX manifest/receipt evidence is not an exact contiguous retained suffix",
+            ));
+        }
+        Self::validate_native_amx_retained_history_continuity(
+            &retained_native_manifests,
+            &retained_native_receipts,
+            false,
+        )
+        .map_err(|message| {
+            self.geometry_error_owned(
+                ErrorKind::InvalidData,
+                format!("retired Native AMX retained history is invalid: {message}"),
+            )
+        })?;
         let mut native_manifests = BTreeMap::new();
         for (lane_block_height, manifest) in retained_native_manifests {
             if manifest.leaf.lane_incarnation != binding.incarnation
@@ -8433,15 +8532,6 @@ impl Kura {
                     "retired Native AMX participant manifest has stale, duplicate, or unverifiable evidence",
                 ));
             }
-        }
-        if !native_amx_retained_windows_are_complete(
-            &native_manifest_heights,
-            &native_receipt_heights,
-        ) {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "retired Native AMX manifest/receipt evidence is not a complete retained suffix",
-            ));
         }
         let mut latest_native_receipt = None;
         for (lane_block_height, receipt) in retained_native_receipts {
@@ -12853,7 +12943,7 @@ fn geometry_pending_archive_gc_root(pending: &[LaneGeometryPendingArchiveGc]) ->
     Hash::new_from_chunks(&[PENDING_GC_DOMAIN, pending.to_vec().encode().as_slice()])
 }
 
-fn geometry_merge_marker_set_root(markers: &[(Name, Vec<u8>)]) -> Hash {
+fn geometry_merge_marker_set_root(markers: &[(StatePath, Vec<u8>)]) -> Hash {
     Hash::new_from_chunks(&[
         MERGE_RELEASE_MARKERS_DOMAIN,
         markers.to_vec().encode().as_slice(),
@@ -13073,62 +13163,7 @@ mod tests {
     // This makes the net disk-reclamation assertion independent of small encoding-size changes.
     const GC_PAYLOAD_LEN: usize = 16 * 1024;
 
-    #[test]
-    fn native_amx_retained_windows_require_a_complete_receipt_suffix() {
-        assert!(native_amx_retained_windows_are_complete(
-            &BTreeSet::from([7, 8, 9, 10]),
-            &BTreeSet::from([9, 10]),
-        ));
-        assert!(!native_amx_retained_windows_are_complete(
-            &BTreeSet::from([7, 9, 10]),
-            &BTreeSet::from([8, 9, 10]),
-        ));
-        assert!(!native_amx_retained_windows_are_complete(
-            &BTreeSet::from([8, 9, 10, 11]),
-            &BTreeSet::from([9, 10]),
-        ));
-        assert!(!native_amx_retained_windows_are_complete(
-            &BTreeSet::from([8]),
-            &BTreeSet::new(),
-        ));
-        assert!(native_amx_retained_windows_are_complete(
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-        ));
-        assert_eq!(
-            Kura::parse_native_amx_evidence_path(Path::new(
-                "native_amx_manifest_v1_00000000000000000001.norito"
-            ))
-            .expect("parse canonical Native manifest filename"),
-            Some((NativeAmxEvidenceKind::Manifest, 1, false)),
-        );
-        assert_eq!(
-            Kura::parse_native_amx_evidence_path(Path::new(
-                "native_amx_receipt_v1_18446744073709551615.norito"
-            ))
-            .expect("parse canonical Native receipt filename"),
-            Some((NativeAmxEvidenceKind::Receipt, u64::MAX, false)),
-        );
-        for obsolete_or_non_canonical in [
-            "native_amx_manifest_v1_00000000000000000000.norito",
-            "native_amx_manifest_v1_1.norito",
-            "native_amx_receipt_v1_000000000000000000001.norito",
-            "native_amx_application_manifests.norito",
-            "native_amx_participant_receipts.index",
-        ] {
-            assert!(
-                Kura::parse_native_amx_evidence_path(Path::new(obsolete_or_non_canonical)).is_err(),
-                "{obsolete_or_non_canonical} must not enter the first-release evidence allowlist",
-            );
-        }
-        assert_eq!(
-            Kura::parse_native_amx_evidence_path(Path::new(
-                "native_amx_receipt_v1_00000000000000000001.norito.tmp"
-            ))
-            .expect("parse canonical Native receipt temp filename"),
-            Some((NativeAmxEvidenceKind::Receipt, 1, true)),
-        );
-    }
+    include!("lane_geometry/native_amx_retained_window_tests.rs");
 
     #[test]
     fn retirement_work_bound_scales_with_routes_and_configured_retention() {
@@ -14172,6 +14207,7 @@ mod tests {
             quorum: DualQuorum::from_roster(&roster).expect("valid Native archive quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"Native archive AMX context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 1_024,
@@ -15016,14 +15052,17 @@ mod tests {
                 .expect("geometry participant settlement hashes");
         let participant_pop = bls_normal_pop_prove(participant_keypair.private_key())
             .expect("geometry retirement participant PoP");
-        let qc = |body| NativeAmxAttestationQcV2 {
-            body,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&participant_validator_set),
-            validator_set: participant_validator_set.clone(),
-            validator_set_pops: vec![participant_pop.clone()],
-            signers_bitmap: vec![1],
-            bls_aggregate_signature: vec![0_u8; crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES],
+        let qc = |body| {
+            NativeAmxAttestationQcV2::try_new(
+                body,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                HashOf::new(&participant_validator_set),
+                participant_validator_set.clone(),
+                vec![participant_pop.clone()],
+                vec![1],
+                vec![0_u8; crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES],
+            )
+            .expect("geometry fixture validator set and proofs must align")
         };
         let prepare_qc = qc(prepare_body);
         let mut commit_body = prepare_body;
@@ -19409,6 +19448,200 @@ mod tests {
     }
 
     #[test]
+    fn configured_primary_replay_preflight_is_read_only_when_floor_is_retained() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, extended) = initial_and_extended_configs();
+        let (initial_incarnations, initial_activations) = initial_geometry();
+        let (extended_incarnations, extended_activations) = extended_geometry();
+        let kura = open_kura(&root, &initial);
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+        )
+        .expect("retain primary-to-extended transition");
+        kura.mark_lane_geometry_catalog_published(
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+            None,
+        )
+        .expect("publish extended geometry");
+        let journal_path = kura.lane_geometry_journal_path();
+        let journal_before = fs::read(&journal_path).expect("retained geometry journal");
+        let initial_bindings = kura
+            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
+            .expect("configured-primary bindings");
+
+        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
+            &initial,
+            &initial_incarnations,
+            &initial_activations,
+            unscoped_lineage_root(&initial_bindings),
+        )
+        .expect("retained transition must preserve the configured-primary replay floor");
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after replay preflight"),
+            journal_before,
+            "replay preflight must not rewrite retained geometry"
+        );
+    }
+
+    #[test]
+    fn configured_primary_replay_preflight_checks_durable_binding_without_history() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured = configured_primary_catalog("replay-binding");
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
+        let (kura, _) =
+            Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
+                .expect("open authenticated configured Kura");
+        let durable_incarnation = Hash::prehashed([0x61; Hash::LENGTH]);
+        kura.establish_or_verify_configured_primary_geometry_anchor(
+            lane_config.primary(),
+            durable_incarnation,
+            baseline,
+        )
+        .expect("bind configured primary");
+        let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        let durable_incarnations = BTreeMap::from([(LaneId::SINGLE, durable_incarnation)]);
+        let journal_path = kura.lane_geometry_journal_path();
+        let journal = kura
+            .read_lane_geometry_journal()
+            .expect("read binding-only geometry journal");
+        assert!(journal.records.is_empty());
+        assert!(journal.checkpoint.is_none());
+        assert!(journal.configured_primary_binding.is_some());
+        let journal_before = fs::read(&journal_path).expect("binding-only journal bytes");
+
+        let mismatched_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0x62; Hash::LENGTH]))]);
+        let mismatched_bindings = kura
+            .geometry_bindings(&lane_config, &mismatched_incarnations, &activation_heights)
+            .expect("mismatched replay bindings");
+        let error = kura
+            .preflight_lane_geometry_recovery_floor_with_lineage_root(
+                &lane_config,
+                &mismatched_incarnations,
+                &activation_heights,
+                unscoped_lineage_root(&mismatched_bindings),
+            )
+            .expect_err("durable configured-primary binding must fail closed");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::InvalidData,
+            "configured-primary geometry binding differs from its durable anchor",
+        );
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after rejected binding preflight"),
+            journal_before,
+            "binding mismatch preflight must not rewrite the journal"
+        );
+
+        let durable_bindings = kura
+            .geometry_bindings(&lane_config, &durable_incarnations, &activation_heights)
+            .expect("durable replay bindings");
+        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
+            &lane_config,
+            &durable_incarnations,
+            &activation_heights,
+            unscoped_lineage_root(&durable_bindings),
+        )
+        .expect("matching durable configured-primary binding remains replayable");
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after matching binding preflight"),
+            journal_before,
+            "successful binding preflight must also remain read-only"
+        );
+    }
+
+    #[test]
+    fn configured_primary_replay_preflight_requires_snapshot_after_compaction() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, extended) = initial_and_extended_configs();
+        let (initial_incarnations, initial_activations) = initial_geometry();
+        let (extended_incarnations, extended_activations) = extended_geometry();
+        let kura = open_kura(&root, &initial);
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+        )
+        .expect("create geometry transition to compact");
+        kura.mark_lane_geometry_catalog_published(
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+            None,
+        )
+        .expect("publish extended geometry");
+        let (block_hash, state_hash) = durable_geometry_snapshot_identity(&kura, 20);
+        let extended_bindings = kura
+            .geometry_bindings(&extended, &extended_incarnations, &extended_activations)
+            .expect("extended checkpoint bindings");
+        let extended_lineage_root = unscoped_lineage_root(&extended_bindings);
+        let summary = kura
+            .checkpoint_lane_geometry_with_proven_snapshot(
+                extended_bindings,
+                extended_lineage_root,
+                20,
+                Some(block_hash),
+                state_hash,
+                Vec::new(),
+            )
+            .expect("compact transition behind the extended snapshot");
+        assert_eq!(summary.compacted_transitions, 1);
+        let journal_path = kura.lane_geometry_journal_path();
+        let journal_before = fs::read(&journal_path).expect("compacted geometry journal");
+        let initial_bindings = kura
+            .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
+            .expect("configured-primary bindings");
+
+        let error = kura
+            .preflight_lane_geometry_recovery_floor_with_lineage_root(
+                &initial,
+                &initial_incarnations,
+                &initial_activations,
+                unscoped_lineage_root(&initial_bindings),
+            )
+            .expect_err("empty-state replay must not cross compacted geometry");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::InvalidData,
+            "state snapshot at height 20 is required because the configured-primary lane-geometry recovery floor was compacted",
+        );
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after rejected replay preflight"),
+            journal_before,
+            "rejected replay preflight must leave compacted geometry untouched"
+        );
+
+        kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+            extended_lineage_root,
+        )
+        .expect("checkpoint-authoritative geometry remains a valid recovery floor");
+        assert_eq!(
+            fs::read(&journal_path).expect("journal after checkpoint preflight"),
+            journal_before,
+            "successful checkpoint preflight must also be read-only"
+        );
+    }
+
+    #[test]
     fn journal_publication_forces_a_paused_usage_scan_to_retry_exactly() {
         let temp = TempDir::new().expect("temporary directory");
         let root = temp.path().join("kura");
@@ -20238,6 +20471,7 @@ mod tests {
         for corruption in [
             "malformed",
             "truncated",
+            "missing-receipt",
             "oversized",
             "oversized-artifact",
             "aggregate",
@@ -20257,6 +20491,10 @@ mod tests {
                     let mut bytes = fs::read(&fixture.receipt).expect("read Native receipt");
                     assert!(bytes.pop().is_some(), "receipt fixture is non-empty");
                     fs::write(&fixture.receipt, bytes).expect("truncate Native receipt");
+                }
+                "missing-receipt" => {
+                    fs::remove_file(&fixture.receipt)
+                        .expect("remove Native archive receipt half-pair");
                 }
                 "oversized" => {
                     let file = OpenOptions::new()
@@ -20280,7 +20518,7 @@ mod tests {
                         .open(&fixture.manifest)
                         .expect("open Native manifest for oversize corruption");
                     file.set_len(
-                        MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES
+                        DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES
                             .checked_add(1)
                             .expect("Native evidence limit can grow by one"),
                     )
@@ -20301,7 +20539,7 @@ mod tests {
                         .create_new(true)
                         .open(&second_manifest)
                         .expect("create a second Native manifest");
-                    file.set_len(MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES)
+                    file.set_len(DEFAULT_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES)
                         .expect("stage aggregate-bound Native manifest");
                 }
                 _ => unreachable!("enumerated corruption"),

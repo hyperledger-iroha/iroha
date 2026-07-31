@@ -498,7 +498,7 @@ def build_summary(
             "Append the catalog snippet to your Nexus config and bump `[nexus] lane_count` accordingly.",
             encode_step,
             "Restart irohad with `--trace-config` to validate the new geometry and capture evidence for the rollout ticket.",
-            "Follow docs/source/nexus_elastic_lane.md to complete validator bootstrap and telemetry wiring.",
+            "Follow specs/nexus_elastic_lane.md to complete validator bootstrap and telemetry wiring.",
         ],
     }
 

@@ -207,14 +207,19 @@ object ContractJsonParser {
     private fun optionalBase64(value: Any?, path: String): String? {
         if (value == null) return null
         check(value is String) { "$path must be a base64 string when present" }
-        val literal = value.trim()
-        check(literal.isNotEmpty()) { "$path must be a non-empty base64 string" }
+        val literal = value
+        check(literal.isNotEmpty() && literal == literal.trim()) {
+            "$path must be exact standard-base64"
+        }
         val decoded = try {
             Base64.getDecoder().decode(literal)
         } catch (ex: IllegalArgumentException) {
             throw IllegalStateException("$path must be valid base64", ex)
         }
         check(decoded.isNotEmpty()) { "$path must not decode to empty bytes" }
+        check(Base64.getEncoder().encodeToString(decoded) == literal) {
+            "$path must be exact standard-base64"
+        }
         return literal
     }
 }

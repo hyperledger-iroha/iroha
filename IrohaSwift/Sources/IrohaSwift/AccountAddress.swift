@@ -247,7 +247,7 @@ public struct AccountAddress {
     }
 
     /// Returns canonical I105 output plus the UX warning required by
-    /// `docs/source/sns/address_display_guidelines.md`.
+    /// `specs/sns/address_display_guidelines.md`.
     public func displayFormats(networkPrefix: UInt16 = 753) throws -> AccountAddressDisplayFormats {
         let canonical = try canonicalBytes()
         return AccountAddressDisplayFormats(
@@ -799,7 +799,7 @@ private func cborAppendBytes(into buffer: inout Data, bytes: Data) {
     buffer.append(bytes)
 }
 
-/// Supported curve identifiers mirroring the registry in `docs/account_structure.md`.
+/// Supported curve identifiers mirroring the registry in `specs/account_structure.md`.
 /// Additional cases compile only when the corresponding feature flag is enabled so preview
 /// curves fail closed by default.
 private enum CurveId: UInt8 {

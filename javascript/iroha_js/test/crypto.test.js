@@ -289,7 +289,7 @@ test("invalid key lengths throw helpful errors", () => {
 
 test("recovery phrase helpers export Ed25519 seeds as reversible 24-word phrases", () => {
   const seed = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
-  const { publicKey } = generateKeyPair({ seed });
+  const publicKey = Buffer.from(ed25519.getPublicKey(seed));
   const recovery = ed25519SeedToRecoveryPhrase(Buffer.concat([seed, publicKey]));
 
   assert.equal(recovery.wordCount, 24);
@@ -302,7 +302,7 @@ test("recovery phrase helpers export Ed25519 seeds as reversible 24-word phrases
 });
 
 test("recovery phrase helpers generate and derive 12-word phrases", () => {
-  const recovery = generateRecoveryPhrase(12);
+  const recovery = entropyToRecoveryPhrase(Buffer.alloc(16, 7));
   const entropy = recoveryPhraseToEntropy(recovery.phrase);
   const seed = deriveEd25519SeedFromRecoveryPhrase(recovery.phrase);
 
@@ -310,6 +310,10 @@ test("recovery phrase helpers generate and derive 12-word phrases", () => {
   assert.equal(recovery.words.length, 12);
   assert.equal(entropy.length, 16);
   assert.equal(seed.length, 32);
+  assert.equal(
+    seed.toString("hex"),
+    "d761d406af2a4a5a15f67c924378ed88d1f85c13f1a37fc7366f59789b3bcd65",
+  );
   assert.notDeepEqual(seed, entropy);
   assert.deepEqual(
     seed,

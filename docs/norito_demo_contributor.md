@@ -3,12 +3,13 @@
 This document captures the manual setup steps required to run the SwiftUI demo against a
 local Torii node and mock ledger. It complements `docs/norito_bridge_release.md` by
 focusing on day-to-day development tasks. For a deeper walkthrough of integrating the
-Norito bridge/Connect stack into Xcode projects, see `docs/connect_swift_integration.md`.
+Norito bridge/Connect stack into Xcode projects, see the
+[public Swift SDK tutorial](https://docs.iroha.tech/guide/tutorials/swift.html).
 
 ## Environment setup
 
 1. Install the Rust toolchain defined in `rust-toolchain.toml`.
-2. Install Swift 5.7+ and Xcode command line tools on macOS.
+2. Install Swift 5.9+ and Xcode command line tools on macOS.
 3. (Optional) Install [SwiftLint](https://github.com/realm/SwiftLint) for linting.
 4. Run `cargo build -p irohad` to ensure the node compiles on your host.
 5. Copy `examples/ios/NoritoDemoXcode/Configs/demo.env.example` to `.env` and adjust the
@@ -116,7 +117,7 @@ config requests Metal.
   (`ci/xcframework-smoke:<lane>:device_tag`) so dashboards can attribute results to the
   correct simulator or StrongBox lane—verify the metadata is present if you adjust the
   pipeline or agent tags.
-- When `make swift-ci` fails, follow the steps in `docs/source/swift_parity_triage.md`
+- When `make swift-ci` fails, follow the steps in `specs/swift_parity_triage.md`
   and review the rendered `mobile_ci` output to determine which lane requires
   regeneration or incident follow-up.
 

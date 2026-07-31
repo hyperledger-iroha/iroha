@@ -66,7 +66,7 @@ if [[ "$mode" == "mutations" ]]; then
 fi
 
 root_dir="$(cd "$(dirname "$0")/../.." && pwd)"
-spec_dir="$root_dir/docs/formal/zk"
+spec_dir="$root_dir/formal/zk"
 module="ZkVerifierAdmission"
 apalache_version="${APALACHE_VERSION:-0.52.2}"
 default_tlc_jar="$root_dir/target/apalache/toolchains/v${apalache_version}/lib/apalache.jar"

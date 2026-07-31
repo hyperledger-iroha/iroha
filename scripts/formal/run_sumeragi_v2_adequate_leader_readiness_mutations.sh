@@ -7,8 +7,11 @@ readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly RETAINED_PRODUCER_PROOF_MODULE="SumeragiV2AdequateLeaderRetainedProducerClosureProofs"
+readonly RETAINED_PRODUCER_PROOF_SHA256="74b800bb99f1c5acb2d625c18c1787db0101186249a559caea14a07cb2079399"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
@@ -47,16 +50,32 @@ grep -Fq "$EXPECTED_JAVA_VERSION" <<<"$java_version" || {
   printf '%s\n' "$java_version" >&2
   exit 1
 }
+retained_producer_proof="${FORMAL_DIR}/${RETAINED_PRODUCER_PROOF_MODULE}.tla"
+[[ -f "$retained_producer_proof" ]] || {
+  echo "missing retained-producer proof source: ${retained_producer_proof}" >&2
+  exit 1
+}
+actual_retained_producer_proof_sha256="$(hash_file "$retained_producer_proof")"
+[[ "$actual_retained_producer_proof_sha256" == "$RETAINED_PRODUCER_PROOF_SHA256" ]] || {
+  echo "retained-producer proof source checksum mismatch" >&2
+  echo "expected: ${RETAINED_PRODUCER_PROOF_SHA256}" >&2
+  echo "actual:   ${actual_retained_producer_proof_sha256}" >&2
+  exit 1
+}
 
 run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-adequate-readiness.XXXXXX")"
 trap 'rm -rf -- "$run_dir"' EXIT
 
 models=(
+  "$RETAINED_PRODUCER_PROOF_MODULE"
   SumeragiV2AdequateLeaderCrashParkingMutation
   SumeragiV2AdequateLeaderMutualOwnerAnchorMutation
   SumeragiV2AdequateLeaderBusyIdleProvenanceMutation
   SumeragiV2AdequateLeaderDormantNonDescentMutation
   SumeragiV2AdequateLeaderSubjectReplacementDormantMutation
+  SumeragiV2AdequateLeaderPreAdmissionRouteMutation
+  SumeragiV2CorridorExitAuthorityReceiptMutation
+  SumeragiV2FixedCorridorDeadlineMutation
 )
 
 for module in "${models[@]}"; do
@@ -90,6 +109,9 @@ run_case() {
   shift 4
   local log="${run_dir}/${label}.log"
   local actual_status
+  local expected_diagnostic
+  local expected_diagnostic_count=0
+  local primary_diagnostic_count
   set +e
   (
     cd "$FORMAL_DIR"
@@ -103,13 +125,56 @@ run_case() {
     cat "$log" >&2
     exit 1
   fi
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  else
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
   for marker in "$@"; do
-    if ! grep -Fq "$marker" "$log"; then
-      echo "${label} missed expected marker: ${marker}" >&2
+    case "$marker" in
+      "Invariant "*)
+        expected_diagnostic="Error: ${marker}"
+        sumeragi_v2_tlc_assert_exact_line \
+          "$label" "$log" "$expected_diagnostic"
+        expected_diagnostic_count=$((expected_diagnostic_count + 1))
+        ;;
+      "Error: Invariant "*|"Error: Action property "*|\
+        "Temporal properties were violated.")
+        expected_diagnostic="$marker"
+        if [[ "$marker" == "Temporal properties were violated." ]]; then
+          expected_diagnostic="Error: ${marker}"
+        fi
+        sumeragi_v2_tlc_assert_exact_line \
+          "$label" "$log" "$expected_diagnostic"
+        expected_diagnostic_count=$((expected_diagnostic_count + 1))
+        ;;
+      *)
+        if ! grep -Fq "$marker" "$log"; then
+          echo "${label} missed expected marker: ${marker}" >&2
+          cat "$log" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  done
+  if [[ "$expected_status" -ne 0 ]]; then
+    [[ "$expected_diagnostic_count" -eq 1 ]] || {
+      echo "${label} did not declare exactly one failure diagnostic" >&2
       cat "$log" >&2
       exit 1
-    fi
-  done
+    }
+    primary_diagnostic_count="$(
+      grep -Ec \
+        "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+        "$log" || true
+    )"
+    [[ "$primary_diagnostic_count" -eq 1 ]] || {
+      echo "${label} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+      cat "$log" >&2
+      exit 1
+    }
+    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+  fi
   echo "[tlc] ${label}: expected status ${expected_status}"
 }
 
@@ -188,5 +253,36 @@ run_case subject-replacement-dormant-omitted-potential-mutation \
   SumeragiV2AdequateLeaderSubjectReplacementDormantMutation.tla \
   adequate_leader_subject_replacement_dormant_omitted_potential_bug.cfg 12 \
   "Invariant ActivationConsumesPotentialBeforeAddingPredecessor is violated."
+
+run_case pre-admission-route-fixed \
+  SumeragiV2AdequateLeaderPreAdmissionRouteMutation.tla \
+  adequate_leader_pre_admission_route_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case pre-admission-route-identity-mutation \
+  SumeragiV2AdequateLeaderPreAdmissionRouteMutation.tla \
+  adequate_leader_pre_admission_route_identity_bug.cfg 12 \
+  "Invariant RetriedTransportRetainsFrozenIdentity is violated."
+
+run_case corridor-exit-authority-receipt-fixed \
+  SumeragiV2CorridorExitAuthorityReceiptMutation.tla \
+  corridor_exit_authority_receipt_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case corridor-exit-authority-receipt-mutation \
+  SumeragiV2CorridorExitAuthorityReceiptMutation.tla \
+  corridor_exit_authority_receipt_bug.cfg 12 \
+  "Invariant CorridorExitAuthorityReceiptImmutable is violated."
+
+run_case fixed-corridor-deadline-reservation \
+  SumeragiV2FixedCorridorDeadlineMutation.tla \
+  fixed_corridor_deadline_reservation_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case fixed-corridor-deadline-owner-refresh-mutation \
+  SumeragiV2FixedCorridorDeadlineMutation.tla \
+  fixed_corridor_deadline_owner_refresh_bug.cfg 13 \
+  "Temporal properties were violated." \
+  "Stuttering"
 
 echo "[tlc] adequate-leader readiness mutation matrix passed"

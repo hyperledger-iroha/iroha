@@ -141,24 +141,25 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
 
     let app = torii.api_router_for_tests();
 
-    // POST /v1/zk/verify with minimal JSON; accept OK or 429
-    let resp = app
-        .clone()
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/zk/verify")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from("{}"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        resp.status(),
-        StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-    ));
+    for retired_path in ["/v1/zk/verify", "/v1/zk/submit-proof"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(retired_path)
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "{retired_path} must not expose a decode-only success surface"
+        );
+    }
 
     // GET /v1/zk/attachments (signed; empty list by default); accept OK or 429
     let request = fixtures::app_signed_request(

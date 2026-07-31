@@ -215,7 +215,7 @@ def build_summary(refs: Sequence[EnvReference]) -> Dict[str, Dict[str, object]]:
 def write_json(output: Path, refs: Sequence[EnvReference]) -> None:
     data = {
         "generated_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "command": "python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md",
+        "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
         "root": REPO_ROOT.name,
         "total_refs": len(refs),
         "unique_vars": len({ref.name for ref in refs}),
@@ -231,7 +231,7 @@ def write_markdown(output: Path, refs: Sequence[EnvReference]) -> None:
     lines.append("# Environment toggle inventory")
     lines.append("")
     lines.append(
-        "_Last refreshed via `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`_"
+        "_Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_"
     )
     lines.append("")
     lines.append(

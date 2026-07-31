@@ -82,7 +82,6 @@ pub struct IrohaZkX509StarkP256StatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct PrivacyJindoFieldElementV1 {
     /// Exact canonical little-endian residue.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -113,7 +112,6 @@ impl PrivacyJindoFieldElementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct PrivacyJindoLatticeCommitmentV1 {
     /// Exact governed lattice-commitment encoding.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
@@ -2537,4 +2535,3 @@ fn validate_activation_statement_len(
     }
     Ok(())
 }
-

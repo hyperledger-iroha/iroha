@@ -4059,8 +4059,8 @@ impl Network {
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
         let genesis_account_id = AccountId::new(self.genesis_key_pair.public_key().clone());
         let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
-        let recompute_staged_hash = |block: &GenesisBlock| {
-            config::staged_genesis_nexus_amx_context_hash(
+        let recompute_staged_hashes = |block: &GenesisBlock| {
+            config::staged_genesis_policy_hashes(
                 block,
                 &genesis_account_id,
                 &peer_topology,
@@ -4068,19 +4068,30 @@ impl Network {
                 pipeline_config.as_ref(),
                 nexus_config.as_ref(),
                 zk_config.as_ref(),
+                actual_config.as_ref(),
             )
             .expect("signed test-network genesis must stage without synthetic results")
         };
-        let assert_signed_staged_hash = |staged_hash: CryptoHash| {
-            let signed_hash = CryptoHash::prehashed(
+        let assert_signed_staged_hashes = |staged_hashes: config::StagedGenesisPolicyHashes| {
+            let signed_nexus_amx = CryptoHash::prehashed(
                 self.consensus_profile
                     .params
                     .v2_context
                     .nexus_amx_context_hash,
             );
+            let signed_execution_policy = CryptoHash::prehashed(
+                self.consensus_profile
+                    .params
+                    .v2_context
+                    .execution_policy_hash,
+            );
             assert_eq!(
-                staged_hash, signed_hash,
+                staged_hashes.nexus_amx, signed_nexus_amx,
                 "signed test-network Nexus/AMX context must match exact genesis pre-execution"
+            );
+            assert_eq!(
+                staged_hashes.execution_policy, signed_execution_policy,
+                "signed test-network execution policy must match exact genesis pre-execution"
             );
         };
 
@@ -4089,7 +4100,7 @@ impl Network {
                 cached_genesis,
                 &consensus_handshake_meta,
             ) {
-                assert_signed_staged_hash(recompute_staged_hash(cached_genesis));
+                assert_signed_staged_hashes(recompute_staged_hashes(cached_genesis));
                 return cached_genesis.clone();
             }
             if genesis_contains_any_consensus_handshake(cached_genesis) {
@@ -4115,8 +4126,9 @@ impl Network {
                 pipeline_config.as_ref(),
                 nexus_config.as_ref(),
                 zk_config.as_ref(),
+                actual_config.as_ref(),
             );
-            assert_signed_staged_hash(recompute_staged_hash(&augmented));
+            assert_signed_staged_hashes(recompute_staged_hashes(&augmented));
             let _ = self.cached_genesis_augmented.set(augmented.clone());
             return augmented;
         }
@@ -4134,11 +4146,12 @@ impl Network {
                 pipeline_config.clone(),
                 nexus_config.clone(),
                 zk_config.clone(),
+                actual_config.clone(),
                 Some(consensus_handshake_meta),
                 None,
                 confidential_policy_hash,
             );
-        assert_signed_staged_hash(staged_hash);
+        assert_signed_staged_hashes(staged_hash);
         let _ = self.cached_genesis.set(genesis.clone());
         genesis
     }
@@ -7426,7 +7439,7 @@ impl NetworkBuilder {
         let zk_config = resolved_genesis_config
             .as_ref()
             .map(|config| config.zk.clone());
-        let (mut parameter_state, preview_staged_nexus_amx_context_hash) =
+        let (mut parameter_state, preview_staged_policy_hashes) =
             match custom_genesis_block.as_ref() {
                 Some(custom) => (
                     consensus_parameters_from_genesis_with_overrides(
@@ -7438,27 +7451,26 @@ impl NetworkBuilder {
                 ),
                 None => {
                     let (preview_genesis, staged_hash) =
-                        config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
-                            genesis_isi.clone(),
-                            genesis_post_topology_isi.clone(),
-                            peer_ids.clone(),
-                            topology_entries.clone(),
-                            genesis_key_pair.clone(),
-                            consensus_chain_id.clone(),
-                            genesis_crypto.clone(),
-                            da_proof_policies.clone(),
-                            pipeline_config.clone(),
-                            nexus_config.clone(),
-                            zk_config.clone(),
-                            None,
-                            Some(match consensus_mode {
-                                ConsensusMode::Permissioned => {
-                                    SumeragiConsensusMode::Permissioned
-                                }
-                                ConsensusMode::Npos => SumeragiConsensusMode::Npos,
-                            }),
-                            confidential_policy_hash,
-                        );
+                    config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
+                        genesis_isi.clone(),
+                        genesis_post_topology_isi.clone(),
+                        peer_ids.clone(),
+                        topology_entries.clone(),
+                        genesis_key_pair.clone(),
+                        consensus_chain_id.clone(),
+                        genesis_crypto.clone(),
+                        da_proof_policies.clone(),
+                        pipeline_config.clone(),
+                        nexus_config.clone(),
+                        zk_config.clone(),
+                        resolved_genesis_config.clone(),
+                        None,
+                        Some(match consensus_mode {
+                            ConsensusMode::Permissioned => SumeragiConsensusMode::Permissioned,
+                            ConsensusMode::Npos => SumeragiConsensusMode::Npos,
+                        }),
+                        confidential_policy_hash,
+                    );
                     (
                         consensus_parameters_from_genesis(&preview_genesis),
                         Some(staged_hash),
@@ -7493,7 +7505,7 @@ impl NetworkBuilder {
             chain_id: consensus_chain_id.clone(),
             wire_protocol_version: PROTO_VERSION,
         };
-        let staged_nexus_amx_context_hash = match custom_genesis_block.as_ref() {
+        let staged_policy_hashes = match custom_genesis_block.as_ref() {
             Some(custom) => {
                 let provisional = normalize_genesis_consensus_handshake(
                     custom,
@@ -7503,7 +7515,7 @@ impl NetworkBuilder {
                     &genesis_key_pair,
                     &consensus_chain_id,
                 );
-                config::staged_genesis_nexus_amx_context_hash(
+                config::staged_genesis_policy_hashes(
                     &provisional,
                     &AccountId::new(genesis_key_pair.public_key().clone()),
                     &peer_topology,
@@ -7511,15 +7523,17 @@ impl NetworkBuilder {
                     pipeline_config.as_ref(),
                     nexus_config.as_ref(),
                     zk_config.as_ref(),
+                    resolved_genesis_config.as_ref(),
                 )
                 .expect("normalized custom genesis must pre-execute for v2 context binding")
             }
-            None => preview_staged_nexus_amx_context_hash
-                .expect("normal genesis preview must provide the staged Nexus/AMX context hash"),
+            None => preview_staged_policy_hashes
+                .expect("normal genesis preview must provide staged execution-policy hashes"),
         };
 
         let mut signed_v2_context = provisional_v2_context;
-        signed_v2_context.nexus_amx_context_hash = staged_nexus_amx_context_hash.into();
+        signed_v2_context.nexus_amx_context_hash = staged_policy_hashes.nexus_amx.into();
+        signed_v2_context.execution_policy_hash = staged_policy_hashes.execution_policy.into();
         let consensus_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
@@ -7589,11 +7603,12 @@ impl NetworkBuilder {
                 pipeline_config.as_ref(),
                 nexus_config.as_ref(),
                 zk_config.as_ref(),
+                resolved_genesis_config.as_ref(),
             )
             .expect("final custom genesis must pre-execute without synthetic results");
             assert_eq!(
-                final_staged_hash, staged_nexus_amx_context_hash,
-                "custom genesis Nexus/AMX binding must be a pre-execution fixed point"
+                final_staged_hash, staged_policy_hashes,
+                "custom genesis policy binding must be a pre-execution fixed point"
             );
             final_custom.0 = signed_block;
             assert!(
@@ -13343,7 +13358,7 @@ exit 0
             .iter()
             .map(NetworkPeer::id)
             .collect::<Vec<_>>();
-        let staged = config::staged_genesis_nexus_amx_context_hash(
+        let staged = config::staged_genesis_policy_hashes(
             genesis,
             &AccountId::new(network.genesis_key_pair.public_key().clone()),
             &topology,
@@ -13351,14 +13366,20 @@ exit 0
             Some(&actual.pipeline),
             Some(&actual.nexus),
             Some(&actual.zk),
+            Some(&actual),
         )
         .expect("signed genesis must independently pre-execute");
         let metadata = consensus_handshake_metadata(genesis)
             .expect("genesis must contain canonical consensus metadata");
         assert_eq!(
-            staged,
+            staged.nexus_amx,
             CryptoHash::prehashed(metadata.sumeragi_v2.nexus_amx_context_hash),
             "signed Nexus/AMX commitment must equal the independently staged projection"
+        );
+        assert_eq!(
+            staged.execution_policy,
+            CryptoHash::prehashed(metadata.sumeragi_v2.execution_policy_hash),
+            "signed execution-policy commitment must equal the independently staged projection"
         );
     }
 

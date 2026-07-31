@@ -24,7 +24,7 @@ use crate::{
 mod model {
     use super::*;
 
-    /// Identifier shared across a settlement lifecycle.
+    /// One-shot identifier consumed when a settlement commits successfully.
     #[derive(
         Debug,
         Display,
@@ -479,7 +479,7 @@ impl core::fmt::Display for PvpIsi {
     }
 }
 
-/// Settlement kind used when recording ledger events.
+/// Settlement kind recorded in a successful receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
@@ -529,7 +529,7 @@ pub enum SettlementLegRole {
     FxDestination,
 }
 
-/// Snapshot of a single settlement leg recorded in the ledger.
+/// Snapshot of a single leg in a committed settlement receipt.
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -546,72 +546,6 @@ pub struct SettlementLegSnapshot {
     pub role: SettlementLegRole,
     /// Original leg payload.
     pub leg: SettlementLeg,
-    /// Whether the leg remained committed after atomicity handling.
-    pub committed: bool,
-}
-
-/// Snapshot of a successful settlement attempt.
-#[allow(missing_copy_implementations)]
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-pub struct SettlementSuccessRecord {
-    /// Whether the first leg remained committed after execution.
-    pub first_committed: bool,
-    /// Whether the second leg remained committed after execution.
-    pub second_committed: bool,
-    /// Observed FX window in milliseconds (`PvP` only).
-    pub fx_window_ms: Option<u64>,
-}
-
-/// Snapshot of a failed settlement attempt.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-pub struct SettlementFailureRecord {
-    /// Stable failure classification.
-    pub reason: String,
-}
-
-/// Outcome recorded for a settlement attempt.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "detail"))]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-pub enum SettlementOutcomeRecord {
-    /// Settlement completed successfully.
-    Success(SettlementSuccessRecord),
-    /// Settlement failed; legs may have been rolled back.
-    Failure(SettlementFailureRecord),
-}
-
-impl SettlementOutcomeRecord {
-    /// Returns `true` when the outcome represents a successful settlement.
-    #[must_use]
-    pub const fn is_success(&self) -> bool {
-        matches!(self, Self::Success(_))
-    }
 }
 
 /// Immutable pricing and route context retained for a successful native FX settlement.
@@ -659,7 +593,12 @@ pub struct FxCorridorSettlementDetails {
     pub destination_amount: Quantity,
 }
 
-/// Ledger entry persisted for auditing and reconciliation.
+/// Immutable receipt persisted after one successful settlement.
+///
+/// The containing world-state map is keyed by the settlement identifier, so the
+/// identifier is deliberately not duplicated here. Presence of a receipt means
+/// that both legs committed successfully. Failed attempts are observable only
+/// through bounded, node-local telemetry and never create consensus state.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[cfg_attr(
@@ -670,10 +609,8 @@ pub struct FxCorridorSettlementDetails {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-pub struct SettlementLedgerEntry {
-    /// Unique identifier shared across the settlement lifecycle.
-    pub settlement_id: SettlementId,
-    /// Settlement kind (`DvP` or `PvP`).
+pub struct SettlementReceipt {
+    /// Settlement kind (`DvP`, `PvP`, or governed FX corridor).
     pub kind: SettlementKind,
     /// Account that authorised the settlement.
     pub authority: AccountId,
@@ -687,41 +624,11 @@ pub struct SettlementLedgerEntry {
     pub block_hash: HashOf<BlockHeader>,
     /// Block timestamp (milliseconds since Unix epoch).
     pub executed_at_ms: u64,
-    /// Legs captured with their committed state at the end of execution.
-    pub legs: Vec<SettlementLegSnapshot>,
+    /// The two committed settlement legs.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_array"))]
+    pub legs: [SettlementLegSnapshot; 2],
     /// Exact governed FX context, present only for native FX corridor settlements.
     pub fx_corridor: Option<FxCorridorSettlementDetails>,
-    /// Outcome of the settlement execution.
-    pub outcome: SettlementOutcomeRecord,
-}
-
-/// Auditing trail for a settlement identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(opaque)
-)]
-pub struct SettlementLedger {
-    /// Chronological sequence of settlement attempts tied to the identifier.
-    pub entries: Vec<SettlementLedgerEntry>,
-}
-
-impl SettlementLedger {
-    /// Append a new entry to the ledger.
-    pub fn push(&mut self, entry: SettlementLedgerEntry) {
-        self.entries.push(entry);
-    }
-
-    /// Iterate over ledger entries.
-    #[must_use]
-    pub fn entries(&self) -> &[SettlementLedgerEntry] {
-        &self.entries
-    }
 }
 
 impl crate::seal::Instruction for DvpIsi {}
@@ -1218,6 +1125,56 @@ mod tests {
                 norito::json::from_str::<FxCorridorSettlementDetails>(&malformed).is_err(),
                 "FX receipts must reject non-string and non-canonical quantity encodings",
             );
+        }
+    }
+
+    #[test]
+    fn committed_settlement_receipt_roundtrips_one_fixed_leg_pair() {
+        let DvpIsi {
+            delivery_leg,
+            payment_leg,
+            plan,
+            ..
+        } = dvp_instruction();
+        let receipt = SettlementReceipt {
+            kind: SettlementKind::Dvp,
+            authority: delivery_leg.from().clone(),
+            plan,
+            metadata: Metadata::default(),
+            block_height: 7,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0xA7; Hash::LENGTH],
+            )),
+            executed_at_ms: 11,
+            legs: [
+                SettlementLegSnapshot {
+                    role: SettlementLegRole::Delivery,
+                    leg: delivery_leg,
+                },
+                SettlementLegSnapshot {
+                    role: SettlementLegRole::Payment,
+                    leg: payment_leg,
+                },
+            ],
+            fx_corridor: None,
+        };
+
+        let bytes = receipt.encode();
+        let decoded = SettlementReceipt::decode(&mut bytes.as_slice()).expect("decode receipt");
+        assert_eq!(decoded, receipt);
+        assert_eq!(decoded.legs.len(), 2);
+
+        #[cfg(feature = "json")]
+        {
+            let json = norito::json::to_json(&receipt).expect("serialize receipt");
+            assert!(
+                !json.contains("\"settlement_id\"") && !json.contains("\"outcome\""),
+                "the map key is the sole settlement identity and receipt presence means success"
+            );
+            let decoded: SettlementReceipt =
+                norito::json::from_str(&json).expect("deserialize receipt");
+            assert_eq!(decoded, receipt);
+            assert_eq!(decoded.legs.len(), 2);
         }
     }
 

@@ -42,13 +42,18 @@ const CRC64_TABLE = Array.from({ length: 256 }, (_, index) => {
   return crc;
 });
 
-test("Kotodama identifier policy keeps retired types contextual", () => {
-  for (const name of ["Amount", "amount"]) {
-    assert.equal(isCanonicalKotodamaIdentifier(name), true);
-    assert.equal(isCanonicalKotodamaIdentifier(name, { declaration: true }), true);
-    assert.equal(isCanonicalKotodamaIdentifier(name, { typeDeclaration: true }), false);
-    assert.equal(KOTODAMA_V1_RETIRED_TYPE_NAMES.includes(name), true);
-  }
+test("Kotodama identifier policy forbids exact Amount globally", () => {
+  assert.equal(KOTODAMA_V1_DECLARATION_RESERVED.includes("Amount"), false);
+  assert.equal(isCanonicalKotodamaIdentifier("Amount"), false);
+  assert.equal(isCanonicalKotodamaIdentifier("Amount", { declaration: true }), false);
+  assert.equal(isCanonicalKotodamaIdentifier("Amount", { typeDeclaration: true }), false);
+  assert.equal(KOTODAMA_V1_RETIRED_TYPE_NAMES.includes("Amount"), true);
+
+  assert.equal(isCanonicalKotodamaIdentifier("amount"), true);
+  assert.equal(isCanonicalKotodamaIdentifier("amount", { declaration: true }), true);
+  assert.equal(isCanonicalKotodamaIdentifier("amount", { typeDeclaration: true }), false);
+  assert.equal(KOTODAMA_V1_RETIRED_TYPE_NAMES.includes("amount"), true);
+
   for (const name of ["int", "decimal", "quantity"]) {
     assert.equal(isCanonicalKotodamaIdentifier(name), true);
     assert.equal(isCanonicalKotodamaIdentifier(name, { declaration: true }), false);
@@ -96,6 +101,7 @@ test("Kotodama dynamic-access policy exposes the exact ordered V1 contract", () 
     "state:Balances/",
     "state:Balances/suffix",
     "state:Balances:suffix",
+    "state:Amount",
     "state:int",
     "state:state",
     "state:__kotodama_link_forged",
@@ -146,6 +152,7 @@ test("Kotodama state type names reject retired types without poisoning fields", 
     "List<amount, 1>",
     "StateMap<AccountId, Amount>",
     "StateMap<AccountId, Amount: quantity>",
+    "Transfer{Amount: quantity}",
     "Transfer{amount: amount}",
     "Transfer{amount:: quantity}",
     "Amount{amount: quantity}",
@@ -845,6 +852,52 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
   ]);
   assert.equal(contextualAmount.output.manifest.error_codes[0].name, "amount");
 
+  const retiredIdentifierCases = [
+    ["entrypoint", (manifest) => {
+      manifest.entrypoints = [compilerEntrypoint("Amount", "View")];
+    }, /entrypoint 0\.name is not a canonical V1 identifier/u],
+    ["parameter", (manifest) => {
+      const entrypoint = compilerEntrypoint("inspect", "View");
+      entrypoint.params = [{ name: "Amount", type_name: "quantity" }];
+      entrypoint.argument_schema = {
+        fields: [{
+          name: "Amount",
+          ty: { nodes: [{ kind: "Leaf", value: { kind: "Quantity", value: null } }] },
+        }],
+      };
+      manifest.entrypoints = [entrypoint];
+    }, /params\[0\]\.name must be unique and canonical/u],
+    ["state", (manifest) => {
+      manifest.states = [{ name: "Amount", type_name: "quantity" }];
+    }, /state 0\.name is not canonical/u],
+    ["struct field", (manifest) => {
+      manifest.states = [{ name: "Balances", type_name: "Transfer{Amount: quantity}" }];
+    }, /state 0\.type_name is not a canonical V1 state type/u],
+    ["error variant", (manifest) => {
+      manifest.error_codes = [{ namespace: "LedgerError", name: "Amount", code: 7 }];
+    }, /canonical namespace and variant identifiers/u],
+    ["dynamic state base", (manifest) => {
+      manifest.access_set_hints = {
+        read_keys: [],
+        write_keys: [],
+        dynamic_reads: [{
+          base_key: "state:Amount",
+          key_type: "AccountId",
+          bound_kind: "take",
+          max_keys: 1,
+        }],
+        dynamic_writes: [],
+      };
+    }, /base_key must be state: plus one canonical state declaration identifier/u],
+  ];
+  for (const [label, mutate, expected] of retiredIdentifierCases) {
+    await assert.rejects(
+      compileResponse(mutate),
+      expected,
+      `exact Amount ${label} must be rejected`,
+    );
+  }
+
   for (const seiyakuName of [
     "Amount",
     "amount",
@@ -1399,9 +1452,30 @@ test("compiler trigger metadata is exact, bounded, and non-recursive beyond poli
 
   await assert.doesNotReject(
     compileMutatedServiceResponse(({ manifest }) => {
-      manifest.entrypoints[0].triggers = [trigger()];
+      const value = trigger();
+      value.id = "amount";
+      value.callback.namespace = "RemoteLedger";
+      manifest.entrypoints[0].triggers = [value];
     }),
   );
+  await assert.rejects(
+    compileMutatedServiceResponse(({ manifest }) => {
+      const value = trigger();
+      value.id = "Amount";
+      manifest.entrypoints[0].triggers = [value];
+    }),
+    /id must be unique and canonical/u,
+  );
+  for (const namespace of ["Amount", "amount"]) {
+    await assert.rejects(
+      compileMutatedServiceResponse(({ manifest }) => {
+        const value = trigger();
+        value.callback.namespace = namespace;
+        manifest.entrypoints[0].triggers = [value];
+      }),
+      /callback\.namespace must be a canonical type declaration/u,
+    );
+  }
   await assert.rejects(
     compileMutatedServiceResponse(({ manifest }) => {
       const value = trigger();

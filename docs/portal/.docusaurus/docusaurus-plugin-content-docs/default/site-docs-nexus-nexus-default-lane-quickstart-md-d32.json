@@ -1,0 +1,29 @@
+{
+  "id": "nexus/nexus-default-lane-quickstart",
+  "title": "Default lane quickstart (NX-5)",
+  "description": "Configure and verify the Nexus default lane fallback so Torii and SDKs can omit lane_id in public lanes.",
+  "source": "@site/docs/nexus/nexus-default-lane-quickstart.md",
+  "sourceDirName": "nexus",
+  "slug": "/nexus/nexus-default-lane-quickstart",
+  "permalink": "/next/nexus/nexus-default-lane-quickstart",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/nexus/nexus-default-lane-quickstart.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "nexus-default-lane-quickstart",
+    "title": "Default lane quickstart (NX-5)",
+    "sidebar_label": "Default Lane Quickstart",
+    "description": "Configure and verify the Nexus default lane fallback so Torii and SDKs can omit lane_id in public lanes."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Nexus lane model",
+    "permalink": "/next/nexus/nexus-lane-model"
+  },
+  "next": {
+    "title": "Elastic Lane Provisioning",
+    "permalink": "/next/nexus/nexus-elastic-lane"
+  }
+}

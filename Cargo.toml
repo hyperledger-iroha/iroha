@@ -2,10 +2,9 @@
 edition = "2024"
 rust-version = "1.92"
 version = "2.0.0-rc.2.0"
-# GitHub org teams pages are no longer supported; point to project contributors instead.
-authors = ["Iroha 2 contributors <https://github.com/hyperledger-iroha/iroha/graphs/contributors>"]
+authors = ["Hyperledger Iroha contributors <https://github.com/hyperledger-iroha/iroha/graphs/contributors>"]
 
-description = "Efficient, simple, Byzantine-fault-tolerant DLT inspired by the Kaizen principle"
+description = "Deterministic Byzantine-fault-tolerant ledger for Hyperledger Iroha 3"
 repository = "https://github.com/hyperledger-iroha/iroha"
 documentation = "https://docs.iroha.tech"
 homepage = "https://iroha.tech"
@@ -15,7 +14,16 @@ keywords = ["blockchain", "crypto", "iroha", "ledger"]
 categories = ["cryptography::cryptocurrencies"]
 
 [workspace.metadata]
-docker_bins = ["iroha", "irohad", "iroha3", "iroha3d", "iroha2", "iroha2d", "kagami"]
+docker_bins = [
+    "iroha",
+    "irohad",
+    "iroha3",
+    "iroha3d",
+    "iroha2",
+    "iroha2d",
+    "kagami",
+    "attachment_sanitizer",
+]
 
 [workspace.dependencies]
 # Internal dependency features are selected by the consuming crate. Keeping the

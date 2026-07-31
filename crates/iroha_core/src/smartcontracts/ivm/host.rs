@@ -75,6 +75,9 @@ use iroha_data_model::{
         AxtProofFragment, AxtRejectContext, AxtRejectReason, AxtReplayRecord, AxtTouchFragment,
         AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
         TouchManifest as ModelTouchManifest,
+        VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_SETTLED_USAGE_STATE_KEY_PREFIX,
+        VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
+        VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_USAGE_STATE_KEY_PREFIX,
     },
     parameter::{Parameters, SmartContractParameters, system::ivm_metadata},
     permission::Permissions,
@@ -102,6 +105,7 @@ use iroha_data_model::{
     soracloud::{
         SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
     },
+    state_path::StatePath,
     subscription::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
@@ -132,7 +136,7 @@ use ivm::{
 use mv::storage::StorageReadOnly;
 use norito::{
     NoritoDeserialize,
-    core::{Archived, DecodeFromSlice, Header, NoritoSerialize},
+    core::{DecodeFromSlice, Header, NoritoSerialize},
     json,
     streaming::CapabilityFlags,
 };
@@ -153,9 +157,10 @@ const AXT_PROOF_CACHE_REJECT: &str = "reject";
 // contracts address the unscoped suffix and must not address another contract's
 // physical namespace directly.
 //
-// Keep this list in sync with the native key constructors in `state.rs` and
-// `tx.rs`.  Prefixes include their delimiter so similarly named user keys remain
-// available.
+// Keep these lists in sync with the native key constructors in `state.rs` and
+// `tx.rs`. Entries either include their delimiter or name a canonical root;
+// matching reserves only the exact root and `_`/`/` descendants so similarly
+// named user keys remain available.
 const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "sc/",
     "merge_execution_batch_applied_",
@@ -177,6 +182,9 @@ const READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "kagemusha_online_registration_v2_",
     "pkdeploy_verified_lane_relay_",
     "pkdeploy_verified_nexus_fee_budget_",
+    VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
+    VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_USAGE_STATE_KEY_PREFIX,
+    VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_SETTLED_USAGE_STATE_KEY_PREFIX,
     "VerifiedLaneRelays/",
 ];
 
@@ -670,11 +678,12 @@ pub struct CoreHostImpl<QS> {
     // Current block height for the execution context.
     current_block_height: Option<u64>,
     // Snapshot of durable smart-contract state persisted in WSV.
-    durable_state_base: BTreeMap<Name, Vec<u8>>,
+    durable_state_base: BTreeMap<StatePath, Vec<u8>>,
     // Overlay of durable state updates staged by the current VM execution.
-    durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+    durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
     // Immutable authorization captured separately for every staged durable write.
-    durable_state_authorizations: BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
+    durable_state_authorizations:
+        BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,
     // Access log for durable-state reads/writes (prepass).
     state_access_log: ivm::host::AccessLog,
     // Per-call undo records. Each journal stores only keys first touched while
@@ -1412,16 +1421,16 @@ pub trait QueryStateRefOps {
         kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
     ) -> Result<(), ValidationFail>;
     /// Load durable smart-contract state by canonical key.
-    fn durable_state_get(&self, key: &Name) -> Option<Vec<u8>>;
+    fn durable_state_get(&self, key: &StatePath) -> Option<Vec<u8>>;
     /// Check durable smart-contract state without cloning the stored value.
-    fn durable_state_contains(&self, key: &Name) -> bool;
+    fn durable_state_contains(&self, key: &StatePath) -> bool;
     /// Read the payload length of durable smart-contract state without cloning it.
     ///
     /// # Errors
     ///
     /// Returns [`ivm::VMError::NoritoInvalid`] when the stored TLV has an
     /// unexpected pointer type.
-    fn durable_state_payload_len(&self, key: &Name) -> Result<Option<usize>, ivm::VMError>;
+    fn durable_state_payload_len(&self, key: &StatePath) -> Result<Option<usize>, ivm::VMError>;
     /// Visit durable-state keys whose text begins with `prefix`, in canonical order.
     ///
     /// Implementations must start at the prefix's ordered lower bound and stop
@@ -1434,7 +1443,7 @@ pub trait QueryStateRefOps {
     fn visit_durable_state_keys_with_text_prefix(
         &self,
         prefix: &str,
-        visitor: &mut dyn FnMut(&Name) -> Result<(), ivm::VMError>,
+        visitor: &mut dyn FnMut(&StatePath) -> Result<(), ivm::VMError>,
     ) -> Result<(), ivm::VMError>;
 }
 
@@ -1444,14 +1453,15 @@ fn durable_state_payload_len(stored: &[u8]) -> Result<usize, ivm::VMError> {
 }
 
 struct LocalDurableStateMerge<'a> {
-    base: std::iter::Peekable<std::collections::btree_map::Range<'a, Name, Vec<u8>>>,
-    overlay: std::iter::Peekable<std::collections::btree_map::Range<'a, Name, Option<Vec<u8>>>>,
+    base: std::iter::Peekable<std::collections::btree_map::Range<'a, StatePath, Vec<u8>>>,
+    overlay:
+        std::iter::Peekable<std::collections::btree_map::Range<'a, StatePath, Option<Vec<u8>>>>,
 }
 
 impl<'a> LocalDurableStateMerge<'a> {
     fn new(
-        base: &'a BTreeMap<Name, Vec<u8>>,
-        overlay: &'a BTreeMap<Name, Option<Vec<u8>>>,
+        base: &'a BTreeMap<StatePath, Vec<u8>>,
+        overlay: &'a BTreeMap<StatePath, Option<Vec<u8>>>,
         prefix: &str,
     ) -> Self {
         Self {
@@ -1464,7 +1474,7 @@ impl<'a> LocalDurableStateMerge<'a> {
         }
     }
 
-    fn peek_key(&mut self) -> Option<&'a Name> {
+    fn peek_key(&mut self) -> Option<&'a StatePath> {
         match (self.base.peek(), self.overlay.peek()) {
             (Some((base, _)), Some((overlay, _))) => {
                 Some(if *base <= *overlay { *base } else { *overlay })
@@ -1475,7 +1485,7 @@ impl<'a> LocalDurableStateMerge<'a> {
         }
     }
 
-    fn next(&mut self) -> Option<(&'a Name, bool)> {
+    fn next(&mut self) -> Option<(&'a StatePath, bool)> {
         let ordering = match (self.base.peek(), self.overlay.peek()) {
             (Some((base, _)), Some((overlay, _))) => base.cmp(overlay),
             (Some(_), None) => core::cmp::Ordering::Less,
@@ -1499,11 +1509,11 @@ impl<'a> LocalDurableStateMerge<'a> {
         }
     }
 
-    fn next_before(&mut self, upper: &Name) -> Option<(&'a Name, bool)> {
+    fn next_before(&mut self, upper: &StatePath) -> Option<(&'a StatePath, bool)> {
         (self.peek_key()? < upper).then(|| self.next()).flatten()
     }
 
-    fn take_equal(&mut self, key: &Name) -> Option<bool> {
+    fn take_equal(&mut self, key: &StatePath) -> Option<bool> {
         (self.peek_key()? == key)
             .then(|| self.next().map(|(_, present)| present))
             .flatten()
@@ -1511,18 +1521,18 @@ impl<'a> LocalDurableStateMerge<'a> {
 }
 
 fn visit_merged_durable_state_keys(
-    base: &BTreeMap<Name, Vec<u8>>,
-    overlay: &BTreeMap<Name, Option<Vec<u8>>>,
+    base: &BTreeMap<StatePath, Vec<u8>>,
+    overlay: &BTreeMap<StatePath, Option<Vec<u8>>>,
     physical_prefix: &str,
     visit_live: impl FnOnce(
-        &mut dyn FnMut(&Name) -> Result<(), ivm::VMError>,
+        &mut dyn FnMut(&StatePath) -> Result<(), ivm::VMError>,
     ) -> Result<(), ivm::VMError>,
-    emit: &mut dyn FnMut(&Name, bool) -> Result<(), ivm::VMError>,
+    emit: &mut dyn FnMut(&StatePath, bool) -> Result<(), ivm::VMError>,
 ) -> Result<(), ivm::VMError> {
     let mut local = LocalDurableStateMerge::new(base, overlay, physical_prefix);
     let mut previous_live = String::new();
     let mut saw_live = false;
-    let mut merge_live = |live_key: &Name| -> Result<(), ivm::VMError> {
+    let mut merge_live = |live_key: &StatePath| -> Result<(), ivm::VMError> {
         if !live_key.as_ref().starts_with(physical_prefix) {
             return Err(ivm::VMError::NoritoInvalid);
         }
@@ -1555,32 +1565,33 @@ fn visit_merged_durable_state_keys(
 
 #[cfg(test)]
 mod durable_state_merge_tests {
+    use iroha_data_model::state_path::MAX_STATE_PATH_BYTES;
     use iroha_test_samples::ALICE_ID;
 
     use super::*;
 
-    fn name(value: &str) -> Name {
-        value.parse().expect("durable-state test name")
+    fn state_path(value: &str) -> StatePath {
+        value.parse().expect("durable-state test path")
     }
 
     #[test]
     fn streaming_merge_applies_overlay_precedence_and_canonical_interleaving() {
         let base = BTreeMap::from([
-            (name("state/b"), vec![1]),
-            (name("state/d"), vec![1]),
-            (name("state/f"), vec![1]),
+            (state_path("state/b"), vec![1]),
+            (state_path("state/d"), vec![1]),
+            (state_path("state/f"), vec![1]),
         ]);
         let overlay = BTreeMap::from([
-            (name("state/b"), Some(vec![2])),
-            (name("state/c"), Some(vec![2])),
-            (name("state/d"), None),
-            (name("state/e"), Some(vec![2])),
+            (state_path("state/b"), Some(vec![2])),
+            (state_path("state/c"), Some(vec![2])),
+            (state_path("state/d"), None),
+            (state_path("state/e"), Some(vec![2])),
         ]);
         let live = [
-            name("state/a"),
-            name("state/b"),
-            name("state/d"),
-            name("state/g"),
+            state_path("state/a"),
+            state_path("state/b"),
+            state_path("state/d"),
+            state_path("state/g"),
         ];
         let mut emitted = Vec::new();
 
@@ -1615,8 +1626,8 @@ mod durable_state_merge_tests {
         let base = BTreeMap::new();
         let overlay = BTreeMap::new();
         for live in [
-            vec![name("state/b"), name("state/a")],
-            vec![name("state/a"), name("other/a")],
+            vec![state_path("state/b"), state_path("state/a")],
+            vec![state_path("state/a"), state_path("other/a")],
         ] {
             assert_eq!(
                 visit_merged_durable_state_keys(
@@ -1634,18 +1645,22 @@ mod durable_state_merge_tests {
     #[test]
     fn production_collection_honors_offset_zero_limit_and_tombstones() {
         let mut host = CoreHost::new(ALICE_ID.clone());
-        host.durable_state_base =
-            BTreeMap::from([(name("state/a"), vec![1]), (name("state/b"), vec![1])]);
-        host.durable_state_overlay =
-            BTreeMap::from([(name("state/b"), None), (name("state/c"), Some(vec![3]))]);
-        let prefix = name("state");
+        host.durable_state_base = BTreeMap::from([
+            (state_path("state/a"), vec![1]),
+            (state_path("state/b"), vec![1]),
+        ]);
+        host.durable_state_overlay = BTreeMap::from([
+            (state_path("state/b"), None),
+            (state_path("state/c"), Some(vec![3])),
+        ]);
+        let prefix = state_path("state");
         let path_len = norito::to_bytes(&prefix).expect("encode prefix").len();
         let vm = IVM::new(u64::MAX);
 
         let (selected, total, _) = host
             .collect_durable_state_keys(&vm, &prefix, path_len, 1, 1)
             .expect("collect offset window");
-        assert_eq!(selected, [name("state/c")]);
+        assert_eq!(selected, [state_path("state/c")]);
         assert_eq!(total, 2);
 
         let (selected, total, _) = host
@@ -1656,28 +1671,105 @@ mod durable_state_merge_tests {
     }
 
     #[test]
-    fn production_collection_validates_oversized_keys_even_when_skipped() {
+    fn exact_state_path_storage_bound_remains_scannable() {
         let mut host = CoreHost::new(ALICE_ID.clone());
-        let oversized = name(&format!(
-            "state/{}",
-            "x".repeat(ivm::syscalls::STATE_MAX_PATH_BYTES)
+        let stem = "state/";
+        let maximum = state_path(&format!(
+            "{stem}{}",
+            "x".repeat(MAX_STATE_PATH_BYTES - stem.len())
         ));
-        host.durable_state_base.insert(oversized, vec![1]);
-        let prefix = name("state");
+        assert_eq!(maximum.as_ref().len(), MAX_STATE_PATH_BYTES);
+        assert!(
+            format!("{maximum}x").parse::<StatePath>().is_err(),
+            "StatePath must reject a key beyond its UTF-8 byte ceiling"
+        );
+        host.durable_state_base.insert(maximum, vec![1]);
+        let prefix = state_path("state");
         let path_len = norito::to_bytes(&prefix).expect("encode prefix").len();
         let vm = IVM::new(u64::MAX);
 
+        let (selected, total, _) = host
+            .collect_durable_state_keys(&vm, &prefix, path_len, u64::MAX, 0)
+            .expect("the exact StatePath ceiling remains a valid scan candidate");
+        assert!(selected.is_empty());
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn maximum_name_base_and_four_kibibyte_map_key_roundtrip_through_core_storage() {
+        let base: Name = "b"
+            .repeat(ivm::syscalls::STATE_MAP_MAX_BASE_BYTES)
+            .parse()
+            .expect("maximum Name base");
+        let key = vec![0xa5; ivm::syscalls::STATE_MAP_MAX_KEY_BYTES];
+        let path = ivm::host::canonical_state_map_path(&base, &key).expect("maximum StateMap path");
         assert_eq!(
-            host.collect_durable_state_keys(&vm, &prefix, path_len, u64::MAX, 0),
+            path.as_ref().len(),
+            ivm::syscalls::STATE_MAP_MAX_BASE_BYTES
+                + 1
+                + 2 * ivm::syscalls::STATE_MAP_MAX_KEY_BYTES
+        );
+
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        host.durable_state_base.insert(path.clone(), vec![1]);
+        let prefix = StatePath::from(&base);
+        let path_len = norito::to_bytes(&prefix).expect("encode map prefix").len();
+        let vm = IVM::new(u64::MAX);
+        let (selected, total, _) = host
+            .collect_durable_state_keys(&vm, &prefix, path_len, 0, 1)
+            .expect("scan maximum StateMap path");
+        assert_eq!(selected, [path]);
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn scoped_path_and_scan_reject_physical_length_overflow_before_state_access() {
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &ALICE_ID,
+            703,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive scoped-boundary contract");
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: None,
+            entrypoint: "boundary".to_owned(),
+        }));
+        let scope_len = host
+            .durable_state_scope_prefix()
+            .expect("contract context has a scope")
+            .len();
+        let exact = state_path(&"x".repeat(MAX_STATE_PATH_BYTES - scope_len));
+        let exact_physical = host
+            .scoped_durable_state_path(&exact)
+            .expect("exact physical boundary is valid")
+            .expect("contract path is scoped");
+        assert_eq!(exact_physical.as_ref().len(), MAX_STATE_PATH_BYTES);
+
+        let oversized = state_path(&"x".repeat(MAX_STATE_PATH_BYTES - scope_len + 1));
+        assert_eq!(
+            host.scoped_durable_state_path(&oversized),
             Err(ivm::VMError::NoritoInvalid)
+        );
+        let path_len = norito::to_bytes(&oversized)
+            .expect("encode logical prefix")
+            .len();
+        let vm = IVM::new(u64::MAX);
+        assert_eq!(
+            host.collect_durable_state_keys(&vm, &oversized, path_len, 0, 1),
+            Err(ivm::VMError::NoritoInvalid),
+            "scans must not turn an unrepresentable physical prefix into an empty success"
         );
     }
 }
 
 fn visit_storage_keys_with_text_prefix(
-    storage: &impl StorageReadOnly<Name, Vec<u8>>,
+    storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
     prefix: &str,
-    visitor: &mut dyn FnMut(&Name) -> Result<(), ivm::VMError>,
+    visitor: &mut dyn FnMut(&StatePath) -> Result<(), ivm::VMError>,
 ) -> Result<(), ivm::VMError> {
     for (key, _) in storage.range::<str>((Bound::Included(prefix), Bound::Unbounded)) {
         if !key.as_ref().starts_with(prefix) {
@@ -2087,7 +2179,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
         }
     }
 
-    fn durable_state_get(&self, key: &Name) -> Option<Vec<u8>> {
+    fn durable_state_get(&self, key: &StatePath) -> Option<Vec<u8>> {
         match *self {
             QueryStateRef::View(view) => view.world().smart_contract_state().get(key).cloned(),
             QueryStateRef::QueryView(view) => view.world().smart_contract_state().get(key).cloned(),
@@ -2096,7 +2188,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
         }
     }
 
-    fn durable_state_contains(&self, key: &Name) -> bool {
+    fn durable_state_contains(&self, key: &StatePath) -> bool {
         match *self {
             QueryStateRef::View(view) => view.world().smart_contract_state().get(key).is_some(),
             QueryStateRef::QueryView(view) => {
@@ -2107,7 +2199,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
         }
     }
 
-    fn durable_state_payload_len(&self, key: &Name) -> Result<Option<usize>, ivm::VMError> {
+    fn durable_state_payload_len(&self, key: &StatePath) -> Result<Option<usize>, ivm::VMError> {
         let stored = match *self {
             QueryStateRef::View(view) => view.world().smart_contract_state().get(key),
             QueryStateRef::QueryView(view) => view.world().smart_contract_state().get(key),
@@ -2122,7 +2214,7 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
     fn visit_durable_state_keys_with_text_prefix(
         &self,
         prefix: &str,
-        visitor: &mut dyn FnMut(&Name) -> Result<(), ivm::VMError>,
+        visitor: &mut dyn FnMut(&StatePath) -> Result<(), ivm::VMError>,
     ) -> Result<(), ivm::VMError> {
         match *self {
             QueryStateRef::View(view) => visit_storage_keys_with_text_prefix(
@@ -2181,8 +2273,9 @@ pub(crate) struct HostExecutionArtifacts {
     entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     confidential_gas_delta: u64,
     completed_axt: Vec<axt::HostAxtState>,
-    durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
-    durable_state_authorizations: BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
+    durable_state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
+    durable_state_authorizations:
+        BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,
 }
 
 #[derive(Clone)]
@@ -2226,7 +2319,7 @@ struct DurableStateOriginal {
 
 #[derive(Default)]
 struct NestedContractCallJournal {
-    durable_state_originals: BTreeMap<Name, DurableStateOriginal>,
+    durable_state_originals: BTreeMap<StatePath, DurableStateOriginal>,
     new_read_keys: BTreeSet<String>,
     new_write_keys: BTreeSet<String>,
     new_durable_read_paths: BTreeSet<String>,
@@ -2318,7 +2411,7 @@ impl HostExecutionArtifacts {
         }
     }
 
-    fn durable_path_requires_authorization(path: &Name) -> bool {
+    fn durable_path_requires_authorization(path: &StatePath) -> bool {
         let path = path.as_ref();
         path.starts_with("sc/")
             || path.starts_with(crate::smartcontracts::code::CONTRACT_LIFECYCLE_STATE_PREFIX)
@@ -2330,9 +2423,9 @@ impl HostExecutionArtifacts {
 
     fn validate_durable_authorizations(
         world: &impl WorldReadOnly,
-        durable_state_overlay: &BTreeMap<Name, Option<Vec<u8>>>,
+        durable_state_overlay: &BTreeMap<StatePath, Option<Vec<u8>>>,
         durable_state_authorizations: &BTreeMap<
-            Name,
+            StatePath,
             Option<ContractEntrypointAuthorizationSnapshot>,
         >,
     ) -> Result<(), ValidationFail> {
@@ -4188,7 +4281,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     /// Replace the durable smart-contract state snapshot with a prebuilt offline fixture.
-    pub fn set_durable_state_snapshot(&mut self, snapshot: BTreeMap<Name, Vec<u8>>) {
+    pub fn set_durable_state_snapshot(&mut self, snapshot: BTreeMap<StatePath, Vec<u8>>) {
         self.durable_state_base = snapshot;
         self.durable_state_overlay.clear();
         self.durable_state_authorizations.clear();
@@ -4893,7 +4986,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         )
     }
 
-    fn try_reserve_durable_state_update(&mut self, key: &Name, value_len: usize) -> bool {
+    fn try_reserve_durable_state_update(&mut self, key: &StatePath, value_len: usize) -> bool {
         const DURABLE_ENTRY_OVERHEAD_BYTES: u64 = 64;
         let key_len = u64::try_from(key.as_ref().len()).unwrap_or(u64::MAX);
         let value_len = u64::try_from(value_len).unwrap_or(u64::MAX);
@@ -4956,7 +5049,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     /// Drain durable contract-state writes collected during the last VM run.
-    pub fn drain_durable_state_overlay(&mut self) -> BTreeMap<Name, Option<Vec<u8>>> {
+    pub fn drain_durable_state_overlay(&mut self) -> BTreeMap<StatePath, Option<Vec<u8>>> {
         self.durable_state_authorizations.clear();
         mem::take(&mut self.durable_state_overlay)
     }
@@ -4965,8 +5058,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     pub(crate) fn drain_durable_state_overlay_with_authorizations(
         &mut self,
     ) -> (
-        BTreeMap<Name, Option<Vec<u8>>>,
-        BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
+        BTreeMap<StatePath, Option<Vec<u8>>>,
+        BTreeMap<StatePath, Option<ContractEntrypointAuthorizationSnapshot>>,
     ) {
         (
             mem::take(&mut self.durable_state_overlay),
@@ -5289,7 +5382,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .collect())
     }
 
-    fn journal_durable_state_before_write(&mut self, key: &Name) {
+    fn journal_durable_state_before_write(&mut self, key: &StatePath) {
         if self.nested_contract_call_journals.is_empty() {
             return;
         }
@@ -5305,7 +5398,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    fn stage_durable_state_update(&mut self, key: Name, value: Option<Vec<u8>>) {
+    fn stage_durable_state_update(&mut self, key: StatePath, value: Option<Vec<u8>>) {
         self.journal_durable_state_before_write(&key);
         self.durable_state_overlay.insert(key.clone(), value);
         self.durable_state_authorizations
@@ -5395,13 +5488,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn contract_state_key_matches_namespace(key: &str, prefix: &str) -> bool {
-        if key.starts_with(prefix) {
-            return true;
-        }
-        prefix
+        if let Some(root) = prefix
             .strip_suffix('/')
             .or_else(|| prefix.strip_suffix('_'))
-            .is_some_and(|root| key == root)
+        {
+            return key == root || key.starts_with(prefix);
+        }
+        key == prefix
+            || key
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with('_') || suffix.starts_with('/'))
     }
 
     fn contract_state_namespace_access(key: &str) -> ContractStateNamespaceAccess {
@@ -5420,7 +5516,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    fn ensure_contract_state_read_allowed(path: &Name) -> Result<(), ivm::VMError> {
+    fn ensure_contract_state_read_allowed(path: &StatePath) -> Result<(), ivm::VMError> {
         if Self::contract_state_namespace_access(path.as_ref())
             == ContractStateNamespaceAccess::OpaqueSystem
         {
@@ -5429,7 +5525,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
-    fn ensure_contract_state_write_allowed(path: &Name) -> Result<(), ivm::VMError> {
+    fn ensure_contract_state_write_allowed(path: &StatePath) -> Result<(), ivm::VMError> {
         if Self::contract_state_namespace_access(path.as_ref())
             != ContractStateNamespaceAccess::User
         {
@@ -5438,7 +5534,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
-    fn scoped_durable_state_path(&self, path: &Name) -> Result<Option<Name>, ivm::VMError> {
+    fn scoped_durable_state_path(
+        &self,
+        path: &StatePath,
+    ) -> Result<Option<StatePath>, ivm::VMError> {
         let Some(scope_prefix) = self.durable_state_scope_prefix() else {
             self.ensure_raw_durable_state_path_allowed(path)?;
             return Ok(None);
@@ -5450,7 +5549,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
-    fn ensure_raw_durable_state_path_allowed(&self, path: &Name) -> Result<(), ivm::VMError> {
+    fn ensure_raw_durable_state_path_allowed(&self, path: &StatePath) -> Result<(), ivm::VMError> {
         if self.current_contract_runtime_context.is_none()
             && (Self::state_key_matches_prefix(path.as_ref(), "sc")
                 || Self::state_key_matches_prefix(
@@ -5486,7 +5585,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .is_some_and(|suffix| suffix.starts_with('/'))
     }
 
-    fn durable_state_key_present(&self, key: &Name) -> Result<bool, ivm::VMError> {
+    fn durable_state_key_present(&self, key: &StatePath) -> Result<bool, ivm::VMError> {
         if let Some(scoped_path) = self.scoped_durable_state_path(key)? {
             if let Some(entry) = self.durable_state_overlay.get(&scoped_path) {
                 return Ok(entry.is_some());
@@ -5503,7 +5602,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         durable_state_payload_len(stored)
     }
 
-    fn durable_state_value_len(&self, key: &Name) -> Result<Option<usize>, ivm::VMError> {
+    fn durable_state_value_len(&self, key: &StatePath) -> Result<Option<usize>, ivm::VMError> {
         if let Some(scoped_path) = self.scoped_durable_state_path(key)? {
             if let Some(entry) = self.durable_state_overlay.get(&scoped_path) {
                 return entry
@@ -5522,7 +5621,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.durable_state_base_or_live_value_len(key)
     }
 
-    fn durable_state_base_or_live_contains(&self, key: &Name) -> bool {
+    fn durable_state_base_or_live_contains(&self, key: &StatePath) -> bool {
         self.durable_state_base.contains_key(key)
             || self
                 .query_state
@@ -5532,7 +5631,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn durable_state_base_or_live_value_len(
         &self,
-        key: &Name,
+        key: &StatePath,
     ) -> Result<Option<usize>, ivm::VMError> {
         if let Some(stored) = self.durable_state_base.get(key) {
             return Self::durable_state_value_payload_len(stored).map(Some);
@@ -5542,7 +5641,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .map_or(Ok(None), |state| state.durable_state_payload_len(key))
     }
 
-    fn durable_state_base_or_live_get<'a>(&'a self, key: &Name) -> Option<Cow<'a, [u8]>> {
+    fn durable_state_base_or_live_get<'a>(&'a self, key: &StatePath) -> Option<Cow<'a, [u8]>> {
         if let Some(stored) = self.durable_state_base.get(key) {
             return Some(Cow::Borrowed(stored.as_slice()));
         }
@@ -5729,7 +5828,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn relative_durable_state_key<'a>(
-        key: &'a Name,
+        key: &'a StatePath,
         scope_prefix: Option<&str>,
     ) -> Result<&'a str, ivm::VMError> {
         scope_prefix.map_or(Ok(key.as_ref()), |scope_prefix| {
@@ -5742,11 +5841,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn collect_durable_state_keys(
         &self,
         vm: &IVM,
-        prefix: &Name,
+        prefix: &StatePath,
         path_len: usize,
         offset: u64,
         limit: u64,
-    ) -> Result<(Vec<Name>, u64, u64), ivm::VMError> {
+    ) -> Result<(Vec<StatePath>, u64, u64), ivm::VMError> {
         let take = ivm::host::checked_state_keys_limit(limit)?;
         let prefix_str = prefix.as_ref();
         let scope_prefix = self.durable_state_scope_prefix();
@@ -5757,6 +5856,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             || prefix_str.to_owned(),
             |scope| format!("{scope}{prefix_str}"),
         );
+        if scope_prefix.is_some() {
+            physical_prefix
+                .parse::<StatePath>()
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        }
         let mut selected = Vec::new();
         let mut selected_element_bytes = 0_usize;
         let mut response_tail_gas = ivm::host::state_keys_prepare_minimum(path_len, limit)?
@@ -5764,7 +5868,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let mut total = 0_u64;
         let mut scan_work_gas = u64::try_from(path_len).unwrap_or(u64::MAX);
 
-        let mut emit = |key: &Name, present: bool| -> Result<(), ivm::VMError> {
+        let mut emit = |key: &StatePath, present: bool| -> Result<(), ivm::VMError> {
             let relative = Self::relative_durable_state_key(key, scope_prefix.as_deref())?;
             ivm::host::validate_state_path_text(relative)?;
             if Self::contract_state_namespace_access(relative)
@@ -5805,9 +5909,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     .saturating_add(u64::try_from(next_response_tail).unwrap_or(u64::MAX)),
             )?;
             let relative = relative
-                .parse::<Name>()
+                .parse::<StatePath>()
                 .map_err(|_| ivm::VMError::NoritoInvalid)?;
-            ivm::host::validate_state_path_name(&relative)?;
+            ivm::host::validate_state_path(&relative)?;
             selected_element_bytes = next_elements;
             response_tail_gas = u64::try_from(next_response_tail).unwrap_or(u64::MAX);
             selected.push(relative);
@@ -5839,7 +5943,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &self,
         vm: &IVM,
         pointer: u64,
-    ) -> Result<(Name, usize), ivm::VMError> {
+    ) -> Result<(StatePath, usize), ivm::VMError> {
         // Authenticated execution must bind every state path to the loaded CNTR
         // schema. Local-debug overlays are deliberately uncommittable, so they
         // may inspect ad-hoc paths without fabricating a deployable interface.
@@ -5849,13 +5953,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         {
             return Err(ivm::VMError::InvalidMetadata);
         }
-        let tlv = Self::expect_tlv(vm, pointer, PointerType::Name)?;
+        let tlv = Self::expect_tlv(vm, pointer, PointerType::NoritoBytes)?;
         let path_len = tlv.payload.len();
-        if path_len > ivm::syscalls::STATE_MAX_PATH_BYTES {
+        if path_len > ivm::syscalls::STATE_MAX_PATH_FRAME_BYTES {
             return Err(ivm::VMError::NoritoInvalid);
         }
-        let path = Self::decode_name_payload(tlv.payload)?;
-        ivm::host::validate_state_path_name(&path)?;
+        let path: StatePath =
+            decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
+        ivm::host::validate_state_path(&path)?;
         Ok((path, path_len))
     }
 
@@ -5863,7 +5968,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &self,
         vm: &IVM,
         pointer: u64,
-    ) -> Result<(Name, usize), ivm::VMError> {
+    ) -> Result<(StatePath, usize), ivm::VMError> {
         let (path, path_len) = self.decode_durable_state_path_payload(vm, pointer)?;
         ivm::host::validate_declared_state_path(vm, &path)?;
         Ok((path, path_len))
@@ -5873,7 +5978,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &self,
         vm: &IVM,
         pointer: u64,
-    ) -> Result<(Name, usize), ivm::VMError> {
+    ) -> Result<(StatePath, usize), ivm::VMError> {
         let (path, path_len) = self.decode_durable_state_path_payload(vm, pointer)?;
         ivm::host::validate_declared_state_scan_path(vm, &path)?;
         Ok((path, path_len))
@@ -8235,7 +8340,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let payload_len = NoritoSerialize::encoded_len_exact(value)?;
         let header_len = Header::SIZE;
-        let align = mem::align_of::<Archived<T>>();
+        let align = norito::core::archived_payload_align::<T>();
         let padding = if align <= 1 {
             0
         } else {
@@ -10245,11 +10350,9 @@ impl<QS> CoreHostImpl<QS> {
         };
 
         let filter = Self::decode_trigger_filter(filter_value)?;
-        if matches!(filter, EventFilterBox::TriggerCompleted(_)) {
-            return Err(ivm::VMError::DecodeError);
-        }
-
-        Ok(Action::new(executable, repeats, authority, filter).with_metadata(metadata))
+        Action::try_new(executable, repeats, authority, filter)
+            .map(|action| action.with_metadata(metadata))
+            .map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn escrow_id_from_name(name: &Name) -> EscrowId {
@@ -10264,6 +10367,7 @@ impl<QS> CoreHostImpl<QS> {
             number,
             ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
                 | ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
+                | ivm::syscalls::SYSCALL_STATE_PATH_FROM_NAME
                 | ivm::syscalls::SYSCALL_STATE_MAP_KEY_AT
                 | ivm::syscalls::SYSCALL_STATE_VALUE_ENCODE
                 | ivm::syscalls::SYSCALL_STATE_VALUE_DECODE
@@ -12114,12 +12218,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         self.decode_durable_state_path_payload(vm, vm.register(10))?;
                     Self::ensure_contract_state_write_allowed(&path)?;
                     let scoped_path = self.scoped_durable_state_path(&path)?;
-                    let effective_path = scoped_path.as_ref().unwrap_or(&path);
+                    let key = scoped_path.unwrap_or_else(|| path.clone());
+                    let effective_path = &key;
                     if crate::validation_fee::is_validation_fee_credit_state_key(effective_path) {
                         return Err(ivm::VMError::PermissionDenied);
                     }
                     ivm::host::validate_declared_state_path(vm, &path)?;
-                    let key = effective_path.clone();
                     let gas = ivm::host::state_path_gas(path_len);
                     if !self.try_reserve_durable_state_update(&key, 0) {
                         return Ok(gas);
@@ -12440,7 +12544,10 @@ mod pointer_abi_tests {
         state::{State, World},
     };
     use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
-    use iroha_data_model::{proof::ProofAttachment, smart_contract::manifest::ContractManifest};
+    use iroha_data_model::{
+        events::execute_trigger::ExecuteTriggerEventFilter, proof::ProofAttachment,
+        smart_contract::manifest::ContractManifest,
+    };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use ivm::{
@@ -12459,6 +12566,11 @@ mod pointer_abi_tests {
         let h = IrohaHash::new(payload);
         v.extend_from_slice(h.as_ref());
         v
+    }
+
+    fn store_state_path_tlv(vm: &mut IVM, path: &impl AsRef<str>) -> u64 {
+        let path: StatePath = path.as_ref().parse().expect("valid durable-state path");
+        store_tlv(vm, PointerType::NoritoBytes, &norito_blob(&path))
     }
 
     fn test_policy_snapshot(dsid: DataSpaceId, policy: AxtPolicyEntry) -> AxtPolicySnapshot {
@@ -12714,8 +12826,8 @@ seiyaku ReadOnlyBinding {
         let mut vm = IVM::new(1_000_000);
         vm.load_prepared(&prepared)
             .expect("load the authenticated view contract into the VM");
-        let missing_path: Name = "missing".parse().expect("valid state path");
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&missing_path));
+        let missing_path: StatePath = "missing".parse().expect("valid state path");
+        let path_ptr = store_state_path_tlv(&mut vm, &missing_path);
         vm.set_register(10, path_ptr);
         host.prepare_syscall(ivm_sys::SYSCALL_STATE_GET, &vm)
             .expect("view preparation permits durable-state reads");
@@ -13262,10 +13374,10 @@ seiyaku PrivilegedBinding {
         let mut vm = IVM::new(u64::MAX);
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("generic image parses outside deployable admission");
-        let path: Name = "state".parse().expect("state path");
+        let path: StatePath = "state".parse().expect("state path");
         let path_payload = norito::to_bytes(&path).expect("encode state path");
         let path_pointer = vm
-            .alloc_input_tlv(&make_tlv(PointerType::Name as u16, &path_payload))
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes as u16, &path_payload))
             .expect("allocate state path");
         vm.set_register(10, path_pointer);
 
@@ -16451,6 +16563,58 @@ seiyaku PrivilegedBinding {
     }
 
     #[test]
+    fn create_trigger_syscall_rejects_mismatched_filter_authority() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(1_000);
+        let action_authority = ALICE_ID.clone();
+        let filter_authority = BOB_ID.clone();
+        let mut host = CoreHost::new(action_authority.clone());
+
+        let action = SpecializedAction::new(
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "must not be queued".to_owned(),
+            ))],
+            Repeats::Exactly(1),
+            filter_authority.clone(),
+            EventFilterBox::ExecuteTrigger(
+                ExecuteTriggerEventFilter::new().under_authority(filter_authority),
+            ),
+        );
+        let mut action_value =
+            norito::json::to_value(&action).expect("serialize specialized action");
+        match &mut action_value {
+            norito::json::Value::Object(map) => {
+                map.insert(
+                    "authority".to_owned(),
+                    norito::json::to_value(&action_authority)
+                        .expect("serialize mismatched action authority"),
+                );
+            }
+            _ => panic!("expected action object"),
+        }
+
+        let trigger_id: TriggerId = "trigger_authority_mismatch".parse().unwrap();
+        let mut map = BTreeMap::new();
+        map.insert(
+            "id".to_owned(),
+            norito::json::Value::String(trigger_id.to_string()),
+        );
+        map.insert("action".to_owned(), action_value);
+        let spec = Json::from(&norito::json::Value::Object(map));
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&spec));
+        vm.set_register(10, ptr);
+
+        let result = host.syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER, &mut vm);
+
+        assert_eq!(result, Err(ivm::VMError::DecodeError));
+        assert!(
+            host.queued.is_empty(),
+            "an invalid trigger action must not leave queued effects"
+        );
+    }
+
+    #[test]
     fn remove_trigger_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = fixture_account("alice");
@@ -16864,12 +17028,24 @@ mod tests {
         norito::to_bytes(val).expect("encode Norito payload")
     }
 
-    fn test_state_path_gas(path: &Name) -> u64 {
-        ivm::host::state_path_gas(norito_blob(path).len())
+    fn state_path_for_test(path: &impl AsRef<str>) -> StatePath {
+        path.as_ref().parse().expect("valid durable-state path")
     }
 
-    fn test_state_value_gas(path: &Name, value_len: usize) -> u64 {
-        ivm::host::state_value_gas(norito_blob(path).len(), value_len)
+    fn store_state_path_tlv(vm: &mut IVM, path: &impl AsRef<str>) -> u64 {
+        store_tlv(
+            vm,
+            PointerType::NoritoBytes,
+            &norito_blob(&state_path_for_test(path)),
+        )
+    }
+
+    fn test_state_path_gas(path: &impl AsRef<str>) -> u64 {
+        ivm::host::state_path_gas(norito_blob(&state_path_for_test(path)).len())
+    }
+
+    fn test_state_value_gas(path: &impl AsRef<str>, value_len: usize) -> u64 {
+        ivm::host::state_value_gas(norito_blob(&state_path_for_test(path)).len(), value_len)
     }
 
     #[test]
@@ -16890,8 +17066,11 @@ mod tests {
             host.retained_output_bytes()
         };
 
-        let name: Name = "state/first".parse().expect("valid state path");
+        let name: Name = "state_input".parse().expect("valid public-input name");
         let canonical_name = CoreHost::encode_norito_payload(&name).expect("encode canonical Name");
+        let path: StatePath = "state/first".parse().expect("valid state path");
+        let canonical_path =
+            CoreHost::encode_norito_payload(&path).expect("encode canonical StatePath");
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -16899,6 +17078,9 @@ mod tests {
         assert_ne!(ambient_before, canonical);
         let alternate_name = norito::to_bytes(&name).expect("encode Name under alternate layout");
         assert_ne!(alternate_name, canonical_name);
+        let alternate_path =
+            norito::to_bytes(&path).expect("encode StatePath under alternate layout");
+        assert_ne!(alternate_path, canonical_path);
 
         let encoded_under_ambient =
             CoreHost::encode_norito_payload(&value).expect("encode host payload canonically");
@@ -16927,6 +17109,15 @@ mod tests {
         assert_eq!(
             CoreHost::decode_name_payload(&alternate_name),
             Err(ivm::VMError::DecodeError)
+        );
+        assert_eq!(
+            decode_canonical_norito::<StatePath>(&canonical_path)
+                .expect("decode canonical StatePath under ambient layout"),
+            path
+        );
+        assert!(
+            decode_canonical_norito::<StatePath>(&alternate_path).is_err(),
+            "ambient StatePath framing must not pass canonical decoding"
         );
         assert_eq!(
             norito::to_bytes(&value).expect("re-encode payload under ambient layout"),
@@ -18037,7 +18228,7 @@ seiyaku AliasPayout {{
     ) -> (
         Result<u64, ivm::VMError>,
         IVM,
-        BTreeMap<Name, Option<Vec<u8>>>,
+        BTreeMap<StatePath, Option<Vec<u8>>>,
     ) {
         call_contract_syscall_with_prepared_cache(
             state,
@@ -18061,7 +18252,7 @@ seiyaku AliasPayout {{
     ) -> (
         Result<u64, ivm::VMError>,
         IVM,
-        BTreeMap<Name, Option<Vec<u8>>>,
+        BTreeMap<StatePath, Option<Vec<u8>>>,
     ) {
         let view = state.view();
         let mut host = CoreHostImpl::new(outer_authority.clone());
@@ -18127,7 +18318,7 @@ seiyaku AliasPayout {{
     ) -> (
         Result<u64, ivm::VMError>,
         IVM,
-        BTreeMap<Name, Option<Vec<u8>>>,
+        BTreeMap<StatePath, Option<Vec<u8>>>,
         u64,
     ) {
         let view = state.view();
@@ -18253,7 +18444,7 @@ seiyaku AliasPayout {{
     ) -> (
         Result<(), ivm::VMError>,
         IVM,
-        BTreeMap<Name, Option<Vec<u8>>>,
+        BTreeMap<StatePath, Option<Vec<u8>>>,
         u64,
     ) {
         let view = state.view();
@@ -20545,9 +20736,9 @@ seiyaku DedicatedQueryContract {
         host.restrict_output_limits(HostOutputLimits::new(3, 1024 * 1024));
 
         for index in 0..10_000 {
-            let key: Name = format!("bounded_state_{index}")
+            let key: StatePath = format!("bounded_state_{index}")
                 .parse()
-                .expect("valid name");
+                .expect("valid state path");
             if host.try_reserve_durable_state_update(&key, 32) {
                 host.durable_state_overlay.insert(key, Some(vec![0; 32]));
             }
@@ -23146,7 +23337,7 @@ seiyaku Callee {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority).with_access_logging();
         host.state_access_log.durable_read_paths_complete = true;
-        let key: Name = "counter".parse().expect("state key");
+        let key: StatePath = "counter".parse().expect("state key");
         host.durable_state_overlay
             .insert(key.clone(), Some(vec![1]));
 
@@ -23181,7 +23372,7 @@ seiyaku Callee {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority).with_access_logging();
         host.state_access_log.durable_read_paths_complete = true;
-        let key: Name = "counter".parse().expect("state key");
+        let key: StatePath = "counter".parse().expect("state key");
         host.durable_state_overlay
             .insert(key.clone(), Some(vec![1]));
 
@@ -26907,7 +27098,7 @@ seiyaku DurableOwner {
             &identity,
         );
         let foreign_digest = hex::encode(Hash::new(b"foreign durable owner").as_ref());
-        let foreign_path: Name = format!("sc/{foreign_digest}/counter")
+        let foreign_path: StatePath = format!("sc/{foreign_digest}/counter")
             .parse()
             .expect("foreign durable path");
         assert!(!authorization.owns_durable_state_path(&foreign_path));
@@ -27751,8 +27942,8 @@ seiyaku DurableOwner {
         let mut host = local_contract_host(authority);
         let mut vm = IVM::new(10_000);
 
-        let path: Name = "counter".parse().unwrap();
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path: StatePath = "counter".parse().unwrap();
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
         let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
         vm.set_register(10, path_ptr);
@@ -27784,8 +27975,8 @@ seiyaku DurableOwner {
         host.restrict_output_limits(HostOutputLimits::new(0, u64::MAX));
         let mut vm = IVM::new(10_000);
 
-        let path: Name = "counter".parse().expect("valid state path");
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path: StatePath = "counter".parse().expect("valid state path");
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
         let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
         vm.set_register(10, path_ptr);
@@ -27833,6 +28024,12 @@ seiyaku DurableOwner {
             "pkdeploy_verified_lane_relay",
             "pkdeploy_verified_lane_relay_1_2_3_deadbeef",
             "pkdeploy_verified_nexus_fee_budget_deadbeef",
+            "pkdeploy_verified_fee_sponsor_vault_allocation",
+            "pkdeploy_verified_fee_sponsor_vault_allocation_deadbeef",
+            "pkdeploy_fee_sponsor_vault_allocation_usage",
+            "pkdeploy_fee_sponsor_vault_allocation_usage_deadbeef",
+            "pkdeploy_fee_sponsor_vault_allocation_settled_usage",
+            "pkdeploy_fee_sponsor_vault_allocation_settled_usage_deadbeef",
             "VerifiedLaneRelays",
             "VerifiedLaneRelays/deadbeef",
         ] {
@@ -27850,6 +28047,9 @@ seiyaku DurableOwner {
             "kagemusha_online_registration_v1x",
             "kagemusha_online_registration_v2x",
             "pkdeploy_verified_lane_relayx",
+            "pkdeploy_verified_fee_sponsor_vault_allocationx",
+            "pkdeploy_fee_sponsor_vault_allocation_usagex",
+            "pkdeploy_fee_sponsor_vault_allocation_settled_usagex",
             "counter",
         ] {
             assert_eq!(
@@ -27863,7 +28063,7 @@ seiyaku DurableOwner {
     #[test]
     fn state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker() {
         crate::test_alias::ensure();
-        let marker: Name = format!(
+        let marker: StatePath = format!(
             "queue_plan_admission_v2_{}_{}",
             "ab".repeat(Hash::LENGTH),
             "cd".repeat(Hash::LENGTH)
@@ -27890,7 +28090,7 @@ seiyaku DurableOwner {
             entrypoint: "attack".to_owned(),
         }));
         let mut vm = IVM::new(10_000);
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&marker));
+        let path_ptr = store_state_path_tlv(&mut vm, &marker);
         let forged = norito::to_bytes(&999_u64).expect("encode forged marker fixture");
         let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
 
@@ -27928,7 +28128,7 @@ seiyaku DurableOwner {
     #[test]
     fn state_syscalls_cannot_forge_delete_or_disclose_merge_lane_frontier() {
         crate::test_alias::ensure();
-        let frontier: Name = format!("merge_lane_frontier_v1_7_11_{}", "ab".repeat(32))
+        let frontier: StatePath = format!("merge_lane_frontier_v1_7_11_{}", "ab".repeat(32))
             .parse()
             .expect("frontier marker key");
         let authority: AccountId = fixture_account("alice");
@@ -27952,13 +28152,14 @@ seiyaku DurableOwner {
             .scoped_durable_state_path(&frontier)
             .expect("build scoped path")
             .expect("runtime context must scope contract state");
+        let physical_frontier = frontier.clone();
 
         let persisted = norito::to_bytes(&77_u64).expect("encode persisted marker fixture");
         let legacy_scoped = norito::to_bytes(&88_u64).expect("encode legacy scoped shadow");
         let mut world = World::new();
         world
             .smart_contract_state
-            .insert(frontier.clone(), persisted.clone());
+            .insert(physical_frontier.clone(), persisted.clone());
         world
             .smart_contract_state
             .insert(scoped_frontier.clone(), legacy_scoped.clone());
@@ -28003,7 +28204,7 @@ seiyaku DurableOwner {
         let mut vm = IVM::new(10_000);
         vm.load_program(&program)
             .expect("load self-describing adversarial contract");
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&frontier));
+        let path_ptr = store_state_path_tlv(&mut vm, &frontier);
         let forged = norito::to_bytes(&999_u64).expect("encode forged marker fixture");
         let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
 
@@ -28021,7 +28222,7 @@ seiyaku DurableOwner {
             "STATE_DEL must not create either a scoped tombstone or its legacy raw tombstone"
         );
         assert!(
-            !host.durable_state_overlay.contains_key(&frontier),
+            !host.durable_state_overlay.contains_key(&physical_frontier),
             "the raw consensus marker must not be staged for mutation"
         );
         assert!(
@@ -28029,7 +28230,7 @@ seiyaku DurableOwner {
             "the scoped fallback path must not be staged for mutation"
         );
         assert_eq!(
-            host.durable_state_base.get(&frontier),
+            host.durable_state_base.get(&physical_frontier),
             Some(&persisted),
             "the host's durable snapshot must retain the exact consensus marker"
         );
@@ -28084,7 +28285,7 @@ seiyaku DurableOwner {
             .memory
             .validate_tlv(vm.register(10))
             .expect("state key list TLV");
-        let keys: Vec<Name> =
+        let keys: Vec<StatePath> =
             norito::decode_from_bytes(keys_tlv.payload).expect("decode state key list");
         assert!(
             keys.is_empty(),
@@ -28107,7 +28308,7 @@ seiyaku DurableOwner {
     #[test]
     fn verified_relay_contract_state_is_readable_but_not_generically_mutable() {
         crate::test_alias::ensure();
-        let path: Name = format!("pkdeploy_verified_lane_relay_1_2_3_{}", "cd".repeat(32))
+        let path: StatePath = format!("pkdeploy_verified_lane_relay_1_2_3_{}", "cd".repeat(32))
             .parse()
             .expect("verified relay state key");
         let value = norito::to_bytes(&42_u64).expect("encode public record fixture");
@@ -28122,7 +28323,7 @@ seiyaku DurableOwner {
             .expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
 
         vm.set_register(10, path_ptr);
         assert_eq!(
@@ -28168,9 +28369,79 @@ seiyaku DurableOwner {
             .memory
             .validate_tlv(vm.register(10))
             .expect("verified relay key list TLV");
-        let keys: Vec<Name> =
+        let keys: Vec<StatePath> =
             norito::decode_from_bytes(keys_tlv.payload).expect("decode verified relay keys");
         assert_eq!(keys, vec![path]);
+    }
+
+    #[test]
+    fn verified_fee_sponsor_state_is_readable_but_not_generically_mutable() {
+        crate::test_alias::ensure();
+        let paths = [
+            format!(
+                "{VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX}_{}",
+                "11".repeat(32)
+            ),
+            format!(
+                "{VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_USAGE_STATE_KEY_PREFIX}_{}",
+                "22".repeat(32)
+            ),
+            format!(
+                "{VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_SETTLED_USAGE_STATE_KEY_PREFIX}_{}",
+                "33".repeat(32)
+            ),
+        ]
+        .map(|key| key.parse::<StatePath>().expect("fee sponsor system key"));
+        let value = norito::to_bytes(&42_u64).expect("encode public record fixture");
+        let mut world = World::new();
+        for path in &paths {
+            world
+                .smart_contract_state
+                .insert(path.clone(), value.clone());
+        }
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let mut host = CoreHost::from_state(fixture_account("alice"), &state)
+            .expect("canonical state snapshots");
+        host.set_local_contract_debug_execution();
+        let mut vm = IVM::new(100_000);
+
+        for path in &paths {
+            let path_ptr = store_state_path_tlv(&mut vm, path);
+            vm.set_register(10, path_ptr);
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm)
+                .expect("verified fee sponsor state remains readable");
+            let value_tlv = vm
+                .memory
+                .validate_tlv(vm.register(10))
+                .expect("verified fee sponsor value TLV");
+            assert_eq!(
+                norito::decode_from_bytes::<u64>(value_tlv.payload)
+                    .expect("decode public fee sponsor record"),
+                42
+            );
+
+            let forged = norito::to_bytes(&99_u64).expect("encode forged record fixture");
+            let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
+            vm.set_register(10, path_ptr);
+            vm.set_register(11, value_ptr);
+            assert_eq!(
+                host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+                Err(ivm::VMError::PermissionDenied),
+                "{path} must be native-authored"
+            );
+            vm.set_register(10, path_ptr);
+            assert_eq!(
+                host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+                Err(ivm::VMError::PermissionDenied),
+                "{path} must not be deleted generically"
+            );
+        }
+        assert!(
+            host.durable_state_overlay.is_empty(),
+            "rejected fee sponsor state mutations must not be staged"
+        );
     }
 
     #[test]
@@ -28242,7 +28513,7 @@ seiyaku DurableOwner {
             .next()
             .and_then(Option::as_ref)
             .expect("typed durable state record");
-        let path: Name = "Stored".parse().expect("declared scalar path");
+        let path: StatePath = "Stored".parse().expect("declared scalar path");
         ivm::host::validate_declared_state_value_payload(&vm, &path, stored)
             .expect("persisted record remains schema-bound and canonical");
 
@@ -28329,8 +28600,8 @@ seiyaku DurableOwner {
         vm.run_with_host(&mut host)
             .expect("canonical typed child write");
 
-        let base: Name = "BytesMap".parse().expect("declared map base");
-        let base_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&base));
+        let base: StatePath = "BytesMap".parse().expect("declared map base");
+        let base_ptr = store_state_path_tlv(&mut vm, &base);
         vm.set_register(10, base_ptr);
         vm.set_register(11, 0);
         vm.set_register(12, ivm_sys::STATE_KEYS_MAX_ITEMS);
@@ -28339,7 +28610,8 @@ seiyaku DurableOwner {
         assert_eq!(vm.register(11), 1);
         assert_eq!(vm.register(12), 1);
         let keys = vm.validate_tlv(vm.register(10)).expect("state-key page");
-        let keys: Vec<Name> = norito::decode_from_bytes(keys.payload).expect("decode key page");
+        let keys: Vec<StatePath> =
+            norito::decode_from_bytes(keys.payload).expect("decode key page");
         assert_eq!(keys.len(), 1);
 
         vm.set_register(10, base_ptr);
@@ -28371,10 +28643,10 @@ seiyaku DurableOwner {
             .clone();
         let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(1))
             .expect("encode canonical map key");
-        let wrong_path: Name = format!("IntMap/{}", hex::encode(key))
+        let wrong_path: StatePath = format!("IntMap/{}", hex::encode(key))
             .parse()
             .expect("canonical typed child path");
-        let wrong_path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&wrong_path));
+        let wrong_path_ptr = store_state_path_tlv(&mut vm, &wrong_path);
         let wrong_value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &bytes_record);
         vm.set_register(10, wrong_path_ptr);
         vm.set_register(11, wrong_value_ptr);
@@ -28504,8 +28776,8 @@ seiyaku DurableOwner {
             crate::validation_fee::VALIDATION_FEE_CREDIT_STATE_LEAF,
             crate::validation_fee::VALIDATION_FEE_CREDIT_ASSET_STATE_LEAF,
         ] {
-            let leaf: Name = leaf.parse().expect("reserved validation-fee credit leaf");
-            let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&leaf));
+            let leaf: StatePath = leaf.parse().expect("reserved validation-fee credit leaf");
+            let path_ptr = store_state_path_tlv(&mut vm, &leaf);
             vm.set_register(10, path_ptr);
             vm.set_register(11, value_ptr);
             assert!(matches!(
@@ -28622,8 +28894,8 @@ seiyaku DurableOwner {
         host.set_contract_runtime_context(Some(context));
         let mut vm = IVM::new(10_000);
 
-        let path: Name = "counter".parse().unwrap();
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path: StatePath = "counter".parse().unwrap();
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
         let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
         vm.set_register(10, path_ptr);
@@ -28660,7 +28932,7 @@ seiyaku DurableOwner {
     fn state_syscall_reads_world_snapshot() {
         crate::test_alias::ensure();
         let mut world = World::new();
-        let path: Name = "counter".parse().unwrap();
+        let path: StatePath = "counter".parse().unwrap();
         let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
         world
             .smart_contract_state
@@ -28673,7 +28945,7 @@ seiyaku DurableOwner {
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
@@ -28691,7 +28963,7 @@ seiyaku DurableOwner {
     fn state_syscall_reads_live_query_state_without_eager_snapshot() {
         crate::test_alias::ensure();
         let mut world = World::new();
-        let path: Name = "counter".parse().unwrap();
+        let path: StatePath = "counter".parse().unwrap();
         let value_bytes = norito::to_bytes(&7_u64).expect("encode state value");
         world
             .smart_contract_state
@@ -28710,7 +28982,7 @@ seiyaku DurableOwner {
         host.set_query_state(&view);
         let mut vm = IVM::new(10_000);
 
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
@@ -28727,8 +28999,8 @@ seiyaku DurableOwner {
         let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
         assert_eq!(value, 7);
 
-        let prefix: Name = "counter".parse().unwrap();
-        let prefix_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&prefix));
+        let prefix: StatePath = "counter".parse().unwrap();
+        let prefix_ptr = store_state_path_tlv(&mut vm, &prefix);
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, 0);
         vm.set_register(12, ivm_sys::STATE_KEYS_MAX_ITEMS);
@@ -28760,10 +29032,10 @@ seiyaku DurableOwner {
         scope_host.set_contract_runtime_context(Some(context.clone()));
 
         let expected = ["orders/1", "orders/10", "orders/2"]
-            .map(|raw| raw.parse::<Name>().expect("state key"))
+            .map(|raw| raw.parse::<StatePath>().expect("state key"))
             .to_vec();
         let collisions = ["orders-shadow/1", "orders0/1"]
-            .map(|raw| raw.parse::<Name>().expect("text-prefix collision"));
+            .map(|raw| raw.parse::<StatePath>().expect("text-prefix collision"));
         let mut world = World::new();
         for (index, key) in expected.iter().rev().enumerate() {
             let physical = scope_host
@@ -28785,7 +29057,7 @@ seiyaku DurableOwner {
         }
         for index in 0..4_096_u32 {
             let side = if index % 2 == 0 { "aa" } else { "zz" };
-            let key: Name = format!("{side}-global-unrelated/{index:05}")
+            let key: StatePath = format!("{side}-global-unrelated/{index:05}")
                 .parse()
                 .expect("unrelated state key");
             world.smart_contract_state.insert(key, vec![0xa5; 256]);
@@ -28802,8 +29074,8 @@ seiyaku DurableOwner {
         host.set_query_state(&view);
         host.set_contract_runtime_context(Some(context));
         let mut vm = IVM::new(u64::MAX);
-        let prefix: Name = "orders".parse().expect("state prefix");
-        let prefix_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&prefix));
+        let prefix: StatePath = "orders".parse().expect("state prefix");
+        let prefix_ptr = store_state_path_tlv(&mut vm, &prefix);
         let prefix_payload_len = norito_blob(&prefix).len();
         let (_, _, scan_work_gas) = host
             .collect_durable_state_keys(
@@ -28827,7 +29099,8 @@ seiyaku DurableOwner {
             .memory
             .validate_tlv(vm.register(10))
             .expect("state keys TLV");
-        let keys: Vec<Name> = norito::decode_from_bytes(keys_tlv.payload).expect("decode keys");
+        let keys: Vec<StatePath> =
+            norito::decode_from_bytes(keys_tlv.payload).expect("decode keys");
         assert_eq!(keys, expected, "keys retain canonical Name/Norito order");
         assert_eq!(
             keys_gas,
@@ -28861,14 +29134,14 @@ seiyaku DurableOwner {
     #[test]
     fn state_has_and_len_borrow_values_amid_large_unrelated_state() {
         crate::test_alias::ensure();
-        let target: Name = "target/large".parse().expect("target state key");
+        let target: StatePath = "target/large".parse().expect("target state key");
         let target_value = vec![0xc3; 512 * 1024];
         let mut world = World::new();
         world
             .smart_contract_state
             .insert(target.clone(), target_value.clone());
         for index in 0..2_048_u32 {
-            let key: Name = format!("unrelated/{index:05}")
+            let key: StatePath = format!("unrelated/{index:05}")
                 .parse()
                 .expect("unrelated state key");
             world.smart_contract_state.insert(key, vec![0x3c; 512]);
@@ -28884,7 +29157,7 @@ seiyaku DurableOwner {
         host.set_local_contract_debug_execution();
         host.set_query_state(&view);
         let mut vm = IVM::new(u64::MAX);
-        let target_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&target));
+        let target_ptr = store_state_path_tlv(&mut vm, &target);
 
         vm.set_register(10, target_ptr);
         assert_eq!(
@@ -28914,7 +29187,7 @@ seiyaku DurableOwner {
     fn state_get_preflights_gas_before_world_state_output() {
         crate::test_alias::ensure();
         let mut world = World::new();
-        let path: Name = "large".parse().expect("state key");
+        let path: StatePath = "large".parse().expect("state key");
         world
             .smart_contract_state
             .insert(path.clone(), vec![0xabu8; 128]);
@@ -28927,7 +29200,7 @@ seiyaku DurableOwner {
         let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(u64::MAX);
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         let code = [
             ivm::encoding::wide::encode_sys(
                 ivm::instruction::wide::system::SCALL,
@@ -28973,7 +29246,7 @@ seiyaku DurableOwner {
     fn state_syscall_reads_world_snapshot_spills_to_heap_when_input_fills() {
         crate::test_alias::ensure();
         let mut world = World::new();
-        let path: Name = "counter".parse().unwrap();
+        let path: StatePath = "counter".parse().unwrap();
         let expected = vec![0xA5; 96];
         let value_bytes = norito::to_bytes(&expected).expect("encode state value");
         world.smart_contract_state.insert(path.clone(), value_bytes);
@@ -28985,7 +29258,7 @@ seiyaku DurableOwner {
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(u64::MAX);
 
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         let filler = make_tlv(PointerType::Blob as u16, b"");
         while vm.alloc_input_tlv(&filler).is_ok() {}
 
@@ -29015,7 +29288,7 @@ seiyaku DurableOwner {
     fn state_syscall_unscoped_overlay_overrides_base_value_without_context() {
         crate::test_alias::ensure();
         let mut world = World::new();
-        let path: Name = "counter".parse().unwrap();
+        let path: StatePath = "counter".parse().unwrap();
         world.smart_contract_state.insert(
             path.clone(),
             norito::to_bytes(&7_u64).expect("encode base state value"),
@@ -29028,7 +29301,7 @@ seiyaku DurableOwner {
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         let value_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
@@ -29081,7 +29354,7 @@ seiyaku DurableOwner {
     fn state_syscall_unscoped_delete_shadows_base_value_without_context() {
         crate::test_alias::ensure();
         let mut world = World::new();
-        let path: Name = "counter".parse().unwrap();
+        let path: StatePath = "counter".parse().unwrap();
         world.smart_contract_state.insert(
             path.clone(),
             norito::to_bytes(&7_u64).expect("encode base state value"),
@@ -29094,7 +29367,7 @@ seiyaku DurableOwner {
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
@@ -29134,10 +29407,11 @@ seiyaku DurableOwner {
             host.set_generic_execution();
             let mut vm = IVM::new(10_000);
             let suffix = if prefix == "sc" { "/secret" } else { "" };
-            let reserved_path: Name = format!("{prefix}/{}{suffix}", "00".repeat(Hash::LENGTH))
-                .parse()
-                .expect("valid reserved state path");
-            let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&reserved_path));
+            let reserved_path: StatePath =
+                format!("{prefix}/{}{suffix}", "00".repeat(Hash::LENGTH))
+                    .parse()
+                    .expect("valid reserved state path");
+            let path_ptr = store_state_path_tlv(&mut vm, &reserved_path);
             let value_ptr = store_tlv(
                 &mut vm,
                 PointerType::NoritoBytes,
@@ -29172,8 +29446,8 @@ seiyaku DurableOwner {
                 "generic IVM must not tombstone `{prefix}`"
             );
 
-            let reserved_prefix: Name = prefix.parse().expect("valid reserved state prefix");
-            let prefix_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&reserved_prefix));
+            let reserved_prefix: StatePath = prefix.parse().expect("valid reserved state prefix");
+            let prefix_ptr = store_state_path_tlv(&mut vm, &reserved_prefix);
             vm.set_register(10, prefix_ptr);
             vm.set_register(11, 0);
             vm.set_register(12, ivm_sys::STATE_KEYS_MAX_ITEMS);
@@ -29239,8 +29513,8 @@ seiyaku DurableOwner {
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
-        let path: Name = "counter".parse().unwrap();
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path: StatePath = "counter".parse().unwrap();
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         let expected = vec![0x3C; 80];
         let value_ptr = store_tlv(
             &mut vm,
@@ -29302,7 +29576,7 @@ seiyaku DurableOwner {
     fn state_syscall_ignores_unscoped_value_when_scoped_value_exists() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let path: Name = "counter".parse().unwrap();
+        let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
@@ -29341,7 +29615,7 @@ seiyaku DurableOwner {
         host.set_contract_runtime_context(Some(context));
 
         let mut vm = IVM::new(10_000);
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         let filler = make_tlv(PointerType::Blob as u16, b"");
         while vm.alloc_input_tlv(&filler).is_ok() {}
 
@@ -29384,7 +29658,7 @@ seiyaku DurableOwner {
             contract_alias: Some("state::keys".parse().expect("contract alias")),
             entrypoint: "list".to_owned(),
         };
-        let scoped_key: Name = "orders/2".parse().unwrap();
+        let scoped_key: StatePath = "orders/2".parse().unwrap();
         let mut scope_host = CoreHost::new(authority.clone());
         scope_host.set_local_contract_debug_execution();
         scope_host.set_contract_runtime_context(Some(context.clone()));
@@ -29414,16 +29688,16 @@ seiyaku DurableOwner {
         host.set_contract_runtime_context(Some(context));
         let mut vm = IVM::new(10_000);
 
-        let unscoped_key: Name = "orders/1".parse().unwrap();
-        let unscoped_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&unscoped_key));
+        let unscoped_key: StatePath = "orders/1".parse().unwrap();
+        let unscoped_ptr = store_state_path_tlv(&mut vm, &unscoped_key);
         vm.set_register(10, unscoped_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
             Ok(test_state_path_gas(&unscoped_key))
         );
 
-        let prefix: Name = "orders".parse().unwrap();
-        let prefix_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&prefix));
+        let prefix: StatePath = "orders".parse().unwrap();
+        let prefix_ptr = store_state_path_tlv(&mut vm, &prefix);
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, 0);
         vm.set_register(12, ivm_sys::STATE_KEYS_MAX_ITEMS);
@@ -29439,7 +29713,7 @@ seiyaku DurableOwner {
             .validate_tlv(vm.register(10))
             .expect("state keys tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let keys: Vec<Name> = norito::decode_from_bytes(tlv.payload).expect("decode key list");
+        let keys: Vec<StatePath> = norito::decode_from_bytes(tlv.payload).expect("decode key list");
         assert_eq!(keys, vec![scoped_key.clone()]);
 
         let (_, _, count_scan_work_gas) = host
@@ -29452,7 +29726,7 @@ seiyaku DurableOwner {
         );
         assert_eq!(vm.register(10), 1);
 
-        let scoped_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&scoped_key));
+        let scoped_ptr = store_state_path_tlv(&mut vm, &scoped_key);
         vm.set_register(10, scoped_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_HAS, &mut vm),
@@ -29481,7 +29755,7 @@ seiyaku DurableOwner {
     fn state_syscall_scoped_overlay_overrides_scoped_base_without_touching_unscoped_state() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let path: Name = "counter".parse().unwrap();
+        let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
@@ -29520,7 +29794,7 @@ seiyaku DurableOwner {
         host.set_contract_runtime_context(Some(context));
 
         let mut vm = IVM::new(10_000);
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         let value_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
@@ -29575,7 +29849,7 @@ seiyaku DurableOwner {
     #[test]
     fn state_syscall_scoped_delete_never_tombstones_unscoped_state() {
         crate::test_alias::ensure();
-        let path: Name = "counter".parse().unwrap();
+        let path: StatePath = "counter".parse().unwrap();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
@@ -29615,7 +29889,7 @@ seiyaku DurableOwner {
         host.set_contract_runtime_context(Some(context));
 
         let mut vm = IVM::new(10_000);
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
@@ -29646,8 +29920,8 @@ seiyaku DurableOwner {
         host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
-        let path: Name = "counter".parse().unwrap();
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path: StatePath = "counter".parse().unwrap();
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
 
         let contract_a = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
@@ -29762,7 +30036,7 @@ seiyaku DurableOwner {
     fn state_syscall_does_not_read_unscoped_key_when_scoped_key_is_missing() {
         crate::test_alias::ensure();
         let mut world = World::new();
-        let path: Name = "counter".parse().unwrap();
+        let path: StatePath = "counter".parse().unwrap();
         let value_bytes = norito::to_bytes(&7_u64).expect("encode unscoped sentinel");
         world
             .smart_contract_state
@@ -29788,7 +30062,7 @@ seiyaku DurableOwner {
             entrypoint: "read".to_owned(),
         }));
         let mut vm = IVM::new(10_000);
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
@@ -30344,8 +30618,8 @@ seiyaku DurableOwner {
         host.set_durable_state_snapshot_from_world(&stx.world);
 
         let mut vm = IVM::new(10_000);
-        let path: Name = "counter".parse().unwrap();
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let path: StatePath = "counter".parse().unwrap();
+        let path_ptr = store_state_path_tlv(&mut vm, &path);
         let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
         let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
         vm.set_register(10, path_ptr);
@@ -32058,325 +32332,5 @@ seiyaku PreparedBoundaryArguments {
         }
     }
 
-    #[test]
-    fn pointer_abi_holding_limit_preserves_some_and_none() {
-        let account = fixture_account("alice");
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonder", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        );
-
-        for expected in [Some(Quantity::from(2_500_u64)), None] {
-            let mut vm = IVM::new(10_000);
-            let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
-            let asset_ptr = store_tlv(
-                &mut vm,
-                PointerType::AssetDefinitionId,
-                &norito_blob(&asset_definition),
-            );
-            let layout = ivm::sum::SumLayoutV1::option(1).expect("quantity option layout");
-            let limit_ptr = match &expected {
-                Some(amount) => {
-                    let amount_ptr =
-                        store_tlv(&mut vm, PointerType::Quantity, &quantity_frame(amount));
-                    ivm::sum::allocate_words(&mut vm, layout, 1, &[amount_ptr])
-                        .expect("Option::some quantity")
-                }
-                None => ivm::sum::allocate_words(&mut vm, layout, 0, &[])
-                    .expect("Option::none quantity"),
-            };
-            vm.set_register(10, account_ptr);
-            vm.set_register(11, asset_ptr);
-            vm.set_register(12, limit_ptr);
-
-            let mut host = CoreHost::new(account.clone());
-            host.syscall(ivm_sys::SYSCALL_SET_ASSET_HOLDING_LIMIT, &mut vm)
-                .expect("queue holding-limit instruction");
-            let queued = host.drain_instructions();
-            assert_eq!(queued.len(), 1);
-            let instruction = queued[0]
-                .as_any()
-                .downcast_ref::<iroha_data_model::isi::SetAssetHoldingLimit>()
-                .expect("typed holding-limit instruction");
-            assert_eq!(instruction.account_id, account);
-            assert_eq!(instruction.asset_definition_id, asset_definition);
-            assert_eq!(instruction.holding_limit, expected);
-        }
-    }
-
-    #[test]
-    fn pointer_abi_daily_limit_rejects_noncanonical_options() {
-        let mut vm = IVM::new(10_000);
-        let layout = ivm::sum::SumLayoutV1::option(1).expect("quantity option layout");
-
-        let invalid_tag = vm.alloc_heap(layout.allocation_bytes().unwrap()).unwrap();
-        vm.store_u64(invalid_tag, 2).unwrap();
-        assert_eq!(
-            CoreHost::decode_optional_amount(&vm, invalid_tag),
-            Err(ivm::VMError::DecodeError)
-        );
-
-        let noncanonical_none = vm.alloc_heap(layout.allocation_bytes().unwrap()).unwrap();
-        vm.store_u64(noncanonical_none, 0).unwrap();
-        vm.store_u64(noncanonical_none + 8, 1).unwrap();
-        assert_eq!(
-            CoreHost::decode_optional_amount(&vm, noncanonical_none),
-            Err(ivm::VMError::DecodeError)
-        );
-
-        let wrong_payload = store_tlv(
-            &mut vm,
-            PointerType::Name,
-            &norito_blob(&"not_a_quantity".parse::<Name>().unwrap()),
-        );
-        let wrong_some = ivm::sum::allocate_words(&mut vm, layout, 1, &[wrong_payload])
-            .expect("well-formed option with wrong payload type");
-        assert!(CoreHost::decode_optional_amount(&vm, wrong_some).is_err());
-        assert!(CoreHost::decode_optional_amount(&vm, invalid_tag + 1).is_err());
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn pointer_abi_transfer_asset_enqueues_isi() {
-        // Prepare Norito-encoded inputs in INPUT region
-        let from: AccountId = fixture_account("alice");
-        let to: AccountId = fixture_account("bob");
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonder", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        );
-        let amount = Quantity::from(1234_u64);
-        let dataspace = DataSpaceId::UNIVERSAL;
-        let from_bytes = norito_blob(&from);
-        let to_bytes = norito_blob(&to);
-        let asset_bytes = norito_blob(&asset_def);
-        let dataspace_bytes = norito_blob(&dataspace);
-        let from_tlv = pointer_abi_tests::make_tlv(ivm::PointerType::AccountId as u16, &from_bytes);
-        let to_tlv = pointer_abi_tests::make_tlv(ivm::PointerType::AccountId as u16, &to_bytes);
-        let asset_tlv =
-            pointer_abi_tests::make_tlv(ivm::PointerType::AssetDefinitionId as u16, &asset_bytes);
-        let dataspace_tlv =
-            pointer_abi_tests::make_tlv(ivm::PointerType::DataSpaceId as u16, &dataspace_bytes);
-        let amount_tlv = pointer_abi_tests::make_tlv(
-            ivm::PointerType::Quantity as u16,
-            &quantity_frame(&amount),
-        );
-
-        // Offsets in INPUT region
-        let off_from = 0u64;
-        let off_to = 256u64;
-        let off_asset = 512u64;
-        let off_amount = 768u64;
-        let off_dataspace = 1024u64;
-        let ptr_from = ivm::Memory::INPUT_START + off_from;
-        let ptr_to = ivm::Memory::INPUT_START + off_to;
-        let ptr_asset = ivm::Memory::INPUT_START + off_asset;
-        let ptr_amount = ivm::Memory::INPUT_START + off_amount;
-        let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
-
-        let mut vm = IVM::new(10_000);
-        // Preload the INPUT region
-        vm.memory
-            .preload_input(off_from, &from_tlv)
-            .expect("preload input");
-        vm.memory
-            .preload_input(off_to, &to_tlv)
-            .expect("preload input");
-        vm.memory
-            .preload_input(off_asset, &asset_tlv)
-            .expect("preload input");
-        vm.memory
-            .preload_input(off_amount, &amount_tlv)
-            .expect("preload input");
-        vm.memory
-            .preload_input(off_dataspace, &dataspace_tlv)
-            .expect("preload input");
-
-        let state =
-            scoped_transfer_state(&from, &to, asset_def.clone(), AssetBalancePolicy::Global);
-        let view = state.view();
-        let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(from.clone());
-        host.set_query_state(&view);
-
-        // Set arg registers to pointers and amount
-        vm.set_register(10, ptr_from);
-        vm.set_register(11, ptr_to);
-        vm.set_register(12, ptr_asset);
-        vm.set_register(13, ptr_amount);
-        vm.set_register(14, ptr_dataspace);
-
-        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
-            .unwrap();
-        let queued = host.drain_instructions();
-        assert_eq!(queued.len(), 1);
-        let instr = &queued[0];
-        let any = instr.as_any();
-        if let Some(tb) = any.downcast_ref::<TransferBox>() {
-            match tb {
-                TransferBox::Asset(inner) => {
-                    assert_eq!(inner.destination, to);
-                    assert_eq!(inner.source.account, from);
-                    assert_eq!(inner.source.definition, asset_def);
-                    assert_eq!(inner.object, amount);
-                }
-                _ => panic!("expected asset transfer"),
-            }
-        } else {
-            panic!("expected TransferBox instruction");
-        }
-    }
-
-    // NOTE: Additional CoreHost tests for NFT syscalls can be added once the VM instruction
-    // builder helpers stabilize across metadata header formats.
-    #[test]
-    fn nft_mint_enqueues_register_and_transfer() {
-        let authority: AccountId = fixture_account("alice");
-        let authority_clone = authority.clone();
-        let owner: AccountId = fixture_account("bob");
-        let nft_id: NftId = "gold$wonderland.universal".parse().unwrap();
-        let nft_tlv = make_tlv(PointerType::NftId as u16, &norito_blob(&nft_id));
-        let owner_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&owner));
-
-        let mut code = Vec::new();
-        code.extend_from_slice(
-            &encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_NFT_MINT_ASSET).expect("syscall id fits in u8"),
-            )
-            .to_le_bytes(),
-        );
-        code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
-        let program = build_program(&code, 4);
-
-        let mut vm = IVM::new(u64::MAX);
-        vm.set_host(CoreHost::new(authority_clone));
-        vm.load_program(&program).unwrap();
-        vm.memory
-            .preload_input(0, &nft_tlv)
-            .expect("preload nft tlv");
-        vm.memory
-            .preload_input(256, &owner_tlv)
-            .expect("preload owner tlv");
-        vm.set_register(10, ivm::Memory::INPUT_START);
-        vm.set_register(11, ivm::Memory::INPUT_START + 256);
-        vm.run().unwrap();
-
-        let host_any = vm.host_mut_any().unwrap();
-        let host = host_any.downcast_mut::<CoreHost>().unwrap();
-        let queued = host.drain_instructions();
-        assert_eq!(queued.len(), 2);
-        let reg = queued[0]
-            .as_any()
-            .downcast_ref::<RegisterBox>()
-            .expect("register instruction");
-        match reg {
-            RegisterBox::Nft(inner) => assert_eq!(&inner.object.id, &nft_id),
-            _ => panic!("expected NFT register"),
-        }
-        let xfer = queued[1]
-            .as_any()
-            .downcast_ref::<TransferBox>()
-            .expect("transfer instruction");
-        match xfer {
-            TransferBox::Nft(inner) => {
-                assert_eq!(&inner.source, &authority);
-                assert_eq!(&inner.destination, &owner);
-                assert_eq!(&inner.object, &nft_id);
-            }
-            _ => panic!("expected NFT transfer"),
-        }
-    }
-
-    #[cfg(all(feature = "telemetry", feature = "sm"))]
-    #[test]
-    fn sm3_syscall_records_success_metric() {
-        crate::test_alias::ensure();
-        let authority: AccountId = fixture_account("alice");
-        let message = b"telemetry";
-        let tlv = pointer_abi_tests::make_tlv(ivm::PointerType::Blob as u16, message);
-
-        let mut vm = IVM::new(10_000);
-        vm.memory
-            .preload_input(0, &tlv)
-            .expect("preload SM3 input TLV");
-
-        let mut code = Vec::new();
-        code.extend_from_slice(
-            &encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_SM3_HASH).expect("syscall id fits in u8"),
-            )
-            .to_le_bytes(),
-        );
-        code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
-        let program = build_program(&code, 4);
-
-        let accounts = Arc::new(vec![authority.clone()]);
-        let mut host = CoreHost::with_accounts(authority, accounts);
-        host.force_sm_enabled_for_tests(true);
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        host.set_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
-        vm.set_host(host);
-        vm.load_program(&program).expect("load SM3 program");
-        vm.set_register(10, ivm::Memory::INPUT_START);
-        vm.run().expect("SM3 syscall must succeed");
-
-        assert_eq!(
-            metrics
-                .sm_syscall_total
-                .with_label_values(&["hash", "-"])
-                .get(),
-            1
-        );
-    }
-
-    #[cfg(all(feature = "telemetry", feature = "sm"))]
-    #[test]
-    fn sm3_syscall_failure_records_failure_metric() {
-        crate::test_alias::ensure();
-        let authority: AccountId = fixture_account("alice");
-        let message = b"not-a-blob";
-        // Encode a TLV with the wrong pointer type to trigger a Norito validation error.
-        let tlv = pointer_abi_tests::make_tlv(ivm::PointerType::AccountId as u16, message);
-
-        let mut vm = IVM::new(10_000);
-        vm.memory
-            .preload_input(0, &tlv)
-            .expect("preload SM3 input TLV");
-
-        let mut code = Vec::new();
-        code.extend_from_slice(
-            &encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_SM3_HASH).expect("syscall id fits in u8"),
-            )
-            .to_le_bytes(),
-        );
-        code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
-        let program = build_program(&code, 4);
-
-        let accounts = Arc::new(vec![authority.clone()]);
-        let mut host = CoreHost::with_accounts(authority, accounts);
-        host.force_sm_enabled_for_tests(true);
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        host.set_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
-        vm.set_host(host);
-        vm.load_program(&program).expect("load SM3 program");
-        vm.set_register(10, ivm::Memory::INPUT_START);
-        let err = vm
-            .run()
-            .expect_err("SM3 must be rejected when TLV carries the wrong type");
-        assert!(matches!(err, ivm::VMError::NoritoInvalid));
-
-        assert_eq!(
-            metrics
-                .sm_syscall_failures_total
-                .with_label_values(&["hash", "-", "norito_invalid"])
-                .get(),
-            1
-        );
-    }
+    include!("host/pointer_abi_and_sm_tests.rs");
 }

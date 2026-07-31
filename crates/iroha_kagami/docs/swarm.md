@@ -39,6 +39,25 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
   - The directory should contain `genesis.json`. If you plan to upgrade the executor at genesis,
     include the executor bytecode file and reference it from `genesis.json`.
 
+The generated Compose manifest intentionally contains no genesis signing key.
+Every service reads the verifier key from a Docker Compose secret, and only
+`irohad0` receives the signing-key secret. Before evaluating the manifest, set
+both source paths:
+
+```bash
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/localnet/genesis.public_key"
+export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/localnet/genesis.private_key"
+docker compose -f ./my-configs/docker-compose.yml up
+```
+
+`kagami localnet` emits both files and protects the private file with
+owner-only permissions. If you prepare genesis manually, create the private
+file as one canonical private-key multihash plus a final newline with mode
+`0600`, and create the public file as its matching public-key multihash plus a
+final newline. Compose refuses to evaluate when either path is unset. The
+in-container signer also rejects a private key that does not derive the
+supplied public key. Never commit the private file.
+
 - `-i, --image <NAME>`: Specifies the Docker image used by the peer services. 
   - By default, the image is pulled from Docker Hub if not cached. 
   - Pass the `--build` option to build the image from a Dockerfile instead. 
@@ -130,7 +149,8 @@ Use a fixed `--seed` and a fixed `--vrf-seed-hex` when generating the manifest i
        --peer-pop "bls_normal:pk1=pop_hex1" \
        --peer-pop "bls_normal:pk2=pop_hex2" \
        --peer-pop "bls_normal:pk3=pop_hex3" \
-       --private-key <GENESIS_SK_HEX> \
+       --private-key-file <MODE_0600_GENESIS_KEY_FILE> \
+       --expected-public-key <GENESIS_PUBLIC_KEY> \
        --out-file ./cfg/genesis.signed.nrt
    ```
 
@@ -142,6 +162,9 @@ Use a fixed `--seed` and a fixed `--vrf-seed-hex` when generating the manifest i
        --config-dir ./cfg \
        --image hyperledger/iroha:dev \
        --out-file ./my-configs/docker-compose.npos.yml
+   export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/cfg/genesis.public_key"
+   export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/cfg/genesis.private_key"
+   docker compose -f ./my-configs/docker-compose.npos.yml up
    ```
 
 Use the same roster/PoPs when starting the containers to avoid mismatches between the signed genesis and node configs.

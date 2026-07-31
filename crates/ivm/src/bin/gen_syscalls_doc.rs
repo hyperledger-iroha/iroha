@@ -2,6 +2,7 @@
 //! Usage:
 //!   cargo run -p ivm --bin gen_syscalls_doc -- --write
 //!   cargo run -p ivm --bin gen_syscalls_doc -- --check
+//!   cargo run -p ivm --bin gen_syscalls_doc -- --write --root /tmp/ivm-doc-stage
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -11,7 +12,7 @@ use std::{
 
 mod support;
 
-use support::{GeneratedOutput, parse_generation_mode as parse_mode, sync_generated_outputs};
+use support::{GeneratedOutput, parse_generation_options, sync_generated_outputs};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED SYSCALLS -->";
 const END: &str = "<!-- END GENERATED SYSCALLS -->";
@@ -67,7 +68,7 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         gas = "G_numeric + bytes".into();
     } else if up.contains("BUILD_PATH_KEY_NORITO") || n == 0x56 {
         args = "r10=&Name(base), r11=&NoritoBytes(key)".into();
-        ret = "r10=ptr (&Name)".into();
+        ret = "r10=ptr (&NoritoBytes(StatePath))".into();
         gas = "G_path + bytes".into();
     } else if up.contains("JSON_ENCODE") || n == 0x57 {
         args = "r10=&Json".into();
@@ -235,17 +236,17 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         ret = "r10=unix_time_ms:u64".into();
         gas = "G_sysvar".into();
     } else if up.contains("STATE_GET") || n == 0x50 {
-        args = "r10=&Name".into();
+        args = "r10=&NoritoBytes(StatePath)".into();
         ret = "r10=ptr (&NoritoBytes) or 0".into();
-        gas = "G_state_get + bytes".into();
+        gas = "G_state_get + canonical path frame bytes + returned value bytes".into();
     } else if up.contains("STATE_SET") || n == 0x51 {
-        args = "r10=&Name, r11=&NoritoBytes".into();
+        args = "r10=&NoritoBytes(StatePath), r11=&NoritoBytes".into();
         ret = "u64=0".into();
-        gas = "G_state_set + bytes".into();
+        gas = "G_state_set + canonical path frame bytes + value bytes".into();
     } else if up.contains("STATE_DEL") || n == 0x52 {
-        args = "r10=&Name".into();
+        args = "r10=&NoritoBytes(StatePath)".into();
         ret = "u64=0".into();
-        gas = "G_state_del".into();
+        gas = "G_state_del + canonical path frame bytes".into();
     } else if up.contains("INPUT_PUBLISH_TLV") || n == 0xE0 {
         args = "r10=&Blob(TLV)".into();
         ret = "ptr (r10)".into();
@@ -301,23 +302,23 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         ret = "r10=&NoritoBytes(same payload)".into();
         gas = "G_pointer + bytes".into();
     } else if up.contains("STATE_KEYS") || n == 0x01_0030 {
-        args = "r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64)".into();
-        ret = "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64".into();
-        gas = "G_state_keys + count + bytes".into();
+        args = "r10=&NoritoBytes(StatePath prefix), r11=offset:u64, r12=limit:u64 (0..=64)".into();
+        ret = "r10=ptr (&NoritoBytes(Vec<StatePath>)), r11=total:u64, r12=count:u64".into();
+        gas = "G_state_keys + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes + canonical response frame bytes".into();
     } else if up.contains("STATE_HAS") || n == 0x01_0031 {
-        args = "r10=&Name(path)".into();
+        args = "r10=&NoritoBytes(StatePath)".into();
         ret = "r10=present:u64".into();
-        gas = "G_state_has".into();
+        gas = "G_state_has + canonical path frame bytes".into();
     } else if up.contains("STATE_LEN") || n == 0x01_0032 {
-        args = "r10=&Name(path)".into();
+        args = "r10=&NoritoBytes(StatePath)".into();
         ret = "r10=len:u64, r11=found:u64".into();
-        gas = "G_state_len + bytes".into();
+        gas = "G_state_len + canonical path frame bytes".into();
     } else if up.contains("STATE_COUNT") || n == 0x01_0033 {
-        args = "r10=&Name(prefix)".into();
+        args = "r10=&NoritoBytes(StatePath prefix)".into();
         ret = "r10=total:u64".into();
-        gas = "G_state_count + count".into();
+        gas = "G_state_count + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes".into();
     } else if up.contains("STATE_MAP_KEY_AT") || n == 0x01_0034 {
-        args = "r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index:u64".into();
+        args = "r10=&NoritoBytes(Vec<StatePath>), r11=&Name(base), r12=index:u64".into();
         ret = "r10=ptr (&NoritoBytes(canonical key)) or 0".into();
         gas = "G_path + bytes".into();
     } else if up.contains("STATE_VALUE_ENCODE") || n == 0x01_0035 {
@@ -328,6 +329,10 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1)".into();
         ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))".into();
         gas = "G_state_value + schema + record + pointers + output".into();
+    } else if up.contains("STATE_PATH_FROM_NAME") || n == 0x01_0037 {
+        args = "r10=&Name".into();
+        ret = "r10=ptr (&NoritoBytes(StatePath))".into();
+        gas = "G_path + bytes".into();
     } else if up.contains("EXECUTE_QUERY") || n == 0xA1 {
         args = "r10=&Json".into();
         ret = "ptr (r10)".into();
@@ -784,21 +789,29 @@ fn prepare_exact_outputs(
         .collect()
 }
 
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("workspace root")
+        .to_path_buf()
+}
+
 fn main() {
-    let mode = match parse_mode(std::env::args().skip(1)) {
-        Ok(mode) => mode,
+    let options = match parse_generation_options(std::env::args().skip(1), workspace_root()) {
+        Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(2);
         }
     };
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let path = PathBuf::from(manifest_dir).join("docs/syscalls.md");
+    let manifest_dir = options.root.join("crates/ivm");
+    let path = manifest_dir.join("docs/syscalls.md");
     let text = fs::read_to_string(&path).expect("read syscalls.md");
 
     // The explicit spec is the canonical source for ABI signatures and gas
     // documentation. Heuristic defaults are diagnostic suggestions only.
-    let spec_path = PathBuf::from(manifest_dir).join("spec/syscalls.toml");
+    let spec_path = manifest_dir.join("spec/syscalls.toml");
     let spec = fs::read_to_string(&spec_path).expect("read canonical syscall spec");
     let map = parse_syscall_spec(&spec).unwrap_or_else(|error| {
         panic!(
@@ -888,8 +901,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let abi_syscall_golden_path =
-        PathBuf::from(manifest_dir).join("tests/abi_syscall_list_golden.rs");
+    let abi_syscall_golden_path = manifest_dir.join("tests/abi_syscall_list_golden.rs");
     let abi_syscall_golden_text =
         fs::read_to_string(&abi_syscall_golden_path).expect("read ABI syscall-list golden test");
     let abi_syscall_golden_section =
@@ -913,7 +925,7 @@ fn main() {
         }
     };
 
-    let abi_src_dir = PathBuf::from(manifest_dir).join("../ivm_abi/src");
+    let abi_src_dir = options.root.join("crates/ivm_abi/src");
     let code_path = abi_src_dir.join("syscalls_doc_gen.rs");
     let gas_code_path = abi_src_dir.join("gas_spec.rs");
     let regenerate_command = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --write";
@@ -924,7 +936,7 @@ fn main() {
         (abi_syscall_golden_path, rendered_abi_syscall_golden),
     ])
     .unwrap_or_else(|error| panic!("prepare generated syscall outputs: {error}"));
-    let updated = sync_generated_outputs(&outputs, mode, regenerate_command)
+    let updated = sync_generated_outputs(&outputs, options.mode, regenerate_command)
         .unwrap_or_else(|error| panic!("{error}"));
     for output_path in updated {
         eprintln!("updated: {}", output_path.display());
@@ -941,7 +953,7 @@ mod tests {
 
     use super::support::GenerationMode as Mode;
     use super::{
-        ABI_SYSCALL_GOLDEN_BEGIN, ABI_SYSCALL_GOLDEN_END, BEGIN, END, parse_mode,
+        ABI_SYSCALL_GOLDEN_BEGIN, ABI_SYSCALL_GOLDEN_END, BEGIN, END, parse_generation_options,
         parse_syscall_spec, prepare_exact_outputs, render_abi_syscall_golden_section, render_docs,
         replace_generated_section, rewrite_gas_tokens, sync_generated_outputs, validate_gas_prose,
     };
@@ -969,12 +981,31 @@ mod tests {
     }
 
     #[test]
-    fn command_mode_is_explicit_and_unambiguous() {
-        assert_eq!(parse_mode(["--check".to_owned()]), Ok(Mode::Check));
-        assert_eq!(parse_mode(["--write".to_owned()]), Ok(Mode::Write));
-        assert!(parse_mode(Vec::new()).is_err());
-        assert!(parse_mode(["--check".to_owned(), "--write".to_owned()]).is_err());
-        assert!(parse_mode(["--no-code".to_owned()]).is_err());
+    fn command_mode_and_staged_root_are_explicit_and_unambiguous() {
+        let default_root = std::path::PathBuf::from("/workspace");
+        let check =
+            parse_generation_options(["--check".to_owned()], &default_root).expect("check options");
+        assert_eq!(check.mode, Mode::Check);
+        assert_eq!(check.root, default_root);
+
+        let write = parse_generation_options(
+            [
+                "--write".to_owned(),
+                "--root".to_owned(),
+                "/staged/repository".to_owned(),
+            ],
+            "/workspace",
+        )
+        .expect("staged write options");
+        assert_eq!(write.mode, Mode::Write);
+        assert_eq!(write.root, std::path::Path::new("/staged/repository"));
+
+        assert!(parse_generation_options(Vec::new(), "/workspace").is_err());
+        assert!(
+            parse_generation_options(["--check".to_owned(), "--write".to_owned()], "/workspace",)
+                .is_err()
+        );
+        assert!(parse_generation_options(["--no-code".to_owned()], "/workspace").is_err());
     }
 
     fn valid_spec_row(number: &str) -> String {

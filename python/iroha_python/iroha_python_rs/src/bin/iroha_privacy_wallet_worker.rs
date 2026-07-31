@@ -1,5 +1,9 @@
 #![deny(unsafe_code)]
 
+#[path = "../privacy_native_actions.rs"]
+mod privacy_native_actions;
+#[path = "../privacy_wallet_bundle.rs"]
+mod privacy_wallet_bundle;
 #[path = "../privacy_wallet_worker.rs"]
 mod privacy_wallet_worker;
 

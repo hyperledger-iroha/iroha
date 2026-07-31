@@ -19,12 +19,10 @@ import org.hyperledger.iroha.android.testing.TestAccountIds;
 public final class SignedTransactionHasherTests {
 
   private static final Set<String> COMPACT_FIXTURE_KEYS =
-      Set.of(
-          "schema.version",
-          "source.tag",
-          "source.bundle.sha256",
-          "reference",
-          "versioned.bytes",
+        Set.of(
+            "schema.version",
+            "source.fixture",
+            "versioned.bytes",
           "versioned.sha256",
           "bare.bytes",
           "compact.length.hex",
@@ -176,6 +174,8 @@ public final class SignedTransactionHasherTests {
   private static void compactEntrypointGoldenMatchesNativeRust() throws Exception {
     final Path fixturePath = resolveCompactHashFixture();
     final Properties fixture = parseCompactHashFixture(Files.readString(fixturePath));
+    assert fixture.getProperty("schema.version").equals("2");
+    assert fixture.getProperty("source.fixture").equals("transfer_asset");
     final byte[] versioned =
         decodeCanonicalBase64(fixture.getProperty("versioned.base64"), "versioned.base64");
     assert versioned.length == Integer.parseInt(fixture.getProperty("versioned.bytes"));

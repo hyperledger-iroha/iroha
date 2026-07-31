@@ -33,7 +33,7 @@ fn curve_registry_aligns_with_runtime() {
     let registry_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("docs/source/references/address_curve_registry.json");
+        .join("specs/references/address_curve_registry.json");
     let payload = std::fs::read_to_string(&registry_path)
         .unwrap_or_else(|err| panic!("failed to read {registry_path:?}: {err}"));
     let registry: Registry =

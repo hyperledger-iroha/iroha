@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/chunker-registry-charter",
+  "title": "SoraFS Chunker Registry Charter",
+  "description": "Governance charter for chunker profile submissions and approvals.",
+  "source": "@site/docs/sorafs/chunker-registry-charter.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/chunker-registry-charter",
+  "permalink": "/next/sorafs/chunker-registry-charter",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/chunker-registry-charter.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "chunker-registry-charter",
+    "title": "SoraFS Chunker Registry Charter",
+    "sidebar_label": "Chunker Registry Charter",
+    "description": "Governance charter for chunker profile submissions and approvals."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Chunker Registry",
+    "permalink": "/next/sorafs/chunker-registry"
+  },
+  "next": {
+    "title": "Chunker Authoring Guide",
+    "permalink": "/next/sorafs/chunker-profile-authoring"
+  }
+}

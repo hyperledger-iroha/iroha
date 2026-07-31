@@ -1,0 +1,15 @@
+{
+  "id": "norito/examples/register-and-mint",
+  "title": "register-and-mint",
+  "description": "---",
+  "source": "@site/docs/norito/examples/register-and-mint.md",
+  "sourceDirName": "norito/examples",
+  "slug": "/norito/examples/register-and-mint",
+  "permalink": "/next/norito/examples/register-and-mint",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/norito/examples/register-and-mint.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

@@ -1,4 +1,5 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { chacha20orig } from "@noble/ciphers/chacha";
 
 import {
@@ -53,12 +54,20 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
+import {
+  NODE_CAPABILITIES_JSON_MAX_BYTES,
+  ToriiDataModelMismatchError,
+  ensureNodeDataModelCompatibility,
+  normalizeNodeCapabilitiesResponse,
+} from "./toriiCompatibility.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   buildCanonicalRequestHeaders,
   requireCanonicalAuthAccount,
 } from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
+import { decodeCanonicalVerifyingKeyTransactionPayload } from "./transactionCodec.js";
 import {
   KotodamaQuantity,
   NumericV1,
@@ -152,7 +161,7 @@ const IVM_PROOF_REQUEST_MAX_BYTES = 8 * 1024 * 1024;
 const IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES = 16 * 1024;
 const IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES = 32 * 1024 * 1024;
 const IVM_PROOF_MAX_BYTES = 8 * 1024 * 1024;
-const NODE_CAPABILITIES_JSON_MAX_BYTES = 1024 * 1024;
+const VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES = 16 * 1024 * 1024;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
 const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
@@ -165,7 +174,6 @@ const SORAFS_BILLING_STATEMENT_MAX_BYTES = 22 * 1024 * 1024;
 const BOUNDED_JSON_MAX_STREAM_CHUNKS = 64 * 1024;
 const JSON_CLONE_MAX_DEPTH = 128;
 const JSON_CLONE_MAX_NODES = 100_000;
-const SUMERAGI_TYPED_JSON_MAX_NODES = 2_000_000;
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const typedArrayBufferGetter = objectGetOwnPropertyDescriptor(
   typedArrayPrototype,
@@ -293,7 +301,6 @@ const SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME =
   "iroha_sccp::TairaSccpMessageProofV1";
 const SCCP_PROOF_REQUEST_NORITO_TYPE_NAME =
   "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
-const EXPECTED_DATA_MODEL_VERSION = 4;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -681,231 +688,6 @@ function copyArrayBufferBytes(buffer, byteOffset, byteLength) {
 
 function isExactJsonMediaType(value) {
   return typeof value === "string" && EXACT_JSON_MEDIA_TYPE_PATTERN.test(value);
-}
-
-/**
- * Parse the integer-only JSON profile emitted by typed Torii endpoints.
- *
- * Native `JSON.parse` rounds integer tokens beyond `Number.MAX_SAFE_INTEGER`.
- * This parser preserves those tokens as `bigint`, rejects duplicate object
- * keys, and accepts no non-canonical numeric spelling. Sumeragi JSON has no
- * floating-point fields; decimal protocol values are encoded as strings.
- */
-function parseLosslessIntegerJson(text, context) {
-  if (typeof text !== "string") {
-    throw new TypeError(`${context} JSON source must be a string`);
-  }
-  let index = 0;
-  let nodes = 0;
-
-  const fail = (message, ErrorType = TypeError) => {
-    throw new ErrorType(`${context} contains invalid JSON at character ${index}: ${message}`);
-  };
-  const consumeNode = (depth) => {
-    nodes += 1;
-    if (nodes > SUMERAGI_TYPED_JSON_MAX_NODES) {
-      fail(
-        `value exceeds the ${SUMERAGI_TYPED_JSON_MAX_NODES}-node limit`,
-        RangeError,
-      );
-    }
-    if (depth > JSON_CLONE_MAX_DEPTH) {
-      fail(`value exceeds the ${JSON_CLONE_MAX_DEPTH}-level nesting limit`, RangeError);
-    }
-  };
-  const skipWhitespace = () => {
-    while (
-      index < text.length &&
-      (
-        text[index] === " " ||
-        text[index] === "\t" ||
-        text[index] === "\n" ||
-        text[index] === "\r"
-      )
-    ) {
-      index += 1;
-    }
-  };
-  const parseString = () => {
-    if (text[index] !== "\"") fail("expected a string");
-    index += 1;
-    let result = "";
-    while (index < text.length) {
-      const character = text[index];
-      if (character === "\"") {
-        index += 1;
-        return result;
-      }
-      if (character === "\\") {
-        index += 1;
-        if (index >= text.length) fail("unterminated string escape");
-        const escaped = text[index];
-        index += 1;
-        switch (escaped) {
-          case "\"":
-          case "\\":
-          case "/":
-            result += escaped;
-            break;
-          case "b":
-            result += "\b";
-            break;
-          case "f":
-            result += "\f";
-            break;
-          case "n":
-            result += "\n";
-            break;
-          case "r":
-            result += "\r";
-            break;
-          case "t":
-            result += "\t";
-            break;
-          case "u": {
-            const hex = text.slice(index, index + 4);
-            if (!/^[0-9A-Fa-f]{4}$/u.test(hex)) {
-              fail("invalid Unicode escape");
-            }
-            result += String.fromCharCode(Number.parseInt(hex, 16));
-            index += 4;
-            break;
-          }
-          default:
-            fail("invalid string escape");
-        }
-        continue;
-      }
-      if (text.charCodeAt(index) <= 0x1f) {
-        fail("unescaped control character in string");
-      }
-      result += character;
-      index += 1;
-    }
-    fail("unterminated string");
-  };
-  const parseInteger = () => {
-    const start = index;
-    if (text[index] === "-") {
-      index += 1;
-    }
-    if (index >= text.length) fail("incomplete number");
-    if (text[index] === "0") {
-      index += 1;
-      if (index < text.length && /[0-9]/u.test(text[index])) {
-        fail("integer tokens must not contain leading zeroes");
-      }
-    } else if (/[1-9]/u.test(text[index])) {
-      do {
-        index += 1;
-      } while (index < text.length && /[0-9]/u.test(text[index]));
-    } else {
-      fail("invalid integer token");
-    }
-    if (index < text.length && /[.eE]/u.test(text[index])) {
-      fail("numeric tokens must be canonical integers");
-    }
-    const token = text.slice(start, index);
-    let integer;
-    try {
-      integer = BigInt(token);
-    } catch {
-      fail("invalid integer token");
-    }
-    if (
-      integer >= BigInt(Number.MIN_SAFE_INTEGER) &&
-      integer <= BigInt(Number.MAX_SAFE_INTEGER)
-    ) {
-      return token === "-0" ? -0 : Number(integer);
-    }
-    return integer;
-  };
-  const parseValue = (depth) => {
-    consumeNode(depth);
-    skipWhitespace();
-    if (index >= text.length) fail("unexpected end of input");
-    switch (text[index]) {
-      case "{": {
-        index += 1;
-        const record = Object.create(null);
-        const keys = new Set();
-        skipWhitespace();
-        if (text[index] === "}") {
-          index += 1;
-          return record;
-        }
-        while (true) {
-          skipWhitespace();
-          const key = parseString();
-          if (keys.has(key)) {
-            fail(`duplicate object key ${JSON.stringify(key)}`);
-          }
-          keys.add(key);
-          skipWhitespace();
-          if (text[index] !== ":") fail("expected ':' after object key");
-          index += 1;
-          const value = parseValue(depth + 1);
-          Object.defineProperty(record, key, {
-            value,
-            enumerable: true,
-            writable: true,
-            configurable: true,
-          });
-          skipWhitespace();
-          if (text[index] === "}") {
-            index += 1;
-            return record;
-          }
-          if (text[index] !== ",") fail("expected ',' or '}' in object");
-          index += 1;
-        }
-      }
-      case "[": {
-        index += 1;
-        const values = [];
-        skipWhitespace();
-        if (text[index] === "]") {
-          index += 1;
-          return values;
-        }
-        while (true) {
-          values.push(parseValue(depth + 1));
-          skipWhitespace();
-          if (text[index] === "]") {
-            index += 1;
-            return values;
-          }
-          if (text[index] !== ",") fail("expected ',' or ']' in array");
-          index += 1;
-        }
-      }
-      case "\"":
-        return parseString();
-      case "t":
-        if (text.slice(index, index + 4) !== "true") fail("invalid literal");
-        index += 4;
-        return true;
-      case "f":
-        if (text.slice(index, index + 5) !== "false") fail("invalid literal");
-        index += 5;
-        return false;
-      case "n":
-        if (text.slice(index, index + 4) !== "null") fail("invalid literal");
-        index += 4;
-        return null;
-      default:
-        if (text[index] === "-" || /[0-9]/u.test(text[index])) {
-          return parseInteger();
-        }
-        fail("unexpected token");
-    }
-  };
-
-  skipWhitespace();
-  const parsed = parseValue(0);
-  skipWhitespace();
-  if (index !== text.length) fail("trailing input");
-  return parsed;
 }
 
 const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
@@ -1457,18 +1239,7 @@ export class IsoMessageTimeoutError extends Error {
   }
 }
 
-export class ToriiDataModelMismatchError extends Error {
-  constructor(expected, actual, cause) {
-    const actualLabel = actual == null ? "missing" : String(actual);
-    super(`Torii data model version mismatch (expected ${expected}, got ${actualLabel}).`);
-    this.name = "ToriiDataModelMismatchError";
-    this.expected = expected;
-    this.actual = actual ?? null;
-    if (cause !== undefined) {
-      this.cause = cause;
-    }
-  }
-}
+export { ToriiDataModelMismatchError };
 
 export class ToriiHttpError extends Error {
   constructor({
@@ -1762,10 +1533,11 @@ function sortJsonForErrorMessage(value) {
 }
 
 /**
- * Minimal Torii HTTP client mirroring the Python helper.
+ * Torii HTTP client for typed queries, transaction submission, status
+ * inspection, event streams, attachments, and prover reports.
  *
- * Provides attachment and prover-report utilities needed by Python
- * developers; more endpoints will be added as the broader JS SDK grows.
+ * Request and response validation follows the canonical Norito-backed data
+ * model exposed by this package.
  */
 
 /**
@@ -1818,6 +1590,30 @@ function sortJsonForErrorMessage(value) {
  * @typedef {PaginationIteratorOptions & { assetId?: string; }} AccountTransactionIteratorOptions
  * @typedef {PaginationIteratorOptions & { assetId?: string; }} AssetHolderIteratorOptions
  *
+ * Immutable local context used to validate server-prepared drafts before
+ * exposing them to a signer.
+ */
+export class LocalSigningContext {
+  #chainId;
+
+  /**
+   * @param {string} chainId Exact chain identifier expected in every draft.
+   */
+  constructor(chainId) {
+    this.#chainId = normalizeVerifyingKeySigningChainId(
+      chainId,
+      "LocalSigningContext.chainId",
+    );
+    Object.freeze(this);
+  }
+
+  /** @returns {string} */
+  get chainId() {
+    return this.#chainId;
+  }
+}
+
+/**
  * @template [T=unknown]
  * @typedef {Object} SseEvent
  * @property {string | null} event
@@ -1842,6 +1638,7 @@ export class ToriiClient {
  * @param {Record<string, string>} [options.defaultHeaders]
  * @param {string} [options.authToken]
  * @param {string} [options.apiToken]
+ * @param {LocalSigningContext} [options.localSigningContext] Immutable context required by local-signing APIs.
  * @param {typeof sorafsGatewayFetch} [options.sorafsGatewayFetch] Custom gateway fetch hook (tests).
  * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
  * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
@@ -1856,6 +1653,31 @@ export class ToriiClient {
       options === undefined || options === null
         ? {}
         : requirePlainObjectOption(options, "ToriiClient options");
+    if (Object.prototype.hasOwnProperty.call(opts, "chainId")) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "ToriiClient options.chainId is not supported; use a LocalSigningContext",
+        "ToriiClient.options.chainId",
+      );
+    }
+    const localSigningContext = opts.localSigningContext;
+    if (
+      localSigningContext !== undefined &&
+      !(localSigningContext instanceof LocalSigningContext)
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "ToriiClient options.localSigningContext must be a LocalSigningContext",
+        "ToriiClient.options.localSigningContext",
+      );
+    }
+    Object.defineProperty(this, "_localSigningContext", {
+      value:
+        localSigningContext === undefined ? null : localSigningContext,
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
     this._baseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
     this._fetch = opts.fetchImpl ?? opts.fetch ?? globalThis.fetch;
     if (typeof this._fetch !== "function") {
@@ -1914,6 +1736,7 @@ export class ToriiClient {
     delete overrides.sorafsGatewayFetch;
     delete overrides.generateDaProofSummary;
     delete overrides.__nativeBinding;
+    delete overrides.localSigningContext;
     this._config = resolveToriiClientConfig({
       config: opts.config,
       overrides,
@@ -3159,13 +2982,19 @@ export class ToriiClient {
   }
 
   /**
-   * Submit a verifying key registration request (`POST /v1/zk/vk/register`).
+   * Prepare a verifying key registration transaction for local signing
+   * (`POST /v1/zk/vk/register`).
    * @param {ToriiVerifyingKeyRegisterPayload} payload
    * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<void>}
+   * @returns {Promise<ToriiVerifyingKeyTransactionDraft>}
    */
   async registerVerifyingKey(payload, options = {}) {
-    const body = JSON.stringify(normalizeVerifyingKeyRegisterPayload(payload));
+    const normalizedPayload = normalizeVerifyingKeyRegisterPayload(payload);
+    const signingContext = requireVerifyingKeySigningContext(
+      this._localSigningContext,
+      "registerVerifyingKey",
+    );
+    const body = JSON.stringify(normalizedPayload);
     const { signal } = normalizeSignalOnlyOption(
       options,
       "registerVerifyingKey",
@@ -3175,24 +3004,48 @@ export class ToriiClient {
       body,
       signal,
     });
-    await this._expectStatus(response, [202]);
+    await this._expectStatus(response, [200]);
+    return normalizeVerifyingKeyTransactionDraft(
+      await this._maybeJson(response),
+      "registerVerifyingKey response",
+      {
+        chainId: signingContext.chainId,
+        operation: "register",
+        request: normalizedPayload,
+      },
+    );
   }
 
   /**
-   * Submit a verifying key update request (`POST /v1/zk/vk/update`).
+   * Prepare a verifying key update transaction for local signing
+   * (`POST /v1/zk/vk/update`).
    * @param {ToriiVerifyingKeyUpdatePayload} payload
    * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<void>}
+   * @returns {Promise<ToriiVerifyingKeyTransactionDraft>}
    */
   async updateVerifyingKey(payload, options = {}) {
-    const body = JSON.stringify(normalizeVerifyingKeyUpdatePayload(payload));
+    const normalizedPayload = normalizeVerifyingKeyUpdatePayload(payload);
+    const signingContext = requireVerifyingKeySigningContext(
+      this._localSigningContext,
+      "updateVerifyingKey",
+    );
+    const body = JSON.stringify(normalizedPayload);
     const { signal } = normalizeSignalOnlyOption(options, "updateVerifyingKey");
     const response = await this._request("POST", "/v1/zk/vk/update", {
       headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
-    await this._expectStatus(response, [202]);
+    await this._expectStatus(response, [200]);
+    return normalizeVerifyingKeyTransactionDraft(
+      await this._maybeJson(response),
+      "updateVerifyingKey response",
+      {
+        chainId: signingContext.chainId,
+        operation: "update",
+        request: normalizedPayload,
+      },
+    );
   }
 
   /**
@@ -5645,7 +5498,7 @@ export class ToriiClient {
   /**
    * Publish (or rotate) a Space Directory manifest (`POST /v1/space-directory/manifests`).
    * @param {PublishSpaceDirectoryManifestRequest} request
-   * @returns {Promise<unknown | null>}
+   * @returns {Promise<AppApiTransactionDraft>}
    */
   async publishSpaceDirectoryManifest(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(
@@ -5658,14 +5511,17 @@ export class ToriiClient {
       body: JSON.stringify(payload),
       signal,
     });
-    await this._expectStatus(response, [202]);
-    return this._maybeJson(response);
+    await this._expectStatus(response, [200]);
+    return normalizeAppApiTransactionDraft(
+      await this._maybeJson(response),
+      "publishSpaceDirectoryManifest response",
+    );
   }
 
   /**
    * Revoke an active Space Directory manifest (`POST /v1/space-directory/manifests/revoke`).
    * @param {RevokeSpaceDirectoryManifestRequest} request
-   * @returns {Promise<unknown | null>}
+   * @returns {Promise<AppApiTransactionDraft>}
    */
   async revokeSpaceDirectoryManifest(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(
@@ -5682,8 +5538,11 @@ export class ToriiClient {
         signal,
       },
     );
-    await this._expectStatus(response, [202]);
-    return this._maybeJson(response);
+    await this._expectStatus(response, [200]);
+    return normalizeAppApiTransactionDraft(
+      await this._maybeJson(response),
+      "revokeSpaceDirectoryManifest response",
+    );
   }
 
   /**
@@ -5883,45 +5742,7 @@ export class ToriiClient {
   }
 
   async _ensureDataModelValidation() {
-    const expected = EXPECTED_DATA_MODEL_VERSION;
-    if (this._dataModelValidation.status === "matched") {
-      return;
-    }
-    if (this._dataModelValidation.status === "mismatched") {
-      throw new ToriiDataModelMismatchError(expected, this._dataModelValidation.actual);
-    }
-    if (this._dataModelValidationPromise) {
-      return this._dataModelValidationPromise;
-    }
-    const promise = (async () => {
-      let capabilities;
-      try {
-        capabilities = await this.getNodeCapabilities();
-      } catch (error) {
-        if (error instanceof ValidationError) {
-          this._dataModelValidation = { status: "mismatched", actual: null };
-          throw new ToriiDataModelMismatchError(expected, null, error);
-        }
-        throw error;
-      }
-      const actual = capabilities.dataModelVersion;
-      if (actual !== expected) {
-        this._dataModelValidation = { status: "mismatched", actual };
-        throw new ToriiDataModelMismatchError(expected, actual);
-      }
-      this._dataModelValidation = { status: "matched", actual };
-    })();
-    this._dataModelValidationPromise = promise;
-    promise
-      .finally(() => {
-        if (this._dataModelValidationPromise === promise) {
-          this._dataModelValidationPromise = null;
-        }
-      })
-      .catch(() => {
-        // Avoid unhandled rejections from the cleanup chain.
-      });
-    return promise;
+    return ensureNodeDataModelCompatibility(this, () => this.getNodeCapabilities());
   }
 
   /**
@@ -8990,7 +8811,7 @@ export class ToriiClient {
   /**
    * Bind, update, or clear a contract alias (`POST /v1/contracts/aliases`).
    * @param {SetContractAliasRequest} request
-   * @returns {Promise<SetContractAliasResponse | null>}
+   * @returns {Promise<SetContractAliasResponse>}
    */
   async setContractAlias(request = {}) {
     const payload = normalizeSetContractAliasRequest(request);
@@ -8998,31 +8819,31 @@ export class ToriiClient {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
     });
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    return body ? normalizeSetContractAliasResponse(body) : null;
+    await this._expectStatus(response, [200]);
+    return normalizeSetContractAliasResponse(await this._maybeJson(response));
   }
 
   /**
-   * Invoke a deployed contract instance (`POST /v1/contracts/call`).
+   * Prepare an unsigned contract-call transaction for local signing
+   * (`POST /v1/contracts/call`).
    * @param {ContractCallRequest} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ContractCallResponse>}
   */
-  async callContract(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "callContract");
+  async prepareContractCall(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "prepareContractCall");
     const payload = normalizeContractCallRequest(request);
     const response = await this._request("POST", "/v1/contracts/call", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
-    await this._expectStatus(response, [200, 202]);
+    await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
       throw new Error("contract call endpoint returned no payload");
     }
-    return normalizeContractCallResponse(body);
+    return normalizeContractCallDraftResponse(body, payload);
   }
 
   /**
@@ -9735,12 +9556,12 @@ export class ToriiClient {
       body: JSON.stringify(payload),
       signal,
     });
-    await this._expectStatus(response, [200, 202]);
+    await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
       throw new Error("subscription plan create endpoint returned no payload");
     }
-    return normalizeSubscriptionPlanCreateResponse(body);
+    return normalizeSubscriptionPlanCreateResponse(body, payload.plan_id);
   }
 
   /**
@@ -9982,12 +9803,16 @@ export class ToriiClient {
         signal,
       },
     );
-    await this._expectStatus(response, [200, 202]);
+    await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
     if (!body) {
       throw new Error("subscription usage endpoint returned no payload");
     }
-    return normalizeSubscriptionActionResponse(body, "recordSubscriptionUsage response");
+    return normalizeSubscriptionUsageDraft(
+      body,
+      normalizedId,
+      "recordSubscriptionUsage response",
+    );
   }
 
   /**
@@ -11542,7 +11367,7 @@ export class ToriiClient {
       throw new TypeError(`${context} must be valid UTF-8`, { cause: error });
     }
     try {
-      const parsed = parseLosslessIntegerJson(text, context);
+      const parsed = parseStrictLosslessIntegerJson(text, context);
       if (signalIsAborted(signal)) {
         cancelReadableBodyBestEffort(body, `${context} was aborted`);
         throw bodyReadAbortError(signal, context);
@@ -14651,41 +14476,18 @@ function parseLanePrivacyCommitment(entry, context) {
   const id = coerceNestedInt(record, "id", context);
   const scheme =
     record.scheme === undefined || record.scheme === null ? "" : String(record.scheme);
-  if (scheme !== "merkle" && scheme !== "snark") {
-    throw new TypeError(`${context}.scheme must be "merkle" or "snark"`);
+  if (scheme !== "merkle") {
+    throw new TypeError(`${context}.scheme must be "merkle"`);
   }
-  let merkle = null;
-  if (scheme === "merkle") {
-    const merkleRecord = ensureRecord(record.merkle, `${context}.merkle`);
-    merkle = {
-      root:
-        merkleRecord.root === undefined || merkleRecord.root === null
-          ? ""
-          : String(merkleRecord.root),
-      max_depth: coerceNestedInt(merkleRecord, "max_depth", `${context}.merkle`),
-    };
-  }
-  let snark = null;
-  if (scheme === "snark") {
-    const snarkRecord = ensureRecord(record.snark, `${context}.snark`);
-    snark = {
-      circuit_id: coerceNestedInt(snarkRecord, "circuit_id", `${context}.snark`),
-      verifying_key_digest:
-        snarkRecord.verifying_key_digest === undefined ||
-        snarkRecord.verifying_key_digest === null
-          ? ""
-          : String(snarkRecord.verifying_key_digest),
-      statement_hash:
-        snarkRecord.statement_hash === undefined || snarkRecord.statement_hash === null
-          ? ""
-          : String(snarkRecord.statement_hash),
-      proof_hash:
-        snarkRecord.proof_hash === undefined || snarkRecord.proof_hash === null
-          ? ""
-          : String(snarkRecord.proof_hash),
-    };
-  }
-  return { id, scheme, merkle, snark };
+  const merkleRecord = ensureRecord(record.merkle, `${context}.merkle`);
+  const merkle = {
+    root:
+      merkleRecord.root === undefined || merkleRecord.root === null
+        ? ""
+        : String(merkleRecord.root),
+    max_depth: coerceNestedInt(merkleRecord, "max_depth", `${context}.merkle`),
+  };
+  return { id, scheme, merkle };
 }
 
 function parseSumeragiNexusFeeSchedule(value, context) {
@@ -14977,6 +14779,10 @@ const SUMERAGI_NATIVE_PROPOSAL_PREIMAGE_TYPE =
   "iroha_data_model::block::consensus::LaneBlockProposalPreimage";
 const SUMERAGI_NATIVE_SETTLEMENT_TYPE =
   "iroha_data_model::block::consensus::LaneBlockCommitment";
+const SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN = Buffer.from(
+  "iroha.nexus.lane-relay.settlement.v1",
+  "utf8",
+);
 
 function parseSumeragiBlsNormalPeerId(value, context) {
   if (typeof value !== "string") {
@@ -15247,9 +15053,16 @@ function computeSumeragiNativeParticipantSettlementHash(settlement) {
     encodeNoritoVec([], (value) => value, true),
     encodeNoritoVec([], (value) => value, true),
   ]);
-  return formatSumeragiNativeHash(
-    frameNoritoPayload(SUMERAGI_NATIVE_SETTLEMENT_TYPE, payload, 2),
+  const framedSettlement = frameNoritoPayload(
+    SUMERAGI_NATIVE_SETTLEMENT_TYPE,
+    payload,
+    2,
   );
+  return formatSumeragiNativeHash(Buffer.concat([
+    u64ToLittleEndianBuffer(SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN.length),
+    SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN,
+    framedSettlement,
+  ]));
 }
 
 export const __sumeragiNativeAmxTestHelpers = objectFreeze({
@@ -19324,77 +19137,6 @@ function normalizeProtectedNamespacesGetResponse(payload) {
   };
 }
 
-function normalizeNodeCapabilitiesResponse(payload) {
-  const record = ensureRecord(payload, "node capabilities response");
-  const cryptoRecord = ensureRecord(record.crypto ?? {}, "node capabilities response.crypto");
-  const curvesRecord = cryptoRecord.curves ?? {};
-  return {
-    abiVersion: ToriiClient._normalizeUnsignedInteger(
-      record.abi_version,
-      "node capabilities response.abi_version",
-      { allowZero: false },
-    ),
-    dataModelVersion: ToriiClient._normalizeUnsignedInteger(
-      record.data_model_version,
-      "node capabilities response.data_model_version",
-      { allowZero: false },
-    ),
-    crypto: {
-      sm: normalizeNodeSmCapabilities(cryptoRecord.sm, "node capabilities response.crypto.sm"),
-      curves: normalizeNodeCurveCapabilities(
-        curvesRecord,
-        "node capabilities response.crypto.curves",
-      ),
-    },
-  };
-}
-
-function normalizeNodeSmCapabilities(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  return {
-    enabled: coerceBoolean(record.enabled, `${context}.enabled`),
-    defaultHash: optionalString(record.default_hash, `${context}.default_hash`),
-    allowedSigning: parseStringArray(
-      record.allowed_signing,
-      `${context}.allowed_signing`,
-    ),
-    sm2DistIdDefault: optionalString(
-      record.sm2_distid_default,
-      `${context}.sm2_distid_default`,
-    ),
-    opensslPreview: coerceBoolean(record.openssl_preview ?? false, `${context}.openssl_preview`),
-    acceleration: normalizeNodeSmAcceleration(record.acceleration, `${context}.acceleration`),
-  };
-}
-
-function normalizeNodeSmAcceleration(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  return {
-    scalar: coerceBoolean(record.scalar ?? true, `${context}.scalar`),
-    neonSm3: coerceBoolean(record.neon_sm3 ?? false, `${context}.neon_sm3`),
-    neonSm4: coerceBoolean(record.neon_sm4 ?? false, `${context}.neon_sm4`),
-    policy: requireNonEmptyString(record.policy ?? "", `${context}.policy`),
-  };
-}
-
-function normalizeNodeCurveCapabilities(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const rawVersion = record.registry_version;
-  const registryVersion =
-    rawVersion === undefined || rawVersion === null
-      ? 1
-      : ToriiClient._normalizeUnsignedInteger(rawVersion, `${context}.registry_version`, {
-          allowZero: false,
-        });
-  const allowedRaw = record.allowed_curve_ids ?? [];
-  const bitmapRaw = record.allowed_curve_bitmap ?? [];
-  return {
-    registryVersion,
-    allowedCurveIds: parseIntegerArray(allowedRaw, `${context}.allowed_curve_ids`),
-    allowedCurveBitmap: parseIntegerArray(bitmapRaw, `${context}.allowed_curve_bitmap`),
-  };
-}
-
 function normalizeConfigurationSnapshot(payload) {
   const record = ensureRecord(payload, "configuration response");
   const publicKeyHex = requireNonEmptyString(
@@ -22631,6 +22373,21 @@ function normalizeAuthorityCredentials(source, context) {
   };
 }
 
+function rejectPrivateKeyFields(record, context) {
+  rejectVerifyingKeyPrivateKeyFields(record, context);
+}
+
+function normalizeSecretFreeAuthority(source, context) {
+  const record = ensureRecord(source, context);
+  rejectPrivateKeyFields(record, context);
+  return {
+    authority: ToriiClient._normalizeAccountId(
+      record.authority,
+      `${context}.authority`,
+    ),
+  };
+}
+
 function resolveAuthorityPrivateKey(record, context) {
   const direct = pickOverride(record, "private_key", "privateKey");
   if (direct !== undefined && direct !== null) {
@@ -23830,8 +23587,21 @@ function normalizeManifestTriggersPayload(value, context) {
     const record = ensureRecord(trigger, `${context}[${index}]`);
     const callback = ensureRecord(record.callback, `${context}[${index}].callback`);
     const metadata = ensureRecord(record.metadata ?? {}, `${context}[${index}].metadata`);
+    const id = requireCanonicalKotodamaIdentifier(
+      record.id,
+      `${context}[${index}].id`,
+      { declaration: true },
+    );
+    const namespace =
+      callback.namespace === undefined || callback.namespace === null
+        ? null
+        : requireCanonicalKotodamaIdentifier(
+            callback.namespace,
+            `${context}[${index}].callback.namespace`,
+            { typeDeclaration: true },
+          );
     return {
-      id: requireExactNonEmptyString(record.id, `${context}[${index}].id`),
+      id,
       repeats: normalizeManifestRepeatsPayload(
         record.repeats,
         `${context}[${index}].repeats`,
@@ -23846,10 +23616,7 @@ function normalizeManifestTriggersPayload(value, context) {
           : normalizeAccountId(record.authority, `${context}[${index}].authority`),
       metadata: cloneJsonValue(metadata, `${context}[${index}].metadata`),
       callback: {
-        namespace: normalizeOptionalManifestString(
-          callback.namespace,
-          `${context}[${index}].callback.namespace`,
-        ),
+        namespace,
         entrypoint: requireCanonicalKotodamaEntrypoint(
           callback.entrypoint,
           `${context}[${index}].callback.entrypoint`,
@@ -24526,7 +24293,7 @@ function normalizePublishSpaceDirectoryManifestRequest(input) {
   if (record.manifest === undefined || record.manifest === null) {
     throw new TypeError("publishSpaceDirectoryManifest.manifest is required");
   }
-  const credentials = normalizeAuthorityCredentials(
+  const credentials = normalizeSecretFreeAuthority(
     record,
     "publishSpaceDirectoryManifest",
   );
@@ -24550,7 +24317,7 @@ function normalizePublishSpaceDirectoryManifestRequest(input) {
 
 function normalizeRevokeSpaceDirectoryManifestRequest(input) {
   const record = ensureRecord(input, "revokeSpaceDirectoryManifest request");
-  const credentials = normalizeAuthorityCredentials(
+  const credentials = normalizeSecretFreeAuthority(
     record,
     "revokeSpaceDirectoryManifest",
   );
@@ -24586,7 +24353,7 @@ function normalizeRevokeSpaceDirectoryManifestRequest(input) {
 
 function normalizeSetContractAliasRequest(input) {
   const record = ensureRecord(input, "setContractAlias request");
-  const credentials = normalizeAuthorityCredentials(record, "setContractAlias");
+  const credentials = normalizeSecretFreeAuthority(record, "setContractAlias");
   const contractAddress = record.contract_address ?? record.contractAddress;
   const payload = {
     ...credentials,
@@ -24630,8 +24397,13 @@ function normalizeSetContractAliasRequest(input) {
 
 function normalizeSetContractAliasResponse(payload) {
   const record = ensureRecord(payload, "setContractAlias response");
+  const draft = normalizeAppApiTransactionDraft(
+    record,
+    "setContractAlias response",
+    ["contract_alias", "contract_address", "dataspace"],
+  );
   return {
-    ok: Boolean(record.ok),
+    ...draft,
     contract_alias:
       record.contract_alias === undefined || record.contract_alias === null
         ? null
@@ -24647,17 +24419,58 @@ function normalizeSetContractAliasResponse(payload) {
       record.dataspace,
       "setContractAlias.response.dataspace",
     ),
-    tx_hash_hex:
-      record.tx_hash_hex === undefined || record.tx_hash_hex === null
-        ? null
-        : normalizeHex32String(
-            record.tx_hash_hex,
-            "setContractAlias.response.tx_hash_hex",
-          ),
-    status: requireNonEmptyString(
-      record.status,
-      "setContractAlias.response.status",
-    ),
+  };
+}
+
+function normalizeAppApiTransactionDraft(
+  input,
+  context,
+  additionalFields = [],
+) {
+  const record = ensureRecord(input, context);
+  assertSupportedOptionKeys(
+    record,
+    new Set([
+      "submitted",
+      "transaction_payload_b64",
+      "signing_message_b64",
+      ...additionalFields,
+    ]),
+    context,
+  );
+  if (requireExactBoolean(record.submitted, `${context}.submitted`) !== false) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.submitted must be false`,
+      `${context}.submitted`,
+    );
+  }
+  const transactionPayloadB64 = record.transaction_payload_b64;
+  const transactionPayload = decodeVerifyingKeyDraftBase64(
+    transactionPayloadB64,
+    `${context}.transaction_payload_b64`,
+    {
+      maxBytes: VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES,
+      limitLabel: "transaction payload",
+    },
+  );
+  const signingMessageB64 = record.signing_message_b64;
+  const signingMessage = decodeVerifyingKeyDraftBase64(
+    signingMessageB64,
+    `${context}.signing_message_b64`,
+    { exactBytes: 32 },
+  );
+  if (!timingSafeEqual(signingMessage, irohaPrehash(transactionPayload))) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.signing_message_b64 must equal the canonical Iroha HashOf(transaction_payload_b64)`,
+      `${context}.signing_message_b64`,
+    );
+  }
+  return {
+    submitted: false,
+    transaction_payload_b64: transactionPayloadB64,
+    signing_message_b64: signingMessageB64,
   };
 }
 
@@ -25440,6 +25253,7 @@ function normalizeContractTargetSelector(record, context) {
 
 function normalizeContractCallRequest(input) {
   const record = ensureRecord(input, "contractCall request");
+  rejectPrivateKeyFields(record, "contractCall");
   rejectRetiredFeeSelectionFields(record, "contractCall request", {
     allowGasLimit: false,
   });
@@ -25450,14 +25264,6 @@ function normalizeContractCallRequest(input) {
     ),
     ...normalizeContractTargetSelector(record, "contractCall"),
   };
-  const hasPrivateKey =
-    pickOverride(record, "private_key", "privateKey") !== undefined ||
-    pickOverride(record, "private_key_multihash", "privateKeyMultihash") !== undefined ||
-    pickOverride(record, "private_key_hex", "privateKeyHex") !== undefined ||
-    pickOverride(record, "private_key_bytes", "privateKeyBytes") !== undefined;
-  if (hasPrivateKey) {
-    normalized.private_key = resolveAuthorityPrivateKey(record, "contractCall");
-  }
   normalized.entrypoint = requireNonEmptyString(
     record.entrypoint,
     "contractCall.entrypoint",
@@ -25682,6 +25488,51 @@ function normalizeContractCallResponse(payload) {
     "contractCall response.operation_receipt",
   );
   return normalized;
+}
+
+function normalizeContractCallDraftResponse(payload, request) {
+  const response = normalizeContractCallResponse(payload);
+  const receipt = response.operation_receipt;
+  if (!response.ok || response.submitted) {
+    throw new TypeError("contractCall draft must be successful and not submitted");
+  }
+  if (response.tx_hash_hex !== null || response.pipeline_status != null) {
+    throw new TypeError("contractCall draft must not contain submission state");
+  }
+  if (
+    response.transaction_scaffold_b64 === null ||
+    response.transaction_scaffold_b64 !== response.signed_transaction_b64
+  ) {
+    throw new TypeError("contractCall draft must contain one exact transaction scaffold");
+  }
+  decodeVerifyingKeyDraftBase64(
+    response.signing_message_b64,
+    "contractCall response.signing_message_b64",
+    { exactBytes: 32 },
+  );
+  if (
+    response.entrypoint !== request.entrypoint ||
+    receipt.operation_kind !== "contract_call" ||
+    receipt.status !== "pending_signature" ||
+    receipt.entrypoint !== request.entrypoint ||
+    receipt.tx_hash_hex !== null
+  ) {
+    throw new TypeError("contractCall draft is not bound to the requested entrypoint");
+  }
+  if (
+    request.contract_address !== undefined &&
+    (response.contract_address !== request.contract_address ||
+      receipt.contract_address !== request.contract_address)
+  ) {
+    throw new TypeError("contractCall draft is not bound to the requested address");
+  }
+  if (
+    request.contract_alias !== undefined &&
+    receipt.contract_alias !== request.contract_alias
+  ) {
+    throw new TypeError("contractCall draft is not bound to the requested alias");
+  }
+  return response;
 }
 
 function normalizeContractCallSimulateRequest(input) {
@@ -26267,22 +26118,6 @@ function normalizeAccountPathLiteral(value, context) {
   return normalizeAccountId(literal, context);
 }
 
-function hasDetachedPrivateKeyInput(record) {
-  return (
-    pickOverride(record, "private_key", "privateKey") !== undefined ||
-    pickOverride(record, "private_key_multihash", "privateKeyMultihash") !== undefined ||
-    pickOverride(record, "private_key_hex", "privateKeyHex") !== undefined ||
-    pickOverride(record, "private_key_bytes", "privateKeyBytes") !== undefined
-  );
-}
-
-function normalizeOptionalDetachedPrivateKey(record, context) {
-  if (!hasDetachedPrivateKeyInput(record)) {
-    return null;
-  }
-  return resolveAuthorityPrivateKey(record, context);
-}
-
 function normalizeMultisigSelectorOnlyRequest(input, context) {
   return normalizeMultisigAccountSelector(input, context);
 }
@@ -26343,6 +26178,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
 
 function normalizeMultisigProposeRequest(input) {
   const record = ensureRecord(input, "proposeMultisig request");
+  rejectPrivateKeyFields(record, "proposeMultisig request");
   rejectValidationFeeSnakeCaseInputs(record, "proposeMultisig request");
   rejectRetiredFeeSelectionFields(record, "proposeMultisig request");
   const selector = normalizeMultisigAccountSelector(record, "proposeMultisig request");
@@ -26367,13 +26203,6 @@ function normalizeMultisigProposeRequest(input) {
       ),
     ),
   };
-  const privateKey = normalizeOptionalDetachedPrivateKey(
-    record,
-    "proposeMultisig request",
-  );
-  if (privateKey !== null) {
-    payload.private_key = privateKey;
-  }
   const publicKeyHex = pickOverride(record, "public_key_hex", "publicKeyHex");
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
     payload.public_key_hex = normalizeHex32String(
@@ -26476,6 +26305,7 @@ function normalizeMultisigProposeRequest(input) {
 
 function normalizeMultisigContractCallProposeRequest(input) {
   const record = ensureRecord(input, "proposeMultisigContractCall request");
+  rejectPrivateKeyFields(record, "proposeMultisigContractCall request");
   rejectRetiredFeeSelectionFields(
     record,
     "proposeMultisigContractCall request",
@@ -26496,13 +26326,6 @@ function normalizeMultisigContractCallProposeRequest(input) {
       "proposeMultisigContractCall request.entrypoint",
     ),
   };
-  const privateKey = normalizeOptionalDetachedPrivateKey(
-    record,
-    "proposeMultisigContractCall request",
-  );
-  if (privateKey !== null) {
-    payload.private_key = privateKey;
-  }
   const publicKeyHex = pickOverride(record, "public_key_hex", "publicKeyHex");
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
     payload.public_key_hex = normalizeHex32String(
@@ -26541,6 +26364,7 @@ function normalizeMultisigContractCallProposeRequest(input) {
 
 function normalizeMultisigContractCallApproveRequest(input) {
   const record = ensureRecord(input, "approveMultisigContractCall request");
+  rejectPrivateKeyFields(record, "approveMultisigContractCall request");
   rejectRetiredFeeSelectionFields(
     record,
     "approveMultisigContractCall request",
@@ -26556,13 +26380,6 @@ function normalizeMultisigContractCallApproveRequest(input) {
       "approveMultisigContractCall request.signer_account_id",
     ),
   };
-  const privateKey = normalizeOptionalDetachedPrivateKey(
-    record,
-    "approveMultisigContractCall request",
-  );
-  if (privateKey !== null) {
-    payload.private_key = privateKey;
-  }
   const publicKeyHex = pickOverride(record, "public_key_hex", "publicKeyHex");
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
     payload.public_key_hex = normalizeHex32String(
@@ -30673,7 +30490,7 @@ function parseSorafsReputationSseU64(raw, context) {
   ) {
     throw new TypeError(`${context} must be a positive canonical u64`);
   }
-  const parsed = parseLosslessIntegerJson(raw, context);
+  const parsed = parseStrictLosslessIntegerJson(raw, context);
   return parseSorafsReputationU64(parsed, context, { minimum: 1n });
 }
 
@@ -30693,7 +30510,7 @@ async function* validateSorafsReputationSseStream(events, requestedSince) {
         throw new TypeError(`${context}.data must be exact compact JSON`);
       }
       const data = parseSorafsReputationEvent(
-        parseLosslessIntegerJson(event.raw, `${context}.data`),
+        parseStrictLosslessIntegerJson(event.raw, `${context}.data`),
         `${context}.data`,
       );
       const eventId = parseSorafsReputationSseU64(
@@ -34504,14 +34321,17 @@ const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "halo2/ipa",
   "halo2/pasta/kaigi-roster-v1",
   "halo2/pasta/kaigi-usage-v1",
-  "halo2/pasta/ivm-overlay-bind",
   "halo2/pasta/ivm-execution-v1",
   "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-  "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-  "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
   "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+  "stark/fri",
+  "stark/fri/sha256-goldilocks",
+  "stark/fri/poseidon2-goldilocks",
+  "stark/fri/sha256_goldilocks.v1",
+]);
+const STARK_VERIFY_BACKEND_LABELS_V1 = new Set([
   "stark/fri",
   "stark/fri/sha256-goldilocks",
   "stark/fri/poseidon2-goldilocks",
@@ -34548,17 +34368,83 @@ function assertProductionVerifyBackendLabel(value, context) {
   return backend;
 }
 
+function normalizeVerifyingKeySigningChainId(value, context) {
+  const chainId = requireExactNonEmptyString(value, context);
+  if (
+    Buffer.byteLength(chainId, "utf8") > 128 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(chainId) ||
+    !/[A-Za-z0-9]$/u.test(chainId)
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be a canonical Iroha ChainId`,
+      context,
+    );
+  }
+  return chainId;
+}
+
+function requireVerifyingKeySigningContext(value, context) {
+  if (value === null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} requires immutable ToriiClient options.localSigningContext`,
+      "ToriiClient.options.localSigningContext",
+    );
+  }
+  return value;
+}
+
+function normalizeVerifyingKeyHex32(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  const normalized = /^0x/iu.test(literal) ? literal.slice(2) : literal;
+  if (normalized.length !== 64 || !/^[0-9a-fA-F]{64}$/u.test(normalized)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must contain exactly 32 bytes`,
+      context,
+    );
+  }
+  return normalized.toLowerCase();
+}
+
+const VERIFYING_KEY_PRIVATE_KEY_FIELDS = new Set([
+  "private_key",
+  "privateKey",
+  "private_key_hex",
+  "privateKeyHex",
+  "private_key_bytes",
+  "privateKeyBytes",
+  "private_key_seed",
+  "privateKeySeed",
+  "private_key_multihash",
+  "privateKeyMultihash",
+  "private_key_algorithm",
+  "privateKeyAlgorithm",
+]);
+
+function rejectVerifyingKeyPrivateKeyFields(record, context) {
+  const fields = Object.keys(record).filter((key) =>
+    VERIFYING_KEY_PRIVATE_KEY_FIELDS.has(key),
+  );
+  if (fields.length === 0) {
+    return;
+  }
+  throw createValidationError(
+    ValidationErrorCode.INVALID_OBJECT,
+    `${context} does not accept private-key fields (${fields.join(", ")}); sign the returned transaction draft locally`,
+    `${context}.private_key`,
+  );
+}
+
 function normalizeVerifyingKeyRegisterPayload(input) {
   const record = ensureRecord(input, "registerVerifyingKey payload");
-  const authorityValue =
-    record.authority;
-  const privateKeyValue = record.private_key;
+  rejectVerifyingKeyPrivateKeyFields(record, "registerVerifyingKey");
   const payload = {
     authority: ToriiClient._normalizeAccountId(
-      authorityValue,
+      record.authority,
       "registerVerifyingKey.authority",
     ),
-    private_key: requireNonEmptyString(privateKeyValue, "registerVerifyingKey.privateKey"),
     backend: assertProductionVerifyBackendLabel(record.backend, "registerVerifyingKey.backend"),
     name: normalizeVerifyingKeyName(record.name, "registerVerifyingKey.name"),
     version: ToriiClient._normalizeUnsignedInteger(
@@ -34570,12 +34456,8 @@ function normalizeVerifyingKeyRegisterPayload(input) {
       record.circuit_id,
       "registerVerifyingKey.circuitId",
     ),
-    public_inputs_schema_hex: requireHexString(
-      record.public_inputs_schema_hex ??
-        record.public_inputs_schema_hash_hex ??
-        record.public_inputs_schema_hash ??
-        record.publicInputsSchemaHashHex ??
-        record.publicInputsSchemaHash,
+    public_inputs_schema_hash_hex: normalizeVerifyingKeyHex32(
+      record.public_inputs_schema_hash_hex,
       "registerVerifyingKey.publicInputsSchemaHashHex",
     ),
     gas_schedule_id: requireExactNonEmptyString(
@@ -34589,15 +34471,12 @@ function normalizeVerifyingKeyRegisterPayload(input) {
 
 function normalizeVerifyingKeyUpdatePayload(input) {
   const record = ensureRecord(input, "updateVerifyingKey payload");
-  const authorityValue =
-    record.authority;
-  const privateKeyValue = record.private_key;
+  rejectVerifyingKeyPrivateKeyFields(record, "updateVerifyingKey");
   const payload = {
     authority: ToriiClient._normalizeAccountId(
-      authorityValue,
+      record.authority,
       "updateVerifyingKey.authority",
     ),
-    private_key: requireNonEmptyString(privateKeyValue, "updateVerifyingKey.privateKey"),
     backend: assertProductionVerifyBackendLabel(record.backend, "updateVerifyingKey.backend"),
     name: normalizeVerifyingKeyName(record.name, "updateVerifyingKey.name"),
     version: ToriiClient._normalizeUnsignedInteger(
@@ -34609,12 +34488,8 @@ function normalizeVerifyingKeyUpdatePayload(input) {
       record.circuit_id,
       "updateVerifyingKey.circuitId",
     ),
-    public_inputs_schema_hex: requireHexString(
-      record.public_inputs_schema_hex ??
-        record.public_inputs_schema_hash_hex ??
-        record.public_inputs_schema_hash ??
-        record.publicInputsSchemaHashHex ??
-        record.publicInputsSchemaHash,
+    public_inputs_schema_hash_hex: normalizeVerifyingKeyHex32(
+      record.public_inputs_schema_hash_hex,
       "updateVerifyingKey.publicInputsSchemaHashHex",
     ),
   };
@@ -34627,6 +34502,192 @@ function normalizeVerifyingKeyUpdatePayload(input) {
   }
   assignVerifyingKeyOptionalFields(record, payload, "updateVerifyingKey");
   return payload;
+}
+
+function normalizeVerifyingKeyTransactionDraft(
+  input,
+  context,
+  { chainId, operation, request },
+) {
+  const record = ensureRecord(input, context);
+  assertSupportedOptionKeys(
+    record,
+    new Set([
+      "submitted",
+      "transaction_payload_b64",
+      "signing_message_b64",
+    ]),
+    context,
+  );
+  if (requireExactBoolean(record.submitted, `${context}.submitted`) !== false) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.submitted must be false`,
+      `${context}.submitted`,
+    );
+  }
+  const transactionPayloadB64 = record.transaction_payload_b64;
+  const transactionPayload = decodeVerifyingKeyDraftBase64(
+    transactionPayloadB64,
+    `${context}.transaction_payload_b64`,
+    {
+      maxBytes: VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES,
+      limitLabel: "transaction payload",
+    },
+  );
+  const signingMessageB64 = record.signing_message_b64;
+  const signingMessage = decodeVerifyingKeyDraftBase64(
+    signingMessageB64,
+    `${context}.signing_message_b64`,
+    { exactBytes: 32 },
+  );
+  const expectedSigningMessage = irohaPrehash(transactionPayload);
+  if (!timingSafeEqual(signingMessage, expectedSigningMessage)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.signing_message_b64 must equal the canonical Iroha HashOf(transaction_payload_b64)`,
+      `${context}.signing_message_b64`,
+    );
+  }
+  let decodedInstruction;
+  try {
+    decodedInstruction = decodeCanonicalVerifyingKeyTransactionPayload(
+      transactionPayload,
+      {
+        expectedChainId: chainId,
+        expectedAuthority: request.authority,
+        operation,
+      },
+    );
+  } catch (error) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.transaction_payload_b64 is not the requested canonical verifying-key transaction: ${error.message}`,
+      `${context}.transaction_payload_b64`,
+    );
+  }
+  const expectedRecord = expectedVerifyingKeyRecord(request);
+  if (
+    decodedInstruction.id?.backend !== request.backend ||
+    decodedInstruction.id?.name !== request.name ||
+    !isDeepStrictEqual(decodedInstruction.record, expectedRecord)
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.transaction_payload_b64 does not contain the exact requested verifying-key registry record`,
+      `${context}.transaction_payload_b64`,
+    );
+  }
+  return {
+    submitted: false,
+    transaction_payload_b64: transactionPayloadB64,
+    signing_message_b64: signingMessageB64,
+  };
+}
+
+function expectedVerifyingKeyRecord(request) {
+  const keyBytes =
+    request.vk_bytes === undefined
+      ? null
+      : Buffer.from(request.vk_bytes, "base64");
+  const commitmentHex =
+    keyBytes === null
+      ? request.commitment_hex
+      : computeVerifyingKeyCommitmentHex(request.backend, request.vk_bytes);
+  return {
+    version: request.version,
+    circuit_id: request.circuit_id,
+    owner_manifest_id: null,
+    namespace: "core",
+    backend: STARK_VERIFY_BACKEND_LABELS_V1.has(request.backend)
+      ? "stark"
+      : "halo2-ipa-pasta",
+    curve: request.curve ?? "unknown",
+    public_inputs_schema_hash: Array.from(
+      Buffer.from(request.public_inputs_schema_hash_hex, "hex"),
+    ),
+    commitment: Array.from(Buffer.from(commitmentHex, "hex")),
+    vk_len: keyBytes === null ? request.vk_len : keyBytes.length,
+    max_proof_bytes: request.max_proof_bytes ?? 0,
+    gas_schedule_id: request.gas_schedule_id ?? null,
+    metadata_uri_cid: request.metadata_uri_cid ?? null,
+    vk_bytes_cid: request.vk_bytes_cid ?? null,
+    activation_height: request.activation_height ?? null,
+    withdraw_height: request.withdraw_height ?? null,
+    key:
+      keyBytes === null
+        ? null
+        : {
+            backend: request.backend,
+            bytes: Array.from(keyBytes),
+          },
+    status: request.status ?? "Active",
+  };
+}
+
+function decodeVerifyingKeyDraftBase64(
+  value,
+  context,
+  { maxBytes = null, exactBytes = null, limitLabel = "payload" } = {},
+) {
+  if (typeof value !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be exact standard-base64`,
+      context,
+    );
+  }
+  if (
+    maxBytes !== null &&
+    value.length > 4 * Math.ceil(maxBytes / 3)
+  ) {
+    throw new RangeError(
+      `${context} exceeds the ${maxBytes}-byte ${limitLabel} limit`,
+    );
+  }
+  if (
+    exactBytes !== null &&
+    value.length !== 4 * Math.ceil(exactBytes / 3)
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must decode to exactly ${exactBytes} bytes`,
+      context,
+    );
+  }
+  if (!hasExactStandardBase64Shape(value)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be exact standard-base64`,
+      context,
+    );
+  }
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const decodedLength = (value.length / 4) * 3 - padding;
+  if (maxBytes !== null && decodedLength > maxBytes) {
+    throw new RangeError(
+      `${context} exceeds the ${maxBytes}-byte ${limitLabel} limit`,
+    );
+  }
+  if (exactBytes !== null && decodedLength !== exactBytes) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must decode to exactly ${exactBytes} bytes`,
+      context,
+    );
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (
+    decoded.length !== decodedLength ||
+    decoded.toString("base64") !== value
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be exact standard-base64`,
+      context,
+    );
+  }
+  return decoded;
 }
 
 function assignVerifyingKeyOptionalFields(record, payload, context) {
@@ -34679,7 +34740,7 @@ function assignVerifyingKeyOptionalFields(record, payload, context) {
   );
   const commitmentValue = record.commitment_hex;
   if (commitmentValue !== undefined && commitmentValue !== null) {
-    payload.commitment_hex = requireHexString(
+    payload.commitment_hex = normalizeVerifyingKeyHex32(
       commitmentValue,
       `${context}.commitmentHex`,
     );
@@ -35469,7 +35530,7 @@ function normalizeTriggerUpsertPayload(input) {
 
 function normalizeSubscriptionPlanCreateRequest(input) {
   const record = ensureRecord(input, "createSubscriptionPlan request");
-  const credentials = normalizeAuthorityCredentials(record, "createSubscriptionPlan");
+  const credentials = normalizeSecretFreeAuthority(record, "createSubscriptionPlan");
   const planId = pickOverride(record, "plan_id", "planId");
   if (planId === undefined || planId === null) {
     throw new TypeError("createSubscriptionPlan.planId is required");
@@ -35563,7 +35624,7 @@ function normalizeSubscriptionActionRequest(input, context) {
 
 function normalizeSubscriptionUsageRequest(input, context) {
   const record = ensureRecord(input, `${context} request`);
-  const credentials = normalizeAuthorityCredentials(record, context);
+  const credentials = normalizeSecretFreeAuthority(record, context);
   const unitKey = pickOverride(record, "unit_key", "unitKey");
   if (unitKey === undefined || unitKey === null) {
     throw new TypeError(`${context}.unitKey is required`);
@@ -35624,15 +35685,42 @@ function normalizeTriggerListResponse(payload, context) {
   };
 }
 
-function normalizeSubscriptionPlanCreateResponse(payload) {
+function normalizeSubscriptionPlanCreateResponse(payload, expectedPlanId) {
   const record = ensureRecord(payload, "subscription plan create response");
+  const draft = normalizeAppApiTransactionDraft(
+    record,
+    "subscription plan create response",
+    ["plan_id"],
+  );
+  const planId = ToriiClient._requireAssetDefinitionId(record.plan_id);
+  if (planId !== expectedPlanId) {
+    throw new TypeError(
+      "subscription plan create response.plan_id is not bound to the request",
+    );
+  }
   return {
-    ok: Boolean(record.ok),
-    plan_id: requireNonEmptyString(record.plan_id, "subscriptionPlanCreate.plan_id"),
-    tx_hash_hex: requireNonEmptyString(
-      record.tx_hash_hex,
-      "subscriptionPlanCreate.tx_hash_hex",
-    ),
+    ...draft,
+    plan_id: planId,
+  };
+}
+
+function normalizeSubscriptionUsageDraft(payload, expectedSubscriptionId, context) {
+  const record = ensureRecord(payload, context);
+  const draft = normalizeAppApiTransactionDraft(
+    record,
+    context,
+    ["subscription_id"],
+  );
+  const subscriptionId = requireExactNonEmptyString(
+    record.subscription_id,
+    `${context}.subscription_id`,
+  );
+  if (subscriptionId !== expectedSubscriptionId) {
+    throw new TypeError(`${context}.subscription_id is not bound to the request`);
+  }
+  return {
+    ...draft,
+    subscription_id: subscriptionId,
   };
 }
 

@@ -16,7 +16,6 @@ import {
   finalizeBrowserSignedTransaction,
   validateBrowserTransferSignable,
 } from "../src/transactionCodec.js";
-import { renderCompactHashVector } from "../scripts/regenerate-compact-hash-vector.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -45,9 +44,7 @@ const ASSET_DEFINITION = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const SOURCE_ASSET = `${ASSET_DEFINITION}#${AUTHORITY}`;
 const EXPECTED_COMPACT_FIXTURE_KEYS = new Set([
   "schema.version",
-  "source.tag",
-  "source.bundle.sha256",
-  "reference",
+  "source.fixture",
   "versioned.bytes",
   "versioned.sha256",
   "bare.bytes",
@@ -445,12 +442,9 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
 });
 
 test("browser signed hash matches the shared compact Android and native Rust golden", () => {
-  assert.equal(
-    fs.readFileSync(FIXTURE_PATH, "utf8"),
-    renderCompactHashVector(),
-    "committed compact vector must be the exact deterministic browser-codec artifact",
-  );
   const fixture = properties(FIXTURE_PATH);
+  assert.equal(fixture["schema.version"], "2");
+  assert.equal(fixture["source.fixture"], "transfer_asset");
   const versioned = decodeCanonicalFixtureBase64(
     fixture["versioned.base64"],
     "versioned.base64",

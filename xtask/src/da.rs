@@ -1781,7 +1781,6 @@ mod tests {
                 ManifestDigest::new(manifest),
                 DaProofScheme::MerkleSha256,
                 CryptoHash::prehashed(chunk_root),
-                None,
                 Some(CryptoHash::new([0x11, 0x22])),
                 RetentionPolicy::default(),
                 StorageTicketId::new(ticket),

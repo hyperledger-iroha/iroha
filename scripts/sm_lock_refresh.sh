@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Helper for selectively updating Cargo.lock entries required by the SM feature spike.
-# Usage: run from the workspace root after obtaining approval per docs/source/crypto/sm_lock_refresh_plan.md.
+# Usage: run from the workspace root after obtaining approval per specs/crypto/sm_lock_refresh_plan.md.
 
 set -euo pipefail
 

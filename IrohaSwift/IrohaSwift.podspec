@@ -10,9 +10,9 @@ raise 'IrohaSwift VERSION must be canonical SemVer' unless canonical_semver.matc
 Pod::Spec.new do |s|
   s.name             = 'IrohaSwift'
   s.version          = version
-  s.summary          = 'Swift SDK for Hyperledger Iroha v2 / Sora Nexus Torii.'
+  s.summary          = 'Swift SDK for Hyperledger Iroha 3 and SORA Nexus Torii.'
   s.description      = <<-DESC
-A Swift library for interacting with Hyperledger Iroha v2 and Sora Nexus:
+A Swift library for interacting with Hyperledger Iroha 3 and SORA Nexus:
 - Torii HTTP(S) client (balances, transactions, ZK attachments, prover reports)
 - Norito envelope encoder and Connect codec with required bridge-backed signing
 - Transaction/transfer builders and Ed25519 key management via CryptoKit

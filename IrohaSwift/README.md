@@ -1,6 +1,6 @@
 # IrohaSwift
 
-Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Apple platforms.
+Swift SDK for the first Hyperledger Iroha 3 release on Apple platforms.
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, prover reports, contracts)
@@ -15,49 +15,70 @@ Features:
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
 - Verifying key registry read/mutation/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `registerVerifyingKey`, `updateVerifyingKey`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
 
+The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
+`listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
+`listDaPinIntents`, `proveDaPinIntent`, and `verifyDaPinIntent`. Manifest and
+storage-ticket query conveniences accept 32-byte hex, but encode the canonical
+Norito JSON transparent-byte wrapper. Proof models preserve `UInt64` exactly
+and reject malformed hash checksums, unknown fields, contradictory verification
+results, and Merkle paths inconsistent with their bundle location. List calls
+use typed forward-only cursors bound to an exact ledger-tip height and block
+hash; pass the returned `nextCursor` into the next list request. Commitment and
+pin-intent proof selectors are separate from list requests and do not accept
+offset pagination.
+
 ## Installation
 
-`IrohaSwift` replaced the older ad-hoc Swift package names; make sure your dependency
-graph points at the renamed module.
+The current SDK ships in this repository under `IrohaSwift/`. Use the local
+package from the same source revision as the Iroha node you target until the
+signed first-release cut is promoted. The remote coordinates below are release
+targets, not evidence that the tags are already public.
 
-The remote coordinates below are the immutable first-release target. Do not
-advertise them until the signed `0.1.0` SwiftPM tag and
-`iroha-swift-v0.1.0` monorepo tag have passed the public package canary. Before
-that cutover, use the local-package form documented below.
+Build the required native bridge before resolving the package:
 
-### Swift Package Manager (Xcode UI)
-1. In Xcode select **File → Add Package Dependencies…**
-2. Enter `https://github.com/hyperledger/iroha-swift` and select the exact
-   first-release version `0.1.0`.
-3. Add the `IrohaSwift` library product to your application target. Apps using
-   NFC or Nearby peer transfer must also add `IrohaSwiftMobileTransports`.
+```bash
+cd /path/to/iroha
+make bridge-xcframework
+```
 
 ### Swift Package Manager (`Package.swift`)
 
+The immutable first-release dependency is:
+
 ```swift
-// Package.swift
 dependencies: [
     .package(
         url: "https://github.com/hyperledger/iroha-swift",
         exact: "0.1.0"
     )
+]
+```
+
+For development against this checkout, use the source-adjacent package:
+
+```swift
+// Package.swift
+dependencies: [
+    .package(name: "IrohaSwift", path: "/path/to/iroha/IrohaSwift")
 ],
 targets: [
     .target(
         name: "YourApp",
         dependencies: [
-            .product(name: "IrohaSwift", package: "iroha-swift"),
-            .product(name: "IrohaSwiftMobileTransports", package: "iroha-swift")
+            .product(name: "IrohaSwift", package: "IrohaSwift"),
+            .product(name: "IrohaSwiftMobileTransports", package: "IrohaSwift"),
+            .product(name: "IrohaSwiftTransferUI", package: "IrohaSwift")
         ]
     )
 ]
 ```
 
-Peer-transfer apps import both modules:
+Import only the products your application uses:
 
 ```swift
 import IrohaSwift
 import IrohaSwiftMobileTransports
+import IrohaSwiftTransferUI
 ```
 
 The host app, not SwiftPM, owns Apple privacy strings and entitlements. Add the
@@ -112,9 +133,6 @@ device.
 </array>
 ```
 
-When working from the monorepo, use `.package(name: "IrohaSwift", path: "../../IrohaSwift")`
-instead of the Git URL so Xcode consumes the local sources.
-
 #### NoritoBridge policy (SwiftPM)
 
 `Package.swift` checks for `dist/NoritoBridge.xcframework` next to the repository root and fails package resolution when the bridge is missing. Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` include the same bridge-location hint for broken or unloaded bridge symbols.
@@ -138,12 +156,14 @@ CI runs `.github/workflows/mobile_sdk_artifacts.yml` (see `ci/check_swift_spm_va
 ### CocoaPods
 
 ```ruby
-pod 'IrohaSwift', :podspec => 'https://raw.githubusercontent.com/hyperledger-iroha/iroha/iroha-swift-v0.1.0/IrohaSwift/IrohaSwift.podspec'
+pod 'IrohaSwift', :path => '/path/to/iroha/IrohaSwift'
 ```
 
 The podspec pulls sources from this repository and requires `dist/NoritoBridge.xcframework`
 next to the checkout; `pod lib lint` fails fast when the bridge is missing so releases
-bundle the signed xcframework (see `docs/connect_swift_integration.md` for the bundling flow).
+bundle the signed xcframework (see
+[`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md) for the
+bundling flow).
 
 Usage:
 ```swift
@@ -217,7 +237,7 @@ torii.listAttachments { result in
     print("attachments:", result)
 }
 
-// Submit transfer (WIP encoder)
+// Build and submit a signed transfer.
 let transfer = TransferRequest(
     chainId: "00000000-0000-0000-0000-000000000000",
     authority: accountId,
@@ -448,7 +468,7 @@ swift test --filter IrohaPeer
 swift test --filter KagemushaPeerTransportTests
 ```
 
-See the [peer transport V1 guide](../docs/source/peer_transport_v1.md) for byte
+See the [peer transport V1 guide](../specs/peer_transport_v1.md) for byte
 layouts, fixture hashes, Android permissions, and durability boundaries.
 
 ### Kagemusha offline cash lifecycle
@@ -1110,13 +1130,17 @@ archive. Do not reconstruct or mutate proof material outside the typed codecs.
 ### Native privacy bridge
 
 `PrivacyNativeBridge` is selector-free.
-`capabilitiesArchiveV1()` returns the canonical typed
-`PrivacyCapabilitySnapshotV1` Norito archive, while `protocolsV1` exposes the
-closed `PrivacyProtocolIdV1` enum in exact wire order.
-`exact12FixtureBundleV1()` returns the byte-complete Rust-derived statements
-and envelopes for all twelve rows; `validateExact12FixtureBundleV1(_:)`
+`compiledProfileCatalogV1()` returns this binary's canonical typed
+`PrivacyCompiledProfileCatalogV1` Norito archive, while `protocolsV1` exposes
+the closed `PrivacyProtocolIdV1` enum in exact wire order. The local catalog
+contains no governance or readiness state; fetch a fresh committed
+`PrivacyCapabilitySnapshotV1` from live Torii before proof submission.
+`exact12FixtureBundleV1()` returns byte-complete Rust-derived statements,
+envelopes, submit instructions, transaction intents, unsigned payloads, signed
+transactions, and transaction hashes for all twelve rows;
+`validateExact12FixtureBundleV1(_:)`
 accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 21
-availability requires both capability symbols, both exact-12 fixture symbols,
+availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
 the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
 protocol-specific typed APIs.
@@ -1289,10 +1313,11 @@ try await sdk.submit(unshield: request, keypair: keypair)
 
 ### Multisig spec builder
 
-The IOS4 multisig roadmap now ships a Swift builder so apps can assemble deterministic
-registration payloads before submitting `MultisigRegister` instructions. The helper mirrors
-`MultisigSpec` from the executor data model, validating quorum/TTL/signatory bounds and
-exporting the exact JSON layout Torii expects:
+The Swift SDK provides a multisignature builder so apps can assemble
+deterministic registration payloads before submitting `MultisigRegister`
+instructions. The helper mirrors `MultisigSpec` from the executor data model,
+validates quorum, TTL, and signatory bounds, and exports the exact JSON layout
+Torii expects:
 
 ```swift
 let specBuilder = MultisigSpecBuilder()
@@ -1450,16 +1475,21 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Direct register/update helpers post the Torii app API payloads with explicit
-`authority` and `private_key` fields, and validate backend labels plus inline
-verifier-key commitments before sending:
+Direct register/update helpers send only the public authority and verifier
+metadata. Torii never receives a private key and never submits the transaction;
+it returns a validated `ToriiVerifyingKeyTransactionDraft` for local signing.
+Configure one immutable chain trust context on clients that prepare signing
+payloads; read-only clients may omit it:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    try await torii.registerVerifyingKey(
+    let torii = ToriiClient(
+        baseURL: toriiURL,
+        localSigningContext: try ToriiLocalSigningContext(chainId: "production-chain")
+    )
+    let draft = try await torii.registerVerifyingKey(
         ToriiVerifyingKeyRegisterRequest(
             authority: "alice",
-            privateKey: "ed25519:...",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -1470,11 +1500,20 @@ if #available(iOS 15, macOS 12, *) {
             status: .active
         )
     )
+    print("unsigned payload bytes:", draft.transactionPayload.count)
 }
 ```
 
-Completion-style overloads still mirror the async read and event-stream helpers
-so UI layers can cancel inflight work if needed.
+Pass `draft.transactionPayload` to Iroha SDK signing abstractions, which apply
+the Iroha prehash themselves. Use `draft.signingMessage` only with raw signature
+primitives or HSM APIs that expect an already-prehashed 32-byte message; signing
+that value through an SDK payload signer would hash it twice. After signing,
+assemble and submit the signed transaction through the normal pipeline API.
+Before returning a draft, the client decodes the canonical transaction, requires
+the configured chain and requested authority, and accepts exactly one matching
+register/update instruction whose identifier and complete verifying-key record
+equal the request. Completion-style register/update overloads return the same
+draft type.
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
@@ -1739,11 +1778,6 @@ for attempt in 0..<5 {
 
 The Android and JavaScript SDKs use the same seed/attempt mapping, so reconnect back-off remains identical regardless of the client stack.
 
-Status:
-- Envelope encoder is complete; transaction payload encoder is under active development.
-- Nexus/Torii v3 surface coverage is in progress; see the workspace `roadmap.md` for the active backlog.
-- PRs welcome for additional endpoints and full Norito encoding coverage.
-
 ### Governance API helpers
 
 `ToriiClient` now wraps the governance REST endpoints so apps can draft contract deployment proposals, submit ballots, and fetch referendum state without reimplementing the HTTP layer. The responses include Norito transaction skeletons (`tx_instructions`) that you can feed into the SDK transaction builders:
@@ -1768,9 +1802,10 @@ The same helpers are exposed on `IrohaSDK` via convenience methods (for example,
 
 ### Norito RPC helper
 
-Use `NoritoRpcClient` when you need direct access to the binary RPC surface (see roadmap
-task NRPC-3B). The helper mirrors the JavaScript client and centralises the
-`application/x-norito` headers, optional query parameters, and timeout handling.
+Use `NoritoRpcClient` when you need direct access to the binary RPC surface.
+The helper mirrors the JavaScript client and centralizes the
+`application/x-norito` headers, optional query parameters, and timeout
+handling.
 
 ```swift
 import IrohaSwift
@@ -1871,11 +1906,11 @@ through one atomic directory exchange.
 
 A SwiftUI wallet example (`examples/ios/NoritoDemoXcode`) showcases token balances,
 Torii WebSocket subscriptions, and IRH transfers. The Xcode project, Swift sources, and
-configuration templates are checked into the repository. Launch the demo by supplying the
-Norito bridge XCFramework and populating the `.env` file (keys such as `TORII_NODE_URL`,
-`CONNECT_SESSION_ID`, `CONNECT_TOKEN_APP`, `CONNECT_TOKEN_WALLET`, and `CONNECT_CHAIN_ID`
-are read on startup). Validation hooks live in `scripts/ci/verify_norito_demo.sh` and will
-be extended to run `xcodebuild` once macOS CI runners are available.
+configuration templates are checked into the repository. Launch the demo by
+supplying the Norito bridge XCFramework and populating the `.env` file (keys
+such as `TORII_NODE_URL`, `CONNECT_SESSION_ID`, `CONNECT_TOKEN_APP`,
+`CONNECT_TOKEN_WALLET`, and `CONNECT_CHAIN_ID` are read on startup). Validation
+hooks for local and CI use live in `scripts/ci/verify_norito_demo.sh`.
 
 For contributor setup and Torii mock ledger instructions, refer to
 [`docs/norito_demo_contributor.md`](../docs/norito_demo_contributor.md).
@@ -1905,7 +1940,7 @@ For contributor setup and Torii mock ledger instructions, refer to
 
 ## Documentation & Integration Guides
 
-- SDK overview and APIs: [`docs/source/sdk/swift/index.md`](../docs/source/sdk/swift/index.md)
-- Connect quickstart (high-level SDK flow + CryptoKit reference): [`docs/connect_swift_ios.md`](../docs/connect_swift_ios.md)
-- Xcode integration guide (NoritoBridgeKit, ChaChaPoly framing, ConnectSession wiring): [`docs/connect_swift_integration.md`](../docs/connect_swift_integration.md)
+- SDK overview and APIs: [`specs/sdk/swift/index.md`](../specs/sdk/swift/index.md)
+- Public Swift SDK and Connect tutorial: [docs.iroha.tech](https://docs.iroha.tech/guide/tutorials/swift.html)
+- Executable Connect examples: [`examples/ios/NoritoDemo`](../examples/ios/NoritoDemo/README.md) and [`examples/ios/NoritoDemoXcode`](../examples/ios/NoritoDemoXcode/README.md)
 - SwiftUI demo contributor guide (local Torii setup, acceleration toggles): [`docs/norito_demo_contributor.md`](../docs/norito_demo_contributor.md)

@@ -1,9 +1,0 @@
-{
-  "fixture_version": 1,
-  "generator": "ivm_fixture_export from the metadata-validated defaults/executor.to artifact",
-  "artifact": "defaults/executor.to",
-  "artifact_length": 145,
-  "code_hash_hex": "d99307ae7062123f0643d12cfafb3735e89861cc09af4a32fb444a250dd2d0c5",
-  "abi_hash_hex": "e2ca8bbdaec17330a417a248faacb6a01931245591e28e44bf3f83da98dde01f",
-  "abi_version": 1
-}

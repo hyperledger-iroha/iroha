@@ -7,15 +7,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 XTASK = REPO_ROOT / "xtask" / "src" / "main.rs"
 TORII_OPENAPI = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
 OPENAPI_GATE = REPO_ROOT / "ci" / "check_openapi_spec.sh"
-PORTAL_SCRIPTS = (
-    REPO_ROOT / "docs" / "portal" / "scripts" / "sync-openapi.mjs",
-    REPO_ROOT / "docs" / "portal" / "scripts" / "verify-openapi-versions.mjs",
+OPENAPI_SCRIPTS = (
+    REPO_ROOT / "tools" / "openapi" / "scripts" / "sync-openapi.mjs",
+    REPO_ROOT / "tools" / "openapi" / "scripts" / "verify-openapi-versions.mjs",
     REPO_ROOT
-    / "docs"
-    / "portal"
+    / "tools"
+    / "openapi"
     / "scripts"
     / "verify-openapi-release-inputs.mjs",
-    REPO_ROOT / "docs" / "portal" / "scripts" / "check-openapi-signatures.mjs",
+    REPO_ROOT / "tools" / "openapi" / "scripts" / "check-openapi-signatures.mjs",
 )
 
 
@@ -50,8 +50,8 @@ def test_every_openapi_manifest_boundary_validates_release_shape() -> None:
         assert "validate_release_openapi_bytes" in body, function_name
 
 
-def test_portal_version_and_signature_paths_reject_empty_specs() -> None:
-    for path in PORTAL_SCRIPTS:
+def test_openapi_version_and_signature_paths_reject_empty_specs() -> None:
+    for path in OPENAPI_SCRIPTS:
         source = path.read_text(encoding="utf-8")
         assert "validateReleaseOpenApiDocumentBytes" in source, path
 
@@ -62,7 +62,7 @@ def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently
     assert "require_clean_checkout" in gate
     assert "EXPECTED_GENERATOR_COMMIT" not in gate
     assert gate.count(
-        "node docs/portal/scripts/verify-openapi-release-inputs.mjs"
+        "node tools/openapi/scripts/verify-openapi-release-inputs.mjs"
     ) == 2
     assert gate.count(
         "python3 scripts/check_sorafs_release_version_map.py"

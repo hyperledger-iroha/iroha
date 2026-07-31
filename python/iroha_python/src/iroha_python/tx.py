@@ -21,14 +21,16 @@ from .crypto import (
     Instruction,
     PrivacyBootleLanternPresentationActionBuildResultV1,
     PrivacyJindoActionBuildResultV1,
-    PrivacyVeRangeActionBuildResultV1,
+    PrivacyNativeActionBuildResultV1,
     PrivacyVegaActionPreparationV1,
+    PrivacyVeRangeActionBuildResultV1,
     PrivacyZkAceTransferActionBuildResultV1,
     PrivacyZkAmsBatchAdmissionActionBuildResultV1,
     PrivacyZkAmsProvisionAccountActionBuildResultV1,
     SignedTransactionEnvelope,
     TransactionBuilder,
     TransactionExecutableEntry,
+    _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
     _normalize_lane_privacy_attachment,
     build_signed_transaction,
 )
@@ -458,7 +460,7 @@ class TransactionDraft:
         commitment_id: int,
         leaf: bytes,
         leaf_index: int,
-        audit_path: Iterable[Optional[bytes]],
+        audit_path: Iterable[bytes],
         proof_backend: str,
         proof_bytes: bytes,
         verifying_key_name: str,
@@ -469,12 +471,20 @@ class TransactionDraft:
         using the shared normalization helper.
         """
 
+        bounded_audit_path: List[bytes] = []
+        for index, sibling in enumerate(audit_path):
+            if index >= _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1:
+                raise ValueError(
+                    "audit_path must contain between 1 and "
+                    f"{_LANE_PRIVACY_MAX_MERKLE_DEPTH_V1} siblings"
+                )
+            bounded_audit_path.append(sibling)
         attachment = _normalize_lane_privacy_attachment(
             {
                 "commitment_id": commitment_id,
                 "leaf": leaf,
                 "leaf_index": leaf_index,
-                "audit_path": list(audit_path),
+                "audit_path": bounded_audit_path,
                 "proof_backend": proof_backend,
                 "proof_bytes": proof_bytes,
                 "verifying_key_name": verifying_key_name,
@@ -614,26 +624,6 @@ class TransactionDraft:
         self.add_instruction(Instruction.verify_proof(dict(proof)))
         return self
 
-    def register_asset_hidden_zk_pool(
-        self,
-        pool_id: str,
-        storage_asset: str,
-        *,
-        asset_set_root: FixedBytesLike,
-        vk_transfer: VerifyingKeyLike,
-    ) -> TransactionDraft:
-        """Append a `RegisterAssetHiddenZkPool` instruction."""
-
-        self.add_instruction(
-            Instruction.register_asset_hidden_zk_pool(
-                _require_non_empty_string(pool_id, "pool_id"),
-                _require_non_empty_string(storage_asset, "storage_asset"),
-                asset_set_root,
-                vk_transfer,
-            )
-        )
-        return self
-
     def shield_asset(
         self,
         asset_definition_id: str,
@@ -728,30 +718,6 @@ class TransactionDraft:
                 list(inputs),
                 dict(proof),
                 outputs=list(outputs or []),
-                root_hint=root_hint,
-            )
-        )
-        return self
-
-    def asset_hidden_zk_transfer_prepared(
-        self,
-        pool_id: str,
-        *,
-        inputs: Iterable[FixedBytesLike],
-        outputs: Iterable[FixedBytesLike],
-        proof: Mapping[str, Any],
-        root_hint: Optional[FixedBytesLike] = None,
-    ) -> TransactionDraft:
-        """Append a prepared `AssetHiddenZkTransfer` instruction."""
-
-        if not isinstance(proof, Mapping):
-            raise TypeError("proof must be a mapping")
-        self.add_instruction(
-            Instruction.asset_hidden_zk_transfer_prepared(
-                _require_non_empty_string(pool_id, "pool_id"),
-                list(inputs),
-                list(outputs),
-                dict(proof),
                 root_hint=root_hint,
             )
         )
@@ -1530,6 +1496,101 @@ class TransactionDraft:
             replay_secret,
         )
 
+    def sign_privacy_anonymous_pgc_payment_action_v1(
+        self,
+        execution_bundle: bytes,
+        *,
+        public_action_json: bytes,
+        canonical_genesis_hash: bytes,
+    ) -> PrivacyNativeActionBuildResultV1:
+        """Build one Anonymous-PGC payment through the strict owner-bundle decoder."""
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native Anonymous-PGC action requires an otherwise empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_anonymous_pgc_payment_action_v1(
+            execution_bundle,
+            public_action_json,
+            canonical_genesis_hash,
+        )
+
+    def sign_privacy_orchard_note_action_v1(
+        self,
+        execution_bundle: bytes,
+        *,
+        public_action_json: bytes,
+        canonical_genesis_hash: bytes,
+    ) -> PrivacyNativeActionBuildResultV1:
+        """Build one Orchard note action through the strict owner-bundle decoder."""
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native Orchard action requires an otherwise empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_orchard_note_action_v1(
+            execution_bundle,
+            public_action_json,
+            canonical_genesis_hash,
+        )
+
+    def sign_privacy_fcmp_membership_payment_action_v1(
+        self,
+        execution_bundle: bytes,
+        *,
+        public_action_json: bytes,
+        canonical_genesis_hash: bytes,
+    ) -> PrivacyNativeActionBuildResultV1:
+        """Build one FCMP++ payment through the strict owner-bundle decoder."""
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native FCMP++ action requires an otherwise empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_fcmp_membership_payment_action_v1(
+            execution_bundle,
+            public_action_json,
+            canonical_genesis_hash,
+        )
+
+    def sign_privacy_ivm_private_note_action_v1(
+        self,
+        execution_bundle: bytes,
+        *,
+        public_action_json: bytes,
+        canonical_genesis_hash: bytes,
+    ) -> PrivacyNativeActionBuildResultV1:
+        """Build one private-IVM note action through the strict owner-bundle decoder."""
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native private-IVM action requires an otherwise empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_ivm_private_note_action_v1(
+            execution_bundle,
+            public_action_json,
+            canonical_genesis_hash,
+        )
+
+    def sign_privacy_pq_masp_note_action_v1(
+        self,
+        execution_bundle: bytes,
+        *,
+        public_action_json: bytes,
+        canonical_genesis_hash: bytes,
+    ) -> PrivacyNativeActionBuildResultV1:
+        """Build one PQ-MASP note action through the strict owner-bundle decoder."""
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native PQ-MASP action requires an otherwise empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_pq_masp_note_action_v1(
+            execution_bundle,
+            public_action_json,
+            canonical_genesis_hash,
+        )
+
     def sign_privacy_jindo_action_v1(
         self,
         private_key: bytes,
@@ -1627,6 +1688,60 @@ class TransactionDraft:
             minimum_age_years,
             reader_challenge,
             session_transcript_digest,
+        )
+
+    def prepare_privacy_zk_x509_identity_presentation_action_v1(
+        self,
+        *,
+        canonical_statement_archive: bytes,
+    ) -> bytes:
+        """Freeze a draft X509 statement and return its transaction intent.
+
+        ``canonical_statement_archive`` must contain the native typed X509
+        statement with a zero transaction-intent field.  The returned digest
+        is the exact intent that an isolated credential prover must bind into
+        the finalized statement and ``X5S1`` proof container.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native ZK-X509 presentation action requires an otherwise "
+                "empty transaction draft"
+            )
+        return bytes(
+            self.to_builder().prepare_privacy_zk_x509_identity_presentation_action_v1(
+                canonical_statement_archive,
+            )
+        )
+
+    def sign_privacy_zk_x509_identity_presentation_action_v1(
+        self,
+        private_key: bytes,
+        *,
+        canonical_genesis_hash: bytes,
+        canonical_statement_archive: bytes,
+        credential_proof: bytes,
+    ) -> PrivacyNativeActionBuildResultV1:
+        """Validate and sign one worker-produced ZK-X509 presentation action.
+
+        The native signer accepts only a canonical, intent-bound typed
+        statement and an exact ``X5S1`` credential proof whose public header is
+        bound to ``canonical_genesis_hash``.  Certificate, CRL, and witness
+        material stays in the isolated prover and never enters this draft.
+        Signing fails closed until the production compiled profile has passed
+        its release-readiness gates; unsigned candidate material is not enough.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native ZK-X509 presentation action requires an otherwise "
+                "empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_zk_x509_identity_presentation_action_v1(
+            private_key,
+            canonical_genesis_hash,
+            canonical_statement_archive,
+            credential_proof,
         )
 
     def sign_privacy_zk_ams_batch_admission_action_v1(

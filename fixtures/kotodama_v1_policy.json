@@ -86,6 +86,9 @@
     "Quantity",
     "number"
   ],
+  "forbidden_source_identifiers": [
+    "Amount"
+  ],
   "ordinary_value_identifiers": [
     "amount"
   ],
@@ -160,6 +163,7 @@
     "get_or",
     "ensure",
     "remove",
+    "path",
     "get_int",
     "get_decimal",
     "get_quantity",

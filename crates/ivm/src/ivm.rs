@@ -567,7 +567,6 @@ pub(crate) fn rtm_available() -> bool {
     #[cfg(all(feature = "htm", target_arch = "x86_64"))]
     {
         use std::arch::x86_64::{__cpuid_count, __get_cpuid_max};
-
         const RTM_FLAG: u32 = 1 << 11;
 
         // RTM detection is not available on stable via `is_x86_feature_detected!`, so use CPUID
@@ -583,7 +582,6 @@ pub(crate) fn rtm_available() -> bool {
     #[cfg(all(feature = "htm", target_arch = "x86"))]
     {
         use std::arch::x86::{__cpuid_count, __get_cpuid_max};
-
         const RTM_FLAG: u32 = 1 << 11;
 
         unsafe {
@@ -8281,7 +8279,6 @@ mod tests {
 
         assert!(!played.get());
     }
-
     #[test]
     fn private_memory_ranges_merge_split_and_respect_half_open_boundaries() {
         let mut ranges = PrivateMemoryRanges::default();
@@ -8302,7 +8299,6 @@ mod tests {
         assert_eq!(ranges.intersection_len(4..24), 8);
         assert!(!ranges.intersects(8..20));
     }
-
     #[test]
     fn private_memory_range_lookup_ignores_large_unrelated_public_span() {
         let mut ranges = PrivateMemoryRanges::default();
@@ -8311,7 +8307,6 @@ mod tests {
         assert_eq!(ranges.intersection_len(0..1_048_576), 0);
         assert!(ranges.intersects(1_999_999..2_000_001));
     }
-
     #[test]
     fn private_memory_ranges_match_byte_reference_across_overwrites() {
         let operations = [
@@ -8348,7 +8343,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn missing_allowed_syscall_metering_entry_fails_closed() {
         let number = crate::syscalls::SYSCALL_EXIT;
@@ -8361,7 +8355,6 @@ mod tests {
             Err(VMError::UnknownSyscall(number))
         );
     }
-
     #[test]
     fn explicitly_allowed_generic_host_private_syscall_uses_reserved_metering() {
         struct ToolingHost {
@@ -8418,7 +8411,6 @@ mod tests {
         assert!(host.prepared.get());
         assert!(host.dispatched);
     }
-
     #[test]
     fn generic_program_admission_rejects_every_durable_state_syscall() {
         for syscall in [
@@ -8442,7 +8434,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn generic_program_unknown_syscalls_keep_the_unknown_syscall_error() {
         let syscall = 0x00FC_FFFF;
@@ -8467,7 +8458,6 @@ mod tests {
         raw.load_code(&code).expect("load raw generic program");
         assert_eq!(raw.run(), Err(VMError::UnknownSyscall(syscall)));
     }
-
     #[test]
     fn raw_generic_execution_rejects_durable_state_before_host_dispatch() {
         struct DispatchSpy {
@@ -8527,7 +8517,6 @@ mod tests {
             assert_eq!(vm.register(10), sentinel, "failure published a result");
         }
     }
-
     #[test]
     fn permissive_host_cannot_enable_kotodama_test_syscalls_for_raw_code() {
         struct ToolingHost {
@@ -8578,7 +8567,6 @@ mod tests {
         assert!(!host.prepared.get());
         assert!(!host.dispatched);
     }
-
     #[test]
     fn public_syscall_privacy_boundaries_match_the_normative_abi_signatures() {
         fn count(declaration: &str, implicit_r10: bool) -> usize {
@@ -8658,7 +8646,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn transfer_availability_syscall_stays_inside_the_abi_v1_public_window() {
         let inputs = syscall_public_input_registers(
@@ -8670,7 +8657,6 @@ mod tests {
             "availability syscall must never consume private or reserved r15"
         );
     }
-
     #[test]
     fn syscall_output_privacy_finalization_uses_only_normative_signatures() {
         let mut vm = IVM::new(u64::MAX);

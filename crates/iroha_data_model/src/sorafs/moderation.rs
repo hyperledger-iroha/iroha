@@ -3561,7 +3561,6 @@ mod tests {
             calibration,
         }
     }
-
     #[test]
     fn model_artifact_validates_and_digest_binds_behaviour() {
         let artifact = sample_model_artifact();
@@ -3593,7 +3592,6 @@ mod tests {
         changed.calibration[1].score_bps -= 1;
         assert_ne!(changed.behaviour_digest(), digest);
     }
-
     #[test]
     fn model_artifact_rejects_shape_and_budget_attacks() {
         let mut artifact = sample_model_artifact();
@@ -3702,7 +3700,6 @@ mod tests {
             Err(ModerationModelArtifactError::AccumulatorOverflow)
         ));
     }
-
     #[test]
     fn artifact_path_validation_is_platform_independent() {
         for accepted in ["model.norito", "models/a-1_model.norito"] {
@@ -3745,7 +3742,6 @@ mod tests {
         payload[..replacement_r.len()].copy_from_slice(replacement_r);
         SignatureOf::from_signature(Signature::from_bytes(&payload))
     }
-
     #[test]
     fn validate_happy_path() {
         let manifest = sign_manifest(sample_body(), &["council", "sre"]);
@@ -3754,7 +3750,6 @@ mod tests {
         assert_eq!(summary.signer_count, 2);
         assert_eq!(summary.manifest_id, [0xAA; 16]);
     }
-
     #[test]
     fn validate_rejects_duplicate_signer() {
         let body = sample_body();
@@ -3782,7 +3777,6 @@ mod tests {
             ModerationReproValidationError::DuplicateSigner
         ));
     }
-
     #[test]
     fn validate_rejects_malformed_ed25519_signature_r() {
         let manifest = sign_manifest(sample_body(), &["council"]);
@@ -3810,7 +3804,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn validate_rejects_malformed_mldsa_signature_lengths() {
         let keypair = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
@@ -3848,7 +3841,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn validate_rejects_missing_models() {
         let mut body = sample_body();
@@ -3857,7 +3849,6 @@ mod tests {
         let err = manifest.validate().expect_err("missing models should fail");
         assert!(matches!(err, ModerationReproValidationError::MissingModels));
     }
-
     #[test]
     fn validate_rejects_zero_manifest_digests() {
         let mut manifest = sign_manifest(sample_body(), &["council"]);
@@ -3894,7 +3885,6 @@ mod tests {
             ModerationReproValidationError::MissingDigest { field: "run_nonce" }
         ));
     }
-
     #[test]
     fn validate_rejects_header_and_text_mutations() {
         let mut body = sample_body();
@@ -3941,7 +3931,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn validate_rejects_digest_and_signer_order_mutations() {
         let mut manifest = sign_manifest(sample_body(), &["council"]);
@@ -3975,7 +3964,6 @@ mod tests {
             Err(ModerationReproValidationError::TooManySignatures { .. })
         ));
     }
-
     #[test]
     fn validate_rejects_bad_thresholds() {
         let mut body = sample_body();
@@ -4023,7 +4011,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn validate_rejects_duplicate_model_ids_and_digests() {
         let mut body = sample_body();
@@ -4070,7 +4057,6 @@ mod tests {
             ModerationReproValidationError::DuplicateWeightsDigest { .. }
         ));
     }
-
     #[test]
     fn validate_rejects_model_path_size_order_and_count_attacks() {
         for invalid_path in [
@@ -4137,7 +4123,6 @@ mod tests {
             Err(ModerationReproValidationError::TooManyModels { .. })
         ));
     }
-
     #[test]
     fn validate_rejects_every_fingerprint_resource_bound_mutation() {
         for calibration_knot_count in [1, 65] {
@@ -4165,7 +4150,6 @@ mod tests {
             Err(ModerationReproValidationError::InvalidModelResourceBudget { .. })
         ));
     }
-
     #[test]
     fn validate_rejects_missing_model_identity_and_digests() {
         let mut body = sample_body();
@@ -4205,7 +4189,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn validate_rejects_bad_model_resources_and_weights() {
         let mut body = sample_body();
@@ -4277,7 +4260,6 @@ mod tests {
             committed_at_unix_ms: 1_738_000_000_000,
         }
     }
-
     #[test]
     fn sorafs_moderation_ballot_commit_reveal_roundtrip() {
         let commit = sample_ballot_commit(SoraFsModerationVoteChoice::Overturn);

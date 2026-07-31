@@ -38,6 +38,6 @@ Suggested execution order:
    adoption threshold and distribution across distinct repositories.
 
 Source material for this bundle:
-- `docs/source/kotodama_grammar.md`
+- `specs/kotodama_grammar.md`
 - `crates/kotodama_lang/src/lexer.rs`
 - `crates/kotodama_lang/src/parser.rs`

@@ -15,7 +15,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 	exit 1
 fi
 
-export DOC_PATH="docs/source/telemetry.md"
+export DOC_PATH="specs/telemetry.md"
 export SRC_PATH="crates/iroha_logger/src/telemetry.rs"
 export DEFAULTS_PATH="crates/iroha_config/src/parameters/defaults.rs"
 export LOGGER_TOML="crates/iroha_logger/Cargo.toml"
@@ -63,7 +63,7 @@ def parse_list_src(text: str, name: str) -> list[str]:
 def parse_doc_block(text: str, start: str, end: str, label: str) -> list[str]:
     if start not in text or end not in text:
         errors.append(
-            f"telemetry-redaction guard: {label} markers missing in docs/source/telemetry.md"
+            f"telemetry-redaction guard: {label} markers missing in specs/telemetry.md"
         )
         return []
     block = text.split(start, 1)[1].split(end, 1)[0]
@@ -108,26 +108,26 @@ keywords_doc = parse_doc_block(
 
 if allowlist_doc != sorted(allowlist_doc):
     errors.append(
-        "telemetry-redaction guard: allowlist in docs/source/telemetry.md must be sorted."
+        "telemetry-redaction guard: allowlist in specs/telemetry.md must be sorted."
     )
 
 if allowlist_src != allowlist_doc:
     errors.append(
-        "telemetry-redaction guard: allowlist mismatch between telemetry.rs and docs/source/telemetry.md."
+        "telemetry-redaction guard: allowlist mismatch between telemetry.rs and specs/telemetry.md."
     )
     errors.append(f"  src: {allowlist_src!r}")
     errors.append(f"  doc: {allowlist_doc!r}")
 
 if prefixes_src != prefixes_doc:
     errors.append(
-        "telemetry-redaction guard: prefix taxonomy mismatch between telemetry.rs and docs/source/telemetry.md."
+        "telemetry-redaction guard: prefix taxonomy mismatch between telemetry.rs and specs/telemetry.md."
     )
     errors.append(f"  src: {prefixes_src!r}")
     errors.append(f"  doc: {prefixes_doc!r}")
 
 if keywords_src != keywords_doc:
     errors.append(
-        "telemetry-redaction guard: keyword taxonomy mismatch between telemetry.rs and docs/source/telemetry.md."
+        "telemetry-redaction guard: keyword taxonomy mismatch between telemetry.rs and specs/telemetry.md."
     )
     errors.append(f"  src: {keywords_src!r}")
     errors.append(f"  doc: {keywords_doc!r}")

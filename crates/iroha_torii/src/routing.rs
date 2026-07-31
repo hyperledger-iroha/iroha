@@ -239,12 +239,6 @@ pub(crate) fn conversion_error(message: String) -> Error {
     ))
 }
 
-fn reject_server_side_signing(endpoint: &'static str) -> Error {
-    conversion_error(format!(
-        "{endpoint} no longer accepts private_key payloads; submit a locally signed transaction instead"
-    ))
-}
-
 #[cfg(feature = "telemetry")]
 pub const SORANET_PRIVACY_EVENT_ENDPOINT: &str = "/v1/soranet/privacy/event";
 #[cfg(feature = "telemetry")]
@@ -517,12 +511,6 @@ pub(crate) struct PipelinePreflightResponse {
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 struct CountResponse {
     count: u64,
-}
-
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-struct OkIdResponse {
-    ok: bool,
-    id: String,
 }
 
 #[cfg(test)]
@@ -3659,6 +3647,38 @@ fn quote_app_api_transaction_builder(
         .map_err(|err| app_api_transaction_signing_error(context, err))
 }
 
+/// Canonical unsigned transaction prepared by Torii for local signing.
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AppApiTransactionDraftDto {
+    /// Always `false`; Torii has not submitted this transaction.
+    pub submitted: bool,
+    /// Canonical Norito `TransactionPayload` bytes encoded as padded base64.
+    pub transaction_payload_b64: String,
+    /// Signature message (`HashOf<TransactionPayload>`) encoded as padded base64.
+    pub signing_message_b64: String,
+}
+
+#[cfg(feature = "app_api")]
+fn app_api_transaction_draft(builder: &TransactionBuilder) -> AppApiTransactionDraftDto {
+    use base64::Engine as _;
+
+    AppApiTransactionDraftDto {
+        submitted: false,
+        transaction_payload_b64: base64::engine::general_purpose::STANDARD
+            .encode(builder.encode_payload()),
+        signing_message_b64: base64::engine::general_purpose::STANDARD
+            .encode(builder.payload_hash_bytes()),
+    }
+}
+
 #[cfg(feature = "app_api")]
 fn quote_and_sign_app_api_transaction(
     builder: TransactionBuilder,
@@ -6009,91 +6029,74 @@ pub async fn handle_get_proof(
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-/// DTO for FindProofRecordById as a signed core query
+#[norito(deny_unknown_fields)]
+/// Canonical signed-query envelope for `FindProofRecordById`.
 pub struct ProofFindByIdQueryDto {
-    /// Authority account id to sign the query
-    pub authority: iroha_data_model::account::AccountId,
-    /// Private key used to sign
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Proof backend (e.g., "halo2/ipa")
-    pub backend: String,
-    /// Proof hash (64-hex)
-    pub hash_hex: String,
+    /// Versioned Norito `SignedQuery` bytes encoded as canonical padded base64.
+    pub signed_query_b64: String,
 }
 
 #[cfg(feature = "app_api")]
-/// Build a SignedQuery for FindProofRecordById from DTO
+/// Decode and constrain a locally signed `FindProofRecordById` query.
 pub fn signed_find_proof_by_id(
     dto: &ProofFindByIdQueryDto,
 ) -> Result<iroha_data_model::query::SignedQuery> {
-    use iroha_data_model::query::{
-        QueryRequest, prelude::SingularQueryBox, proof::prelude::FindProofRecordById,
-    };
-    // Parse hash
-    let bytes = hex::decode(dto.hash_hex.trim_start_matches("0x")).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(e.to_string()),
-        ))
-    })?;
-    if bytes.len() != 32 {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "expected 32-byte hash".into(),
-            ),
-        )));
+    use base64::Engine as _;
+    use iroha_data_model::query::{QueryRequest, prelude::SingularQueryBox};
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(dto.signed_query_b64.as_bytes())
+        .map_err(|err| conversion_error(format!("invalid signed_query_b64: {err}")))?;
+    if base64::engine::general_purpose::STANDARD.encode(&bytes) != dto.signed_query_b64 {
+        return Err(conversion_error(
+            "signed_query_b64 must use canonical padded base64".to_owned(),
+        ));
     }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    let id = iroha_data_model::proof::ProofId {
-        backend: dto.backend.clone(),
-        proof_hash: arr,
-    };
-    let singular = SingularQueryBox::FindProofRecordById(FindProofRecordById { id });
-    let req = QueryRequest::Singular(singular).with_authority(dto.authority.clone().into());
-    // Build a temporary KeyPair from the private key. Public key derived within KeyPair::from
-    let key_pair = iroha_crypto::KeyPair::from(dto.private_key.0.clone());
-    req.try_sign(&key_pair).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "failed to sign proof query: {err}"
-            )),
-        ))
-    })
+    let query =
+        <SignedQuery as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&bytes)
+            .map_err(|err| conversion_error(format!("invalid signed_query_b64: {err}")))?;
+    if !matches!(
+        query.request(),
+        QueryRequest::Singular(SingularQueryBox::FindProofRecordById(_))
+    ) {
+        return Err(conversion_error(
+            "signed_query_b64 must contain FindProofRecordById".to_owned(),
+        ));
+    }
+    Ok(query)
 }
 
-/// POST /v1/zk/verify — minimal demo decode endpoint that accepts either Norito
-/// (`application/x-norito`) or JSON and returns `{ "ok": true|false }`.
-///
-/// This is a convenience, non-consensus-critical handler intended for quick
-/// end-to-end demos. It does not perform cryptographic verification or any
-/// VK/circuit/schema binding checks; it only checks that the body decodes under
-/// the declared content type.
-pub async fn handle_v1_zk_verify(
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
-) -> Result<impl IntoResponse> {
-    let ct = headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let ok = if ct.contains(super::utils::NORITO_MIME_TYPE) {
-        // For Norito, treat non-empty body as accepted. We avoid binding to a
-        // specific envelope type in this app-facing convenience endpoint.
-        !body.is_empty()
-    } else if ct.contains("application/json") {
-        norito::json::from_slice::<norito::json::Value>(&body).is_ok()
-    } else {
-        // Unknown content type; try JSON as a last resort.
-        norito::json::from_slice::<norito::json::Value>(&body).is_ok()
+#[cfg(all(test, feature = "app_api"))]
+mod proof_query_envelope_tests {
+    use super::{ProofFindByIdQueryDto, signed_find_proof_by_id};
+    use base64::Engine as _;
+    use iroha_data_model::{
+        account::AccountId,
+        query::{QueryRequest, executor::prelude::FindParameters, prelude::SingularQueryBox},
     };
-    let payload = json_object(vec![json_entry("ok", ok)]);
-    let body = json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    use iroha_version::codec::EncodeVersioned as _;
+
+    #[test]
+    fn proof_query_envelope_rejects_other_signed_query_variants() {
+        let key_pair = super::checked_routing_fixture_keypair(
+            0x51,
+            iroha_crypto::Algorithm::Ed25519,
+            "derive proof query envelope fixture signer",
+        );
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(authority)
+            .sign(&key_pair);
+        let dto = ProofFindByIdQueryDto {
+            signed_query_b64: base64::engine::general_purpose::STANDARD
+                .encode(signed.encode_versioned()),
+        };
+
+        assert!(
+            signed_find_proof_by_id(&dto).is_err(),
+            "non-proof signed query must be rejected"
+        );
+    }
 }
 
 /// GET /v1/sumeragi/pacemaker — snapshot of pacemaker timers and config
@@ -9642,67 +9645,14 @@ pub(crate) fn build_pipeline_preflight_response(
     }
 }
 
-/// POST /v1/zk/submit-proof — minimal demo endpoint that accepts either Norito
-/// (`application/x-norito`) or JSON and returns `{ "ok": true|false, "id": "<hex>" }`.
-///
-/// This is a convenience, non-consensus-critical handler intended for quick
-/// end-to-end demos. It does not perform cryptographic verification or durable
-/// storage, and it does not imply that the payload would pass the runtime ZK
-/// verifier. The returned `id` is a deterministic Blake2b-32 hash of the raw
-/// request body bytes (after any JSON serialization).
-pub async fn handle_v1_zk_submit_proof(
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
-) -> Result<Response> {
-    let ct = headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    // Determine acceptance boolean, mirroring verify semantics
-    let ok = if ct.contains(super::utils::NORITO_MIME_TYPE) {
-        // For Norito, any non-empty payload is considered accepted by the demo handler.
-        !body.is_empty()
-    } else if ct.contains("application/json") {
-        norito::json::from_slice::<norito::json::Value>(&body).is_ok()
-    } else {
-        // Unknown content type; try JSON as a last resort.
-        norito::json::from_slice::<norito::json::Value>(&body).is_ok()
-    };
-    // Compute a deterministic id for reference/tracking (not persisted here).
-    let id_hex = {
-        let h = iroha_crypto::Hash::new(&body);
-        hex::encode::<[u8; 32]>(h.into())
-    };
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    Ok(crate::utils::respond_with_format(
-        OkIdResponse { ok, id: id_hex },
-        format,
-    ))
-}
-
 #[cfg(feature = "zk-verify-batch")]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ZkVerifyBatchLimits {
     pub(crate) open: iroha_zkp_halo2::OpenVerifyLimits,
+    pub(crate) max_body_bytes: usize,
     pub(crate) max_batch: usize,
     pub(crate) max_envelope_bytes: usize,
     pub(crate) enforce_transcript_label_ascii: bool,
-}
-
-#[cfg(feature = "zk-verify-batch")]
-impl ZkVerifyBatchLimits {
-    pub(crate) const fn unbounded() -> Self {
-        Self {
-            open: iroha_zkp_halo2::OpenVerifyLimits::unbounded(),
-            max_batch: usize::MAX,
-            max_envelope_bytes: usize::MAX,
-            enforce_transcript_label_ascii: false,
-        }
-    }
 }
 
 #[cfg(feature = "zk-verify-batch")]
@@ -9780,32 +9730,14 @@ fn render_zk_verify_batch_response(ok: bool, statuses_json: Value) -> Result<Res
 }
 
 #[cfg(feature = "zk-verify-batch")]
-/// POST /v1/zk/verify-batch — verify a batch of standalone native IPA
-/// polynomial-opening envelopes and return JSON
-/// `{ "ok": true, "statuses": [true|false, ...] }`.
-///
-/// This endpoint is intentionally narrower than the ledger/runtime verifier:
-/// it replays `iroha_zkp_halo2::OpenVerifyEnvelope` proofs directly and does
-/// not consult the WSV VK registry or enforce circuit/schema policy. It is
-/// useful for native poly-open diagnostics, but it is not equivalent to
-/// `iroha_core::zk::verify_backend_with_timing_guardrails`.
-///
-/// Content types:
-/// - `application/x-norito`: request body is a Norito-encoded `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>`.
-/// - `application/json`: array of base64-encoded Norito envelopes.
-pub async fn handle_v1_zk_verify_batch(
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
-) -> Result<Response> {
-    handle_v1_zk_verify_batch_with_limits(headers, body, ZkVerifyBatchLimits::unbounded()).await
-}
-
-#[cfg(feature = "zk-verify-batch")]
 pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
     limits: ZkVerifyBatchLimits,
 ) -> Result<Response> {
+    if body.len() > limits.max_body_bytes {
+        return verify_batch_limit_rejected("body_too_large", limits.max_body_bytes, body.len());
+    }
     let ct = headers
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -9875,7 +9807,9 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
 ///
 /// This is an example wrapper for the Norito TLV APIs available via IVM syscalls.
 /// Returns recent shielded roots for the requested asset, bounded by the configured
-/// `zk.root_history_cap`. If the asset has no shielded state, returns an empty set.
+/// `zk.root_history_cap`. Only assets bound to the canonical confidential-v2
+/// transfer verifier are accepted. A confidential-v2 asset with no shielded
+/// state returns an empty set.
 pub(crate) fn resolve_asset_definition_selector(
     world: &impl WorldReadOnly,
     asset_literal: &str,
@@ -10042,12 +9976,14 @@ pub async fn handle_v1_zk_roots(
     } else {
         core::cmp::min(cap, req.max as usize)
     };
-    // Fetch roots from WSV (if any); build response window
-    let roots_all = world
-        .zk_assets()
-        .get(&ad)
-        .map(|st| st.root_history.clone())
-        .unwrap_or_default();
+    let st = world.zk_assets().get(&ad).ok_or_else(zk_merkle_not_found)?;
+    let current_root = iroha_core::zk::confidential_v2::compute_confidential_root_v2(
+        &st.commitments,
+    )
+    .map_err(|err| zk_query_conversion_error(format!("failed to compute current root: {err}")))?;
+    ensure_confidential_v2_asset(world, &ad, st, &current_root)?;
+    // Fetch the validated confidential-v2 roots and build the response window.
+    let roots_all = st.root_history.clone();
     let latest_opt = roots_all.last().copied();
     let roots_tail: Vec<[u8; 32]> = if roots_all.len() <= want {
         roots_all.clone()
@@ -10686,6 +10622,13 @@ mod zk_roots_selector_tests {
             iroha_core::query::store::LiveQueryStore::start_test(),
         ));
         bind_permanent_asset_alias_for_test(&state, &authority, &definition_id, "usd#main");
+        seed_zk_asset_frontier_for_test(
+            &state,
+            &definition_id,
+            Vec::new(),
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            None,
+        );
         (state, definition_id)
     }
 
@@ -10712,8 +10655,10 @@ mod zk_roots_selector_tests {
         );
         vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
 
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let next_height =
+            core::num::NonZeroU64::new((state.committed_height() as u64).saturating_add(1).max(1))
+                .expect("next test block height is nonzero");
+        let header = iroha_data_model::block::BlockHeader::new(next_height, None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         {
@@ -10723,7 +10668,11 @@ mod zk_roots_selector_tests {
                 .insert(vk_id.clone(), vk_record);
             let mut zk_state = iroha_core::state::ZkAssetState::default();
             zk_state.commitments = commitments;
-            zk_state.root_history = vec![root_override.unwrap_or(root)];
+            zk_state.root_history = match root_override {
+                Some(root) => vec![root],
+                None if zk_state.commitments.is_empty() => Vec::new(),
+                None => vec![root],
+            };
             zk_state.vk_transfer = Some(iroha_core::state::ZkAssetVerifierBinding {
                 id: vk_id,
                 commitment: [0x43; 32],
@@ -10744,6 +10693,19 @@ mod zk_roots_selector_tests {
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
             )) if message.contains(expected)
         ));
+    }
+
+    fn assert_empty_anchored_roots(payload: &ZkRootsGetResponseDto) {
+        assert_eq!(payload.latest, "");
+        assert!(payload.roots.is_empty());
+        assert!(payload.evaluated_block_height > 0);
+        assert_eq!(payload.evaluated_block_hash.len(), 64);
+        assert!(
+            payload
+                .evaluated_block_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        );
     }
 
     #[test]
@@ -11062,10 +11024,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_eq!(payload.latest, "");
-        assert!(payload.roots.is_empty());
-        assert_eq!(payload.evaluated_block_height, 0);
-        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
+        assert_empty_anchored_roots(&payload);
     }
 
     #[tokio::test]
@@ -11126,10 +11085,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::decode_from_bytes(&bytes).expect("norito response payload");
-        assert_eq!(payload.latest, "");
-        assert!(payload.roots.is_empty());
-        assert_eq!(payload.evaluated_block_height, 0);
-        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
+        assert_empty_anchored_roots(&payload);
     }
 
     #[tokio::test]
@@ -11165,10 +11121,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_eq!(payload.latest, "");
-        assert!(payload.roots.is_empty());
-        assert_eq!(payload.evaluated_block_height, 0);
-        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
+        assert_empty_anchored_roots(&payload);
     }
 
     #[tokio::test]
@@ -11202,10 +11155,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_eq!(payload.latest, "");
-        assert!(payload.roots.is_empty());
-        assert_eq!(payload.evaluated_block_height, 0);
-        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
+        assert_empty_anchored_roots(&payload);
     }
 
     #[tokio::test]
@@ -11239,10 +11189,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_eq!(payload.latest, "");
-        assert!(payload.roots.is_empty());
-        assert_eq!(payload.evaluated_block_height, 0);
-        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
+        assert_empty_anchored_roots(&payload);
     }
 
     #[tokio::test]
@@ -11276,10 +11223,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_eq!(payload.latest, "");
-        assert!(payload.roots.is_empty());
-        assert_eq!(payload.evaluated_block_height, 0);
-        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
+        assert_empty_anchored_roots(&payload);
     }
 
     #[tokio::test]
@@ -11315,10 +11259,7 @@ mod zk_roots_selector_tests {
             .to_bytes();
         let payload: ZkRootsGetResponseDto =
             norito::json::from_slice(&bytes).expect("json response payload");
-        assert_eq!(payload.latest, "");
-        assert!(payload.roots.is_empty());
-        assert_eq!(payload.evaluated_block_height, 0);
-        assert_eq!(payload.evaluated_block_hash, "0".repeat(64));
+        assert_empty_anchored_roots(&payload);
     }
 
     #[tokio::test]
@@ -11419,6 +11360,31 @@ mod zk_roots_selector_tests {
             Error::Query(iroha_data_model::ValidationFail::NotPermitted(ref message))
                 if message.contains("invalid asset selector")
         ));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_zk_roots_rejects_non_confidential_v2_asset() {
+        let (state, definition_id) = selector_state();
+        seed_zk_asset_frontier_for_test(
+            &state,
+            &definition_id,
+            vec![[0xaa; 32]],
+            "legacy-transfer-circuit",
+            None,
+        );
+
+        let err = handle_v1_zk_roots(
+            state,
+            None,
+            crate::NoritoJson(ZkRootsGetRequestDto {
+                asset_id: definition_id.to_string(),
+                max: 1,
+            }),
+        )
+        .await
+        .expect_err("legacy shielded roots must not be exposed as confidential-v2 witnesses");
+
+        assert_query_conversion_contains(err, "does not use the confidential-v2 Merkle tree");
     }
 
     #[tokio::test]
@@ -15598,9 +15564,9 @@ pub async fn handle_get_contract_state(
         }
     }
 
-    fn parse_name(value: &str, label: &str) -> Result<Name> {
-        Name::from_str(value)
-            .map_err(|err| conversion_error(format!("invalid {label} name `{value}`: {err}")))
+    fn parse_state_path(value: &str, label: &str) -> Result<StatePath> {
+        StatePath::from_str(value)
+            .map_err(|err| conversion_error(format!("invalid {label} `{value}`: {err}")))
     }
 
     let mut mode_count = 0u8;
@@ -15659,13 +15625,13 @@ pub async fn handle_get_contract_state(
         let digest = hex::encode(Hash::new(scope_id.as_bytes()).as_ref());
         format!("sc/{digest}/")
     });
-    let scoped_name_for = |logical_path: &str| -> Result<Name> {
+    let scoped_path_for = |logical_path: &str| -> Result<StatePath> {
         let scoped = if let Some(prefix) = scoped_prefix.as_ref() {
             format!("{prefix}{logical_path}")
         } else {
             logical_path.to_owned()
         };
-        Name::from_str(&scoped).map_err(|err| {
+        StatePath::from_str(&scoped).map_err(|err| {
             conversion_error(format!(
                 "invalid scoped smart-contract state path `{scoped}`: {err}"
             ))
@@ -15744,8 +15710,8 @@ pub async fn handle_get_contract_state(
         };
 
     if let Some(path_raw) = q.path {
-        let name = parse_name(&path_raw, "path")?;
-        let path = name.as_ref();
+        let state_path = parse_state_path(&path_raw, "path")?;
+        let path = state_path.as_ref();
         let stored = get_schema_aware_value(path);
         let logical_found = schema_registry
             .as_ref()
@@ -15791,16 +15757,15 @@ pub async fn handle_get_contract_state(
             if trimmed.is_empty() {
                 continue;
             }
-            let name = parse_name(trimmed, "paths")?;
-            parsed.push(name);
+            parsed.push(parse_state_path(trimmed, "path")?);
         }
         if parsed.is_empty() {
             return Err(conversion_error("paths is empty".to_string()));
         }
         let mut entries = Vec::with_capacity(parsed.len());
         let mut paths = Vec::with_capacity(parsed.len());
-        for name in parsed {
-            let path = name.as_ref();
+        for state_path in parsed {
+            let path = state_path.as_ref();
             let stored = get_schema_aware_value(path);
             let logical_found = schema_registry.as_ref().is_some_and(|registry| {
                 contract_state_logical_path_exists(registry, path, &has_value)
@@ -15836,15 +15801,15 @@ pub async fn handle_get_contract_state(
     }
 
     let prefix_raw = q.prefix.unwrap_or_default();
-    let prefix = parse_name(&prefix_raw, "prefix")?;
+    let prefix = parse_state_path(&prefix_raw, "prefix")?;
     let prefix_str = prefix.as_ref();
     let offset = q.offset.unwrap_or(0);
     let limit = q.limit.unwrap_or(default_limit).min(max_limit);
     let mut entries = Vec::new();
     let mut skipped = 0u64;
     let mut has_more = false;
-    let storage_prefix_name = scoped_name_for(prefix_str)?;
-    let storage_prefix_str = storage_prefix_name.as_ref().to_owned();
+    let storage_prefix_path = scoped_path_for(prefix_str)?;
+    let storage_prefix_str = storage_prefix_path.as_ref().to_owned();
 
     if let (Some(ContractStateDecodeMode::Json), Some(registry)) =
         (decode_mode, schema_registry.as_ref())
@@ -15854,7 +15819,7 @@ pub async fn handle_get_contract_state(
             value,
         })) = registry.get(prefix_str)
         {
-            for (stored_name, _) in storage.range(storage_prefix_name.clone()..) {
+            for (stored_name, _) in storage.range(storage_prefix_path.clone()..) {
                 let key_str = stored_name.as_ref();
                 if !key_str.starts_with(&storage_prefix_str) {
                     break;
@@ -15914,7 +15879,7 @@ pub async fn handle_get_contract_state(
         }
     }
 
-    for (key, value) in storage.range(storage_prefix_name.clone()..) {
+    for (key, value) in storage.range(storage_prefix_path.clone()..) {
         let key_str = key.as_ref();
         if !key_str.starts_with(&storage_prefix_str) {
             break;
@@ -16296,10 +16261,10 @@ mod contract_state_tests {
     fn scoped_state_key(
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
         logical_path: &str,
-    ) -> Name {
+    ) -> StatePath {
         let digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
         let scoped = format!("sc/{digest}/{logical_path}");
-        Name::from_str(&scoped).expect("scoped contract state path")
+        StatePath::from_str(&scoped).expect("scoped contract state path")
     }
 
     #[tokio::test]
@@ -16407,6 +16372,41 @@ mod contract_state_tests {
             paths,
             vec!["market/by-id/mkt-1/meta", "market/by-id/mkt-1/state"]
         );
+    }
+
+    #[tokio::test]
+    async fn contract_state_query_uses_state_path_not_business_name_limits() {
+        let logical_path = format!("map/{}", "a".repeat(300));
+        let state_path =
+            StatePath::from_str(&logical_path).expect("long composite state path remains valid");
+        assert!(
+            Name::from_str(&logical_path).is_err(),
+            "fixture must exceed the business-name ceiling"
+        );
+        let mut world = World::default();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(state_path, vec![0x5a]);
+        let state = Arc::new(CoreState::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+
+        let JsonBody(response) = handle_get_contract_state(
+            state,
+            NoritoQuery(ContractStateQuery {
+                path: Some(logical_path.clone()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("long canonical state path must be queryable");
+
+        assert_eq!(response.entries.len(), 1);
+        assert_eq!(response.entries[0].path, logical_path);
+        assert!(response.entries[0].found);
+        assert_eq!(response.entries[0].value_len, Some(1));
     }
 
     #[test]
@@ -18582,7 +18582,6 @@ async fn submit_contract_call_request(
 
     let ContractCallDto {
         authority,
-        private_key,
         public_key_hex,
         signature_b64,
         contract_address,
@@ -18673,44 +18672,6 @@ async fn submit_contract_call_request(
     let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
-    if let Some(private_key) = private_key {
-        let tx = sign_app_api_transaction(builder, &private_key.0, endpoint)?;
-        let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
-        handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
-        return Ok(ContractCallResponseDto {
-            ok: true,
-            submitted: true,
-            dataspace: dataspace.clone(),
-            contract_address: Some(contract_address.clone()),
-            code_hash_hex: code_hash_hex.clone(),
-            abi_hash_hex: abi_hash_hex.clone(),
-            creation_time_ms,
-            transaction_ttl_ms,
-            tx_hash_hex: Some(tx_hash_hex.clone()),
-            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex.clone())),
-            entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
-            transaction_scaffold_b64: None,
-            signed_transaction_b64: None,
-            signing_message_b64: None,
-            entrypoint: response_entrypoint.clone(),
-            operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
-                status: "submitted",
-                dataspace: &dataspace,
-                contract_alias: contract_alias.as_ref(),
-                contract_address: &contract_address,
-                code_hash_hex: &code_hash_hex,
-                abi_hash_hex: &abi_hash_hex,
-                tx_hash_hex: Some(tx_hash_hex),
-                entrypoint: response_entrypoint.clone(),
-                entrypoint_hash_hex: Some(entrypoint_hash_hex),
-                gas_limit,
-                fee_payment: fee_payment.clone(),
-                payload_digest_hex: &payload_digest_hex,
-            }),
-        });
-    }
-
     if public_key_hex.is_some() || signature_b64.is_some() {
         let public_key_hex = public_key_hex
             .as_deref()
@@ -21466,7 +21427,10 @@ fn execute_contract_view(
                 })
         },
     )?;
-    Ok(IrohaJson::from(value))
+    IrohaJson::from_norito_value_ref(&value).map_err(|error| ContractViewExecutionError {
+        message: format!("contract view returned invalid or oversized JSON: {error}"),
+        vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -22154,8 +22118,8 @@ const MULTISIG_SPEC_METADATA_KEY: &str = "multisig/spec";
 #[cfg(feature = "app_api")]
 fn multisig_account_state_contract_key(
     multisig_account_id: &iroha_data_model::account::AccountId,
-) -> Name {
-    Name::from_str(&format!(
+) -> StatePath {
+    StatePath::from_str(&format!(
         "multisig/account/{}",
         HashOf::new(multisig_account_id)
     ))
@@ -22165,8 +22129,8 @@ fn multisig_account_state_contract_key(
 #[cfg(feature = "app_api")]
 fn multisig_signatory_index_contract_key(
     signatory_account_id: &iroha_data_model::account::AccountId,
-) -> Name {
-    Name::from_str(&format!(
+) -> StatePath {
+    StatePath::from_str(&format!(
         "multisig/signatory/{}",
         HashOf::new(&signatory_account_id.subject_id())
     ))
@@ -22176,8 +22140,8 @@ fn multisig_signatory_index_contract_key(
 #[cfg(feature = "app_api")]
 fn multisig_proposal_state_prefix(
     multisig_account_id: &iroha_data_model::account::AccountId,
-) -> Name {
-    Name::from_str(&format!(
+) -> StatePath {
+    StatePath::from_str(&format!(
         "multisig/proposal/{}/",
         HashOf::new(multisig_account_id)
     ))
@@ -22188,8 +22152,8 @@ fn multisig_proposal_state_prefix(
 fn multisig_proposal_state_contract_key(
     multisig_account_id: &iroha_data_model::account::AccountId,
     instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
-) -> Name {
-    Name::from_str(&format!(
+) -> StatePath {
+    StatePath::from_str(&format!(
         "{}{}",
         multisig_proposal_state_prefix(multisig_account_id).as_ref(),
         instructions_hash
@@ -22200,8 +22164,8 @@ fn multisig_proposal_state_contract_key(
 #[cfg(feature = "app_api")]
 fn multisig_proposal_terminal_state_prefix(
     multisig_account_id: &iroha_data_model::account::AccountId,
-) -> Name {
-    Name::from_str(&format!(
+) -> StatePath {
+    StatePath::from_str(&format!(
         "multisig/proposal-terminal/{}/",
         HashOf::new(multisig_account_id)
     ))
@@ -22212,8 +22176,8 @@ fn multisig_proposal_terminal_state_prefix(
 fn multisig_proposal_terminal_state_contract_key(
     multisig_account_id: &iroha_data_model::account::AccountId,
     instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
-) -> Name {
-    Name::from_str(&format!(
+) -> StatePath {
+    StatePath::from_str(&format!(
         "{}{}",
         multisig_proposal_terminal_state_prefix(multisig_account_id).as_ref(),
         instructions_hash
@@ -26294,7 +26258,6 @@ mod multisig_selector_tests {
             MaybeTelemetry::disabled(),
             NoritoJson(ContractCallDto {
                 authority: authority.clone(),
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 contract_address: Some(contract_address.clone()),
@@ -26339,7 +26302,6 @@ mod multisig_selector_tests {
             MaybeTelemetry::disabled(),
             NoritoJson(ContractCallDto {
                 authority,
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 contract_address: None,
@@ -26379,7 +26341,6 @@ mod multisig_selector_tests {
             MaybeTelemetry::disabled(),
             NoritoJson(ContractCallDto {
                 authority,
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 contract_address: None,
@@ -26437,7 +26398,6 @@ mod multisig_selector_tests {
                     multisig_account_alias: None,
                 },
                 signer_account_id: outsider.clone(),
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_234),
@@ -27502,7 +27462,6 @@ mod multisig_selector_tests {
             NoritoJson(MultisigContractCallApproveDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_123),
@@ -27548,7 +27507,6 @@ mod multisig_selector_tests {
             NoritoJson(MultisigCancelRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_124),
@@ -27625,7 +27583,6 @@ mod multisig_selector_tests {
             NoritoJson(MultisigCancelRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_125),
@@ -27678,7 +27635,6 @@ mod multisig_selector_tests {
             NoritoJson(MultisigContractCallProposeDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_234),
@@ -27751,7 +27707,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigContractCallProposeDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
@@ -27829,7 +27784,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigProposeDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
@@ -27878,7 +27832,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigProposeDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: Some("AQID".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
@@ -27903,7 +27856,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigProposeDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
-                private_key: None,
                 public_key_hex: Some("00".repeat(32)),
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
@@ -27928,7 +27880,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigProposeDto {
                 selector: concrete_selector(multisig_account_id),
                 signer_account_id: signer_two_id.clone(),
-                private_key: None,
                 public_key_hex: Some("  ".to_owned()),
                 signature_b64: Some("  ".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
@@ -27973,7 +27924,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigProposeDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
-                private_key: None,
                 public_key_hex: Some("not hex".to_owned()),
                 signature_b64: Some("AQID".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
@@ -28003,7 +27953,6 @@ seiyaku BytesPayloadNormalizeTest {
                 NoritoJson(MultisigProposeDto {
                     selector: concrete_selector(multisig_account_id.clone()),
                     signer_account_id: signer_two_id.clone(),
-                    private_key: None,
                     public_key_hex: Some(hex::encode(public_key)),
                     signature_b64: Some("AQID".to_owned()),
                     creation_time_ms: Some(1_700_000_000_345),
@@ -28041,7 +27990,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigProposeDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
-                private_key: None,
                 public_key_hex: Some(other_public_key_hex),
                 signature_b64: Some("AQID".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
@@ -28071,7 +28019,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigProposeDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id.clone(),
-                private_key: None,
                 public_key_hex: Some(signer_public_key_hex.clone()),
                 signature_b64: Some("not base64".to_owned()),
                 creation_time_ms: Some(1_700_000_000_345),
@@ -28097,7 +28044,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigProposeDto {
                 selector: concrete_selector(multisig_account_id),
                 signer_account_id: signer_two_id,
-                private_key: None,
                 public_key_hex: Some(signer_public_key_hex),
                 signature_b64: Some(forged_signature_b64),
                 creation_time_ms: Some(1_700_000_000_345),
@@ -28203,7 +28149,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigProposeDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id,
-                private_key: None,
                 public_key_hex: Some(public_key_hex),
                 signature_b64: Some(signature_b64),
                 creation_time_ms: Some(creation_time_ms),
@@ -28321,7 +28266,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigProposeDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_one_id,
-                private_key: None,
                 public_key_hex: Some(public_key_hex),
                 signature_b64: Some(signature_b64),
                 creation_time_ms: Some(creation_time_ms),
@@ -28392,47 +28336,12 @@ seiyaku BytesPayloadNormalizeTest {
         );
     }
 
-    #[tokio::test]
-    async fn multisig_generic_propose_rejects_private_key_server_side_signing() {
-        let (
-            state,
-            multisig_account_id,
-            _authority_account_id,
-            signer_two_id,
-            _alias_literal,
-            authority_keypair,
-        ) = multisig_contract_test_fixture();
-        let instruction: dm::InstructionBox =
-            dm::Log::new(dm::Level::INFO, "multisig propose".to_owned()).into();
-
-        let err = handle_post_multisig_propose(
-            Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
-            build_queue(),
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(MultisigProposeDto {
-                selector: concrete_selector(multisig_account_id),
-                signer_account_id: signer_two_id,
-                private_key: Some(dm::ExposedPrivateKey(
-                    authority_keypair.private_key().clone(),
-                )),
-                public_key_hex: None,
-                signature_b64: None,
-                creation_time_ms: Some(1_700_000_000_345),
-                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), None),
-                memo: None,
-                validation_fee_policy_version: None,
-                validation_fee_policy_hash: None,
-                validation_fee_instruction_index: None,
-                validation_fee_transfer_entry_index: None,
-                instructions: vec![instruction],
-            }),
+    #[test]
+    fn multisig_generic_propose_does_not_deserialize_private_keys() {
+        norito::json::from_str::<MultisigProposeDto>(
+            r#"{"private_key":"ed01200000000000000000000000000000000000000000000000000000000000000000"}"#,
         )
-        .await
-        .expect_err("private_key must be rejected");
-        let message = expect_conversion(err);
-        assert!(message.contains("/v1/multisig/propose"));
-        assert!(message.contains("no longer accepts private_key"));
+        .expect_err("private_key must be rejected as an unknown field");
     }
 
     #[test]
@@ -28450,7 +28359,6 @@ seiyaku BytesPayloadNormalizeTest {
         let request = MultisigProposeDto {
             selector: alias_selector(&alias_literal),
             signer_account_id: signer_two_id,
-            private_key: None,
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: Some(1_700_000_000_345),
@@ -28589,7 +28497,6 @@ seiyaku BytesPayloadNormalizeTest {
         let request = MultisigProposeDto {
             selector: alias_selector(&alias_literal),
             signer_account_id: signer_two_id.clone(),
-            private_key: None,
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: Some(1_700_000_000_345),
@@ -28645,7 +28552,6 @@ seiyaku BytesPayloadNormalizeTest {
             NoritoJson(MultisigApproveDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 signer_account_id: signer_two_id,
-                private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_456),
@@ -28693,7 +28599,6 @@ pub async fn handle_post_contract_call_multisig_propose(
     let MultisigContractCallProposeDto {
         selector,
         signer_account_id,
-        private_key,
         public_key_hex,
         signature_b64,
         creation_time_ms,
@@ -28798,11 +28703,7 @@ pub async fn handle_post_contract_call_multisig_propose(
     )?;
     let fee_payment = builder.payload().fee_payment.clone();
 
-    let response = if private_key.is_some() {
-        return Err(reject_server_side_signing(
-            ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
-        ));
-    } else if public_key_hex.is_some() || signature_b64.is_some() {
+    let response = if public_key_hex.is_some() || signature_b64.is_some() {
         let public_key_hex = public_key_hex
             .as_deref()
             .map(str::trim)
@@ -28951,7 +28852,6 @@ pub async fn handle_post_contract_call_multisig_approve(
     let MultisigContractCallApproveDto {
         selector,
         signer_account_id,
-        private_key,
         public_key_hex,
         signature_b64,
         creation_time_ms,
@@ -28991,11 +28891,7 @@ pub async fn handle_post_contract_call_multisig_approve(
     let fee_payment = builder.payload().fee_payment.clone();
 
     let response =
-        if private_key.is_some() {
-            return Err(reject_server_side_signing(
-                ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
-            ));
-        } else if public_key_hex.is_some() || signature_b64.is_some() {
+        if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
                 .map(str::trim)
@@ -29101,7 +28997,6 @@ pub async fn handle_post_multisig_cancel(
     let MultisigCancelRequestDto {
         selector,
         signer_account_id,
-        private_key,
         public_key_hex,
         signature_b64,
         creation_time_ms,
@@ -29182,9 +29077,7 @@ pub async fn handle_post_multisig_cancel(
     )?;
     let fee_payment = builder.payload().fee_payment.clone();
 
-    let response = if private_key.is_some() {
-        return Err(reject_server_side_signing(ENDPOINT_MULTISIG_CANCEL));
-    } else if public_key_hex.is_some() || signature_b64.is_some() {
+    let response = if public_key_hex.is_some() || signature_b64.is_some() {
         let public_key_hex = public_key_hex
             .as_deref()
             .map(str::trim)
@@ -29313,7 +29206,6 @@ pub async fn handle_post_multisig_propose(
     let MultisigProposeDto {
         selector,
         signer_account_id,
-        private_key,
         public_key_hex,
         signature_b64,
         creation_time_ms,
@@ -29396,9 +29288,7 @@ pub async fn handle_post_multisig_propose(
     let fee_payment = builder.payload().fee_payment.clone();
 
     let response =
-        if private_key.is_some() {
-            return Err(reject_server_side_signing(ENDPOINT_MULTISIG_PROPOSE));
-        } else if public_key_hex.is_some() || signature_b64.is_some() {
+        if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
                 .map(str::trim)
@@ -29537,7 +29427,6 @@ pub async fn handle_post_multisig_approve(
     let MultisigApproveDto {
         selector,
         signer_account_id,
-        private_key,
         public_key_hex,
         signature_b64,
         creation_time_ms,
@@ -29577,9 +29466,7 @@ pub async fn handle_post_multisig_approve(
     let fee_payment = builder.payload().fee_payment.clone();
 
     let response =
-        if private_key.is_some() {
-            return Err(reject_server_side_signing(ENDPOINT_MULTISIG_APPROVE));
-        } else if public_key_hex.is_some() || signature_b64.is_some() {
+        if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
                 .map(str::trim)
@@ -30133,12 +30020,11 @@ pub fn handle_proof_retention_status(
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// DTO for registering a verifying key
 pub struct ZkVkRegisterDto {
     /// Account authorizing the operation
     pub authority: iroha_data_model::account::AccountId,
-    /// Exposed private key used to sign the transaction
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Verifier backend identifier (e.g., “groth16”)
     pub backend: String,
     /// Verifying key name within the backend namespace
@@ -30208,12 +30094,11 @@ fn _assert_vk_register_dto_json() {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// DTO for updating a verifying key record
 pub struct ZkVkUpdateDto {
     /// Account authorizing the operation
     pub authority: iroha_data_model::account::AccountId,
-    /// Exposed private key used to sign the transaction
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Verifier backend identifier (e.g., “groth16”)
     pub backend: String,
     /// Verifying key name within the backend namespace
@@ -30810,15 +30695,14 @@ mod vk_record_input_tests {
     }
 }
 
-/// POST /v1/zk/vk/register — submit RegisterVerifyingKey as a signed transaction.
+/// POST /v1/zk/vk/register — prepare `RegisterVerifyingKey` for local signing.
 #[cfg(feature = "app_api")]
 pub async fn handle_post_vk_register(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<ZkVkRegisterDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<AppApiTransactionDraftDto>> {
     use iroha_data_model::{isi::verifying_keys, prelude as dm};
     let vk_record = mk_record_from_inputs(VkRecordInputs {
         backend: req.backend.clone(),
@@ -30842,32 +30726,28 @@ pub async fn handle_post_vk_register(
         id,
         record: vk_record,
     };
-    let tx = quote_and_sign_app_api_transaction(
+    let builder = quote_app_api_transaction_builder(
         dm::TransactionBuilder::new(
             (*chain_id).clone(),
             req.authority.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
-        &req.private_key.0,
         queue.as_ref(),
         state.as_ref(),
         "/v1/zk/vk/register",
     )?;
-    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/register")
-        .await
-        .map(|_| (StatusCode::ACCEPTED, ()))
+    Ok(JsonBody(app_api_transaction_draft(&builder)))
 }
 
-/// POST /v1/zk/vk/update — submit UpdateVerifyingKey as a signed transaction.
+/// POST /v1/zk/vk/update — prepare `UpdateVerifyingKey` for local signing.
 #[cfg(feature = "app_api")]
 pub async fn handle_post_vk_update(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<ZkVkUpdateDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<AppApiTransactionDraftDto>> {
     use iroha_data_model::{isi::verifying_keys, prelude as dm};
     let vk_record = mk_record_from_inputs(VkRecordInputs {
         backend: req.backend.clone(),
@@ -30891,21 +30771,18 @@ pub async fn handle_post_vk_update(
         id,
         record: vk_record,
     };
-    let tx = quote_and_sign_app_api_transaction(
+    let builder = quote_app_api_transaction_builder(
         dm::TransactionBuilder::new(
             (*chain_id).clone(),
             req.authority.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(core::iter::once(dm::InstructionBox::from(isi))),
-        &req.private_key.0,
         queue.as_ref(),
         state.as_ref(),
         "/v1/zk/vk/update",
     )?;
-    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/update")
-        .await
-        .map(|_| (StatusCode::ACCEPTED, ()))
+    Ok(JsonBody(app_api_transaction_draft(&builder)))
 }
 
 /// GET /v1/zk/vk/{backend}/{name} — read verifying key record.
@@ -30962,11 +30839,10 @@ pub struct ContractCodeRecordDto {
     norito::derive::NoritoSerialize,
 )]
 /// Request for binding, updating, or clearing a contract alias.
+#[norito(deny_unknown_fields)]
 pub struct SetContractAliasDto {
-    /// Transaction authority
+    /// Transaction authority.
     pub authority: iroha_data_model::account::AccountId,
-    /// Signing key for submitting the transaction
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Canonical contract address whose alias binding should be updated.
     pub contract_address: iroha_data_model::smart_contract::ContractAddress,
     /// Optional alias literal. `None` clears the current binding.
@@ -30986,10 +30862,11 @@ pub struct SetContractAliasDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Response returned after submitting a contract alias update transaction.
+/// Unsigned contract-alias transaction draft for local signing.
+#[norito(deny_unknown_fields)]
 pub struct SetContractAliasResponseDto {
-    /// Whether the alias update request was accepted for submission.
-    pub ok: bool,
+    /// Always `false`; Torii has not submitted this transaction.
+    pub submitted: bool,
     /// Resolved alias bound to the contract, when present.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
@@ -30997,42 +30874,10 @@ pub struct SetContractAliasResponseDto {
     pub contract_address: iroha_data_model::smart_contract::ContractAddress,
     /// Dataspace alias hosting the contract instance.
     pub dataspace: String,
-    /// Hex-encoded transaction hash, when available.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub tx_hash_hex: Option<String>,
-    /// Submission status.
-    pub status: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// Request for dry-run simulation of contract deployment without enqueueing a transaction.
-pub struct ContractSimulateDto {
-    /// Transaction authority used for host context and metadata validation.
-    pub authority: iroha_data_model::account::AccountId,
-    /// Signing key used to build the in-memory transaction.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Base64-encoded compiled `.to` bytecode.
-    pub code_b64: String,
-    /// Optional transaction metadata applied during simulation (default empty).
-    #[norito(default)]
-    pub metadata: iroha_data_model::metadata::Metadata,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Clone, Debug, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// Response for contract simulation.
-pub struct ContractSimulateResponseDto {
-    /// Whether simulation succeeded.
-    pub ok: bool,
-    /// Hex-encoded code hash.
-    pub code_hash_hex: String,
-    /// Hex-encoded ABI hash.
-    pub abi_hash_hex: String,
-    /// Estimated gas budget derived from the program header.
-    pub gas_estimate: u64,
-    /// Queued ISIs produced by the VM, rendered as Norito JSON.
-    pub instructions: Vec<norito::json::Value>,
+    /// Canonical Norito `TransactionPayload` bytes encoded as padded base64.
+    pub transaction_payload_b64: String,
+    /// Signature message (`HashOf<TransactionPayload>`) encoded as padded base64.
+    pub signing_message_b64: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -31357,9 +31202,6 @@ pub struct AssetTransferResponseDto {
 pub struct ContractCallDto {
     /// Account authorizing the call.
     pub authority: iroha_data_model::account::AccountId,
-    /// Optional private key used to sign and submit the transaction directly.
-    #[norito(default)]
-    pub private_key: Option<iroha_data_model::prelude::ExposedPrivateKey>,
     /// Optional Ed25519 public key (hex) used with a detached signature submit flow.
     #[norito(default)]
     pub public_key_hex: Option<String>,
@@ -32250,9 +32092,6 @@ pub struct MultisigProposeDto {
     pub selector: MultisigAccountSelectorDto,
     /// Signer account submitting this proposal participation.
     pub signer_account_id: iroha_data_model::account::AccountId,
-    /// Optional private key used to sign and submit directly.
-    #[norito(default)]
-    pub private_key: Option<iroha_data_model::prelude::ExposedPrivateKey>,
     /// Optional Ed25519 public key (hex) used for detached submit.
     #[norito(default)]
     pub public_key_hex: Option<String>,
@@ -32299,9 +32138,6 @@ pub struct MultisigApproveDto {
     pub selector: MultisigAccountSelectorDto,
     /// Signer account submitting this approval participation.
     pub signer_account_id: iroha_data_model::account::AccountId,
-    /// Optional private key used to sign and submit directly.
-    #[norito(default)]
-    pub private_key: Option<iroha_data_model::prelude::ExposedPrivateKey>,
     /// Optional Ed25519 public key (hex) used for detached submit.
     #[norito(default)]
     pub public_key_hex: Option<String>,
@@ -32337,9 +32173,6 @@ pub struct MultisigContractCallProposeDto {
     pub selector: MultisigAccountSelectorDto,
     /// Signer account submitting this proposal participation.
     pub signer_account_id: iroha_data_model::account::AccountId,
-    /// Optional private key used to sign and submit directly.
-    #[norito(default)]
-    pub private_key: Option<iroha_data_model::prelude::ExposedPrivateKey>,
     /// Optional Ed25519 public key (hex) used for detached submit.
     #[norito(default)]
     pub public_key_hex: Option<String>,
@@ -32380,9 +32213,6 @@ pub struct MultisigContractCallApproveDto {
     pub selector: MultisigAccountSelectorDto,
     /// Signer account submitting this approval participation.
     pub signer_account_id: iroha_data_model::account::AccountId,
-    /// Optional private key used to sign and submit directly.
-    #[norito(default)]
-    pub private_key: Option<iroha_data_model::prelude::ExposedPrivateKey>,
     /// Optional Ed25519 public key (hex) used for detached submit.
     #[norito(default)]
     pub public_key_hex: Option<String>,
@@ -32441,7 +32271,6 @@ mod multisig_native_norito_dto_tests {
                 multisig_account_alias: Some("cbdc@hbl.sbp".to_owned()),
             },
             signer_account_id: signer.clone(),
-            private_key: None,
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: Some(1_700_000_000_234),
@@ -32528,9 +32357,6 @@ pub struct MultisigCancelRequestDto {
     pub selector: MultisigAccountSelectorDto,
     /// Signer account submitting this cancellation participation.
     pub signer_account_id: iroha_data_model::account::AccountId,
-    /// Optional private key used to sign and submit directly.
-    #[norito(default)]
-    pub private_key: Option<iroha_data_model::prelude::ExposedPrivateKey>,
     /// Optional Ed25519 public key (hex) used for detached submit.
     #[norito(default)]
     pub public_key_hex: Option<String>,
@@ -32851,11 +32677,10 @@ pub struct SubscriptionInstructionDraftDto {
     norito::derive::NoritoSerialize,
 )]
 /// Request payload for creating a subscription plan.
+#[norito(deny_unknown_fields)]
 pub struct SubscriptionPlanCreateDto {
     /// Account authorizing the transaction (plan provider).
     pub authority: iroha_data_model::account::AccountId,
-    /// Signing key for submitting the transaction.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Asset definition id used to store the plan metadata.
     pub plan_id: iroha_data_model::asset::AssetDefinitionId,
     /// Subscription plan payload stored on the asset definition.
@@ -32864,14 +32689,16 @@ pub struct SubscriptionPlanCreateDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-/// Response payload returned after registering a subscription plan.
+/// Canonical unsigned transaction draft for registering a subscription plan.
 pub struct SubscriptionPlanCreateResponseDto {
-    /// Whether the plan registration succeeded.
-    pub ok: bool,
+    /// Always `false`; Torii has not submitted this transaction.
+    pub submitted: bool,
     /// Plan asset definition id.
     pub plan_id: iroha_data_model::asset::AssetDefinitionId,
-    /// Hex-encoded transaction hash submitted to the queue.
-    pub tx_hash_hex: String,
+    /// Canonical Norito `TransactionPayload` bytes encoded as padded base64.
+    pub transaction_payload_b64: String,
+    /// Signature message (`HashOf<TransactionPayload>`) encoded as padded base64.
+    pub signing_message_b64: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -33103,11 +32930,10 @@ pub enum SubscriptionCancelMode {
     norito::derive::NoritoSerialize,
 )]
 /// Request payload for recording subscription usage.
+#[norito(deny_unknown_fields)]
 pub struct SubscriptionUsageRequestDto {
     /// Account authorizing the transaction (usage reporter).
     pub authority: iroha_data_model::account::AccountId,
-    /// Signing key for submitting the transaction.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Usage counter key to update.
     pub unit_key: iroha_data_model::name::Name,
     /// Non-negative usage increment.
@@ -33155,14 +32981,16 @@ pub struct SubscriptionActionResponseDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-/// Response payload for a server-submitted subscription usage action.
+/// Canonical unsigned transaction draft for recording subscription usage.
 pub struct SubscriptionUsageResponseDto {
-    /// Whether the action succeeded.
-    pub ok: bool,
+    /// Always `false`; Torii has not submitted this transaction.
+    pub submitted: bool,
     /// Subscription NFT id.
     pub subscription_id: iroha_data_model::nft::NftId,
-    /// Hex-encoded transaction hash submitted to the queue.
-    pub tx_hash_hex: String,
+    /// Canonical Norito `TransactionPayload` bytes encoded as padded base64.
+    pub transaction_payload_b64: String,
+    /// Signature message (`HashOf<TransactionPayload>`) encoded as padded base64.
+    pub signing_message_b64: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -33290,58 +33118,20 @@ pub struct RecordPorVerdictResponseDto {
     pub status: String,
 }
 
-#[cfg(feature = "app_api")]
-fn contract_alias_activation_state(
-    state: &CoreState,
-    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
-    expected_address: &iroha_data_model::smart_contract::ContractAddress,
-) -> (bool, bool) {
-    let world = state.world_view();
-    let bound = world
-        .contract_address_by_alias_at(contract_alias, current_time_millis())
-        .is_some_and(|candidate| candidate == *expected_address);
-    let active = world.contract_instances().get(expected_address).is_some();
-    (bound, active)
-}
-
-#[cfg(feature = "app_api")]
-async fn wait_for_contract_alias_target(
-    state: Arc<CoreState>,
-    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
-    expected_address: &iroha_data_model::smart_contract::ContractAddress,
-) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-    loop {
-        let (bound, active) =
-            contract_alias_activation_state(state.as_ref(), contract_alias, expected_address);
-        if bound && active {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(conversion_error(format!(
-                "timed out waiting for alias `{contract_alias}` to activate at `{expected_address}`"
-            )));
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
-/// POST /v1/contracts/aliases — bind, update, or clear the on-chain alias for
-/// an existing public contract instance.
+/// POST /v1/contracts/aliases — prepare a canonical unsigned transaction that
+/// binds, updates, or clears the alias for an existing public contract instance.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_alias_set(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<SetContractAliasDto>,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{isi::contract_alias::SetContractAlias, prelude as dm};
 
     let SetContractAliasDto {
         authority,
-        private_key,
         contract_address,
         contract_alias,
         lease_expiry_ms,
@@ -33362,49 +33152,27 @@ pub async fn handle_post_contract_alias_set(
         )),
         None => dm::InstructionBox::from(SetContractAlias::clear(contract_address.clone())),
     };
-    let tx = quote_and_sign_app_api_transaction(
+    let builder = quote_app_api_transaction_builder(
         dm::TransactionBuilder::new(
             (*chain_id).clone(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(std::iter::once(instruction)),
-        &private_key.0,
         queue.as_ref(),
         state.as_ref(),
         "/v1/contracts/aliases",
     )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    let draft = app_api_transaction_draft(&builder);
 
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state.clone(),
-        tx,
-        telemetry,
-        "/v1/contracts/aliases",
-    )
-    .await?;
-
-    if let Some(contract_alias) = contract_alias.as_ref() {
-        wait_for_contract_alias_target(state, contract_alias, &contract_address).await?;
-    }
-
-    let body = norito::json::to_json_pretty(&SetContractAliasResponseDto {
-        ok: true,
+    Ok(JsonBody(SetContractAliasResponseDto {
+        submitted: draft.submitted,
         contract_alias,
         contract_address,
         dataspace,
-        tx_hash_hex: Some(tx_hash_hex),
-        status: "submitted".to_owned(),
-    })
-    .unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        transaction_payload_b64: draft.transaction_payload_b64,
+        signing_message_b64: draft.signing_message_b64,
+    }))
 }
 
 /// POST /v1/sorafs/pin/register — submit a manifest registration transaction after validation.
@@ -33620,11 +33388,11 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
 ) -> Result<impl IntoResponse> {
     let register =
         validate_sorafs_capacity_declaration_transaction(chain_id.as_ref(), &transaction)?;
+    ensure_sorafs_quota_authority_registered(state.as_ref(), &transaction)?;
+    let quota_subject = sorafs_transaction_quota_subject(&transaction);
     let record = &register.record;
     let provider_id = record.provider_id;
-    if let Err(err) =
-        sorafs_limits.enforce(SorafsAction::CapacityDeclaration, provider_id.as_bytes())
-    {
+    if let Err(err) = sorafs_limits.enforce(SorafsAction::CapacityDeclaration, &quota_subject) {
         return Err(quota_limit_error(err));
     }
     let response = RegisterCapacityDeclarationResponseDto {
@@ -33664,10 +33432,11 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
     transaction: SignedTransaction,
 ) -> Result<impl IntoResponse> {
     let submit = validate_sorafs_capacity_telemetry_transaction(chain_id.as_ref(), &transaction)?;
+    ensure_sorafs_quota_authority_registered(state.as_ref(), &transaction)?;
+    let quota_subject = sorafs_transaction_quota_subject(&transaction);
     let record = submit.record;
     let provider_id = record.provider_id;
-    if let Err(err) = sorafs_limits.enforce(SorafsAction::CapacityTelemetry, provider_id.as_bytes())
-    {
+    if let Err(err) = sorafs_limits.enforce(SorafsAction::CapacityTelemetry, &quota_subject) {
         return Err(quota_limit_error(err));
     }
     let response = RecordCapacityTelemetryResponseDto {
@@ -33693,6 +33462,31 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+fn sorafs_transaction_quota_subject(transaction: &SignedTransaction) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"iroha:sorafs:control-plane-quota:v1\0");
+    hasher.update(transaction.authority().to_string().as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_sorafs_quota_authority_registered(
+    state: &CoreState,
+    transaction: &SignedTransaction,
+) -> Result<()> {
+    state
+        .world_view()
+        .account(transaction.authority())
+        .map(|_| ())
+        .map_err(|_| {
+            sorafs_pin_validation_error(
+                "sorafs_quota_authority_not_registered",
+                "SoraFS control-plane quota authority must be a registered on-chain account",
+            )
+        })
 }
 
 #[iroha_futures::telemetry_future]
@@ -35676,6 +35470,38 @@ mod sorafs_capacity_tests {
     }
 
     #[test]
+    fn capacity_quota_subject_is_bound_to_transaction_authority() {
+        let chain_id = ChainId::from("chain");
+        let authority = checked_capacity_keypair(0xB1, "derive capacity quota authority fixture");
+        let other = checked_capacity_keypair(0xB2, "derive alternate quota authority fixture");
+        let declaration = signed_capacity_declaration_transaction(
+            &chain_id,
+            &authority,
+            sample_capacity_declaration_record(),
+        );
+        let telemetry = signed_capacity_telemetry_transaction(
+            &chain_id,
+            &authority,
+            sample_capacity_telemetry_record(),
+        );
+        let other_declaration = signed_capacity_declaration_transaction(
+            &chain_id,
+            &other,
+            sample_capacity_declaration_record(),
+        );
+
+        assert_eq!(
+            sorafs_transaction_quota_subject(&declaration),
+            sorafs_transaction_quota_subject(&telemetry),
+            "the signed authority, not a caller-selected provider field, selects the bucket"
+        );
+        assert_ne!(
+            sorafs_transaction_quota_subject(&declaration),
+            sorafs_transaction_quota_subject(&other_declaration)
+        );
+    }
+
+    #[test]
     fn capacity_declaration_rejects_noncanonical_bounded_and_mismatched_records() {
         let chain_id = ChainId::from("chain");
         let key_pair = checked_capacity_keypair(0xA3, "derive capacity record validation fixture");
@@ -36879,7 +36705,7 @@ fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex>
     let cache_key = account_history_index_cache_key(state);
     if let Some(existing) = ACCOUNT_HISTORY_INDEX
         .read()
-        .expect("account history index read lock poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
         .filter(|index| index.cache_key == cache_key)
     {
@@ -36888,7 +36714,7 @@ fn account_history_index_snapshot(state: &CoreState) -> Arc<AccountHistoryIndex>
 
     let mut guard = ACCOUNT_HISTORY_INDEX
         .write()
-        .expect("account history index write lock poisoned");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(existing) = guard.as_ref().filter(|index| index.cache_key == cache_key) {
         return Arc::clone(existing);
     }
@@ -44885,60 +44711,6 @@ mod query_endpoint_tests {
         let resp = app.oneshot(req).await.unwrap();
         // Not found should map to 404
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn diagnostic_zk_submit_proof_does_not_create_ledger_proof_record() {
-        use axum::http::header::CONTENT_TYPE;
-
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
-        let body = br#"{"backend":"halo2/ipa","proof":"diagnostic-only"}"#;
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(
-            CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/json"),
-        );
-
-        let response = handle_v1_zk_submit_proof(headers, axum::body::Bytes::from_static(body))
-            .await
-            .expect("diagnostic submit handler should respond");
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .expect("collect diagnostic submit response")
-            .to_bytes();
-        let json: norito::json::Value =
-            norito::json::from_slice(&bytes).expect("diagnostic submit JSON");
-        assert_eq!(
-            json.get("ok").and_then(norito::json::Value::as_bool),
-            Some(true)
-        );
-        let diagnostic_id = json
-            .get("id")
-            .and_then(norito::json::Value::as_str)
-            .expect("diagnostic submit id");
-        assert_eq!(
-            diagnostic_id.len(),
-            64,
-            "diagnostic id should be a raw 32-byte body hash"
-        );
-
-        let ledger_id = format!("halo2/ipa:{diagnostic_id}");
-        let err = match handle_get_proof_record(state, axum::extract::Path(ledger_id)).await {
-            Ok(_) => panic!("diagnostic submit must not persist a ledger proof record"),
-            Err(err) => err,
-        };
-        assert!(matches!(
-            err,
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound
-            ))
-        ));
     }
 
     #[tokio::test]
@@ -61166,12 +60938,11 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Request payload for submitting a signed space directory manifest through Torii.
+/// Request payload for preparing a space-directory manifest transaction.
+#[norito(deny_unknown_fields)]
 pub struct SpaceDirectoryManifestPublishDto {
     /// Account that authorizes the manifest publication.
     pub authority: iroha_data_model::account::AccountId,
-    /// Exposed private key used to sign/authenticate the manifest payload.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Manifest describing the permissions for the space directory assets.
     pub manifest: iroha_data_model::nexus::AssetPermissionManifest,
     /// Optional operator-facing justification recorded with the publication event.
@@ -61188,11 +60959,10 @@ pub struct SpaceDirectoryManifestPublishDto {
     norito::derive::NoritoSerialize,
 )]
 /// Request payload for revoking a manifest from the space directory.
+#[norito(deny_unknown_fields)]
 pub struct SpaceDirectoryManifestRevokeDto {
     /// Account that owns the dataspace and authorizes the revocation.
     pub authority: iroha_data_model::account::AccountId,
-    /// Private key presented to authenticate the revocation request.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// UAID literal (`uaid:<hex>` or raw 64-hex digest).
     pub uaid: String,
     /// Dataspace identifier hosting the manifest.
@@ -61203,6 +60973,42 @@ pub struct SpaceDirectoryManifestRevokeDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod app_api_inline_signing_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn mutation_and_query_dtos_do_not_deserialize_private_keys() {
+        macro_rules! assert_private_key_rejected {
+            ($dto:ty) => {
+                assert!(
+                    norito::json::from_str::<$dto>(
+                        r#"{"private_key":"ed01200000000000000000000000000000000000000000000000000000000000000000"}"#,
+                    )
+                    .is_err(),
+                    "{} must reject private_key during strict extraction",
+                    stringify!($dto),
+                );
+            };
+        }
+
+        assert_private_key_rejected!(ZkVkRegisterDto);
+        assert_private_key_rejected!(ZkVkUpdateDto);
+        assert_private_key_rejected!(ProofFindByIdQueryDto);
+        assert_private_key_rejected!(SetContractAliasDto);
+        assert_private_key_rejected!(ContractCallDto);
+        assert_private_key_rejected!(MultisigProposeDto);
+        assert_private_key_rejected!(MultisigApproveDto);
+        assert_private_key_rejected!(MultisigContractCallProposeDto);
+        assert_private_key_rejected!(MultisigContractCallApproveDto);
+        assert_private_key_rejected!(MultisigCancelRequestDto);
+        assert_private_key_rejected!(SubscriptionPlanCreateDto);
+        assert_private_key_rejected!(SubscriptionUsageRequestDto);
+        assert_private_key_rejected!(SpaceDirectoryManifestPublishDto);
+        assert_private_key_rejected!(SpaceDirectoryManifestRevokeDto);
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -61444,16 +61250,16 @@ pub async fn handle_v1_space_directory_manifests(
     Ok(resp)
 }
 
-/// POST /v1/space-directory/manifests — enqueue a manifest publication.
+/// POST /v1/space-directory/manifests — prepare a canonical unsigned manifest
+/// publication transaction for local signing.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_space_directory_manifest_publish(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     crate::NoritoJson(payload): crate::NoritoJson<SpaceDirectoryManifestPublishDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<AppApiTransactionDraftDto>> {
     use iroha_data_model::{
         isi::space_directory::PublishSpaceDirectoryManifest,
         prelude::{InstructionBox, TransactionBuilder},
@@ -61461,7 +61267,6 @@ pub async fn handle_post_space_directory_manifest_publish(
 
     let SpaceDirectoryManifestPublishDto {
         authority,
-        private_key,
         mut manifest,
         reason,
     } = payload;
@@ -61475,41 +61280,31 @@ pub async fn handle_post_space_directory_manifest_publish(
     }
 
     let isi = PublishSpaceDirectoryManifest { manifest };
-    let tx = quote_and_sign_app_api_transaction(
+    let builder = quote_app_api_transaction_builder(
         TransactionBuilder::new(
             (*chain_id).clone(),
             authority.into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([InstructionBox::from(isi)]),
-        &private_key.0,
         queue.as_ref(),
         state.as_ref(),
         ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH,
     )?;
 
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH,
-    )
-    .await
-    .map(|_| (StatusCode::ACCEPTED, ()))
+    Ok(JsonBody(app_api_transaction_draft(&builder)))
 }
 
-/// POST /v1/space-directory/manifests/revoke — enqueue a manifest revocation.
+/// POST /v1/space-directory/manifests/revoke — prepare a canonical unsigned
+/// manifest-revocation transaction for local signing.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_space_directory_manifest_revoke(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     crate::NoritoJson(payload): crate::NoritoJson<SpaceDirectoryManifestRevokeDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<AppApiTransactionDraftDto>> {
     use iroha_data_model::{
         isi::space_directory::RevokeSpaceDirectoryManifest,
         prelude::{InstructionBox, TransactionBuilder},
@@ -61517,7 +61312,6 @@ pub async fn handle_post_space_directory_manifest_revoke(
 
     let SpaceDirectoryManifestRevokeDto {
         authority,
-        private_key,
         uaid,
         dataspace,
         revoked_epoch,
@@ -61531,29 +61325,19 @@ pub async fn handle_post_space_directory_manifest_revoke(
         revoked_epoch,
         reason,
     };
-    let tx = quote_and_sign_app_api_transaction(
+    let builder = quote_app_api_transaction_builder(
         TransactionBuilder::new(
             (*chain_id).clone(),
             authority.into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([InstructionBox::from(isi)]),
-        &private_key.0,
         queue.as_ref(),
         state.as_ref(),
         ENDPOINT_SPACE_DIRECTORY_MANIFEST_REVOKE,
     )?;
 
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        ENDPOINT_SPACE_DIRECTORY_MANIFEST_REVOKE,
-    )
-    .await
-    .map(|_| (StatusCode::ACCEPTED, ()))
+    Ok(JsonBody(app_api_transaction_draft(&builder)))
 }
 
 #[cfg(feature = "app_api")]
@@ -69566,12 +69350,10 @@ pub async fn handle_post_v1_subscription_plan(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<SubscriptionPlanCreateDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<SubscriptionPlanCreateResponseDto>> {
     let SubscriptionPlanCreateDto {
         authority,
-        private_key,
         plan_id,
         plan,
     } = req;
@@ -69595,42 +69377,25 @@ pub async fn handle_post_v1_subscription_plan(
         )),
     ];
 
-    let tx = quote_and_sign_app_api_transaction(
+    let builder = quote_app_api_transaction_builder(
         TransactionBuilder::new(
             (*chain_id).clone(),
             authority.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions),
-        &private_key.0,
         queue.as_ref(),
         state.as_ref(),
         ENDPOINT_SUBSCRIPTION_PLANS_LIST,
     )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    let draft = app_api_transaction_draft(&builder);
 
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        ENDPOINT_SUBSCRIPTION_PLANS_LIST,
-    )
-    .await?;
-
-    let payload = SubscriptionPlanCreateResponseDto {
-        ok: true,
+    Ok(JsonBody(SubscriptionPlanCreateResponseDto {
+        submitted: draft.submitted,
         plan_id,
-        tx_hash_hex,
-    };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        transaction_payload_b64: draft.transaction_payload_b64,
+        signing_message_b64: draft.signing_message_b64,
+    }))
 }
 
 #[iroha_futures::telemetry_future]
@@ -70421,13 +70186,11 @@ pub async fn handle_post_v1_subscription_usage(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     subscription_id: NftId,
     NoritoJson(req): NoritoJson<SubscriptionUsageRequestDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<SubscriptionUsageResponseDto>> {
     let SubscriptionUsageRequestDto {
         authority,
-        private_key,
         unit_key,
         delta,
         usage_trigger_id,
@@ -70441,41 +70204,25 @@ pub async fn handle_post_v1_subscription_usage(
         delta,
     };
     let instruction = ExecuteTrigger::new(trigger_id).with_args(usage_args);
-    let tx = quote_and_sign_app_api_transaction(
+    let builder = quote_app_api_transaction_builder(
         TransactionBuilder::new(
             (*chain_id).clone(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([InstructionBox::from(instruction)]),
-        &private_key.0,
         queue.as_ref(),
         state.as_ref(),
         ENDPOINT_SUBSCRIPTIONS_LIST,
     )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )
-    .await?;
+    let draft = app_api_transaction_draft(&builder);
 
-    let payload = SubscriptionUsageResponseDto {
-        ok: true,
+    Ok(JsonBody(SubscriptionUsageResponseDto {
+        submitted: draft.submitted,
         subscription_id,
-        tx_hash_hex,
-    };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        transaction_payload_b64: draft.transaction_payload_b64,
+        signing_message_b64: draft.signing_message_b64,
+    }))
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -70488,7 +70235,7 @@ mod subscription_api_tests {
     use iroha_core::{
         EventsSender, kura::Kura, query::store::LiveQueryStore, queue::Queue, state::World,
     };
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     #[test]
     fn derive_trigger_id_is_deterministic() {
@@ -71238,7 +70985,7 @@ mod subscription_api_tests {
     }
 
     #[tokio::test]
-    async fn handle_post_v1_subscription_plan_enqueues_transaction() {
+    async fn handle_post_v1_subscription_plan_returns_unsigned_transaction_draft() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
         let state = state_with_plans_and_subscriptions(
@@ -71247,34 +70994,32 @@ mod subscription_api_tests {
             Vec::new(),
             Vec::new(),
         );
-        let (queue, chain_id, telemetry) = test_queue_components();
+        let (queue, chain_id, _telemetry) = test_queue_components();
         let plan_id: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f8");
         let plan = sample_plan(provider.clone());
         let req = SubscriptionPlanCreateDto {
             authority: provider,
-            private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()),
             plan_id: plan_id.clone(),
             plan,
         };
 
-        let resp = handle_post_v1_subscription_plan(
-            chain_id,
-            queue.clone(),
-            state,
-            telemetry,
-            NoritoJson(req),
-        )
-        .await
-        .expect("handler ok")
-        .into_response();
+        let resp =
+            handle_post_v1_subscription_plan(chain_id, queue.clone(), state, NoritoJson(req))
+                .await
+                .expect("handler ok")
+                .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(queue.queued_len(), 0);
 
         let json = response_json(resp).await;
-        assert_eq!(json["ok"].as_bool(), Some(true));
+        assert_eq!(json["submitted"].as_bool(), Some(false));
         let plan_id_str = plan_id.to_string();
         assert_eq!(json["plan_id"].as_str(), Some(plan_id_str.as_str()));
+        assert!(json["transaction_payload_b64"].as_str().is_some());
+        assert!(json["signing_message_b64"].as_str().is_some());
+        assert!(json.get("private_key").is_none());
+        assert!(json.get("tx_hash_hex").is_none());
     }
 
     #[tokio::test]
@@ -71464,10 +71209,9 @@ mod subscription_api_tests {
             Some(9_000)
         );
 
-        let (queue, chain_id, telemetry) = test_queue_components();
+        let (queue, chain_id, _telemetry) = test_queue_components();
         let usage_req = SubscriptionUsageRequestDto {
             authority: subscriber,
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             unit_key: "requests".parse().unwrap(),
             delta: Quantity::from(5_u32),
             usage_trigger_id: None,
@@ -71476,22 +71220,24 @@ mod subscription_api_tests {
             chain_id,
             queue.clone(),
             state,
-            telemetry,
             active_id.clone(),
             NoritoJson(usage_req),
         )
         .await
         .expect("usage ok")
         .into_response();
-        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(queue.queued_len(), 0);
         assert_eq!(resp.status(), StatusCode::OK);
         let usage = response_json(resp).await;
-        assert_eq!(usage["ok"].as_bool(), Some(true));
+        assert_eq!(usage["submitted"].as_bool(), Some(false));
         assert_eq!(
             usage["subscription_id"].as_str(),
             Some(active_id.to_string().as_str())
         );
-        assert!(usage["tx_hash_hex"].as_str().is_some());
+        assert!(usage["transaction_payload_b64"].as_str().is_some());
+        assert!(usage["signing_message_b64"].as_str().is_some());
+        assert!(usage.get("private_key").is_none());
+        assert!(usage.get("tx_hash_hex").is_none());
     }
 
     #[tokio::test]
@@ -71558,6 +71304,25 @@ mod subscription_api_tests {
 
     #[test]
     fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
+        let plan = SubscriptionPlanCreateDto {
+            authority: ALICE_ID.clone(),
+            plan_id: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554404f9"),
+            plan: sample_plan(ALICE_ID.clone()),
+        };
+        let mut plan_value = norito::json::to_value(&plan)
+            .unwrap()
+            .as_object()
+            .cloned()
+            .unwrap();
+        plan_value.insert(
+            "private_key".to_owned(),
+            Value::String("forbidden".to_owned()),
+        );
+        assert!(
+            norito::json::from_value::<SubscriptionPlanCreateDto>(Value::Object(plan_value))
+                .is_err()
+        );
+
         let create = SubscriptionCreateDto {
             authority: BOB_ID.clone(),
             subscription_id: "sub-strict-create$wonderland.universal".parse().unwrap(),
@@ -71596,6 +71361,26 @@ mod subscription_api_tests {
         );
         assert!(
             norito::json::from_value::<SubscriptionActionDto>(Value::Object(action_value)).is_err()
+        );
+
+        let usage = SubscriptionUsageRequestDto {
+            authority: BOB_ID.clone(),
+            unit_key: "requests".parse().unwrap(),
+            delta: Quantity::from(1_u32),
+            usage_trigger_id: None,
+        };
+        let mut usage_value = norito::json::to_value(&usage)
+            .unwrap()
+            .as_object()
+            .cloned()
+            .unwrap();
+        usage_value.insert(
+            "private_key".to_owned(),
+            Value::String("forbidden".to_owned()),
+        );
+        assert!(
+            norito::json::from_value::<SubscriptionUsageRequestDto>(Value::Object(usage_value))
+                .is_err()
         );
     }
 
@@ -74689,45 +74474,7 @@ pub fn handle_get_nexus_lane_lifecycle(state: &CoreState) -> Result<LaneLifecycl
 
 #[cfg(test)]
 mod nexus_lane_lifecycle_tests {
-    use super::*;
-
-    fn enabled_state_for_lifecycle_test() -> Arc<CoreState> {
-        let mut state = CoreState::new_for_testing(
-            iroha_core::state::World::default(),
-            Kura::blank_kura_for_testing(),
-            iroha_core::query::store::LiveQueryStore::start_test(),
-        );
-        let configured_catalog = state.nexus_snapshot().lane_catalog;
-        state
-            .prepare_configured_primary_geometry_anchor(&configured_catalog)
-            .expect("prepare the authenticated primary lane anchor");
-        state
-            .set_nexus(iroha_config::parameters::actual::Nexus {
-                enabled: true,
-                ..Default::default()
-            })
-            .expect("enable Nexus for lifecycle test");
-        Arc::new(state)
-    }
-
-    #[test]
-    fn lane_lifecycle_status_binds_exact_current_catalog() {
-        let state = enabled_state_for_lifecycle_test();
-        let status = handle_get_nexus_lane_lifecycle(&state).expect("lifecycle status");
-        assert!(status.nexus_enabled);
-        let view = state.view();
-        assert_eq!(
-            status.validate().expect("validate lifecycle status"),
-            view.nexus.lane_catalog
-        );
-        let expected_incarnations =
-            iroha_data_model::nexus::LaneLifecycleParameterV1::canonical_incarnations(
-                &view.nexus.lane_catalog,
-                &view.lane_incarnations,
-            )
-            .expect("canonical committed incarnations");
-        assert_eq!(status.incarnations, expected_incarnations);
-    }
+    include!("tests/routing_nexus_lane_lifecycle.rs");
 }
 
 pub mod block {

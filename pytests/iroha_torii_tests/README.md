@@ -1,6 +1,6 @@
 # Torii API Testing Project
 
-This project is dedicated to automating the testing of the Torii API, which is part of the Iroha 2 blockchain framework.
+This project automates testing of the Torii API exposed by Iroha 3.
 
 ## Getting Started
 

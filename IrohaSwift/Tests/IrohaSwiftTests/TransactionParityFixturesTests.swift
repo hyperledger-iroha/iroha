@@ -236,6 +236,8 @@ final class TransactionParityFixturesTests: XCTestCase {
             .appendingPathComponent("fixtures/norito_rpc/iroha_compact_hash_vector.properties")
         let fixtureText = try String(contentsOf: fixtureURL, encoding: .utf8)
         let fixture = try Self.properties(fixtureText)
+        XCTAssertEqual(fixture["schema.version"], "2")
+        XCTAssertEqual(fixture["source.fixture"], "transfer_asset")
         let versioned = try TransactionFixtureLoader.decodeCanonicalBase64(
             try XCTUnwrap(fixture["versioned.base64"]),
             context: "versioned.base64"
@@ -245,9 +247,10 @@ final class TransactionParityFixturesTests: XCTestCase {
 
         let bare = Data(versioned.dropFirst())
         XCTAssertEqual(bare.count, Int(try XCTUnwrap(fixture["bare.bytes"])))
+        let payload = try canonicalSignedTransactionPayload(bare)
         var compact = CompactNoritoWriter()
         compact.writeUInt32LE(0)
-        compact.writeField(bare)
+        compact.writeField(payload)
         XCTAssertEqual(
             Data(compact.data.prefix(6)).hexEncodedString(),
             fixture["canonical.prefix.hex"]
@@ -259,7 +262,7 @@ final class TransactionParityFixturesTests: XCTestCase {
 
         var fixedWidth = CanonicalNoritoWriter()
         fixedWidth.writeUInt32LE(0)
-        fixedWidth.writeField(bare)
+        fixedWidth.writeField(payload)
         XCTAssertNotEqual(
             IrohaHash.hash(fixedWidth.data).hexEncodedString(),
             fixture["canonical.hash"],
@@ -303,6 +306,50 @@ final class TransactionParityFixturesTests: XCTestCase {
                     return XCTFail("unexpected base64 error for \(malformed): \(error)")
                 }
             }
+        }
+    }
+
+    func testPayloadFixtureLoaderRequiresPositiveIntegerTtl() throws {
+        let payloadURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/swift_parity_payloads.json")
+        let source = try Data(contentsOf: payloadURL)
+
+        func loadFixture(ttl: Any?) throws -> TransactionFixtureLoader.PayloadEntry {
+            guard var entries =
+                    try JSONSerialization.jsonObject(with: source) as? [[String: Any]],
+                  var payload = entries.first?["payload"] as? [String: Any] else {
+                throw FixtureError.missingFixture("swift parity payload")
+            }
+            if let ttl {
+                payload["time_to_live_ms"] = ttl
+            } else {
+                payload.removeValue(forKey: "time_to_live_ms")
+            }
+            entries[0]["payload"] = payload
+            let data = try JSONSerialization.data(withJSONObject: entries)
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            return try decoder.decode([TransactionFixtureLoader.PayloadEntry].self, from: data)[0]
+        }
+
+        XCTAssertEqual(try loadFixture(ttl: 1).payload.timeToLiveMs, 1)
+        XCTAssertEqual(try loadFixture(ttl: 100_000).payload.timeToLiveMs, 100_000)
+
+        let invalidValues: [(String, Any?)] = [
+            ("missing", nil),
+            ("null", NSNull()),
+            ("zero", 0),
+            ("negative", -1),
+            ("true", true),
+            ("false", false),
+            ("fractional", 1.5),
+            ("string", "100000"),
+        ]
+        for (label, value) in invalidValues {
+            XCTAssertThrowsError(try loadFixture(ttl: value), label)
         }
     }
 
@@ -402,9 +449,7 @@ final class TransactionParityFixturesTests: XCTestCase {
     private static func properties(_ contents: String) throws -> [String: String] {
         let expectedKeys: Set<String> = [
             "schema.version",
-            "source.tag",
-            "source.bundle.sha256",
-            "reference",
+            "source.fixture",
             "versioned.bytes",
             "versioned.sha256",
             "bare.bytes",
@@ -576,7 +621,7 @@ private struct TransactionPayloadSpec: Decodable {
     let authority: String
     let creationTimeMs: UInt64
     let executable: TransactionExecutable
-    let timeToLiveMs: UInt64?
+    let timeToLiveMs: UInt64
     let nonce: UInt32?
     let feePayment: FeePaymentIntent
     let metadata: [String: String]
@@ -598,7 +643,14 @@ private struct TransactionPayloadSpec: Decodable {
         authority = try container.decode(String.self, forKey: .authority)
         creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
         executable = try container.decode(TransactionExecutable.self, forKey: .executable)
-        timeToLiveMs = try container.decodeIfPresent(UInt64.self, forKey: .timeToLiveMs)
+        timeToLiveMs = try container.decode(UInt64.self, forKey: .timeToLiveMs)
+        guard timeToLiveMs > 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .timeToLiveMs,
+                in: container,
+                debugDescription: "time_to_live_ms must be positive"
+            )
+        }
         nonce = try container.decodeIfPresent(UInt32.self, forKey: .nonce)
         // The fixture loader uses `convertFromSnakeCase` for the surrounding
         // payload. Decode the fee object as JSON first so its exact wire keys

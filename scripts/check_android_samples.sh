@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SAMPLES_DIR="$ROOT_DIR/examples/android"
-SCREENSHOT_ROOT="$ROOT_DIR/docs/source/sdk/android/samples/screenshots"
+SCREENSHOT_ROOT="$ROOT_DIR/specs/sdk/android/samples/screenshots"
 LOCALIZATION_HELPER="$ROOT_DIR/scripts/android_sample_localization.py"
 REQUIRED_SAMPLE_LOCALES=("en" "ja" "he")
 

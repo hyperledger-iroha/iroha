@@ -13,11 +13,11 @@ usage() {
 Usage: scripts/iroha_monitor_demo.sh [options]
 
 Launch `iroha_monitor --spawn-lite`, capture the overview/focused-search frames, and
-store the artefacts under docs/source/images/iroha_monitor_demo/.
+store the artefacts under specs/images/iroha_monitor_demo/.
 
 Options:
   --output-dir DIR      Directory for SVG/ANS outputs
-                        (default: docs/source/images/iroha_monitor_demo)
+                        (default: specs/images/iroha_monitor_demo)
   --monitor-binary BIN  Path to iroha_monitor binary (default: target/debug/iroha_monitor)
   --duration SEC        Seconds to keep the monitor running per capture (default: 4)
   --cols N              Terminal column count for captures (default: 120)
@@ -42,7 +42,7 @@ Prerequisites:
 EOF
 }
 
-OUTPUT_DIR="${ROOT_DIR}/docs/source/images/iroha_monitor_demo"
+OUTPUT_DIR="${ROOT_DIR}/specs/images/iroha_monitor_demo"
 MONITOR_BIN="${ROOT_DIR}/target/debug/iroha_monitor"
 DURATION=4
 COLS=120

@@ -8,9 +8,9 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     fs::File,
-    io::Read,
+    io::{Read, Write},
     num::NonZeroU32,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
@@ -40,29 +40,49 @@ use norito::{
     json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };
 use sha2::{Digest as ShaDigest, Sha256};
-use tempfile::tempdir;
+use tempfile::{NamedTempFile, tempdir};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+const CANONICAL_FIXTURE_DIRECTORY: &str = "fixtures/norito_rpc";
+const CANONICAL_PAYLOADS: &str = "fixtures/norito_rpc/transaction_payloads.json";
+const PAYLOADS_BASENAME: &str = "transaction_payloads.json";
 const CANONICAL_MANIFEST: &str = "fixtures/norito_rpc/transaction_fixtures.manifest.json";
 const SCHEMA_HASH_MANIFEST: &str = "fixtures/norito_rpc/schema_hashes.json";
 const SCHEMA_HASH_MANIFEST_BASENAME: &str = "schema_hashes.json";
 const MANIFEST_BASENAME: &str = "transaction_fixtures.manifest.json";
-const SDK_MANIFESTS: &[(&str, &str, bool)] = &[
-    (
-        "python",
-        "python/iroha_python/tests/fixtures/transaction_fixtures.manifest.json",
-        false,
-    ),
-    (
-        "java",
-        "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
-        true,
-    ),
-    (
-        "swift",
-        "IrohaSwift/Fixtures/transaction_fixtures.manifest.json",
-        false,
-    ),
+const COMPACT_HASH_VECTOR_BASENAME: &str = "iroha_compact_hash_vector.properties";
+const COMPACT_HASH_VECTOR_SOURCE: &str = "transfer_asset";
+const SIGNED_TRANSACTION_V1: u8 = 1;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalBlobPolicy {
+    None,
+    Canonical,
+    SwiftPrefixed,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SdkFixtureDirectory {
+    label: &'static str,
+    relative_directory: &'static str,
+    local_blobs: LocalBlobPolicy,
+}
+
+const SDK_FIXTURE_DIRECTORIES: &[SdkFixtureDirectory] = &[
+    SdkFixtureDirectory {
+        label: "python",
+        relative_directory: "python/iroha_python/tests/fixtures",
+        local_blobs: LocalBlobPolicy::None,
+    },
+    SdkFixtureDirectory {
+        label: "java",
+        relative_directory: "java/iroha_android/src/test/resources",
+        local_blobs: LocalBlobPolicy::Canonical,
+    },
+    SdkFixtureDirectory {
+        label: "swift",
+        relative_directory: "IrohaSwift/Fixtures",
+        local_blobs: LocalBlobPolicy::SwiftPrefixed,
+    },
 ];
 
 fn workspace_root() -> PathBuf {
@@ -105,85 +125,109 @@ pub enum JsonOutput {
     File(PathBuf),
 }
 
-/// Inputs and output selection for fixture regeneration.
+/// Root receiving the complete canonical and SDK fixture publication.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FixtureOptions {
-    /// Source JSON containing transaction fixture definitions.
-    fixtures_json: Option<PathBuf>,
-    /// Deprecated exporter manifest argument retained for CLI compatibility.
-    exporter_manifest: Option<PathBuf>,
-    /// Directory receiving canonical manifests and encoded payloads.
-    output_dir: Option<PathBuf>,
-    /// Existing manifest whose entries select the fixtures to retain.
-    selection_manifest: Option<PathBuf>,
-    /// Emit every generated fixture instead of applying the selection manifest.
-    include_all: bool,
-    /// Compare generated payload bytes with encoded hints from the source JSON.
-    check_encoded: bool,
+    output_root: Option<PathBuf>,
 }
 
 impl FixtureOptions {
-    /// Create fixture-generation options from the established `xtask` inputs.
-    pub fn new(
-        fixtures_json: Option<PathBuf>,
-        exporter_manifest: Option<PathBuf>,
-        output_dir: Option<PathBuf>,
-        selection_manifest: Option<PathBuf>,
-        include_all: bool,
-        check_encoded: bool,
-    ) -> Self {
-        Self {
-            fixtures_json,
-            exporter_manifest,
-            output_dir,
-            selection_manifest,
-            include_all,
-            check_encoded,
-        }
+    /// Create fixture-generation options rooted at an optional staging tree.
+    pub fn new(output_root: Option<PathBuf>) -> Self {
+        Self { output_root }
     }
 
     fn resolve_paths(&self) -> Result<ResolvedFixtureOptions> {
-        let root = workspace_root();
-        if self.exporter_manifest.is_some() {
-            eprintln!(
-                "[norito-rpc] warning: --exporter is deprecated and ignored; fixture exporter is built into xtask"
+        let requested_root = self.output_root.clone().unwrap_or_else(workspace_root);
+        reject_ambiguous_root(&requested_root)?;
+        let root_metadata = fs::symlink_metadata(&requested_root)
+            .with_context(|| format!("output root does not exist: {}", requested_root.display()))?;
+        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+            bail!(
+                "output root must be an existing non-symlink directory: {}",
+                requested_root.display()
             );
         }
-        let fixtures = self.fixtures_json.clone().unwrap_or_else(|| {
-            root.join("java/iroha_android/src/test/resources/transaction_payloads.json")
-        });
-        if !fixtures.is_file() {
+        let output_root = requested_root
+            .canonicalize()
+            .with_context(|| format!("failed to resolve {}", requested_root.display()))?;
+        if output_root.parent().is_none() {
+            bail!("filesystem root is not a valid fixture output root");
+        }
+        let fixtures = output_root.join(CANONICAL_PAYLOADS);
+        ensure_safe_owned_path(&output_root, &fixtures)?;
+        let fixture_metadata = fs::symlink_metadata(&fixtures)
+            .with_context(|| format!("canonical fixtures JSON missing: {}", fixtures.display()))?;
+        if fixture_metadata.file_type().is_symlink() || !fixture_metadata.is_file() {
             return Err(eyre!(
-                "fixtures JSON missing: {} (override with --fixtures)",
+                "canonical fixtures JSON must be a regular non-symlink file: {}",
                 fixtures.display()
             ));
         }
-        let output = self
-            .output_dir
-            .clone()
-            .unwrap_or_else(|| root.join("fixtures/norito_rpc"));
-        let selection = self
-            .selection_manifest
-            .clone()
-            .unwrap_or_else(|| output.join(MANIFEST_BASENAME));
         Ok(ResolvedFixtureOptions {
+            output_root,
             fixtures_json: fixtures,
-            output_dir: output,
-            manifest_path: selection,
         })
     }
 }
 
 struct ResolvedFixtureOptions {
+    output_root: PathBuf,
     fixtures_json: PathBuf,
-    output_dir: PathBuf,
-    manifest_path: PathBuf,
+}
+
+fn reject_ambiguous_root(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty()
+        || path == Path::new(".")
+        || path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        bail!("fixture output root must be an unambiguous directory path");
+    }
+    Ok(())
+}
+
+fn ensure_safe_owned_path(root: &Path, target: &Path) -> Result<()> {
+    let relative = target.strip_prefix(root).with_context(|| {
+        format!(
+            "fixture output {} escapes root {}",
+            target.display(),
+            root.display()
+        )
+    })?;
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        bail!("invalid fixture output path: {}", target.display());
+    }
+
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "fixture output path contains a symlink: {}",
+                    current.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect {}", current.display()));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct SchemaHashManifest {
     version: u32,
-    generated_at: String,
     entries: Vec<SchemaHashEntry>,
 }
 
@@ -194,12 +238,8 @@ impl SchemaHashManifest {
     }
 
     fn new_current() -> Self {
-        let timestamp = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .expect("timestamp format must succeed");
         Self {
             version: 1,
-            generated_at: timestamp,
             entries: schema_targets()
                 .into_iter()
                 .map(|target| SchemaHashEntry {
@@ -270,10 +310,6 @@ fn verify_schema_hash_manifest(manifest: &SchemaHashManifest) -> Result<()> {
             manifest.version
         );
     }
-    if OffsetDateTime::parse(&manifest.generated_at, &Rfc3339).is_err() {
-        bail!("schema hash manifest has invalid generated_at timestamp");
-    }
-
     let expected = schema_targets();
     if expected.len() != manifest.entries.len() {
         bail!(
@@ -365,7 +401,17 @@ fn write_json_output(value: &Value, target: JsonOutput) -> Result<()> {
 }
 
 fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
-    let root = workspace_root();
+    let resolved = FixtureOptions::new(None).resolve_paths()?;
+    let root = resolved.output_root.clone();
+    let rendered = tempdir().context("failed to create private fixture verification tree")?;
+    let expected = render_fixture_publication(&resolved.fixtures_json, rendered.path())?;
+    compare_owned_publication(
+        rendered.path(),
+        &root,
+        &owned_publication_paths(&expected.fixtures)?,
+    )?;
+    verify_all_blob_policies(&root, &expected.fixtures, true)?;
+
     let canonical_path = root.join(CANONICAL_MANIFEST);
     let canonical = Manifest::load(&canonical_path)
         .with_context(|| format!("failed to read {}", canonical_path.display()))?;
@@ -376,31 +422,46 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
                 .expect("manifest file should have parent directory"),
         ))
         .context("canonical manifest validation failed")?;
+    let compact_hash_vector_path = canonical_path
+        .parent()
+        .expect("manifest file should have parent directory")
+        .join(COMPACT_HASH_VECTOR_BASENAME);
+    verify_compact_hash_vector(&compact_hash_vector_path, &canonical.fixtures)?;
 
+    let canonical_manifest_bytes = fs::read(&canonical_path)?;
+    let canonical_payloads_path = root.join(CANONICAL_PAYLOADS);
+    let canonical_payloads_bytes = fs::read(&canonical_payloads_path)?;
     let mut sdk_manifests = Vec::new();
-    for (label, rel_path, enforce_parity) in SDK_MANIFESTS {
-        let manifest_path = root.join(rel_path);
-        let manifest_dir = manifest_path
-            .parent()
-            .ok_or_else(|| eyre!("manifest path {} has no parent", manifest_path.display()))?;
-        let manifest = Manifest::load(&manifest_path)
-            .with_context(|| format!("{label} manifest missing at {}", manifest_path.display()))?;
+    for sdk in SDK_FIXTURE_DIRECTORIES {
+        let manifest_dir = root.join(sdk.relative_directory);
+        let manifest_path = manifest_dir.join(MANIFEST_BASENAME);
+        let manifest = Manifest::load(&manifest_path).with_context(|| {
+            format!(
+                "{} manifest missing at {}",
+                sdk.label,
+                manifest_path.display()
+            )
+        })?;
         manifest
-            .validate(Some(manifest_dir))
-            .with_context(|| format!("{label} manifest failed validation"))?;
-        manifest
-            .compare_with(&canonical)
-            .map_err(|err| eyre!("{label} manifest diverges: {err}"))
-            .or_else(|err| {
-                if *enforce_parity {
-                    Err(err)
-                } else {
-                    eprintln!("[norito-rpc] warning: {label} manifest parity skipped ({err})");
-                    Ok(())
-                }
-            })?;
+            .validate(
+                (sdk.local_blobs == LocalBlobPolicy::Canonical).then_some(manifest_dir.as_path()),
+            )
+            .with_context(|| format!("{} manifest failed validation", sdk.label))?;
+        if fs::read(&manifest_path)? != canonical_manifest_bytes {
+            bail!(
+                "{} manifest bytes differ from the canonical manifest",
+                sdk.label
+            );
+        }
+        let payloads_path = manifest_dir.join(PAYLOADS_BASENAME);
+        if fs::read(&payloads_path)? != canonical_payloads_bytes {
+            bail!(
+                "{} payload descriptor bytes differ from the canonical descriptor",
+                sdk.label
+            );
+        }
         sdk_manifests.push(SdkManifestReport {
-            sdk: label.to_string(),
+            sdk: sdk.label.to_string(),
             manifest: manifest_digest(&manifest_path, &root)?,
         });
     }
@@ -430,66 +491,61 @@ fn build_verification_report() -> Result<NoritoRpcVerificationReport> {
 /// Regenerate canonical Norito RPC fixtures from the configured source JSON.
 pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
     let resolved = options.resolve_paths()?;
-    fs::create_dir_all(&resolved.output_dir)
-        .with_context(|| format!("failed to create {}", resolved.output_dir.display()))?;
-    let temp_dir = tempdir().context("failed to create temporary directory")?;
-    generate_fixture_artifacts(&resolved, temp_dir.path(), options.check_encoded)?;
-    let generated_manifest_path = temp_dir.path().join(MANIFEST_BASENAME);
-    let generated = Manifest::load(&generated_manifest_path).with_context(|| {
-        format!(
-            "failed to read generated manifest {}",
-            generated_manifest_path.display()
-        )
-    })?;
-    generated
-        .validate(Some(temp_dir.path()))
-        .map_err(|err| eyre!("generated manifest failed validation: {err}"))?;
-
-    let desired_names = if options.include_all {
-        None
-    } else if resolved.manifest_path.exists() {
-        let existing = Manifest::load(&resolved.manifest_path)?;
-        Some(
-            existing
-                .fixtures
-                .iter()
-                .map(|fixture| fixture.name.clone())
-                .collect::<Vec<_>>(),
-        )
-    } else {
-        None
-    };
-
-    let selected = filter_fixtures(&generated, desired_names.as_deref())?;
-    sync_norito_files(&selected, temp_dir.path(), &resolved.output_dir)?;
-    let filtered_manifest = Manifest {
-        fixtures: selected.clone(),
-    };
-    filtered_manifest
-        .validate(Some(&resolved.output_dir))
-        .context("final manifest validation failed")?;
-    let manifest_json = json::to_json_pretty(&filtered_manifest)?;
-    fs::write(&resolved.manifest_path, format!("{manifest_json}\n"))
-        .with_context(|| format!("failed to write {}", resolved.manifest_path.display()))?;
-    let schema_path = resolved.output_dir.join(SCHEMA_HASH_MANIFEST_BASENAME);
-    write_schema_hash_manifest(&schema_path)
-        .with_context(|| format!("failed to generate {}", schema_path.display()))?;
+    let rendered = tempdir().context("failed to create private fixture publication tree")?;
+    let generated = render_fixture_publication(&resolved.fixtures_json, rendered.path())?;
+    let owned_paths = owned_publication_paths(&generated.fixtures)?;
+    preflight_publication(&resolved.output_root, &generated.fixtures, &owned_paths)?;
+    publish_owned_publication(rendered.path(), &resolved.output_root, &owned_paths)?;
+    compare_owned_publication(rendered.path(), &resolved.output_root, &owned_paths)?;
+    verify_all_blob_policies(&resolved.output_root, &generated.fixtures, true)?;
 
     println!(
         "norito-rpc fixtures regenerated: {} entries written to {}",
-        filtered_manifest.fixtures.len(),
-        resolved.manifest_path.display()
+        generated.fixtures.len(),
+        resolved.output_root.join(CANONICAL_MANIFEST).display()
     );
     Ok(())
 }
 
-fn generate_fixture_artifacts(
-    resolved: &ResolvedFixtureOptions,
-    out_dir: &Path,
-    check_encoded: bool,
-) -> Result<()> {
-    let fixtures_text = fs::read_to_string(&resolved.fixtures_json)
-        .with_context(|| format!("failed to read {}", resolved.fixtures_json.display()))?;
+fn render_fixture_publication(fixtures_json: &Path, publication_root: &Path) -> Result<Manifest> {
+    let canonical_dir = publication_root.join(CANONICAL_FIXTURE_DIRECTORY);
+    fs::create_dir_all(&canonical_dir)
+        .with_context(|| format!("failed to create {}", canonical_dir.display()))?;
+    generate_fixture_artifacts(fixtures_json, &canonical_dir)?;
+
+    let manifest_path = canonical_dir.join(MANIFEST_BASENAME);
+    let manifest = Manifest::load(&manifest_path).with_context(|| {
+        format!(
+            "failed to read generated manifest {}",
+            manifest_path.display()
+        )
+    })?;
+    manifest
+        .validate(Some(&canonical_dir))
+        .map_err(|error| eyre!("generated manifest failed validation: {error}"))?;
+
+    let compact_hash_vector = render_compact_hash_vector(&manifest.fixtures)?;
+    let schema_path = canonical_dir.join(SCHEMA_HASH_MANIFEST_BASENAME);
+    write_schema_hash_manifest(&schema_path)
+        .with_context(|| format!("failed to generate {}", schema_path.display()))?;
+    let compact_hash_vector_path = canonical_dir.join(COMPACT_HASH_VECTOR_BASENAME);
+    fs::write(&compact_hash_vector_path, compact_hash_vector)
+        .with_context(|| format!("failed to generate {}", compact_hash_vector_path.display()))?;
+
+    let manifest_json = json::to_json_pretty(&manifest)?;
+    sync_sdk_fixture_mirrors(
+        publication_root,
+        &canonical_dir,
+        &manifest.fixtures,
+        &manifest_json,
+    )?;
+    verify_all_blob_policies(publication_root, &manifest.fixtures, true)?;
+    Ok(manifest)
+}
+
+fn generate_fixture_artifacts(fixtures_json: &Path, out_dir: &Path) -> Result<()> {
+    let fixtures_text = fs::read_to_string(fixtures_json)
+        .with_context(|| format!("failed to read {}", fixtures_json.display()))?;
     let fixtures_value: Value =
         json::from_str(&fixtures_text).context("invalid transaction_payloads fixtures JSON")?;
     let raw_fixtures = parse_payload_fixtures(&fixtures_value)?;
@@ -497,7 +553,7 @@ fn generate_fixture_artifacts(
 
     let mut fixtures = Vec::with_capacity(raw_fixtures.len());
     for raw in &raw_fixtures {
-        fixtures.push(raw.generate_fixture(&keypair, check_encoded)?);
+        fixtures.push(raw.generate_fixture(&keypair)?);
     }
 
     fs::create_dir_all(out_dir)
@@ -518,11 +574,12 @@ fn generate_fixture_artifacts(
     )
     .context("failed to write generated fixture manifest")?;
 
-    // Keep the Android/Swift/Python `transaction_payloads.json` source hints in sync.
+    // Render refreshed generated hints into the private publication tree.
     let updated_payloads = build_payload_fixtures_json(&raw_fixtures, &fixtures)?;
     let payloads_json = json::to_json_pretty(&updated_payloads)?;
-    fs::write(&resolved.fixtures_json, format!("{payloads_json}\n"))
-        .with_context(|| format!("failed to write {}", resolved.fixtures_json.display()))?;
+    let rendered_payloads = out_dir.join(PAYLOADS_BASENAME);
+    fs::write(&rendered_payloads, format!("{payloads_json}\n"))
+        .with_context(|| format!("failed to write {}", rendered_payloads.display()))?;
 
     Ok(())
 }
@@ -540,11 +597,10 @@ struct RawPayloadFixture {
     name: String,
     payload: RawPayload,
     payload_json: Value,
-    encoded_hint: Option<String>,
     chain_hint: Option<String>,
     authority_hint: Option<String>,
     creation_time_ms_hint: Option<u64>,
-    ttl_ms_hint: Option<u64>,
+    ttl_ms_hint: u64,
     nonce_hint: Option<u32>,
 }
 
@@ -554,7 +610,7 @@ struct RawPayload {
     authority: String,
     creation_time_ms: u64,
     executable: RawExecutable,
-    ttl_ms: Option<u64>,
+    ttl_ms: u64,
     nonce: Option<u32>,
     fee_payment: FeePaymentIntent,
     metadata: Vec<(Name, Json)>,
@@ -590,7 +646,7 @@ struct PayloadSummary {
     chain: String,
     authority: String,
     creation_time_ms: u64,
-    ttl_ms: Option<u64>,
+    ttl_ms: u64,
     nonce: Option<u32>,
     payload_base64: String,
     signed_base64: String,
@@ -604,7 +660,7 @@ struct WireInstructionPayload {
 }
 
 impl RawPayloadFixture {
-    fn generate_fixture(&self, keypair: &KeyPair, check_encoded: bool) -> Result<Fixture> {
+    fn generate_fixture(&self, keypair: &KeyPair) -> Result<Fixture> {
         if let Some(chain_hint) = &self.chain_hint
             && chain_hint != &self.payload.chain
         {
@@ -637,13 +693,11 @@ impl RawPayloadFixture {
                 self.payload.creation_time_ms
             );
         }
-        if let Some(ttl_hint) = self.ttl_ms_hint
-            && Some(ttl_hint) != self.payload.ttl_ms
-        {
+        if self.ttl_ms_hint != self.payload.ttl_ms {
             bail!(
-                "fixture '{}' time_to_live_ms mismatch: expected {}, got {:?}",
+                "fixture '{}' time_to_live_ms mismatch: expected {}, got {}",
                 self.name,
-                ttl_hint,
+                self.ttl_ms_hint,
                 self.payload.ttl_ms
             );
         }
@@ -669,19 +723,28 @@ impl RawPayloadFixture {
             )
         })?;
         let payload_value = signed.payload().clone();
-        let payload_bytes = payload_value.encode();
-        let payload_base64 = BASE64.encode(&payload_bytes);
-        if check_encoded
-            && let Some(expected) = &self.encoded_hint
-            && expected != &payload_base64
-        {
+        let actual_ttl = payload_value.time_to_live().ok_or_else(|| {
+            eyre!(
+                "fixture '{}' is missing time_to_live_ms after construction",
+                self.name
+            )
+        })?;
+        let actual_ttl_ms = u64::try_from(actual_ttl.as_millis()).map_err(|_| {
+            eyre!(
+                "fixture '{}' time_to_live_ms exceeds u64 after construction",
+                self.name
+            )
+        })?;
+        if actual_ttl_ms != self.payload.ttl_ms {
             bail!(
-                "encoded payload mismatch for '{}': expected {}, got {}",
+                "fixture '{}' time_to_live_ms changed during construction: expected {}, got {}",
                 self.name,
-                expected,
-                payload_base64
+                self.payload.ttl_ms,
+                actual_ttl_ms
             );
         }
+        let payload_bytes = payload_value.encode();
+        let payload_base64 = BASE64.encode(&payload_bytes);
 
         let signed_bytes = signed.encode();
         let signed_base64 = BASE64.encode(&signed_bytes);
@@ -696,7 +759,7 @@ impl RawPayloadFixture {
                 chain: self.payload.chain.clone(),
                 authority: payload_value.authority().to_string(),
                 creation_time_ms: self.payload.creation_time_ms,
-                ttl_ms: self.payload.ttl_ms,
+                ttl_ms: actual_ttl_ms,
                 nonce: self.payload.nonce,
                 payload_base64,
                 signed_base64,
@@ -716,9 +779,7 @@ impl RawPayload {
 
         let mut builder = TransactionBuilder::new(chain_id, authority, self.fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
-        if let Some(ttl) = self.ttl_ms {
-            builder.set_ttl(Duration::from_millis(ttl));
-        }
+        builder.set_ttl(Duration::from_millis(self.ttl_ms));
         if let Some(nonce) = self.nonce {
             let nz = NonZeroU32::new(nonce).ok_or_else(|| eyre!("nonce must be > 0"))?;
             builder.set_nonce(nz);
@@ -794,6 +855,7 @@ fn parse_payload_fixtures(value: &Value) -> Result<Vec<RawPayloadFixture>> {
         .collect::<Result<Vec<_>>>()?;
     let mut names = HashSet::with_capacity(fixtures.len());
     for fixture in &fixtures {
+        validate_fixture_name(&fixture.name)?;
         if !names.insert(fixture.name.as_str()) {
             bail!("duplicate fixture name '{}'", fixture.name);
         }
@@ -806,6 +868,24 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
         .as_object()
         .ok_or_else(|| eyre!("fixture entries must be objects"))?;
     let name = expect_string(obj, "name")?.to_owned();
+    const ALLOWED_FIELDS: &[&str] = &[
+        "name",
+        "chain",
+        "authority",
+        "creation_time_ms",
+        "time_to_live_ms",
+        "nonce",
+        "payload_base64",
+        "signed_base64",
+        "payload_hash",
+        "signed_hash",
+        "payload",
+    ];
+    for key in obj.keys() {
+        if !ALLOWED_FIELDS.contains(&key.as_str()) {
+            bail!("fixture '{name}' contains unknown top-level field '{key}'");
+        }
+    }
     let payload_value = obj
         .get("payload")
         .ok_or_else(|| eyre!("fixture '{name}' missing payload"))?;
@@ -813,25 +893,21 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
     let payload = parse_payload(payload_value)
         .with_context(|| format!("invalid payload for fixture '{name}'"))?;
 
-    let encoded_hint = obj
-        .get("payload_base64")
-        .or_else(|| obj.get("encoded"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
     let chain_hint = obj.get("chain").and_then(Value::as_str).map(str::to_owned);
     let authority_hint = obj
         .get("authority")
         .and_then(Value::as_str)
         .map(str::to_owned);
     let creation_time_ms_hint = obj.get("creation_time_ms").and_then(Value::as_u64);
-    let ttl_ms_hint = obj.get("time_to_live_ms").and_then(Value::as_u64);
-    let nonce_hint = obj.get("nonce").and_then(Value::as_u64).map(|n| n as u32);
+    let ttl_ms_hint = expect_nonzero_u64(obj, "time_to_live_ms")
+        .with_context(|| format!("invalid top-level lifetime for fixture '{name}'"))?;
+    let nonce_hint = parse_optional_u32(obj, "nonce")
+        .with_context(|| format!("invalid top-level nonce for fixture '{name}'"))?;
 
     Ok(RawPayloadFixture {
         name,
         payload,
         payload_json,
-        encoded_hint,
         chain_hint,
         authority_hint,
         creation_time_ms_hint,
@@ -851,7 +927,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         .get("executable")
         .ok_or_else(|| eyre!("missing executable"))?;
     let executable = parse_executable(executable_value)?;
-    let ttl_ms = parse_optional_u64(obj, "time_to_live_ms")?;
+    let ttl_ms = expect_nonzero_u64(obj, "time_to_live_ms")?;
     let nonce = parse_optional_u32(obj, "nonce")?;
     let fee_payment = obj
         .get("fee_payment")
@@ -1001,13 +1077,6 @@ fn parse_account_id(value: &str) -> Result<AccountId> {
         .with_context(|| format!("account id '{value}' must be a canonical I105-encoded literal"))
 }
 
-fn optional_u64_value(value: Option<u64>) -> Value {
-    match value {
-        Some(v) => Value::Number(Number::U64(v)),
-        None => Value::Null,
-    }
-}
-
 fn optional_u32_value(value: Option<u32>) -> Value {
     match value {
         Some(v) => Value::Number(Number::U64(v as u64)),
@@ -1047,7 +1116,7 @@ fn build_payload_fixtures_json(
         );
         entry.insert(
             "time_to_live_ms".to_owned(),
-            optional_u64_value(fixture.summary.ttl_ms),
+            Value::Number(Number::U64(fixture.summary.ttl_ms)),
         );
         entry.insert(
             "nonce".to_owned(),
@@ -1068,10 +1137,6 @@ fn build_payload_fixtures_json(
         entry.insert(
             "signed_hash".to_owned(),
             Value::String(fixture.summary.signed_hash_hex.clone()),
-        );
-        entry.insert(
-            "encoded".to_owned(),
-            Value::String(fixture.summary.payload_base64.clone()),
         );
 
         let mut payload = raw.payload_json.clone();
@@ -1205,15 +1270,12 @@ fn expect_u64(obj: &Map, key: &str) -> Result<u64> {
         .ok_or_else(|| eyre!("missing '{key}' integer"))
 }
 
-fn parse_optional_u64(obj: &Map, key: &str) -> Result<Option<u64>> {
-    match obj.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(number)) => number
-            .as_u64()
-            .ok_or_else(|| eyre!("'{key}' must be an integer or null"))
-            .map(Some),
-        Some(other) => bail!("'{key}' must be an integer or null, got {other:?}"),
+fn expect_nonzero_u64(obj: &Map, key: &str) -> Result<u64> {
+    let value = expect_u64(obj, key)?;
+    if value == 0 {
+        bail!("'{key}' must be greater than zero");
     }
+    Ok(value)
 }
 
 fn parse_optional_u32(obj: &Map, key: &str) -> Result<Option<u32>> {
@@ -1231,29 +1293,31 @@ fn parse_optional_u32(obj: &Map, key: &str) -> Result<Option<u32>> {
     }
 }
 
-fn filter_fixtures(
-    manifest: &Manifest,
-    desired_names: Option<&[String]>,
-) -> Result<Vec<FixtureEntry>> {
-    if let Some(names) = desired_names {
-        let mut filtered = Vec::with_capacity(names.len());
-        for name in names {
-            let entry = manifest
-                .fixtures
-                .iter()
-                .find(|fixture| &fixture.name == name)
-                .ok_or_else(|| {
-                    eyre!(
-                        "fixture '{}' missing from regenerated manifest; rerun exporter or update selection",
-                        name
-                    )
-                })?;
-            filtered.push(entry.clone());
-        }
-        Ok(filtered)
-    } else {
-        Ok(manifest.fixtures.clone())
+fn validate_fixture_name(name: &str) -> Result<()> {
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        bail!("fixture name must not be empty");
+    };
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        bail!("fixture name '{name}' must start with a lowercase ASCII letter or digit");
     }
+    if !bytes.all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+    }) {
+        bail!(
+            "fixture name '{name}' must contain only lowercase ASCII letters, digits, '_' or '-'"
+        );
+    }
+    Ok(())
+}
+
+fn validate_fixture_identity(name: &str, encoded_file: &str) -> Result<()> {
+    validate_fixture_name(name)?;
+    let expected = format!("{name}.norito");
+    if encoded_file != expected {
+        bail!("fixture '{name}' encoded_file must be exactly '{expected}', got '{encoded_file}'");
+    }
+    Ok(())
 }
 
 fn sync_norito_files(
@@ -1263,12 +1327,8 @@ fn sync_norito_files(
 ) -> Result<()> {
     fs::create_dir_all(target_dir)
         .with_context(|| format!("failed to create {}", target_dir.display()))?;
-    let desired: HashSet<String> = fixtures
-        .iter()
-        .map(|fixture| fixture.name.clone())
-        .collect();
     for fixture in fixtures {
-        let src = source_dir.join(format!("{}.norito", fixture.name));
+        let src = source_dir.join(&fixture.encoded_file);
         if !src.is_file() {
             return Err(eyre!(
                 "fixture '{}' missing generated payload at {}",
@@ -1276,33 +1336,261 @@ fn sync_norito_files(
                 src.display()
             ));
         }
-        let dst = target_dir.join(format!("{}.norito", fixture.name));
+        let dst = target_dir.join(&fixture.encoded_file);
         fs::copy(&src, &dst)
             .with_context(|| format!("failed to copy {} to {}", src.display(), dst.display()))?;
     }
+    Ok(())
+}
 
-    for entry in fs::read_dir(target_dir)
-        .with_context(|| format!("failed to read entries from {}", target_dir.display()))?
-    {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
+fn sync_sdk_fixture_mirrors(
+    publication_root: &Path,
+    canonical_dir: &Path,
+    fixtures: &[FixtureEntry],
+    manifest_json: &str,
+) -> Result<()> {
+    let canonical_payloads = canonical_dir.join(PAYLOADS_BASENAME);
+    let payloads = fs::read(&canonical_payloads)
+        .with_context(|| format!("failed to read {}", canonical_payloads.display()))?;
+    let manifest = format!("{manifest_json}\n");
+    for sdk in SDK_FIXTURE_DIRECTORIES {
+        let target_dir = publication_root.join(sdk.relative_directory);
+        fs::create_dir_all(&target_dir)
+            .with_context(|| format!("failed to create {} fixture directory", sdk.label))?;
+        if sdk.local_blobs == LocalBlobPolicy::Canonical {
+            sync_norito_files(fixtures, canonical_dir, &target_dir)?;
+        }
+        fs::write(target_dir.join(PAYLOADS_BASENAME), &payloads)
+            .with_context(|| format!("failed to write {} payload descriptor", sdk.label))?;
+        fs::write(target_dir.join(MANIFEST_BASENAME), manifest.as_bytes())
+            .with_context(|| format!("failed to write {} fixture manifest", sdk.label))?;
+    }
+    Ok(())
+}
+
+fn owned_publication_paths(fixtures: &[FixtureEntry]) -> Result<Vec<PathBuf>> {
+    let canonical_dir = PathBuf::from(CANONICAL_FIXTURE_DIRECTORY);
+    let mut paths = vec![
+        canonical_dir.join(PAYLOADS_BASENAME),
+        canonical_dir.join(MANIFEST_BASENAME),
+        canonical_dir.join(SCHEMA_HASH_MANIFEST_BASENAME),
+        canonical_dir.join(COMPACT_HASH_VECTOR_BASENAME),
+    ];
+    for fixture in fixtures {
+        validate_fixture_identity(&fixture.name, &fixture.encoded_file)?;
+        paths.push(canonical_dir.join(&fixture.encoded_file));
+    }
+    for sdk in SDK_FIXTURE_DIRECTORIES {
+        let sdk_dir = PathBuf::from(sdk.relative_directory);
+        paths.push(sdk_dir.join(PAYLOADS_BASENAME));
+        paths.push(sdk_dir.join(MANIFEST_BASENAME));
+        if sdk.local_blobs == LocalBlobPolicy::Canonical {
+            for fixture in fixtures {
+                paths.push(sdk_dir.join(&fixture.encoded_file));
+            }
+        }
+    }
+    paths.sort();
+    for pair in paths.windows(2) {
+        if pair[0] == pair[1] {
+            bail!("duplicate generated fixture output {}", pair[0].display());
+        }
+    }
+    Ok(paths)
+}
+
+fn preflight_publication(
+    destination_root: &Path,
+    fixtures: &[FixtureEntry],
+    owned_paths: &[PathBuf],
+) -> Result<()> {
+    for relative in owned_paths {
+        ensure_safe_owned_path(destination_root, &destination_root.join(relative))?;
+    }
+    verify_all_blob_policies(destination_root, fixtures, false)
+}
+
+fn publish_owned_publication(
+    rendered_root: &Path,
+    destination_root: &Path,
+    owned_paths: &[PathBuf],
+) -> Result<()> {
+    for relative in owned_paths {
+        let source = rendered_root.join(relative);
+        let destination = destination_root.join(relative);
+        ensure_safe_owned_path(destination_root, &destination)?;
+        let bytes = fs::read(&source)
+            .with_context(|| format!("missing rendered fixture output {}", source.display()))?;
+        if destination.is_file() && fs::read(&destination)? == bytes {
             continue;
         }
-        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("norito") {
-            continue;
-        }
-        let stem = entry
-            .path()
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        if !desired.contains(stem.as_str()) {
-            fs::remove_file(entry.path())
-                .with_context(|| format!("failed to remove stale fixture {}", stem))?;
+        let parent = destination
+            .parent()
+            .ok_or_else(|| eyre!("fixture output has no parent: {}", destination.display()))?;
+        ensure_safe_owned_path(destination_root, parent)?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+        ensure_safe_owned_path(destination_root, &destination)?;
+
+        let mut temporary = NamedTempFile::new_in(parent)
+            .with_context(|| format!("failed to stage {}", destination.display()))?;
+        temporary.write_all(&bytes)?;
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(&destination).map_err(|error| {
+            eyre!(
+                "failed to atomically publish {}: {}",
+                destination.display(),
+                error.error
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn compare_owned_publication(
+    rendered_root: &Path,
+    destination_root: &Path,
+    owned_paths: &[PathBuf],
+) -> Result<()> {
+    for relative in owned_paths {
+        let expected = fs::read(rendered_root.join(relative))?;
+        let destination = destination_root.join(relative);
+        let actual = fs::read(&destination).with_context(|| {
+            format!(
+                "generated fixture output missing: {}",
+                destination.display()
+            )
+        })?;
+        if actual != expected {
+            bail!(
+                "generated fixture output is stale: {}",
+                destination.display()
+            );
         }
     }
     Ok(())
+}
+
+fn verify_all_blob_policies(
+    publication_root: &Path,
+    fixtures: &[FixtureEntry],
+    require_canonical_set: bool,
+) -> Result<()> {
+    verify_blob_policy(
+        &publication_root.join(CANONICAL_FIXTURE_DIRECTORY),
+        fixtures,
+        LocalBlobPolicy::Canonical,
+        require_canonical_set,
+    )?;
+    for sdk in SDK_FIXTURE_DIRECTORIES {
+        let directory = publication_root.join(sdk.relative_directory);
+        if !directory.exists() && !require_canonical_set {
+            continue;
+        }
+        verify_blob_policy(&directory, fixtures, sdk.local_blobs, require_canonical_set)
+            .with_context(|| format!("{} local fixture policy failed", sdk.label))?;
+    }
+    Ok(())
+}
+
+fn verify_blob_policy(
+    directory: &Path,
+    fixtures: &[FixtureEntry],
+    policy: LocalBlobPolicy,
+    require_canonical_set: bool,
+) -> Result<()> {
+    let actual = collect_norito_paths(directory)?;
+    let expected: HashSet<PathBuf> = fixtures
+        .iter()
+        .map(|fixture| PathBuf::from(&fixture.encoded_file))
+        .collect();
+
+    match policy {
+        LocalBlobPolicy::None if !actual.is_empty() => {
+            bail!(
+                "fixture directory {} contains redundant Norito blobs: {:?}",
+                directory.display(),
+                actual
+            );
+        }
+        LocalBlobPolicy::Canonical => {
+            let unexpected: Vec<_> = actual.difference(&expected).cloned().collect();
+            if !unexpected.is_empty() {
+                bail!(
+                    "fixture directory {} contains unowned Norito blobs: {:?}",
+                    directory.display(),
+                    unexpected
+                );
+            }
+            if require_canonical_set && actual != expected {
+                let missing: Vec<_> = expected.difference(&actual).cloned().collect();
+                bail!(
+                    "fixture directory {} is missing canonical Norito blobs: {:?}",
+                    directory.display(),
+                    missing
+                );
+            }
+        }
+        LocalBlobPolicy::SwiftPrefixed => {
+            let unexpected: Vec<_> = actual
+                .iter()
+                .filter(|relative| {
+                    relative.parent() != Some(Path::new(""))
+                        || !relative
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.starts_with("swift_"))
+                })
+                .cloned()
+                .collect();
+            if !unexpected.is_empty() {
+                bail!(
+                    "Swift fixture directory {} contains unowned Norito blobs: {:?}",
+                    directory.display(),
+                    unexpected
+                );
+            }
+        }
+        LocalBlobPolicy::None => {}
+    }
+    Ok(())
+}
+
+fn collect_norito_paths(directory: &Path) -> Result<HashSet<PathBuf>> {
+    if !directory.is_dir() {
+        bail!("fixture directory missing: {}", directory.display());
+    }
+    let mut found = HashSet::new();
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        for entry in fs::read_dir(&current)
+            .with_context(|| format!("failed to read {}", current.display()))?
+        {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            if entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("norito")
+            {
+                continue;
+            }
+            if file_type.is_symlink() {
+                bail!(
+                    "Norito fixture must not be a symlink: {}",
+                    entry.path().display()
+                );
+            }
+            found.insert(entry.path().strip_prefix(directory)?.to_path_buf());
+        }
+    }
+    Ok(found)
 }
 
 fn manifest_digest(path: &Path, root: &Path) -> Result<ManifestDigestReport> {
@@ -1370,6 +1658,7 @@ impl Manifest {
         let mut signed_hashes = HashSet::with_capacity(self.fixtures.len());
         let mut signed_bytes_values = HashSet::with_capacity(self.fixtures.len());
         for fixture in &self.fixtures {
+            validate_fixture_identity(&fixture.name, &fixture.encoded_file)?;
             if !names.insert(fixture.name.as_str()) {
                 bail!("duplicate fixture name '{}'", fixture.name);
             }
@@ -1406,45 +1695,6 @@ impl Manifest {
         }
         Ok(())
     }
-
-    fn as_map(&self) -> BTreeMap<&str, FixtureComparable<'_>> {
-        self.fixtures
-            .iter()
-            .map(|fixture| {
-                (
-                    fixture.name.as_str(),
-                    FixtureComparable::from_entry(fixture),
-                )
-            })
-            .collect()
-    }
-
-    fn compare_with(&self, canonical: &Manifest) -> Result<()> {
-        let expected = canonical.as_map();
-        let actual = self.as_map();
-
-        let mut issues = Vec::new();
-
-        for name in actual.keys() {
-            if !expected.contains_key(name) {
-                issues.push(format!("unexpected fixture '{name}'"));
-            }
-        }
-
-        for (name, actual_entry) in &actual {
-            if let Some(canonical_entry) = expected.get(name)
-                && actual_entry != canonical_entry
-            {
-                issues.push(format!("fixture '{name}' differs from canonical"));
-            }
-        }
-
-        if issues.is_empty() {
-            Ok(())
-        } else {
-            Err(eyre!(issues.join("; ")))
-        }
-    }
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -1462,12 +1712,18 @@ struct FixtureEntry {
     signed_hash: String,
     #[norito(default)]
     nonce: Option<u32>,
-    #[norito(default)]
-    time_to_live_ms: Option<u64>,
+    time_to_live_ms: u64,
 }
 
 impl FixtureEntry {
     fn validate(&self, base_dir: Option<&Path>) -> Result<()> {
+        validate_fixture_identity(&self.name, &self.encoded_file)?;
+        if self.time_to_live_ms == 0 {
+            bail!(
+                "fixture '{}' time_to_live_ms must be greater than zero",
+                self.name
+            );
+        }
         let payload_bytes = BASE64
             .decode(&self.payload_base64)
             .with_context(|| format!("fixture '{}' payload base64 invalid", self.name))?;
@@ -1500,13 +1756,52 @@ impl FixtureEntry {
                 signed_bytes.len()
             );
         }
-        let signed_hash = signed_transaction_entrypoint_hash_hex(&signed_bytes)?;
+        let signed = decode_canonical_signed_transaction(&signed_bytes)?;
+        let signed_hash = hex_encode(signed.hash_as_entrypoint().as_ref());
         if signed_hash != self.signed_hash {
             bail!(
                 "fixture '{}' signed hash mismatch (manifest={}, computed={})",
                 self.name,
                 self.signed_hash,
                 signed_hash
+            );
+        }
+        if signed.payload().encode() != payload_bytes {
+            bail!(
+                "fixture '{}' signed payload differs from the canonical payload bytes",
+                self.name
+            );
+        }
+
+        let actual_creation_time_ms =
+            u64::try_from(signed.creation_time().as_millis()).map_err(|_| {
+                eyre!(
+                    "fixture '{}' creation_time_ms exceeds u64 in signed payload",
+                    self.name
+                )
+            })?;
+        let actual_ttl_ms = signed
+            .time_to_live()
+            .map(|ttl| u64::try_from(ttl.as_millis()))
+            .transpose()
+            .map_err(|_| {
+                eyre!(
+                    "fixture '{}' time_to_live_ms exceeds u64 in signed payload",
+                    self.name
+                )
+            })?;
+        let actual_nonce = signed.nonce().map(NonZeroU32::get);
+        let actual_authority = signed.authority().to_string();
+        let actual_chain = signed.chain().to_string();
+        if actual_authority != self.authority
+            || actual_chain != self.chain
+            || actual_creation_time_ms != self.creation_time_ms
+            || actual_ttl_ms != Some(self.time_to_live_ms)
+            || actual_nonce != self.nonce
+        {
+            bail!(
+                "fixture '{}' manifest summary differs from signed payload",
+                self.name
             );
         }
 
@@ -1541,6 +1836,13 @@ fn blake2b256_hex(bytes: &[u8]) -> String {
 fn signed_transaction_entrypoint_hash_hex(
     canonical_bare_signed_transaction: &[u8],
 ) -> Result<String> {
+    let signed = decode_canonical_signed_transaction(canonical_bare_signed_transaction)?;
+    Ok(hex_encode(signed.hash_as_entrypoint().as_ref()))
+}
+
+fn decode_canonical_signed_transaction(
+    canonical_bare_signed_transaction: &[u8],
+) -> Result<SignedTransaction> {
     let (signed, used) = SignedTransaction::decode_from_slice(canonical_bare_signed_transaction)
         .map_err(|err| eyre!("invalid canonical SignedTransaction bytes: {err}"))?;
     if used != canonical_bare_signed_transaction.len()
@@ -1548,42 +1850,100 @@ fn signed_transaction_entrypoint_hash_hex(
     {
         bail!("SignedTransaction bytes are not exact canonical bare encoding");
     }
-    Ok(hex_encode(signed.hash_as_entrypoint().as_ref()))
+    Ok(signed)
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct FixtureComparable<'a> {
-    authority: &'a str,
-    chain: &'a str,
-    creation_time_ms: u64,
-    encoded_file: &'a str,
-    encoded_len: u64,
-    signed_len: u64,
-    payload_base64: &'a str,
-    signed_base64: &'a str,
-    payload_hash: &'a str,
-    signed_hash: &'a str,
-    nonce: Option<u32>,
-    time_to_live_ms: Option<u64>,
-}
+fn render_compact_hash_vector(fixtures: &[FixtureEntry]) -> Result<String> {
+    let source = fixtures
+        .iter()
+        .find(|fixture| fixture.name == COMPACT_HASH_VECTOR_SOURCE)
+        .ok_or_else(|| {
+            eyre!(
+                "compact hash vector source fixture '{}' is missing from the selected manifest",
+                COMPACT_HASH_VECTOR_SOURCE
+            )
+        })?;
+    source
+        .validate(None)
+        .context("compact hash vector source fixture failed validation")?;
 
-impl<'a> FixtureComparable<'a> {
-    fn from_entry(entry: &'a FixtureEntry) -> Self {
-        Self {
-            authority: &entry.authority,
-            chain: &entry.chain,
-            creation_time_ms: entry.creation_time_ms,
-            encoded_file: &entry.encoded_file,
-            encoded_len: entry.encoded_len,
-            signed_len: entry.signed_len,
-            payload_base64: &entry.payload_base64,
-            signed_base64: &entry.signed_base64,
-            payload_hash: &entry.payload_hash,
-            signed_hash: &entry.signed_hash,
-            nonce: entry.nonce,
-            time_to_live_ms: entry.time_to_live_ms,
-        }
+    let bare = BASE64
+        .decode(&source.signed_base64)
+        .context("compact hash vector signed bytes are not valid base64")?;
+    if BASE64.encode(&bare) != source.signed_base64 {
+        bail!("compact hash vector signed bytes are not canonical base64");
     }
+    let signed = decode_canonical_signed_transaction(&bare)?;
+    let payload = signed.payload().encode();
+    let mut canonical = 0_u32.to_le_bytes().to_vec();
+    norito::core::write_len_to_vec(&mut canonical, payload.len() as u64);
+    let prefix_len = canonical.len();
+    canonical.extend_from_slice(&payload);
+    let prefix = &canonical[..prefix_len];
+    let (discriminant, compact_length) = prefix
+        .split_at_checked(core::mem::size_of::<u32>())
+        .ok_or_else(|| eyre!("compact entrypoint prefix is missing its discriminant"))?;
+    if discriminant != 0_u32.to_le_bytes() {
+        bail!("compact hash vector source is not the External transaction entrypoint");
+    }
+    if compact_length.is_empty() {
+        bail!("compact entrypoint prefix is missing its canonical length");
+    }
+    if compact_length.len() != 2 {
+        bail!(
+            "compact hash vector source must exercise a two-byte length, got {} bytes",
+            compact_length.len()
+        );
+    }
+    let canonical_hash = blake2b256_hex(&canonical);
+    if canonical_hash != source.signed_hash {
+        bail!("compact hash vector does not match the manifest signed hash");
+    }
+    let payload_hash = blake2b256_hex(&payload);
+    if payload_hash != source.payload_hash {
+        bail!("compact hash vector payload does not match the manifest payload hash");
+    }
+
+    let mut versioned = Vec::with_capacity(1 + bare.len());
+    versioned.push(SIGNED_TRANSACTION_V1);
+    versioned.extend_from_slice(&bare);
+
+    Ok(format!(
+        concat!(
+            "schema.version=2\n",
+            "source.fixture={source_fixture}\n",
+            "versioned.bytes={versioned_bytes}\n",
+            "versioned.sha256={versioned_sha256}\n",
+            "bare.bytes={bare_bytes}\n",
+            "compact.length.hex={compact_length}\n",
+            "canonical.prefix.hex={canonical_prefix}\n",
+            "canonical.hash={canonical_hash}\n",
+            "payload.prehash={payload_prehash}\n",
+            "versioned.base64={versioned_base64}\n",
+        ),
+        source_fixture = source.name,
+        versioned_bytes = versioned.len(),
+        versioned_sha256 = hex_encode(Sha256::digest(&versioned)),
+        bare_bytes = bare.len(),
+        compact_length = hex_encode(compact_length),
+        canonical_prefix = hex_encode(prefix),
+        canonical_hash = canonical_hash,
+        payload_prehash = payload_hash,
+        versioned_base64 = BASE64.encode(versioned),
+    ))
+}
+
+fn verify_compact_hash_vector(path: &Path, fixtures: &[FixtureEntry]) -> Result<()> {
+    let expected = render_compact_hash_vector(fixtures)?;
+    let actual = fs::read_to_string(path)
+        .with_context(|| format!("failed to read compact hash vector {}", path.display()))?;
+    if actual != expected {
+        bail!(
+            "compact hash vector {} is stale; regenerate Norito RPC fixtures",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1614,7 +1974,7 @@ mod tests {
             payload_hash: format!("payload-{name}"),
             signed_hash: format!("signed-{name}"),
             nonce: None,
-            time_to_live_ms: None,
+            time_to_live_ms: 1,
         }
     }
 
@@ -1677,15 +2037,6 @@ mod tests {
     }
 
     #[test]
-    fn filter_fixtures_respects_selection_order() {
-        let manifest = sample_manifest();
-        let selection = vec!["gamma".to_string(), "alpha".to_string()];
-        let filtered = filter_fixtures(&manifest, Some(&selection)).expect("filter succeeds");
-        let names: Vec<_> = filtered.iter().map(|entry| entry.name.as_str()).collect();
-        assert_eq!(names, ["gamma", "alpha"]);
-    }
-
-    #[test]
     fn signed_hash_uses_compact_external_entrypoint_domain() {
         let keypair = signing_keypair().expect("fixture signing key");
         let signed = TransactionBuilder::new(
@@ -1713,21 +2064,71 @@ mod tests {
     }
 
     #[test]
-    fn filter_fixtures_errors_on_missing_entries() {
-        let manifest = sample_manifest();
-        let selection = vec!["delta".to_string()];
-        let err = filter_fixtures(&manifest, Some(&selection)).expect_err("missing fixture");
-        assert!(
-            err.to_string().contains("delta"),
-            "error should mention missing fixture"
+    fn compact_hash_vector_is_descriptor_owned_and_deterministic() {
+        let root = workspace_root();
+        let manifest =
+            Manifest::load(&root.join(CANONICAL_MANIFEST)).expect("canonical manifest loads");
+        let first = render_compact_hash_vector(&manifest.fixtures).expect("render compact vector");
+        let second = render_compact_hash_vector(&manifest.fixtures).expect("render compact vector");
+        assert_eq!(
+            first, second,
+            "compact vector rendering must be deterministic"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                root.join("fixtures/norito_rpc")
+                    .join(COMPACT_HASH_VECTOR_BASENAME)
+            )
+            .expect("read checked-in compact vector"),
+            first,
+            "checked-in compact vector must be generated from the canonical manifest"
+        );
+
+        let properties: BTreeMap<_, _> = first
+            .lines()
+            .map(|line| line.split_once('=').expect("generated property"))
+            .collect();
+        assert_eq!(properties["schema.version"], "2");
+        assert_eq!(properties["source.fixture"], COMPACT_HASH_VECTOR_SOURCE);
+        assert_eq!(
+            properties["versioned.bytes"]
+                .parse::<usize>()
+                .expect("versioned byte count"),
+            properties["bare.bytes"]
+                .parse::<usize>()
+                .expect("bare byte count")
+                + 1
+        );
+        assert_eq!(
+            properties["canonical.prefix.hex"],
+            format!("00000000{}", properties["compact.length.hex"])
+        );
+        assert_eq!(properties["versioned.bytes"], "592");
+        assert_eq!(
+            properties["versioned.sha256"],
+            "8c7bd16c4f5bbbbeb67aa0a0e3b2d82e4a2a0f08d2bdc7e48aff6ed8d806b255"
+        );
+        assert_eq!(properties["bare.bytes"], "591");
+        assert_eq!(properties["compact.length.hex"], "bf03");
+        assert_eq!(properties["canonical.prefix.hex"], "00000000bf03");
+        assert_eq!(
+            properties["canonical.hash"],
+            "9e4fca2b657ecf1d9c206badf2b2b7511c1cfbc749a778ce792eb31a13ac9927"
+        );
+        assert_eq!(
+            properties["payload.prehash"],
+            "ea55e9ccd91a2a4910245a7747b856af27b2262f4278b8c0efd3166603612d71"
         );
     }
 
     #[test]
-    fn filter_fixtures_returns_all_when_unfiltered() {
-        let manifest = sample_manifest();
-        let filtered = filter_fixtures(&manifest, None).expect("all fixtures");
-        assert_eq!(filtered.len(), 3);
+    fn compact_hash_vector_requires_the_canonical_source_fixture() {
+        let error = render_compact_hash_vector(&sample_manifest().fixtures)
+            .expect_err("missing canonical source fixture must fail closed");
+        assert!(
+            error.to_string().contains(COMPACT_HASH_VECTOR_SOURCE),
+            "error must identify the missing source fixture: {error}"
+        );
     }
 
     #[test]
@@ -1745,21 +2146,42 @@ mod tests {
     }
 
     #[test]
-    fn manifest_validation_rejects_duplicate_encoded_files() {
-        let first = fixture("alpha");
-        let mut second = fixture("beta");
-        second.encoded_file = first.encoded_file.clone();
+    fn manifest_validation_rejects_noncanonical_encoded_file() {
+        let mut entry = fixture("alpha");
+        entry.encoded_file = "renamed.norito".into();
         let manifest = Manifest {
-            fixtures: vec![first, second],
+            fixtures: vec![entry],
         };
         let err = manifest
             .validate(None)
-            .expect_err("duplicate encoded files must fail closed");
+            .expect_err("renamed encoded files must fail closed");
         assert!(
             err.to_string()
-                .contains("duplicate fixture encoded_file 'alpha.norito'"),
+                .contains("encoded_file must be exactly 'alpha.norito'"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn fixture_names_reject_path_and_nonportable_forms() {
+        for name in [
+            "",
+            "../escape",
+            "/absolute",
+            "nested/name",
+            "nested\\name",
+            "Upper",
+        ] {
+            let error = validate_fixture_name(name)
+                .expect_err("nonportable fixture names must fail closed");
+            assert!(
+                error.to_string().contains("fixture name"),
+                "unexpected error for {name:?}: {error}"
+            );
+        }
+        for name in ["alpha", "0-alpha", "typed_fee_payment_gas_limit"] {
+            validate_fixture_name(name).expect("portable fixture name");
+        }
     }
 
     #[test]
@@ -1800,55 +2222,6 @@ mod tests {
                 "unexpected error for {malformed:?}: {err}"
             );
         }
-    }
-
-    #[test]
-    fn compare_with_allows_subset() {
-        let canonical = Manifest {
-            fixtures: vec![fixture("alpha"), fixture("beta")],
-        };
-        let subset = Manifest {
-            fixtures: vec![fixture("alpha")],
-        };
-        subset
-            .compare_with(&canonical)
-            .expect("subset manifests should compare cleanly");
-    }
-
-    #[test]
-    fn compare_with_rejects_unexpected_entries() {
-        let canonical = Manifest {
-            fixtures: vec![fixture("alpha")],
-        };
-        let extra = Manifest {
-            fixtures: vec![fixture("alpha"), fixture("gamma")],
-        };
-        let err = extra
-            .compare_with(&canonical)
-            .expect_err("extra fixtures should fail comparison");
-        assert!(
-            err.to_string().contains("unexpected fixture 'gamma'"),
-            "error should mention unexpected fixture: {err}"
-        );
-    }
-
-    #[test]
-    fn compare_with_rejects_creation_time_drift() {
-        let canonical = Manifest {
-            fixtures: vec![fixture("alpha")],
-        };
-        let mut drift_entry = fixture("alpha");
-        drift_entry.creation_time_ms += 1;
-        let drift = Manifest {
-            fixtures: vec![drift_entry],
-        };
-        let err = drift
-            .compare_with(&canonical)
-            .expect_err("creation_time_ms drift should fail comparison");
-        assert!(
-            err.to_string().contains("fixture 'alpha' differs"),
-            "error should mention fixture mismatch: {err}"
-        );
     }
 
     #[test]
@@ -1905,6 +2278,19 @@ mod tests {
     }
 
     #[test]
+    fn schema_manifest_generation_is_deterministic() {
+        let first =
+            json::to_json_pretty(&SchemaHashManifest::new_current()).expect("serialize manifest");
+        let second =
+            json::to_json_pretty(&SchemaHashManifest::new_current()).expect("serialize manifest");
+        assert_eq!(first, second);
+        assert!(
+            !first.contains("generated_at"),
+            "checked-in schema manifests must not contain wall-clock state"
+        );
+    }
+
+    #[test]
     fn schema_hash_hex_round_trip() {
         let target_binding = schema_targets();
         let target = target_binding.first().expect("at least one schema target");
@@ -1946,22 +2332,21 @@ mod tests {
                 authority: account_id.to_string(),
                 creation_time_ms: 1_735_000_000_000,
                 executable: RawExecutable::Instructions(Vec::new()),
-                ttl_ms: Some(60_000),
+                ttl_ms: 60_000,
                 nonce: Some(1),
                 fee_payment: FeePaymentIntent::authority(Vec::new(), None),
                 metadata: Vec::new(),
             },
             payload_json: Value::Null,
-            encoded_hint: None,
             chain_hint: None,
             authority_hint: None,
             creation_time_ms_hint: None,
-            ttl_ms_hint: None,
+            ttl_ms_hint: 60_000,
             nonce_hint: None,
         };
 
         let fixture = raw
-            .generate_fixture(&keypair, false)
+            .generate_fixture(&keypair)
             .expect("generate checked signed fixture");
         let (signed, used) = SignedTransaction::decode_from_slice(&fixture.signed_bytes)
             .expect("decode checked signed fixture");
@@ -1979,7 +2364,7 @@ mod tests {
             authority: String::new(),
             creation_time_ms: 0,
             executable: RawExecutable::Instructions(Vec::new()),
-            ttl_ms: None,
+            ttl_ms: 1,
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Vec::new(),
@@ -1993,6 +2378,70 @@ mod tests {
             error.to_string().contains("invalid canonical chain id ''"),
             "unexpected chain id error: {error}"
         );
+    }
+
+    #[test]
+    fn payload_ttl_is_required_and_nonzero() {
+        for value in [None, Some(Value::Null), Some(Value::from(0_u64))] {
+            let mut object = Map::new();
+            if let Some(value) = value {
+                object.insert("time_to_live_ms".to_owned(), value);
+            }
+            let error = expect_nonzero_u64(&object, "time_to_live_ms")
+                .expect_err("missing, null, and zero lifetimes must be rejected");
+            assert!(
+                error.to_string().contains("time_to_live_ms"),
+                "unexpected lifetime error: {error}"
+            );
+        }
+
+        let mut object = Map::new();
+        object.insert("time_to_live_ms".to_owned(), Value::from(100_000_u64));
+        assert_eq!(
+            expect_nonzero_u64(&object, "time_to_live_ms").expect("positive lifetime"),
+            100_000
+        );
+    }
+
+    #[test]
+    fn fixture_manifest_requires_explicit_ttl() {
+        let manifest = Manifest {
+            fixtures: vec![fixture("required-ttl")],
+        };
+        let encoded = json::to_json_pretty(&manifest).expect("serialize fixture manifest");
+        let base: Value = json::from_str(&encoded).expect("parse fixture manifest value");
+
+        for replacement in [None, Some(Value::Null)] {
+            let mut candidate = base.clone();
+            let entry = candidate
+                .as_object_mut()
+                .and_then(|object| object.get_mut("fixtures"))
+                .and_then(Value::as_array_mut)
+                .and_then(|fixtures| fixtures.first_mut())
+                .and_then(Value::as_object_mut)
+                .expect("fixture manifest entry");
+            if let Some(value) = replacement {
+                entry.insert("time_to_live_ms".to_owned(), value);
+            } else {
+                entry.remove("time_to_live_ms");
+            }
+
+            json::from_value::<Manifest>(candidate)
+                .expect_err("missing and null fixture lifetimes must be rejected");
+        }
+
+        let mut zero = base;
+        zero.as_object_mut()
+            .and_then(|object| object.get_mut("fixtures"))
+            .and_then(Value::as_array_mut)
+            .and_then(|fixtures| fixtures.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("fixture manifest entry")
+            .insert("time_to_live_ms".to_owned(), Value::from(0_u64));
+        let zero_manifest: Manifest = json::from_value(zero).expect("zero is structurally numeric");
+        zero_manifest
+            .validate(None)
+            .expect_err("zero fixture lifetime must be rejected");
     }
 
     #[test]
@@ -2024,10 +2473,9 @@ mod tests {
             .expect("at least one fixture in canonical manifest")
             .clone();
 
-        // Happy path: point the fixture at a custom file in a temporary directory.
+        // Happy path: write the fixture at its identity-bound canonical basename.
         let temp_dir = tempdir().expect("temp dir");
-        let mut entry = template.clone();
-        entry.encoded_file = "custom_payload.norito".into();
+        let entry = template.clone();
         let payload_bytes = BASE64
             .decode(&entry.payload_base64)
             .expect("payload payload_base64 decodes");
@@ -2056,8 +2504,36 @@ mod tests {
             .validate(Some(temp_dir.path()))
             .expect_err("missing encoded payloads should be rejected");
         assert!(
-            err.to_string().contains("custom_payload.norito"),
+            err.to_string().contains(&entry.encoded_file),
             "error should mention missing encoded file name: {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_validation_rejects_ttl_summary_drift() {
+        let root = workspace_root();
+        let canonical_path = root.join(CANONICAL_MANIFEST);
+        let canonical = Manifest::load(&canonical_path).expect("canonical manifest loads");
+        let mut entry = canonical
+            .fixtures
+            .first()
+            .expect("at least one fixture in canonical manifest")
+            .clone();
+        entry.time_to_live_ms = entry
+            .time_to_live_ms
+            .checked_add(1)
+            .expect("fixture lifetime can be incremented");
+
+        let error = Manifest {
+            fixtures: vec![entry],
+        }
+        .validate(None)
+        .expect_err("manifest lifetime drift must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("manifest summary differs from signed payload"),
+            "unexpected lifetime drift error: {error}"
         );
     }
 }

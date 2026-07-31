@@ -11,12 +11,7 @@ CODE_ANCHOR_RE = re.compile(r"^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$")
 DOC_HEADING_ID_RE = re.compile(r"\s*\{#([A-Za-z0-9_-]+)\}\s*$")
 DOC_EXTS = (".md", ".mdx")
 
-PORTAL_ROOT = ROOT / "docs" / "portal"
-PORTAL_DOCS_ROOT = PORTAL_ROOT / "docs"
-PORTAL_VERSIONED_ROOT = PORTAL_ROOT / "versioned_docs"
-PORTAL_I18N_ROOT = PORTAL_ROOT / "i18n"
-PORTAL_STATIC_ROOT = PORTAL_ROOT / "static"
-ALLOW_PATHS = {ROOT / "artifacts" / "docs_portal_preview"}
+DOC_ROOTS = (ROOT / "docs", ROOT / "specs")
 
 SKIP_DIRS = {
     ".cargo",
@@ -38,18 +33,7 @@ SKIP_DIRS = {
     "vendor",
 }
 
-def is_allowed_path(path: Path) -> bool:
-    for allowed in ALLOW_PATHS:
-        try:
-            path.relative_to(allowed)
-            return True
-        except ValueError:
-            continue
-    return False
-
 def should_skip_path(path: Path) -> bool:
-    if is_allowed_path(path):
-        return False
     return any(part in SKIP_DIRS for part in path.parts)
 
 def slugify(title: str) -> str:
@@ -177,21 +161,8 @@ def iter_md_files(root: Path):
                 seen.add(path)
                 yield path
 
-def find_portal_doc_roots():
-    roots = []
-    if PORTAL_DOCS_ROOT.is_dir():
-        roots.append(PORTAL_DOCS_ROOT)
-    if PORTAL_VERSIONED_ROOT.is_dir():
-        roots.extend(sorted(p for p in PORTAL_VERSIONED_ROOT.iterdir() if p.is_dir()))
-    if PORTAL_I18N_ROOT.is_dir():
-        for lang_dir in sorted(PORTAL_I18N_ROOT.iterdir()):
-            docs_dir = lang_dir / "docusaurus-plugin-content-docs"
-            if not docs_dir.is_dir():
-                continue
-            for version_dir in sorted(docs_dir.iterdir()):
-                if version_dir.is_dir():
-                    roots.append(version_dir)
-    return roots
+def find_doc_roots():
+    return [root for root in DOC_ROOTS if root.is_dir()]
 
 def build_doc_id_map(doc_root: Path):
     mapping = {}
@@ -261,10 +232,6 @@ def resolve_path_target(md_path: Path, path_part: str):
                 candidate = base / f"{name}{ext}"
                 if candidate.exists():
                     return candidate, base
-    if path_part.startswith("/"):
-        static_candidate = PORTAL_STATIC_ROOT / path_part.lstrip("/")
-        if static_candidate.exists():
-            return static_candidate, base
     return None, base
 
 def resolve_doc_id_target(md_path: Path, path_part: str, doc_roots, doc_id_maps):
@@ -303,8 +270,12 @@ def resolve_doc_id_target(md_path: Path, path_part: str, doc_roots, doc_id_maps)
     return None
 
 def main():
-    md_files = list(iter_md_files(ROOT))
-    doc_roots = find_portal_doc_roots()
+    doc_roots = find_doc_roots()
+    md_files = [
+        path
+        for doc_root in doc_roots
+        for path in iter_md_files(doc_root)
+    ]
     doc_id_maps = {root: build_doc_id_map(root) for root in doc_roots}
     broken = []
     for md_path in md_files:

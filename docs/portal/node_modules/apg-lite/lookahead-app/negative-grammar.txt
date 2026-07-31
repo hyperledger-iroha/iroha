@@ -1,0 +1,8 @@
+; Note that the rule "any-char" accepts "*" and "/".
+; Without the negative look ahead operator *any-char would over run
+; the end of the string and never find the "end" rule.
+C-lang = begin comment end
+begin    = "/*"
+comment  = *(!end any-char)
+end      = "*/"
+any-char = %d32-126

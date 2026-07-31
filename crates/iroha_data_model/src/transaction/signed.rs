@@ -204,7 +204,6 @@ mod model {
 
     /// Signature of transaction
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[norito(transparent)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1060,6 +1059,11 @@ fn normalize_privacy_submission_for_intent_v1(submission: &SubmitPrivacyProofV1)
         statement.device_authentication_digest =
             PrivacyVegaDeviceAuthenticationDigestV1::new([0; 32]);
     }
+    if let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) =
+        &mut normalized.envelope.statement
+    {
+        statement.action_digest = crate::privacy::PrivacyActionDigestV1::new([0; 32]);
+    }
     normalized.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
     normalized.into()
 }
@@ -1120,6 +1124,42 @@ static FAULT_INJECTION_METADATA_NAME: LazyLock<Name> = LazyLock::new(|| {
 });
 
 impl TransactionPayload {
+    /// Validate the complete signature-bound fee intent.
+    ///
+    /// This combines the typed fee-intent invariants with rejection of retired
+    /// metadata keys so every admission path can apply one canonical check.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the typed intent is non-canonical or legacy fee
+    /// metadata is present.
+    pub fn validate_fee_payment_intent(&self) -> Result<(), FeePaymentIntentError> {
+        self.fee_payment
+            .validate()
+            .and_then(|()| FeePaymentIntent::validate_metadata(&self.metadata))
+    }
+
+    /// Return the canonical privacy transaction-intent projection bytes.
+    ///
+    /// This is the exact unsigned-payload preimage consumed by
+    /// [`Self::privacy_transaction_intent_digest_v1`]. Exposing the projection
+    /// removes independent SDK approximations: callers can decode and
+    /// byte-identically reproduce the Rust-owned normalization before signing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed error for zero or multiple submissions, dynamic/opaque
+    /// execution paths, or canonical encoding failure.
+    pub fn privacy_transaction_intent_projection_bytes_v1(
+        &self,
+    ) -> Result<Vec<u8>, PrivacyTransactionIntentErrorV1> {
+        let mut normalized = self.clone();
+        normalized.instructions =
+            normalize_privacy_executable_for_intent_v1(&normalized.instructions)?;
+        norito::encode_canonical(&normalized)
+            .map_err(|_| PrivacyTransactionIntentErrorV1::PayloadEncodingFailure)
+    }
+
     /// Derive the canonical privacy transaction-intent digest from this unsigned payload.
     ///
     /// V1 accepts exactly one direct typed [`SubmitPrivacyProofV1`] in either
@@ -1134,7 +1174,10 @@ impl TransactionPayload {
     /// For ZK-ACE, the replay nullifier also becomes 32 zero bytes because it
     /// is derived from the resulting intent-bound authorization projection.
     /// For Vega, the device-authentication digest also becomes 32 zero bytes
-    /// because `H_dev` binds the resulting transaction-intent digest.
+    /// because `H_dev` binds the resulting transaction-intent digest. For the
+    /// native IVM private-note protocol, the self-authenticating action digest
+    /// likewise becomes 32 zero bytes because its canonical preimage includes
+    /// the resulting transaction-intent digest.
     ///
     /// Zeroing these derived fields removes their otherwise unavoidable
     /// self-reference. Every independent payload field, statement field,
@@ -1147,11 +1190,7 @@ impl TransactionPayload {
     pub fn privacy_transaction_intent_digest_v1(
         &self,
     ) -> Result<PrivacyTransactionIntentDigestV1, PrivacyTransactionIntentErrorV1> {
-        let mut normalized = self.clone();
-        normalized.instructions =
-            normalize_privacy_executable_for_intent_v1(&normalized.instructions)?;
-        let encoded = norito::to_bytes(&normalized)
-            .map_err(|_| PrivacyTransactionIntentErrorV1::PayloadEncodingFailure)?;
+        let encoded = self.privacy_transaction_intent_projection_bytes_v1()?;
         let encoded_len = u64::try_from(encoded.len())
             .map_err(|_| PrivacyTransactionIntentErrorV1::PayloadLengthOverflow)?;
         let mut hasher = blake3::Hasher::new();
@@ -1535,9 +1574,7 @@ impl SignedTransaction {
     #[inline]
     pub fn verify_signature(&self) -> Result<(), TransactionSignatureError> {
         self.payload
-            .fee_payment
-            .validate()
-            .and_then(|()| FeePaymentIntent::validate_metadata(&self.payload.metadata))
+            .validate_fee_payment_intent()
             .map_err(|err| TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()))?;
         let TransactionSignature(signature) = &self.signature;
         match self.payload.authority.controller() {
@@ -2128,9 +2165,7 @@ impl TransactionBuilder {
             return Err(TransactionSignatureError::MissingTimeToLive);
         }
         payload
-            .fee_payment
-            .validate()
-            .and_then(|()| FeePaymentIntent::validate_metadata(&payload.metadata))
+            .validate_fee_payment_intent()
             .map_err(|err| TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()))
     }
 
@@ -2341,7 +2376,6 @@ impl TransactionBuilder {
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedTransaction, TransactionSignatureError> {
         use iroha_crypto::PublicKey;
-
         let payload = self.payload;
 
         Self::validate_payload(&payload)?;
@@ -2445,14 +2479,16 @@ mod tests {
         prelude::{Log, Register, TriggerId},
         privacy::{
             IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1,
-            IrohaJindoPolynomialCommitmentStatementV1, PrivacyChallengeV1,
+            IrohaIvmPrivateNoteStarkStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
+            PrivacyActionDigestV1, PrivacyChallengeV1, PrivacyCommitmentV1,
             PrivacyCredentialDocumentTypeV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
             PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyNullifierV1,
             PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-            PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProtocolIdV1,
-            PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
-            PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+            PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyProgramIdV1,
+            PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1, PrivacyProofV1,
+            PrivacyProtocolIdV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
+            PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementSchemaDigestV1,
+            PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyValueBalanceV1,
             PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordDigestV1,
             PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
             PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
@@ -2655,6 +2691,42 @@ mod tests {
             submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
             submission.envelope.proof =
                 PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(vec![
+                    0xA5, 0x5A,
+                ]));
+        });
+        payload
+    }
+
+    fn draft_ivm_private_note_privacy_payload() -> TransactionPayload {
+        let mut payload = draft_privacy_payload();
+        mutate_direct_privacy_submission(&mut payload, |submission| {
+            let context = submission.envelope.statement.context().clone();
+            let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+            submission.envelope.protocol_id = protocol_id;
+            submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
+            submission.envelope.engine_id = protocol_id.expected_engine();
+            let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
+                context,
+                asset_definition_id: sample_fee_asset(),
+                pool_id: PrivacyPoolIdV1::new(privacy_test_bytes(0x91)),
+                program_id: PrivacyProgramIdV1::new(privacy_test_bytes(0x92)),
+                action_digest: PrivacyActionDigestV1::new([0; 32]),
+                state_root: PrivacyRootV1::new(privacy_test_bytes(0x93)),
+                root_epoch: 7,
+                nullifiers: vec![PrivacyNullifierV1::new(privacy_test_bytes(0x94))],
+                output_commitments: vec![PrivacyCommitmentV1::new(privacy_test_bytes(0x95))],
+                encrypted_outputs: Vec::new(),
+                value_balance: PrivacyValueBalanceV1::balanced(),
+                execution_epoch: 7,
+            };
+            statement.action_digest = statement
+                .computed_action_digest()
+                .expect("draft IVM action digest");
+            submission.envelope.statement =
+                PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement);
+            submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
+            submission.envelope.proof =
+                PrivacyProofV1::IrohaIvmPrivateNoteStarkV1(PrivacyProofBytesV1::new(vec![
                     0xA5, 0x5A,
                 ]));
         });
@@ -2933,12 +3005,12 @@ mod tests {
         let normalized_bytes = norito::to_bytes(&normalized).expect("canonical normalized payload");
         assert_eq!(
             normalized_bytes.len(),
-            14_176,
+            14_187,
             "the canonical fixture wire length is part of the cross-SDK KAT"
         );
         assert_eq!(
             hex::encode(expected.as_bytes()),
-            "a9dac5175c7e527acd53f8f71a735afaae89cb5b9cb865c4523c03e2fc1710d8",
+            "76fe315dd9a739d4a9b18f92959a258bbcaa2f420997972680416f7edb123552",
             "canonical privacy transaction-intent V1 digest"
         );
     }
@@ -3143,9 +3215,29 @@ mod tests {
     #[test]
     fn privacy_transaction_intent_projection_breaks_the_derived_digest_cycle_exactly() {
         let payload = finalized_privacy_payload();
+        let canonical_projection = payload
+            .privacy_transaction_intent_projection_bytes_v1()
+            .expect("canonical finalized projection bytes");
         let expected = payload
             .privacy_transaction_intent_digest_v1()
             .expect("canonical finalized projection");
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                payload
+                    .privacy_transaction_intent_projection_bytes_v1()
+                    .expect("ambient layout flags cannot alter the canonical projection"),
+                canonical_projection
+            );
+            assert_eq!(
+                payload
+                    .privacy_transaction_intent_digest_v1()
+                    .expect("ambient layout flags cannot alter the canonical intent"),
+                expected
+            );
+        }
         assert_canonical_privacy_intent_kat(&payload, expected);
         assert_privacy_proof_bytes_are_projected_out(&payload, expected);
         assert_stored_privacy_digests_are_checked(&payload, expected);
@@ -3220,7 +3312,7 @@ mod tests {
             .expect("derive Vega draft intent");
         assert_eq!(
             hex::encode(expected.as_bytes()),
-            "542c40dfa0d36a7aa9ab84eff51f367944a2b6c0614cf5ef355065c8bd038c72",
+            "88a32ad2633e7740cdc680972dc738ce8d94a60f774cc4e8a4286f5a99f4fc66",
             "canonical Vega two-phase transaction-intent projection KAT"
         );
 
@@ -3292,6 +3384,109 @@ mod tests {
                 .expect("final intent-bound Vega payload"),
             expected
         );
+    }
+
+    #[test]
+    fn ivm_private_note_intent_projection_breaks_the_action_digest_fixed_point() {
+        let payload = draft_ivm_private_note_privacy_payload();
+        let expected = payload
+            .privacy_transaction_intent_digest_v1()
+            .expect("derive IVM private-note draft intent");
+
+        let mut changed_action_digest = payload.clone();
+        mutate_direct_privacy_submission(&mut changed_action_digest, |submission| {
+            let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) =
+                &mut submission.envelope.statement
+            else {
+                panic!("IVM private-note fixture statement");
+            };
+            statement.action_digest = PrivacyActionDigestV1::new(privacy_test_bytes(0x96));
+        });
+        assert_eq!(
+            changed_action_digest
+                .privacy_transaction_intent_digest_v1()
+                .expect("derived IVM action digest is projected out"),
+            expected
+        );
+
+        let independent_mutations: [fn(&mut IrohaIvmPrivateNoteStarkStatementV1); 3] = [
+            |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
+                statement.state_root.0[0] ^= 1;
+            },
+            |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
+                statement.execution_epoch += 1;
+            },
+            |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
+                statement.output_commitments[0].0[0] ^= 1;
+            },
+        ];
+        for mutate in independent_mutations {
+            let mut changed = payload.clone();
+            mutate_direct_privacy_submission(&mut changed, |submission| {
+                let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) =
+                    &mut submission.envelope.statement
+                else {
+                    panic!("IVM private-note fixture statement");
+                };
+                mutate(statement);
+            });
+            assert_ne!(
+                changed
+                    .privacy_transaction_intent_digest_v1()
+                    .expect("independent IVM statement field remains bound"),
+                expected
+            );
+        }
+
+        let mut finalized = payload;
+        mutate_direct_privacy_submission(&mut finalized, |submission| {
+            let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) =
+                &mut submission.envelope.statement
+            else {
+                panic!("IVM private-note fixture statement");
+            };
+            statement.context.transaction_intent_digest = expected;
+            statement.action_digest = PrivacyActionDigestV1::new([0; 32]);
+            statement.action_digest = statement
+                .computed_action_digest()
+                .expect("intent-bound IVM action digest");
+            assert!(!statement.action_digest.is_zero());
+            assert_eq!(
+                statement
+                    .computed_action_digest()
+                    .expect("stable IVM action digest"),
+                statement.action_digest,
+                "canonical two-phase construction reaches a stable action digest"
+            );
+            submission.envelope.statement_digest = submission
+                .envelope
+                .statement
+                .digest()
+                .expect("final IVM statement digest");
+        });
+        assert_eq!(
+            finalized
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect("final IVM intent binding"),
+            expected
+        );
+
+        let mut stale_action_digest = finalized;
+        mutate_direct_privacy_submission(&mut stale_action_digest, |submission| {
+            let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) =
+                &mut submission.envelope.statement
+            else {
+                panic!("IVM private-note fixture statement");
+            };
+            statement.action_digest.0[0] ^= 1;
+            assert_ne!(
+                statement
+                    .computed_action_digest()
+                    .expect("recompute adversarial IVM action digest"),
+                statement.action_digest,
+                "an independently drifted action digest cannot authenticate its statement"
+            );
+        });
     }
 
     #[test]
@@ -3643,6 +3838,35 @@ mod tests {
         assert_eq!(
             err,
             FeePaymentIntentError::LegacyMetadataKey("fee_sponsor".to_owned())
+        );
+    }
+
+    #[test]
+    fn transaction_payload_validates_typed_and_legacy_fee_invariants_together() {
+        let mut payload = sample_signed_transaction().payload().clone();
+        payload.fee_payment = FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                sample_fee_asset(),
+                Quantity::zero(),
+            )],
+            None,
+        );
+        assert!(matches!(
+            payload.validate_fee_payment_intent(),
+            Err(FeePaymentIntentError::ZeroChargeLimit { .. })
+        ));
+
+        payload.fee_payment = FeePaymentIntent::authority(Vec::new(), None);
+        payload.metadata.insert(
+            "gas_limit".parse().expect("valid metadata key"),
+            Json::new(1_u64),
+        );
+        assert_eq!(
+            payload
+                .validate_fee_payment_intent()
+                .expect_err("retired metadata must fail the combined validation"),
+            FeePaymentIntentError::LegacyMetadataKey("gas_limit".to_owned())
         );
     }
 
@@ -4395,7 +4619,6 @@ mod tests {
     #[test]
     fn signed_transaction_roundtrip_preserves_instruction_order() {
         use crate::parameter::{Parameter, system::SumeragiParameter};
-
         let chain: ChainId = "test-chain".parse().unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -4738,13 +4961,12 @@ mod tests {
             metadata: Metadata::default(),
             attachments: None,
         };
-        let signature = TransactionSignature(checked_transaction_payload_signature(
-            member_key.private_key(),
-            &payload,
-        ));
+        let unknown_signature =
+            checked_transaction_payload_signature(unknown_key.private_key(), &payload);
+        let signature = TransactionSignature(unknown_signature.clone());
         let multisig_signatures = MultisigSignatures::new(vec![MultisigSignature::new(
             unknown_key.public_key().clone(),
-            checked_transaction_payload_signature(unknown_key.private_key(), &payload),
+            unknown_signature,
         )]);
 
         let tx = SignedTransaction {
@@ -5512,11 +5734,9 @@ mod norito_rpc_fixture_tests {
     }
 
     fn parse_compact_hash_fixture(raw: &str) -> std::collections::BTreeMap<String, String> {
-        const EXPECTED_KEYS: [&str; 12] = [
+        const EXPECTED_KEYS: [&str; 10] = [
             "schema.version",
-            "source.tag",
-            "source.bundle.sha256",
-            "reference",
+            "source.fixture",
             "versioned.bytes",
             "versioned.sha256",
             "bare.bytes",
@@ -5855,8 +6075,9 @@ mod norito_rpc_fixture_tests {
     fn compact_external_entrypoint_golden_matches_native_hash_and_rejects_alias_encodings() {
         use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
         use sha2::Digest as _;
-
         let fixture = compact_hash_fixture();
+        assert_eq!(fixture["schema.version"], "2");
+        assert_eq!(fixture["source.fixture"], "transfer_asset");
         let versioned = BASE64
             .decode(fixture["versioned.base64"].as_bytes())
             .expect("compact hash fixture must contain valid base64");
@@ -5882,10 +6103,18 @@ mod norito_rpc_fixture_tests {
         assert_eq!(bare.len(), fixture["bare.bytes"].parse::<usize>().unwrap());
         assert_eq!(bare, versioned[1..]);
 
+        let payload = transaction.payload().encode();
+        let mut canonical = 0_u32.to_le_bytes().to_vec();
+        norito::core::write_len_to_vec(&mut canonical, payload.len() as u64);
+        canonical.extend_from_slice(&payload);
         let entrypoint = TransactionEntrypoint::External(transaction);
-        let canonical = norito::codec::encode_adaptive(&entrypoint);
         let expected_prefix = hex::decode(&fixture["canonical.prefix.hex"]).unwrap();
         assert!(canonical.starts_with(&expected_prefix));
+        assert_eq!(
+            hex::encode(iroha_crypto::Hash::new(&canonical).as_ref()),
+            fixture["canonical.hash"],
+            "the payload-only External identity preimage must match the shared golden"
+        );
         assert_eq!(
             hex::encode(entrypoint.hash().as_ref()),
             fixture["canonical.hash"],
@@ -5926,19 +6155,31 @@ mod norito_rpc_fixture_tests {
         overlong_entrypoint.extend_from_slice(&canonical[..terminal_index]);
         overlong_entrypoint.extend_from_slice(&[terminal | 0x80, 0x00]);
         overlong_entrypoint.extend_from_slice(&canonical[terminal_index + 1..]);
-        assert!(
-            norito::codec::decode_adaptive::<TransactionEntrypoint>(&overlong_entrypoint).is_err(),
-            "overlong External field length must be rejected"
+        assert_ne!(
+            iroha_crypto::Hash::new(&overlong_entrypoint).as_ref(),
+            entrypoint.hash().as_ref(),
+            "an overlong External identity length must not alias the canonical hash"
         );
 
         let mut fixed_width_entrypoint = Vec::with_capacity(canonical.len() + 6);
         fixed_width_entrypoint.extend_from_slice(&canonical[..4]);
-        fixed_width_entrypoint.extend_from_slice(&(bare.len() as u64).to_le_bytes());
-        fixed_width_entrypoint.extend_from_slice(&bare);
-        assert!(
-            norito::codec::decode_adaptive::<TransactionEntrypoint>(&fixed_width_entrypoint)
-                .is_err(),
-            "fixed-u64 External field length must not alias canonical COMPACT_LEN bytes"
+        fixed_width_entrypoint.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        fixed_width_entrypoint.extend_from_slice(&payload);
+        assert_ne!(
+            iroha_crypto::Hash::new(&fixed_width_entrypoint).as_ref(),
+            entrypoint.hash().as_ref(),
+            "fixed-u64 External identity length must not alias canonical COMPACT_LEN bytes"
+        );
+
+        let wire_entrypoint = norito::codec::encode_adaptive(&entrypoint);
+        assert_ne!(
+            wire_entrypoint, canonical,
+            "the authorization-bearing entrypoint wire is distinct from its identity preimage"
+        );
+        assert_eq!(
+            norito::codec::decode_adaptive::<TransactionEntrypoint>(&wire_entrypoint)
+                .expect("canonical authorization-bearing entrypoint wire"),
+            entrypoint
         );
     }
 }

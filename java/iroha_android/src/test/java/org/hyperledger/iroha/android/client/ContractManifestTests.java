@@ -21,6 +21,7 @@ public final class ContractManifestTests {
 
   public static void main(final String[] args) {
     fullManifestPreservesExactKotodamaV1Interface();
+    triggerBoundariesRejectExactAmountSourceFormOnly();
     manifestRejectsUnknownEnglishAndNoncanonicalShapes();
     retiredNumericTypeNamesAreRejectedOnlyInTypePositions();
     dynamicAccessHintsEnforceTheExactV1Policy();
@@ -80,6 +81,35 @@ public final class ContractManifestTests {
     require("ed25519:fixture".equals(manifest.provenance().signer()), "provenance signer");
   }
 
+  private static void triggerBoundariesRejectExactAmountSourceFormOnly() {
+    final String response = fullResponse();
+    final String[] retired = {
+      replaceFirst(response, "\"id\":\"settle\"", "\"id\":\"Amount\""),
+      replaceFirst(response, "\"namespace\":null", "\"namespace\":\"Amount\"")
+    };
+    for (final String payload : retired) {
+      expectFailure(
+          () -> ContractJsonParser.parseManifestRecord(payload.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    final String lowercase =
+        replaceFirst(
+            replaceFirst(response, "\"id\":\"settle\"", "\"id\":\"amount\""),
+            "\"namespace\":null",
+            "\"namespace\":\"RemoteLedger\"");
+    final ContractManifest.TriggerDescriptor trigger =
+        ContractJsonParser.parseManifestRecord(lowercase.getBytes(StandardCharsets.UTF_8))
+            .manifest()
+            .entrypoints()
+            .get(0)
+            .triggers()
+            .get(0);
+    require("amount".equals(trigger.id()), "lowercase amount trigger id");
+    require(
+        "RemoteLedger".equals(trigger.callback().namespace()),
+        "canonical callback namespace");
+  }
+
   private static void manifestRejectsUnknownEnglishAndNoncanonicalShapes() {
     final String response = fullResponse();
     final String[] invalid = {
@@ -102,6 +132,27 @@ public final class ContractManifestTests {
           "\"seiyaku_name\":\"Option\""),
       replaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Amount\""),
       replaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"amount\""),
+      replaceFirst(response, "\"name\":\"transfer\",", "\"name\":\"Amount\","),
+      replaceFirst(
+          response,
+          "\"name\":\"request\",\"type_name\"",
+          "\"name\":\"Amount\",\"type_name\""),
+      replaceFirst(
+          response,
+          "\"fields\":[\"amount\",\"memo\"]",
+          "\"fields\":[\"Amount\",\"memo\"]"),
+      replaceFirst(
+          response,
+          "\"name\":\"Balances\",\"type_name\"",
+          "\"name\":\"Amount\",\"type_name\""),
+      replaceFirst(
+          response,
+          "\"name\":\"InsufficientFunds\",\"code\"",
+          "\"name\":\"Amount\",\"code\""),
+      replaceFirst(
+          response,
+          "\"base_key\":\"state:Balances\"",
+          "\"base_key\":\"state:Amount\""),
       replaceFirst(
           response,
           "\"seiyaku_name\":\"Ledger\"",
@@ -205,6 +256,7 @@ public final class ContractManifestTests {
       "StateMap<AccountId, Amount: quantity>",
       "Transfer{amount: amount}",
       "Transfer{amount:: quantity}",
+      "Transfer{Amount: quantity}",
       "Amount{amount: quantity}",
       "Transfer{amount: quantity, amount: int}",
       "Transfer{}",

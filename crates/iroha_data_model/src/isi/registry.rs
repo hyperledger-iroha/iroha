@@ -61,8 +61,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<offline::ActivateKagemushaRecursiveReleaseV4>,
     InstructionRegistry::register_slice::<offline::RegisterOfflineDeviceAttestation>,
     InstructionRegistry::register_slice::<offline::SetOfflineDeviceAttestationPolicy>,
-    InstructionRegistry::register_slice::<zk::RegisterAssetHiddenZkPool>,
-    InstructionRegistry::register_slice::<zk::AssetHiddenZkTransfer>,
     InstructionRegistry::register_slice::<asset_alias::SetAssetDefinitionBalancePolicy>,
     InstructionRegistry::register_slice::<crate::isi::staking::RegisterPublicLaneValidator>,
     InstructionRegistry::register_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>,
@@ -1074,6 +1072,22 @@ mod tests {
                 registry.contains(wire_id),
                 "{wire_id} must be a lookup key for {type_name}"
             );
+            assert_eq!(
+                registry
+                    .entry_for_key(type_name)
+                    .expect("registered type-name lookup")
+                    .type_name,
+                type_name,
+                "Rust type-name lookup must retain its intended constructor"
+            );
+            assert_eq!(
+                registry
+                    .entry_for_key(wire_id)
+                    .expect("registered wire-id lookup")
+                    .type_name,
+                type_name,
+                "wire-id lookup must retain the constructor assigned in the V1 inventory"
+            );
             if let Some(previous) = seen_wire_ids.insert(wire_id, type_name) {
                 panic!("wire id collision: {wire_id} registered for {previous} and {type_name}");
             }
@@ -1091,24 +1105,56 @@ mod tests {
         use sha2::{Digest, Sha256};
 
         #[cfg(feature = "governance")]
-        const EXPECTED_SHA256: &str =
-            "50e4ce8cce8a62e0a54d738abe03a48354de9e399ee9402ada49cacaf61a41c0";
-        #[cfg(not(feature = "governance"))]
-        const EXPECTED_SHA256: &str =
-            "377305e0ace3812406b05a9369147a8fe06996e87009dffb6f0683c54cd06240";
+        const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
+            "cac7fc565a6a5a5b25be028218e08cb46973b96bfc24dd488c56c9b84bbdc297";
+        const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
+            "8b3425102fdceb1cf4e61ef19ec6db5474d365918d1fe233255aa47e08de47b8";
 
-        let mut wire_ids = wire_ids::ALL
-            .iter()
-            .map(|entry| entry.wire_id)
-            .collect::<Vec<_>>();
-        wire_ids.sort_unstable();
-        let canonical = wire_ids
-            .into_iter()
-            .map(|wire_id| format!("{wire_id}\n"))
-            .collect::<String>();
-        let actual = hex::encode(Sha256::digest(canonical.as_bytes()));
+        let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
+            let mut assignments = entries
+                .into_iter()
+                .map(|entry| format!("{}\t{}\n", entry.type_label, entry.wire_id))
+                .collect::<Vec<_>>();
+            assignments.sort_unstable();
+            let canonical = assignments.concat();
+            hex::encode(Sha256::digest(canonical.as_bytes()))
+        };
 
-        assert_eq!(actual, EXPECTED_SHA256);
+        let without_governance = assignment_digest(
+            wire_ids::ALL
+                .iter()
+                .filter(|entry| !entry.governance_only)
+                .collect(),
+        );
+        assert_eq!(
+            without_governance, EXPECTED_WITHOUT_GOVERNANCE_SHA256,
+            "non-governance V1 type-to-wire-ID assignments changed"
+        );
+
+        #[cfg(feature = "governance")]
+        {
+            assert_eq!(
+                wire_ids::ALL
+                    .iter()
+                    .filter(|entry| entry.governance_only)
+                    .count(),
+                17,
+                "governance-only V1 inventory changed without updating its explicit scope"
+            );
+            assert_eq!(
+                assignment_digest(wire_ids::ALL.iter().collect()),
+                EXPECTED_WITH_GOVERNANCE_SHA256,
+                "complete V1 type-to-wire-ID assignments changed"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "instruction registry key collision")]
+    fn instruction_registry_rejects_wire_id_collisions() {
+        let _registry = InstructionRegistry::new()
+            .register_with_id::<Log>("instruction.collision")
+            .register_with_id::<Upgrade>("instruction.collision");
     }
 
     #[test]

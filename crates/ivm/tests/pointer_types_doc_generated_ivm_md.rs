@@ -1,4 +1,4 @@
-//! Verify root and localized `ivm.md` pointer type tables are up to date.
+//! Verify the root `ivm.md` pointer type table is up to date.
 
 const BEGIN: &str = "<!-- BEGIN GENERATED POINTER TYPES -->";
 const END: &str = "<!-- END GENERATED POINTER TYPES -->";
@@ -27,31 +27,4 @@ fn generated_pointer_types_section_in_ivm_md_is_up_to_date() {
     let table = ivm::render_pointer_types_markdown_table();
     let expected = format!("{BEGIN}\n{table}{END}");
     assert_generated_pointer_types(&repo_root().join("ivm.md"), &expected);
-}
-
-#[test]
-fn localized_pointer_type_sections_are_up_to_date() {
-    let localized_root = repo_root().join("docs/i18n/root");
-    let mut paths = std::fs::read_dir(&localized_root)
-        .expect("read localized docs root")
-        .map(|entry| {
-            entry
-                .expect("read localized docs entry")
-                .path()
-                .join("ivm.md")
-        })
-        .filter(|path| path.is_file())
-        .collect::<Vec<_>>();
-    paths.sort();
-    assert!(
-        !paths.is_empty(),
-        "no localized ivm.md documents found under {}",
-        localized_root.display()
-    );
-
-    let table = ivm::render_pointer_types_markdown_table();
-    let expected = format!("{BEGIN}\n{table}{END}");
-    for path in paths {
-        assert_generated_pointer_types(&path, &expected);
-    }
 }

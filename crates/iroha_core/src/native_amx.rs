@@ -2775,7 +2775,7 @@ pub fn validate_native_amx_qc(
     {
         return Err(NativeAmxQcValidationError::InvalidValidatorSet);
     }
-    if qc.validator_set != validator_set {
+    if qc.validator_set() != validator_set {
         return Err(NativeAmxQcValidationError::ValidatorSetMismatch);
     }
     if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
@@ -2799,10 +2799,7 @@ pub fn validate_native_amx_qc(
         );
     }
 
-    if qc.validator_set_pops.len() != validator_set.len() {
-        return Err(NativeAmxQcValidationError::InvalidProofOfPossession);
-    }
-    for (validator, embedded_pop) in validator_set.iter().zip(&qc.validator_set_pops) {
+    for (validator, embedded_pop) in qc.validators_with_pops() {
         if !peer_uses_bls_normal(validator) {
             return Err(NativeAmxQcValidationError::SignerNotBlsNormal);
         }
@@ -2926,7 +2923,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
             }
             let common_qc_shape = |qc: &NativeAmxAttestationQcV2, phase: NativeAmxPhase| {
                 let body = &qc.body;
-                let validator_count = qc.validator_set.len();
+                let validator_count = qc.validator_set().len();
                 let expected_quorum =
                     crate::sumeragi::network_topology::commit_quorum_from_len(validator_count)
                         .max(1);
@@ -2991,13 +2988,12 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
                     && advertised_validator_count == validator_count
                     && advertised_min_quorum == expected_quorum
                     && qc.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1
-                    && qc.validator_set_hash == HashOf::new(&qc.validator_set)
+                    && qc.validator_set_hash == qc.computed_validator_set_hash()
                     && qc.validator_set_hash == body.participant_validator_set_hash
-                    && qc.validator_set.windows(2).all(|pair| pair[0] < pair[1])
-                    && qc.validator_set.iter().all(peer_uses_bls_normal)
-                    && qc.validator_set_pops.len() == validator_count
+                    && qc.validator_set().windows(2).all(|pair| pair[0] < pair[1])
+                    && qc.validator_set().iter().all(peer_uses_bls_normal)
                     && qc
-                        .validator_set_pops
+                        .validator_set_pops()
                         .iter()
                         .all(|pop| pop.len() == NATIVE_AMX_BLS_PROOF_BYTES)
                     && qc.signers_bitmap.len() == validator_count.div_ceil(8)
@@ -3007,8 +3003,8 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
             };
             if !common_qc_shape(prepare, NativeAmxPhase::Prepare)
                 || !common_qc_shape(commit, NativeAmxPhase::Commit)
-                || prepare.validator_set != commit.validator_set
-                || prepare.validator_set_pops != commit.validator_set_pops
+                || prepare.validator_set() != commit.validator_set()
+                || prepare.validator_set_pops() != commit.validator_set_pops()
                 || prepare.validator_set_hash != commit.validator_set_hash
             {
                 return false;
@@ -3166,15 +3162,17 @@ pub fn aggregate_votes_to_qc(
     let bls_aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .map_err(|_| NativeAmxQcBuildError::SignatureAggregate)?;
 
-    Ok(NativeAmxAttestationQcV2 {
+    let validator_set_hash = HashOf::new(&validator_set);
+    NativeAmxAttestationQcV2::try_new(
         body,
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash: HashOf::new(&validator_set),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash,
         validator_set,
         validator_set_pops,
         signers_bitmap,
         bls_aggregate_signature,
-    })
+    )
+    .map_err(|_| NativeAmxQcBuildError::InvalidProofOfPossession)
 }
 
 #[derive(Default)]
@@ -5092,8 +5090,8 @@ mod tests {
         .expect("valid quorum should aggregate");
 
         assert_eq!(qc.body, body);
-        assert_eq!(qc.validator_set, validator_set);
-        assert_eq!(qc.validator_set_pops, validator_set_pops);
+        assert_eq!(qc.validator_set(), validator_set.as_slice());
+        assert_eq!(qc.validator_set_pops(), validator_set_pops.as_slice());
         let mut expected_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
         for keypair in [&keypairs[2], &keypairs[0], &keypairs[1]] {
             let signer = PeerId::new(keypair.public_key().clone());
@@ -5313,128 +5311,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn commit_request_shape_binds_the_exact_round_and_epoch() {
-        let keys = [checked_bls_keypair(0x41), checked_bls_keypair(0x42)];
-        let mut validators = keys
-            .iter()
-            .map(|key| PeerId::new(key.public_key().clone()))
-            .collect::<Vec<_>>();
-        validators.sort();
-        let prepare_request = full_plan_request(
-            body_for_validator_set(NativeAmxPhase::Prepare, &validators),
-            validators.clone(),
-        );
-        let prepare_body = prepare_request.body;
-        let validator_set_pops = aligned_pops(&validators, &keys);
-        let votes = keys
-            .iter()
-            .map(|key| signed_vote(&prepare_body, key))
-            .collect::<Vec<_>>();
-        let prepare_qc = aggregate_votes_to_qc(
-            prepare_body,
-            validators.clone(),
-            validator_set_pops,
-            &votes,
-            2,
-        )
-        .expect("prepare QC");
-        let mut commit_request = prepare_request;
-        commit_request.body.phase = NativeAmxPhase::Commit;
-        let request = NativeAmxCommitRequestV2 {
-            request: commit_request,
-            prepare_qc: prepare_qc.clone(),
-        };
-        assert_eq!(request.validate_shape(), Ok(()));
-
-        let mut replayed_view = request.clone();
-        replayed_view.request.body.round.view =
-            replayed_view.request.body.round.view.saturating_add(1);
-        replayed_view.request.body.coordinator_lane_block_view = replayed_view
-            .request
-            .body
-            .coordinator_lane_block_view
-            .saturating_add(1);
-        replayed_view
-            .request
-            .coordinator_proposal
-            .descriptor
-            .lane_block_view = replayed_view.request.body.coordinator_lane_block_view;
-        replayed_view
-            .request
-            .coordinator_proposal
-            .descriptor
-            .descriptor_hash = replayed_view
-            .request
-            .coordinator_proposal
-            .descriptor
-            .computed_descriptor_hash();
-        replayed_view.request.coordinator_proposal.proposal_hash = replayed_view
-            .request
-            .coordinator_proposal
-            .computed_proposal_hash();
-        replayed_view.request.body.coordinator_proposal_hash =
-            replayed_view.request.coordinator_proposal.proposal_hash;
-        assert_eq!(
-            replayed_view.validate_shape(),
-            Err(NativeAmxCommitRequestError::LegMismatch)
-        );
-        let mut replayed_epoch = request;
-        replayed_epoch.request.body.epoch = replayed_epoch.request.body.epoch.saturating_add(1);
-        assert_eq!(
-            replayed_epoch.validate_shape(),
-            Err(NativeAmxCommitRequestError::LegMismatch)
-        );
-    }
-
-    #[test]
-    fn qc_validation_rejects_context_replay_and_missing_pop() {
-        let keys = [
-            checked_bls_keypair(0x51),
-            checked_bls_keypair(0x52),
-            checked_bls_keypair(0x53),
-        ];
-        let mut validators = keys
-            .iter()
-            .map(|key| PeerId::new(key.public_key().clone()))
-            .collect::<Vec<_>>();
-        validators.sort();
-        let body = body_for_validator_set(NativeAmxPhase::Prepare, &validators);
-        let validator_set_pops = aligned_pops(&validators, &keys);
-        let votes = keys
-            .iter()
-            .map(|key| signed_vote(&body, key))
-            .collect::<Vec<_>>();
-        let qc = aggregate_votes_to_qc(body, validators.clone(), validator_set_pops, &votes, 3)
-            .expect("aggregate exact QC");
-        let pops = keys
-            .iter()
-            .map(|key| {
-                (
-                    key.public_key().clone(),
-                    iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("prove PoP"),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(
-            validate_native_amx_qc(&qc, &body, &validators, 3, &pops),
-            Ok(())
-        );
-
-        let mut another_context = body;
-        another_context.round.context_id = HeightContextId(
-            HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(b"replayed-context")),
-        );
-        assert_eq!(
-            validate_native_amx_qc(&qc, &another_context, &validators, 3, &pops),
-            Err(NativeAmxQcValidationError::BodyMismatch)
-        );
-
-        let mut missing_pop = pops;
-        missing_pop.remove(keys[0].public_key());
-        assert_eq!(
-            validate_native_amx_qc(&qc, &body, &validators, 3, &missing_pop),
-            Err(NativeAmxQcValidationError::InvalidProofOfPossession)
-        );
-    }
+    // Commit-request and QC replay-validation tests retain their stable libtest paths.
+    include!("native_amx/commit_validation_tail_tests.rs");
 }

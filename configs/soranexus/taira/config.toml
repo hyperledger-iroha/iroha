@@ -117,6 +117,8 @@ enabled = true
 private_key = "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
 minimum_xor_balance = "1"
 max_tx_value = "1000000000"
+operation_registry_max_entries = 4096
+operation_registry_max_bytes = 524288
 
 [settlement.offline]
 enabled = true
@@ -215,6 +217,17 @@ stop_grace_ms = 10000
 fee_payer = "sponsor"
 fee_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
 fee_program_revision = 1
+
+[soracloud_runtime.submission.signer]
+# Public binding only. The matching private key remains inside the deployment
+# provider named by `handle`; the validator-bundle renderer rejects this
+# template until every field is supplied explicitly.
+handle = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE"
+authority = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_AUTHORITY"
+algorithm = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_ALGORITHM"
+public_key_hex = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_PUBLIC_KEY_HEX"
+revision = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_REVISION"
+policy_digest_hex = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_POLICY_DIGEST_HEX"
 
 [soracloud_runtime.egress]
 default_allow = false
@@ -468,20 +481,6 @@ dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "unshield"
 description = "Route unshield instructions to the external IS lane for dataspace-scoped balances"
-
-[[nexus.routing_policy.rules]]
-lane = 3
-dataspace = "is"
-[nexus.routing_policy.rules.matcher]
-instruction = "register_asset_hidden_zk_pool"
-description = "Route asset-hidden pool registration to the external IS lane"
-
-[[nexus.routing_policy.rules]]
-lane = 3
-dataspace = "is"
-[nexus.routing_policy.rules.matcher]
-instruction = "asset_hidden_zk_transfer"
-description = "Route asset-hidden ZK transfers to the external IS lane"
 
 [nexus.fusion]
 floor_teu = 2500

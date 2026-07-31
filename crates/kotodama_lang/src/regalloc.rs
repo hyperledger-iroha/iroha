@@ -2459,6 +2459,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         EncodeInt { value, .. } | PointerToNorito { value, .. } => f(*value),
         PointerFromNorito { blob, .. } => f(*blob),
+        StatePathFromName { name, .. } => f(*name),
         PathMapKeyNorito { base, key_blob, .. } => {
             f(*base);
             f(*key_blob);
@@ -2659,7 +2660,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::JsonObject { dest, .. } => Some(*dest),
         Instr::JsonSetInt { dest, .. } => Some(*dest),
         Instr::JsonSetAccountId { dest, .. } => Some(*dest),
-        Instr::PathMapKeyNorito { dest, .. } => Some(*dest),
+        Instr::StatePathFromName { dest, .. } | Instr::PathMapKeyNorito { dest, .. } => Some(*dest),
         Instr::JsonEncode { dest, .. } => Some(*dest),
         Instr::JsonDecode { dest, .. } => Some(*dest),
         Instr::JsonGetNumeric { dest, .. }

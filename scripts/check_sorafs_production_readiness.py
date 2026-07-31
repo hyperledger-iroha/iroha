@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import re
 import sys
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -175,6 +176,7 @@ from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
     KIND_BY_NAME as REFERENCE_SDK_KIND_BY_NAME,
     POLICY_BOUND_KINDS as REFERENCE_SDK_POLICY_BOUND_KINDS,
     RELEASE_MANIFEST_BOUND_KINDS as REFERENCE_SDK_RELEASE_MANIFEST_BOUND_KINDS,
+    SOURCE_ARTIFACT_KINDS as REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_KINDS,
 )
 from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REPAIR_REQUIRED_KINDS,
@@ -217,195 +219,102 @@ from sorafs_topology_qualification import (  # noqa: E402
     validate_topology_binding_object,
 )
 
+from sorafs_production_readiness_contract import (  # noqa: E402
+    FOUNDATIONAL_PREREQUISITE_SCHEMA,
+    FOUNDATIONAL_PREREQUISITE_SIGNATURE_DOMAIN,
+    RESILIENCE_QUALIFICATION_RECEIPT_SCHEMA,
+    RESILIENCE_QUALIFICATION_SUMMARY_SCHEMA,
+    RESILIENCE_QUALIFICATION_SIGNATURE_DOMAIN,
+    RESILIENCE_QUALIFICATION_REQUIREMENTS,
+    RESILIENCE_QUALIFICATION_SUMMARY_FIELDS,
+    RESILIENCE_QUALIFICATION_ARTIFACT_BINDING_FIELDS,
+    RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS,
+    RESILIENCE_QUALIFICATION_BINDING_SCHEMA,
+    RESILIENCE_QUALIFICATION_BINDING_FIELDS,
+    AGGREGATE_RESILIENCE_QUALIFICATION_SCHEMA,
+    AGGREGATE_RESILIENCE_QUALIFICATION_FIELDS,
+    FOUNDATIONAL_PREREQUISITE_IDS,
+    FOUNDATIONAL_PREREQUISITE_LANES,
+    MAX_FOUNDATIONAL_RELEASE_SEQUENCE,
+    FOUNDATIONAL_PREREQUISITE_FIELDS,
+    FOUNDATIONAL_PREREQUISITE_DEPLOYMENT_FIELDS,
+    FOUNDATIONAL_PREREQUISITE_ROW_FIELDS,
+    FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS,
+    AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS,
+    FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS,
+    AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS,
+    AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS,
+    POP_CREDENTIALS_ROOT_BOUND_FINGERPRINT_FIELDS,
+    POP_CREDENTIALS_REVOCATION_BOUND_FINGERPRINT_FIELDS,
+    MAX_SUMMARY_BYTES,
+    DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
+    LOWER_HEX_DIGITS,
+    PRODUCTION_READY_ENVIRONMENTS,
+    FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS,
+    SUCCESS_ARTIFACT_STATUSES,
+    REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_FIELDS,
+    REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_DIGEST_BINDINGS,
+    REFERENCE_SDK_PUBLIC_PROVENANCE_FINGERPRINT_FIELDS,
+    REFERENCE_SDK_PUBLIC_PROVENANCE_PATH_COMPONENT_RE,
+    REFERENCE_SDK_JWT_LIKE_PATH_COMPONENT_RE,
+    REFERENCE_SDK_RESERVED_PUBLIC_HOST_SUFFIXES,
+    REFERENCE_SDK_LEGACY_IPV4_COMPONENT_RE,
+    PATH_SENSITIVE_KEY_FRAGMENTS,
+    GATE_METADATA_FIELDS,
+    PAYLOAD_FREE_SUMMARY_CORE_FIELDS,
+    PAYLOAD_FREE_SUMMARY_METADATA_FIELDS,
+    PAYLOAD_FREE_SUMMARY_FIELDS,
+    PAYLOAD_FREE_SUMMARY_LIST_METADATA_FIELDS,
+    PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS,
+    PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS,
+    PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS,
+    PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS,
+    PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS,
+    PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS,
+    PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS,
+    PAYLOAD_FREE_SUMMARY_OBJECT_LIST_STRING_FIELD_POLICIES,
+    PAYLOAD_FREE_SUMMARY_OBJECT_LIST_FINGERPRINT_HEX_BINDINGS,
+    PAYLOAD_FREE_SUMMARY_STRING_METADATA_FIELDS,
+    PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_BINDINGS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS,
+    PAYLOAD_FREE_SUMMARY_ALLOWED_STRING_LIST_VALUES,
+    PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES,
+    PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS,
+    PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS,
+    PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS,
+    PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS,
+    MAX_SUMMARY_METADATA_DEPTH,
+    PAYLOAD_FREE_ARTIFACT_FIELDS,
+    PAYLOAD_FREE_REQUIRED_ROW_FIELDS,
+    AGGREGATE_REQUIRED_GATE_ROW_FIELDS,
+    AGGREGATE_MISSING_GATE_ROW_FIELDS,
+    AGGREGATE_SUMMARY_FIELDS,
+    GateSummaryKind,
+    GATE_SUMMARY_KINDS,
+    SCHEMA_TO_GATE,
+    GATE_BY_NAME,
+    DEFAULT_REQUIRED_GATES,
+    GATE_REQUIRED_KIND_SCHEMAS,
+)
 
+# Keep the public aggregate schema and diagnostic-sensitivity inventory local:
+# release contract tests and shared evidence tooling inspect these literal
+# declarations without importing the checker.
 SUMMARY_SCHEMA = "sorafs.production_readiness.aggregate_gate.v1"
 GATEWAY_MODERATION_CATALOG_MISMATCH_ERROR = (
     "moderation_panel evidence viewer catalog digests must match "
     "gateway_compliance valid_catalog_digests"
 )
-FOUNDATIONAL_PREREQUISITE_SCHEMA = (
-    "sorafs.production_readiness.foundational_prerequisites.v1"
-)
-FOUNDATIONAL_PREREQUISITE_SIGNATURE_DOMAIN = (
-    b"iroha:sorafs:production-readiness:foundational-prerequisites:v1\x00"
-)
-RESILIENCE_QUALIFICATION_RECEIPT_SCHEMA = (
-    "sorafs.l1.resilience_qualification.v1"
-)
-RESILIENCE_QUALIFICATION_SUMMARY_SCHEMA = (
-    "sorafs.l1.resilience_qualification.summary.v1"
-)
-RESILIENCE_QUALIFICATION_SIGNATURE_DOMAIN = (
-    b"iroha:sorafs:l1-resilience-qualification:v1\x00"
-)
-RESILIENCE_QUALIFICATION_REQUIREMENTS = (
-    "network_partition_recovery",
-    "consensus_view_change",
-    "validator_restart",
-    "torii_restart",
-    "provider_restart",
-    "simultaneous_peer_submission",
-    "signer_rotation",
-    "root_rotation",
-    "catalog_rotation",
-    "gateway_failover",
-    "governance_dag_failover",
-    "stale_fork_rejection",
-    "crash_recovery",
-    "identical_post_recovery_peer_state",
-    "repair_outcome",
-    "settlement_outcome",
-    "backup_restore",
-    "release_rollback",
-    "package_yank",
-)
-RESILIENCE_QUALIFICATION_SUMMARY_FIELDS = frozenset(
-    {
-        "schema",
-        "status",
-        "qualification_scope",
-        "live_evidence_recognized",
-        "externally_authenticated",
-        "promotion_eligible",
-        "readiness_lane_count_delta",
-        "receipt_sha256",
-        "canonical_receipt_sha256",
-        "receipt_generated_at_unix",
-        "receipt_authentication",
-        "deployment",
-        "topology_qualification",
-        "required_requirements",
-        "recognized_requirement_count",
-        "artifact_bindings",
-        "earliest_capture_unix",
-        "latest_capture_unix",
-        "errors",
-    }
-)
-RESILIENCE_QUALIFICATION_ARTIFACT_BINDING_FIELDS = frozenset(
-    {"requirement", "artifact_path", "artifact_sha256", "captured_at_unix"}
-)
-RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS = frozenset(
-    {
-        "kind",
-        "algorithm",
-        "public_key_fingerprint_sha256",
-        "signature_hex",
-    }
-)
-RESILIENCE_QUALIFICATION_BINDING_SCHEMA = (
-    "sorafs.production_readiness.resilience_qualification_binding.v1"
-)
-RESILIENCE_QUALIFICATION_BINDING_FIELDS = frozenset(
-    {
-        "schema",
-        "summary_sha256",
-        "receipt_sha256",
-        "canonical_receipt_sha256",
-        "receipt_generated_at_unix",
-        "signer_public_key_fingerprint_sha256",
-    }
-)
-AGGREGATE_RESILIENCE_QUALIFICATION_SCHEMA = (
-    "sorafs.production_readiness.aggregate_resilience_qualification.v1"
-)
-AGGREGATE_RESILIENCE_QUALIFICATION_FIELDS = frozenset(
-    {"schema", "present", "valid", "binding", "errors"}
-)
-FOUNDATIONAL_PREREQUISITE_IDS = (
-    "SFM-1",
-    "SF-1",
-    "SF-2",
-    "SF-2c",
-    "SF-3",
-    "SF-4",
-    "SF-5b",
-    "SF-6",
-    "SF-8a",
-)
-MAX_FOUNDATIONAL_RELEASE_SEQUENCE = (1 << 63) - 1
-FOUNDATIONAL_PREREQUISITE_FIELDS = frozenset(
-    {
-        "schema",
-        "status",
-        "deployment",
-        "generated_at_unix",
-        "release_sequence",
-        "previous_envelope_sha256",
-        "topology_qualification",
-        "resilience_qualification",
-        "prerequisites",
-        "lane_summaries",
-        "signature",
-    }
-)
-FOUNDATIONAL_PREREQUISITE_DEPLOYMENT_FIELDS = frozenset(
-    {"deployment_id", "environment"}
-)
-FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
-    {
-        "id",
-        "status",
-        "evidence_anchor_sha256",
-        "evidence_generated_at_unix",
-    }
-)
-FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS = frozenset({"gate", "sha256"})
-FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS = frozenset(
-    {"algorithm", "public_key_fingerprint_sha256", "signature_hex"}
-)
-AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
-    {
-        "schema",
-        "present",
-        "valid",
-        "required_ids",
-        "prerequisite_count",
-        "generated_at_unix",
-        "oldest_evidence_generated_at_unix",
-        "newest_evidence_generated_at_unix",
-        "deployment_id",
-        "environment",
-        "release_sequence",
-        "previous_envelope_sha256",
-        "signer_public_key_fingerprint_sha256",
-        "topology_qualification",
-        "resilience_qualification",
-        "evidence_anchor_sha256",
-        "lane_summary_sha256",
-        "path",
-        "sha256",
-        "errors",
-    }
-)
-AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
-    {"schema", "present", "valid", "errors"}
-)
-POP_CREDENTIALS_ROOT_BOUND_FINGERPRINT_FIELDS = tuple(
-    (
-        kind_name,
-        "synced_root_digest_hex" if kind_name == "juror_client" else "root_digest_hex",
-    )
-    for kind_name in POP_CREDENTIALS_ROOT_BOUND_KINDS
-)
-POP_CREDENTIALS_REVOCATION_BOUND_FINGERPRINT_FIELDS = tuple(
-    (
-        kind_name,
-        (
-            "synced_revocation_list_digest_hex"
-            if kind_name == "juror_client"
-            else "revocation_list_digest_hex"
-        ),
-    )
-    for kind_name in POP_CREDENTIALS_REVOCATION_BOUND_KINDS
-)
-MAX_SUMMARY_BYTES = 4 * 1024 * 1024
-DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS = 14 * 24 * 60 * 60
-LOWER_HEX_DIGITS = set("0123456789abcdef")
-PRODUCTION_READY_ENVIRONMENTS = frozenset({"prod", "production"})
-FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS = frozenset({"stage", "staging"})
-SUCCESS_ARTIFACT_STATUSES = frozenset({"passed", "verified"})
-
 SENSITIVE_KEYS = {
     "authorization",
     "bearer_token",
@@ -432,894 +341,60 @@ SENSITIVE_KEYS = {
     "signed_transaction",
     "token",
 }
-PATH_SENSITIVE_KEY_FRAGMENTS = HIGH_RISK_SENSITIVE_KEY_FRAGMENTS - frozenset(
-    {"requestbody", "responsebody"}
-)
 
-GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
-    "ai_prescreen": frozenset(
-        {
-            "valid_executor_summary_digests",
-            "deployment_context",
-            "valid_notification_manifest_digests",
-            "valid_policy_digests",
-            "valid_runner_bindings",
-            "valid_workflow_digests",
-        }
-    ),
-    "appeal_finance": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_config_digests",
-            "valid_multi_peer_runs",
-            "valid_policy_digests",
-        }
-    ),
-    "gateway_compliance": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_catalog_digests",
-            "valid_catalog_history_bindings",
-            "valid_policy_digests",
-        }
-    ),
-    "gateway_load": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_policy_digests",
-            "valid_staging_report_digests",
-            "valid_suite_report_digests",
-        }
-    ),
-    "governance_dag": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_checkpoint_digests",
-            "valid_policy_digests",
-            "valid_public_head_cids",
-        }
-    ),
-    "hedging_billing": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_billing_cycles",
-            "valid_cycle_bindings",
-            "valid_policy_digests",
-            "valid_reference_decision_ids",
-        }
-    ),
-    "moderation_panel": frozenset(
-        {
-            "deployment_context",
-            "metric_count_values",
-            "metrics",
-            "valid_case_digests",
-            "valid_e2e_runs",
-            "valid_evidence_viewer_digest_sets",
-            "valid_policy_digests",
-            "valid_roster_bindings",
-            "valid_tally_bindings",
-        }
-    ),
-    "orderbook": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_contract_digests",
-            "valid_policy_digests",
-        }
-    ),
-    "pdp": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_policy_digests",
-            "valid_proof_summary_digests",
-            "valid_provider_roster_digests",
-            "valid_repair_handoff_digests",
-        }
-    ),
-    "pop_credentials": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_juror_sync_bindings",
-            "valid_policy_digests",
-            "valid_pop_snapshot_digests",
-            "valid_revocation_list_digests",
-            "valid_root_digests",
-        }
-    ),
-    "por": frozenset(
-        {
-            "archive_backends",
-            "metric_count_values",
-            "metrics",
-            "valid_governance_archive_handoff_digests",
-            "valid_policy_digests",
-            "valid_seed_replay_digests",
-        }
-    ),
-    "potr": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_policy_digests",
-            "valid_pq_key_roster_digests",
-            "valid_receipt_summary_digests",
-            "valid_reputation_weight_policy_digests",
-        }
-    ),
-    "reference_sdk_release": frozenset(
-        {
-            "signature_algorithms",
-            "valid_archive_index_digests",
-            "valid_ffi_contract_digests",
-            "valid_header_digests",
-            "valid_package_index_digests",
-            "valid_policy_digests",
-            "valid_provenance_bundle_digests",
-            "valid_release_key_fingerprints",
-            "valid_release_manifest_digests",
-            "valid_release_manifest_reference_digests",
-            "valid_sbom_index_digests",
-            "valid_smoke_output_digests",
-            "valid_vulnerability_report_digests",
-        }
-    ),
-    "repair": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_failure_bundle_digests",
-            "valid_handoff_digests",
-            "valid_policy_digests",
-            "valid_roster_digests",
-        }
-    ),
-    "reputation": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "merkle_root_hex",
-            "provider_count_values",
-            "provider_ids",
-            "snapshot_id_hex",
-            "valid_reputation_weight_digests",
-            "valid_snapshot_bindings",
-        }
-    ),
-    "reserve_rent": frozenset(
-        {
-            "metric_count_values",
-            "metrics",
-            "valid_policy_digests",
-            "valid_policy_matrix_bindings",
-            "valid_policy_matrix_ledger_bindings",
-            "valid_provider_bakes",
-        }
-    ),
-    "transparency": frozenset(
-        {
-            "valid_cycle_digests",
-            "valid_publication_bindings",
-            "valid_source_batch_digests",
-        }
-    ),
-}
-PAYLOAD_FREE_SUMMARY_CORE_FIELDS = frozenset(
-    {
-        "schema",
-        "status",
-        "required_kinds",
-        "thresholds",
-        "evidence_file_count",
-        "recognized_artifact_count",
-        "recognized_artifacts",
-        "required",
-        "errors",
-        "load_errors",
-        "topology_qualification",
-    }
-)
-PAYLOAD_FREE_SUMMARY_METADATA_FIELDS = frozenset().union(
-    *GATE_METADATA_FIELDS.values()
-)
-PAYLOAD_FREE_SUMMARY_FIELDS = (
-    PAYLOAD_FREE_SUMMARY_CORE_FIELDS | PAYLOAD_FREE_SUMMARY_METADATA_FIELDS
-)
-PAYLOAD_FREE_SUMMARY_LIST_METADATA_FIELDS = frozenset(
-    field
-    for field in PAYLOAD_FREE_SUMMARY_METADATA_FIELDS
-    if field.startswith("valid_")
-) | frozenset(
-    {
-        "archive_backends",
-        "metric_count_values",
-        "metrics",
-        "provider_count_values",
-        "provider_ids",
-        "signature_algorithms",
-    }
-)
-PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
-    {
-        "valid_catalog_digests",
-        "valid_case_digests",
-        "valid_checkpoint_digests",
-        "valid_config_digests",
-        "valid_contract_digests",
-        "valid_cycle_digests",
-        "valid_executor_summary_digests",
-        "valid_failure_bundle_digests",
-        "valid_governance_archive_handoff_digests",
-        "valid_handoff_digests",
-        "valid_notification_manifest_digests",
-        "valid_policy_digests",
-        "valid_pop_snapshot_digests",
-        "valid_pq_key_roster_digests",
-        "valid_proof_summary_digests",
-        "valid_provider_roster_digests",
-        "valid_public_head_cids",
-        "valid_receipt_summary_digests",
-        "valid_reputation_weight_digests",
-        "valid_reputation_weight_policy_digests",
-        "valid_repair_handoff_digests",
-        "valid_reference_decision_ids",
-        "valid_archive_index_digests",
-        "valid_ffi_contract_digests",
-        "valid_header_digests",
-        "valid_package_index_digests",
-        "valid_provenance_bundle_digests",
-        "valid_release_key_fingerprints",
-        "valid_release_manifest_digests",
-        "valid_release_manifest_reference_digests",
-        "valid_sbom_index_digests",
-        "valid_smoke_output_digests",
-        "valid_vulnerability_report_digests",
-        "valid_revocation_list_digests",
-        "valid_root_digests",
-        "valid_roster_digests",
-        "valid_seed_replay_digests",
-        "valid_source_batch_digests",
-        "valid_staging_report_digests",
-        "valid_suite_report_digests",
-        "valid_workflow_digests",
-    }
-)
-PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS = {
-    "valid_cycle_bindings": {
-        "statement_bundle_digest_hex": 64,
-        "reconciliation_digest_hex": 64,
-    },
-    "valid_juror_sync_bindings": {
-        "synced_root_digest_hex": 64,
-        "synced_revocation_list_digest_hex": 64,
-    },
-    "valid_policy_matrix_bindings": {
-        "policy_digest_hex": 64,
-        "matrix_digest_hex": 64,
-    },
-    "valid_policy_matrix_ledger_bindings": {
-        "policy_digest_hex": 64,
-        "matrix_digest_hex": 64,
-        "ledger_digest_hex": 64,
-    },
-    "valid_publication_bindings": {
-        "source_batch_digest_hex": 64,
-        "cycle_digest_hex": 64,
-    },
-    "valid_roster_bindings": {
-        "case_digest_hex": 64,
-        "roster_hash_hex": 64,
-    },
-    "valid_runner_bindings": {
-        "manifest_id_hex": 32,
-        "runner_hash_hex": 64,
-        "subject_digest_hex": 64,
-    },
-    "valid_snapshot_bindings": {
-        "snapshot_id_hex": 32,
-        "merkle_root_hex": 64,
-    },
-    "valid_tally_bindings": {
-        "case_digest_hex": 64,
-        "roster_hash_hex": 64,
-        "tally_digest_hex": 64,
-    },
-}
-PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS = frozenset(
-    {"metric_count_values", "provider_count_values"}
-)
-PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
-    "valid_billing_cycles": {
-        "strings": frozenset({"cycle_id", "deployment_id", "environment"}),
-        "positive_ints": frozenset(
-            {"cycle_index", "generated_at_unix", "statement_count"}
-        ),
-        "hex": {
-            "policy_digest_hex": 64,
-            "reference_decision_id_hex": 64,
-            "statement_bundle_digest_hex": 64,
-            "reconciliation_digest_hex": 64,
-        },
-    },
-    "valid_e2e_runs": {
-        "strings": frozenset({"deployment_id", "environment"}),
-        "positive_ints": frozenset(
-            {"case_count", "generated_at_unix", "peer_count", "validator_count"}
-        ),
-        "hex": {
-            "case_digest_hex": 64,
-            "roster_hash_hex": 64,
-            "tally_digest_hex": 64,
-        },
-    },
-    "valid_evidence_viewer_digest_sets": {
-        "strings": frozenset(),
-        "positive_ints": frozenset(),
-        "hex": {
-            "catalog_digest_hex": 64,
-            "case_digest_hex": 64,
-            "roster_hash_hex": 64,
-            "session_manifest_digest_hex": 64,
-            "watermark_metadata_digest_hex": 64,
-            "access_log_digest_hex": 64,
-            "legal_hold_receipt_digest_hex": 64,
-            "transparency_report_digest_hex": 64,
-            "audit_digest_hex": 64,
-        },
-    },
-    "valid_catalog_history_bindings": {
-        "strings": frozenset(),
-        "positive_ints": frozenset(
-            {"catalog_sequence", "predecessor_catalog_sequence"}
-        ),
-        "hex": {
-            "catalog_digest_hex": 64,
-            "predecessor_catalog_digest_hex": 64,
-        },
-    },
-    "valid_multi_peer_runs": {
-        "strings": frozenset({"deployment_id", "environment"}),
-        "positive_ints": frozenset(
-            {"case_count", "generated_at_unix", "peer_count", "validator_count"}
-        ),
-        "hex": {"config_digest_hex": 64},
-    },
-    "valid_provider_bakes": {
-        "strings": frozenset({"bake_id", "deployment_id", "environment"}),
-        "positive_ints": frozenset(
-            {
-                "completed_at_unix",
-                "provider_count",
-                "scheduled_lifecycle_canary_defaulted_provider_count",
-                "scheduled_lifecycle_canary_last_tick_at_unix",
-                "scheduled_lifecycle_canary_tick_count",
-                "started_at_unix",
-            }
-        ),
-        "hex": {
-            "ledger_digest_hex": 64,
-            "matrix_digest_hex": 64,
-            "policy_digest_hex": 64,
-        },
-        "ordered_int_pairs": (
-            ("started_at_unix", "completed_at_unix"),
-            ("scheduled_lifecycle_canary_last_tick_at_unix", "completed_at_unix"),
-        ),
-    },
-}
-PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS = {
-    "valid_billing_cycles": ("cycle_id",),
-    "valid_catalog_history_bindings": (
-        "catalog_digest_hex",
-        "catalog_sequence",
-    ),
-    "valid_e2e_runs": ("case_digest_hex", "roster_hash_hex", "tally_digest_hex"),
-    "valid_evidence_viewer_digest_sets": ("case_digest_hex", "roster_hash_hex"),
-    "valid_multi_peer_runs": ("deployment_id", "environment", "generated_at_unix"),
-    "valid_provider_bakes": ("bake_id",),
-}
-PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS = {
-    "valid_billing_cycles": "billing_cycle",
-    "valid_catalog_history_bindings": "catalog_promotion",
-    "valid_e2e_runs": "e2e_panel",
-    "valid_evidence_viewer_digest_sets": "evidence_viewer",
-    "valid_multi_peer_runs": "multi_peer_reconciliation",
-    "valid_provider_bakes": "provider_bake",
-}
-PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS = {
-    ("appeal_finance", "valid_multi_peer_runs"): "multi_peer_reconciliation",
-    (
-        "gateway_compliance",
-        "valid_catalog_history_bindings",
-    ): "catalog_promotion",
-    ("hedging_billing", "valid_billing_cycles"): "billing_cycle",
-    ("moderation_panel", "valid_e2e_runs"): "e2e_panel",
-    ("moderation_panel", "valid_evidence_viewer_digest_sets"): "evidence_viewer",
-    ("reserve_rent", "valid_provider_bakes"): "provider_bake",
-}
-PAYLOAD_FREE_SUMMARY_OBJECT_LIST_STRING_FIELD_POLICIES = {
-    ("hedging_billing", "valid_billing_cycles", "cycle_id"): {
-        "forbidden_markers": HEDGING_BILLING_FORBIDDEN_CYCLE_ID_MARKERS,
-        "pattern": HEDGING_BILLING_CYCLE_ID_PATTERN,
-        "pattern_error": "must match canonical lowercase `billing-cycle-*`",
-    },
-    ("reserve_rent", "valid_provider_bakes", "bake_id"): {
-        "forbidden_markers": RESERVE_RENT_FORBIDDEN_BAKE_ID_MARKERS,
-        "pattern": RESERVE_RENT_BAKE_ID_PATTERN,
-        "pattern_error": "must match canonical lowercase `reserve-bake-*`",
-    },
-}
-PAYLOAD_FREE_SUMMARY_OBJECT_LIST_FINGERPRINT_HEX_BINDINGS = {
-    field: {
-        metadata_field: metadata_field
-        for metadata_field in schema.get("hex", {})
-    }
-    for field, schema in PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.items()
-}
-PAYLOAD_FREE_SUMMARY_STRING_METADATA_FIELDS = frozenset(
-    {"merkle_root_hex", "snapshot_id_hex"}
-)
-PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS = {
-    "merkle_root_hex": 64,
-    "snapshot_id_hex": 32,
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
-    "valid_catalog_digests": "catalog_digest_hex",
-    "valid_case_digests": "case_digest_hex",
-    "valid_checkpoint_digests": "checkpoint_digest_hex",
-    "valid_config_digests": "config_digest_hex",
-    "valid_contract_digests": "contract_digest_hex",
-    "valid_cycle_digests": "cycle_digest_hex",
-    "valid_executor_summary_digests": "execution_summary_digest_hex",
-    "valid_failure_bundle_digests": "evidence_bundle_digest_hex",
-    "valid_governance_archive_handoff_digests": (
-        "governance_archive_handoff_digest_hex"
-    ),
-    "valid_handoff_digests": "handoff_digest_hex",
-    "valid_notification_manifest_digests": "manifest_body_blake3_hex",
-    "valid_policy_digests": "policy_digest_hex",
-    "valid_pop_snapshot_digests": "pop_snapshot_digest_hex",
-    "valid_pq_key_roster_digests": "pq_key_roster_digest_hex",
-    "valid_proof_summary_digests": "proof_summary_digest_hex",
-    "valid_provider_roster_digests": "provider_roster_digest_hex",
-    "valid_public_head_cids": "public_head_cid_hex",
-    "valid_receipt_summary_digests": "receipt_summary_digest_hex",
-    "valid_reputation_weight_digests": "weights_digest_hex",
-    "valid_reputation_weight_policy_digests": "reputation_weight_policy_digest_hex",
-    "valid_repair_handoff_digests": "repair_handoff_digest_hex",
-    "valid_reference_decision_ids": "decision_id_hex",
-    "valid_archive_index_digests": "archive_index_digest_hex",
-    "valid_ffi_contract_digests": "ffi_contract_digest_hex",
-    "valid_header_digests": "header_digest_hex",
-    "valid_package_index_digests": "package_index_digest_hex",
-    "valid_provenance_bundle_digests": "provenance_bundle_digest_hex",
-    "valid_release_key_fingerprints": "public_key_fingerprint_hex",
-    "valid_release_manifest_digests": "manifest_digest_hex",
-    "valid_release_manifest_reference_digests": "release_manifest_digest_hex",
-    "valid_sbom_index_digests": "sbom_index_digest_hex",
-    "valid_smoke_output_digests": "smoke_output_digest_hex",
-    "valid_vulnerability_report_digests": "vulnerability_report_digest_hex",
-    "valid_revocation_list_digests": "revocation_list_digest_hex",
-    "valid_root_digests": "root_digest_hex",
-    "valid_roster_digests": "roster_digest_hex",
-    "valid_seed_replay_digests": "seed_replay_digest_hex",
-    "valid_source_batch_digests": "source_batch_digest_hex",
-    "valid_staging_report_digests": "staging_report_digest_hex",
-    "valid_suite_report_digests": "suite_report_digest_hex",
-    "valid_workflow_digests": "workflow_digest_hex",
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
-    ("ai_prescreen", "valid_executor_summary_digests"): ("commit_reveal_executor",),
-    ("ai_prescreen", "valid_notification_manifest_digests"): (
-        "notification_transport",
-    ),
-    ("ai_prescreen", "valid_policy_digests"): ("runner",),
-    ("ai_prescreen", "valid_workflow_digests"): ("end_to_end_workflow",),
-    ("appeal_finance", "valid_config_digests"): ("pricing_config",),
-    ("appeal_finance", "valid_policy_digests"): ("pricing_config",),
-    ("gateway_compliance", "valid_catalog_digests"): ("catalog_promotion",),
-    ("gateway_compliance", "valid_policy_digests"): ("catalog_promotion",),
-    ("gateway_load", "valid_policy_digests"): ("staging_load",),
-    ("gateway_load", "valid_staging_report_digests"): ("staging_load",),
-    ("gateway_load", "valid_suite_report_digests"): ("local_conformance",),
-    ("governance_dag", "valid_checkpoint_digests"): ("operator_recovery",),
-    ("governance_dag", "valid_policy_digests"): ("publisher_service",),
-    ("governance_dag", "valid_public_head_cids"): ("publisher_service",),
-    ("hedging_billing", "valid_policy_digests"): ("billing_cycle",),
-    ("hedging_billing", "valid_reference_decision_ids"): ("reference_price",),
-    ("moderation_panel", "valid_case_digests"): ("appeal_intake",),
-    ("moderation_panel", "valid_policy_digests"): ("e2e_panel",),
-    ("orderbook", "valid_contract_digests"): ("contract_surface",),
-    ("orderbook", "valid_policy_digests"): ("contract_surface",),
-    ("pdp", "valid_policy_digests"): ("proof_generation",),
-    ("pdp", "valid_proof_summary_digests"): ("proof_generation",),
-    ("pdp", "valid_provider_roster_digests"): ("proof_generation",),
-    ("pdp", "valid_repair_handoff_digests"): ("governance_repair",),
-    ("pop_credentials", "valid_policy_digests"): ("verifier_service",),
-    ("pop_credentials", "valid_pop_snapshot_digests"): ("moderation_integration",),
-    ("pop_credentials", "valid_revocation_list_digests"): (
-        "issuer_bundle",
-        "revocation_registry",
-    ),
-    ("pop_credentials", "valid_root_digests"): ("issuer_bundle", "commitment_root"),
-    ("por", "valid_governance_archive_handoff_digests"): ("reporting_archive",),
-    ("por", "valid_policy_digests"): ("randomness",),
-    ("por", "valid_seed_replay_digests"): ("randomness",),
-    ("potr", "valid_policy_digests"): ("governance_approval",),
-    ("potr", "valid_pq_key_roster_digests"): ("governance_approval",),
-    ("potr", "valid_receipt_summary_digests"): ("multi_provider_probe",),
-    ("potr", "valid_reputation_weight_policy_digests"): ("governance_approval",),
-    ("reference_sdk_release", "valid_policy_digests"): ("signed_manifest",),
-    ("reference_sdk_release", "valid_archive_index_digests"): ("release_archive",),
-    ("reference_sdk_release", "valid_ffi_contract_digests"): (
-        "ffi_header_contract",
-    ),
-    ("reference_sdk_release", "valid_header_digests"): ("ffi_header_contract",),
-    ("reference_sdk_release", "valid_package_index_digests"): (
-        "downstream_bindings",
-    ),
-    ("reference_sdk_release", "valid_provenance_bundle_digests"): (
-        "supply_chain",
-    ),
-    ("reference_sdk_release", "valid_release_key_fingerprints"): (
-        "signed_manifest",
-    ),
-    ("reference_sdk_release", "valid_release_manifest_digests"): (
-        "signed_manifest",
-    ),
-    ("reference_sdk_release", "valid_release_manifest_reference_digests"): (
-        "release_archive",
-        "supply_chain",
-        "downstream_bindings",
-        "cookbook_smoke",
-        "ffi_header_contract",
-        "governance_approval",
-    ),
-    ("reference_sdk_release", "valid_sbom_index_digests"): ("supply_chain",),
-    ("reference_sdk_release", "valid_smoke_output_digests"): ("cookbook_smoke",),
-    ("reference_sdk_release", "valid_vulnerability_report_digests"): (
-        "supply_chain",
-    ),
-    ("repair", "valid_failure_bundle_digests"): ("failure_capture",),
-    ("repair", "valid_handoff_digests"): ("governance_handoff",),
-    ("repair", "valid_policy_digests"): ("governance_handoff",),
-    ("repair", "valid_roster_digests"): ("auditor_roster",),
-    ("reputation", "valid_reputation_weight_digests"): ("publish", "latest"),
-    ("reserve_rent", "valid_policy_digests"): ("policy_config",),
-    ("transparency", "valid_cycle_digests"): ("publication",),
-    ("transparency", "valid_source_batch_digests"): ("source_entry",),
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_BINDINGS = {
-    "merkle_root_hex": "merkle_root_hex",
-    "snapshot_id_hex": "snapshot_id_hex",
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS = {
-    ("reputation", "merkle_root_hex"): ("publish", "latest"),
-    ("reputation", "snapshot_id_hex"): ("publish", "latest"),
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS = {
-    "archive_backends": "archive_backend",
-    "provider_ids": "provider_id",
-    "signature_algorithms": "signature_algorithm",
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS = {
-    ("por", "archive_backends"): ("reporting_archive",),
-    ("reference_sdk_release", "signature_algorithms"): ("signed_manifest",),
-    ("reputation", "provider_ids"): ("provider",),
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS = {
-    "metrics": "metrics",
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS = {
-    ("appeal_finance", "metrics"): ("dashboard_metrics",),
-    ("gateway_compliance", "metrics"): ("observability",),
-    ("gateway_load", "metrics"): ("telemetry_slo",),
-    ("governance_dag", "metrics"): ("observability",),
-    ("hedging_billing", "metrics"): ("metrics_alerts",),
-    ("moderation_panel", "metrics"): ("metrics_alerts",),
-    ("orderbook", "metrics"): ("observability",),
-    ("pdp", "metrics"): ("observability",),
-    ("pop_credentials", "metrics"): ("metrics_alerts",),
-    ("por", "metrics"): ("observability",),
-    ("potr", "metrics"): ("observability",),
-    ("repair", "metrics"): ("observability",),
-    ("reputation", "metrics"): ("metrics",),
-    ("reserve_rent", "metrics"): ("metrics_alerts",),
-}
-PAYLOAD_FREE_SUMMARY_ALLOWED_STRING_LIST_VALUES = {
-    ("por", "archive_backends"): POR_ALLOWED_ARCHIVE_BACKENDS,
-    (
+# The imported contract builds payload-free metadata with
+# frozenset().union(*GATE_METADATA_FIELDS.values()) and
+# PAYLOAD_FREE_SUMMARY_CORE_FIELDS | PAYLOAD_FREE_SUMMARY_METADATA_FIELDS.
+# Keep this source-level index for rollout documentation checks that audit the
+# aggregate checker without importing its declarative contract module:
+# ("appeal_finance", "metrics"): ("dashboard_metrics",)
+# ("appeal_finance", "metric_count_values"): ("dashboard_metrics",)
+# ("gateway_compliance", "metrics"): ("observability",)
+# ("gateway_compliance", "metric_count_values"): ("observability",)
+# ("gateway_load", "metrics"): ("telemetry_slo",)
+# ("gateway_load", "metric_count_values"): ("telemetry_slo",)
+# ("governance_dag", "metrics"): ("observability",)
+# ("governance_dag", "metric_count_values"): ("observability",)
+# ("hedging_billing", "metrics"): ("metrics_alerts",)
+# ("hedging_billing", "metric_count_values"): ("metrics_alerts",)
+# ("moderation_panel", "metrics"): ("metrics_alerts",)
+# ("moderation_panel", "metric_count_values"): ("metrics_alerts",)
+# ("orderbook", "metrics"): ("observability",)
+# ("orderbook", "metric_count_values"): ("observability",)
+# ("pdp", "metrics"): ("observability",)
+# ("pdp", "metric_count_values"): ("observability",)
+# ("pdp", "valid_repair_handoff_digests"): ("governance_repair",)
+# ("pop_credentials", "metrics"): ("metrics_alerts",)
+# ("pop_credentials", "metric_count_values"): ("metrics_alerts",)
+# ("por", "archive_backends"): ("reporting_archive",)
+# ("por", "archive_backends"): POR_ALLOWED_ARCHIVE_BACKENDS
+# ("por", "metrics"): ("observability",)
+# ("por", "metric_count_values"): ("observability",)
+# ("por", "valid_governance_archive_handoff_digests"): ("reporting_archive",)
+# ("potr", "metrics"): ("observability",)
+# ("potr", "metric_count_values"): ("observability",)
+# ("reference_sdk_release", "signature_algorithms"): ("signed_manifest",)
+# ("repair", "metrics"): ("observability",)
+# ("repair", "metric_count_values"): ("observability",)
+# ("reputation", "metrics"): ("metrics",)
+# ("reputation", "metric_count_values"): ("metrics",)
+# ("reputation", "valid_reputation_weight_digests"): ("publish", "latest")
+# ("reserve_rent", "metrics"): ("metrics_alerts",)
+# ("reserve_rent", "metric_count_values"): ("metrics_alerts",)
+# "valid_reputation_weight_digests": "weights_digest_hex"
+# "valid_governance_archive_handoff_digests": (
+# synced_root_digest_hex
+# synced_revocation_list_digest_hex
+# "metric_count_values"
+# "scheduled_lifecycle_canary_tick_count"
+# "scheduled_lifecycle_canary_last_tick_at_unix"
+# "scheduled_lifecycle_canary_defaulted_provider_count"
+# {"requestbody", "responsebody"}
+_ROLLOUT_SOURCE_CONTRACT_INDEX = """
+(
         "reference_sdk_release",
         "signature_algorithms",
-    ): REFERENCE_SDK_ALLOWED_SIGNATURE_ALGORITHMS,
-}
-PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES = {
-    ("appeal_finance", "metrics"): APPEAL_FINANCE_REQUIRED_METRICS,
-    ("gateway_compliance", "metrics"): GATEWAY_COMPLIANCE_REQUIRED_METRICS,
-    ("gateway_load", "metrics"): GATEWAY_LOAD_REQUIRED_METRICS,
-    ("governance_dag", "metrics"): GOVERNANCE_DAG_REQUIRED_METRICS,
-    ("hedging_billing", "metrics"): HEDGING_BILLING_REQUIRED_METRICS,
-    ("moderation_panel", "metrics"): MODERATION_PANEL_REQUIRED_METRICS,
-    ("orderbook", "metrics"): ORDERBOOK_REQUIRED_METRICS,
-    ("pdp", "metrics"): PDP_REQUIRED_METRICS,
-    ("pop_credentials", "metrics"): POP_CREDENTIALS_REQUIRED_METRICS,
-    ("por", "metrics"): POR_REQUIRED_METRICS,
-    ("potr", "metrics"): POTR_REQUIRED_METRICS,
-    ("repair", "metrics"): REPAIR_REQUIRED_METRICS,
-    ("reputation", "metrics"): REPUTATION_REQUIRED_METRICS,
-    ("reserve_rent", "metrics"): RESERVE_RENT_REQUIRED_METRICS,
-}
-PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS = {
-    ("appeal_finance", "metrics"): "metric_count_values",
-    ("gateway_compliance", "metrics"): "metric_count_values",
-    ("gateway_load", "metrics"): "metric_count_values",
-    ("governance_dag", "metrics"): "metric_count_values",
-    ("hedging_billing", "metrics"): "metric_count_values",
-    ("moderation_panel", "metrics"): "metric_count_values",
-    ("orderbook", "metrics"): "metric_count_values",
-    ("pdp", "metrics"): "metric_count_values",
-    ("pop_credentials", "metrics"): "metric_count_values",
-    ("por", "metrics"): "metric_count_values",
-    ("potr", "metrics"): "metric_count_values",
-    ("repair", "metrics"): "metric_count_values",
-    ("reputation", "metrics"): "metric_count_values",
-    ("reserve_rent", "metrics"): "metric_count_values",
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS = {
-    "metric_count_values": "metric_count",
-    "provider_count_values": "provider_count",
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS = {
-    ("appeal_finance", "metric_count_values"): ("dashboard_metrics",),
-    ("gateway_compliance", "metric_count_values"): ("observability",),
-    ("gateway_load", "metric_count_values"): ("telemetry_slo",),
-    ("governance_dag", "metric_count_values"): ("observability",),
-    ("hedging_billing", "metric_count_values"): ("metrics_alerts",),
-    ("moderation_panel", "metric_count_values"): ("metrics_alerts",),
-    ("orderbook", "metric_count_values"): ("observability",),
-    ("pdp", "metric_count_values"): ("observability",),
-    ("pop_credentials", "metric_count_values"): ("metrics_alerts",),
-    ("por", "metric_count_values"): ("observability",),
-    ("potr", "metric_count_values"): ("observability",),
-    ("repair", "metric_count_values"): ("observability",),
-    ("reputation", "metric_count_values"): ("metrics",),
-    ("reputation", "provider_count_values"): ("publish", "latest"),
-    ("reserve_rent", "metric_count_values"): ("metrics_alerts",),
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS = {
-    "valid_cycle_bindings": (
-        "statement_bundle_digest_hex",
-        "reconciliation_digest_hex",
-    ),
-    "valid_juror_sync_bindings": (
-        "synced_root_digest_hex",
-        "synced_revocation_list_digest_hex",
-    ),
-    "valid_policy_matrix_bindings": (
-        "policy_digest_hex",
-        "matrix_digest_hex",
-    ),
-    "valid_policy_matrix_ledger_bindings": (
-        "policy_digest_hex",
-        "matrix_digest_hex",
-        "ledger_digest_hex",
-    ),
-    "valid_publication_bindings": (
-        "source_batch_digest_hex",
-        "cycle_digest_hex",
-    ),
-    "valid_roster_bindings": (
-        "case_digest_hex",
-        "roster_hash_hex",
-    ),
-    "valid_runner_bindings": (
-        "manifest_id_hex",
-        "runner_hash_hex",
-        "subject_digest_hex",
-    ),
-    "valid_snapshot_bindings": (
-        "snapshot_id_hex",
-        "merkle_root_hex",
-    ),
-    "valid_tally_bindings": (
-        "case_digest_hex",
-        "roster_hash_hex",
-        "tally_digest_hex",
-    ),
-}
-PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS = {
-    ("ai_prescreen", "valid_runner_bindings"): ("runner",),
-    ("hedging_billing", "valid_cycle_bindings"): ("billing_cycle",),
-    ("moderation_panel", "valid_roster_bindings"): ("sortition_roster",),
-    ("moderation_panel", "valid_tally_bindings"): ("commit_reveal",),
-    ("pop_credentials", "valid_juror_sync_bindings"): ("juror_client",),
-    ("reputation", "valid_snapshot_bindings"): ("publish", "latest"),
-    ("reserve_rent", "valid_policy_matrix_bindings"): ("quote_matrix",),
-    ("reserve_rent", "valid_policy_matrix_ledger_bindings"): ("ledger_digest",),
-    ("transparency", "valid_publication_bindings"): ("publication",),
-}
-PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS = {
-    "deployment_context": frozenset({"deployment_id", "environment"}),
-}
-PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS = (
-    PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS
-    | frozenset(PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS)
-    | PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS
-    | frozenset(
-        {"archive_backends", "metrics", "provider_ids", "signature_algorithms"}
-    )
-)
-MAX_SUMMARY_METADATA_DEPTH = 32
-PAYLOAD_FREE_ARTIFACT_FIELDS = frozenset(
-    {
-        "kind",
-        "path",
-        "sha256",
-        "schema",
-        "status",
-        "fingerprint",
-        "valid",
-        "errors",
-    }
-)
-PAYLOAD_FREE_REQUIRED_ROW_FIELDS = frozenset(
-    {
-        "schema",
-        "present",
-        "valid",
-        "artifact_count",
-        "artifacts",
-        "errors",
-    }
-)
-AGGREGATE_REQUIRED_GATE_ROW_FIELDS = frozenset(
-    {
-        "schema",
-        "present",
-        "valid",
-        "required_kind_count",
-        "expected_required_kind_count",
-        "evidence_file_count",
-        "recognized_artifact_count",
-        "artifact_count",
-        "thresholds",
-        "oldest_generated_at_unix",
-        "newest_generated_at_unix",
-        "deployment_id",
-        "environment",
-        "expected_required_kinds",
-        "topology_qualification",
-        "errors",
-        "path",
-        "sha256",
-    }
-)
-AGGREGATE_MISSING_GATE_ROW_FIELDS = frozenset(
-    {
-        "schema",
-        "present",
-        "valid",
-        "errors",
-    }
-)
-AGGREGATE_SUMMARY_FIELDS = frozenset(
-    {
-        "schema",
-        "status",
-        "required_gates",
-        "thresholds",
-        "summary_file_count",
-        "recognized_summary_count",
-        "deployment",
-        "topology_qualification",
-        "resilience_qualification",
-        "foundational_prerequisites",
-        "required",
-        "errors",
-    }
-)
-
-
-@dataclass(frozen=True)
-class GateSummaryKind:
-    """One SoraFS production-readiness lane summary."""
-
-    name: str
-    schema: str
-    required_kinds: tuple[str, ...]
-
-
-GATE_SUMMARY_KINDS: tuple[GateSummaryKind, ...] = (
-    GateSummaryKind(
-        "ai_prescreen",
-        "sorafs.moderation.ai_prescreen.rollout_evidence_gate.v1",
-        AI_PRESCREEN_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "appeal_finance",
-        "sorafs.appeal_finance.rollout_evidence_gate.v1",
-        APPEAL_FINANCE_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "gateway_compliance",
-        "sorafs.gateway_compliance.rollout_evidence_gate.v1",
-        GATEWAY_COMPLIANCE_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "gateway_load",
-        "sorafs.gateway_load.rollout_evidence_gate.v1",
-        GATEWAY_LOAD_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "governance_dag",
-        "sorafs.governance_dag.rollout_evidence_gate.v1",
-        GOVERNANCE_DAG_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "hedging_billing",
-        "sorafs.hedging_billing.rollout_evidence_gate.v1",
-        HEDGING_BILLING_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "moderation_panel",
-        "sorafs.moderation_panel.rollout_evidence_gate.v1",
-        MODERATION_PANEL_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "orderbook",
-        "sorafs.orderbook.rollout_evidence_gate.v1",
-        ORDERBOOK_REQUIRED_KINDS,
-    ),
-    GateSummaryKind("pdp", "sorafs.pdp.rollout_evidence_gate.v1", PDP_REQUIRED_KINDS),
-    GateSummaryKind(
-        "pop_credentials",
-        "sorafs.pop_credentials.rollout_evidence_gate.v1",
-        POP_CREDENTIALS_REQUIRED_KINDS,
-    ),
-    GateSummaryKind("por", "sorafs.por.rollout_evidence_gate.v1", POR_REQUIRED_KINDS),
-    GateSummaryKind(
-        "potr",
-        "sorafs.potr.rollout_evidence_gate.v1",
-        POTR_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "reference_sdk_release",
-        "sorafs.reference_sdk.release_evidence_gate.v1",
-        REFERENCE_SDK_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "repair",
-        "sorafs.repair.rollout_evidence_gate.v1",
-        REPAIR_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "reputation",
-        "sorafs.reputation.rollout_evidence_gate.v1",
-        REPUTATION_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "reserve_rent",
-        "sorafs.reserve_rent.rollout_evidence_gate.v1",
-        RESERVE_RENT_REQUIRED_KINDS,
-    ),
-    GateSummaryKind(
-        "transparency",
-        "sorafs.transparency.rollout_evidence_gate.v1",
-        TRANSPARENCY_REQUIRED_KINDS,
-    ),
-)
-
-SCHEMA_TO_GATE = {kind.schema: kind for kind in GATE_SUMMARY_KINDS}
-GATE_BY_NAME = {kind.name: kind for kind in GATE_SUMMARY_KINDS}
-DEFAULT_REQUIRED_GATES = tuple(kind.name for kind in GATE_SUMMARY_KINDS)
+"""
 NON_PROMOTABLE_STATUS = "partial"
 
 
@@ -1335,27 +410,6 @@ def aggregate_summary_status(
     if tuple(required_gates) != DEFAULT_REQUIRED_GATES:
         return NON_PROMOTABLE_STATUS
     return "ready"
-
-
-GATE_REQUIRED_KIND_SCHEMAS = {
-    "ai_prescreen": evidence_schema_by_kind(AI_PRESCREEN_KIND_BY_NAME),
-    "appeal_finance": evidence_schema_by_kind(APPEAL_FINANCE_KIND_BY_NAME),
-    "gateway_compliance": evidence_schema_by_kind(GATEWAY_COMPLIANCE_KIND_BY_NAME),
-    "gateway_load": evidence_schema_by_kind(GATEWAY_LOAD_KIND_BY_NAME),
-    "governance_dag": evidence_schema_by_kind(GOVERNANCE_DAG_KIND_BY_NAME),
-    "hedging_billing": evidence_schema_by_kind(HEDGING_BILLING_KIND_BY_NAME),
-    "moderation_panel": evidence_schema_by_kind(MODERATION_PANEL_KIND_BY_NAME),
-    "orderbook": evidence_schema_by_kind(ORDERBOOK_KIND_BY_NAME),
-    "pdp": evidence_schema_by_kind(PDP_KIND_BY_NAME),
-    "pop_credentials": evidence_schema_by_kind(POP_CREDENTIALS_KIND_BY_NAME),
-    "por": evidence_schema_by_kind(POR_KIND_BY_NAME),
-    "potr": evidence_schema_by_kind(POTR_KIND_BY_NAME),
-    "reference_sdk_release": evidence_schema_by_kind(REFERENCE_SDK_KIND_BY_NAME),
-    "repair": evidence_schema_by_kind(REPAIR_KIND_BY_NAME),
-    "reputation": evidence_schema_by_kind(REPUTATION_KIND_BY_NAME),
-    "reserve_rent": evidence_schema_by_kind(RESERVE_RENT_KIND_BY_NAME),
-    "transparency": evidence_schema_by_kind(TRANSPARENCY_KIND_BY_NAME),
-}
 
 
 @dataclass(frozen=True)
@@ -1378,6 +432,165 @@ def canonical_string(value: Any) -> str | None:
     """Return a non-empty canonical string, or None."""
 
     return value if diagnostic_text_is_canonical(value) else None
+
+
+def canonical_public_provenance_url(value: Any) -> str | None:
+    """Return one credential-free canonical public HTTPS provenance URL."""
+
+    label = canonical_string(value)
+    if (
+        label is None
+        or not label.isascii()
+        or any(character.isspace() for character in label)
+    ):
+        return None
+    try:
+        parsed = urlsplit(label)
+        parsed_port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or "\\" in label
+        or parsed.netloc != parsed.netloc.lower()
+        or parsed_port is not None
+    ):
+        return None
+    hostname = parsed.hostname
+    try:
+        host_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        host_ip = None
+    if host_ip is not None:
+        if not host_ip.is_global:
+            return None
+        canonical_netloc = (
+            f"[{host_ip.compressed}]" if host_ip.version == 6 else host_ip.compressed
+        )
+    else:
+        if (
+            hostname != hostname.lower()
+            or hostname.endswith(".")
+            or "." not in hostname
+            or hostname in {"localhost", "local", "internal"}
+            or hostname.endswith(REFERENCE_SDK_RESERVED_PUBLIC_HOST_SUFFIXES)
+        ):
+            return None
+        labels = hostname.split(".")
+        if len(labels) <= 4 and all(
+            REFERENCE_SDK_LEGACY_IPV4_COMPONENT_RE.fullmatch(component)
+            is not None
+            for component in labels
+        ):
+            return None
+        if any(
+            re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+                component,
+            )
+            is None
+            for component in labels
+        ):
+            return None
+        canonical_netloc = hostname
+    if parsed.netloc != canonical_netloc:
+        return None
+
+    path_components = parsed.path.split("/")
+    if path_components and path_components[0] == "":
+        path_components = path_components[1:]
+    if any(component == "" for component in path_components):
+        return None
+    for component in path_components:
+        if (
+            REFERENCE_SDK_PUBLIC_PROVENANCE_PATH_COMPONENT_RE.fullmatch(component)
+            is None
+        ):
+            return None
+        for variant in decoded_text_variants(component):
+            if (
+                variant in {".", ".."}
+                or "/" in variant
+                or "\\" in variant
+                or path_component_has_sensitive_label(variant)
+                or REFERENCE_SDK_JWT_LIKE_PATH_COMPONENT_RE.search(variant)
+                is not None
+            ):
+                return None
+    return label
+
+
+def sanitize_reference_sdk_supply_chain_artifact_for_sensitivity(
+    artifact: Any,
+    *,
+    supply_chain_kind_known: bool,
+) -> Any:
+    """Mask only validated public provenance URLs in a supply-chain artifact."""
+
+    if not isinstance(artifact, dict):
+        return artifact
+    if (
+        not supply_chain_kind_known
+        and artifact.get("kind") != "supply_chain"
+    ):
+        return artifact
+    fingerprint = artifact.get("fingerprint")
+    if not isinstance(fingerprint, dict):
+        return artifact
+    sanitized_fingerprint = dict(fingerprint)
+    changed = False
+    for field in REFERENCE_SDK_PUBLIC_PROVENANCE_FINGERPRINT_FIELDS:
+        if canonical_public_provenance_url(fingerprint.get(field)) is not None:
+            sanitized_fingerprint[field] = "<public-provenance-metadata>"
+            changed = True
+    if not changed:
+        return artifact
+    sanitized_artifact = dict(artifact)
+    sanitized_artifact["fingerprint"] = sanitized_fingerprint
+    return sanitized_artifact
+
+
+def reference_sdk_release_sensitivity_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a lane-local view that retains all non-public secret scanning."""
+
+    candidate = dict(payload)
+    recognized = payload.get("recognized_artifacts")
+    if isinstance(recognized, list):
+        candidate["recognized_artifacts"] = [
+            sanitize_reference_sdk_supply_chain_artifact_for_sensitivity(
+                artifact,
+                supply_chain_kind_known=False,
+            )
+            for artifact in recognized
+        ]
+
+    required = payload.get("required")
+    if not isinstance(required, dict):
+        return candidate
+    supply_chain = required.get("supply_chain")
+    if not isinstance(supply_chain, dict):
+        return candidate
+    artifacts = supply_chain.get("artifacts")
+    if not isinstance(artifacts, list):
+        return candidate
+    required_copy = dict(required)
+    supply_chain_copy = dict(supply_chain)
+    supply_chain_copy["artifacts"] = [
+        sanitize_reference_sdk_supply_chain_artifact_for_sensitivity(
+            artifact,
+            supply_chain_kind_known=True,
+        )
+        for artifact in artifacts
+    ]
+    required_copy["supply_chain"] = supply_chain_copy
+    candidate["required"] = required_copy
+    return candidate
 
 
 def is_production_ready_environment(value: Any) -> bool:
@@ -2602,6 +1815,91 @@ def validate_foundational_lane_summary_rows(
     return rows
 
 
+def validate_foundational_prerequisite_readiness_summary_rows(
+    value: Any,
+    prerequisite_id: str | None,
+    errors: list[str],
+    *,
+    path: str,
+) -> list[dict[str, str]]:
+    """Validate one prerequisite's exact ordered readiness-summary digest group."""
+
+    rows: list[dict[str, str]] = []
+    if not isinstance(value, list):
+        errors.append(f"{path} must be an array")
+        return rows
+    for index, item in enumerate(value):
+        row_path = f"{path}[{index}]"
+        row = validate_foundational_exact_fields(
+            item,
+            FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS,
+            row_path,
+            errors,
+        )
+        if row is None:
+            continue
+        gate = canonical_string(row.get("gate"))
+        if gate is None:
+            errors.append(f"{row_path}.gate must be a canonical string")
+        digest = canonical_lower_hex(row.get("sha256"), 64)
+        if digest is None:
+            errors.append(f"{row_path}.sha256 must be canonical lowercase SHA-256")
+        elif not any(bytes.fromhex(digest)):
+            errors.append(f"{row_path}.sha256 must not be zero")
+        if gate is not None and digest is not None and any(bytes.fromhex(digest)):
+            rows.append({"gate": gate, "sha256": digest})
+
+    expected_gates = FOUNDATIONAL_PREREQUISITE_LANES.get(prerequisite_id)
+    observed_gates = [row["gate"] for row in rows]
+    if expected_gates is None:
+        errors.append(f"{path} requires a known prerequisite id")
+    elif observed_gates != list(expected_gates):
+        errors.append(
+            f"{path} must match the exact canonical readiness lanes for its prerequisite id"
+        )
+        if len(set(observed_gates)) != len(observed_gates):
+            errors.append(f"{path} must not contain duplicate gates")
+        if set(expected_gates) - set(observed_gates):
+            errors.append(f"{path} is missing required gates")
+        if set(observed_gates) - set(expected_gates):
+            errors.append(f"{path} contains unknown gates")
+    digests = [row["sha256"] for row in rows]
+    if len(set(digests)) != len(digests):
+        errors.append(f"{path} must use unique summary digests")
+    return rows
+
+
+def validate_foundational_grouped_lane_summary_digest_bindings(
+    grouped_rows: list[dict[str, Any]],
+    lane_summary_rows: list[dict[str, str]],
+    errors: list[str],
+    *,
+    path: str,
+) -> None:
+    """Require every grouped prerequisite digest to equal the signed global row."""
+
+    global_by_gate = {
+        row["gate"]: row["sha256"]
+        for row in lane_summary_rows
+        if set(row) == FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS
+    }
+    for group in grouped_rows:
+        rows = group.get("readiness_summary_sha256")
+        if canonical_string(group.get("id")) is None or not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            gate = canonical_string(row.get("gate"))
+            digest = canonical_lower_hex(row.get("sha256"), 64)
+            if gate is None or digest is None:
+                continue
+            if global_by_gate.get(gate) != digest:
+                errors.append(
+                    f"{path} grouped digest must match foundational lane_summaries"
+                )
+
+
 def validate_foundational_prerequisite_summary(
     payload: dict[str, Any],
     options: ValidationOptions,
@@ -2733,6 +2031,7 @@ def validate_foundational_prerequisite_summary(
     prerequisite_ids: list[str] = []
     anchors: list[str] = []
     evidence_generated_times: list[int] = []
+    prerequisite_readiness_summary_rows: list[dict[str, Any]] = []
     if not isinstance(prerequisites, list):
         errors.append("foundational prerequisites must be an array")
     else:
@@ -2751,6 +2050,21 @@ def validate_foundational_prerequisite_summary(
                 errors.append(f"{path}.id must be a canonical string")
             else:
                 prerequisite_ids.append(prerequisite_id)
+            readiness_summary_rows = (
+                validate_foundational_prerequisite_readiness_summary_rows(
+                    row.get("readiness_summary_sha256"),
+                    prerequisite_id,
+                    errors,
+                    path=f"{path}.readiness_summary_sha256",
+                )
+            )
+            if prerequisite_id in FOUNDATIONAL_PREREQUISITE_LANES:
+                prerequisite_readiness_summary_rows.append(
+                    {
+                        "id": prerequisite_id,
+                        "readiness_summary_sha256": readiness_summary_rows,
+                    }
+                )
             if row.get("status") != "verified":
                 errors.append(f"{path}.status must be `verified`")
             anchor = canonical_lower_hex(row.get("evidence_anchor_sha256"), 64)
@@ -2795,6 +2109,12 @@ def validate_foundational_prerequisite_summary(
     lane_summary_rows = validate_foundational_lane_summary_rows(
         payload.get("lane_summaries"),
         errors,
+    )
+    validate_foundational_grouped_lane_summary_digest_bindings(
+        prerequisite_readiness_summary_rows,
+        lane_summary_rows,
+        errors,
+        path="foundational prerequisites readiness_summary_sha256",
     )
     topology_qualification = payload.get("topology_qualification")
     errors.extend(
@@ -2904,6 +2224,9 @@ def validate_foundational_prerequisite_summary(
         "topology_qualification": topology_qualification,
         "resilience_qualification": resilience_qualification,
         "evidence_anchor_sha256": anchors,
+        "prerequisite_readiness_summary_sha256": (
+            prerequisite_readiness_summary_rows
+        ),
         "lane_summary_sha256": lane_summary_rows,
         "errors": errors,
     }
@@ -5079,6 +4402,190 @@ def validate_reference_sdk_release_bound_artifact_metadata(
         ),
         errors=errors,
     )
+    for metadata_field, fingerprint_field, diagnostic in (
+        (
+            "valid_sbom_index_digests",
+            "sbom_index_digest_hex",
+            "SBOM index",
+        ),
+        (
+            "valid_vulnerability_report_digests",
+            "vulnerability_report_digest_hex",
+            "vulnerability report",
+        ),
+        (
+            "valid_provenance_bundle_digests",
+            "provenance_bundle_digest_hex",
+            "provenance bundle",
+        ),
+    ):
+        bound_artifact_fingerprints_match_hex_list_metadata(
+            payload,
+            kind_names=("supply_chain",),
+            metadata_field=metadata_field,
+            fingerprint_field=fingerprint_field,
+            error=(
+                "reference_sdk_release supply-chain "
+                f"{diagnostic} fingerprints must match {metadata_field}"
+            ),
+            errors=errors,
+        )
+    supply_chain_fingerprints = payload_free_summary_artifact_fingerprints(
+        payload,
+        kind_name="supply_chain",
+    )
+    trust_tuples: set[tuple[str, str, str]] = set()
+    for index, fingerprint in enumerate(supply_chain_fingerprints):
+        validate_reference_sdk_supply_chain_fingerprint(
+            fingerprint,
+            errors,
+            path=(
+                "reference_sdk_release supply_chain "
+                f"fingerprint[{index}]"
+            ),
+        )
+        certificate_identity = canonical_public_provenance_url(
+            fingerprint.get("provenance_certificate_identity")
+        )
+        oidc_issuer = canonical_public_provenance_url(
+            fingerprint.get("provenance_oidc_issuer")
+        )
+        verification_key_fingerprint = canonical_lower_hex(
+            fingerprint.get("provenance_verification_key_fingerprint_hex"),
+            64,
+        )
+        if (
+            certificate_identity is not None
+            and oidc_issuer is not None
+            and verification_key_fingerprint is not None
+            and any(
+                character != "0"
+                for character in verification_key_fingerprint
+            )
+        ):
+            trust_tuples.add(
+                (
+                    certificate_identity,
+                    oidc_issuer,
+                    verification_key_fingerprint,
+                )
+            )
+    if len(trust_tuples) > 1:
+        errors.append(
+            "reference_sdk_release supply-chain fingerprints must share one "
+            "operator provenance trust tuple"
+        )
+
+
+def validate_reference_sdk_supply_chain_fingerprint(
+    fingerprint: dict[str, Any],
+    errors: list[str],
+    *,
+    path: str,
+) -> None:
+    """Require the source-bound, public SF-11 supply-chain fingerprint."""
+
+    source_artifacts = fingerprint.get("source_artifacts")
+    if not isinstance(source_artifacts, list):
+        errors.append(f"{path}.source_artifacts must be an array")
+        source_artifacts = []
+    expected_kinds = REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_KINDS
+    if len(source_artifacts) != len(expected_kinds):
+        errors.append(
+            f"{path}.source_artifacts must contain exactly four bindings"
+        )
+
+    observed_kinds: list[str] = []
+    artifact_paths: list[str] = []
+    artifact_digests: list[str] = []
+    source_digests: dict[str, str] = {}
+    for index, value in enumerate(source_artifacts):
+        row_path = f"{path}.source_artifacts[{index}]"
+        if not isinstance(value, dict):
+            errors.append(f"{row_path} must be an object")
+            continue
+        if set(value) != REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_FIELDS:
+            errors.append(
+                f"{row_path} fields must match the exact source binding contract"
+            )
+        kind = canonical_string(value.get("kind"))
+        if kind is None:
+            errors.append(f"{row_path}.kind must be canonical")
+        else:
+            observed_kinds.append(kind)
+        artifact_path = canonical_string(value.get("artifact_path"))
+        if (
+            artifact_path is None
+            or not is_archive_portable_artifact_path(artifact_path)
+        ):
+            errors.append(
+                f"{row_path}.artifact_path must be archive-relative and portable"
+            )
+        else:
+            artifact_paths.append(artifact_path)
+        digest = _nonzero_sha256(
+            value.get("sha256"),
+            path=f"{row_path}.sha256",
+            errors=errors,
+        )
+        if digest is not None:
+            artifact_digests.append(digest)
+            if kind in expected_kinds and kind not in source_digests:
+                source_digests[kind] = digest
+
+    if observed_kinds != list(expected_kinds):
+        errors.append(
+            f"{path}.source_artifacts kinds must match the exact canonical order"
+        )
+    if len(artifact_paths) != len(set(artifact_paths)):
+        errors.append(f"{path}.source_artifacts paths must be unique")
+    if len(artifact_digests) != len(set(artifact_digests)):
+        errors.append(f"{path}.source_artifacts SHA-256 digests must be unique")
+
+    for source_kind, fingerprint_field in (
+        REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_DIGEST_BINDINGS
+    ):
+        fingerprint_digest = _nonzero_sha256(
+            fingerprint.get(fingerprint_field),
+            path=f"{path}.{fingerprint_field}",
+            errors=errors,
+        )
+        source_digest = source_digests.get(source_kind)
+        if (
+            source_digest is not None
+            and fingerprint_digest is not None
+            and source_digest != fingerprint_digest
+        ):
+            errors.append(
+                f"{path}.{source_kind} source digest must match "
+                f"{fingerprint_field}"
+            )
+
+    if (
+        canonical_public_provenance_url(
+            fingerprint.get("provenance_certificate_identity")
+        )
+        is None
+    ):
+        errors.append(
+            f"{path}.provenance_certificate_identity must be a canonical "
+            "public HTTPS identity"
+        )
+    if (
+        canonical_public_provenance_url(
+            fingerprint.get("provenance_oidc_issuer")
+        )
+        is None
+    ):
+        errors.append(
+            f"{path}.provenance_oidc_issuer must be a canonical public "
+            "HTTPS issuer"
+        )
+    _nonzero_sha256(
+        fingerprint.get("provenance_verification_key_fingerprint_hex"),
+        path=f"{path}.provenance_verification_key_fingerprint_hex",
+        errors=errors,
+    )
 
 
 def validate_payload_free_cross_metadata_bindings(
@@ -6036,6 +5543,69 @@ def validate_aggregate_required_row_output(
     )
 
 
+def validate_aggregate_foundational_prerequisite_readiness_summary_output(
+    value: Any,
+    lane_summary_rows: list[dict[str, str]],
+    errors: list[str],
+) -> list[dict[str, Any]]:
+    """Validate the aggregate's preserved prerequisite-to-lane digest groups."""
+
+    path = "aggregate foundational prerequisites prerequisite_readiness_summary_sha256"
+    groups: list[dict[str, Any]] = []
+    if not isinstance(value, list):
+        errors.append(f"{path} must be an array")
+        return groups
+    observed_ids: list[str] = []
+    for index, item in enumerate(value):
+        row_path = f"{path}[{index}]"
+        row = validate_foundational_exact_fields(
+            item,
+            AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS,
+            row_path,
+            errors,
+        )
+        if row is None:
+            continue
+        prerequisite_id = canonical_string(row.get("id"))
+        if prerequisite_id is None:
+            errors.append(f"{row_path}.id must be a canonical string")
+        else:
+            observed_ids.append(prerequisite_id)
+        readiness_summary_rows = (
+            validate_foundational_prerequisite_readiness_summary_rows(
+                row.get("readiness_summary_sha256"),
+                prerequisite_id,
+                errors,
+                path=f"{row_path}.readiness_summary_sha256",
+            )
+        )
+        if prerequisite_id in FOUNDATIONAL_PREREQUISITE_LANES:
+            groups.append(
+                {
+                    "id": prerequisite_id,
+                    "readiness_summary_sha256": readiness_summary_rows,
+                }
+            )
+
+    if observed_ids != list(FOUNDATIONAL_PREREQUISITE_IDS):
+        errors.append(
+            f"{path} must match the exact prerequisite set and canonical order"
+        )
+        if len(set(observed_ids)) != len(observed_ids):
+            errors.append(f"{path} must not contain duplicate ids")
+        if set(FOUNDATIONAL_PREREQUISITE_IDS) - set(observed_ids):
+            errors.append(f"{path} is missing required ids")
+        if set(observed_ids) - set(FOUNDATIONAL_PREREQUISITE_IDS):
+            errors.append(f"{path} contains unknown ids")
+    validate_foundational_grouped_lane_summary_digest_bindings(
+        groups,
+        lane_summary_rows,
+        errors,
+        path=path,
+    )
+    return groups
+
+
 def validate_aggregate_foundational_prerequisite_output(
     row: Any,
     errors: list[str],
@@ -6197,6 +5767,15 @@ def validate_aggregate_foundational_prerequisite_output(
     )
     if valid is True and len(lane_summary_rows) != len(DEFAULT_REQUIRED_GATES):
         errors.append(f"{path} lane summary digests must cover every readiness lane")
+    grouped_rows = validate_aggregate_foundational_prerequisite_readiness_summary_output(
+        row.get("prerequisite_readiness_summary_sha256"),
+        lane_summary_rows,
+        errors,
+    )
+    if valid is True and len(grouped_rows) != len(FOUNDATIONAL_PREREQUISITE_IDS):
+        errors.append(
+            f"{path} prerequisite readiness summary digests must cover every prerequisite"
+        )
 
     artifact_path = row.get("path")
     if canonical_string(artifact_path) is None:
@@ -6477,6 +6056,39 @@ def validate_aggregate_summary_output(
         errors,
     )
     if (
+        isinstance(required, dict)
+        and isinstance(foundational_prerequisites, dict)
+        and foundational_prerequisites.get("present") is True
+    ):
+        foundational_lane_rows = foundational_prerequisites.get(
+            "lane_summary_sha256"
+        )
+        if isinstance(foundational_lane_rows, list):
+            for lane_row in foundational_lane_rows:
+                if not isinstance(lane_row, dict):
+                    continue
+                gate_name = canonical_string(lane_row.get("gate"))
+                foundational_digest = canonical_lower_hex(
+                    lane_row.get("sha256"),
+                    64,
+                )
+                required_row = required.get(gate_name) if gate_name is not None else None
+                required_digest = (
+                    canonical_lower_hex(required_row.get("sha256"), 64)
+                    if isinstance(required_row, dict)
+                    else None
+                )
+                if (
+                    gate_name is not None
+                    and foundational_digest is not None
+                    and required_digest is not None
+                    and foundational_digest != required_digest
+                ):
+                    errors.append(
+                        f"{gate_name} aggregate foundational lane digest must "
+                        "match required row sha256"
+                    )
+    if (
         isinstance(foundational_prerequisites, dict)
         and foundational_prerequisites.get("present") is True
     ):
@@ -6607,8 +6219,13 @@ def validate_gate_summary(
     """Validate one existing lane-gate summary."""
 
     errors: list[str] = []
+    sensitivity_payload = (
+        reference_sdk_release_sensitivity_view(payload)
+        if gate.name == "reference_sdk_release"
+        else payload
+    )
     visit_sensitive_fields(
-        payload,
+        sensitivity_payload,
         "",
         errors,
         sensitive_keys=SENSITIVE_KEYS,

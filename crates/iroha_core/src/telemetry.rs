@@ -2280,7 +2280,6 @@ impl StateTelemetry {
         proposals: impl IntoIterator<Item = ([u8; 32], crate::state::GovernanceProposalStatus)>,
     ) {
         use crate::state::GovernanceProposalStatus as GPS;
-
         let mut counts = [0u64; 5];
         let mut cache = self
             .governance_status_cache
@@ -2592,7 +2591,6 @@ impl StateTelemetry {
         headroom_pct: u64,
     ) -> norito::json::Value {
         use norito::json::{Map, Value};
-
         let mut buckets = Map::new();
         buckets.insert("floor".into(), Value::from(update.buckets.floor));
         buckets.insert("headroom".into(), Value::from(update.buckets.headroom));
@@ -3841,7 +3839,6 @@ impl StateTelemetry {
         statuses: impl IntoIterator<Item = crate::state::GovernanceProposalStatus>,
     ) {
         use crate::state::GovernanceProposalStatus as GPS;
-
         let collected: Vec<GPS> = statuses.into_iter().collect();
 
         #[cfg(feature = "telemetry")]
@@ -5288,6 +5285,8 @@ pub enum PinIntentSpoolReason {
     UnsupportedVersion,
     /// Pin intent bundle entries were not in canonical order.
     NonCanonicalOrder,
+    /// Pin intent bundle exceeded the representable location space.
+    BundleTooLarge,
     /// Manifest hash was zero or missing.
     ZeroManifest,
     /// Intent duplicated lane/epoch/sequence/ticket.
@@ -5298,6 +5297,8 @@ pub enum PinIntentSpoolReason {
     DuplicateManifest,
     /// Alias collision superseded this intent.
     AliasSuperseded,
+    /// Alias exceeded the consensus admission byte bound.
+    AliasTooLong,
     /// Lane was not present in the lane catalog.
     UnknownLane,
     /// Owner account missing from WSV.
@@ -5315,11 +5316,13 @@ impl PinIntentSpoolReason {
             PinIntentSpoolReason::Kept => "kept",
             PinIntentSpoolReason::UnsupportedVersion => "unsupported_version",
             PinIntentSpoolReason::NonCanonicalOrder => "non_canonical_order",
+            PinIntentSpoolReason::BundleTooLarge => "bundle_too_large",
             PinIntentSpoolReason::ZeroManifest => "zero_manifest",
             PinIntentSpoolReason::DuplicateIntent => "duplicate",
             PinIntentSpoolReason::DuplicateStorageTicket => "duplicate_storage_ticket",
             PinIntentSpoolReason::DuplicateManifest => "duplicate_manifest",
             PinIntentSpoolReason::AliasSuperseded => "alias_superseded",
+            PinIntentSpoolReason::AliasTooLong => "alias_too_long",
             PinIntentSpoolReason::UnknownLane => "unknown_lane",
             PinIntentSpoolReason::UnknownOwner => "unknown_owner",
             PinIntentSpoolReason::ZeroStorageTicket => "zero_storage_ticket",
@@ -5336,6 +5339,9 @@ impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
             }
             DaPinIntentValidationError::NonCanonicalOrder { .. } => {
                 PinIntentSpoolReason::NonCanonicalOrder
+            }
+            DaPinIntentValidationError::BundleTooLarge { .. } => {
+                PinIntentSpoolReason::BundleTooLarge
             }
             DaPinIntentValidationError::UnknownLane { .. } => PinIntentSpoolReason::UnknownLane,
             DaPinIntentValidationError::UnknownOwner { .. } => PinIntentSpoolReason::UnknownOwner,
@@ -5357,6 +5363,7 @@ impl From<&DaPinIntentValidationError> for PinIntentSpoolReason {
             DaPinIntentValidationError::AliasSuperseded { .. } => {
                 PinIntentSpoolReason::AliasSuperseded
             }
+            DaPinIntentValidationError::AliasTooLong { .. } => PinIntentSpoolReason::AliasTooLong,
         }
     }
 }
@@ -11031,6 +11038,10 @@ mod tests {
             PinIntentSpoolResult::Dropped,
             PinIntentSpoolReason::SealedDuplicate,
         );
+        let oversized = DaPinIntentValidationError::BundleTooLarge { len: 2, max: 1 };
+        let oversized_reason = PinIntentSpoolReason::from(&oversized);
+        assert_eq!(oversized_reason, PinIntentSpoolReason::BundleTooLarge);
+        telemetry.note_da_pin_intent_spool(PinIntentSpoolResult::Dropped, oversized_reason);
         telemetry.note_da_pin_intent_spool(PinIntentSpoolResult::Kept, PinIntentSpoolReason::Kept);
 
         assert_eq!(
@@ -11044,6 +11055,13 @@ mod tests {
             metrics
                 .sumeragi_da_pin_intent_spool_total
                 .with_label_values(&["dropped", "sealed_duplicate"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_da_pin_intent_spool_total
+                .with_label_values(&["dropped", "bundle_too_large"])
                 .get(),
             1
         );
@@ -12191,7 +12209,6 @@ mod tests {
     fn oracle_metrics_recorded() {
         use iroha_crypto::Hash;
         use iroha_primitives::numeric::Numeric;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         telemetry.observe_oracle_settlement_context(
@@ -12293,7 +12310,6 @@ mod tests {
     #[cfg(feature = "telemetry")]
     fn audit_outcome_event_includes_expected_fields() {
         use norito::json::to_string as to_json_string;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics, true);
         let outcome = TelemetryAuditOutcome {
@@ -12862,7 +12878,6 @@ mod tests {
     #[test]
     fn sumeragi_new_view_counters_and_highest_qc_gauge() {
         use std::sync::Arc;
-
         let metrics = Arc::new(Metrics::default());
         let tel = Telemetry::new(metrics.clone(), true);
 
@@ -12900,7 +12915,6 @@ mod tests {
     #[test]
     fn queue_backpressure_metrics_updated() {
         use std::sync::Arc;
-
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
 
@@ -15418,9 +15432,7 @@ mod tests {
         use iroha_data_model::{
             block::{BlockHeader, BlockSignature},
             da::{
-                commitment::{
-                    DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment,
-                },
+                commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
                 types::{BlobDigest, RetentionPolicy, StorageTicketId},
             },
             nexus::LaneId,
@@ -15449,7 +15461,6 @@ mod tests {
             ManifestDigest::new([0x22; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x33; 32]),
-            Some(KzgCommitment::new([0x44; 48])),
             Some(Hash::prehashed([0x55; 32])),
             RetentionPolicy::default(),
             StorageTicketId::new([0x66; 32]),

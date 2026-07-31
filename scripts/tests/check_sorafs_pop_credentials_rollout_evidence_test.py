@@ -18,14 +18,25 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+TEST_DIR = Path(__file__).resolve().parent
+if str(TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(TEST_DIR))
+from sorafs_rollout_runner_test_support import TopologyBoundChecker  # noqa: E402
+
 
 NOW = 1_800_006_000
 GENERATED_AT = NOW - 120
 HEX = "ab" * 32
 HEX_2 = "cd" * 32
 HEX_3 = "ef" * 32
-DEPLOYMENT_ID = "pop-staging-a"
-ENVIRONMENT = "staging"
+DEPLOYMENT_ID = "pop-production-a"
+ENVIRONMENT = "production"
+CHECKER = TopologyBoundChecker(
+    MODULE.main,
+    deployment_id=DEPLOYMENT_ID,
+    environment=ENVIRONMENT,
+    name="pop-credentials-checker",
+)
 
 
 def write_json(path: Path, payload: dict[str, object]) -> Path:
@@ -275,14 +286,14 @@ def validation_options() -> object:
 
 
 def run_gate(root: Path, *extra: str) -> int:
-    return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW), *extra])
+    return CHECKER(["--evidence-dir", str(root), "--now-unix", str(NOW), *extra])
 
 
 def test_complete_evidence_is_ready(tmp_path: Path, capsys) -> None:
     evidence_dir = write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
 
-    exit_code = MODULE.main(
+    exit_code = CHECKER(
         [
             "--evidence-dir",
             str(evidence_dir),
@@ -381,7 +392,7 @@ def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
         summary = root / "summary.json"
 
         assert (
-            MODULE.main(
+            CHECKER(
                 [
                     "--evidence-dir",
                     str(evidence_dir),
@@ -405,7 +416,7 @@ def test_response_file_complete_evidence_is_ready(tmp_path: Path, capsys) -> Non
     summary = tmp_path / "summary.json"
     args_file = write_args_file(tmp_path / "rollout.args", evidence_dir, summary)
 
-    exit_code = MODULE.main([f"@{args_file}"])
+    exit_code = CHECKER([f"@{args_file}"])
 
     assert exit_code == 0
     assert "is ready" in capsys.readouterr().err
@@ -459,7 +470,7 @@ def test_issuer_credential_count_must_match_unique_credentials(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -487,7 +498,7 @@ def test_issuer_credentials_must_not_duplicate(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -514,7 +525,7 @@ def test_issuer_credentials_must_use_reviewed_labels(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -540,7 +551,7 @@ def test_issuer_credentials_reject_non_production_markers(tmp_path: Path) -> Non
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -569,7 +580,7 @@ def test_issuer_credentials_must_use_pop_family(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -598,7 +609,7 @@ def test_verifier_proof_probe_count_must_match_unique_probes(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -630,7 +641,7 @@ def test_verifier_probes_must_not_duplicate(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -660,7 +671,7 @@ def test_verifier_probes_must_use_partitioned_reviewed_labels(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -688,7 +699,7 @@ def test_verifier_probes_reject_non_production_markers(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -718,7 +729,7 @@ def test_verifier_probes_must_use_pop_families(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -745,7 +756,7 @@ def test_verifier_probe_partition_counts_must_match_probes(tmp_path: Path) -> No
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -779,7 +790,7 @@ def test_verifier_route_count_must_match_unique_routes(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -807,7 +818,7 @@ def test_verifier_routes_must_not_duplicate(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -836,7 +847,7 @@ def test_verifier_routes_must_not_include_unknown_values(tmp_path: Path) -> None
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -866,7 +877,7 @@ def test_verifier_payload_free_flags_are_required(tmp_path: Path) -> None:
         summary = root / "summary.json"
 
         assert (
-            MODULE.main(
+            CHECKER(
                 [
                     "--evidence-dir",
                     str(evidence_dir),
@@ -900,7 +911,7 @@ def test_route_body_hash_is_required_for_route_artifacts(tmp_path: Path) -> None
         summary = root / "summary.json"
 
         assert (
-            MODULE.main(
+            CHECKER(
                 [
                     "--evidence-dir",
                     str(evidence_dir),
@@ -932,7 +943,7 @@ def test_moderation_sortition_probe_count_must_match_unique_probes(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -962,7 +973,7 @@ def test_moderation_sortition_probes_must_not_duplicate(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -994,7 +1005,7 @@ def test_moderation_sortition_probes_must_use_reviewed_labels(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1022,7 +1033,7 @@ def test_moderation_sortition_probes_reject_non_production_markers(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1052,7 +1063,7 @@ def test_moderation_probes_must_use_pop_families(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1081,7 +1092,7 @@ def test_moderation_commit_reveal_probe_count_must_match_unique_probes(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1112,7 +1123,7 @@ def test_moderation_commit_reveal_probes_must_use_reviewed_labels(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1140,7 +1151,7 @@ def test_moderation_commit_reveal_probes_reject_non_production_markers(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1175,7 +1186,7 @@ def test_moderation_commit_reveal_probes_must_not_duplicate(tmp_path: Path) -> N
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1211,7 +1222,7 @@ def test_enrollment_portal_route_count_must_match_unique_routes(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1239,7 +1250,7 @@ def test_enrollment_portal_routes_must_not_duplicate(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1270,7 +1281,7 @@ def test_enrollment_portal_routes_must_not_include_unknown_values(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1297,7 +1308,7 @@ def test_deployment_context_is_required(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1324,7 +1335,7 @@ def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1352,7 +1363,7 @@ def test_missing_verifier_service_blocks_rollout(tmp_path: Path, capsys) -> None
     evidence_dir = write_complete_evidence(tmp_path)
     (evidence_dir / "verifier_service.json").unlink()
 
-    assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
+    assert CHECKER(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
     captured = capsys.readouterr()
     assert "missing required rollout evidence" in captured.err
@@ -1367,7 +1378,7 @@ def test_transcript_digest_backend_cannot_pass_governance(tmp_path: Path, capsys
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1398,7 +1409,7 @@ def test_verifier_service_requires_policy_digest(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1427,7 +1438,7 @@ def test_governance_policy_digest_must_match_verifier_service(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1612,7 +1623,7 @@ def test_policy_bound_subset_requires_verifier_service_anchor(tmp_path: Path) ->
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1643,7 +1654,7 @@ def test_payload_leakage_blocks_rollout(tmp_path: Path, capsys) -> None:
     issuer["credential_payload"] = "raw credential bytes"
     write_json(evidence_dir / "issuer_bundle.json", issuer)
 
-    assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
+    assert CHECKER(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
     err = capsys.readouterr().err
     assert "<sensitive-key> must not be present" in err
@@ -1656,7 +1667,7 @@ def test_stale_revocation_registry_blocks_rollout(tmp_path: Path, capsys) -> Non
     revocation["published_at_unix"] = NOW - MODULE.DEFAULT_MAX_REVOCATION_AGE_SECS - 1
     write_json(evidence_dir / "revocation_registry.json", revocation)
 
-    assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
+    assert CHECKER(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
     assert "published_at_unix is older" in capsys.readouterr().err
 
@@ -1669,7 +1680,7 @@ def test_revoked_nonce_count_must_match_unique_refs(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1699,7 +1710,7 @@ def test_revoked_nonce_refs_must_not_duplicate(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1729,7 +1740,7 @@ def test_revoked_nonce_refs_must_use_reviewed_labels(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1755,7 +1766,7 @@ def test_revoked_nonce_refs_reject_non_production_markers(tmp_path: Path) -> Non
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1782,7 +1793,7 @@ def test_verifier_service_requires_root_revocation_binding(tmp_path: Path, capsy
     verifier.pop("root_digest_hex")
     write_json(evidence_dir / "verifier_service.json", verifier)
 
-    assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
+    assert CHECKER(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
     assert "root_digest_hex must be a non-empty string" in capsys.readouterr().err
 
@@ -1795,7 +1806,7 @@ def test_commitment_root_must_match_issuer_bundle(tmp_path: Path, capsys) -> Non
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1825,7 +1836,7 @@ def test_juror_root_binding_must_match_published_root(tmp_path: Path, capsys) ->
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1855,7 +1866,7 @@ def test_governance_revocation_binding_must_match_published_registry(
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1880,7 +1891,7 @@ def test_missing_required_metric_blocks_rollout(tmp_path: Path, capsys) -> None:
     metrics["metrics"] = ["pop_credential_issuance_total"]
     write_json(evidence_dir / "metrics_alerts.json", metrics)
 
-    assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
+    assert CHECKER(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
     assert "metrics must include value `pop_revocation_publication_total`" in capsys.readouterr().err
 
@@ -1894,7 +1905,7 @@ def test_metrics_must_not_duplicate(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1921,7 +1932,7 @@ def test_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -1950,7 +1961,7 @@ def test_metrics_payload_free_flags_are_required(tmp_path: Path) -> None:
         summary = root / "summary.json"
 
         assert (
-            MODULE.main(
+            CHECKER(
                 [
                     "--evidence-dir",
                     str(evidence_dir),
@@ -1975,7 +1986,7 @@ def test_explicit_unknown_schema_fails(tmp_path: Path, capsys) -> None:
     )
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 str(path),
@@ -1997,7 +2008,7 @@ def test_unknown_directory_artifact_is_ignored_for_subset_gate(tmp_path: Path, c
     write_json(evidence_dir / "unknown.json", {"schema": "other.v1"})
     write_json(evidence_dir / "issuer_bundle.json", complete_payloads()["issuer_bundle"])
 
-    exit_code = MODULE.main(
+    exit_code = CHECKER(
         [
             "--evidence-dir",
             str(evidence_dir),
@@ -2025,7 +2036,7 @@ def test_invalid_optional_artifact_blocks_subset_gate(tmp_path: Path, capsys) ->
     write_json(evidence_dir / "verifier_service.json", verifier)
 
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence-dir",
                 str(evidence_dir),
@@ -2043,7 +2054,7 @@ def test_invalid_optional_artifact_blocks_subset_gate(tmp_path: Path, capsys) ->
 
 def test_unknown_required_kind_fails_before_validation(capsys) -> None:
     assert (
-        MODULE.main(
+        CHECKER(
             [
                 "--evidence",
                 "missing.json",

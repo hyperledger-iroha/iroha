@@ -58,6 +58,8 @@ object NativeAmxV2 {
         "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
     private const val SETTLEMENT_TYPE =
         "iroha_data_model::block::consensus::LaneBlockCommitment"
+    private val SETTLEMENT_HASH_DOMAIN =
+        "iroha.nexus.lane-relay.settlement.v1".toByteArray(StandardCharsets.UTF_8)
 
     private class BlsNormalPeerId(
         val literal: String,
@@ -1597,7 +1599,11 @@ object NativeAmxV2 {
                 vector(emptyList<ByteArray>()) { it },
             ),
         )
-        return ConsensusHash(hashLiteral(noritoFrame(SETTLEMENT_TYPE, payload)))
+        val frame = noritoFrame(SETTLEMENT_TYPE, payload)
+        val domainLength = u64(BigInteger.valueOf(SETTLEMENT_HASH_DOMAIN.size.toLong()))
+        return ConsensusHash(
+            hashLiteral(domainLength + SETTLEMENT_HASH_DOMAIN + frame),
+        )
     }
 
     private fun settlementReceipt(receipt: SettlementReceipt): ByteArray =

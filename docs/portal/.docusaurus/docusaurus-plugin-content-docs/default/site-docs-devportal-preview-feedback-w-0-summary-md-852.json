@@ -1,0 +1,29 @@
+{
+  "id": "devportal/preview-feedback/w0/preview-feedback-w0-summary",
+  "title": "W0 midpoint feedback digest",
+  "description": "Midpoint checkpoints, findings, and action items for the core-maintainer preview wave.",
+  "source": "@site/docs/devportal/preview-feedback/w0/summary.md",
+  "sourceDirName": "devportal/preview-feedback/w0",
+  "slug": "/devportal/preview-feedback/w0/preview-feedback-w0-summary",
+  "permalink": "/next/devportal/preview-feedback/w0/preview-feedback-w0-summary",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/preview-feedback/w0/summary.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "preview-feedback-w0-summary",
+    "title": "W0 midpoint feedback digest",
+    "sidebar_label": "W0 feedback (midpoint)",
+    "description": "Midpoint checkpoints, findings, and action items for the core-maintainer preview wave."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Feedback logging",
+    "permalink": "/next/devportal/preview-feedback-log"
+  },
+  "next": {
+    "title": "W1 plan",
+    "permalink": "/next/devportal/preview-feedback/w1/preview-feedback-w1-plan"
+  }
+}

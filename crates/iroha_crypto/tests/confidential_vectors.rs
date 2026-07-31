@@ -5,7 +5,7 @@ use iroha_crypto::derive_keyset;
 
 #[test]
 fn confidential_vectors_match_fixture() {
-    let fixture = include_str!("../../../docs/source/confidential_key_vectors.json");
+    let fixture = include_str!("../../../specs/confidential_key_vectors.json");
     let values: norito::json::Value = norito::json::from_str(fixture).expect("parse fixture");
     let items = values.as_array().expect("fixture array");
     for item in items {

@@ -66,6 +66,6 @@ cat target/contract.to | iroha transaction ivm
 ```
 
 The `.to` file can also be embedded into genesis or manifests depending on your
-deployment pipeline. See `examples/README.md` and `docs/source/kotodama_examples.md`
+deployment pipeline. See `examples/README.md` and `specs/kotodama_examples.md`
 for additional workflows, including end-to-end examples that exercise the host
 ABI and integration tests that compile and execute the samples automatically.

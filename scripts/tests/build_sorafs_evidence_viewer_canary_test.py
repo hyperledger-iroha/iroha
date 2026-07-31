@@ -31,6 +31,7 @@ CHECKER = importlib.util.module_from_spec(CHECKER_SPEC)
 assert CHECKER_SPEC and CHECKER_SPEC.loader  # pragma: no cover - defensive
 sys.modules[CHECKER_SPEC.name] = CHECKER
 CHECKER_SPEC.loader.exec_module(CHECKER)
+TOPOLOGY = sys.modules["sorafs_topology_qualification"]
 
 
 DIGEST = "a" * 64
@@ -44,6 +45,40 @@ def canary_path(tmp_path: Path) -> Path:
 def write_json(path: Path, payload: dict) -> Path:
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def write_topology_qualification(root: Path) -> Path:
+    """Write the exact reviewed topology required by the moderation gate."""
+
+    path = root / "topology-qualification.json"
+    return write_json(
+        path,
+        {
+            "schema": TOPOLOGY.SUMMARY_SCHEMA,
+            "status": "configuration-qualified",
+            "qualification_scope": "pre-deployment-configuration",
+            "live_evidence_recognized": False,
+            "promotion_eligible": False,
+            "manifest_sha256": "11" * 32,
+            "canonical_manifest_sha256": "22" * 32,
+            "deployment": {
+                "deployment_id": "sorafs-panel-prod-20260701",
+                "environment": "production",
+            },
+            "validator_count": 4,
+            "storage_provider_count": 2,
+            "gateway_count": 2,
+            "governance_dag_instance_count": 2,
+            "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+            "runtime_material_policy_valid": True,
+            "signed_model_artifact_count": 1,
+            "required_lane_slots": list(TOPOLOGY.CANONICAL_READINESS_LANES),
+            "recognized_lane_slot_count": len(
+                TOPOLOGY.CANONICAL_READINESS_LANES
+            ),
+            "errors": [],
+        },
+    )
 
 
 def with_context(payload: dict) -> dict:
@@ -356,6 +391,8 @@ def test_generated_canary_passes_existing_evidence_viewer_gate(tmp_path: Path) -
     assert (
         CHECKER.main(
             [
+                "--topology-qualification-summary",
+                str(write_topology_qualification(tmp_path)),
                 "--evidence",
                 str(tmp_path / "appeal-intake.json"),
                 "--evidence",

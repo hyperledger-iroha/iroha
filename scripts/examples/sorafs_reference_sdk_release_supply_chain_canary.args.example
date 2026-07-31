@@ -1,3 +1,5 @@
+# Supply the reviewed deployment's source root and public trust tuple.
+# generated-at-unix must equal the oldest validated source timestamp.
 --kind
 supply_chain
 --out
@@ -12,19 +14,11 @@ production
 1800700000
 --release-manifest-digest-hex
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
---sbom-index-digest-hex
-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
---vulnerability-report-digest-hex
-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
---provenance-bundle-digest-hex
-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
---target
-x86_64-apple-darwin
---target
-aarch64-apple-darwin
---target
-x86_64-unknown-linux-gnu
---target
-aarch64-unknown-linux-gnu
---target
-x86_64-pc-windows-msvc
+--supply-chain-source-root
+/var/tmp/sorafs/reference-sdk-supply-chain-source
+--provenance-certificate-identity
+https://github.com/hyperledger/iroha/.github/workflows/sorafs-cli-release.yml@refs/tags/sorafs-cli-v1.0.0
+--provenance-oidc-issuer
+https://token.actions.githubusercontent.com
+--provenance-verification-public-key-hex
+1111111111111111111111111111111111111111111111111111111111111111

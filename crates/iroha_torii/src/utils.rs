@@ -1970,7 +1970,11 @@ pub mod extractors {
     fn record_norito_decode_failure(_: &'static str, _: &norito::Error) {}
 
     #[allow(clippy::result_large_err)]
-    fn decode_body_as_norito_or_json<T: JsonDeserializeOwned + SupportsNoritoDecode + 'static>(
+    /// Decode an already-admitted typed body after a caller-specific
+    /// authentication boundary has run.
+    pub(crate) fn decode_body_as_norito_or_json<
+        T: JsonDeserializeOwned + SupportsNoritoDecode + 'static,
+    >(
         body: &Bytes,
         format: super::TypedRequestContentFormat,
     ) -> Result<T, Response> {

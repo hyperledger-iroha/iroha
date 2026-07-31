@@ -204,38 +204,8 @@ fn bind_reusable_tcp_listener_addr(addr: std::net::SocketAddr) -> io::Result<Tcp
 }
 
 #[cfg(test)]
-mod tcp_listener_bind_tests {
-    use std::net::{Ipv4Addr, SocketAddr};
-
-    use super::bind_reusable_tcp_listener;
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn reusable_tcp_listener_binds_loopback() {
-        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-        let listener = bind_reusable_tcp_listener(&[addr]).expect("reusable listener should bind");
-
-        assert_ne!(
-            listener
-                .local_addr()
-                .expect("listener has local addr")
-                .port(),
-            0,
-            "OS should assign an ephemeral port"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn reusable_tcp_listener_rejects_active_listener() {
-        let active = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .expect("active listener should bind");
-        let addr = active.local_addr().expect("active listener has local addr");
-
-        let err = bind_reusable_tcp_listener(&[addr])
-            .expect_err("active listener must not be shadowed by reusable bind");
-
-        assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
-    }
-}
+#[path = "network/tcp_listener_bind_tests.rs"]
+mod tcp_listener_bind_tests;
 
 // Simple CIDR (IPv4/IPv6) representation for ACLs.
 #[derive(Clone, Debug)]
@@ -395,20 +365,26 @@ fn runtime_from_handshake(
                 Error::HandshakeSoranet(format!("invalid soranet revocation configuration: {err}"))
             },
         )?;
-    let revocation_store = TicketRevocationStore::load(
-        revocation_store_path.as_ref(),
-        revocation_limits,
-        SystemTime::now(),
-    )
-    .unwrap_or_else(|err| {
-        iroha_logger::warn!(
-            path = %revocation_store_path,
-            ?err,
-            "failed to load soranet revocation store; falling back to in-memory cache"
-        );
-        TicketRevocationStore::in_memory(revocation_limits)
-            .expect("revocation limits already validated")
-    });
+    let revocation_store = if required {
+        TicketRevocationStore::load(
+            revocation_store_path.as_ref(),
+            revocation_limits,
+            SystemTime::now(),
+        )
+        .map_err(|err| {
+            Error::HandshakeSoranet(format!(
+                "failed to load soranet revocation store at {}: {err}",
+                revocation_store_path
+            ))
+        })?
+    } else {
+        // Production configuration fixes `required = true`. Programmatic test
+        // configurations that disable admission must not create shared replay
+        // state in the workspace.
+        TicketRevocationStore::in_memory(revocation_limits).map_err(|err| {
+            Error::HandshakeSoranet(format!("invalid soranet revocation configuration: {err}"))
+        })?
+    };
     let revocation_store = Some(Arc::new(Mutex::new(revocation_store)));
 
     let config = SoranetHandshakeConfig::new(
@@ -453,118 +429,8 @@ fn relay_role_from_mode(mode: iroha_config::parameters::actual::RelayMode) -> Re
 }
 
 #[cfg(test)]
-mod runtime_tests {
-    use std::{fs, num::NonZeroU32, time::Duration};
-
-    use iroha_config::parameters::actual::SoranetPuzzle as ConfigPuzzle;
-    use rand::{SeedableRng, rngs::StdRng};
-    use tempfile::tempdir;
-
-    use super::*;
-
-    #[test]
-    fn runtime_from_handshake_preserves_puzzle_parameters() {
-        let mut handshake = ActualSoranetHandshake::default();
-        handshake.pow.required = true;
-        handshake.pow.difficulty = 6;
-        handshake.pow.max_future_skew = Duration::from_secs(300);
-        handshake.pow.min_ticket_ttl = Duration::from_secs(60);
-        handshake.pow.ticket_ttl = Duration::from_secs(240);
-        handshake.pow.puzzle = Some(ConfigPuzzle {
-            memory_kib: NonZeroU32::new(64 * 1024).expect("memory"),
-            time_cost: NonZeroU32::new(3).expect("time_cost"),
-            lanes: NonZeroU32::new(2).expect("lanes"),
-        });
-        let dir = tempdir().expect("tempdir");
-        handshake.pow.revocation_store_path = dir
-            .path()
-            .join("revocations.norito")
-            .to_string_lossy()
-            .into_owned()
-            .into();
-
-        let runtime = runtime_from_handshake(handshake).expect("runtime");
-        assert!(
-            runtime.pow_required(),
-            "puzzle-enabled handshake must require PoW"
-        );
-        let pow = runtime.pow_parameters();
-        assert_eq!(pow.difficulty(), 6);
-        let puzzle = runtime
-            .puzzle_parameters()
-            .expect("puzzle parameters should be present");
-        assert_eq!(puzzle.memory_kib().get(), 64 * 1024);
-        assert_eq!(puzzle.time_cost().get(), 3);
-        assert_eq!(puzzle.lanes().get(), 2);
-    }
-
-    #[test]
-    fn runtime_from_handshake_rejects_invalid_pow_bounds() {
-        let mut handshake = ActualSoranetHandshake::default();
-        handshake.pow.required = true;
-        handshake.pow.max_future_skew = Duration::from_secs(30);
-        handshake.pow.min_ticket_ttl = Duration::from_secs(60);
-
-        let err = runtime_from_handshake(handshake).expect_err("invalid PoW bounds must fail");
-        match err {
-            Error::HandshakeSoranet(message) => {
-                assert!(
-                    message.contains("PoW")
-                        && message.contains("max_future_skew")
-                        && message.contains("min_ttl"),
-                    "expected PoW bounds validation failure, got {message}"
-                );
-            }
-            other => panic!("unexpected error type: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn runtime_from_handshake_rejects_invalid_revocation_limits() {
-        let mut handshake = ActualSoranetHandshake::default();
-        handshake.pow.required = true;
-        handshake.pow.revocation_store_capacity = 0;
-
-        let err = runtime_from_handshake(handshake).expect_err("should fail");
-        match err {
-            Error::HandshakeSoranet(message) => {
-                assert!(
-                    message.contains("revocation"),
-                    "expected revocation validation failure, got {message}"
-                );
-            }
-            other => panic!("unexpected error type: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn runtime_from_handshake_falls_back_on_corrupt_revocation_snapshot() {
-        let mut handshake = ActualSoranetHandshake::default();
-        let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("revocations.norito");
-        fs::write(&path, b"corrupt snapshot").expect("write corrupt revocation file");
-        handshake.pow.required = true;
-        handshake.pow.difficulty = 1;
-        handshake.pow.revocation_store_path = path.to_string_lossy().into_owned().into();
-
-        let runtime = runtime_from_handshake(handshake).expect("runtime should fall back");
-        let mut rng = StdRng::from_seed([0x44; 32]);
-        let minted = runtime
-            .mint_challenge_ticket(&mut rng)
-            .expect("mint ticket")
-            .expect("ticket present");
-        let ticket = minted.ticket.expect("ticket bytes");
-
-        runtime
-            .verify_challenge_ticket(&ticket)
-            .expect("first verify succeeds");
-        assert_eq!(runtime.active_revocations(), 1);
-        let err = runtime
-            .verify_challenge_ticket(&ticket)
-            .expect_err("replay should be rejected via fallback store");
-        assert!(matches!(err, crate::peer::ChallengeVerifyError::Replay));
-    }
-}
+#[path = "network/runtime_tests.rs"]
+mod runtime_tests;
 
 mod net_channel {
     use tokio::sync::mpsc;
@@ -730,7 +596,7 @@ const RELAY_ORIGIN_SIGNATURE_DOMAIN: &[u8] = b"iroha:p2p:relay-origin:v1\n";
 /// Largest canonical signature carried by a supported peer identity.
 ///
 /// ML-DSA-65 is wider than every classical, BLS, GOST, and SM2 signature.
-pub const MAX_RELAY_ORIGIN_SIGNATURE_BYTES: usize = 3_309;
+pub const MAX_RELAY_ORIGIN_SIGNATURE_BYTES: usize = Algorithm::MlDsa.signature_payload_len();
 /// Default hop limit for relay forwarding (origin hub hop + spoke hop).
 #[cfg(test)]
 const DEFAULT_RELAY_TTL: u8 = 8;
@@ -779,7 +645,7 @@ where
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         use std::borrow::Cow;
 
-        let min_size = core::mem::size_of::<ncore::Archived<Self>>();
+        let min_size = ncore::archived_payload_size::<Self>();
         let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
             let mut padded = Vec::with_capacity(min_size);
             padded.extend_from_slice(bytes);
@@ -904,22 +770,13 @@ fn relay_origin_signature_digest<T: Encode>(
 }
 
 fn relay_origin_signature_len(origin: &PeerId) -> Option<usize> {
-    Some(match origin.public_key().try_algorithm().ok()? {
-        Algorithm::Ed25519 | Algorithm::Secp256k1 => 64,
-        Algorithm::BlsNormal => 96,
-        Algorithm::BlsSmall => 48,
-        Algorithm::MlDsa => MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-        #[cfg(feature = "gost")]
-        Algorithm::Gost3410_2012_256ParamSetA
-        | Algorithm::Gost3410_2012_256ParamSetB
-        | Algorithm::Gost3410_2012_256ParamSetC => 64,
-        #[cfg(feature = "gost")]
-        Algorithm::Gost3410_2012_512ParamSetA | Algorithm::Gost3410_2012_512ParamSetB => 128,
-        #[cfg(feature = "sm")]
-        Algorithm::Sm2 => 64,
-        #[allow(unreachable_patterns)]
-        _ => return None,
-    })
+    Some(
+        origin
+            .public_key()
+            .try_algorithm()
+            .ok()?
+            .signature_payload_len(),
+    )
 }
 
 /// Return the plaintext wire length of a P2P data frame containing `payload`.
@@ -971,19 +828,10 @@ fn peer_id_wire_len_from_raw_key_bytes(raw_key_bytes: usize, flags: u8) -> Optio
         .checked_add(public_key_len)
 }
 
-fn byte_sequence_wire_len(bytes: usize, flags: u8) -> Option<usize> {
-    if ncore::packed_seq_enabled_for_flags(flags) {
-        ncore::seq_len_prefix_len(bytes)
-            .checked_add(
-                bytes
-                    .checked_add(1)?
-                    .checked_mul(core::mem::size_of::<u64>())?,
-            )?
-            .checked_add(bytes)
-    } else {
-        let encoded_byte_len = checked_len_prefixed(core::mem::size_of::<u8>(), flags)?;
-        ncore::seq_len_prefix_len(bytes).checked_add(bytes.checked_mul(encoded_byte_len)?)
-    }
+fn byte_sequence_wire_len(bytes: usize) -> Option<usize> {
+    // `Vec<u8>` always uses Norito's raw-byte sequence fast path: a fixed-width
+    // element count followed by the bytes themselves, regardless of layout flags.
+    ncore::seq_len_prefix_len(bytes).checked_add(bytes)
 }
 
 fn peer_id_raw_key_bytes(peer_id: &PeerId) -> Option<usize> {
@@ -1016,7 +864,7 @@ fn relay_message_wire_payload_len(
     let target_len = relay_target_wire_len(target_raw_key_bytes, flags)?;
     let ttl_len = core::mem::size_of::<u8>();
     let priority_len = core::mem::size_of::<u32>();
-    let origin_signature_len = byte_sequence_wire_len(origin_signature_bytes, flags)?;
+    let origin_signature_len = byte_sequence_wire_len(origin_signature_bytes)?;
     let field_lens = [
         origin_len,
         target_len,
@@ -1966,621 +1814,8 @@ impl<T: Pload + message::ClassifyTopic> DeferredPeerFrameQueue<T> {
 }
 
 #[cfg(test)]
-mod data_frame_wire_len_tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use norito::codec::{Decode, Encode};
-
-    use super::*;
-
-    #[derive(Clone, Debug, Decode, Encode)]
-    struct Dummy {
-        tag: u8,
-    }
-
-    #[derive(Clone, Debug, Decode, Encode)]
-    struct DynamicDummy {
-        body: Vec<u8>,
-    }
-
-    impl message::ClassifyTopic for DynamicDummy {
-        const HAS_INBOUND_DECODE_LIMITS: bool = true;
-
-        fn topic(&self) -> message::Topic {
-            message::Topic::Control
-        }
-
-        fn inbound_topic(
-            payload: &[u8],
-            _flags: u8,
-        ) -> Result<Option<message::Topic>, ncore::Error> {
-            if payload.is_empty() {
-                return Err(ncore::Error::LengthMismatch);
-            }
-            Ok(Some(message::Topic::Control))
-        }
-
-        fn inbound_decode_limits(
-            payload: &[u8],
-            _framed_len: usize,
-            _flags: u8,
-        ) -> Result<Option<norito::DecodeLimits>, ncore::Error> {
-            if payload.is_empty() {
-                return Err(ncore::Error::LengthMismatch);
-            }
-            Ok(Some(norito::DecodeLimits::new(8, 64, 16, 128, 8)))
-        }
-    }
-
-    #[derive(Clone, Debug, Decode, Encode)]
-    struct DeniedDummy;
-
-    impl message::ClassifyTopic for DeniedDummy {
-        fn is_outbound_allowed(&self) -> bool {
-            false
-        }
-    }
-
-    fn assert_relay_origin_signature_roundtrip(
-        algorithm: Algorithm,
-        seed_tag: u8,
-        expected_signature_len: usize,
-    ) {
-        let key_pair = KeyPair::try_from_seed(vec![seed_tag; 32], algorithm)
-            .unwrap_or_else(|error| panic!("derive deterministic {algorithm:?} key pair: {error}"));
-        assert_eq!(key_pair.algorithm(), algorithm);
-
-        let target_key_pair =
-            KeyPair::try_from_seed(vec![seed_tag.wrapping_add(0x40); 32], Algorithm::Ed25519)
-                .expect("derive deterministic relay target");
-        let target = PeerId::from(target_key_pair.public_key().clone());
-        let payload = DynamicDummy {
-            body: vec![seed_tag, 0xC0, 0xDE],
-        };
-        let frame = RelayMessage::try_new(
-            &key_pair,
-            RelayTarget::Direct(target.clone()),
-            7,
-            message::Priority::High,
-            payload.clone(),
-        )
-        .unwrap_or_else(|error| panic!("sign {algorithm:?} relay origin: {error}"));
-
-        assert_eq!(
-            frame.origin_signature.len(),
-            expected_signature_len,
-            "{algorithm:?} signature width changed"
-        );
-        assert_eq!(
-            relay_origin_signature_len(&frame.origin),
-            Some(expected_signature_len),
-            "{algorithm:?} transport geometry must use the exact signature width"
-        );
-        frame
-            .verify_origin_signature()
-            .unwrap_or_else(|error| panic!("verify fresh {algorithm:?} relay: {error}"));
-
-        let materialized_wire_len = crate::peer::materialized_data_message_wire_len(frame.clone())
-            .expect("materialize signed relay frame");
-        assert_eq!(
-            data_frame_wire_len(
-                &frame.origin,
-                Some(&target),
-                frame.ttl,
-                frame.priority,
-                &payload,
-            ),
-            materialized_wire_len,
-            "{algorithm:?} estimated wire geometry must match the signed frame"
-        );
-        assert_eq!(
-            data_frame_wire_len_from_payload_len::<DynamicDummy>(
-                &frame.origin,
-                Some(&target),
-                payload.encoded_len(),
-            ),
-            materialized_wire_len,
-            "{algorithm:?} payload-length geometry must match the signed frame"
-        );
-
-        let encoded = frame.encode();
-        let (decoded, used) =
-            <RelayMessage<DynamicDummy> as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
-                .unwrap_or_else(|error| panic!("decode {algorithm:?} relay: {error}"));
-        assert_eq!(used, encoded.len());
-        assert_eq!(decoded.origin, frame.origin);
-        assert_eq!(decoded.origin_signature, frame.origin_signature);
-        assert_eq!(decoded.origin_signature.len(), expected_signature_len);
-        assert_eq!(decoded.ttl, frame.ttl);
-        assert_eq!(decoded.priority, frame.priority);
-        assert_eq!(decoded.payload.body, payload.body);
-        match &decoded.target {
-            RelayTarget::Direct(decoded_target) => assert_eq!(decoded_target, &target),
-            RelayTarget::Broadcast => panic!("decoded {algorithm:?} relay lost its target"),
-        }
-        decoded
-            .verify_origin_signature()
-            .unwrap_or_else(|error| panic!("verify round-tripped {algorithm:?} relay: {error}"));
-
-        let mut payload_tampered = decoded;
-        payload_tampered.payload.body.push(0xFF);
-        assert!(
-            payload_tampered.verify_origin_signature().is_err(),
-            "{algorithm:?} relay signature must bind the immutable payload"
-        );
-    }
-
-    #[test]
-    fn relay_origin_signature_roundtrips_with_ed25519() {
-        assert_relay_origin_signature_roundtrip(Algorithm::Ed25519, 0x11, 64);
-    }
-
-    #[test]
-    fn relay_origin_signature_roundtrips_with_secp256k1() {
-        assert_relay_origin_signature_roundtrip(Algorithm::Secp256k1, 0x12, 64);
-    }
-
-    #[test]
-    fn relay_origin_signature_roundtrips_with_bls_normal() {
-        assert_relay_origin_signature_roundtrip(Algorithm::BlsNormal, 0x13, 96);
-    }
-
-    #[test]
-    fn relay_origin_signature_roundtrips_with_bls_small() {
-        assert_relay_origin_signature_roundtrip(Algorithm::BlsSmall, 0x14, 48);
-    }
-
-    #[test]
-    fn relay_origin_signature_roundtrips_with_ml_dsa_65() {
-        assert_relay_origin_signature_roundtrip(
-            Algorithm::MlDsa,
-            0x15,
-            MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-        );
-    }
-
-    #[cfg(feature = "gost")]
-    #[test]
-    fn relay_origin_signature_roundtrips_with_gost_256_param_set_a() {
-        assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetA, 0x21, 64);
-    }
-
-    #[cfg(feature = "gost")]
-    #[test]
-    fn relay_origin_signature_roundtrips_with_gost_256_param_set_b() {
-        assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetB, 0x22, 64);
-    }
-
-    #[cfg(feature = "gost")]
-    #[test]
-    fn relay_origin_signature_roundtrips_with_gost_256_param_set_c() {
-        assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_256ParamSetC, 0x23, 64);
-    }
-
-    #[cfg(feature = "gost")]
-    #[test]
-    fn relay_origin_signature_roundtrips_with_gost_512_param_set_a() {
-        assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_512ParamSetA, 0x24, 128);
-    }
-
-    #[cfg(feature = "gost")]
-    #[test]
-    fn relay_origin_signature_roundtrips_with_gost_512_param_set_b() {
-        assert_relay_origin_signature_roundtrip(Algorithm::Gost3410_2012_512ParamSetB, 0x25, 128);
-    }
-
-    #[cfg(feature = "sm")]
-    #[test]
-    fn relay_origin_signature_roundtrips_with_sm2() {
-        assert_relay_origin_signature_roundtrip(Algorithm::Sm2, 0x31, 64);
-    }
-
-    #[test]
-    fn data_frame_wire_len_matches_manual_envelope() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let target = PeerId::from(KeyPair::random().public_key().clone());
-        let payload = Dummy { tag: 7 };
-
-        let direct =
-            data_frame_wire_len(&origin, Some(&target), 8, message::Priority::High, &payload);
-        let direct_from_len = data_frame_wire_len_from_payload_len::<Dummy>(
-            &origin,
-            Some(&target),
-            payload.encoded_len(),
-        );
-        assert_eq!(direct_from_len, direct);
-        let direct_frame = RelayMessage::new(
-            origin.clone(),
-            RelayTarget::Direct(target.clone()),
-            8,
-            message::Priority::High,
-            payload.clone(),
-        );
-        let direct_expected = crate::peer::materialized_data_message_wire_len(direct_frame)
-            .expect("materialize direct comparator frame");
-        assert_eq!(
-            direct, direct_expected,
-            "direct frame size should match envelope"
-        );
-
-        let broadcast = data_frame_wire_len(&origin, None, 8, message::Priority::Low, &payload);
-        let broadcast_from_len =
-            data_frame_wire_len_from_payload_len::<Dummy>(&origin, None, payload.encoded_len());
-        assert_eq!(broadcast_from_len, broadcast);
-        let broadcast_frame = RelayMessage::new(
-            origin,
-            RelayTarget::Broadcast,
-            8,
-            message::Priority::Low,
-            payload,
-        );
-        let broadcast_expected = crate::peer::materialized_data_message_wire_len(broadcast_frame)
-            .expect("materialize broadcast comparator frame");
-        assert_eq!(
-            broadcast, broadcast_expected,
-            "broadcast frame size should match envelope"
-        );
-    }
-
-    #[test]
-    fn data_frame_wire_len_from_payload_len_matches_varint_boundaries_and_large_peer_ids() {
-        let key_pair = KeyPair::from_seed(vec![0x51; 32], Algorithm::MlDsa);
-        let (_, raw_key) = key_pair
-            .public_key()
-            .try_to_bytes()
-            .expect("generated ML-DSA key is canonical");
-        let raw_key_bytes = raw_key.len();
-        assert_eq!(raw_key_bytes, 1_952, "ML-DSA-65 key width changed");
-        let origin = PeerId::from(key_pair.public_key().clone());
-        let target = origin.clone();
-
-        for body_len in [0, 1, 127, 128, 16_383, 16_384] {
-            let payload = DynamicDummy {
-                body: vec![0xA5; body_len],
-            };
-            let payload_len = payload.encoded_len();
-            let direct = data_frame_wire_len(
-                &origin,
-                Some(&target),
-                u8::MAX,
-                message::Priority::High,
-                &payload,
-            );
-            let broadcast = data_frame_wire_len(&origin, None, 0, message::Priority::Low, &payload);
-
-            assert_eq!(
-                data_frame_wire_len_from_payload_len::<DynamicDummy>(
-                    &origin,
-                    Some(&target),
-                    payload_len,
-                ),
-                direct,
-                "direct frame geometry diverged at body length {body_len}"
-            );
-            assert_eq!(
-                data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-                    raw_key_bytes,
-                    Some(raw_key_bytes),
-                    MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                    payload_len,
-                ),
-                direct,
-                "synthetic direct peer geometry diverged at body length {body_len}"
-            );
-            assert_eq!(
-                data_frame_wire_len_from_payload_len::<DynamicDummy>(&origin, None, payload_len,),
-                broadcast,
-                "broadcast frame geometry diverged at body length {body_len}"
-            );
-            assert_eq!(
-                data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-                    raw_key_bytes,
-                    None,
-                    MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                    payload_len,
-                ),
-                broadcast,
-                "synthetic broadcast peer geometry diverged at body length {body_len}"
-            );
-            assert!(direct > broadcast);
-        }
-
-        assert_eq!(
-            data_frame_wire_len_from_payload_len::<DynamicDummy>(
-                &origin,
-                Some(&target),
-                usize::MAX,
-            ),
-            usize::MAX,
-            "payload-length overflow must fail closed"
-        );
-        assert_eq!(
-            data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-                usize::MAX,
-                None,
-                MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                0,
-            ),
-            usize::MAX,
-            "origin key-length overflow must fail closed"
-        );
-        assert_eq!(
-            data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-                raw_key_bytes,
-                None,
-                MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                usize::MAX,
-            ),
-            usize::MAX,
-            "synthetic payload-length overflow must fail closed"
-        );
-        assert_eq!(
-            data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-                raw_key_bytes,
-                Some(usize::MAX),
-                MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                0,
-            ),
-            usize::MAX,
-            "target key-length overflow must fail closed"
-        );
-        assert_ne!(
-            data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-                0,
-            ),
-            usize::MAX,
-            "protocol-maximum public-key geometry must remain representable"
-        );
-    }
-
-    #[cfg(feature = "sm")]
-    #[test]
-    fn data_frame_wire_len_matches_materialized_maximum_sm2_peer_ids() {
-        let distid = "x".repeat(u16::MAX as usize / 8);
-        let private = iroha_crypto::Sm2PrivateKey::from_seed(&distid, b"p2p-maximum-sm2-peer")
-            .expect("maximum SM2 distinguishing identifier is accepted");
-        let key_payload = iroha_crypto::sm::encode_sm2_public_key_payload(
-            &distid,
-            &private.public_key().to_sec1_bytes(false),
-        )
-        .expect("encode maximum canonical SM2 public key payload");
-        let public_key = iroha_crypto::PublicKey::from_bytes(Algorithm::Sm2, &key_payload)
-            .expect("maximum canonical SM2 public key is accepted");
-        let (_, raw_key) = public_key
-            .try_to_bytes()
-            .expect("maximum SM2 public key has canonical bytes");
-        assert_eq!(raw_key.len(), iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
-
-        let origin = PeerId::from(public_key);
-        let target = origin.clone();
-        assert!(
-            origin.encoded_len() > 16_384,
-            "the real PeerId fixture must cross the compact-length boundary missed by ML-DSA"
-        );
-        let payload = DynamicDummy {
-            body: vec![0x5A; 128],
-        };
-        let payload_len = payload.encoded_len();
-
-        let direct_frame = RelayMessage::new(
-            origin.clone(),
-            RelayTarget::Direct(target.clone()),
-            u8::MAX,
-            message::Priority::High,
-            payload.clone(),
-        );
-        let direct_materialized = crate::peer::materialized_data_message_wire_len(direct_frame)
-            .expect("materialize maximum-SM2 direct comparator");
-        assert_eq!(
-            data_frame_wire_len(
-                &origin,
-                Some(&target),
-                u8::MAX,
-                message::Priority::High,
-                &payload
-            ),
-            direct_materialized
-        );
-        assert_eq!(
-            data_frame_wire_len_from_payload_len::<DynamicDummy>(
-                &origin,
-                Some(&target),
-                payload_len,
-            ),
-            direct_materialized
-        );
-        assert_eq!(
-            data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
-                64,
-                payload_len,
-            ),
-            direct_materialized
-        );
-
-        let broadcast_frame = RelayMessage::new(
-            origin.clone(),
-            RelayTarget::Broadcast,
-            0,
-            message::Priority::Low,
-            payload.clone(),
-        );
-        let broadcast_materialized =
-            crate::peer::materialized_data_message_wire_len(broadcast_frame)
-                .expect("materialize maximum-SM2 broadcast comparator");
-        assert_eq!(
-            data_frame_wire_len(&origin, None, 0, message::Priority::Low, &payload),
-            broadcast_materialized
-        );
-        assert_eq!(
-            data_frame_wire_len_from_payload_len::<DynamicDummy>(&origin, None, payload_len),
-            broadcast_materialized
-        );
-        assert_eq!(
-            data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
-                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
-                None,
-                64,
-                payload_len,
-            ),
-            broadcast_materialized
-        );
-    }
-
-    #[test]
-    fn relay_message_decode_from_slice_roundtrip() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let target = PeerId::from(KeyPair::random().public_key().clone());
-        let payload = Dummy { tag: 42 };
-        let frame = RelayMessage::new(
-            origin.clone(),
-            RelayTarget::Direct(target.clone()),
-            5,
-            message::Priority::High,
-            payload.clone(),
-        );
-
-        let bytes = frame.encode();
-        let (decoded, used) =
-            <RelayMessage<Dummy> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
-                .expect("decode relay message");
-
-        assert_eq!(used, bytes.len(), "should consume full payload");
-        assert_eq!(decoded.origin, origin);
-        assert_eq!(decoded.ttl, 5);
-        assert_eq!(decoded.priority, message::Priority::High);
-        assert_eq!(decoded.payload.tag, payload.tag);
-        match decoded.target {
-            RelayTarget::Direct(peer_id) => assert_eq!(peer_id, target),
-            RelayTarget::Broadcast => panic!("expected direct relay target"),
-        }
-    }
-
-    #[test]
-    fn relay_message_decode_from_slice_roundtrip_with_dynamic_payload() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let target = PeerId::from(KeyPair::random().public_key().clone());
-        let payload = DynamicDummy {
-            body: vec![1u8, 2, 3, 4],
-        };
-        let frame = RelayMessage::new(
-            origin.clone(),
-            RelayTarget::Direct(target.clone()),
-            6,
-            message::Priority::Low,
-            payload.clone(),
-        );
-
-        let bytes = frame.encode();
-        let (decoded, used) =
-            <RelayMessage<DynamicDummy> as ncore::DecodeFromSlice>::decode_from_slice(&bytes)
-                .expect("decode relay message");
-
-        assert_eq!(used, bytes.len(), "should consume full payload");
-        assert_eq!(decoded.origin, origin);
-        assert_eq!(decoded.ttl, 6);
-        assert_eq!(decoded.priority, message::Priority::Low);
-        assert_eq!(decoded.payload.body, payload.body);
-        match decoded.target {
-            RelayTarget::Direct(peer_id) => assert_eq!(peer_id, target),
-            RelayTarget::Broadcast => panic!("expected direct relay target"),
-        }
-    }
-
-    #[test]
-    fn relay_envelope_delegates_policy_to_exact_nested_payload() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let target = PeerId::from(KeyPair::random().public_key().clone());
-        let nested = DynamicDummy {
-            body: vec![1, 3, 3, 7],
-        };
-        let frame = RelayMessage::new(
-            origin,
-            RelayTarget::Direct(target),
-            5,
-            message::Priority::High,
-            nested.clone(),
-        );
-        let (bare, flags) = norito::codec::encode_with_header_flags(&frame);
-        let nested_bare = nested.encode();
-
-        assert_eq!(
-            relay_message_payload_field(&bare, flags).expect("extract nested relay payload"),
-            nested_bare,
-            "the predecode hook must inspect only the nested application payload"
-        );
-        assert_eq!(
-            <RelayMessage<DynamicDummy> as message::ClassifyTopic>::inbound_decode_limits(
-                &bare, 512, flags,
-            )
-            .expect("delegate nested policy"),
-            Some(norito::DecodeLimits::new(8, 64, 16, 128, 8))
-        );
-        assert_eq!(
-            <RelayMessage<DynamicDummy> as message::ClassifyTopic>::inbound_topic(&bare, flags)
-                .expect("delegate nested raw topic"),
-            Some(message::Topic::Control),
-            "the relay wrapper must classify the exact nested application field"
-        );
-    }
-
-    #[test]
-    fn relay_payload_extractor_rejects_truncated_or_trailing_layouts() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let frame = RelayMessage::new(
-            origin,
-            RelayTarget::Broadcast,
-            1,
-            message::Priority::Low,
-            DynamicDummy { body: vec![9] },
-        );
-        let (bare, flags) = norito::codec::encode_with_header_flags(&frame);
-
-        assert!(
-            relay_message_payload_field(&bare[..bare.len() - 1], flags).is_err(),
-            "truncated relay layout must fail before typed decode"
-        );
-        assert!(
-            <RelayMessage<DynamicDummy> as message::ClassifyTopic>::inbound_topic(
-                &bare[..bare.len() - 1],
-                flags,
-            )
-            .is_err(),
-            "the raw topic wrapper must fail closed on a truncated relay"
-        );
-        let mut trailing = bare;
-        trailing.push(0);
-        assert!(
-            relay_message_payload_field(&trailing, flags).is_err(),
-            "trailing bytes must not be ignored by the raw envelope parser"
-        );
-        assert!(
-            <RelayMessage<DynamicDummy> as message::ClassifyTopic>::inbound_topic(
-                &trailing,
-                flags,
-            )
-            .is_err(),
-            "the raw topic wrapper must fail closed on relay trailing bytes"
-        );
-    }
-
-    #[test]
-    fn relay_message_preserves_outbound_admission_policy() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let frame = RelayMessage::new(
-            origin,
-            RelayTarget::Broadcast,
-            1,
-            message::Priority::High,
-            DeniedDummy,
-        );
-
-        assert!(!message::ClassifyTopic::is_outbound_allowed(&frame));
-    }
-}
+#[path = "network/data_frame_wire_len_tests.rs"]
+mod data_frame_wire_len_tests;
 
 /// Returns the number of dropped post messages (bounded queues only).
 ///
@@ -8004,7 +7239,7 @@ impl<T: Pload> Subscriber<T> {
 // traffic cannot consume its admission capacity.
 #[derive(derive_more::Debug)]
 #[debug("core::any::type_name::<Self>()")]
-pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
+pub struct NetworkBaseHandle<T: Pload, E: Enc> {
     /// Sender to subscribe for messages received form other peers in the network
     subscribe_to_peers_messages_sender: mpsc::Sender<Subscriber<T>>,
     /// Receiver of `OnlinePeer` message
@@ -8067,13 +7302,11 @@ pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     topic_frame_caps: TopicFrameCaps,
     /// Configured capacity for subscriber queues.
     subscriber_queue_cap: core::num::NonZeroUsize,
-    /// Key exchange used by network
-    _key_exchange: core::marker::PhantomData<K>,
     /// Encryptor used by the network
     _encryptor: core::marker::PhantomData<E>,
 }
 
-impl<T: Pload, K: Kex, E: Enc> Clone for NetworkBaseHandle<T, K, E> {
+impl<T: Pload, E: Enc> Clone for NetworkBaseHandle<T, E> {
     fn clone(&self) -> Self {
         Self {
             subscribe_to_peers_messages_sender: self.subscribe_to_peers_messages_sender.clone(),
@@ -8111,7 +7344,6 @@ impl<T: Pload, K: Kex, E: Enc> Clone for NetworkBaseHandle<T, K, E> {
             relay_ttl: self.relay_ttl,
             topic_frame_caps: self.topic_frame_caps,
             subscriber_queue_cap: self.subscriber_queue_cap,
-            _key_exchange: core::marker::PhantomData::<K>,
             _encryptor: core::marker::PhantomData::<E>,
         }
     }
@@ -8553,7 +7785,7 @@ fn network_actor_byte_budget(
     })
 }
 
-impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBaseHandle<T, K, E> {
+impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// Maximum independent authenticated reply sources reserved by this actor.
     #[must_use]
     pub const fn reply_route_source_capacity(&self) -> usize {
@@ -8569,7 +7801,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     pub async fn start(
         key_pair: KeyPair,
         config: Config,
-        chain_id: Option<ChainId>,
+        chain_id: ChainId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         shutdown_signal: ShutdownSignal,
@@ -8665,7 +7897,6 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 other: usize::MAX,
             },
             subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
-            _key_exchange: core::marker::PhantomData::<K>,
             _encryptor: core::marker::PhantomData::<E>,
         }
     }
@@ -8772,8 +8003,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             quic_max_idle_timeout,
             ..
         }: Config,
-        // Optional ChainId used to bind handshake to chain (feature-gated by callers)
-        chain_id: Option<ChainId>,
+        // Canonical chain identity bound into every peer handshake signature.
+        chain_id: ChainId,
         // Optional consensus capabilities for handshake gating (mode/proto/fingerprint)
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -9196,7 +8427,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         if quic_enabled {
             // Start QUIC listener on the same address (UDP). This is optional and will accept
             // incoming connections and spawn peer actors for each bidirectional stream.
-            match start_quic_listener::<WireMessage<T>, K, E>(
+            match start_quic_listener::<WireMessage<T>, E>(
                 &listen_addr.value().to_socket_addrs()?.as_slice()[0],
                 key_pair.clone(),
                 public_address.value().clone(),
@@ -9246,7 +8477,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 tls_listen_address.as_ref().map(|x| x.value().clone())
             };
             if let Some(tls_addr) = tls_bind_addr {
-                match start_tls_listener::<WireMessage<T>, K, E>(
+                match start_tls_listener::<WireMessage<T>, E>(
                     tls_addr.to_socket_addrs()?.as_slice()[0],
                     key_pair.clone(),
                     public_address.value().clone(),
@@ -9463,7 +8694,6 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 .map(f64::from),
             low_bytes_buckets: HashMap::new(),
             disconnect_on_post_overflow,
-            _key_exchange: core::marker::PhantomData::<K>,
             _encryptor: core::marker::PhantomData::<E>,
         };
         let child = Child::new(
@@ -9508,7 +8738,6 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 relay_ttl,
                 topic_frame_caps,
                 subscriber_queue_cap: p2p_subscriber_queue_cap,
-                _key_exchange: core::marker::PhantomData,
                 _encryptor: core::marker::PhantomData,
             },
             child,
@@ -10709,7 +9938,7 @@ mod handle_update_tests {
     };
 
     use iroha_config::parameters::actual::SoranetHandshake as ActualSoranetHandshake;
-    use iroha_crypto::{encryption::ChaCha20Poly1305, kex::X25519Sha256};
+    use iroha_crypto::encryption::ChaCha20Poly1305;
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
     use tokio::sync::{mpsc, watch};
@@ -11617,7 +10846,7 @@ mod handle_update_tests {
     }
 
     fn handle_with_control_update_receivers() -> (
-        NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305>,
+        NetworkBaseHandle<Dummy, ChaCha20Poly1305>,
         ControlUpdateReceivers,
     ) {
         let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
@@ -11675,7 +10904,6 @@ mod handle_update_tests {
                 relay_ttl: 0,
                 topic_frame_caps: test_topic_frame_caps(),
                 subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
-                _key_exchange: core::marker::PhantomData,
                 _encryptor: core::marker::PhantomData,
             },
             ControlUpdateReceivers {
@@ -11690,7 +10918,7 @@ mod handle_update_tests {
         )
     }
 
-    fn closed_handle() -> NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305> {
+    fn closed_handle() -> NetworkBaseHandle<Dummy, ChaCha20Poly1305> {
         let (handle, receivers) = handle_with_control_update_receivers();
         drop(receivers);
         handle
@@ -11698,10 +10926,15 @@ mod handle_update_tests {
 
     fn test_consensus_caps(marker: u8) -> crate::ConsensusHandshakeCaps {
         crate::ConsensusHandshakeCaps {
-            mode_tag: format!("test-{marker}"),
+            mode: if marker & 1 == 0 {
+                crate::ConsensusMode::Permissioned
+            } else {
+                crate::ConsensusMode::Npos
+            },
             proto_version: u32::from(marker),
             consensus_fingerprint: [marker; 32],
             config: crate::ConsensusConfigCaps {
+                execution_policy_hash: [marker; 32],
                 nexus_policy_digest: [marker; 32],
                 v2_config_fingerprint: [marker; 32],
                 ivm_gas_schedule_hash: [marker; 32],
@@ -11710,7 +10943,7 @@ mod handle_update_tests {
     }
 
     pub(super) fn handle_with_network_receivers<T: Pload>() -> (
-        NetworkBaseHandle<T, X25519Sha256, ChaCha20Poly1305>,
+        NetworkBaseHandle<T, ChaCha20Poly1305>,
         net_channel::Receiver<AdmittedNetworkMessage<T>>,
         net_channel::Receiver<AdmittedNetworkMessage<T>>,
         net_channel::Receiver<AdmittedNetworkMessage<T>>,
@@ -11776,7 +11009,6 @@ mod handle_update_tests {
             relay_ttl: 0,
             topic_frame_caps: test_topic_frame_caps(),
             subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
-            _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         };
 
@@ -11790,7 +11022,7 @@ mod handle_update_tests {
     }
 
     fn accept_direct_targets<T: Pload>(
-        handle: &NetworkBaseHandle<T, X25519Sha256, ChaCha20Poly1305>,
+        handle: &NetworkBaseHandle<T, ChaCha20Poly1305>,
         targets: HashSet<PeerId>,
     ) {
         let _ = handle
@@ -11801,7 +11033,7 @@ mod handle_update_tests {
     }
 
     fn handle_with_subscriber_receiver() -> (
-        NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305>,
+        NetworkBaseHandle<Dummy, ChaCha20Poly1305>,
         mpsc::Receiver<Subscriber<Dummy>>,
     ) {
         let (subscribe_tx, subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
@@ -11863,7 +11095,6 @@ mod handle_update_tests {
                 relay_ttl: 0,
                 topic_frame_caps: test_topic_frame_caps(),
                 subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
-                _key_exchange: core::marker::PhantomData,
                 _encryptor: core::marker::PhantomData,
             },
             subscribe_rx,
@@ -13248,7 +12479,6 @@ mod accept_stream_tests {
     use iroha_crypto::{
         KeyPair,
         encryption::ChaCha20Poly1305,
-        kex::X25519Sha256,
         soranet::handshake::{
             DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         },
@@ -13729,10 +12959,10 @@ mod accept_stream_tests {
         let mut cfg = base_cfg();
         cfg.max_frame_bytes = crate::MAX_ENCRYPTED_FRAME_BYTES + 1;
 
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             KeyPair::random(),
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             iroha_futures::supervisor::ShutdownSignal::new(),
@@ -13747,10 +12977,10 @@ mod accept_stream_tests {
         let mut cfg = base_cfg();
         cfg.deferred_send_max_bytes_total = 1;
 
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             KeyPair::random(),
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             iroha_futures::supervisor::ShutdownSignal::new(),
@@ -13769,10 +12999,10 @@ mod accept_stream_tests {
         let mut cfg = base_cfg();
         cfg.max_incoming = core::num::NonZeroUsize::new(1);
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown.clone(),
@@ -13819,10 +13049,10 @@ mod accept_stream_tests {
         cfg.p2p_proxy = None;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown,
@@ -13844,10 +13074,10 @@ mod accept_stream_tests {
         cfg.p2p_no_proxy = vec!["localhost".to_string()];
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown,
@@ -13869,10 +13099,10 @@ mod accept_stream_tests {
         cfg.p2p_proxy_tls_pinned_cert_der_base64 = None;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown,
@@ -13894,10 +13124,10 @@ mod accept_stream_tests {
         cfg.tls_fallback_to_plain = false;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown,
@@ -13919,10 +13149,10 @@ mod accept_stream_tests {
         cfg.tls_inbound_only = true;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown,
@@ -13944,10 +13174,10 @@ mod accept_stream_tests {
         cfg.tls_inbound_only = true;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown.clone(),
@@ -13976,10 +13206,10 @@ mod accept_stream_tests {
         cfg.quic_enabled = true;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown,
@@ -13998,10 +13228,10 @@ mod accept_stream_tests {
         let mut cfg = base_cfg();
         cfg.max_incoming = core::num::NonZeroUsize::new(1);
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            Some(ChainId::from("test-chain".to_string())),
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown.clone(),
@@ -14039,10 +13269,10 @@ mod accept_stream_tests {
         let mut cfg = base_cfg();
         cfg.max_frame_bytes = 37_777;
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            None,
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown.clone(),
@@ -14121,35 +13351,34 @@ mod accept_stream_tests {
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
         let shutdown = ShutdownSignal::new();
-        let _listener_task =
-            start_tls_listener::<super::WireMessage<Dummy>, X25519Sha256, ChaCha20Poly1305>(
-                addr,
-                key_pair.clone(),
-                socket_addr!(127.0.0.1:1_337),
-                service_tx,
-                Duration::from_secs(1),
-                None,
-                None,
-                None,
-                None,
-                8,
-                OutboundFrameQueueLimits::default(),
-                OutboundPostByteBudgets::default(),
-                crate::peer::InboundFrameByteBudgets::default(),
-                true,
-                max_frame_bytes,
-                false,
-                0,
-                soranet.clone(),
-                true,
-                RelayRole::Disabled,
-                true,
-                None,
-                Arc::new(Semaphore::new(1)),
-                shutdown,
-            )
-            .await
-            .expect("start_tls_listener");
+        let _listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
+            addr,
+            key_pair.clone(),
+            socket_addr!(127.0.0.1:1_337),
+            service_tx,
+            Duration::from_secs(1),
+            ChainId::from("test-chain"),
+            None,
+            None,
+            None,
+            8,
+            OutboundFrameQueueLimits::default(),
+            OutboundPostByteBudgets::default(),
+            crate::peer::InboundFrameByteBudgets::default(),
+            true,
+            max_frame_bytes,
+            false,
+            0,
+            soranet.clone(),
+            true,
+            RelayRole::Disabled,
+            true,
+            None,
+            Arc::new(Semaphore::new(1)),
+            shutdown,
+        )
+        .await
+        .expect("start_tls_listener");
 
         let tcp = match tokio::net::TcpStream::connect(addr).await {
             Ok(stream) => stream,
@@ -14200,10 +13429,10 @@ mod accept_stream_tests {
         cfg.max_incoming = core::num::NonZeroUsize::new(2);
         cfg.max_frame_bytes = 48_888;
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let started = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
+        let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             key_pair,
             cfg,
-            None,
+            ChainId::from("test-chain"),
             None,
             None,
             shutdown.clone(),
@@ -14259,8 +13488,13 @@ mod accept_stream_tests {
         cfg.address = iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:1));
         cfg.public_address = iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:1));
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
-        let result = super::NetworkBaseHandle::<Dummy, X25519Sha256, ChaCha20Poly1305>::start(
-            key_pair, cfg, None, None, None, shutdown,
+        let result = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
+            key_pair,
+            cfg,
+            ChainId::from("test-chain"),
+            None,
+            None,
+            shutdown,
         )
         .await;
 
@@ -14334,7 +13568,7 @@ mod accept_stream_tests {
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
-        let mut network = super::NetworkBase::<Dummy, X25519Sha256, ChaCha20Poly1305> {
+        let mut network = super::NetworkBase::<Dummy, ChaCha20Poly1305> {
             listen_addr: listen_addr_std.into(),
             listener_tasks: Vec::new(),
             peer_tasks: Vec::new(),
@@ -14397,7 +13631,7 @@ mod accept_stream_tests {
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
-            chain_id: None,
+            chain_id: ChainId::from("test-chain"),
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
@@ -14485,7 +13719,6 @@ mod accept_stream_tests {
             cap_health: max_frame_bytes,
             cap_other: max_frame_bytes,
             disconnect_on_post_overflow: false,
-            _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         };
 
@@ -14575,42 +13808,41 @@ mod accept_stream_tests {
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
-        let _listener_task =
-            start_quic_listener::<super::WireMessage<Dummy>, X25519Sha256, ChaCha20Poly1305>(
-                &addr,
-                key_pair.clone(),
-                socket_addr!(127.0.0.1:4_321),
-                service_tx,
-                Duration::from_secs(1),
-                None,
-                false,
-                0,
-                0,
-                0,
-                None,
-                None,
-                None,
-                None,
-                8,
-                OutboundFrameQueueLimits::default(),
-                OutboundPostByteBudgets::default(),
-                crate::peer::InboundFrameByteBudgets::default(),
-                true,
-                max_frame_bytes,
-                soranet.clone(),
-                false,
-                RelayRole::Disabled,
-                crate::transport::quic::FlowControlConfig {
-                    max_encrypted_frame_bytes: max_frame_bytes,
-                    max_total_connections: 1,
-                    process_budget_bytes: 4 * crate::transport::quic::FLOW_CONTROL_GRANULE_BYTES,
-                },
-                1,
-                Arc::new(Semaphore::new(1)),
-                ShutdownSignal::new(),
-            )
-            .await
-            .expect("start_quic_listener");
+        let _listener_task = start_quic_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
+            &addr,
+            key_pair.clone(),
+            socket_addr!(127.0.0.1:4_321),
+            service_tx,
+            Duration::from_secs(1),
+            None,
+            false,
+            0,
+            0,
+            0,
+            ChainId::from("test-chain"),
+            None,
+            None,
+            None,
+            8,
+            OutboundFrameQueueLimits::default(),
+            OutboundPostByteBudgets::default(),
+            crate::peer::InboundFrameByteBudgets::default(),
+            true,
+            max_frame_bytes,
+            soranet.clone(),
+            false,
+            RelayRole::Disabled,
+            crate::transport::quic::FlowControlConfig {
+                max_encrypted_frame_bytes: max_frame_bytes,
+                max_total_connections: 1,
+                process_budget_bytes: 4 * crate::transport::quic::FLOW_CONTROL_GRANULE_BYTES,
+            },
+            1,
+            Arc::new(Semaphore::new(1)),
+            ShutdownSignal::new(),
+        )
+        .await
+        .expect("start_quic_listener");
 
         let bind_addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let mut endpoint = match quinn::Endpoint::client(bind_addr) {
@@ -14723,7 +13955,7 @@ mod accept_stream_tests {
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
-        let mut network = super::NetworkBase::<DummyConsensus, X25519Sha256, ChaCha20Poly1305> {
+        let mut network = super::NetworkBase::<DummyConsensus, ChaCha20Poly1305> {
             listen_addr: listen_addr_std.into(),
             listener_tasks: Vec::new(),
             peer_tasks: Vec::new(),
@@ -14797,7 +14029,7 @@ mod accept_stream_tests {
             tcp_nodelay: true,
             tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
-            chain_id: None,
+            chain_id: ChainId::from("test-chain"),
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
@@ -14878,7 +14110,6 @@ mod accept_stream_tests {
             cap_health: 128,
             cap_other: 128,
             disconnect_on_post_overflow: false,
-            _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         };
 
@@ -14962,165 +14193,163 @@ mod accept_stream_tests {
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
-        let mut network =
-            super::NetworkBase::<DummyConsensusPayload, X25519Sha256, ChaCha20Poly1305> {
-                listen_addr: listen_addr_std.into(),
-                listener_tasks: Vec::new(),
-                peer_tasks: Vec::new(),
-                public_address: listen_addr_std.into(),
-                relay_role: RelayRole::Disabled,
-                relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
-                relay_hub_addresses: Vec::new(),
-                relay_hub_peer: None,
-                relay_trusted_peers: HashSet::new(),
-                relay_ttl: DEFAULT_RELAY_TTL,
-                trust_gossip_config: true,
-                trust_gossip: true,
-                self_id: PeerId::from(key_pair.public_key().clone()),
-                address_book: HashMap::new(),
-                peer_reputations: PeerReputationBook::default(),
-                soranet_handshake: soranet.clone(),
-                peers: HashMap::new(),
-                connecting_peers: HashMap::new(),
-                outbound_connections: HashSet::new(),
-                listener,
-                key_pair: key_pair.clone(),
-                subscribers_to_peers_messages: Vec::new(),
-                unrouted_reliable_deliveries: VecDeque::new(),
-                subscribe_to_peers_messages_receiver: subscribe_rx,
-                online_peers_sender: online_peers_tx,
-                online_peer_capabilities_sender: online_peer_capabilities_tx,
-                reliable_broadcast_topology: Arc::new(Mutex::new(
-                    super::ReliableProgressTopology::empty(),
-                )),
-                reliable_direct_topology: Arc::new(Mutex::new(
-                    super::ReliableProgressTopology::empty(),
-                )),
-                reply_route_owner: Arc::new(()),
-                reply_route_tenures: HashMap::new(),
-                next_reply_connection_ordinal: 0,
-                next_reply_delivery_ordinal: 0,
-                pending_reply_source_authority: PendingReplySourceAuthority::default(),
-                pending_configured_hub_source: None,
-                network_actor_progress_budget: test_network_actor_progress_budget(),
-                update_topology_receiver: update_topology_rx,
-                update_peers_receiver: update_peers_rx,
-                update_peer_capabilities_receiver,
-                update_trusted_peers_receiver,
-                update_acl_receiver: update_acl_rx,
-                network_message_high_receiver: network_message_high_rx,
-                network_message_safety_receiver: super::net_channel::channel_with_capacity(1).1,
-                network_message_progress_receiver: super::net_channel::channel_with_capacity(1).1,
-                network_message_low_receiver: network_message_low_rx,
-                peer_message_high_receiver: peer_message_hi_rx,
-                peer_message_safety_receiver: mpsc::channel(1).1,
-                peer_message_low_receiver: peer_message_lo_rx,
-                peer_message_high_sender: peer_message_hi_tx,
-                peer_message_safety_sender: mpsc::channel(1).0,
-                peer_message_low_sender: peer_message_lo_tx,
-                service_message_receiver: service_message_rx,
-                service_message_sender: service_message_tx,
-                update_handshake_receiver: update_handshake_rx,
-                update_consensus_caps_receiver,
-                current_conn_id: 0,
-                requested_topology: HashSet::new(),
-                current_topology: HashSet::new(),
-                current_peers_addresses: Vec::new(),
-                idle_timeout: Duration::from_millis(50),
-                reply_writer_flush_timeout:
-                    iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
-                dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-                tcp_nodelay: true,
-                tcp_keepalive: None,
-                connect_startup_delay_until: tokio::time::Instant::now(),
-                chain_id: None,
-                consensus_caps: None,
-                consensus_reconnect_generation: ReconnectGeneration::default(),
-                confidential_caps: None,
-                crypto_caps: None,
-                peer_capabilities: HashMap::new(),
-                post_queue_cap: 4,
-                outbound_frame_queue_limits: OutboundFrameQueueLimits::default(),
-                outbound_post_byte_budgets: OutboundPostByteBudgets::default(),
-                inbound_frame_byte_budgets: crate::peer::InboundFrameByteBudgets::default(),
-                inbound_dispatch_byte_budgets: crate::peer::InboundDispatchByteBudgets::default(),
-                authenticated_source_credit_capacity: 1,
-                debug_packet_loss_outbound_percent: 0,
-                debug_packet_loss_outbound_counter: 0,
-                debug_packet_loss_inbound_percent: 0,
-                debug_packet_loss_inbound_counter: 0,
-                dns_refresh_interval: None,
-                dns_refresh_ttl: None,
-                dns_last_refresh: HashMap::new(),
-                dns_pending_refresh: HashSet::new(),
-                quic_enabled: false,
-                quic_datagrams_enabled: false,
-                quic_datagram_max_payload_bytes: 0,
-                quic_dialer: None,
-                local_scion_supported: false,
-                tls_enabled: false,
-                tls_fallback_to_plain: false,
-                prefer_ws_fallback: false,
-                proxy_policy: crate::transport::ProxyPolicy::disabled(),
-                proxy_tls_verify: true,
-                proxy_tls_pinned_cert_der: None,
-                allowlist_only: false,
-                allow_keys: HashSet::new(),
-                deny_keys: HashSet::new(),
-                allow_nets: Vec::new(),
-                deny_nets: Vec::new(),
-                retry_backoff: HashMap::new(),
-                pending_connects: Vec::new(),
-                deferred_send_queue: DeferredPeerFrameQueue::new(
-                    iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-                    iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-                    Duration::from_millis(
-                        iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-                    ),
+        let mut network = super::NetworkBase::<DummyConsensusPayload, ChaCha20Poly1305> {
+            listen_addr: listen_addr_std.into(),
+            listener_tasks: Vec::new(),
+            peer_tasks: Vec::new(),
+            public_address: listen_addr_std.into(),
+            relay_role: RelayRole::Disabled,
+            relay_mode: iroha_config::parameters::actual::RelayMode::Disabled,
+            relay_hub_addresses: Vec::new(),
+            relay_hub_peer: None,
+            relay_trusted_peers: HashSet::new(),
+            relay_ttl: DEFAULT_RELAY_TTL,
+            trust_gossip_config: true,
+            trust_gossip: true,
+            self_id: PeerId::from(key_pair.public_key().clone()),
+            address_book: HashMap::new(),
+            peer_reputations: PeerReputationBook::default(),
+            soranet_handshake: soranet.clone(),
+            peers: HashMap::new(),
+            connecting_peers: HashMap::new(),
+            outbound_connections: HashSet::new(),
+            listener,
+            key_pair: key_pair.clone(),
+            subscribers_to_peers_messages: Vec::new(),
+            unrouted_reliable_deliveries: VecDeque::new(),
+            subscribe_to_peers_messages_receiver: subscribe_rx,
+            online_peers_sender: online_peers_tx,
+            online_peer_capabilities_sender: online_peer_capabilities_tx,
+            reliable_broadcast_topology: Arc::new(Mutex::new(
+                super::ReliableProgressTopology::empty(),
+            )),
+            reliable_direct_topology: Arc::new(
+                Mutex::new(super::ReliableProgressTopology::empty()),
+            ),
+            reply_route_owner: Arc::new(()),
+            reply_route_tenures: HashMap::new(),
+            next_reply_connection_ordinal: 0,
+            next_reply_delivery_ordinal: 0,
+            pending_reply_source_authority: PendingReplySourceAuthority::default(),
+            pending_configured_hub_source: None,
+            network_actor_progress_budget: test_network_actor_progress_budget(),
+            update_topology_receiver: update_topology_rx,
+            update_peers_receiver: update_peers_rx,
+            update_peer_capabilities_receiver,
+            update_trusted_peers_receiver,
+            update_acl_receiver: update_acl_rx,
+            network_message_high_receiver: network_message_high_rx,
+            network_message_safety_receiver: super::net_channel::channel_with_capacity(1).1,
+            network_message_progress_receiver: super::net_channel::channel_with_capacity(1).1,
+            network_message_low_receiver: network_message_low_rx,
+            peer_message_high_receiver: peer_message_hi_rx,
+            peer_message_safety_receiver: mpsc::channel(1).1,
+            peer_message_low_receiver: peer_message_lo_rx,
+            peer_message_high_sender: peer_message_hi_tx,
+            peer_message_safety_sender: mpsc::channel(1).0,
+            peer_message_low_sender: peer_message_lo_tx,
+            service_message_receiver: service_message_rx,
+            service_message_sender: service_message_tx,
+            update_handshake_receiver: update_handshake_rx,
+            update_consensus_caps_receiver,
+            current_conn_id: 0,
+            requested_topology: HashSet::new(),
+            current_topology: HashSet::new(),
+            current_peers_addresses: Vec::new(),
+            idle_timeout: Duration::from_millis(50),
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+            tcp_nodelay: true,
+            tcp_keepalive: None,
+            connect_startup_delay_until: tokio::time::Instant::now(),
+            chain_id: ChainId::from("test-chain"),
+            consensus_caps: None,
+            consensus_reconnect_generation: ReconnectGeneration::default(),
+            confidential_caps: None,
+            crypto_caps: None,
+            peer_capabilities: HashMap::new(),
+            post_queue_cap: 4,
+            outbound_frame_queue_limits: OutboundFrameQueueLimits::default(),
+            outbound_post_byte_budgets: OutboundPostByteBudgets::default(),
+            inbound_frame_byte_budgets: crate::peer::InboundFrameByteBudgets::default(),
+            inbound_dispatch_byte_budgets: crate::peer::InboundDispatchByteBudgets::default(),
+            authenticated_source_credit_capacity: 1,
+            debug_packet_loss_outbound_percent: 0,
+            debug_packet_loss_outbound_counter: 0,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_inbound_counter: 0,
+            dns_refresh_interval: None,
+            dns_refresh_ttl: None,
+            dns_last_refresh: HashMap::new(),
+            dns_pending_refresh: HashSet::new(),
+            quic_enabled: false,
+            quic_datagrams_enabled: false,
+            quic_datagram_max_payload_bytes: 0,
+            quic_dialer: None,
+            local_scion_supported: false,
+            tls_enabled: false,
+            tls_fallback_to_plain: false,
+            prefer_ws_fallback: false,
+            proxy_policy: crate::transport::ProxyPolicy::disabled(),
+            proxy_tls_verify: true,
+            proxy_tls_pinned_cert_der: None,
+            allowlist_only: false,
+            allow_keys: HashSet::new(),
+            deny_keys: HashSet::new(),
+            allow_nets: Vec::new(),
+            deny_nets: Vec::new(),
+            retry_backoff: HashMap::new(),
+            pending_connects: Vec::new(),
+            deferred_send_queue: DeferredPeerFrameQueue::new(
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+                Duration::from_millis(
+                    iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
                 ),
-                happy_eyeballs_stagger: Duration::from_millis(10),
-                topology_update_interval:
-                    iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
-                addr_ipv6_first: false,
-                last_active: HashMap::new(),
-                incoming_pending: HashSet::new(),
-                incoming_active: HashSet::new(),
-                terminating_connections: HashSet::new(),
-                max_incoming: None,
-                max_total_connections: None,
-                accept_params: AcceptThrottleParams::new(
-                    None,
-                    None,
-                    iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-                    iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-                    None,
-                    None,
-                    iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS.get(),
-                    iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-                ),
-                accept_prefix_buckets: HashMap::new(),
-                accept_ip_buckets: HashMap::new(),
-                sampler_high_queue_warn: LogSampler::new(),
-                sampler_low_queue_warn: LogSampler::new(),
-                sampler_accept_err: LogSampler::new(),
-                low_rate_per_sec: None,
-                low_burst: None,
-                low_buckets: HashMap::new(),
-                low_bytes_per_sec: None,
-                low_bytes_burst: None,
-                low_bytes_buckets: HashMap::new(),
-                max_frame_bytes: 4096,
-                cap_consensus: 128,
-                cap_control: 128,
-                cap_block_sync: 512,
-                cap_tx_gossip: 128,
-                cap_peer_gossip: 128,
-                cap_health: 128,
-                cap_other: 128,
-                disconnect_on_post_overflow: false,
-                _key_exchange: core::marker::PhantomData,
-                _encryptor: core::marker::PhantomData,
-            };
+            ),
+            happy_eyeballs_stagger: Duration::from_millis(10),
+            topology_update_interval:
+                iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
+            addr_ipv6_first: false,
+            last_active: HashMap::new(),
+            incoming_pending: HashSet::new(),
+            incoming_active: HashSet::new(),
+            terminating_connections: HashSet::new(),
+            max_incoming: None,
+            max_total_connections: None,
+            accept_params: AcceptThrottleParams::new(
+                None,
+                None,
+                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
+                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
+                None,
+                None,
+                iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS.get(),
+                iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
+            ),
+            accept_prefix_buckets: HashMap::new(),
+            accept_ip_buckets: HashMap::new(),
+            sampler_high_queue_warn: LogSampler::new(),
+            sampler_low_queue_warn: LogSampler::new(),
+            sampler_accept_err: LogSampler::new(),
+            low_rate_per_sec: None,
+            low_burst: None,
+            low_buckets: HashMap::new(),
+            low_bytes_per_sec: None,
+            low_bytes_burst: None,
+            low_bytes_buckets: HashMap::new(),
+            max_frame_bytes: 4096,
+            cap_consensus: 128,
+            cap_control: 128,
+            cap_block_sync: 512,
+            cap_tx_gossip: 128,
+            cap_peer_gossip: 128,
+            cap_health: 128,
+            cap_other: 128,
+            disconnect_on_post_overflow: false,
+            _encryptor: core::marker::PhantomData,
+        };
 
         let before = cap_violations_consensus();
 
@@ -15218,7 +14447,7 @@ mod accept_stream_tests {
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
-        let mut network = super::NetworkBase::<DummyConsensusChunk, X25519Sha256, ChaCha20Poly1305> {
+        let mut network = super::NetworkBase::<DummyConsensusChunk, ChaCha20Poly1305> {
             listen_addr: listen_addr_std.into(),
             listener_tasks: Vec::new(),
             peer_tasks: Vec::new(),
@@ -15288,7 +14517,7 @@ mod accept_stream_tests {
             tcp_nodelay: true,
             tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
-            chain_id: None,
+            chain_id: ChainId::from("test-chain"),
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
@@ -15373,7 +14602,6 @@ mod accept_stream_tests {
             cap_health: 128,
             cap_other: 128,
             disconnect_on_post_overflow: false,
-            _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         };
 
@@ -15581,7 +14809,7 @@ mod reputation_tests {
 
 #[cfg(feature = "quic")]
 #[allow(clippy::too_many_arguments)]
-async fn start_quic_listener<T, K, E>(
+async fn start_quic_listener<T, E>(
     addr: &std::net::SocketAddr,
     key_pair: iroha_crypto::KeyPair,
     public_address: iroha_primitives::addr::SocketAddr,
@@ -15592,7 +14820,7 @@ async fn start_quic_listener<T, K, E>(
     quic_datagram_max_payload_bytes: usize,
     quic_datagram_receive_buffer_bytes: usize,
     quic_datagram_send_buffer_bytes: usize,
-    chain_id: Option<iroha_data_model::ChainId>,
+    chain_id: iroha_data_model::ChainId,
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
     crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15612,7 +14840,6 @@ async fn start_quic_listener<T, K, E>(
 ) -> Result<AbortOnDropTask, Error>
 where
     T: Pload + message::ClassifyTopic,
-    K: Kex,
     E: Enc,
 {
     use std::sync::Arc;
@@ -15814,7 +15041,7 @@ where
                     Err(_) => (None, None),
                 };
 
-                let peer_task = connected_from::<T, K, E>(
+                let peer_task = connected_from::<T, E>(
                     public_address,
                     key_pair,
                     Connection::from_quic(
@@ -15860,7 +15087,7 @@ where
 mod quic_tests {
     use std::sync::Arc;
 
-    use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305, kex::X25519Sha256};
+    use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, Encode};
 
@@ -15888,7 +15115,7 @@ mod quic_tests {
         >(1);
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
         let shutdown = ShutdownSignal::new();
-        let task = match start_quic_listener::<WireMessage<Dummy>, X25519Sha256, ChaCha20Poly1305>(
+        let task = match start_quic_listener::<WireMessage<Dummy>, ChaCha20Poly1305>(
             &addr,
             kp,
             socket_addr!(127.0.0.1:1337),
@@ -15899,7 +15126,7 @@ mod quic_tests {
             0,
             0,
             0,
-            None,
+            iroha_data_model::ChainId::from("test-chain"),
             None,
             None,
             None,
@@ -15947,13 +15174,13 @@ mod quic_tests {
 
 #[cfg(feature = "p2p_tls")]
 #[allow(clippy::too_many_arguments)]
-async fn start_tls_listener<T, K, E>(
+async fn start_tls_listener<T, E>(
     addr: std::net::SocketAddr,
     key_pair: iroha_crypto::KeyPair,
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
-    chain_id: Option<iroha_data_model::ChainId>,
+    chain_id: iroha_data_model::ChainId,
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
     crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15975,7 +15202,6 @@ async fn start_tls_listener<T, K, E>(
 ) -> Result<AbortOnDropTask, Error>
 where
     T: boilerplate::Pload + message::ClassifyTopic,
-    K: boilerplate::Kex,
     E: boilerplate::Enc,
 {
     // Generate a self-signed certificate for the TLS server.
@@ -16079,7 +15305,7 @@ where
                 match tokio::time::timeout(idle_timeout, acceptor.accept(tcp)).await {
                     Ok(Ok(tls_stream)) => {
                         let (read_half, write_half) = tokio::io::split(tls_stream);
-                        let peer_task = connected_from::<T, K, E>(
+                        let peer_task = connected_from::<T, E>(
                             public_address,
                             key_pair,
                             Connection::from_split_with_binding(
@@ -16130,7 +15356,7 @@ where
 
 /// Base network layer structure, holding connections interacting with peers.
 #[allow(clippy::struct_excessive_bools)]
-struct NetworkBase<T: Pload, K: Kex, E: Enc> {
+struct NetworkBase<T: Pload, E: Enc> {
     /// Listening address for incoming connections. Must parse into [`std::net::SocketAddr`]
     listen_addr: SocketAddr,
     /// TLS/QUIC accept loops owned by this actor and joined at shutdown.
@@ -16272,8 +15498,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     ///
     /// Will try to establish connection via both addresses.
     current_peers_addresses: Vec<(PeerId, SocketAddr)>,
-    /// Optional `ChainId` to include in handshake signature binding.
-    chain_id: Option<ChainId>,
+    /// Canonical `ChainId` included in every handshake signature binding.
+    chain_id: ChainId,
     /// Optional consensus handshake capabilities for gating connections.
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
     /// Most recently applied reconnect request generation.
@@ -16408,13 +15634,11 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     cap_other: usize,
     /// Whether to disconnect on per-peer post overflow (bounded channels)
     disconnect_on_post_overflow: bool,
-    /// Key exchange used by network
-    _key_exchange: core::marker::PhantomData<K>,
     /// Encryptor used by the network
     _encryptor: core::marker::PhantomData<E>,
 }
 
-impl<T: Pload, K: Kex, E: Enc> NetworkBase<T, K, E> {
+impl<T: Pload, E: Enc> NetworkBase<T, E> {
     /// Revoke every actor-owned reply tenure and every caller-held waiter
     /// authorized by those tenures.
     ///
@@ -16432,13 +15656,13 @@ impl<T: Pload, K: Kex, E: Enc> NetworkBase<T, K, E> {
     }
 }
 
-impl<T: Pload, K: Kex, E: Enc> Drop for NetworkBase<T, K, E> {
+impl<T: Pload, E: Enc> Drop for NetworkBase<T, E> {
     fn drop(&mut self) {
         let _ = self.cancel_all_reply_route_tenures();
     }
 }
 
-impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
+impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     fn update_soranet_handshake_config(
         &mut self,
         handshake: ActualSoranetHandshake,
@@ -16510,7 +15734,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 // pending reservation remains charged until its exact peer
                 // connection instance reports Connected or Terminated.
                 let service_message_sender = self.service_message_sender.clone();
-                let task = connected_from::<WireMessage<T>, K, E>(
+                let task = connected_from::<WireMessage<T>, E>(
                     self.public_address.clone(),
                     self.key_pair.clone(),
                     Connection::from_split(conn_id, read, write),
@@ -17369,7 +16593,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         // Apply configured TCP socket options (best-effort)
         crate::transport::apply_tcp_socket_options(&stream, self.tcp_nodelay, self.tcp_keepalive);
         let service_message_sender = self.service_message_sender.clone();
-        let task = connected_from::<WireMessage<T>, K, E>(
+        let task = connected_from::<WireMessage<T>, E>(
             self.public_address.clone(),
             self.key_pair.clone(),
             Connection::new(conn_id, stream),
@@ -17561,7 +16785,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         let reconnect =
             consensus_caps.take_reconnect_request(&mut self.consensus_reconnect_generation);
         iroha_logger::info!(
-            mode_tag=?consensus_caps.caps.mode_tag,
+            mode_tag = consensus_caps.caps.mode.tag(),
             drop_existing = reconnect,
             "Updating consensus handshake capabilities at runtime"
         );
@@ -18609,7 +17833,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     fn is_permissioned_consensus(&self) -> bool {
         self.consensus_caps
             .as_ref()
-            .map_or(true, |caps| caps.mode_tag.contains("permissioned"))
+            .is_none_or(|caps| matches!(caps.mode, crate::ConsensusMode::Permissioned))
     }
 
     fn reply_source_capacity(&self) -> usize {
@@ -18801,7 +18025,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         self.connecting_peers.insert(conn_id, peer.clone());
         self.outbound_connections.insert(conn_id);
         let service_message_sender = self.service_message_sender.clone();
-        let task = connecting::<WireMessage<T>, K, E>(
+        let task = connecting::<WireMessage<T>, E>(
             // NOTE: we intentionally use peer's address and our public key, it's used during handshake
             peer.address().clone(),
             peer.id().clone(),
@@ -20387,7 +19611,7 @@ mod tests {
     use std::collections::{BTreeSet, HashSet};
     use std::sync::{Mutex, OnceLock};
 
-    use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305, kex::X25519Sha256};
+    use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
     use iroha_primitives::addr::socket_addr;
     use norito::codec::DecodeAll;
     use rand::{SeedableRng, rngs::StdRng};
@@ -20399,6 +19623,11 @@ mod tests {
 
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyMsg;
+
+    #[derive(Clone, Debug, Decode, Encode)]
+    struct TamperableMsg {
+        tag: u8,
+    }
 
     impl message::ClassifyTopic for DummyMsg {
         fn progress_reconstruction(&self) -> message::ProgressReconstruction {
@@ -22542,8 +21771,7 @@ mod tests {
 
     #[test]
     fn subscribe_with_filter_returns_error_when_closed() {
-        let handle =
-            NetworkBaseHandle::<DummyMsg, X25519Sha256, ChaCha20Poly1305>::closed_for_tests();
+        let handle = NetworkBaseHandle::<DummyMsg, ChaCha20Poly1305>::closed_for_tests();
         let (tx, _rx) = mpsc::channel(1);
         assert!(
             handle
@@ -22564,8 +21792,11 @@ mod tests {
         let config = runtime_from_handshake(handshake).expect("runtime");
 
         let mut rng = StdRng::seed_from_u64(7);
+        let transcript = iroha_crypto::soranet::pow::derive_admission_transcript(
+            b"network-runtime-test-client-hello",
+        );
         let minted = config
-            .mint_challenge_ticket(&mut rng)
+            .mint_challenge_ticket(&transcript, &mut rng)
             .expect("mint ticket")
             .expect("ticket bytes");
         let ticket_bytes = minted.ticket.expect("ticket bytes present");
@@ -22575,13 +21806,13 @@ mod tests {
         let signed = iroha_crypto::soranet::pow::SignedTicket::sign(
             ticket,
             &iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT,
-            None,
+            &transcript,
             keypair.secret_key(),
         )
         .expect("sign ticket");
 
         let admission = config
-            .verify_challenge_ticket(&signed.encode())
+            .verify_challenge_ticket(&signed.encode(), &transcript)
             .expect("verify signed ticket")
             .expect("admission");
         assert_eq!(admission.pow.difficulty(), 1);
@@ -22678,7 +21909,7 @@ mod tests {
     }
 
     fn insert_ref_peer<T: Pload>(
-        network: &mut NetworkBase<T, X25519Sha256, ChaCha20Poly1305>,
+        network: &mut NetworkBase<T, ChaCha20Poly1305>,
         peer_id: PeerId,
         peer_addr: SocketAddr,
         conn_id: ConnectionId,
@@ -22699,7 +21930,7 @@ mod tests {
     }
 
     fn insert_dummy_ref_peer(
-        network: &mut NetworkBase<DummyMsg, X25519Sha256, ChaCha20Poly1305>,
+        network: &mut NetworkBase<DummyMsg, ChaCha20Poly1305>,
         peer_id: PeerId,
         peer_addr: SocketAddr,
         conn_id: ConnectionId,
@@ -22729,7 +21960,7 @@ mod tests {
     }
 
     fn replace_test_authenticated_source_geometry(
-        network: &mut NetworkBase<DummyMsg, X25519Sha256, ChaCha20Poly1305>,
+        network: &mut NetworkBase<DummyMsg, ChaCha20Poly1305>,
         max_sources: usize,
         protected_sources: Option<HashSet<PeerId>>,
     ) {
@@ -22756,12 +21987,12 @@ mod tests {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn bare_network() -> Option<NetworkBase<DummyMsg, X25519Sha256, ChaCha20Poly1305>> {
+    fn bare_network() -> Option<NetworkBase<DummyMsg, ChaCha20Poly1305>> {
         bare_network_with::<DummyMsg>()
     }
 
     fn bare_network_with<T: Pload + message::ClassifyTopic>()
-    -> Option<NetworkBase<T, X25519Sha256, ChaCha20Poly1305>> {
+    -> Option<NetworkBase<T, ChaCha20Poly1305>> {
         let _guard = enter_test_runtime();
         let key_pair = KeyPair::random();
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
@@ -22861,7 +22092,7 @@ mod tests {
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
-            chain_id: None,
+            chain_id: ChainId::from("test-chain"),
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
@@ -22953,7 +22184,6 @@ mod tests {
             cap_health: 1024,
             cap_other: 1024,
             disconnect_on_post_overflow: false,
-            _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         })
     }
@@ -23760,7 +22990,7 @@ mod tests {
         let Some(mut independent_actor) = bare_network() else {
             return;
         };
-        let prepare_waiter = |actor: &mut NetworkBase<DummyMsg, X25519Sha256, ChaCha20Poly1305>,
+        let prepare_waiter = |actor: &mut NetworkBase<DummyMsg, ChaCha20Poly1305>,
                               connection_id: ConnectionId,
                               connection_ordinal: u128,
                               label: &'static [u8]| {
@@ -24034,10 +23264,11 @@ mod tests {
         };
         replace_test_authenticated_source_geometry(&mut network, 1, None);
         network.consensus_caps = Some(crate::ConsensusHandshakeCaps {
-            mode_tag: "public".to_owned(),
+            mode: crate::ConsensusMode::Npos,
             proto_version: 1,
             consensus_fingerprint: [0; 32],
             config: crate::ConsensusConfigCaps {
+                execution_policy_hash: [0; 32],
                 nexus_policy_digest: [0; 32],
                 v2_config_fingerprint: [0; 32],
                 ivm_gas_schedule_hash: [0; 32],
@@ -24260,10 +23491,11 @@ mod tests {
         };
         replace_test_authenticated_source_geometry(&mut network, 1, Some(HashSet::new()));
         network.consensus_caps = Some(crate::ConsensusHandshakeCaps {
-            mode_tag: "public".to_owned(),
+            mode: crate::ConsensusMode::Npos,
             proto_version: 1,
             consensus_fingerprint: [0; 32],
             config: crate::ConsensusConfigCaps {
+                execution_policy_hash: [0; 32],
                 nexus_policy_digest: [0; 32],
                 v2_config_fingerprint: [0; 32],
                 ivm_gas_schedule_hash: [0; 32],
@@ -24322,9 +23554,10 @@ mod tests {
         let Some(mut network) = bare_network() else {
             return;
         };
+        let peer_key_pair = KeyPair::random();
         let peer = Peer::new(
             socket_addr!(127.0.0.1:12078),
-            KeyPair::random().public_key().clone(),
+            peer_key_pair.public_key().clone(),
         );
         let current_conn_id = 78;
         let stale_conn_id = 77;
@@ -30964,7 +30197,7 @@ mod tests {
             RelayTarget::Direct(target),
             DEFAULT_RELAY_TTL,
             Priority::High,
-            Dummy { tag: 7 },
+            TamperableMsg { tag: 7 },
         );
         frame
             .verify_origin_signature()
@@ -31871,7 +31104,7 @@ pub mod message {
     }
 
     /// Update consensus handshake capabilities and optionally reconnect peers.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Copy, Debug)]
     pub struct UpdateConsensusCaps {
         /// New consensus handshake capabilities to advertise and require.
         pub caps: crate::ConsensusHandshakeCaps,
@@ -32035,7 +31268,7 @@ impl PeerReputationBook {
 // Low-priority helpers were accidentally emitted outside of the impl, which
 // causes free functions with a `self` parameter (invalid) and missing generics.
 // Wrap them into the NetworkBase impl where they belong.
-impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
+impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     fn low_allow(&mut self, id: &PeerId) -> bool {
         let Some(rate) = self.low_rate_per_sec else {
             return true;

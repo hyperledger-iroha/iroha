@@ -407,6 +407,7 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 1;
 /// Maximum configured columns of any one class in a phase.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 443;
 /// Reviewed first-release advice-column profile for compact degree-16 generation.
+///
 pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [443];
 /// Reviewed first-release lookup-column profile for compact degree-16 generation.
 ///
@@ -432,15 +433,18 @@ pub const KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4: u32 = 0;
 pub const KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4: u32 = 1;
 /// Absolute defensive ceiling for one measured V4 Step proof transcript.
 ///
-/// The 128 KiB bound leaves substantial headroom for the reviewed compact
-/// profile while still rejecting unbounded or profile-incompatible proof
-/// payloads. Release promotion separately pins the candidate's measured size.
-pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 128 * 1024;
+/// The reviewed compact composite profile is preflighted at roughly 148 KiB.
+/// The 192 KiB bound leaves explicit evolution headroom while still rejecting
+/// unbounded or profile-incompatible proof payloads. Release promotion
+/// separately pins the candidate's exact transcript size.
+pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 192 * 1024;
 /// Absolute defensive ceiling for one canonical V4 Eq/Ep proof-pair payload.
 ///
-/// The canonical pair owns a separate 256 KiB bound. Release promotion
-/// separately pins the candidate's measured Eq/Ep pair size beneath it.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 256 * 1024;
+/// A recursive pair carries two Step transcripts, two parent lineages, and two
+/// fixed accumulation transcripts. The 384 KiB bound admits the reviewed
+/// roughly 301 KiB recursive shape; release promotion pins its exact canonical
+/// maximum rather than the smaller initialization-pair measurement.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 384 * 1024;
 /// Maximum processed proving-key payload admitted by the compact V5 profile.
 ///
 /// The first-release circuit includes five authenticated Table16 SHA lanes.
@@ -822,9 +826,7 @@ mod model {
     #[repr(transparent)]
     #[cfg_attr(
         feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-        norito(transparent),
-        norito(with = "crate::json_helpers::fixed_bytes")
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaDevicePublicKeyV2(
         pub(super) [u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2],
@@ -839,9 +841,7 @@ mod model {
     #[repr(transparent)]
     #[cfg_attr(
         feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-        norito(transparent),
-        norito(with = "crate::json_helpers::fixed_bytes")
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaDeviceSignatureV2(pub(super) [u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2]);
 
@@ -1247,6 +1247,8 @@ mod model {
         pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
         /// Frozen Nexus/AMX context commitment.
         pub nexus_amx_context_hash: Hash,
+        /// Canonical V1 identity of the process-local execution policy.
+        pub execution_policy_hash: Hash,
         /// Frozen data-availability layout.
         pub da_layout: DataAvailabilityLayout,
         /// Finalized leader-rotation seed.
@@ -6806,6 +6808,11 @@ impl KagemushaTopUpFinalityHeightContextV2 {
     ///
     /// Returns [`KagemushaValidationError`] when a required structure, bound, authorization, or contextual binding is invalid.
     pub fn validate_structure(&self) -> Result<(), KagemushaValidationError> {
+        if self.execution_policy_hash == Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context.execution_policy_hash",
+            });
+        }
         let next_roster_too_large = self.next_epoch_snapshot.as_ref().is_some_and(|snapshot| {
             snapshot.roster.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
                 || snapshot.validator_set_pops.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
@@ -6864,6 +6871,7 @@ impl KagemushaTopUpFinalityHeightContextV2 {
                 }
             })?,
             nexus_amx_context_hash: self.nexus_amx_context_hash,
+            execution_policy_hash: self.execution_policy_hash,
             da_layout: self.da_layout,
             leader_seed: self.leader_seed,
         };
@@ -10554,7 +10562,7 @@ fn canonical_kagemusha_archive_payload_v4<T: norito::NoritoSerialize>(
             length: header.length,
             limit: archive_limit,
         })?;
-    let align = core::mem::align_of::<norito::core::Archived<T>>();
+    let align = norito::core::archived_payload_align::<T>();
     let remainder = norito::core::Header::SIZE % align;
     let padding = if remainder == 0 { 0 } else { align - remainder };
     let payload_start = norito::core::Header::SIZE
@@ -11514,6 +11522,7 @@ mod kagemusha_v4_topup_provenance_tests {
                     parent_commit_qc: None,
                     snapshot_bootstrap: None,
                     nexus_amx_context_hash: Hash::new([seed, 11]),
+                    execution_policy_hash: Hash::new([seed, 12]),
                     da_layout: DataAvailabilityLayout {
                         encoding: crate::block::consensus_v2::PayloadEncoding::Plain,
                         chunk_size_bytes: 1024,
@@ -11652,6 +11661,24 @@ mod kagemusha_v4_topup_provenance_tests {
                 anchor_digest: [0xe2; 32],
             };
         rejects(&wrong_ref_fixture, &wrong_ref_fixture.provenance, 50);
+    }
+
+    #[test]
+    fn topup_finality_height_context_rejects_zero_execution_policy_hash() {
+        let fixture = fixture_with_seeds(&[0x22]);
+        let mut context = fixture.provenance.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .clone();
+        context.execution_policy_hash = Hash::prehashed([0; Hash::LENGTH]);
+
+        assert!(matches!(
+            context.validate_structure(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context.execution_policy_hash"
+            })
+        ));
     }
 
     #[test]
@@ -12365,44 +12392,5 @@ impl KagemushaRecursiveSpendRedeemResultV4 {
 
 #[cfg(test)]
 mod kagemusha_v4_lifecycle_additional_domain_tests {
-    use super::*;
-
-    #[test]
-    fn abi21_bundle_request_and_redemption_domains_are_unique() {
-        let v4 = [
-            KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_REQUEST_OUTPUT_BINDING_DIGEST_DOMAIN_V4,
-        ];
-        assert_eq!(
-            v4.into_iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len(),
-            v4.len()
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V2
-        );
-        assert_ne!(
-            KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V2
-        );
-    }
-
-    #[test]
-    fn abi21_chain_request_size_caps_are_inclusive_and_fail_one_byte_over() {
-        for maximum in [
-            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
-        ] {
-            ensure_kagemusha_encoded_size_at_most(maximum, maximum)
-                .expect("the exact canonical request limit is accepted");
-            assert!(matches!(
-                ensure_kagemusha_encoded_size_at_most(maximum + 1, maximum),
-                Err(KagemushaValidationError::EncodedSizeExceeded { actual, max })
-                    if actual == maximum + 1 && max == maximum
-            ));
-        }
-    }
+    include!("kagemusha_v4_lifecycle_additional_domain_tests.rs");
 }

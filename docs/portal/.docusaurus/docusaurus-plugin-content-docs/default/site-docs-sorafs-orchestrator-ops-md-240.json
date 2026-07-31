@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/orchestrator-ops",
+  "title": "SoraFS Orchestrator Operations Runbook",
+  "description": "Step-by-step operational guide for rolling out, monitoring, and rolling back the multi-source orchestrator.",
+  "source": "@site/docs/sorafs/orchestrator-ops.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/orchestrator-ops",
+  "permalink": "/next/sorafs/orchestrator-ops",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/orchestrator-ops.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "orchestrator-ops",
+    "title": "SoraFS Orchestrator Operations Runbook",
+    "sidebar_label": "Orchestrator Ops Runbook",
+    "description": "Step-by-step operational guide for rolling out, monitoring, and rolling back the multi-source orchestrator."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "SoraFS Reference SDK Error Codes",
+    "permalink": "/next/sorafs/reference-sdk/errors"
+  },
+  "next": {
+    "title": "Staging Manifest Playbook",
+    "permalink": "/next/sorafs/staging-manifest-playbook"
+  }
+}

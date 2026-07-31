@@ -3,14 +3,15 @@ package org.hyperledger.iroha.sdk.privacy
 import java.util.Collections
 
 /**
- * Canonical first-release privacy capability bridge.
+ * Canonical first-release local privacy build-metadata bridge.
  *
- * The bridge exposes the authoritative typed Norito capability snapshot and the Rust-derived
- * byte-complete exact-12 fixture bundle. Proof operations live behind protocol-specific APIs and
- * cannot be selected with free-form strings here.
+ * The bridge exposes this binary's typed Norito compiled-profile catalog and the Rust-derived
+ * byte-complete exact-12 fixture bundle. The catalog never establishes network activation or
+ * readiness; callers must fetch a fresh authoritative PrivacyCapabilitySnapshotV1 from live
+ * Torii before submitting a privacy proof.
  */
 class PrivacyNativeBridge private constructor() {
-    enum class ValidationStatusV1(val code: Int) {
+    enum class CompiledProfileCatalogValidationStatusV1(val code: Int) {
         VALID(0),
         NULL_POINTER(1),
         EMPTY(2),
@@ -19,7 +20,7 @@ class PrivacyNativeBridge private constructor() {
         SCHEMA_MISMATCH(5),
         NON_CANONICAL(6),
         MALFORMED_ARCHIVE(7),
-        INVALID_SNAPSHOT(8),
+        INVALID_CATALOG(8),
     }
 
     /** Stable ABI-21 result of validating the Rust-derived exact-12 fixture bundle. */
@@ -65,7 +66,7 @@ class PrivacyNativeBridge private constructor() {
 
     companion object {
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
-        const val PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: Int = 256 * 1024
+        const val COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: Int = 256 * 1024
         const val EXACT12_FIXTURE_BUNDLE_MAX_BYTES: Int = 2 * 1024 * 1024
         private const val LIBRARY_NAME: String = "connect_norito_bridge"
         private val PROTOCOLS: List<ProtocolIdV1> =
@@ -79,22 +80,60 @@ class PrivacyNativeBridge private constructor() {
         @JvmStatic
         fun protocolsV1(): List<ProtocolIdV1> = PROTOCOLS
 
-        /** Returns the authoritative `PrivacyCapabilitySnapshotV1` Norito archive. */
+        /** Returns this binary's canonical `PrivacyCompiledProfileCatalogV1` Norito archive. */
         @JvmStatic
-        fun capabilitiesArchiveV1(): ByteArray {
-            check(nativeAvailable) { "native privacy capability bridge is unavailable" }
+        fun compiledProfileCatalogV1(): ByteArray {
+            check(nativeAvailable) { "native privacy compiled-profile catalog is unavailable" }
             val archive =
                 try {
-                    nativeCapabilities()
+                    nativeCompiledProfileCatalog()
                 } catch (error: RuntimeException) {
-                    throw IllegalStateException("native privacy capability query failed", error)
+                    throw IllegalStateException(
+                        "native privacy compiled-profile catalog query failed",
+                        error,
+                    )
                 } catch (error: LinkageError) {
-                    throw IllegalStateException("native privacy capability query failed", error)
+                    throw IllegalStateException(
+                        "native privacy compiled-profile catalog query failed",
+                        error,
+                    )
                 }
-            return requireCapabilityArchive(archive)
+            return requireCompiledProfileCatalog(archive)
         }
 
-        /** Returns the complete canonical Rust-derived exact-12 statement/envelope fixture bundle. */
+        /** Validates bytes as the exact compiled-profile catalog of the loaded binary. */
+        @JvmStatic
+        fun validateCompiledProfileCatalogV1(
+            archive: ByteArray?,
+        ): CompiledProfileCatalogValidationStatusV1 {
+            if (archive == null) return CompiledProfileCatalogValidationStatusV1.NULL_POINTER
+            if (archive.isEmpty()) return CompiledProfileCatalogValidationStatusV1.EMPTY
+            if (archive.size > COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES) {
+                return CompiledProfileCatalogValidationStatusV1.ARCHIVE_TOO_LARGE
+            }
+            check(nativeAvailable) { "native privacy compiled-profile catalog is unavailable" }
+            val code =
+                try {
+                    nativeValidateCompiledProfileCatalog(archive)
+                } catch (error: RuntimeException) {
+                    throw IllegalStateException(
+                        "native privacy compiled-profile catalog validation failed",
+                        error,
+                    )
+                } catch (error: LinkageError) {
+                    throw IllegalStateException(
+                        "native privacy compiled-profile catalog validation failed",
+                        error,
+                    )
+                }
+            return CompiledProfileCatalogValidationStatusV1.values().firstOrNull {
+                it.code == code
+            } ?: throw IllegalStateException(
+                "native privacy compiled-profile catalog validation returned an unknown status",
+            )
+        }
+
+        /** Returns canonical Rust-derived exact-12 bytes through signed-transaction and hash layers. */
         @JvmStatic
         fun exact12FixtureBundleV1(): ByteArray {
             check(nativeAvailable) { "native exact-12 privacy fixture bridge is unavailable" }
@@ -150,17 +189,20 @@ class PrivacyNativeBridge private constructor() {
                 )
         }
 
-        internal fun requireCapabilityArchive(archive: ByteArray?): ByteArray {
+        internal fun requireCompiledProfileCatalog(archive: ByteArray?): ByteArray {
             check(
                 archive != null &&
                     archive.isNotEmpty() &&
-                    archive.size <= PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
+                    archive.size <= COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
             ) {
-                "invalid privacy capability archive length"
+                "invalid privacy compiled-profile catalog length"
             }
             requireNotNull(archive)
-            check(nativeValidateCapabilities(archive) == ValidationStatusV1.VALID.code) {
-                "invalid typed privacy capability archive"
+            check(
+                nativeValidateCompiledProfileCatalog(archive) ==
+                    CompiledProfileCatalogValidationStatusV1.VALID.code,
+            ) {
+                "invalid typed privacy compiled-profile catalog"
             }
             return archive.copyOf()
         }
@@ -187,7 +229,7 @@ class PrivacyNativeBridge private constructor() {
             try {
                 System.loadLibrary(LIBRARY_NAME)
                 nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION &&
-                    requireCapabilityArchive(nativeCapabilities()).isNotEmpty() &&
+                    requireCompiledProfileCatalog(nativeCompiledProfileCatalog()).isNotEmpty() &&
                     requireExact12FixtureBundle(nativeExact12FixtureBundle()).isNotEmpty()
             } catch (_: RuntimeException) {
                 false
@@ -197,9 +239,11 @@ class PrivacyNativeBridge private constructor() {
 
         @JvmStatic private external fun nativeBridgeAbiVersion(): Int
 
-        @JvmStatic private external fun nativeCapabilities(): ByteArray?
+        @JvmStatic private external fun nativeCompiledProfileCatalog(): ByteArray?
 
-        @JvmStatic private external fun nativeValidateCapabilities(archive: ByteArray): Int
+        @JvmStatic private external fun nativeValidateCompiledProfileCatalog(
+            archive: ByteArray,
+        ): Int
 
         @JvmStatic private external fun nativeExact12FixtureBundle(): ByteArray?
 

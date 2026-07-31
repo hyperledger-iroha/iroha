@@ -24,8 +24,8 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetId,
     block::{BlockHeader, consensus_v2::SnapshotV2BootstrapRecord},
-    name::Name,
     nexus::{LaneCatalog, LaneId},
+    state_path::StatePath,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
@@ -858,6 +858,44 @@ fn regular_file_has_single_link(metadata: &std::fs::Metadata) -> bool {
     }
 }
 
+#[cfg(unix)]
+fn snapshot_unix_owner_and_mode_are_trusted(uid: u32, mode: u32, effective_uid: u32) -> bool {
+    uid == effective_uid && mode & 0o022 == 0
+}
+
+fn snapshot_metadata_has_trusted_owner_and_mode(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        snapshot_unix_owner_and_mode_are_trusted(
+            metadata.uid(),
+            metadata.mode(),
+            rustix::process::geteuid().as_raw(),
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        true
+    }
+}
+
+fn bounded_snapshot_read_capacity(opened_len: u64, max_bytes: u64) -> std::io::Result<usize> {
+    if opened_len > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("snapshot artifact is {opened_len} bytes; maximum is {max_bytes}"),
+        ));
+    }
+    usize::try_from(opened_len).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "snapshot artifact length does not fit memory",
+        )
+    })
+}
+
 fn read_bounded_stable_regular_file(
     path: &Path,
     max_bytes: u64,
@@ -871,10 +909,11 @@ fn read_bounded_stable_regular_file(
         || !path_before.is_file()
         || !regular_file_has_single_link(&path_before)
         || !stable_file_identity_available(stable_file_identity(&path_before))
+        || !snapshot_metadata_has_trusted_owner_and_mode(&path_before)
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "snapshot artifact must be a direct single-link regular file",
+            "snapshot artifact must be a direct single-link regular file owned by the effective user and not writable by group or other users",
         ));
     }
     if path_before.len() > max_bytes {
@@ -893,19 +932,20 @@ fn read_bounded_stable_regular_file(
         || !regular_file_has_single_link(&opened_before)
         || !stable_file_identity_available(stable_file_identity(&opened_before))
         || stable_file_identity(&opened_before) != stable_file_identity(&path_before)
+        || !snapshot_metadata_has_trusted_owner_and_mode(&opened_before)
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "snapshot artifact identity changed while opening",
         ));
     }
-    let capacity = usize::try_from(opened_before.len()).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "snapshot artifact length does not fit memory",
-        )
+    let capacity = bounded_snapshot_read_capacity(opened_before.len(), max_bytes)?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(capacity).map_err(|error| {
+        std::io::Error::other(format!(
+            "failed to reserve memory for snapshot artifact: {error}"
+        ))
     })?;
-    let mut bytes = Vec::with_capacity(capacity);
     std::io::Read::by_ref(&mut file)
         .take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)?;
@@ -925,6 +965,8 @@ fn read_bounded_stable_regular_file(
         || stable_file_identity(&opened_before) != stable_file_identity(&path_after)
         || opened_before.len() != opened_after.len()
         || opened_before.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        || !snapshot_metadata_has_trusted_owner_and_mode(&opened_after)
+        || !snapshot_metadata_has_trusted_owner_and_mode(&path_after)
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -973,6 +1015,8 @@ fn bind_snapshot_file(
         || !regular_file_has_single_link(&opened)
         || stable_file_identity(&opened) != stable_file_identity(&metadata)
         || opened.len() != metadata.len()
+        || !snapshot_metadata_has_trusted_owner_and_mode(&metadata)
+        || !snapshot_metadata_has_trusted_owner_and_mode(&opened)
     {
         return Err(TryReadError::SnapshotBindingChanged(path.to_path_buf()));
     }
@@ -1020,6 +1064,8 @@ fn verify_bound_snapshot_file_at(
         || stable_file_identity(&metadata) != binding.identity
         || metadata.len() != binding.len
         || Hash::new(&bytes) != binding.bytes_hash
+        || !snapshot_metadata_has_trusted_owner_and_mode(&metadata)
+        || !snapshot_metadata_has_trusted_owner_and_mode(&opened)
     {
         return Err(TryReadError::SnapshotBindingChanged(path.to_path_buf()));
     }
@@ -1122,6 +1168,13 @@ fn direct_snapshot_directory_identity(
         .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(TryReadError::SnapshotBindingChanged(path.to_path_buf()));
+    }
+    if !snapshot_metadata_has_trusted_owner_and_mode(&metadata) {
+        return Err(TryReadError::SnapshotGenerationInvalid {
+            path: path.to_path_buf(),
+            reason: "directory must be owned by the effective user and not writable by group or other users"
+                .to_owned(),
+        });
     }
     let identity = stable_file_identity(&metadata);
     if !stable_file_identity_available(identity) {
@@ -2440,9 +2493,15 @@ fn create_generation_artifact(
         ));
     }
     let path = generation_dir.join(name);
-    let mut file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    let mut file = options
         .open(&path)
         .map_err(|error| TryWriteError::IO(error, path.clone()))?;
     file.write_all(bytes)
@@ -2620,7 +2679,14 @@ fn publish_immutable_snapshot_generation(
     match std::fs::symlink_metadata(&generations_dir) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            match std::fs::create_dir(&generations_dir) {
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+
+                builder.mode(0o700);
+            }
+            match builder.create(&generations_dir) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(TryWriteError::IO(error, generations_dir.clone())),
@@ -2880,12 +2946,54 @@ fn publish_snapshot_current_pointer(
     Ok(())
 }
 
-/// Serialize and write snapshot to file,
-/// overwriting any previously stored data.
+/// Reconstruct generated bytes through the semantic restart boundary before publication.
 ///
 /// # Errors
-/// - IO errors
-/// - Serialization errors
+/// Returns the same typed semantic error that would make the restart reader reject the payload.
+fn validate_generated_snapshot_for_restart(
+    state: &State,
+    snapshot_bytes: &[u8],
+) -> Result<(), TryReadError> {
+    let value: json::Value =
+        json::from_slice(snapshot_bytes).map_err(TryReadError::Serialization)?;
+    validate_snapshot_sccp_registry(&value)?;
+    let seed = KuraSeed {
+        kura: state.kura_handle(),
+        query_handle: state.query_handle.clone(),
+        #[cfg(feature = "telemetry")]
+        telemetry: StateTelemetry::default(),
+    };
+    let mut restored = seed
+        .into_state_from_json_without_durable_recovery(value)
+        .map_err(TryReadError::Serialization)?;
+    if restored.chain_id_ref() != state.chain_id_ref() {
+        return Err(TryReadError::ChainIdMismatch {
+            expected: state.chain_id_ref().clone(),
+            actual: restored.chain_id_ref().clone(),
+        });
+    }
+    if restored.has_snapshot_v2_bootstrap_candidate() {
+        restored
+            .authenticate_snapshot_v2_bootstrap_candidate(
+                SnapshotBootstrapLineageAuthority::normally_signed_carried_lineage(),
+            )
+            .map_err(TryReadError::InvalidSnapshotBootstrap)?;
+    }
+    restored
+        .install_zk_for_isolated_prevalidation(state.zk_snapshot())
+        .map_err(TryReadError::ZkConfigInstall)?;
+    crate::state::validate_sccp_snapshot_revert_candidate(&restored)
+        .map_err(TryReadError::InvalidSccpRevert)?;
+
+    let mut canonical_payload = String::new();
+    serialize_state_snapshot(&restored, &mut canonical_payload, true);
+    if canonical_payload.as_bytes() != snapshot_bytes {
+        return Err(TryReadError::NonCanonicalSnapshotPayload);
+    }
+    Ok(())
+}
+
+/// Serialize, validate, and durably publish one canonical state snapshot.
 fn try_write_snapshot_with_limit(
     state: &State,
     store_dir: impl AsRef<Path>,
@@ -2893,25 +3001,72 @@ fn try_write_snapshot_with_limit(
     merkle_chunk_size: NonZeroUsize,
     max_payload_bytes: NonZeroUsize,
 ) -> Result<(), TryWriteError> {
-    ensure_state_is_backed_by_kura(state)?;
     let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
-
-    std::fs::create_dir_all(store_dir.as_ref())
-        .map_err(|err| TryWriteError::IO(err, store_dir.as_ref().to_path_buf()))?;
-    let store_dir = store_dir.as_ref();
-    let directory_identity = direct_snapshot_directory_identity(store_dir)
-        .map_err(|error| snapshot_publication_error("bind snapshot directory", error))?;
     let mut snapshot_json = String::new();
     serialize_state_snapshot(state, &mut snapshot_json, true);
-    let snapshot_bytes = snapshot_json.into_bytes();
+    try_write_snapshot_payload_with_limit_locked(
+        state,
+        store_dir,
+        signing_key,
+        merkle_chunk_size,
+        max_payload_bytes,
+        snapshot_json.into_bytes(),
+    )
+}
+
+#[cfg(test)]
+fn try_write_snapshot_payload_with_limit(
+    state: &State,
+    store_dir: impl AsRef<Path>,
+    signing_key: &KeyPair,
+    merkle_chunk_size: NonZeroUsize,
+    max_payload_bytes: NonZeroUsize,
+    snapshot_bytes: Vec<u8>,
+) -> Result<(), TryWriteError> {
+    let _publication_guard = SNAPSHOT_PUBLICATION_LOCK.lock();
+    try_write_snapshot_payload_with_limit_locked(
+        state,
+        store_dir,
+        signing_key,
+        merkle_chunk_size,
+        max_payload_bytes,
+        snapshot_bytes,
+    )
+}
+
+fn try_write_snapshot_payload_with_limit_locked(
+    state: &State,
+    store_dir: impl AsRef<Path>,
+    signing_key: &KeyPair,
+    merkle_chunk_size: NonZeroUsize,
+    max_payload_bytes: NonZeroUsize,
+    snapshot_bytes: Vec<u8>,
+) -> Result<(), TryWriteError> {
+    ensure_state_is_backed_by_kura(state)?;
     if snapshot_bytes.len() > max_payload_bytes.get() {
         return Err(TryWriteError::PayloadTooLarge {
             actual: snapshot_bytes.len(),
             maximum: max_payload_bytes,
         });
     }
+    validate_generated_snapshot_for_restart(state, &snapshot_bytes)
+        .map_err(TryWriteError::RestartValidation)?;
     let geometry_checkpoint = geometry_checkpoint_from_snapshot_bytes(&snapshot_bytes)?;
     ensure_snapshot_commit_evidence(state, &geometry_checkpoint)?;
+    let mut store_builder = std::fs::DirBuilder::new();
+    store_builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+
+        store_builder.mode(0o700);
+    }
+    store_builder
+        .create(store_dir.as_ref())
+        .map_err(|err| TryWriteError::IO(err, store_dir.as_ref().to_path_buf()))?;
+    let store_dir = store_dir.as_ref();
+    let directory_identity = direct_snapshot_directory_identity(store_dir)
+        .map_err(|error| snapshot_publication_error("bind snapshot directory", error))?;
     let digest_bytes = Sha256::digest(&snapshot_bytes);
     let digest_vec = digest_bytes.to_vec();
     let digest_hex = hex::encode(&digest_vec);
@@ -3005,7 +3160,7 @@ struct DurableSnapshotGeometryCheckpoint {
     block_hash: Option<HashOf<BlockHeader>>,
     state_hash: Hash,
     snapshot_v2_bootstrap: Option<SnapshotV2BootstrapRecord>,
-    smart_contract_state: BTreeMap<Name, Vec<u8>>,
+    smart_contract_state: BTreeMap<StatePath, Vec<u8>>,
 }
 
 fn ensure_snapshot_commit_evidence(
@@ -3263,7 +3418,7 @@ fn geometry_checkpoint_from_snapshot_bytes(
         .ok_or_else(|| {
             TryWriteError::Serialization(json::Error::missing_field("world.smart_contract_state"))
         })?;
-    let smart_contract_storage: Storage<Name, Vec<u8>> =
+    let smart_contract_storage: Storage<StatePath, Vec<u8>> =
         json::from_value(smart_contract_state_value).map_err(TryWriteError::Serialization)?;
     let smart_contract_state = smart_contract_storage
         .view()
@@ -3691,6 +3846,8 @@ enum TryWriteError {
     IO(#[source] std::io::Error, PathBuf),
     /// Error (de)serializing World State View snapshot
     Serialization(norito::json::Error),
+    /// Generated snapshot is not admissible through the restart reader: {0}
+    RestartValidation(#[source] TryReadError),
     /// Error (de)serializing snapshot Merkle metadata
     MerkleSerialization(norito::json::Error),
     /// Error signing snapshot digest
@@ -3772,7 +3929,10 @@ mod tests {
         domain::DomainId,
         isi::{Log, space_directory::PublishSpaceDirectoryManifest},
         metadata::Metadata,
-        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+        nexus::{
+            AssetPermissionManifest, DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig,
+            ManifestVersion, UniversalAccountId,
+        },
         peer::PeerId,
         smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress, ContractAlias},
         transaction::TransactionBuilder,
@@ -3947,6 +4107,7 @@ mod tests {
                 quorum: DualQuorum::from_roster(&roster).expect("snapshot-eviction fixture quorum"),
                 roster: roster.clone(),
                 nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: DataAvailabilityLayout {
                     encoding: PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,
@@ -4112,6 +4273,52 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
+    #[test]
+    async fn bounded_snapshot_reader_rechecks_the_opened_file_length() {
+        let error = bounded_snapshot_read_capacity(9, 8)
+            .expect_err("growth between path metadata and the opened descriptor must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    async fn snapshot_bindings_reject_untrusted_unix_owner_or_mode() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let root = tempdir().expect("tempdir");
+        let directory = root.path().join("snapshot");
+        std::fs::create_dir(&directory).expect("create snapshot directory");
+        let metadata = std::fs::symlink_metadata(&directory).expect("snapshot directory metadata");
+        let effective_uid = rustix::process::geteuid().as_raw();
+        assert!(snapshot_unix_owner_and_mode_are_trusted(
+            metadata.uid(),
+            metadata.mode(),
+            effective_uid
+        ));
+        assert!(!snapshot_unix_owner_and_mode_are_trusted(
+            metadata.uid().wrapping_add(1),
+            metadata.mode(),
+            effective_uid
+        ));
+
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o770))
+            .expect("make snapshot directory group-writable");
+        assert!(matches!(
+            direct_snapshot_directory_identity(&directory),
+            Err(TryReadError::SnapshotGenerationInvalid { .. })
+        ));
+
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("restore snapshot directory permissions");
+        let artifact = directory.join("artifact");
+        std::fs::write(&artifact, b"snapshot").expect("write snapshot artifact");
+        std::fs::set_permissions(&artifact, std::fs::Permissions::from_mode(0o660))
+            .expect("make snapshot artifact group-writable");
+        let error = read_bounded_stable_regular_file(&artifact, 1024)
+            .expect_err("group-writable snapshot artifact must fail closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
     #[cfg(unix)]
     #[test]
     async fn bounded_snapshot_reader_rejects_symlink_and_hardlink() {
@@ -4244,7 +4451,11 @@ mod tests {
 
     #[test]
     async fn snapshot_publication_accepts_complete_authenticated_tuple() {
-        let (state, kura, block, artifact) = snapshot_gate_fixture();
+        let (mut state, kura, block, artifact) = snapshot_gate_fixture();
+        state.nexus.get_mut().autoscale.scale_out_window_blocks =
+            std::num::NonZeroU16::new(48).expect("non-zero scale-out window");
+        state.nexus.get_mut().autoscale.scale_in_window_blocks =
+            std::num::NonZeroU16::new(192).expect("non-zero scale-in window");
         let state_hash = canonical_state_snapshot_hash(&state);
         store_snapshot_checkpoint_and_manifest(&state, &kura, &block, state_hash, &artifact);
         let _ = kura
@@ -4252,15 +4463,37 @@ mod tests {
             .expect("store exact finality artifact");
         let root = tempdir().expect("snapshot gate temp root");
         let store_dir = root.path().join("snapshot");
+        let signing_key = checked_random_snapshot_keypair();
 
-        try_write_snapshot(
-            &state,
-            &store_dir,
-            &checked_random_snapshot_keypair(),
-            TEST_CHUNK_SIZE,
-        )
-        .expect("complete authenticated commit tuple must permit publication");
+        try_write_snapshot(&state, &store_dir, &signing_key, TEST_CHUNK_SIZE)
+            .expect("complete authenticated commit tuple must permit publication");
         assert_canonical_snapshot_generation(&store_dir);
+        let restored = try_read_snapshot(
+            &store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            BlockCount(state.committed_height()),
+            TEST_CHUNK_SIZE,
+            signing_key.public_key(),
+            state.chain_id_ref(),
+            &state.zk_snapshot(),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("post-height snapshot must remain exactly restart-readable");
+        assert_eq!(
+            restored.nexus_snapshot().autoscale.scale_out_window_blocks,
+            state.nexus_snapshot().autoscale.scale_out_window_blocks
+        );
+        assert_eq!(
+            restored.nexus_snapshot().autoscale.scale_in_window_blocks,
+            state.nexus_snapshot().autoscale.scale_in_window_blocks
+        );
+        assert_eq!(
+            exact_snapshot_payload_bytes(&restored),
+            exact_snapshot_payload_bytes(&state),
+            "post-height publication must preserve the exact canonical restart payload"
+        );
     }
 
     #[test]
@@ -5111,6 +5344,105 @@ mod tests {
             canonical_state_snapshot_bytes_for_tests(&snapshot_state),
             canonical_state_snapshot_bytes_for_tests(&state),
             "snapshot roundtrip must preserve canonical WSV bytes"
+        );
+    }
+
+    #[test]
+    async fn generated_snapshot_passes_restart_validation_before_publication() {
+        let state = state_factory();
+        let snapshot_bytes = exact_snapshot_payload_bytes(&state);
+
+        validate_generated_snapshot_for_restart(&state, &snapshot_bytes)
+            .expect("writer-generated snapshot must survive restart initialization exactly");
+    }
+
+    #[test]
+    async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
+        let tmp_root = tempdir().expect("snapshot tempdir");
+        let store_dir = tmp_root.path().join("snapshot");
+        let kura_store_dir = tmp_root.path().join("kura");
+        let initial_catalog = LaneCatalog::default();
+        let extended_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                ModelLaneConfig::default(),
+                ModelLaneConfig {
+                    id: LaneId::new(1),
+                    alias: "snapshot-validation-secondary".to_owned(),
+                    ..ModelLaneConfig::default()
+                },
+            ],
+        )
+        .expect("extended lane catalog");
+        let initial = LaneConfig::from_catalog(&initial_catalog);
+        let extended = LaneConfig::from_catalog(&extended_catalog);
+        let initial_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, Hash::new(b"snapshot-validation-primary"))]);
+        let extended_incarnations = BTreeMap::from([
+            (LaneId::SINGLE, initial_incarnations[&LaneId::SINGLE]),
+            (LaneId::new(1), Hash::new(b"snapshot-validation-secondary")),
+        ]);
+        let initial_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        let extended_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
+        let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
+        let (kura, _) = Kura::new(&kura_config, &initial).expect("create persistent Kura");
+        kura.apply_lane_geometry_transition_at_height(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+            0,
+        )
+        .expect("seed recoverable geometry transition");
+        kura.mark_lane_geometry_catalog_published(
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+            None,
+        )
+        .expect("publish recoverable geometry transition");
+        let journal_before = kura
+            .lane_geometry_journal_state_for_test()
+            .expect("read geometry journal before rejected snapshot");
+        let journal_bytes_before = std::fs::read(kura.lane_geometry_journal_path())
+            .expect("read exact geometry journal before rejected snapshot");
+        assert_eq!(journal_before.1, vec!["catalog_published"]);
+
+        let state = state_factory_with_kura(Arc::clone(&kura));
+        let mut noncanonical = exact_snapshot_payload_bytes(&state);
+        noncanonical.insert(1, b' ');
+        let key_pair = checked_random_snapshot_keypair();
+        let error = try_write_snapshot_payload_with_limit(
+            &state,
+            &store_dir,
+            &key_pair,
+            TEST_CHUNK_SIZE,
+            iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES,
+            noncanonical,
+        )
+        .expect_err("noncanonical payload must fail before publication");
+        assert!(matches!(
+            error,
+            TryWriteError::RestartValidation(TryReadError::NonCanonicalSnapshotPayload)
+        ));
+        assert!(
+            !store_dir.exists(),
+            "restart validation must precede creation of snapshot publication artifacts"
+        );
+        assert_eq!(
+            kura.lane_geometry_journal_state_for_test()
+                .expect("read geometry journal after rejected snapshot"),
+            journal_before,
+            "rejected payload must not compact or otherwise rewrite geometry recovery history"
+        );
+        assert_eq!(
+            std::fs::read(kura.lane_geometry_journal_path())
+                .expect("read exact geometry journal after rejected snapshot"),
+            journal_bytes_before,
+            "rejected payload must preserve exact durable geometry journal bytes"
         );
     }
 

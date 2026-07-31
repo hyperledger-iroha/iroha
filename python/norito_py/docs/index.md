@@ -44,10 +44,11 @@ Inspect a payload header without decoding the body:
 norito-dump path/to/payload.to
 ```
 
-## Roadmap
-- Structural schema hashing (iroha_schema-compatible)
-- Columnar (NCB) helpers and streaming decode APIs
-- Compression benchmarks and user-configurable policy knobs
+## Current scope
+
+The package includes structural schema descriptors, columnar helpers, streaming
+decode APIs, and optional compression support. Layout flags and compression
+policies are always explicit; decoders do not infer wire layouts.
 
 ## License
 

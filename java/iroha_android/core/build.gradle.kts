@@ -63,6 +63,18 @@ tasks.withType<Test>().configureEach {
         rootProject.layout.projectDirectory
             .dir("..")
             .dir("..")
+            .file("fixtures/zk/verifying_key_record_v1.json"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .file("fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
             .file("fixtures/offline/kagemusha_peer_transport_v2.json"),
     )
     inputs.dir(
@@ -267,15 +279,6 @@ tasks.register("checkAndroidFixtures") {
         report.parentFile.mkdirs()
         report.writeText("ok\n")
     }
-}
-
-tasks.register<JavaExec>("exportTransactionFixtures") {
-    description = "Regenerates shared Android/Swift/Python transaction fixtures from the canonical signing seed."
-    group = "verification"
-    dependsOn("testClasses")
-    classpath = sourceSets["main"].runtimeClasspath + sourceSets["test"].runtimeClasspath
-    mainClass.set("org.hyperledger.iroha.android.tx.TransactionFixtureResourceExporter")
-    workingDir = rootProject.layout.projectDirectory.dir("..").asFile
 }
 
 tasks.named("check") {

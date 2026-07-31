@@ -1,0 +1,28 @@
+{
+  "id": "nexus/confidential-assets",
+  "title": "Confidential Assets & ZK Transfers",
+  "description": "Phase C blueprint for shielded circulation, registries, and operator controls.",
+  "source": "@site/docs/nexus/confidential-assets.md",
+  "sourceDirName": "nexus",
+  "slug": "/nexus/confidential-assets",
+  "permalink": "/next/nexus/confidential-assets",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/nexus/confidential-assets.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Confidential Assets & ZK Transfers",
+    "description": "Phase C blueprint for shielded circulation, registries, and operator controls.",
+    "slug": "/nexus/confidential-assets"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "2026 Q1 routed-trace audit report (B1)",
+    "permalink": "/next/nexus/nexus-routed-trace-audit-2026q1"
+  },
+  "next": {
+    "title": "Confidential Gas Calibration Ledger",
+    "permalink": "/next/nexus/confidential-gas-calibration"
+  }
+}

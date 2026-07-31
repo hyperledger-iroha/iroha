@@ -1,23 +1,19 @@
 //! Executor fixture admission and migration-boundary tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use core::num::NonZeroU64;
-use std::{fs, path::PathBuf};
 
-#[cfg(not(feature = "iroha-core-tests"))]
 use iroha_core::{
     executor::Executor as RuntimeExecutor,
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World, WorldReadOnly},
 };
-#[cfg(not(feature = "iroha-core-tests"))]
 use iroha_data_model::{
     ChainId, executor::Executor as DataModelExecutor, transaction::executable::IvmBytecode,
 };
 use iroha_data_model::{block::BlockHeader, smart_contract::payloads::ExecutorContext};
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, Memory, VMError, host::IVMHost};
-#[cfg(not(feature = "iroha-core-tests"))]
 use norito::codec::Encode;
 
 struct LoggingHost;
@@ -38,14 +34,10 @@ impl IVMHost for LoggingHost {
 }
 
 #[test]
-fn print_syscalls() {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("..");
-    path.push("..");
-    path.push("integration_tests/fixtures/ivm/executor_with_custom_permission.to");
-    let bytes = fs::read(path).unwrap();
+fn canonical_executor_runs_without_hidden_host_semantics() {
+    let bytes = include_bytes!("../../../defaults/executor.to");
     let mut vm = IVM::new(0);
-    vm.load_program(&bytes).unwrap();
+    vm.load_program(bytes).unwrap();
     vm.set_host(LoggingHost);
 
     let context = ExecutorContext {
@@ -61,11 +53,11 @@ fn print_syscalls() {
     vm.store_bytes(Memory::HEAP_START, &bytes_with_len).unwrap();
     vm.set_register(10, Memory::HEAP_START);
     vm.set_gas_limit(50_000_000);
-    let _ = vm.run();
+    vm.run()
+        .expect("canonical executor must run through ordinary guest semantics");
 }
 
 #[test]
-#[cfg(not(feature = "iroha-core-tests"))]
 fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
     let state = State::new_with_chain_for_testing(
         World::new(),

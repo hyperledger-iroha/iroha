@@ -293,14 +293,11 @@ pub fn decode_connect_frame_framed(bytes: &[u8]) -> Result<ConnectFrameV1, Error
     disable_packed_struct_layout_for_connect();
     let header_flags = *bytes.get(Header::SIZE - 1).ok_or(Error::LengthMismatch)?;
     ensure_connect_layout(header_flags)?;
-    let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
-    // `from_bytes_view` installs a payload context. Scope it so decoding a
-    // Connect frame cannot change the layout used by the next protocol value
-    // handled on this thread.
-    let _payload_context = norito::core::PayloadCtxGuard::enter(&[]);
     let view = norito::core::from_bytes_view(bytes)?;
-    let payload = view.as_bytes();
-    decode_connect_frame_payload(payload)
+    view.decode_exact_with(|payload| {
+        let frame = decode_connect_frame_payload(payload)?;
+        Ok((frame, payload.len()))
+    })
 }
 
 /// Encode an encrypted Connect envelope with the canonical v1 Norito header.
@@ -1187,9 +1184,9 @@ mod tests {
 
     #[test]
     fn archived_alignments_are_natural() {
-        assert!(std::mem::align_of::<norito::core::Archived<ConnectFrameV1>>() >= 8);
-        assert!(std::mem::align_of::<norito::core::Archived<FrameKind>>() >= 4);
-        assert!(std::mem::align_of::<norito::core::Archived<ConnectControlV1>>() >= 4);
+        assert!(norito::core::archived_payload_align::<ConnectFrameV1>() >= 8);
+        assert!(norito::core::archived_payload_align::<FrameKind>() >= 4);
+        assert!(norito::core::archived_payload_align::<ConnectControlV1>() >= 4);
     }
 
     #[test]
@@ -1201,8 +1198,8 @@ mod tests {
             &payload,
             CONNECT_LAYOUT_FLAGS,
         )?;
-        let decoded_payload = norito::core::from_bytes_view(&framed)?;
-        let decoded = decode_frame_kind_payload(decoded_payload.as_bytes())?.0;
+        let view = norito::core::from_bytes_view(&framed)?;
+        let decoded = view.decode_exact_with(decode_frame_kind_payload)?;
         assert_eq!(decoded, fk);
         Ok(())
     }
@@ -1232,9 +1229,9 @@ mod tests {
         )
         .expect("frame control");
         let view = norito::core::from_bytes_view(&framed).expect("view");
-        let decoded = decode_connect_control_payload(view.as_bytes())
-            .expect("decode control")
-            .0;
+        let decoded = view
+            .decode_exact_with(decode_connect_control_payload)
+            .expect("decode control");
         assert_eq!(decoded, ctrl);
     }
 
@@ -1243,13 +1240,10 @@ mod tests {
         norito::disable_packed_struct_layout();
         let arr = [0xABu8; 32];
         let framed = norito::to_bytes(&arr).expect("encode array");
-        let payload = norito::core::from_bytes_view(&framed)
-            .expect("view")
-            .as_bytes()
-            .to_vec();
-        let decoded_field = norito::core::decode_field_canonical::<[u8; 32]>(&payload);
-        let (decoded_field, used) = decoded_field.expect("field decode");
-        assert_eq!(used, payload.len());
+        let view = norito::core::from_bytes_view(&framed).expect("view");
+        let decoded_field = view
+            .decode_exact_with(norito::core::decode_field_canonical::<[u8; 32]>)
+            .expect("field decode");
         assert_eq!(decoded_field, arr);
         let decoded: [u8; 32] = norito::decode_from_bytes(&framed).expect("decode");
         assert_eq!(decoded, arr);

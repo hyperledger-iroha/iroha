@@ -198,7 +198,7 @@ fn vec_sequential_exact_len() {
         None => return,
     };
     let expected =
-        norito::core::len_prefix_len(v.len()) + v.len() * (norito::core::len_prefix_len(4) + 4);
+        norito::core::seq_len_prefix_len(v.len()) + v.len() * (norito::core::len_prefix_len(4) + 4);
     assert_eq!(exact, expected);
     let bytes = to_bytes(&v).expect("encode");
     assert_eq!(bytes.len(), norito::core::Header::SIZE + expected);

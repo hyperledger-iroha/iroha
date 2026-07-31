@@ -581,10 +581,7 @@ impl Execute for RecordKaigiUsage {
                                 "usage commitment does not match payload parameters",
                             ));
                         }
-                        #[cfg(feature = "kaigi_privacy_mocks")]
-                        privacy::verify_usage_commitment(proof.as_deref())?;
-                        #[cfg(not(feature = "kaigi_privacy_mocks"))]
-                        privacy::verify_usage_commitment(stx, proof.as_deref())?;
+                        privacy::verify_usage_commitment(stx, proof.as_deref(), &commitment)?;
                         record.push_usage_commitment(commitment);
                     }
                 }

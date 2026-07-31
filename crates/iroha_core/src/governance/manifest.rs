@@ -20,9 +20,7 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::privacy::CommitmentScheme;
 use iroha_crypto::{
     Hash,
-    privacy::{
-        LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, SnarkCircuit, SnarkCircuitId,
-    },
+    privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
 };
 use iroha_data_model::{
     account::AccountId,
@@ -75,39 +73,25 @@ struct ManifestValidatorBindingFile {
 
 /// Manifest-level privacy commitment descriptor.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
+#[norito(deny_unknown_fields)]
 struct ManifestPrivacyCommitment {
     /// Registry identifier assigned to the commitment entry.
     pub id: Option<u16>,
-    /// Commitment scheme (`merkle`, `snark`, …).
+    /// Commitment scheme. The first release accepts only `merkle`.
     pub scheme: Option<String>,
     /// Merkle-specific parameters.
     #[norito(default)]
     pub merkle: Option<ManifestMerkleCommitment>,
-    /// zk-SNARK–specific parameters.
-    #[norito(default)]
-    pub snark: Option<ManifestSnarkCommitment>,
 }
 
 /// Merkle commitment parameters advertised in manifests.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
+#[norito(deny_unknown_fields)]
 struct ManifestMerkleCommitment {
     /// Canonical 32-byte root digest encoded as hex.
     pub root: Option<String>,
     /// Maximum allowed audit-path depth.
     pub max_depth: Option<u8>,
-}
-
-/// zk-SNARK commitment parameters advertised in manifests.
-#[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
-struct ManifestSnarkCommitment {
-    /// Circuit identifier assigned by governance.
-    pub circuit_id: Option<u16>,
-    /// Digest of the verifying key payload.
-    pub verifying_key_digest: Option<String>,
-    /// Digest of the canonical public-input encoding.
-    pub statement_hash: Option<String>,
-    /// Digest of the proof bytes bound to the verifying key.
-    pub proof_hash: Option<String>,
 }
 
 /// Governance catalog overlay loaded from distribution cache.
@@ -736,13 +720,6 @@ enum LanePrivacyCommitmentDigestV1 {
         root: [u8; 32],
         max_depth: u8,
     },
-    Snark {
-        id: u16,
-        circuit_id: u16,
-        verifying_key_digest: [u8; 32],
-        statement_hash: [u8; 32],
-        proof_hash: [u8; 32],
-    },
 }
 
 impl LaneManifestSourceSnapshot {
@@ -949,13 +926,6 @@ impl LaneManifestRegistry {
                             id: commitment.id().get(),
                             root: *merkle.root().as_ref(),
                             max_depth: merkle.max_depth(),
-                        },
-                        CommitmentScheme::Snark(snark) => LanePrivacyCommitmentDigestV1::Snark {
-                            id: commitment.id().get(),
-                            circuit_id: snark.circuit_id().get(),
-                            verifying_key_digest: *snark.verifying_key_digest(),
-                            statement_hash: *snark.statement_hash(),
-                            proof_hash: *snark.proof_hash(),
                         },
                     })
                     .collect();
@@ -1394,56 +1364,9 @@ impl LaneManifestRegistry {
                         MerkleCommitment::from_root_bytes(root_bytes, max_depth),
                     ));
                 }
-                "snark" => {
-                    let snark = entry.snark.as_ref().ok_or_else(|| {
-                    format!(
-                        "privacy commitment {id} for lane `{alias}` must include a `snark` section"
-                    )
-                })?;
-                    let circuit_id = snark.circuit_id.ok_or_else(|| {
-                    format!(
-                        "privacy commitment {id} for lane `{alias}` is missing `snark.circuit_id`"
-                    )
-                })?;
-                    let vk_digest = snark.verifying_key_digest.as_deref().ok_or_else(|| {
-                    format!(
-                        "privacy commitment {id} for lane `{alias}` is missing `snark.verifying_key_digest`"
-                    )
-                })?;
-                    let statement_hash = snark.statement_hash.as_deref().ok_or_else(|| {
-                    format!(
-                        "privacy commitment {id} for lane `{alias}` is missing `snark.statement_hash`"
-                    )
-                })?;
-                    let proof_hash = snark.proof_hash.as_deref().ok_or_else(|| {
-                    format!(
-                        "privacy commitment {id} for lane `{alias}` is missing `snark.proof_hash`"
-                    )
-                })?;
-                    let circuit = SnarkCircuit::new(
-                        SnarkCircuitId::new(circuit_id),
-                        Self::parse_hex_digest(
-                            alias,
-                            id,
-                            "snark.verifying_key_digest",
-                            vk_digest.trim(),
-                        )?,
-                        Self::parse_hex_digest(
-                            alias,
-                            id,
-                            "snark.statement_hash",
-                            statement_hash.trim(),
-                        )?,
-                        Self::parse_hex_digest(alias, id, "snark.proof_hash", proof_hash.trim())?,
-                    );
-                    commitments.push(LanePrivacyCommitment::snark(
-                        LaneCommitmentId::new(id),
-                        circuit,
-                    ));
-                }
                 other => {
                     return Err(format!(
-                        "privacy commitment {id} for lane `{alias}` uses unsupported scheme `{other}`"
+                        "privacy commitment {id} for lane `{alias}` uses unsupported scheme `{other}`; only `merkle` is accepted until an on-chain verifying-key-backed proof verifier is available"
                     ));
                 }
             }
@@ -2140,13 +2063,54 @@ mod tests {
                     ),
                     max_depth: Some(16),
                 }),
-                snark: None,
             }]),
             ..ManifestFile::default()
         };
         let parsed = LaneManifestRegistry::parse_privacy_commitments("private", &manifest)
             .expect("commitments parsed");
         assert_eq!(parsed.len(), 1);
+    }
+
+    #[test]
+    fn privacy_commitments_reject_snark_scheme_without_real_verifier() {
+        let manifest = ManifestFile {
+            lane: Some("private".to_string()),
+            governance: Some("council".to_string()),
+            privacy_commitments: Some(vec![ManifestPrivacyCommitment {
+                id: Some(2),
+                scheme: Some("snark".to_string()),
+                merkle: None,
+            }]),
+            ..ManifestFile::default()
+        };
+        let err = LaneManifestRegistry::parse_privacy_commitments("private", &manifest)
+            .expect_err("hash-only SNARK commitments must not be admitted");
+        assert!(
+            err.contains("only `merkle` is accepted"),
+            "unexpected rejection: {err}"
+        );
+    }
+
+    #[test]
+    fn privacy_commitment_json_rejects_removed_snark_fields() {
+        let raw = r#"{
+            "privacy_commitments": [{
+                "id": 2,
+                "scheme": "snark",
+                "snark": {
+                    "circuit_id": 5,
+                    "verifying_key_digest": "00",
+                    "statement_hash": "00",
+                    "proof_hash": "00"
+                }
+            }]
+        }"#;
+        let err = json::from_json::<ManifestFile>(raw)
+            .expect_err("removed SNARK fields must be rejected");
+        assert!(
+            err.to_string().contains("snark"),
+            "unexpected rejection: {err}"
+        );
     }
 
     #[test]

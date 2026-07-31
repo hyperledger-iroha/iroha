@@ -1312,8 +1312,8 @@ async fn fetch_private_uploaded_model_receipt(
 }
 
 #[tokio::test]
-async fn restarted_peer_with_mismatched_genesis_pubkey_uses_stored_genesis() -> Result<()> {
-    let test_name = stringify!(restarted_peer_with_mismatched_genesis_pubkey_uses_stored_genesis);
+async fn restarted_peer_with_mismatched_genesis_pubkey_is_rejected() -> Result<()> {
+    let test_name = stringify!(restarted_peer_with_mismatched_genesis_pubkey_is_rejected);
     let Some(network) =
         sandbox::start_network_async_or_skip(NetworkBuilder::new().with_peers(4), test_name)
             .await?
@@ -1341,22 +1341,18 @@ async fn restarted_peer_with_mismatched_genesis_pubkey_uses_stored_genesis() -> 
                 .chain(std::iter::once(Cow::Owned(override_layer))),
             Some(&genesis),
         )
-        .await?;
-        peer.once_block(1).await;
-        Ok::<(), eyre::Report>(())
+        .await
     })
     .await;
 
-    match start_result {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => {
-            if let Some(reason) = sandbox::sandbox_reason(&err) {
-                return Err(err.wrap_err(format!(
-                    "sandboxed network restriction detected while restarting peer with mismatched genesis pubkey: {reason}"
-                )));
-            }
-            return Err(err);
+    let rejection = match start_result {
+        Ok(Ok(())) => {
+            network.shutdown().await;
+            return Err(eyre!(
+                "peer accepted a stored genesis that does not match configured genesis.public_key"
+            ));
         }
+        Ok(Err(err)) => err,
         Err(err) => {
             let err = eyre::Report::new(err);
             if let Some(reason) = sandbox::sandbox_reason(&err) {
@@ -1364,9 +1360,20 @@ async fn restarted_peer_with_mismatched_genesis_pubkey_uses_stored_genesis() -> 
                     "sandboxed network restriction detected while restarting peer with mismatched genesis pubkey: {reason}"
                 )));
             }
-            return Err(err);
+            return Err(err.wrap_err(
+                "timed out waiting for restart to reject mismatched genesis.public_key",
+            ));
         }
+    };
+    if let Some(reason) = sandbox::sandbox_reason(&rejection) {
+        return Err(rejection.wrap_err(format!(
+            "sandboxed network restriction detected while restarting peer with mismatched genesis pubkey: {reason}"
+        )));
     }
+    assert!(
+        format!("{rejection:?}").contains("does not match configured genesis.public_key"),
+        "restart failed for an unexpected reason: {rejection:?}"
+    );
 
     network.shutdown().await;
     Ok(())

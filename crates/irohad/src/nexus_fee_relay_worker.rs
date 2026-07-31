@@ -3,6 +3,11 @@
 //! The worker never mutates world state directly. It watches finalized lane
 //! relay envelopes published by core, builds FastPQ/AXT proofs, and submits the
 //! corresponding protocol ISIs through the normal transaction queue.
+//! The process-local Sumeragi status cache is only a bounded notification
+//! surface: a relay becomes proof-eligible only when the exact envelope is also
+//! present in State's finality-authenticated lane-relay store. The worker
+//! constructs proofs; normal ISI execution performs their authoritative
+//! verification before any state mutation.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -19,7 +24,7 @@ use iroha_config::parameters::actual::{
 };
 use iroha_core::{
     queue::Queue,
-    state::{State, StateView, WorldReadOnly},
+    state::{LaneRelayStore, State, StateView, WorldReadOnly},
     sumeragi::{self, SumeragiHandle},
     tx::AcceptedTransaction,
 };
@@ -44,6 +49,7 @@ use iroha_data_model::{
         VerifiedLaneRelayRecord, fee_sponsor_vault_allocation_claim_digest,
         fee_sponsor_vault_source_state_root, lane_relay_fastpq_claim_digest,
     },
+    state_path::StatePath,
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -192,7 +198,7 @@ impl NexusFeeRelayWorker {
         }
 
         let state_path = storage_root.join(WORKER_STATE_FILE);
-        let durable = load_durable_state(&state_path).unwrap_or_else(|error| {
+        let mut durable = load_durable_state(&state_path).unwrap_or_else(|error| {
             iroha_logger::warn!(
                 ?error,
                 path = %state_path.display(),
@@ -200,6 +206,10 @@ impl NexusFeeRelayWorker {
             );
             DurableWorkerState::default()
         });
+        if prune_durable_worker_state(&mut durable, config.max_pending_relays.get()) {
+            persist_durable_state(&state_path, &durable)
+                .wrap_err("persist bounded Nexus fee relay worker state after startup pruning")?;
+        }
 
         Ok(Self {
             config,
@@ -270,28 +280,44 @@ impl NexusFeeRelayWorker {
         Ok(())
     }
 
+    fn persist_bounded_state(&self, durable: &mut DurableWorkerState) -> Result<()> {
+        let _ = prune_durable_worker_state(durable, self.config.max_pending_relays.get());
+        persist_durable_state(&self.state_path, durable)
+    }
+
     fn enqueue_status_relays(&self) -> Result<()> {
-        let envelopes = sumeragi::status::lane_relay_envelopes_snapshot();
+        let candidates = sumeragi::status::lane_relay_envelopes_snapshot();
+        let envelopes = {
+            let recorded_relays = self.state.lane_relays.read();
+            candidates
+                .into_iter()
+                .filter_map(|candidate| {
+                    authoritative_status_relay(&recorded_relays, &candidate).cloned()
+                })
+                .collect::<Vec<_>>()
+        };
         if envelopes.is_empty() {
             return Ok(());
         }
 
         let mut durable = self.durable.lock();
         for envelope in envelopes {
-            if durable_pending_relay_count(&durable) >= self.config.max_pending_relays.get()
-                && !durable.relays.contains_key(&relay_work_key(&envelope))
+            let key = relay_work_key(&envelope);
+            if durable.relays.len() >= self.config.max_pending_relays.get()
+                && !durable.relays.contains_key(&key)
             {
-                iroha_logger::warn!(
-                    max_pending_relays = self.config.max_pending_relays.get(),
-                    "Nexus fee relay worker pending set is full; dropping finalized relay enqueue"
-                );
-                continue;
+                if !reclaim_oldest_rejected_relay(&mut durable) {
+                    iroha_logger::warn!(
+                        max_pending_relays = self.config.max_pending_relays.get(),
+                        "Nexus fee relay worker bounded durable relay set is full of active work; deferring finalized relay enqueue"
+                    );
+                    continue;
+                }
             }
 
             if self.verified_relay_exists(&envelope)? {
                 continue;
             }
-            let key = relay_work_key(&envelope);
             durable.relays.entry(key).or_insert(DurableRelayWork {
                 envelope,
                 status: DurableWorkStatus::Pending,
@@ -299,7 +325,7 @@ impl NexusFeeRelayWorker {
                 last_height: self.committed_height(),
             });
         }
-        persist_durable_state(&self.state_path, &durable)
+        self.persist_bounded_state(&mut durable)
     }
 
     fn submit_pending_relays(&self) -> Result<()> {
@@ -385,11 +411,11 @@ impl NexusFeeRelayWorker {
         match prepare_relay_attempt(work, current_height, self.config.max_retry_attempts.get()) {
             RelayAttemptDecision::Deferred => Ok(None),
             RelayAttemptDecision::Rejected => {
-                persist_durable_state(&self.state_path, &durable)?;
+                self.persist_bounded_state(&mut durable)?;
                 Ok(None)
             }
             RelayAttemptDecision::Ready(envelope) => {
-                persist_durable_state(&self.state_path, &durable)?;
+                self.persist_bounded_state(&mut durable)?;
                 Ok(Some(*envelope))
             }
         }
@@ -402,14 +428,16 @@ impl NexusFeeRelayWorker {
         envelope: Option<LaneRelayEnvelope>,
     ) -> Result<()> {
         let mut durable = self.durable.lock();
-        if let Some(work) = durable.relays.get_mut(key) {
+        if status == DurableWorkStatus::Accepted {
+            durable.relays.remove(key);
+        } else if let Some(work) = durable.relays.get_mut(key) {
             if let Some(envelope) = envelope {
                 work.envelope = envelope;
             }
             work.status = status;
             work.last_height = self.committed_height();
         }
-        persist_durable_state(&self.state_path, &durable)
+        self.persist_bounded_state(&mut durable)
     }
 
     fn reject_relay_attempt(
@@ -455,22 +483,27 @@ impl NexusFeeRelayWorker {
             DurableWorkStatus::Pending
         };
         work.last_height = self.committed_height();
-        persist_durable_state(&self.state_path, &durable)
+        self.persist_bounded_state(&mut durable)
     }
 
     fn announce_verified_relays(&self) -> Result<()> {
-        let records = self.verified_relay_records()?;
-        for (key, record) in records {
-            {
-                let mut durable = self.durable.lock();
-                if let Some(work) = durable.relays.get_mut(&key) {
-                    work.status = DurableWorkStatus::Accepted;
-                    work.envelope = record.relay_envelope.clone();
-                    work.last_height = self.committed_height();
-                }
-                persist_durable_state(&self.state_path, &durable)?;
+        let records = self.verified_relay_records(self.config.max_pending_relays.get())?;
+        let current_keys = records
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<BTreeSet<_>>();
+        {
+            let mut durable = self.durable.lock();
+            for key in &current_keys {
+                durable.relays.remove(key);
             }
+            self.persist_bounded_state(&mut durable)?;
+        }
+        self.announced_relays
+            .lock()
+            .retain(|key| current_keys.contains(key));
 
+        for (key, record) in records {
             let mut announced = self.announced_relays.lock();
             if announced.contains(&key) {
                 continue;
@@ -485,9 +518,12 @@ impl NexusFeeRelayWorker {
         Ok(())
     }
 
-    fn verified_relay_records(&self) -> Result<BTreeMap<String, VerifiedLaneRelayRecord>> {
+    fn verified_relay_records(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, VerifiedLaneRelayRecord)>> {
         let view = self.state.view();
-        let mut records = BTreeMap::new();
+        let mut newest_records = BTreeMap::new();
         for (key, payload) in view.world().smart_contract_state().iter() {
             let key_text = key.to_string();
             if !key_text.starts_with(VERIFIED_LANE_RELAY_STATE_KEY_PREFIX) {
@@ -497,20 +533,27 @@ impl NexusFeeRelayWorker {
                 .wrap_err("decode verified lane relay record JSON payload")?;
             let record: VerifiedLaneRelayRecord = norito::json::from_slice(json.get().as_bytes())
                 .wrap_err("decode verified lane relay record")?;
-            records.insert(record.relay_ref.relay_state_key(), record);
+            let relay_key = record.relay_ref.relay_state_key();
+            newest_records.insert(
+                (record.relay_envelope.block_height, relay_key.clone()),
+                (relay_key, record),
+            );
+            if newest_records.len() > limit {
+                newest_records.pop_first();
+            }
         }
-        Ok(records)
+        Ok(newest_records.into_values().collect())
     }
 
     fn verified_relay_exists(&self, envelope: &LaneRelayEnvelope) -> Result<bool> {
-        let key = Name::from_str(&envelope.relay_ref().relay_state_key())
+        let key = StatePath::from_str(&envelope.relay_ref().relay_state_key())
             .wrap_err("parse verified lane relay state key")?;
         Ok(self
             .state
             .view()
             .world()
             .smart_contract_state()
-            .get(&key)
+            .get(key.as_ref())
             .is_some())
     }
 
@@ -536,19 +579,21 @@ impl NexusFeeRelayWorker {
             if self.verified_allocation_for_work(&work)?.is_some() {
                 work.status = DurableWorkStatus::Accepted;
                 work.last_height = current_height;
-                self.store_allocation_work(key, work)?;
+                let _ = self.store_allocation_work(key, work)?;
                 continue;
             }
             if work.attempts >= self.config.max_retry_attempts.get() {
                 work.status = DurableWorkStatus::Rejected;
-                self.store_allocation_work(key, work)?;
+                let _ = self.store_allocation_work(key, work)?;
                 continue;
             }
 
             work.status = DurableWorkStatus::Proving;
             work.attempts = work.attempts.saturating_add(1);
             work.last_height = current_height;
-            self.store_allocation_work(key.clone(), work.clone())?;
+            if !self.store_allocation_work(key.clone(), work.clone())? {
+                continue;
+            }
 
             let proof_blob = match prove_fee_sponsor_vault_allocation(&work, &self.fastpq) {
                 Ok(proof) => proof,
@@ -558,7 +603,7 @@ impl NexusFeeRelayWorker {
                     } else {
                         DurableWorkStatus::Pending
                     };
-                    self.store_allocation_work(key, work)?;
+                    let _ = self.store_allocation_work(key, work)?;
                     iroha_logger::warn!(
                         ?error,
                         "Nexus fee relay worker failed to prove sponsor-program vault allocation"
@@ -569,7 +614,9 @@ impl NexusFeeRelayWorker {
             work.status = DurableWorkStatus::Submitted;
             work.proof_blob = Some(proof_blob.clone());
             work.last_height = current_height;
-            self.store_allocation_work(key, work.clone())?;
+            if !self.store_allocation_work(key, work.clone())? {
+                continue;
+            }
             self.submit_instruction(
                 InstructionBox::from(RegisterVerifiedFeeSponsorVaultAllocation {
                     program_id: work.program_id,
@@ -772,10 +819,28 @@ impl NexusFeeRelayWorker {
             .unwrap_or(candidate)
     }
 
-    fn store_allocation_work(&self, key: String, work: DurableAllocationWork) -> Result<()> {
+    fn store_allocation_work(&self, key: String, work: DurableAllocationWork) -> Result<bool> {
         let mut durable = self.durable.lock();
+        if matches!(
+            work.status,
+            DurableWorkStatus::Accepted | DurableWorkStatus::Rejected
+        ) {
+            durable.allocations.remove(&key);
+            self.persist_bounded_state(&mut durable)?;
+            return Ok(true);
+        }
+        if !durable.allocations.contains_key(&key)
+            && durable.allocations.len() >= self.config.max_pending_relays.get()
+        {
+            iroha_logger::warn!(
+                max_pending_items = self.config.max_pending_relays.get(),
+                "Nexus fee relay worker bounded durable allocation set is full; deferring new allocation work"
+            );
+            return Ok(false);
+        }
         durable.allocations.insert(key, work);
-        persist_durable_state(&self.state_path, &durable)
+        self.persist_bounded_state(&mut durable)?;
+        Ok(true)
     }
 
     fn mark_accepted_allocations(&self) -> Result<()> {
@@ -790,28 +855,25 @@ impl NexusFeeRelayWorker {
             return Ok(());
         }
 
-        let current_height = self.committed_height();
         let mut durable = self.durable.lock();
-        for (key, mut work) in accepted {
-            work.status = DurableWorkStatus::Accepted;
-            work.last_height = current_height;
-            durable.allocations.insert(key, work);
+        for (key, _) in accepted {
+            durable.allocations.remove(&key);
         }
-        persist_durable_state(&self.state_path, &durable)
+        self.persist_bounded_state(&mut durable)
     }
 
     fn verified_allocation_for_work(
         &self,
         work: &DurableAllocationWork,
     ) -> Result<Option<VerifiedFeeSponsorVaultAllocation>> {
-        let key = Name::from_str(&VerifiedFeeSponsorVaultAllocation::state_key_for(
+        let key = StatePath::from_str(&VerifiedFeeSponsorVaultAllocation::state_key_for(
             &work.program_id,
             &work.asset_definition_id,
             &work.lease_id,
         ))
         .wrap_err("parse verified fee sponsor vault allocation state key")?;
         let view = self.state.view();
-        let Some(payload) = view.world().smart_contract_state().get(&key) else {
+        let Some(payload) = view.world().smart_contract_state().get(key.as_ref()) else {
             return Ok(None);
         };
         decode_verified_allocation_record(payload).map(Some)
@@ -933,21 +995,82 @@ fn sign_nexus_fee_relay_submission_transaction(
     .wrap_err_with(|| format!("sign internal Nexus fee relay mutation at `{endpoint}`"))
 }
 
-fn durable_pending_relay_count(durable: &DurableWorkerState) -> usize {
+fn prune_durable_worker_state(durable: &mut DurableWorkerState, max_items_per_kind: usize) -> bool {
+    let original_relay_count = durable.relays.len();
+    let original_allocation_count = durable.allocations.len();
     durable
         .relays
-        .values()
-        .filter(|work| {
-            !matches!(
-                work.status,
-                DurableWorkStatus::Accepted | DurableWorkStatus::Rejected
-            )
+        .retain(|_, work| work.status != DurableWorkStatus::Accepted);
+    durable.allocations.retain(|_, work| {
+        !matches!(
+            work.status,
+            DurableWorkStatus::Accepted | DurableWorkStatus::Rejected
+        )
+    });
+
+    let relay_overflow = durable.relays.len().saturating_sub(max_items_per_kind);
+    if relay_overflow > 0 {
+        let mut eviction_order = durable
+            .relays
+            .iter()
+            .map(|(key, work)| {
+                (
+                    work.status != DurableWorkStatus::Rejected,
+                    work.last_height,
+                    key.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        eviction_order.sort_unstable();
+        for (_, _, key) in eviction_order.into_iter().take(relay_overflow) {
+            durable.relays.remove(&key);
+        }
+    }
+    let allocation_overflow = durable.allocations.len().saturating_sub(max_items_per_kind);
+    if allocation_overflow > 0 {
+        let mut eviction_order = durable
+            .allocations
+            .iter()
+            .map(|(key, work)| (work.last_height, key.clone()))
+            .collect::<Vec<_>>();
+        eviction_order.sort_unstable();
+        for (_, key) in eviction_order.into_iter().take(allocation_overflow) {
+            durable.allocations.remove(&key);
+        }
+    }
+    durable.relays.len() != original_relay_count
+        || durable.allocations.len() != original_allocation_count
+}
+
+fn reclaim_oldest_rejected_relay(durable: &mut DurableWorkerState) -> bool {
+    let rejected_key = durable
+        .relays
+        .iter()
+        .filter(|(_, work)| work.status == DurableWorkStatus::Rejected)
+        .min_by(|(left_key, left), (right_key, right)| {
+            (left.last_height, left_key.as_str()).cmp(&(right.last_height, right_key.as_str()))
         })
-        .count()
+        .map(|(key, _)| key.clone());
+    rejected_key
+        .and_then(|key| durable.relays.remove(&key))
+        .is_some()
 }
 
 fn relay_work_key(envelope: &LaneRelayEnvelope) -> String {
     envelope.relay_ref().relay_state_key()
+}
+
+fn authoritative_status_relay<'a>(
+    recorded_relays: &'a LaneRelayStore,
+    candidate: &LaneRelayEnvelope,
+) -> Option<&'a LaneRelayEnvelope> {
+    let recorded = recorded_relays.get(
+        candidate.lane_id,
+        candidate.dataspace_id,
+        candidate.lane_incarnation,
+        candidate.block_height,
+    )?;
+    (recorded.qc.is_some() && recorded == candidate).then_some(recorded)
 }
 
 fn allocation_work_key(work: &DurableAllocationWork) -> String {
@@ -1396,7 +1519,10 @@ mod tests {
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         Level,
-        block::{BlockHeader, consensus::LaneBlockCommitment},
+        block::{
+            BlockHeader,
+            consensus::{CertPhase, LaneBlockCommitment, Qc, QcAggregate},
+        },
         domain::DomainId,
         isi::Log,
         nexus::{LaneId, LaneRelayEnvelope},
@@ -1468,6 +1594,201 @@ mod tests {
         LaneRelayEnvelope::new(header, None, None, settlement_commitment, 0)
             .expect("valid envelope")
             .with_manifest_root(Some(manifest_root))
+    }
+
+    fn sample_allocation_work(
+        last_height: u64,
+        status: DurableWorkStatus,
+    ) -> DurableAllocationWork {
+        let sponsor = AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
+        DurableAllocationWork {
+            program_id: FeeSponsorProgramId::new(
+                sponsor,
+                "relay".parse().expect("valid sponsor program name"),
+            ),
+            program_revision: 1,
+            asset_definition_id: AssetDefinitionId::new(
+                DomainId::try_new("universal", "universal").expect("valid universal domain"),
+                "xor".parse().expect("valid fee asset name"),
+            ),
+            verified_allocation: Quantity::from(1_u32),
+            source_dataspace_id: DataSpaceId::new(10),
+            source_height: last_height,
+            source_state_root: Hash::new(last_height.to_le_bytes()),
+            expires_at_height: last_height.saturating_add(10),
+            lease_id: Hash::new([u8::try_from(last_height).unwrap_or(u8::MAX)]),
+            manifest_root: [0x63; 32],
+            proof_blob: None,
+            status,
+            attempts: 1,
+            last_height,
+        }
+    }
+
+    #[test]
+    fn durable_worker_pruning_bounds_both_kinds_and_discards_terminal_payloads_first() {
+        let envelope = sample_envelope([0x40; 32]);
+        let mut durable = DurableWorkerState::default();
+        for (key, status, last_height) in [
+            ("accepted", DurableWorkStatus::Accepted, 4),
+            ("rejected", DurableWorkStatus::Rejected, 1),
+            ("pending-old", DurableWorkStatus::Pending, 2),
+            ("pending-new", DurableWorkStatus::Submitted, 3),
+        ] {
+            durable.relays.insert(
+                key.to_owned(),
+                DurableRelayWork {
+                    envelope: envelope.clone(),
+                    status,
+                    attempts: 1,
+                    last_height,
+                },
+            );
+        }
+        for (key, status, last_height) in [
+            ("accepted", DurableWorkStatus::Accepted, 5),
+            ("rejected", DurableWorkStatus::Rejected, 4),
+            ("pending-old", DurableWorkStatus::Pending, 1),
+            ("pending-mid", DurableWorkStatus::Proving, 2),
+            ("pending-new", DurableWorkStatus::Submitted, 3),
+        ] {
+            durable
+                .allocations
+                .insert(key.to_owned(), sample_allocation_work(last_height, status));
+        }
+
+        assert!(prune_durable_worker_state(&mut durable, 2));
+
+        assert_eq!(
+            durable.relays.keys().cloned().collect::<Vec<_>>(),
+            vec!["pending-new".to_owned(), "pending-old".to_owned()]
+        );
+        assert_eq!(
+            durable.allocations.keys().cloned().collect::<Vec<_>>(),
+            vec!["pending-mid".to_owned(), "pending-new".to_owned()]
+        );
+        assert!(
+            !prune_durable_worker_state(&mut durable, 2),
+            "already-bounded state must not trigger another checkpoint rewrite"
+        );
+    }
+
+    #[test]
+    fn verified_worker_records_use_state_path_keys() {
+        let envelope = sample_envelope([0x40; 32]);
+        let relay_key_text = envelope.relay_ref().relay_state_key();
+        let relay_key = StatePath::from_str(&relay_key_text).expect("valid relay state path");
+        assert_eq!(relay_key.as_ref(), relay_key_text);
+
+        let allocation = sample_allocation_work(7, DurableWorkStatus::Pending);
+        let allocation_key_text = VerifiedFeeSponsorVaultAllocation::state_key_for(
+            &allocation.program_id,
+            &allocation.asset_definition_id,
+            &allocation.lease_id,
+        );
+        let allocation_key =
+            StatePath::from_str(&allocation_key_text).expect("valid allocation state path");
+        assert_eq!(allocation_key.as_ref(), allocation_key_text);
+
+        let records = BTreeMap::from([
+            (relay_key.clone(), vec![0xA5]),
+            (allocation_key.clone(), vec![0x5A]),
+        ]);
+        assert_eq!(
+            records
+                .get(&relay_key)
+                .expect("stored relay record")
+                .as_slice(),
+            &[0xA5]
+        );
+        assert_eq!(
+            records
+                .get(&allocation_key)
+                .expect("stored allocation record")
+                .as_slice(),
+            &[0x5A]
+        );
+    }
+
+    #[test]
+    fn rejected_relay_slot_is_reclaimed_before_active_work() {
+        let envelope = sample_envelope([0x41; 32]);
+        let mut durable = DurableWorkerState::default();
+        for (key, status, last_height) in [
+            ("pending", DurableWorkStatus::Pending, 1),
+            ("rejected-new", DurableWorkStatus::Rejected, 3),
+            ("rejected-old", DurableWorkStatus::Rejected, 2),
+        ] {
+            durable.relays.insert(
+                key.to_owned(),
+                DurableRelayWork {
+                    envelope: envelope.clone(),
+                    status,
+                    attempts: 1,
+                    last_height,
+                },
+            );
+        }
+
+        assert!(reclaim_oldest_rejected_relay(&mut durable));
+        assert!(!durable.relays.contains_key("rejected-old"));
+        assert!(durable.relays.contains_key("rejected-new"));
+        assert!(durable.relays.contains_key("pending"));
+    }
+
+    fn attach_test_qc(envelope: &mut LaneRelayEnvelope) {
+        let validator_set = Vec::new();
+        envelope.qc = Some(Qc {
+            phase: CertPhase::Commit,
+            subject_block_hash: envelope.block_header.hash(),
+            parent_state_root: Hash::new(b"relay-worker-test-parent-state-root"),
+            post_state_root: Hash::new(b"relay-worker-test-post-state-root"),
+            height: envelope.block_header.height().get(),
+            view: envelope.block_header.view_change_index(),
+            epoch: 0,
+            chain_order_hash: Hash::new(b"relay-worker-test-chain-order"),
+            rechain_seq: 0,
+            mode_tag: envelope.lane_qc_mode_tag("relay-worker-test"),
+            highest_qc: None,
+            validator_set_hash: iroha_crypto::HashOf::new(&validator_set),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![1],
+                bls_aggregate_signature: vec![0xA5; 96],
+            },
+        });
+    }
+
+    #[test]
+    fn status_relay_requires_exact_finality_authenticated_state_entry() {
+        let pending = sample_envelope([0x40; 32]);
+        let mut recorded_relays = LaneRelayStore::default();
+        recorded_relays
+            .insert(pending.clone())
+            .expect("insert pending diagnostic relay");
+        assert!(
+            authoritative_status_relay(&recorded_relays, &pending).is_none(),
+            "a QC-less status snapshot must not trigger proof generation"
+        );
+
+        let mut finalized = pending;
+        attach_test_qc(&mut finalized);
+        recorded_relays
+            .insert(finalized.clone())
+            .expect("upgrade recorded relay with finality certificate");
+        assert_eq!(
+            authoritative_status_relay(&recorded_relays, &finalized),
+            Some(&finalized),
+            "the exact finalized State entry is proof-eligible"
+        );
+
+        let mut altered = finalized;
+        altered.rbc_bytes_total = altered.rbc_bytes_total.saturating_add(1);
+        assert!(
+            authoritative_status_relay(&recorded_relays, &altered).is_none(),
+            "status payloads cannot substitute fields after State authentication"
+        );
     }
 
     #[test]
@@ -1640,7 +1961,7 @@ mod tests {
     fn lane_relay_worker_proof_verifies_and_binds_claim() -> Result<()> {
         let envelope = sample_envelope([0x42; 32]);
         let (proven, proof_blob) = prove_lane_relay_envelope(&envelope, 20, 7, &test_fastpq())?;
-        proven.verify_fastpq_proof_material()?;
+        proven.validate_fastpq_proof_metadata()?;
         let proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
         let verified = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)?;
         assert_eq!(proof_envelope.dsid, envelope.dataspace_id);
@@ -1651,6 +1972,7 @@ mod tests {
             hex::encode(lane_relay_fastpq_claim_digest(&envelope)?.as_ref())
         );
         assert_eq!(binding.verified_effect_type, LANE_RELAY_FASTPQ_EFFECT_TYPE);
+        assert_eq!(binding.target_dsids, vec![DataSpaceId::UNIVERSAL.as_u64()]);
         assert_ne!(verified.proof_digest, Hash::new(b"test-only-digest"));
         Ok(())
     }
@@ -1711,6 +2033,7 @@ mod tests {
             binding.verified_effect_type,
             FEE_SPONSOR_VAULT_ALLOCATION_EFFECT_TYPE
         );
+        assert_eq!(binding.target_dsids, vec![DataSpaceId::UNIVERSAL.as_u64()]);
         let claim = FeeSponsorVaultAllocationClaim {
             program_id,
             program_revision: 3,

@@ -1,0 +1,26 @@
+{
+  "id": "devportal/torii-rpc-overview",
+  "title": "Norito-RPC Overview",
+  "description": "Norito-RPC is the binary transport for Torii APIs. It reuses the same HTTP paths",
+  "source": "@site/docs/devportal/torii-rpc-overview.md",
+  "sourceDirName": "devportal",
+  "slug": "/devportal/torii-rpc-overview",
+  "permalink": "/next/devportal/torii-rpc-overview",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/torii-rpc-overview.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Norito-RPC Overview"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Try It sandbox",
+    "permalink": "/next/devportal/try-it"
+  },
+  "next": {
+    "title": "Norito-RPC adoption",
+    "permalink": "/next/devportal/norito-rpc-adoption"
+  }
+}

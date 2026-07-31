@@ -2134,9 +2134,9 @@ function validationFeeScaledUnits(value, scale, context) {
  * `requiredOverlayTransfer` is an assertion, not an appended instruction: the
  * deployed router/pool call must emit that exact transfer itself. This keeps the
  * transfer inside both the node-generated proof commitment and the user-signed
- * transaction payload. Pre-release signed/keyset validation-fee inputs are
- * rejected; only the ledger-native Parliament registry may authorize those
- * reserved policy fields.
+ * transaction payload. Signed/keyset validation-fee inputs are unsupported;
+ * only the ledger-native Parliament registry may authorize those reserved
+ * policy fields.
  *
  * @param {ToriiClient} client
  * @param {object} input
@@ -4281,81 +4281,6 @@ export function buildConfidentialTransferProofV2({
     vk.bytes,
   );
   return {
-    nullifiers: Array.isArray(result.nullifiers)
-      ? result.nullifiers.map((entry) => Buffer.from(entry))
-      : [],
-    outputCommitments: Array.isArray(
-      result.outputCommitments ?? result.output_commitments,
-    )
-      ? (result.outputCommitments ?? result.output_commitments).map((entry) =>
-          Buffer.from(entry),
-        )
-      : [],
-    root: Buffer.from(result.root),
-    proof: Buffer.from(result.proof),
-  };
-}
-
-/**
- * Build an asset-hidden transfer v1 proof envelope.
- */
-export function buildConfidentialAssetHiddenTransferProofV1({
-  chainId,
-  poolId,
-  assetSetRootHex,
-  assetSetRoot,
-  inputCommitments,
-  inputCommitmentsHex,
-  nullifiers,
-  nullifiersHex,
-  outputCommitments,
-  outputCommitmentsHex,
-  rootHintHex,
-  rootHint,
-  verifyingKey,
-}) {
-  const native = resolveNativeBinding();
-  if (
-    !native ||
-    typeof native.buildConfidentialAssetHiddenTransferProofV1 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'buildConfidentialAssetHiddenTransferProofV1' is unavailable",
-    );
-  }
-  const vk = normalizeInlineVerifyingKeyRecord(
-    verifyingKey,
-    "confidentialAssetHiddenTransferProofV1",
-  );
-  const normalizeList = (values, context) =>
-    Array.isArray(values)
-      ? values.map((entry, index) =>
-          normalizeFixed32HexInput(entry, `${context}[${index}]`),
-        )
-      : [];
-  const result = native.buildConfidentialAssetHiddenTransferProofV1(
-    normalizeExactMetadataString(chainId, "confidentialAssetHiddenTransferProofV1.chainId"),
-    normalizeExactMetadataString(poolId, "confidentialAssetHiddenTransferProofV1.poolId"),
-    normalizeFixed32HexInput(assetSetRootHex ?? assetSetRoot, "assetSetRoot"),
-    normalizeList(inputCommitmentsHex ?? inputCommitments, "inputCommitments"),
-    normalizeList(nullifiersHex ?? nullifiers, "nullifiers"),
-    normalizeList(
-      outputCommitmentsHex ?? outputCommitments,
-      "outputCommitments",
-    ),
-    normalizeFixed32HexInput(rootHintHex ?? rootHint, "rootHint"),
-    vk.backend,
-    vk.circuitId,
-    vk.bytes,
-  );
-  return {
-    inputCommitments: Array.isArray(
-      result.inputCommitments ?? result.input_commitments,
-    )
-      ? (result.inputCommitments ?? result.input_commitments).map((entry) =>
-          Buffer.from(entry),
-        )
-      : [],
     nullifiers: Array.isArray(result.nullifiers)
       ? result.nullifiers.map((entry) => Buffer.from(entry))
       : [],

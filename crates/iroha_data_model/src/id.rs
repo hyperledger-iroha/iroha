@@ -31,7 +31,6 @@ mod model {
     /// `.`, `_`, `:`, or `-`.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
     #[repr(transparent)]
-    #[cfg_attr(feature = "json", norito(transparent))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     pub struct ChainId(Box<str>);
 

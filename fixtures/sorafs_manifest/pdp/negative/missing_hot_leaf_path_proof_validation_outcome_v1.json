@@ -4,7 +4,7 @@
   "category": "validation",
   "message": "PDP exhaustive witness verification failed: PDP segment 0 hot leaf 0 segment path failed: Merkle path depth 0 does not match expected depth 6",
   "action": "Reject the payload set and regenerate the commitment, challenge, or proof; active governed admission must still be evaluated separately after witness verification succeeds.",
-  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "docs_url": "https://docs.iroha.tech/",
   "telemetry_tags": [
     "sorafs.reference.pdp",
     "sorafs.reference.code.SFS-PDP-001"
@@ -56,7 +56,7 @@
     },
     {
       "key": "challenge_id_hex",
-      "value": "cf0fcb348631bfcd6f4c3cdf128ca59faa20d7b899baa2822b6dc968a6a4dab8"
+      "value": "83bca9f3d36245704bb1e56da832d07a1960372af70df4fccc942f8f08dcf8ca"
     },
     {
       "key": "provider_id_hex",
@@ -88,7 +88,7 @@
     },
     {
       "key": "challenge_id_hex",
-      "value": "cf0fcb348631bfcd6f4c3cdf128ca59faa20d7b899baa2822b6dc968a6a4dab8"
+      "value": "83bca9f3d36245704bb1e56da832d07a1960372af70df4fccc942f8f08dcf8ca"
     },
     {
       "key": "manifest_digest_hex",

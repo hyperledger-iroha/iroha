@@ -1845,7 +1845,8 @@ mod tests {
 
     #[test]
     fn volunteer_validator_accepts_template() {
-        let raw = include_str!("../../docs/examples/ministry/volunteer_brief_template.json");
+        let raw =
+            include_str!("../../fixtures/documentation/ministry/volunteer_brief_template.json");
         let value: Value = norito::json::from_str(raw).expect("parse volunteer template");
         let report = super::validate_volunteer_entry(&value, "brief");
         assert!(

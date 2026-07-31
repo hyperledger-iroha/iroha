@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/pin-registry-ops",
+  "title": "Pin Registry Operations",
+  "description": "Monitor and triage the SoraFS pin registry and replication SLA metrics.",
+  "source": "@site/versioned_docs/version-2025-q2/sorafs/pin-registry-ops.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/pin-registry-ops",
+  "permalink": "/sorafs/pin-registry-ops",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/versioned_docs/version-2025-q2/sorafs/pin-registry-ops.md",
+  "tags": [],
+  "version": "2025-q2",
+  "frontMatter": {
+    "id": "pin-registry-ops",
+    "title": "Pin Registry Operations",
+    "sidebar_label": "Pin Registry Operations",
+    "description": "Monitor and triage the SoraFS pin registry and replication SLA metrics."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Node Operations Runbook",
+    "permalink": "/sorafs/node-operations"
+  },
+  "next": {
+    "title": "Rust SDK Quickstart",
+    "permalink": "/sdks/rust"
+  }
+}

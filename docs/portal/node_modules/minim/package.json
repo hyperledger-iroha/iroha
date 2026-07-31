@@ -1,0 +1,63 @@
+{
+  "name": "minim",
+  "version": "0.23.8",
+  "description": "A library for interacting with JSON through Refract elements",
+  "main": "lib/minim.js",
+  "scripts": {
+    "prepare": "npm run build",
+    "build": "npm run build:cjs && npm run build:browser",
+    "build:cjs": "babel lib --out-dir dist/lib",
+    "build:browser": "browserify -d -s minim -t [ babelify ] -o dist/minim.js dist/lib/minim.js",
+    "coverage": "istanbul cover _mocha -- -R spec --recursive --require babel-register",
+    "coveralls": "coveralls <coverage/lcov.info",
+    "lint": "eslint .",
+    "precoveralls": "npm run coverage",
+    "test": "mocha",
+    "test:browser": "karma start"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://github.com/refractproject/minim"
+  },
+  "keywords": [
+    "JSON",
+    "MSON",
+    "Refract"
+  ],
+  "author": "Stephen Mizell",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/refractproject/minim/issues"
+  },
+  "homepage": "https://github.com/refractproject/minim",
+  "devDependencies": {
+    "babel-cli": "^6.26.0",
+    "babel-core": "^6.26.3",
+    "babel-preset-env": "^1.7.0",
+    "babel-register": "^6.26.0",
+    "babelify": "^8.0.0",
+    "browserify": "^16.2.3",
+    "chai": "^4.2.0",
+    "coveralls": "^3.0.1",
+    "eslint": "^5.14.1",
+    "eslint-config-airbnb-base": "^13.1.0",
+    "eslint-plugin-import": "^2.16.0",
+    "fantasy-land": "^3.5.0",
+    "istanbul": "^0.4.5",
+    "karma": "^4.0.0",
+    "karma-browserify": "^6.0.0",
+    "karma-chai": "^0.1.0",
+    "karma-firefox-launcher": "^1.1.0",
+    "karma-mocha": "^1.3.0",
+    "karma-mocha-reporter": "^2.2.5",
+    "karma-sinon": "^1.0.4",
+    "mocha": "^6.0.1",
+    "sinon": "^8.1.0"
+  },
+  "dependencies": {
+    "lodash": "^4.15.0"
+  },
+  "engines": {
+    "node": ">=6"
+  }
+}

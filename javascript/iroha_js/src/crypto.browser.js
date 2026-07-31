@@ -105,10 +105,10 @@ const CRYPTO_ALGORITHM_ALIASES = new Map([
 
 function normalizeSeed(seed) {
   const buffer = toBuffer(seed, "seed");
-  if (buffer.length === ED25519_SEED_LENGTH) {
-    return Buffer.from(buffer);
+  if (buffer.length !== ED25519_SEED_LENGTH) {
+    throw new Error("key-generation seed must be exactly 32 bytes");
   }
-  return Buffer.from(sha256(buffer));
+  return Buffer.from(buffer);
 }
 
 function normalizePublicKey(publicKey) {
@@ -305,7 +305,10 @@ export function recoveryPhraseToEntropy(phrase) {
 }
 
 export function deriveEd25519SeedFromRecoveryPhrase(phrase) {
-  return normalizeSeed(recoveryPhraseToEntropy(phrase));
+  const entropy = recoveryPhraseToEntropy(phrase);
+  return entropy.length === ED25519_SEED_LENGTH
+    ? entropy
+    : Buffer.from(sha256(entropy));
 }
 
 export function ed25519SeedToRecoveryPhrase(privateKey) {

@@ -1,0 +1,18 @@
+;
+; authority from the URI RFC 3986
+; NOTE: While we have greatly simplified "userinfo" and "host",
+;       the simplifications retain the fact that there is a great
+;       deal of overlap in the characters space accepted by the two phrases.
+;       That is, "userinfo" and "host" could easily both accept the same phrase.
+;       And that is the essential problem this grammar is designed to emphasize.
+;
+authority     = [ userinfo "@" ] host [ ":" port ]
+host          = reg-name
+;userinfo      = *( unreserved / pct-encoded / sub-delims / ":" )
+;host          = IP-literal / IPv4address / reg-name
+;reg-name      = *( unreserved / pct-encoded / sub-delims )
+userinfo      = *( ALPHA / DIGIT / "." / ":" )
+reg-name      = *( ALPHA / DIGIT/ "." )
+port          = *DIGIT
+ALPHA         = %d65-90 / %d97-122
+DIGIT         = %d48-57

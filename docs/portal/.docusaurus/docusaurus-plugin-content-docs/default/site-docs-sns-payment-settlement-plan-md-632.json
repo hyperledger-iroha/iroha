@@ -1,0 +1,29 @@
+{
+  "id": "sns/payment-settlement-plan",
+  "title": "SNS Payment & Settlement Plan",
+  "description": "Playbook for routing SNS registrar revenue, reconciling steward/treasury splits, and producing evidence bundles.",
+  "source": "@site/docs/sns/payment-settlement-plan.md",
+  "sourceDirName": "sns",
+  "slug": "/sns/payment-settlement-plan",
+  "permalink": "/next/sns/payment-settlement-plan",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sns/payment-settlement-plan.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "payment-settlement-plan",
+    "title": "SNS Payment & Settlement Plan",
+    "sidebar_label": "Payment & settlement plan",
+    "description": "Playbook for routing SNS registrar revenue, reconciling steward/treasury splits, and producing evidence bundles."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "governance-playbook",
+    "permalink": "/next/sns/governance-playbook"
+  },
+  "next": {
+    "title": "SNS KPI dashboard",
+    "permalink": "/next/sns/kpi-dashboard"
+  }
+}

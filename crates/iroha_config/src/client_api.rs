@@ -3523,7 +3523,7 @@ mod test {
                     resume_hash_hex: None,
                     pow: SoranetHandshakePowSummary {
                         required: true,
-                        difficulty: 0,
+                        difficulty: iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY,
                         max_future_skew_secs: 300,
                         min_ticket_ttl_secs: 30,
                         ticket_ttl_secs: 60,
@@ -3619,7 +3619,7 @@ mod test {
                   "resume_hash_hex": null,
                   "pow": {
                     "required": true,
-                    "difficulty": 0,
+                    "difficulty": 6,
                     "max_future_skew_secs": 300,
                     "min_ticket_ttl_secs": 30,
                     "ticket_ttl_secs": 60,

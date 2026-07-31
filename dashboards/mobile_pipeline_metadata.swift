@@ -4,7 +4,7 @@
 //
 // Renders a concise summary of the shared Swift pipeline metadata feed.
 // The feed captures job/test duration data that parity dashboards share
-// with other SDKs. See docs/source/references/ios_metrics.md for schema
+// with other SDKs. See specs/references/ios_metrics.md for schema
 // notes and dashboards/data/mobile_pipeline_metadata.sample.json for a sample.
 
 import Foundation

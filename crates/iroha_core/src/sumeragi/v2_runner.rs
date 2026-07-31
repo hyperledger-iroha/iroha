@@ -78,10 +78,11 @@ use super::{
         successor_block_refinement_projection, successor_context_refinement_projection,
     },
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
+    v2_transport::AuthenticatedCertifiedBodyRequest,
     v2_worker::{
-        CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServePrepareError,
-        ExactFanoutOwnership, ProductionV2Services, V2CleanupSupervisor,
-        durable_exact_output_handoff_owner_pair,
+        CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServeNegativeOutcome,
+        CertifiedServePrepareError, ExactFanoutOwnership, ProductionV2Services,
+        V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
     },
 };
 use crate::{
@@ -1190,9 +1191,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         }
         let (exact_output_service_owner, exact_output_transport_owner) =
             durable_exact_output_handoff_owner_pair();
+        let durable_decided_subject = executor.local_proposal_directive()?.decided_subject();
         let mut services = ProductionV2Services::start(
             context.clone(),
             executor.current_tag(),
+            durable_decided_subject,
             validator_set_pops,
             local_peer.clone(),
             local_validator,
@@ -1329,6 +1332,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
         let mut committed_lane_status_publisher = CommittedLaneStatusPublisher::default();
         committed_lane_status_publisher.publish_if_changed(&lane_work);
+        if let Some(scheduler_ordinal) = services
+            .dormant_certified_serve_ingress_scheduler_ordinal()
+            .map_err(V2RunnerError::Service)?
+        {
+            let _ = services.fail_closed_dormant_certified_serve(scheduler_ordinal);
+            return Err(V2RunnerError::RestartRequired);
+        }
         // Seed executor lock ownership from replay before consuming startup
         // effects. Otherwise a recovered lock would look like a live first-lock
         // transition and could retire safe work reconstructed from the same WAL.
@@ -1418,6 +1428,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // poll. It rebuilds the live overlays only at its next semantic
             // deadline or after the published height owner changes.
             liveness_watchdog.poll(Instant::now());
+            if let Some(scheduler_ordinal) = services
+                .dormant_certified_serve_ingress_scheduler_ordinal()
+                .map_err(V2RunnerError::Service)?
+            {
+                let _ = services.fail_closed_dormant_certified_serve(scheduler_ordinal);
+                return Err(V2RunnerError::RestartRequired);
+            }
+            let certified_serve_barrier = services
+                .certified_serve_barrier()
+                .map_err(V2RunnerError::Service)?;
             let now = Instant::now();
             if !recovering_interrupted_tip && now >= next_npos_vrf_retransmit {
                 broadcast_npos_vrf_messages(
@@ -1447,7 +1467,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     // The matching PendingFetch is itself an older passive
                     // owner, so this is one bounded opportunity rather than a
                     // prerequisite for retry.
-                    advance_executor_once_before_exact_serve(&mut executor, &mut services)?;
+                    advance_executor_once_before_exact_serve(
+                        &block_rx,
+                        &mut executor,
+                        &mut services,
+                    )?;
                 }
                 match executor.retry_retained_certified_body_response(&mut services) {
                     Ok(_) => {}
@@ -1469,10 +1493,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // dedicated runner turn before completions, runtime work, lock
             // reconciliation, or any other local producer can acquire a later
             // I/O position.
-            if let Some(serve_barrier) = services
-                .certified_serve_barrier()
-                .map_err(V2RunnerError::Service)?
-            {
+            if let Some(serve_barrier) = certified_serve_barrier {
                 // One exact ticket closes its finite older-owner prefix through
                 // bounded turns. Each turn atomically selects at most one
                 // completed causal lifecycle whose immutable ordinal is
@@ -1489,7 +1510,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 {
                     services.drain_exact_serve_runtime_predecessor(
                         &mut executor,
-                        serve_barrier.lifecycle_ordinal(),
+                        serve_barrier.scheduler_ordinal(),
                     )?;
                     // A frozen Control/Serve prefix may still own every
                     // physical I/O unit. Yield this turn until one unit drains
@@ -1499,7 +1520,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     // exact target barrier installed.
                     if executor.older_runtime_lifecycle_predates_exact_serve(
                         Instant::now(),
-                        serve_barrier.lifecycle_ordinal(),
+                        serve_barrier.scheduler_ordinal(),
                     )? && services
                         .certified_serve_runtime_predecessor_capacity_available(serve_barrier)
                         .map_err(V2RunnerError::Service)?
@@ -1511,13 +1532,17 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                                 1,
                             )?;
                         } else {
-                            advance_executor_once_before_exact_serve(&mut executor, &mut services)?;
+                            advance_executor_once_before_exact_serve(
+                                &block_rx,
+                                &mut executor,
+                                &mut services,
+                            )?;
                         }
                     }
                     older_predecessor_remains = executor
                         .older_runtime_lifecycle_predates_exact_serve(
                             Instant::now(),
-                            serve_barrier.lifecycle_ordinal(),
+                            serve_barrier.scheduler_ordinal(),
                         )?;
                     services
                         .finish_certified_serve_runtime_episode_turn(
@@ -1537,8 +1562,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     if recovering_interrupted_tip {
                         drain_decided_lane_recovery_ingress(
                             &block_rx,
+                            &executor,
+                            &mut services,
                             &mut lane_work,
                             executor.current_tag().view(),
+                            output_guard.as_ref(),
+                            kura.as_ref(),
+                            &common_config.key_pair,
+                            block_sync_server
+                                .as_mut()
+                                .expect("block-sync server initialized before ingress"),
                         )?;
                     } else {
                         drain_v2_ingress(
@@ -1548,7 +1581,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             &mut lane_work,
                             output_guard.as_ref(),
                             kura.as_ref(),
-                            &context_store,
                             &common_config.key_pair,
                             block_sync_server
                                 .as_mut()
@@ -1575,8 +1607,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             else {
                 // Exact admission won the queue-locked race after the
                 // observation above. Restart at the dedicated target turn.
+                let _ = wake_rx.recv_timeout(IDLE_POLL);
                 continue;
             };
+
+            debug_assert!(startup_effects.is_empty());
 
             // Retry actor-owned output first, but keep servicing bounded
             // reducer and completion sources while one target is unavailable.
@@ -1650,7 +1685,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &mut lane_work,
                     output_guard.as_ref(),
                     kura.as_ref(),
-                    &context_store,
                     &common_config.key_pair,
                     block_sync_server
                         .as_mut()
@@ -1712,8 +1746,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 )?;
                 drain_decided_lane_recovery_ingress(
                     &block_rx,
+                    &executor,
+                    &mut services,
                     &mut lane_work,
                     executor.current_tag().view(),
+                    output_guard.as_ref(),
+                    kura.as_ref(),
+                    &common_config.key_pair,
+                    block_sync_server
+                        .as_mut()
+                        .expect("block-sync server initialized before ingress"),
                 )?;
                 drain_lane_relay_ingress(
                     &lane_relay_rx,
@@ -1743,7 +1785,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     control_queue_capacity,
                 )?;
             } else {
-                advance_executor(&mut executor, &mut services, control_queue_capacity)?;
+                advance_executor(
+                    &block_rx,
+                    &mut executor,
+                    &mut services,
+                    control_queue_capacity,
+                )?;
                 let _ = retry_exact_output_and_apply_sidecar_admissions(
                     &mut lane_work,
                     &services,
@@ -2511,6 +2558,248 @@ enum PreparedCertifiedServe {
     Service(String),
 }
 
+enum DecidedLaneRecoveryCurrentServe {
+    Authenticated {
+        authenticated_via: PeerId,
+        request: AuthenticatedCertifiedBodyRequest,
+    },
+    Negative {
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+        reason: String,
+    },
+    Service(String),
+}
+
+enum DecidedLaneRecoveryIngressPreparation {
+    LaneLocal,
+    CurrentServe(DecidedLaneRecoveryCurrentServe),
+    HistoricalServe,
+    LeaderWireRetire,
+}
+
+enum DecidedLaneRecoveryCurrentDrain<Admission> {
+    Admitted(Admission),
+    Rejected(String),
+}
+
+enum DecidedLaneRecoveryDrainAuthorization<Admission> {
+    LaneLocal,
+    CurrentServe(DecidedLaneRecoveryCurrentDrain<Admission>),
+    HistoricalServe,
+    LeaderWireRetire,
+}
+
+enum DecidedLaneRecoveryDrainDecision<Admission> {
+    Retain,
+    Authorized(DecidedLaneRecoveryDrainAuthorization<Admission>),
+    FailClosed(String),
+}
+
+trait DecidedLaneRecoveryDrainAuthorizer {
+    type Admission;
+
+    fn stage_negative(
+        &mut self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> Result<(), String>;
+
+    fn prepare_exact(
+        &mut self,
+        authenticated_via: &PeerId,
+        request: AuthenticatedCertifiedBodyRequest,
+    ) -> Result<Self::Admission, CertifiedServePrepareError>;
+}
+
+impl DecidedLaneRecoveryDrainAuthorizer for ProductionV2Services {
+    type Admission = CertifiedServeAdmission;
+
+    fn stage_negative(
+        &mut self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> Result<(), String> {
+        self.stage_certified_serve_rejection(request_hash, outcome)
+    }
+
+    fn prepare_exact(
+        &mut self,
+        authenticated_via: &PeerId,
+        request: AuthenticatedCertifiedBodyRequest,
+    ) -> Result<Self::Admission, CertifiedServePrepareError> {
+        self.prepare_certified_request(authenticated_via, request)
+    }
+}
+
+fn authorize_decided_lane_recovery_drain<A: DecidedLaneRecoveryDrainAuthorizer>(
+    preparation: DecidedLaneRecoveryIngressPreparation,
+    authorizer: &mut A,
+) -> DecidedLaneRecoveryDrainDecision<A::Admission> {
+    match preparation {
+        DecidedLaneRecoveryIngressPreparation::LaneLocal => {
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::LaneLocal,
+            )
+        }
+        DecidedLaneRecoveryIngressPreparation::HistoricalServe => {
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::HistoricalServe,
+            )
+        }
+        DecidedLaneRecoveryIngressPreparation::LeaderWireRetire => {
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
+            )
+        }
+        DecidedLaneRecoveryIngressPreparation::CurrentServe(
+            DecidedLaneRecoveryCurrentServe::Negative {
+                request_hash,
+                outcome,
+                reason,
+            },
+        ) => match authorizer.stage_negative(request_hash, outcome) {
+            Ok(()) => DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Rejected(reason),
+                ),
+            ),
+            Err(error) => DecidedLaneRecoveryDrainDecision::FailClosed(error),
+        },
+        DecidedLaneRecoveryIngressPreparation::CurrentServe(
+            DecidedLaneRecoveryCurrentServe::Service(reason),
+        ) => DecidedLaneRecoveryDrainDecision::FailClosed(reason),
+        DecidedLaneRecoveryIngressPreparation::CurrentServe(
+            DecidedLaneRecoveryCurrentServe::Authenticated {
+                authenticated_via,
+                request,
+            },
+        ) => match authorizer.prepare_exact(&authenticated_via, request) {
+            Ok(admission) => DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Admitted(admission),
+                ),
+            ),
+            Err(CertifiedServePrepareError::Backpressure) => {
+                DecidedLaneRecoveryDrainDecision::Retain
+            }
+            Err(CertifiedServePrepareError::Rejected(reason)) => {
+                DecidedLaneRecoveryDrainDecision::Authorized(
+                    DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                        DecidedLaneRecoveryCurrentDrain::Rejected(reason),
+                    ),
+                )
+            }
+            Err(CertifiedServePrepareError::Service(reason)) => {
+                DecidedLaneRecoveryDrainDecision::FailClosed(reason)
+            }
+        },
+    }
+}
+
+fn prepare_decided_lane_recovery_ingress(
+    inbound: &InboundBlockMessage,
+    active_height: wire::Height,
+    decided_subject: wire::BlockSubject,
+    authenticate: impl FnOnce(
+        wire::CertifiedBodyRequest,
+        &PeerId,
+    ) -> Result<AuthenticatedCertifiedBodyRequest, String>,
+) -> DecidedLaneRecoveryIngressPreparation {
+    if inbound.message().is_lane_local() {
+        return DecidedLaneRecoveryIngressPreparation::LaneLocal;
+    }
+    let BlockMessage::V2(message) = inbound.message() else {
+        return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;
+    };
+    let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload else {
+        return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;
+    };
+    if message.validate_version().is_err() {
+        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
+            DecidedLaneRecoveryCurrentServe::Service(
+                "terminal recovery Serve ingress crossed version validation".to_owned(),
+            ),
+        );
+    }
+    if request.round.height < active_height {
+        return DecidedLaneRecoveryIngressPreparation::HistoricalServe;
+    }
+    if request.round.height > active_height {
+        return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;
+    }
+    let Some(sender) = inbound.sender() else {
+        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
+            DecidedLaneRecoveryCurrentServe::Service(
+                "terminal recovery Serve ingress lost its authenticated sender".to_owned(),
+            ),
+        );
+    };
+    let Some(authenticated_via) = inbound.via() else {
+        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
+            DecidedLaneRecoveryCurrentServe::Service(
+                "terminal recovery Serve ingress lost its authenticated source".to_owned(),
+            ),
+        );
+    };
+    let Some(reply_routes) = inbound.reply_routes() else {
+        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
+            DecidedLaneRecoveryCurrentServe::Service(
+                "terminal recovery Serve ingress lost its reply capability".to_owned(),
+            ),
+        );
+    };
+    let Some(ingress_ownership) = inbound.ingress_ownership() else {
+        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
+            DecidedLaneRecoveryCurrentServe::Service(
+                "terminal recovery Serve ingress lost its ownership evidence".to_owned(),
+            ),
+        );
+    };
+    if reply_routes.semantic_target() != sender
+        || !ingress_ownership.validate_exact()
+        || !ingress_ownership.matches_message(inbound.message())
+        || !ingress_ownership.matches_semantic_origin(Some(sender))
+        || !ingress_ownership.matches_reply_routes(Some(reply_routes))
+    {
+        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
+            DecidedLaneRecoveryCurrentServe::Service(
+                "terminal recovery Serve ingress changed its transport ownership".to_owned(),
+            ),
+        );
+    }
+    let authenticated = match authenticate(request.clone(), sender) {
+        Ok(authenticated) => authenticated,
+        Err(reason) => {
+            return DecidedLaneRecoveryIngressPreparation::CurrentServe(
+                DecidedLaneRecoveryCurrentServe::Negative {
+                    request_hash: HashOf::new(request),
+                    outcome: CertifiedServeNegativeOutcome::InvalidCertificate,
+                    reason,
+                },
+            );
+        }
+    };
+    if request.subject != decided_subject {
+        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
+            DecidedLaneRecoveryCurrentServe::Negative {
+                request_hash: authenticated.request_hash(),
+                outcome: CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                    decided_subject,
+                ),
+                reason: "terminal recovery Serve request was superseded by durable Decision"
+                    .to_owned(),
+            },
+        );
+    }
+    DecidedLaneRecoveryIngressPreparation::CurrentServe(
+        DecidedLaneRecoveryCurrentServe::Authenticated {
+            authenticated_via: authenticated_via.clone(),
+            request: authenticated,
+        },
+    )
+}
+
 fn drain_v2_ingress(
     receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
@@ -2518,7 +2807,6 @@ fn drain_v2_ingress(
     lane_work: &mut V2LaneWorkAdapter,
     output_guard: &ConsensusOutputGuard,
     kura: &Kura,
-    context_store: &super::v2_context_store::V2ContextStore,
     local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
     block_sync: &mut V2BlockSyncDiscovery,
@@ -2569,7 +2857,7 @@ fn drain_v2_ingress(
                 .local_proposal_directive()?
                 .decided_subject()
                 .is_some();
-            advance_executor(executor, services, 1)?;
+            advance_executor(receiver, executor, services, 1)?;
             let is_terminal = executor
                 .local_proposal_directive()?
                 .decided_subject()
@@ -2595,6 +2883,9 @@ fn drain_v2_ingress(
                     return true;
                 };
                 if message.validate_version().is_err() {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress crossed version validation".to_owned(),
+                    ));
                     return true;
                 }
                 let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) =
@@ -2602,25 +2893,36 @@ fn drain_v2_ingress(
                 else {
                     return true;
                 };
-                if request.round.height != executor.context().height
-                    || certified_body_request_is_superseded_after_decision(
-                        request,
-                        terminal_subject,
-                        executor.context().height,
-                    )
-                {
+                if request.round.height != executor.context().height {
                     return true;
                 }
+                let superseded_by_decision = certified_body_request_is_superseded_after_decision(
+                    request,
+                    terminal_subject,
+                    executor.context().height,
+                );
                 let Some(sender) = inbound.sender() else {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress lost its authenticated sender".to_owned(),
+                    ));
                     return true;
                 };
                 let Some(authenticated_via) = inbound.via() else {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress lost its authenticated source".to_owned(),
+                    ));
                     return true;
                 };
                 let Some(reply_routes) = inbound.reply_routes() else {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress lost its reply capability".to_owned(),
+                    ));
                     return true;
                 };
                 let Some(ingress_ownership) = inbound.ingress_ownership() else {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress lost its ownership evidence".to_owned(),
+                    ));
                     return true;
                 };
                 if reply_routes.semantic_target() != sender
@@ -2629,17 +2931,46 @@ fn drain_v2_ingress(
                     || !ingress_ownership.matches_semantic_origin(Some(sender))
                     || !ingress_ownership.matches_reply_routes(Some(reply_routes))
                 {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(
+                        "reserved certified-body ingress changed its transport ownership"
+                            .to_owned(),
+                    ));
                     return true;
                 }
-                let authenticated = match executor
-                    .authenticate_certified_body_request(request.clone(), sender)
-                {
-                    Ok(authenticated) => authenticated,
-                    Err(error) => {
-                        prepared_serve = Some(PreparedCertifiedServe::Rejected(error.to_string()));
-                        return true;
-                    }
-                };
+                let authenticated =
+                    match executor.authenticate_certified_body_request(request.clone(), sender) {
+                        Ok(authenticated) => authenticated,
+                        Err(error) => {
+                            prepared_serve = Some(
+                                match services.stage_certified_serve_rejection(
+                                    HashOf::new(request),
+                                    CertifiedServeNegativeOutcome::InvalidCertificate,
+                                ) {
+                                    Ok(()) => PreparedCertifiedServe::Rejected(error.to_string()),
+                                    Err(reason) => PreparedCertifiedServe::Service(reason),
+                                },
+                            );
+                            return true;
+                        }
+                    };
+                if superseded_by_decision {
+                    let decided = terminal_subject.expect(
+                        "Decision supersession requires the durable exact terminal subject",
+                    );
+                    prepared_serve = Some(
+                        match services.stage_certified_serve_rejection(
+                            authenticated.request_hash(),
+                            CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
+                        ) {
+                            Ok(()) => PreparedCertifiedServe::Rejected(
+                                "certified body request was superseded by durable Decision"
+                                    .to_owned(),
+                            ),
+                            Err(reason) => PreparedCertifiedServe::Service(reason),
+                        },
+                    );
+                    return true;
+                }
                 match services.prepare_certified_request(authenticated_via, authenticated) {
                     Ok(admission) => {
                         prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));
@@ -2838,16 +3169,12 @@ fn drain_v2_ingress(
                 }
                 if request.round.height < executor.context().height {
                     let response_peer = sender.clone();
-                    match serve_block_sync_while_guarded(
+                    let terminal_ownership = ingress_ownership.clone();
+                    let served = serve_block_sync_while_guarded(
                         output_guard,
                         || {
-                            block_sync_server.serve_historical_body(
-                                kura,
-                                context_store,
-                                request,
-                                &sender,
-                                local_key,
-                            )
+                            block_sync_server
+                                .serve_historical_body(kura, request, &sender, local_key)
                         },
                         |response, permit| {
                             services.post_durable_history_response_on_reply_routes_with_permit(
@@ -2858,12 +3185,21 @@ fn drain_v2_ingress(
                                 permit,
                             )
                         },
-                    ) {
-                        Ok(()) => {}
-                        Err(error) if is_remote_block_sync_rejection(&error) => {
+                    );
+                    match finalize_bound_block_sync_serve(
+                        served,
+                        || mark_leader_wire_volatile(receiver, &terminal_ownership),
+                        |error| {
                             iroha_logger::debug!(%error, "rejected historical certified body request");
+                        },
+                    )? {
+                        BoundBlockSyncServeOutcome::Posted
+                        | BoundBlockSyncServeOutcome::VolatileRemoteRejection => {}
+                        BoundBlockSyncServeOutcome::VolatileNoResponse => {
+                            iroha_logger::debug!(
+                                "retired historical certified body request without a local response"
+                            );
                         }
-                        Err(error) => return Err(error.into()),
                     }
                 } else if request.round.height == executor.context().height {
                     if certified_body_request_is_superseded_after_decision(
@@ -2874,8 +3210,25 @@ fn drain_v2_ingress(
                         // Current-height serving authority narrows to the
                         // exact Decision. A certified losing body remains
                         // useful only before that terminal choice.
-                        mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                        continue;
+                        match prepared_serve.take() {
+                            Some(PreparedCertifiedServe::Rejected(reason)) => {
+                                iroha_logger::debug!(
+                                    %reason,
+                                    "retired certified body request superseded by Decision"
+                                );
+                                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
+                                continue;
+                            }
+                            Some(PreparedCertifiedServe::Service(reason)) => {
+                                return Err(V2RunnerError::Service(reason));
+                            }
+                            Some(PreparedCertifiedServe::Admitted(_)) | None => {
+                                return Err(V2RunnerError::Service(
+                                    "Decision-superseded certified-body ingress crossed physical drain without its durable negative outcome"
+                                        .to_owned(),
+                                ));
+                            }
+                        }
                     }
                     match prepared_serve.take() {
                         Some(PreparedCertifiedServe::Admitted(admission)) => {
@@ -2960,7 +3313,8 @@ fn drain_v2_ingress(
                     continue;
                 }
                 let response_peer = sender.clone();
-                match serve_block_sync_while_guarded(
+                let terminal_ownership = ingress_ownership.clone();
+                let served = serve_block_sync_while_guarded(
                     output_guard,
                     || block_sync_server.serve(kura, request, &sender, local_key),
                     |response, permit| {
@@ -2972,12 +3326,21 @@ fn drain_v2_ingress(
                             permit,
                         )
                     },
-                ) {
-                    Ok(()) => {}
-                    Err(error) if is_remote_block_sync_rejection(&error) => {
+                );
+                match finalize_bound_block_sync_serve(
+                    served,
+                    || mark_leader_wire_volatile(receiver, &terminal_ownership),
+                    |error| {
                         iroha_logger::debug!(%error, "rejected CommitQC discovery request");
+                    },
+                )? {
+                    BoundBlockSyncServeOutcome::Posted
+                    | BoundBlockSyncServeOutcome::VolatileRemoteRejection => {}
+                    BoundBlockSyncServeOutcome::VolatileNoResponse => {
+                        iroha_logger::debug!(
+                            "retired CommitQC discovery request without a local response"
+                        );
                     }
-                    Err(error) => return Err(error.into()),
                 }
             }
             wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
@@ -3013,25 +3376,336 @@ fn drain_v2_ingress(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecidedLaneRecoveryDrainCommitOutcome {
+    LaneLocal,
+    CurrentServe,
+    HistoricalServe,
+    LeaderWireVolatile,
+}
+
+trait DecidedLaneRecoveryDrainCommitter {
+    type Admission;
+
+    fn commit_lane_local(&mut self) -> Result<(), V2RunnerError>;
+
+    fn commit_current_serve(
+        &mut self,
+        current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
+    ) -> Result<(), V2RunnerError>;
+
+    fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError>;
+
+    fn commit_historical_serve(&mut self) -> Result<(), V2RunnerError>;
+
+    fn commit_leader_wire_volatile(&mut self) -> Result<(), V2RunnerError>;
+}
+
+fn commit_decided_lane_recovery_drain<C: DecidedLaneRecoveryDrainCommitter>(
+    authorization: DecidedLaneRecoveryDrainAuthorization<C::Admission>,
+    committer: &mut C,
+) -> Result<DecidedLaneRecoveryDrainCommitOutcome, V2RunnerError> {
+    match authorization {
+        DecidedLaneRecoveryDrainAuthorization::LaneLocal => {
+            committer.commit_lane_local()?;
+            Ok(DecidedLaneRecoveryDrainCommitOutcome::LaneLocal)
+        }
+        DecidedLaneRecoveryDrainAuthorization::CurrentServe(current) => {
+            committer.commit_current_serve(current)?;
+            Ok(DecidedLaneRecoveryDrainCommitOutcome::CurrentServe)
+        }
+        DecidedLaneRecoveryDrainAuthorization::HistoricalServe => {
+            committer.bind_leader_wire()?;
+            committer.commit_historical_serve()?;
+            Ok(DecidedLaneRecoveryDrainCommitOutcome::HistoricalServe)
+        }
+        DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire => {
+            committer.bind_leader_wire()?;
+            committer.commit_leader_wire_volatile()?;
+            Ok(DecidedLaneRecoveryDrainCommitOutcome::LeaderWireVolatile)
+        }
+    }
+}
+
+struct ProductionDecidedLaneRecoveryDrainCommitter<'a> {
+    receiver: &'a FairV2Ingress,
+    inbound: Option<InboundBlockMessage>,
+    bound_leader_wire: Option<FairV2IngressOwnershipEvidence>,
+    executor: &'a V2EffectExecutor,
+    services: &'a mut ProductionV2Services,
+    lane_work: &'a mut V2LaneWorkAdapter,
+    active_view: wire::View,
+    output_guard: &'a ConsensusOutputGuard,
+    kura: &'a Kura,
+    local_key: &'a KeyPair,
+    block_sync_server: &'a mut V2BlockSyncServer,
+}
+
+impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
+    fn take_inbound(&mut self) -> Result<InboundBlockMessage, V2RunnerError> {
+        self.inbound.take().ok_or_else(|| {
+            V2RunnerError::Service(
+                "terminal recovery drain attempted to consume one ingress occurrence twice"
+                    .to_owned(),
+            )
+        })
+    }
+
+    fn take_bound_leader_wire(&mut self) -> Result<FairV2IngressOwnershipEvidence, V2RunnerError> {
+        self.bound_leader_wire.take().ok_or_else(|| {
+            V2RunnerError::Service(
+                "terminal recovery drain used leader-wire ownership before binding it".to_owned(),
+            )
+        })
+    }
+}
+
+impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCommitter<'_> {
+    type Admission = CertifiedServeAdmission;
+
+    fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
+        let inbound = self.take_inbound()?;
+        let _ = self
+            .lane_work
+            .accept_lane_message_with_ingress_ownership(inbound, self.active_view);
+        let _ = self.lane_work.service_next_historical_recovery()?;
+        Ok(())
+    }
+
+    fn commit_current_serve(
+        &mut self,
+        current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
+    ) -> Result<(), V2RunnerError> {
+        let mut inbound = self.take_inbound()?;
+        match current {
+            DecidedLaneRecoveryCurrentDrain::Admitted(admission) => {
+                let ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+                    V2RunnerError::Service(
+                        "terminal recovery Serve admission lost its fair ownership".to_owned(),
+                    )
+                })?;
+                let (_, _, reply_routes) = inbound.into_message_sender_and_reply_routes();
+                self.services
+                    .serve_certified_request_on_routes(
+                        admission,
+                        reply_routes.ok_or_else(|| {
+                            V2RunnerError::Service(
+                                "terminal recovery Serve admission lost its reply routes"
+                                    .to_owned(),
+                            )
+                        })?,
+                        ingress_ownership,
+                    )
+                    .map_err(V2RunnerError::Service)
+            }
+            DecidedLaneRecoveryCurrentDrain::Rejected(reason) => {
+                iroha_logger::debug!(
+                    %reason,
+                    "retired terminal-recovery certified body request"
+                );
+                Ok(())
+            }
+        }
+    }
+
+    fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError> {
+        let inbound = self.inbound.as_mut().ok_or_else(|| {
+            V2RunnerError::Service(
+                "discarded terminal-recovery ingress was already consumed".to_owned(),
+            )
+        })?;
+        let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+            V2RunnerError::Service(
+                "discarded terminal-recovery ingress lost its fair ownership carrier".to_owned(),
+            )
+        })?;
+        if !ingress_ownership.validate_exact()
+            || !ingress_ownership.matches_message(inbound.message())
+            || !ingress_ownership.matches_semantic_origin(inbound.sender())
+            || !ingress_ownership.matches_reply_routes(inbound.reply_routes())
+        {
+            return Err(V2RunnerError::Service(
+                "discarded terminal-recovery ingress carried altered fair ownership".to_owned(),
+            ));
+        }
+        self.receiver
+            .bind_leader_wire_runtime_ownership(&mut ingress_ownership)
+            .map_err(V2RunnerError::Service)?;
+        self.bound_leader_wire = Some(ingress_ownership);
+        Ok(())
+    }
+
+    fn commit_historical_serve(&mut self) -> Result<(), V2RunnerError> {
+        let inbound = self.take_inbound()?;
+        let ingress_ownership = self.take_bound_leader_wire()?;
+        let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
+        let BlockMessage::V2(message) = message else {
+            return Err(V2RunnerError::Service(
+                "historical terminal-recovery route changed message class after authorization"
+                    .to_owned(),
+            ));
+        };
+        message
+            .validate_version()
+            .map_err(|error| V2RunnerError::Service(error.to_string()))?;
+        let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = message.payload else {
+            return Err(V2RunnerError::Service(
+                "historical terminal-recovery route changed payload after authorization".to_owned(),
+            ));
+        };
+        if request.round.height >= self.executor.context().height {
+            return Err(V2RunnerError::Service(
+                "historical terminal-recovery route crossed the active height".to_owned(),
+            ));
+        }
+        let Some(sender) = sender else {
+            mark_leader_wire_volatile(self.receiver, &ingress_ownership)?;
+            return Ok(());
+        };
+        let Some(reply_routes) = reply_routes else {
+            mark_leader_wire_volatile(self.receiver, &ingress_ownership)?;
+            return Ok(());
+        };
+        if reply_routes.semantic_target() != &sender {
+            mark_leader_wire_volatile(self.receiver, &ingress_ownership)?;
+            return Ok(());
+        }
+        let response_peer = sender.clone();
+        let terminal_ownership = ingress_ownership.clone();
+        let output_guard = self.output_guard;
+        let block_sync_server = &mut *self.block_sync_server;
+        let kura = self.kura;
+        let local_key = self.local_key;
+        let services = &mut *self.services;
+        let served = serve_block_sync_while_guarded(
+            output_guard,
+            || block_sync_server.serve_historical_body(kura, request, &sender, local_key),
+            |response, permit| {
+                services.post_durable_history_response_on_reply_routes_with_permit(
+                    response_peer,
+                    reply_routes,
+                    ingress_ownership,
+                    response,
+                    permit,
+                )
+            },
+        );
+        match finalize_bound_block_sync_serve(
+            served,
+            || mark_leader_wire_volatile(self.receiver, &terminal_ownership),
+            |error| {
+                iroha_logger::debug!(
+                    %error,
+                    "rejected historical certified body request during terminal recovery"
+                );
+            },
+        )? {
+            BoundBlockSyncServeOutcome::Posted
+            | BoundBlockSyncServeOutcome::VolatileRemoteRejection => {}
+            BoundBlockSyncServeOutcome::VolatileNoResponse => {
+                iroha_logger::debug!(
+                    "retired terminal-recovery historical body request without a local response"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn commit_leader_wire_volatile(&mut self) -> Result<(), V2RunnerError> {
+        let _ = self.take_inbound()?;
+        let ingress_ownership = self.take_bound_leader_wire()?;
+        mark_leader_wire_volatile(self.receiver, &ingress_ownership)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn drain_decided_lane_recovery_ingress(
     receiver: &FairV2Ingress,
+    executor: &V2EffectExecutor,
+    services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
     active_view: wire::View,
+    output_guard: &ConsensusOutputGuard,
+    kura: &Kura,
+    local_key: &KeyPair,
+    block_sync_server: &mut V2BlockSyncServer,
 ) -> Result<(), V2RunnerError> {
-    let Some(inbound) = receiver
-        .try_recv_if_checked(|_| true)
-        .map_err(V2RunnerError::Service)?
-    else {
+    let decided_subject = executor
+        .local_proposal_directive()?
+        .decided_subject()
+        .ok_or_else(|| {
+            V2RunnerError::Service(
+                "terminal lane recovery ingress lost its durable Decision subject".to_owned(),
+            )
+        })?;
+    let mut authorization = None;
+    let mut authorization_error = None;
+    let inbound = receiver
+        .try_recv_if_checked(|inbound| {
+            if authorization_error.is_some() {
+                return false;
+            }
+            let preparation = prepare_decided_lane_recovery_ingress(
+                inbound,
+                executor.context().height,
+                decided_subject,
+                |request, sender| {
+                    executor
+                        .authenticate_certified_body_request(request, sender)
+                        .map_err(|error| error.to_string())
+                },
+            );
+            match authorize_decided_lane_recovery_drain(preparation, services) {
+                DecidedLaneRecoveryDrainDecision::Retain => false,
+                DecidedLaneRecoveryDrainDecision::Authorized(candidate) => {
+                    if authorization.replace(candidate).is_some() {
+                        authorization_error = Some(
+                            "terminal recovery selected more than one checked ingress occurrence"
+                                .to_owned(),
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                }
+                DecidedLaneRecoveryDrainDecision::FailClosed(reason) => {
+                    authorization_error = Some(reason);
+                    false
+                }
+            }
+        })
+        .map_err(V2RunnerError::Service)?;
+    if let Some(reason) = authorization_error {
+        return Err(V2RunnerError::Service(reason));
+    }
+    let Some(inbound) = inbound else {
         return Ok(());
     };
-    if inbound.message().is_lane_local() {
-        let _ = lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view);
-        let _ = lane_work.service_next_historical_recovery()?;
-    }
-    // Global traffic for this replayed terminal height is intentionally
-    // dropped. The durable Decision and finality tuple are the only global
-    // authority; only its exact lane carrier may still make progress. One fair
-    // occurrence per outer loop keeps pending Apply/completion work dominant.
+    let authorization = authorization.ok_or_else(|| {
+        V2RunnerError::Service(
+            "terminal recovery checked dequeue lost its pre-drain authorization".to_owned(),
+        )
+    })?;
+    let mut committer = ProductionDecidedLaneRecoveryDrainCommitter {
+        receiver,
+        inbound: Some(inbound),
+        bound_leader_wire: None,
+        executor,
+        services,
+        lane_work,
+        active_view,
+        output_guard,
+        kura,
+        local_key,
+        block_sync_server,
+    };
+    let _ = commit_decided_lane_recovery_drain(authorization, &mut committer)?;
+    // Non-Serve global traffic for this replayed terminal height is
+    // intentionally dropped. The durable Decision and finality tuple are the
+    // only global reducer authority. Current-height Serve traffic is instead
+    // fully authenticated above and atomically terminalized before the carrier
+    // can leave fair ingress. One occurrence per outer loop keeps pending
+    // Apply/completion work dominant.
     Ok(())
 }
 
@@ -3122,11 +3796,24 @@ fn is_remote_block_sync_rejection(error: &V2BlockSyncError) -> bool {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GuardedBlockSyncServeOutcome {
+    Posted,
+    NoResponse,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BoundBlockSyncServeOutcome {
+    Posted,
+    VolatileNoResponse,
+    VolatileRemoteRejection,
+}
+
 fn serve_block_sync_while_guarded<Response>(
     output_guard: &ConsensusOutputGuard,
     serve: impl FnOnce() -> Result<Option<Response>, V2BlockSyncError>,
     post: impl FnOnce(Response, &ConsensusOutputPermit<'_>) -> Result<(), String>,
-) -> Result<(), V2BlockSyncError> {
+) -> Result<GuardedBlockSyncServeOutcome, V2BlockSyncError> {
     let operation = output_guard
         .begin_fail_stop_operation()
         .ok_or(V2BlockSyncError::RestartRequired)?;
@@ -3137,11 +3824,11 @@ fn serve_block_sync_while_guarded<Response>(
                 return Err(V2BlockSyncError::ResponsePost(error));
             }
             operation.complete();
-            Ok(())
+            Ok(GuardedBlockSyncServeOutcome::Posted)
         }
         Ok(None) => {
             operation.complete();
-            Ok(())
+            Ok(GuardedBlockSyncServeOutcome::NoResponse)
         }
         Err(error) if is_remote_block_sync_rejection(&error) => {
             operation.complete();
@@ -3151,6 +3838,26 @@ fn serve_block_sync_while_guarded<Response>(
             drop(operation);
             Err(error)
         }
+    }
+}
+
+fn finalize_bound_block_sync_serve(
+    served: Result<GuardedBlockSyncServeOutcome, V2BlockSyncError>,
+    retire_volatile: impl FnOnce() -> Result<(), V2RunnerError>,
+    observe_remote_rejection: impl FnOnce(&V2BlockSyncError),
+) -> Result<BoundBlockSyncServeOutcome, V2RunnerError> {
+    match served {
+        Ok(GuardedBlockSyncServeOutcome::Posted) => Ok(BoundBlockSyncServeOutcome::Posted),
+        Ok(GuardedBlockSyncServeOutcome::NoResponse) => {
+            retire_volatile()?;
+            Ok(BoundBlockSyncServeOutcome::VolatileNoResponse)
+        }
+        Err(error) if is_remote_block_sync_rejection(&error) => {
+            retire_volatile()?;
+            observe_remote_rejection(&error);
+            Ok(BoundBlockSyncServeOutcome::VolatileRemoteRejection)
+        }
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -3247,11 +3954,13 @@ fn commit_certificate_admission_completed(
 }
 
 fn advance_executor(
+    receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
     for _ in 0..limit.max(1) {
+        executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
         match executor.step(Instant::now(), services)? {
             EffectExecutorStep::Idle => break,
             EffectExecutorStep::Advanced { .. } => {
@@ -3273,9 +3982,11 @@ fn advance_executor(
 /// the ordinary runner path performs them after the barrier drains. This is
 /// deliberately not a loop, even when the older causal episode remains live.
 fn advance_executor_once_before_exact_serve(
+    receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
 ) -> Result<(), V2RunnerError> {
+    executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
     let _ = executor.step(Instant::now(), services)?;
     Ok(())
 }
@@ -4176,7 +4887,7 @@ pub(super) enum V2RunnerError {
 #[cfg(test)]
 mod tests {
     use std::{
-        cell::Cell,
+        cell::{Cell, RefCell},
         collections::VecDeque,
         sync::{Mutex, atomic::AtomicUsize},
     };
@@ -4211,6 +4922,19 @@ mod tests {
         },
         sumeragi::LaneRelayMessage,
     };
+
+    #[test]
+    fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {
+        let (mut services, _) = super::super::v2_worker::tests::fixture();
+        assert!(!services.exact_output_restart_required_for_test());
+        let reason = services.fail_closed_dormant_certified_serve(41);
+        assert!(reason.contains("41"));
+        assert!(reason.contains("restart is required for local discharge"));
+        assert!(
+            services.exact_output_restart_required_for_test(),
+            "a carrierless live Serve lifecycle must restart into local startup discharge"
+        );
+    }
 
     #[test]
     fn committed_lane_status_publisher_retries_revision_drift_without_publication() {
@@ -4375,6 +5099,7 @@ mod tests {
                 quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"runner-test-nexus-amx"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 1024,
@@ -4387,6 +5112,489 @@ mod tests {
             },
             keys,
         )
+    }
+
+    fn decided_recovery_certified_request(
+        context: &wire::HeightContext,
+        requester_key: &KeyPair,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> wire::CertifiedBodyRequest {
+        let mut request = wire::CertifiedBodyRequest {
+            round,
+            subject,
+            certificate: wire::QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment: wire::ExecutionCommitment::without_topups(
+                    Hash::new(b"runner recovery parent state"),
+                    Hash::new(b"runner recovery post state"),
+                    Hash::new(b"runner recovery ordinary writes"),
+                    Hash::new(b"runner recovery executed block"),
+                ),
+                signers: (0..context.roster.len())
+                    .map(|index| u32::try_from(index).expect("small runner roster index"))
+                    .collect(),
+                aggregate_signature: vec![0xA5; 48],
+            },
+            requester: PeerId::new(requester_key.public_key().clone()),
+            signature: Vec::new(),
+        };
+        request.signature =
+            Signature::new(requester_key.private_key(), &request.signature_preimage())
+                .payload()
+                .to_vec();
+        request
+    }
+
+    fn admitted_decided_recovery_request(
+        context: &wire::HeightContext,
+        request: &wire::CertifiedBodyRequest,
+    ) -> InboundBlockMessage {
+        let requester = request.requester.clone();
+        super::super::fair_v2_ingress_admit_with_roster_for_test(
+            InboundBlockMessage::from_transport(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
+                )),
+                requester.clone(),
+                requester,
+            ),
+            context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+        )
+    }
+
+    enum RecordedPrepareOutcome {
+        Admitted(u8),
+        Backpressure,
+        Rejected(&'static str),
+        Service(&'static str),
+    }
+
+    struct RecordingDecidedLaneAuthorizer {
+        calls: Vec<&'static str>,
+        stage_error: Option<&'static str>,
+        prepare_outcome: Option<RecordedPrepareOutcome>,
+    }
+
+    impl RecordingDecidedLaneAuthorizer {
+        fn new(prepare_outcome: RecordedPrepareOutcome) -> Self {
+            Self {
+                calls: Vec::new(),
+                stage_error: None,
+                prepare_outcome: Some(prepare_outcome),
+            }
+        }
+    }
+
+    impl DecidedLaneRecoveryDrainAuthorizer for RecordingDecidedLaneAuthorizer {
+        type Admission = u8;
+
+        fn stage_negative(
+            &mut self,
+            _request_hash: HashOf<wire::CertifiedBodyRequest>,
+            _outcome: CertifiedServeNegativeOutcome,
+        ) -> Result<(), String> {
+            self.calls.push("stage-negative");
+            self.stage_error
+                .map_or(Ok(()), |reason| Err(reason.to_owned()))
+        }
+
+        fn prepare_exact(
+            &mut self,
+            _authenticated_via: &PeerId,
+            _request: AuthenticatedCertifiedBodyRequest,
+        ) -> Result<Self::Admission, CertifiedServePrepareError> {
+            self.calls.push("prepare-exact");
+            match self
+                .prepare_outcome
+                .take()
+                .expect("recording authorizer is called at most once")
+            {
+                RecordedPrepareOutcome::Admitted(admission) => Ok(admission),
+                RecordedPrepareOutcome::Backpressure => {
+                    Err(CertifiedServePrepareError::Backpressure)
+                }
+                RecordedPrepareOutcome::Rejected(reason) => {
+                    Err(CertifiedServePrepareError::Rejected(reason.to_owned()))
+                }
+                RecordedPrepareOutcome::Service(reason) => {
+                    Err(CertifiedServePrepareError::Service(reason.to_owned()))
+                }
+            }
+        }
+    }
+
+    struct RecordingDecidedLaneCommitter {
+        calls: Vec<&'static str>,
+        fail_on: Option<&'static str>,
+    }
+
+    impl RecordingDecidedLaneCommitter {
+        fn new(fail_on: Option<&'static str>) -> Self {
+            Self {
+                calls: Vec::new(),
+                fail_on,
+            }
+        }
+
+        fn record(&mut self, operation: &'static str) -> Result<(), V2RunnerError> {
+            self.calls.push(operation);
+            if self.fail_on == Some(operation) {
+                Err(V2RunnerError::Service(format!("{operation} failed")))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl DecidedLaneRecoveryDrainCommitter for RecordingDecidedLaneCommitter {
+        type Admission = u8;
+
+        fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
+            self.record("lane-local")
+        }
+
+        fn commit_current_serve(
+            &mut self,
+            current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
+        ) -> Result<(), V2RunnerError> {
+            match current {
+                DecidedLaneRecoveryCurrentDrain::Admitted(7) => self.record("serve-exact-decided"),
+                DecidedLaneRecoveryCurrentDrain::Rejected(_) => {
+                    self.record("retire-staged-negative")
+                }
+                DecidedLaneRecoveryCurrentDrain::Admitted(other) => Err(V2RunnerError::Service(
+                    format!("unexpected test admission {other}"),
+                )),
+            }
+        }
+
+        fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError> {
+            self.record("bind-leader-wire")
+        }
+
+        fn commit_historical_serve(&mut self) -> Result<(), V2RunnerError> {
+            self.record("serve-history")
+        }
+
+        fn commit_leader_wire_volatile(&mut self) -> Result<(), V2RunnerError> {
+            self.record("retire-volatile")
+        }
+    }
+
+    #[test]
+    fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
+        let (context, keys) = context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 3,
+        };
+        let subject = proposal_subject(b"decided drain authorization subject");
+        let decided_subject = proposal_subject(b"decided drain authorization winner");
+        let request = decided_recovery_certified_request(&context, &keys[1], round, subject);
+        let inbound = admitted_decided_recovery_request(&context, &request);
+        let prepare = |winner| {
+            prepare_decided_lane_recovery_ingress(
+                &inbound,
+                context.height,
+                winner,
+                |request, sender| {
+                    super::super::v2_transport::authenticate_certified_body_request(
+                        &context,
+                        request,
+                        sender,
+                        |_, _| Ok::<(), String>(()),
+                    )
+                    .map_err(|error| error.to_string())
+                },
+            )
+        };
+
+        let mut staged = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
+        let staged_decision =
+            authorize_decided_lane_recovery_drain(prepare(decided_subject), &mut staged);
+        assert!(matches!(
+            staged_decision,
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Rejected(_)
+                )
+            )
+        ));
+        staged.calls.push("checked-drain");
+        assert_eq!(staged.calls, ["stage-negative", "checked-drain"]);
+
+        let mut failed_stage =
+            RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
+        failed_stage.stage_error = Some("durable negative write failed");
+        assert!(matches!(
+            authorize_decided_lane_recovery_drain(
+                prepare(decided_subject),
+                &mut failed_stage,
+            ),
+            DecidedLaneRecoveryDrainDecision::FailClosed(reason)
+                if reason == "durable negative write failed"
+        ));
+        assert_eq!(failed_stage.calls, ["stage-negative"]);
+
+        let mut admitted = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Admitted(7));
+        assert!(matches!(
+            authorize_decided_lane_recovery_drain(prepare(subject), &mut admitted),
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Admitted(7)
+                )
+            )
+        ));
+        admitted.calls.push("checked-drain");
+        assert_eq!(admitted.calls, ["prepare-exact", "checked-drain"]);
+
+        let mut typed_rejection = RecordingDecidedLaneAuthorizer::new(
+            RecordedPrepareOutcome::Rejected("typed negative was staged"),
+        );
+        assert!(matches!(
+            authorize_decided_lane_recovery_drain(prepare(subject), &mut typed_rejection),
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Rejected(reason)
+                )
+            ) if reason == "typed negative was staged"
+        ));
+        typed_rejection.calls.push("checked-drain");
+        assert_eq!(typed_rejection.calls, ["prepare-exact", "checked-drain"]);
+
+        let mut backpressured =
+            RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
+        assert!(matches!(
+            authorize_decided_lane_recovery_drain(prepare(subject), &mut backpressured),
+            DecidedLaneRecoveryDrainDecision::Retain
+        ));
+        assert_eq!(backpressured.calls, ["prepare-exact"]);
+
+        let mut failed_prepare = RecordingDecidedLaneAuthorizer::new(
+            RecordedPrepareOutcome::Service("Serve preparation failed"),
+        );
+        assert!(matches!(
+            authorize_decided_lane_recovery_drain(prepare(subject), &mut failed_prepare),
+            DecidedLaneRecoveryDrainDecision::FailClosed(reason)
+                if reason == "Serve preparation failed"
+        ));
+        assert_eq!(
+            failed_prepare.calls,
+            ["prepare-exact"],
+            "service failure cannot authorize checked dequeue"
+        );
+    }
+
+    #[test]
+    fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
+        let mut exact = RecordingDecidedLaneCommitter::new(None);
+        assert_eq!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Admitted(7),
+                ),
+                &mut exact,
+            )
+            .expect("commit exact decided Serve"),
+            DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
+        );
+        assert_eq!(exact.calls, ["serve-exact-decided"]);
+
+        let mut negative = RecordingDecidedLaneCommitter::new(None);
+        assert_eq!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                    DecidedLaneRecoveryCurrentDrain::Rejected(
+                        "durable negative staged".to_owned(),
+                    ),
+                ),
+                &mut negative,
+            )
+            .expect("retire staged negative"),
+            DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
+        );
+        assert_eq!(negative.calls, ["retire-staged-negative"]);
+
+        let mut historical = RecordingDecidedLaneCommitter::new(None);
+        assert_eq!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::HistoricalServe,
+                &mut historical,
+            )
+            .expect("route historical Serve"),
+            DecidedLaneRecoveryDrainCommitOutcome::HistoricalServe
+        );
+        assert_eq!(historical.calls, ["bind-leader-wire", "serve-history"]);
+
+        let mut volatile = RecordingDecidedLaneCommitter::new(None);
+        assert_eq!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
+                &mut volatile,
+            )
+            .expect("retire non-Serve terminal traffic"),
+            DecidedLaneRecoveryDrainCommitOutcome::LeaderWireVolatile
+        );
+        assert_eq!(volatile.calls, ["bind-leader-wire", "retire-volatile"]);
+
+        let mut failed_bind = RecordingDecidedLaneCommitter::new(Some("bind-leader-wire"));
+        assert!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
+                &mut failed_bind,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            failed_bind.calls,
+            ["bind-leader-wire"],
+            "a failed bind cannot publish VolatileTerminal"
+        );
+    }
+
+    #[test]
+    fn drain_decided_lane_recovery_ingress_prepares_exact_and_typed_negative_branches() {
+        let (context, keys) = context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 3,
+        };
+        let subject = proposal_subject(b"decided recovery exact subject");
+        let request = decided_recovery_certified_request(&context, &keys[1], round, subject);
+        let inbound = admitted_decided_recovery_request(&context, &request);
+        let authenticate = |request, sender: &PeerId| {
+            super::super::v2_transport::authenticate_certified_body_request(
+                &context,
+                request,
+                sender,
+                |_, _| Ok::<(), String>(()),
+            )
+            .map_err(|error| error.to_string())
+        };
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &inbound,
+                context.height,
+                subject,
+                authenticate,
+            ),
+            DecidedLaneRecoveryIngressPreparation::CurrentServe(
+                DecidedLaneRecoveryCurrentServe::Authenticated { request: authenticated, .. }
+            ) if authenticated.request_hash() == HashOf::new(&request)
+        ));
+
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &inbound,
+                context.height,
+                subject,
+                |_, _| Err("invalid aggregate signature".to_owned()),
+            ),
+            DecidedLaneRecoveryIngressPreparation::CurrentServe(
+                DecidedLaneRecoveryCurrentServe::Negative {
+                    request_hash,
+                    outcome: CertifiedServeNegativeOutcome::InvalidCertificate,
+                    ..
+                }
+            ) if request_hash == HashOf::new(&request)
+        ));
+
+        let decided_subject = proposal_subject(b"decided recovery winning subject");
+        assert_ne!(decided_subject, subject);
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &inbound,
+                context.height,
+                decided_subject,
+                |request, sender| {
+                    super::super::v2_transport::authenticate_certified_body_request(
+                        &context,
+                        request,
+                        sender,
+                        |_, _| Ok::<(), String>(()),
+                    )
+                    .map_err(|error| error.to_string())
+                },
+            ),
+            DecidedLaneRecoveryIngressPreparation::CurrentServe(
+                DecidedLaneRecoveryCurrentServe::Negative {
+                    request_hash,
+                    outcome:
+                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
+                    ..
+                }
+            ) if request_hash == HashOf::new(&request) && decided == decided_subject
+        ));
+    }
+
+    #[test]
+    fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traffic() {
+        let (context, keys) = context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height.saturating_sub(1),
+            view: 0,
+        };
+        let subject = proposal_subject(b"decided recovery historical subject");
+        let historical = decided_recovery_certified_request(&context, &keys[1], round, subject);
+        let historical_inbound = admitted_decided_recovery_request(&context, &historical);
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &historical_inbound,
+                context.height,
+                subject,
+                |_, _| panic!("historical classification precedes active Serve authentication"),
+            ),
+            DecidedLaneRecoveryIngressPreparation::HistoricalServe
+        ));
+
+        let peer = context.roster[0].validator.clone();
+        let non_serve = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"wrong-version recovery chunk",
+                )),
+                index: 0,
+                bytes: vec![0xA5],
+                sender: 0,
+                signature: vec![0x5A],
+            }),
+        );
+        let ordinary_non_serve =
+            InboundBlockMessage::new(BlockMessage::V2(non_serve.clone()), Some(peer.clone()));
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &ordinary_non_serve,
+                context.height,
+                subject,
+                |_, _| panic!("non-Serve traffic never reaches Serve authentication"),
+            ),
+            DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
+        ));
+
+        let mut wrong_version = non_serve;
+        wrong_version.protocol_version = wrong_version.protocol_version.saturating_sub(1);
+        let wrong_version =
+            InboundBlockMessage::new(BlockMessage::V2(wrong_version), Some(peer.clone()));
+        assert!(matches!(
+            prepare_decided_lane_recovery_ingress(
+                &wrong_version,
+                context.height,
+                subject,
+                |_, _| panic!("non-Serve traffic never reaches Serve authentication"),
+            ),
+            DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
+        ));
     }
 
     fn leader_wire_runtime_ingress_fixture() -> (
@@ -4530,10 +5738,11 @@ mod tests {
             ownership.leader_wire_runtime_receipt().is_some(),
             "the synthetic stale Coalesce result carries a fresh runtime receipt"
         );
-        assert!(
+        assert_eq!(
             gate.earliest_ingress_scheduler_ordinal()
-                .expect("read runner leader-wire minimum")
-                .is_some()
+                .expect("read runner leader-wire minimum"),
+            None,
+            "a runtime-bound owner has already left the durable Ingress selector"
         );
 
         assert!(matches!(
@@ -7338,6 +8547,106 @@ mod tests {
 
         assert!(!output_guard.restart_required());
         assert!(output_guard.acquire().is_some());
+    }
+
+    #[test]
+    fn bound_block_sync_finalization_retires_only_nonfatal_no_output_paths() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let calls = RefCell::new(Vec::new());
+        let served = serve_block_sync_while_guarded(
+            output_guard.as_ref(),
+            || Ok(Some(())),
+            |(), _permit| {
+                calls.borrow_mut().push("post");
+                Ok(())
+            },
+        );
+        let posted = finalize_bound_block_sync_serve(
+            served,
+            || {
+                calls.borrow_mut().push("volatile");
+                Ok(())
+            },
+            |_| calls.borrow_mut().push("remote-rejection"),
+        )
+        .expect("posted response owns its bound runtime receipt");
+        assert_eq!(posted, BoundBlockSyncServeOutcome::Posted);
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["post"],
+            "posted exact output, not VolatileTerminal, owns the runtime receipt"
+        );
+        calls.borrow_mut().clear();
+
+        let served = serve_block_sync_while_guarded(
+            output_guard.as_ref(),
+            || Ok::<Option<()>, V2BlockSyncError>(None),
+            |(), _permit| {
+                calls.borrow_mut().push("unexpected-post");
+                Ok(())
+            },
+        );
+        let no_response = finalize_bound_block_sync_serve(
+            served,
+            || {
+                calls.borrow_mut().push("volatile");
+                Ok(())
+            },
+            |_| calls.borrow_mut().push("remote-rejection"),
+        )
+        .expect("no-response history retires through VolatileTerminal");
+        assert_eq!(no_response, BoundBlockSyncServeOutcome::VolatileNoResponse);
+        assert_eq!(calls.borrow().as_slice(), ["volatile"]);
+        calls.borrow_mut().clear();
+
+        let served = serve_block_sync_while_guarded(
+            output_guard.as_ref(),
+            || {
+                Err::<Option<()>, _>(V2BlockSyncError::Wire(
+                    wire::ValidationError::WrongHeightContext,
+                ))
+            },
+            |(), _permit| {
+                calls.borrow_mut().push("unexpected-post");
+                Ok(())
+            },
+        );
+        let remote_rejection = finalize_bound_block_sync_serve(
+            served,
+            || {
+                calls.borrow_mut().push("volatile");
+                Ok(())
+            },
+            |_| calls.borrow_mut().push("remote-rejection"),
+        )
+        .expect("remote rejection retires through VolatileTerminal");
+        assert_eq!(
+            remote_rejection,
+            BoundBlockSyncServeOutcome::VolatileRemoteRejection
+        );
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["volatile", "remote-rejection"],
+            "runtime retirement precedes nonfatal rejection observation"
+        );
+        calls.borrow_mut().clear();
+
+        let fatal = finalize_bound_block_sync_serve(
+            Err(V2BlockSyncError::RestartRequired),
+            || {
+                calls.borrow_mut().push("volatile");
+                Ok(())
+            },
+            |_| calls.borrow_mut().push("remote-rejection"),
+        );
+        assert!(matches!(
+            fatal,
+            Err(V2RunnerError::BlockSync(V2BlockSyncError::RestartRequired))
+        ));
+        assert!(
+            calls.borrow().is_empty(),
+            "fatal service failure leaves the durable Runtime owner for restart recovery"
+        );
     }
 
     #[test]

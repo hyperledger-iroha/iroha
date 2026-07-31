@@ -402,7 +402,7 @@ impl LaneLifecycleParameterV1 {
     IntoSchema,
 )]
 #[repr(transparent)]
-#[norito(transparent, decode_from_slice)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -421,7 +421,7 @@ pub struct LaneId(u32);
     Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
 )]
 #[repr(transparent)]
-#[norito(transparent, decode_from_slice)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -599,7 +599,7 @@ impl norito::json::JsonDeserialize for ShardId {
     Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
 )]
 #[repr(transparent)]
-#[norito(transparent, decode_from_slice)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -2102,7 +2102,7 @@ mod tests {
             governance: Some("governance-v2".into()),
             settlement: Some("settlement-v3".into()),
             storage: LaneStorageProfile::SplitReplica,
-            proof_scheme: DaProofScheme::KzgBls12_381,
+            proof_scheme: DaProofScheme::MerkleSha256,
             metadata: BTreeMap::new(),
         };
         base.metadata

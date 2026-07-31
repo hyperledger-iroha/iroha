@@ -367,7 +367,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cutover-plan",
         required=True,
-        help="Path to `portal.dns-cutover.json` (from docs portal tooling).",
+        help="Path to the governed DNS cutover-plan JSON.",
     )
     parser.add_argument(
         "--out",

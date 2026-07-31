@@ -20,7 +20,6 @@ BASH_3_ENTRYPOINTS = (
     REPO_ROOT / "scripts/run_full_tests.sh",
     REPO_ROOT / "check_pending_incentive_snapshots.sh",
     REPO_ROOT / "scripts/android_sbom_provenance.sh",
-    REPO_ROOT / "docs/portal/scripts/sorafs-pin-release.sh",
 )
 BASH_4_ONLY_PATTERNS = (
     re.compile(r"\bdeclare\s+-A\b"),
@@ -53,24 +52,6 @@ def test_entrypoint_avoids_bash_4_only_builtins_and_expansions(script: Path) -> 
 
     for pattern in BASH_4_ONLY_PATTERNS:
         assert pattern.search(source) is None, f"{script} contains {pattern.pattern}"
-
-
-def test_sorafs_pin_release_help_runs_on_stock_macos_bash() -> None:
-    result = subprocess.run(
-        [
-            "/bin/bash",
-            str(REPO_ROOT / "docs/portal/scripts/sorafs-pin-release.sh"),
-            "--help",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "Usage: sorafs-pin-release.sh" in result.stdout
-
 
 @pytest.mark.parametrize(
     "relay_args",
@@ -128,10 +109,69 @@ def test_portable_replacements_keep_all_fixed_mappings() -> None:
         assert module in sbom
         assert filename in sbom
 
-    swift_regen = (REPO_ROOT / "scripts/swift_fixture_regen.sh").read_text(
-        encoding="utf-8"
+    for script_name in (
+        "python_fixture_regen.sh",
+        "swift_fixture_regen.sh",
+        "android_fixture_regen.sh",
+    ):
+        fixture_regen = (REPO_ROOT / "scripts" / script_name).read_text(
+            encoding="utf-8"
+        )
+        assert 'norito-rpc-fixtures "$@"' in fixture_regen
+        for retired in ("rsync", "export_norito_fixtures", "SWIFT_FIXTURE_ARCHIVE"):
+            assert retired not in fixture_regen
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    [
+        "python_fixture_regen.sh",
+        "swift_fixture_regen.sh",
+        "android_fixture_regen.sh",
+    ],
+)
+def test_fixture_regen_delegates_exactly_to_the_canonical_owner(
+    tmp_path: Path, script_name: str
+) -> None:
+    fake_cargo = tmp_path / "cargo"
+    capture = tmp_path / "args.txt"
+    _write_executable(
+        fake_cargo,
+        """
+        #!/bin/bash
+        printf '%s\n' "$@" > "${CAPTURE_ARGS}"
+        """,
     )
-    assert 'archive_info+=("${archive_line}")' in swift_regen
+    env = os.environ.copy()
+    env.update({"CARGO_BIN": str(fake_cargo), "CAPTURE_ARGS": str(capture)})
+
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            str(REPO_ROOT / "scripts" / script_name),
+            "--output-root",
+            "artifacts/norito-stage",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert capture.read_text(encoding="utf-8").splitlines() == [
+        "run",
+        "--locked",
+        "-p",
+        "xtask",
+        "--bin",
+        "xtask",
+        "--",
+        "norito-rpc-fixtures",
+        "--output-root",
+        "artifacts/norito-stage",
+    ]
 
 
 def test_android_sbom_collection_preserves_each_module_report(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ use iroha_data_model::{
     proof::{ProofAttachment, VerifyingKeyId},
     query::QueryRequest,
     smart_contract::ContractAddress,
+    state_path::StatePath,
 };
 #[cfg(test)]
 use iroha_primitives::numeric::Numeric;
@@ -565,8 +566,9 @@ impl MockWorldStateView {
     // Smart-contract durable state (mock)
     // -----------------------------
 
-    pub fn sc_get(&self, path: &str) -> Option<Vec<u8>> {
-        let out = self.state_overlay.get(path);
+    pub fn sc_get<P: AsRef<str>>(&self, path: P) -> Option<Vec<u8>> {
+        let path: StatePath = path.as_ref().parse().ok()?;
+        let out = self.state_overlay.get(&path);
         if crate::dev_env::decode_trace_enabled() {
             eprintln!(
                 "sc_get: {path} -> {}",
@@ -576,19 +578,21 @@ impl MockWorldStateView {
         out
     }
 
-    pub fn sc_keys(&self) -> Vec<String> {
+    pub fn sc_keys(&self) -> Vec<StatePath> {
         self.state_overlay.keys().cloned().collect()
     }
 
-    pub fn sc_set(&mut self, path: &str, value: Vec<u8>) -> Result<(), VMError> {
+    pub fn sc_set<P: AsRef<str>>(&mut self, path: P, value: Vec<u8>) -> Result<(), VMError> {
+        let path: StatePath = path.as_ref().parse().map_err(|_| VMError::NoritoInvalid)?;
         if crate::dev_env::decode_trace_enabled() {
             eprintln!("sc_set: {path} -> {value:?}");
         }
-        self.state_overlay.set(path, value)
+        self.state_overlay.set(&path, value)
     }
 
-    pub fn sc_del(&mut self, path: &str) -> Result<(), VMError> {
-        self.state_overlay.del(path)
+    pub fn sc_del<P: AsRef<str>>(&mut self, path: P) -> Result<(), VMError> {
+        let path: StatePath = path.as_ref().parse().map_err(|_| VMError::NoritoInvalid)?;
+        self.state_overlay.del(&path)
     }
 
     pub fn sc_snapshot(&self) -> DurableStateSnapshot {
@@ -1962,7 +1966,7 @@ pub struct WsvHost {
     contract_runtime_entrypoint: Option<String>,
     fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Quantity)>>,
     actual_access: crate::host::AccessLog,
-    state_overlay: HashMap<String, Option<Vec<u8>>>,
+    state_overlay: HashMap<StatePath, Option<Vec<u8>>>,
     tx_active: bool,
     /// Authoritative schema registry for typed Norito encode/decode.
     schema: std::sync::Arc<dyn SchemaRegistry + Send + Sync>,
@@ -1991,7 +1995,7 @@ struct WsvHostSnapshot {
     contract_runtime_entrypoint: Option<String>,
     fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Quantity)>>,
     actual_access: crate::host::AccessLog,
-    state_overlay: HashMap<String, Option<Vec<u8>>>,
+    state_overlay: HashMap<StatePath, Option<Vec<u8>>>,
     tx_active: bool,
     schema: std::sync::Arc<dyn SchemaRegistry + Send + Sync>,
 }
@@ -2391,7 +2395,7 @@ impl WsvHost {
                 .is_some_and(|suffix| suffix.starts_with('/'))
     }
 
-    fn state_key_present(&self, key: &str) -> bool {
+    fn state_key_present(&self, key: &StatePath) -> bool {
         if self.tx_active
             && let Some(entry) = self.state_overlay.get(key)
         {
@@ -2405,7 +2409,7 @@ impl WsvHost {
         Ok(stored.len())
     }
 
-    fn state_value_len(&self, key: &str) -> Result<Option<usize>, VMError> {
+    fn state_value_len(&self, key: &StatePath) -> Result<Option<usize>, VMError> {
         if self.tx_active
             && let Some(entry) = self.state_overlay.get(key)
         {
@@ -2423,15 +2427,6 @@ impl WsvHost {
 
     fn state_query_gas(payload_len: usize) -> u64 {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
-    }
-
-    fn state_keys_gas(returned_count: usize, payload_len: usize) -> u64 {
-        Self::state_query_gas(payload_len)
-            .saturating_add(u64::try_from(returned_count).unwrap_or(u64::MAX))
-    }
-
-    fn state_count_gas(total_count: usize) -> u64 {
-        16_u64.saturating_add(u64::try_from(total_count).unwrap_or(u64::MAX))
     }
 
     fn sysvar_gas(payload_len: usize) -> u64 {
@@ -2517,34 +2512,70 @@ impl WsvHost {
         MUTATION_GAS.saturating_mul(u64::try_from(entries).unwrap_or(u64::MAX))
     }
 
-    fn state_keys_with_prefix(&self, prefix: &Name) -> Result<Vec<Name>, VMError> {
-        let prefix = prefix.as_ref();
-        let mut candidates = BTreeSet::new();
-        for key in self.wsv.sc_keys() {
-            if Self::state_key_matches_prefix(&key, prefix) {
-                candidates.insert(key.parse().map_err(|_| VMError::NoritoInvalid)?);
-            }
-        }
-        if self.tx_active {
-            for key in self.state_overlay.keys() {
-                if Self::state_key_matches_prefix(key, prefix) {
-                    candidates.insert(key.parse().map_err(|_| VMError::NoritoInvalid)?);
-                }
-            }
-        }
-        Ok(candidates
-            .into_iter()
-            .filter(|key: &Name| self.state_key_present(key.as_ref()))
-            .collect())
-    }
-
-    fn paged_state_keys(keys: &[Name], offset: u64, limit: u64) -> Result<Vec<Name>, VMError> {
+    fn state_keys_page_with_prefix(
+        &self,
+        vm: &IVM,
+        prefix: &StatePath,
+        path_len: usize,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<StatePath>, u64, u64), VMError> {
+        let prefix_text = prefix.as_ref();
         let take = checked_state_keys_limit(limit)?;
-        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
-        if offset >= keys.len() {
-            return Ok(Vec::new());
+        let mut candidates = BTreeSet::<&StatePath>::new();
+        candidates.extend(self.wsv.state_overlay.keys_with_text_prefix(prefix_text));
+        if self.tx_active {
+            candidates.extend(
+                self.state_overlay
+                    .keys()
+                    .filter(|key| key.as_ref().starts_with(prefix_text)),
+            );
         }
-        Ok(keys.iter().skip(offset).take(take).cloned().collect())
+
+        let mut selected = Vec::new();
+        let mut selected_element_bytes = 0_usize;
+        let mut total = 0_u64;
+        let mut scan_work_gas = u64::try_from(path_len).unwrap_or(u64::MAX);
+        let mut response_tail_gas = crate::host::state_keys_prepare_minimum(path_len, limit)?
+            .saturating_sub(crate::host::state_path_gas(path_len));
+        for key in candidates {
+            crate::host::preflight_reserved_state_scan_work_with_tail(
+                vm,
+                scan_work_gas,
+                key.as_ref().len(),
+                response_tail_gas,
+            )?;
+            crate::host::validate_state_path(key)?;
+            scan_work_gas = scan_work_gas
+                .saturating_add(1)
+                .saturating_add(u64::try_from(key.as_ref().len()).unwrap_or(u64::MAX));
+
+            let present = self.state_overlay.get(key).map_or_else(
+                || self.wsv.state_overlay.get_ref(key).is_some(),
+                Option::is_some,
+            );
+            if present && Self::state_key_matches_prefix(key.as_ref(), prefix_text) {
+                if total >= offset && selected.len() < take {
+                    let (next_elements, next_response_tail) =
+                        crate::host::state_keys_response_tail_after_item(
+                            selected.len(),
+                            selected_element_bytes,
+                            key.as_ref(),
+                        )?;
+                    preflight_reserved_syscall_gas(
+                        vm,
+                        crate::host::STATE_QUERY_GAS_BASE
+                            .saturating_add(scan_work_gas)
+                            .saturating_add(u64::try_from(next_response_tail).unwrap_or(u64::MAX)),
+                    )?;
+                    selected_element_bytes = next_elements;
+                    response_tail_gas = u64::try_from(next_response_tail).unwrap_or(u64::MAX);
+                    selected.push((*key).clone());
+                }
+                total = total.saturating_add(1);
+            }
+        }
+        Ok((selected, total, scan_work_gas))
     }
 
     /// Enable or disable SM helper syscalls.
@@ -3286,6 +3317,20 @@ impl WsvHost {
         }
         self.decode_name_payload(tlv.payload)
     }
+
+    fn decode_state_path_reg(&self, vm: &IVM, reg: usize) -> Result<(StatePath, usize), VMError> {
+        let pointer = crate::core_host::CoreHost::resolve_code_tlv_addr(vm, vm.register(reg));
+        let tlv = vm.validate_tlv(pointer)?;
+        if tlv.type_id != PointerType::NoritoBytes
+            || tlv.payload.len() > syscalls::STATE_MAX_PATH_FRAME_BYTES
+        {
+            return Err(VMError::NoritoInvalid);
+        }
+        let path: StatePath =
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        crate::host::validate_state_path(&path)?;
+        Ok((path, tlv.payload.len()))
+    }
 }
 
 /// Parse a permission token from a compact Name string.
@@ -3472,31 +3517,50 @@ impl IVMHost for WsvHost {
                 | crate::syscalls::SYSCALL_STATE_MAP_KEY_AT
                 | crate::syscalls::SYSCALL_STATE_VALUE_ENCODE
                 | crate::syscalls::SYSCALL_STATE_VALUE_DECODE
+                | crate::syscalls::SYSCALL_STATE_PATH_FROM_NAME
                 | crate::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
                 | crate::syscalls::SYSCALL_JSON_BUILD
         ) {
             return crate::core_host::CoreHost::new().prepare_syscall(number, vm);
         }
 
-        let state_quote =
-            match number {
-                crate::syscalls::SYSCALL_STATE_GET
-                | crate::syscalls::SYSCALL_STATE_LEN
-                | crate::syscalls::SYSCALL_STATE_KEYS
-                | crate::syscalls::SYSCALL_STATE_COUNT => Some(
-                    reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)?,
-                ),
-                crate::syscalls::SYSCALL_STATE_SET => {
-                    quote_tlv_payload_len_at(vm, vm.register(10), PointerType::Name)?;
-                    let value_len =
-                        quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
-                    Some(Self::state_query_gas(value_len))
-                }
-                crate::syscalls::SYSCALL_STATE_DEL | crate::syscalls::SYSCALL_STATE_HAS => Some(16),
-                crate::syscalls::SYSCALL_CORE_QUERY_GET
-                | crate::syscalls::SYSCALL_CORE_QUERY_PAGE => Some(Self::state_query_gas(0)),
-                _ => None,
-            };
+        let state_quote = match number {
+            crate::syscalls::SYSCALL_STATE_GET => {
+                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                Some(crate::host::state_get_gas_quote(path_len))
+            }
+            crate::syscalls::SYSCALL_STATE_LEN => {
+                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                Some(crate::host::state_path_gas(path_len))
+            }
+            crate::syscalls::SYSCALL_STATE_KEYS => {
+                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                let minimum = crate::host::state_keys_prepare_minimum(path_len, vm.register(12))?;
+                Some(reserve_available_syscall_gas_at_least(vm, minimum)?)
+            }
+            crate::syscalls::SYSCALL_STATE_COUNT => {
+                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                Some(reserve_available_syscall_gas_at_least(
+                    vm,
+                    crate::host::state_path_gas(path_len),
+                )?)
+            }
+            crate::syscalls::SYSCALL_STATE_SET => {
+                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                let value_len =
+                    quote_tlv_payload_len_at(vm, vm.register(11), PointerType::NoritoBytes)?;
+                crate::host::validate_state_value_payload_len(value_len)?;
+                Some(crate::host::state_value_gas(path_len, value_len))
+            }
+            crate::syscalls::SYSCALL_STATE_DEL | crate::syscalls::SYSCALL_STATE_HAS => {
+                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
+                Some(crate::host::state_path_gas(path_len))
+            }
+            crate::syscalls::SYSCALL_CORE_QUERY_GET | crate::syscalls::SYSCALL_CORE_QUERY_PAGE => {
+                Some(Self::state_query_gas(0))
+            }
+            _ => None,
+        };
         if let Some(quote) = state_quote {
             return Ok(quote);
         }
@@ -3541,12 +3605,12 @@ impl IVMHost for WsvHost {
             }
             // Durable smart-contract state syscalls
             crate::syscalls::SYSCALL_STATE_GET => {
-                // r10 = &Name path -> return a host-owned &NoritoBytes value (or 0 if none).
-                let name = self.decode_name_reg(vm, 10)?;
-                crate::host::validate_declared_state_path(vm, &name)?;
-                let path = name.as_ref();
+                // r10 = &NoritoBytes(StatePath) -> return a host-owned
+                // &NoritoBytes value (or 0 if none).
+                let (path, path_len) = self.decode_state_path_reg(vm, 10)?;
+                crate::host::validate_declared_state_path(vm, &path)?;
                 if self.tx_active
-                    && let Some(entry) = self.state_overlay.get(path)
+                    && let Some(entry) = self.state_overlay.get(&path)
                 {
                     if crate::dev_env::decode_trace_enabled() {
                         eprintln!(
@@ -3557,39 +3621,41 @@ impl IVMHost for WsvHost {
                     match entry {
                         Some(val) => {
                             let len = Self::state_value_payload_len(val)?;
-                            let gas = Self::state_query_gas(len);
+                            let gas = crate::host::state_value_gas(path_len, len);
                             preflight_reserved_syscall_gas(vm, gas)?;
-                            crate::host::validate_declared_state_value_payload(vm, &name, val)?;
+                            crate::host::validate_declared_state_value_payload(vm, &path, val)?;
                             let val = val.clone();
-                            self.log_read_key(path);
+                            self.log_read_key(path.as_ref());
                             Self::load_state_value(vm, &val)?;
                             return Ok(gas);
                         }
                         None => {
-                            preflight_reserved_syscall_gas(vm, 16)?;
-                            self.log_read_key(path);
+                            let gas = crate::host::state_path_gas(path_len);
+                            preflight_reserved_syscall_gas(vm, gas)?;
+                            self.log_read_key(path.as_ref());
                             vm.set_register(10, 0);
-                            return Ok(16);
+                            return Ok(gas);
                         }
                     }
                 }
-                if let Some(env) = self.wsv.sc_get(path) {
+                if let Some(env) = self.wsv.sc_get(&path) {
                     let len = Self::state_value_payload_len(&env)?;
-                    let gas = Self::state_query_gas(len);
+                    let gas = crate::host::state_value_gas(path_len, len);
                     preflight_reserved_syscall_gas(vm, gas)?;
-                    crate::host::validate_declared_state_value_payload(vm, &name, &env)?;
-                    self.log_read_key(path);
+                    crate::host::validate_declared_state_value_payload(vm, &path, &env)?;
+                    self.log_read_key(path.as_ref());
                     Self::load_state_value(vm, &env)?;
                     Ok(gas)
                 } else {
-                    preflight_reserved_syscall_gas(vm, 16)?;
-                    self.log_read_key(path);
+                    let gas = crate::host::state_path_gas(path_len);
+                    preflight_reserved_syscall_gas(vm, gas)?;
+                    self.log_read_key(path.as_ref());
                     vm.set_register(10, 0);
-                    Ok(16)
+                    Ok(gas)
                 }
             }
             crate::syscalls::SYSCALL_STATE_SET => {
-                // r10 = &Name path; r11 = &NoritoBytes value
+                // r10 = &NoritoBytes(StatePath); r11 = &NoritoBytes value
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!(
                         "[WsvHost] STATE_SET regs r10=0x{path:08x} r11=0x{val:08x}",
@@ -3597,10 +3663,8 @@ impl IVMHost for WsvHost {
                         val = vm.register(11)
                     );
                 }
-                let p_path = vm.validate_tlv(vm.register(10))?;
                 let p_val = vm.validate_tlv(vm.register(11))?;
-                if p_path.type_id != PointerType::Name || p_val.type_id != PointerType::NoritoBytes
-                {
+                if p_val.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
                 // Enforce pointer-ABI policy for the value type
@@ -3611,12 +3675,11 @@ impl IVMHost for WsvHost {
                         type_id: p_val.type_id as u16,
                     });
                 }
-                let path_name = self.decode_name_payload(p_path.payload)?;
-                crate::host::validate_declared_state_path(vm, &path_name)?;
+                let (path, path_len) = self.decode_state_path_reg(vm, 10)?;
+                crate::host::validate_declared_state_path(vm, &path)?;
                 crate::host::validate_state_value_payload_len(p_val.payload.len())?;
-                crate::host::validate_declared_state_value_payload(vm, &path_name, p_val.payload)?;
-                let path = path_name.as_ref();
-                self.log_write_key(path);
+                crate::host::validate_declared_state_value_payload(vm, &path, p_val.payload)?;
+                self.log_write_key(path.as_ref());
                 let stored = p_val.payload.to_vec();
                 if self.tx_active {
                     if crate::dev_env::decode_trace_enabled() {
@@ -3625,78 +3688,90 @@ impl IVMHost for WsvHost {
                             stored.len()
                         );
                     }
-                    self.state_overlay.insert(path.to_string(), Some(stored));
+                    self.state_overlay.insert(path, Some(stored));
                 } else {
-                    self.wsv.sc_set(path, stored)?;
+                    self.wsv.sc_set(&path, stored)?;
                 }
-                Ok(Self::state_query_gas(p_val.payload.len()))
+                Ok(crate::host::state_value_gas(path_len, p_val.payload.len()))
             }
             crate::syscalls::SYSCALL_STATE_DEL => {
-                // r10 = &Name path
-                let p_path = vm.validate_tlv(vm.register(10))?;
-                if p_path.type_id != PointerType::Name {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let path = self.decode_name_payload(p_path.payload)?;
+                // r10 = &NoritoBytes(StatePath)
+                let (path, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_path(vm, &path)?;
                 self.log_write_key(path.as_ref());
                 if self.tx_active {
                     if crate::dev_env::decode_trace_enabled() {
                         eprintln!("[WsvHost] overlay STATE_DEL path='{}'", path.as_ref());
                     }
-                    self.state_overlay.insert(path.to_string(), None);
+                    self.state_overlay.insert(path, None);
                 } else {
-                    self.wsv.sc_del(path.as_ref())?;
+                    self.wsv.sc_del(&path)?;
                 }
-                Ok(16)
+                Ok(crate::host::state_path_gas(path_len))
             }
             crate::syscalls::SYSCALL_STATE_KEYS => {
-                let prefix = self.decode_name_reg(vm, 10)?;
+                let (prefix, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_scan_path(vm, &prefix)?;
-                self.log_read_key(prefix.as_ref());
-                let keys = self.state_keys_with_prefix(&prefix)?;
-                let selected = Self::paged_state_keys(&keys, vm.register(11), vm.register(12))?;
+                let (selected, total, scan_work_gas) = self.state_keys_page_with_prefix(
+                    vm,
+                    &prefix,
+                    path_len,
+                    vm.register(11),
+                    vm.register(12),
+                )?;
+                crate::host::preflight_reserved_state_keys_page(
+                    vm,
+                    &selected,
+                    scan_work_gas,
+                    0,
+                    u64::try_from(selected.len()).unwrap_or(u64::MAX),
+                )?;
                 let payload = encode_canonical_norito(&selected)?;
-                let gas = Self::state_keys_gas(selected.len(), payload.len());
+                let gas = crate::host::STATE_QUERY_GAS_BASE
+                    .saturating_add(scan_work_gas)
+                    .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
                 preflight_reserved_syscall_gas(vm, gas)?;
+                self.log_read_key(prefix.as_ref());
                 let ptr = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, ptr);
-                vm.set_register(11, u64::try_from(keys.len()).unwrap_or(u64::MAX));
+                vm.set_register(11, total);
                 vm.set_register(12, u64::try_from(selected.len()).unwrap_or(u64::MAX));
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_STATE_HAS => {
-                let path = self.decode_name_reg(vm, 10)?;
+                let (path, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_path(vm, &path)?;
                 self.log_read_key(path.as_ref());
-                vm.set_register(10, u64::from(self.state_key_present(path.as_ref())));
-                Ok(16)
+                vm.set_register(10, u64::from(self.state_key_present(&path)));
+                Ok(crate::host::state_path_gas(path_len))
             }
             crate::syscalls::SYSCALL_STATE_LEN => {
-                let path = self.decode_name_reg(vm, 10)?;
+                let (path, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_path(vm, &path)?;
                 self.log_read_key(path.as_ref());
-                if let Some(len) = self.state_value_len(path.as_ref())? {
-                    let gas = Self::state_query_gas(len);
+                if let Some(len) = self.state_value_len(&path)? {
+                    let gas = crate::host::state_path_gas(path_len);
                     preflight_reserved_syscall_gas(vm, gas)?;
                     vm.set_register(10, u64::try_from(len).unwrap_or(u64::MAX));
                     vm.set_register(11, 1);
                     Ok(gas)
                 } else {
-                    preflight_reserved_syscall_gas(vm, 16)?;
+                    let gas = crate::host::state_path_gas(path_len);
+                    preflight_reserved_syscall_gas(vm, gas)?;
                     vm.set_register(10, 0);
                     vm.set_register(11, 0);
-                    Ok(16)
+                    Ok(gas)
                 }
             }
             crate::syscalls::SYSCALL_STATE_COUNT => {
-                let prefix = self.decode_name_reg(vm, 10)?;
+                let (prefix, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_scan_path(vm, &prefix)?;
-                self.log_read_key(prefix.as_ref());
-                let total = self.state_keys_with_prefix(&prefix)?.len();
-                let gas = Self::state_count_gas(total);
+                let (_, total, scan_work_gas) =
+                    self.state_keys_page_with_prefix(vm, &prefix, path_len, u64::MAX, 0)?;
+                let gas = crate::host::STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas);
                 preflight_reserved_syscall_gas(vm, gas)?;
-                vm.set_register(10, u64::try_from(total).unwrap_or(u64::MAX));
+                self.log_read_key(prefix.as_ref());
+                vm.set_register(10, total);
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
@@ -4082,6 +4157,7 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_STATE_MAP_KEY_AT
             | crate::syscalls::SYSCALL_STATE_VALUE_ENCODE
             | crate::syscalls::SYSCALL_STATE_VALUE_DECODE
+            | crate::syscalls::SYSCALL_STATE_PATH_FROM_NAME
             | crate::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
             | crate::syscalls::SYSCALL_JSON_BUILD => {
                 crate::core_host::CoreHost::new().syscall(number, vm)
@@ -8204,19 +8280,22 @@ mod tests_null_decode {
         );
         let mut wsv = MockWorldStateView::new();
         for index in 0..1_024_u16 {
+            let path: StatePath = format!("orders/{index:04}")
+                .parse()
+                .expect("canonical state fixture");
             wsv.state_overlay
                 .set(
-                    &format!("orders/{index:04}"),
+                    &path,
                     vec![u8::try_from(index % 251).expect("byte fits"); 64],
                 )
                 .expect("insert state fixture");
         }
         let host = WsvHost::new_with_subject(wsv, caller, HashMap::new());
         let mut vm = IVM::new(2_000_000);
-        let prefix: Name = "orders".parse().expect("state prefix");
+        let prefix: StatePath = "orders".parse().expect("state prefix");
         let prefix_ptr = vm
             .alloc_input_tlv(&make_tlv(
-                PointerType::Name,
+                PointerType::NoritoBytes,
                 &norito::to_bytes(&prefix).expect("encode prefix"),
             ))
             .expect("allocate prefix");
@@ -8241,17 +8320,67 @@ mod tests_null_decode {
             .memory
             .validate_tlv(execution_vm.register(10))
             .expect("state keys output");
-        let keys: Vec<Name> = norito::decode_from_bytes(output.payload).expect("decode keys");
+        let keys: Vec<StatePath> = norito::decode_from_bytes(output.payload).expect("decode keys");
         assert!(keys.is_empty(), "maximal offset must select an empty page");
         assert_eq!(execution_vm.register(11), 1_024);
         assert_eq!(execution_vm.register(12), 0);
         assert!(actual <= available);
         assert_eq!(WsvHost::state_query_gas(usize::MAX), u64::MAX);
-        assert_eq!(WsvHost::state_count_gas(usize::MAX), u64::MAX);
     }
 
     #[test]
-    fn state_scan_quote_does_not_trust_malformed_name_payload() {
+    fn state_scan_charges_all_text_prefix_candidates_before_overlay_selection() {
+        let caller: AccountId = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        let mut wsv = MockWorldStateView::new();
+        for raw in ["orders-extra", "orders/00", "orders/02", "orders2/00"] {
+            wsv.sc_set(raw, vec![1]).expect("insert state fixture");
+        }
+        let mut host = WsvHost::new_with_subject(wsv, caller, HashMap::new());
+        host.tx_active = true;
+        host.state_overlay
+            .insert("orders/00".parse().expect("tombstoned path"), None);
+        host.state_overlay
+            .insert("orders/01".parse().expect("inserted path"), Some(vec![2]));
+        host.state_overlay
+            .insert("orders/02".parse().expect("updated path"), Some(vec![3]));
+
+        let prefix: StatePath = "orders".parse().expect("state prefix");
+        let path_len = crate::host::state_path_payload_len(&prefix).expect("framed prefix length");
+        let vm = IVM::new(u64::MAX);
+        let (selected, total, scan_work_gas) = host
+            .state_keys_page_with_prefix(&vm, &prefix, path_len, 0, syscalls::STATE_KEYS_MAX_ITEMS)
+            .expect("scan adversarial base and transaction overlays");
+
+        assert_eq!(
+            selected.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            vec!["orders/01".to_owned(), "orders/02".to_owned()]
+        );
+        assert_eq!(total, 2);
+        let candidate_text = [
+            "orders-extra",
+            "orders/00",
+            "orders/01",
+            "orders/02",
+            "orders2/00",
+        ];
+        let expected_scan_work = candidate_text.iter().fold(
+            u64::try_from(path_len).expect("path length fits u64"),
+            |gas, key| {
+                gas.saturating_add(1)
+                    .saturating_add(u64::try_from(key.len()).expect("key length fits u64"))
+            },
+        );
+        assert_eq!(
+            scan_work_gas, expected_scan_work,
+            "segment mismatches, tombstones, and overlay duplicates must not escape scan gas"
+        );
+    }
+
+    #[test]
+    fn state_scan_quote_does_not_trust_malformed_state_path_payload() {
         let caller: AccountId = test_account_id(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
@@ -8259,8 +8388,8 @@ mod tests_null_decode {
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
         let mut vm = IVM::new(1_000);
         let pointer = vm
-            .alloc_input_tlv(&make_tlv(PointerType::Name, &[0xff, 0x80]))
-            .expect("allocate malformed Name TLV");
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &[0xff, 0x80]))
+            .expect("allocate malformed StatePath TLV");
         vm.set_register(10, pointer);
 
         assert_eq!(
@@ -8270,7 +8399,7 @@ mod tests_null_decode {
         let mut execution_host = host.clone();
         let error = execution_host
             .syscall(syscalls::SYSCALL_STATE_COUNT, &mut vm)
-            .expect_err("malformed name must be rejected by the state scan");
+            .expect_err("malformed StatePath must be rejected by the state scan");
         assert!(matches!(error, VMError::DecodeError));
         assert!(execution_host.actual_access.read_keys.is_empty());
     }

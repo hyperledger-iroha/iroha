@@ -9,6 +9,9 @@
 //! Ordered mailbox execution and public query local reads now run admitted IVM
 //! bundles directly through the Soracloud host surface while asset local reads
 //! still resolve from the committed snapshot plus hydrated artifact cache.
+//! The Soracloud host has no ledger world-state snapshot, so it rejects the
+//! complete state-backed AXT syscall family instead of delegating it to the
+//! standalone core-host shim.
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
@@ -140,6 +143,7 @@ const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_DIR: &str = "uploaded_model_keys";
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_FILE: &str = "x25519_v1.bin";
 const MODEL_HOST_VIOLATION_REPORT_COOLDOWN_MS: u64 = 30_000;
 const GENERATED_HF_RECONCILE_REQUEST_COOLDOWN_MS: u64 = 30_000;
+const SORACLOUD_COOLDOWN_TRACKER_MAX_ENTRIES: usize = 4_096;
 const INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 const INROU_HOST_HEARTBEAT_TTL_FLOOR_MS: u64 = 300_000;
 // Avoid rewriting authoritative adverts just to push the same heartbeat expiry forward.
@@ -147,8 +151,9 @@ const INROU_HOST_HEARTBEAT_REFRESH_MARGIN_FLOOR_MS: u64 = 60_000;
 const INROU_PLACEMENT_RECONCILE_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 const SORACLOUD_LOCAL_READ_MAX_SNAPSHOT_LAG_BLOCKS: u64 = 64;
 const INROU_PORTABLE_START_GRACE_FLOOR: Duration = Duration::from_secs(180);
-const INROU_PORTABLE_BUNDLE_METADATA_PATH: &str = "/soracloud/bundle.tgz";
-const INROU_PORTABLE_BUNDLE_METADATA_MEMBER: &str = "soracloud/bundle.tgz";
+const INROU_PORTABLE_BUNDLE_BLOCK_MEMBER: &str = "inrou_bundle.raw";
+const INROU_PORTABLE_BUNDLE_DEVICE_SERIAL: &str = "sora_bundle";
+const INROU_PORTABLE_BLOCK_SECTOR_BYTES: usize = 512;
 const INROU_PORTABLE_BUNDLE_GUEST_ROOT: &str = "/var/lib/soracloud/materialization/bundle";
 /// Largest variable response body a Soracloud syscall may materialize.
 ///
@@ -758,6 +763,21 @@ impl Ord for ModelHostViolationReportKey {
     }
 }
 
+fn bounded_cooldown_allows_attempt<K: Clone + Ord>(
+    attempts_ms: &mut BTreeMap<K, u64>,
+    key: &K,
+    now_ms: u64,
+    cooldown_ms: u64,
+    max_entries: usize,
+) -> bool {
+    attempts_ms.retain(|_, attempted_at_ms| now_ms.saturating_sub(*attempted_at_ms) < cooldown_ms);
+    if attempts_ms.contains_key(key) || attempts_ms.len() >= max_entries {
+        return false;
+    }
+    attempts_ms.insert(key.clone(), now_ms);
+    true
+}
+
 struct SoracloudModelHostViolationReporter {
     mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
     recent_attempts_ms: Mutex<BTreeMap<ModelHostViolationReportKey, u64>>,
@@ -849,13 +869,13 @@ impl SoracloudModelHostViolationReporter {
     fn cooldown_allows_attempt(&self, key: &ModelHostViolationReportKey) -> bool {
         let now_ms = soracloud_runtime_observed_at_ms();
         let mut recent_attempts_ms = self.recent_attempts_ms.lock();
-        if let Some(last_attempt_ms) = recent_attempts_ms.get(key)
-            && now_ms.saturating_sub(*last_attempt_ms) < MODEL_HOST_VIOLATION_REPORT_COOLDOWN_MS
-        {
-            return false;
-        }
-        recent_attempts_ms.insert(key.clone(), now_ms);
-        true
+        bounded_cooldown_allows_attempt(
+            &mut recent_attempts_ms,
+            key,
+            now_ms,
+            MODEL_HOST_VIOLATION_REPORT_COOLDOWN_MS,
+            SORACLOUD_COOLDOWN_TRACKER_MAX_ENTRIES,
+        )
     }
 }
 
@@ -1667,6 +1687,8 @@ pub struct SoracloudRuntimeManagerHandle {
     hf_local_workers: SharedHfLocalRunnerWorkers,
     host_violation_reporter: Arc<SoracloudModelHostViolationReporter>,
     mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
+    hf_inference_credential_provider:
+        Option<Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>>,
     generated_hf_reconcile_attempts_ms: Arc<Mutex<BTreeMap<Hash, u64>>>,
     ivm_runtime_cache: Arc<SoracloudPreparedRuntimeCache>,
 }
@@ -1965,14 +1987,13 @@ impl SoracloudRuntimeManagerHandle {
     fn generated_hf_reconcile_attempt_allowed(&self, placement_id: Hash) -> bool {
         let now_ms = soracloud_runtime_observed_at_ms();
         let mut attempts = self.generated_hf_reconcile_attempts_ms.lock();
-        if let Some(previous_attempt_ms) = attempts.get(&placement_id)
-            && now_ms.saturating_sub(*previous_attempt_ms)
-                < GENERATED_HF_RECONCILE_REQUEST_COOLDOWN_MS
-        {
-            return false;
-        }
-        attempts.insert(placement_id, now_ms);
-        true
+        bounded_cooldown_allows_attempt(
+            &mut attempts,
+            &placement_id,
+            now_ms,
+            GENERATED_HF_RECONCILE_REQUEST_COOLDOWN_MS,
+            SORACLOUD_COOLDOWN_TRACKER_MAX_ENTRIES,
+        )
     }
 }
 
@@ -2131,6 +2152,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                     self.state_dir.as_ref(),
                     &self.config.egress,
                     &self.config.hf,
+                    self.hf_inference_credential_provider.as_deref(),
                     &self.hf_local_workers,
                     &self.host_violation_reporter,
                     self.ivm_runtime_cache.as_ref(),
@@ -2530,6 +2552,13 @@ struct SoracloudIvmHost {
 }
 
 impl SoracloudIvmHost {
+    fn ensure_syscall_available(number: u32) -> Result<(), VMError> {
+        if ivm_syscalls::is_axt_syscall(number) {
+            return Err(VMError::UnknownSyscall(number));
+        }
+        Ok(())
+    }
+
     fn new(
         request: SoracloudOrderedMailboxExecutionRequest,
         state_dir: PathBuf,
@@ -3261,6 +3290,7 @@ impl SoracloudIvmHost {
 
 impl IVMHost for SoracloudIvmHost {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+        Self::ensure_syscall_available(number)?;
         if number == ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT {
             let request_bytes = Self::quoted_request_payload_len(vm, PointerType::Name)?;
             return Self::state_dependent_gas_quote(vm, request_bytes);
@@ -3291,6 +3321,7 @@ impl IVMHost for SoracloudIvmHost {
     }
 
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        Self::ensure_syscall_available(number)?;
         match number {
             ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT => self.read_public_input(vm),
             SYSCALL_SORACLOUD_READ_COMMITTED_STATE => {
@@ -3641,6 +3672,10 @@ impl IVMHost for SoracloudIvmHost {
         }
     }
 
+    fn allows_syscall(&self, policy: ivm::SyscallPolicy, number: u32) -> bool {
+        !ivm_syscalls::is_axt_syscall(number) && self.core_host.allows_syscall(policy, number)
+    }
+
     fn as_any(&mut self) -> &mut dyn std::any::Any
     where
         Self: 'static,
@@ -3786,23 +3821,6 @@ struct HostedHttpWorker {
 enum HostedHttpWorkerAttachment {
     #[allow(dead_code)]
     FirecrackerKvm(InrouTapNetworkAttachment),
-    PortableVm(PortableVmAttachment),
-}
-
-struct PortableVmAttachment {
-    metadata_server: Option<PortableVmMetadataServer>,
-}
-
-struct PortableVmMetadataServer {
-    bind_addr: SocketAddr,
-    shutdown_tx: Option<mpsc::Sender<()>>,
-    thread: Option<thread::JoinHandle<()>>,
-}
-
-struct PortableVmMetadataAsset {
-    path: PathBuf,
-    content_type: &'static str,
-    fingerprint: SoracloudArtifactFileFingerprint,
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -3898,6 +3916,8 @@ pub(crate) struct SoracloudRuntimeManager {
     hosted_http_workers: SharedHostedHttpWorkers,
     host_violation_reporter: Arc<SoracloudModelHostViolationReporter>,
     mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
+    hf_inference_credential_provider:
+        Option<Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>>,
     last_model_host_heartbeat_attempt_ms: Mutex<Option<u64>>,
     last_inrou_host_advert_attempt_ms: Mutex<Option<u64>>,
     pending_inrou_host_capability_advert: Mutex<Option<SoraInrouHostCapabilityRecordV1>>,
@@ -4018,6 +4038,7 @@ impl SoracloudRuntimeManager {
             hosted_http_workers: Arc::new(Mutex::new(BTreeMap::new())),
             host_violation_reporter: SoracloudModelHostViolationReporter::disabled(),
             mutation_sink: None,
+            hf_inference_credential_provider: None,
             last_model_host_heartbeat_attempt_ms: Mutex::new(None),
             last_inrou_host_advert_attempt_ms: Mutex::new(None),
             pending_inrou_host_capability_advert: Mutex::new(None),
@@ -4038,6 +4059,16 @@ impl SoracloudRuntimeManager {
         self.host_violation_reporter =
             SoracloudModelHostViolationReporter::with_mutation_sink(Arc::clone(&mutation_sink));
         self.mutation_sink = Some(mutation_sink);
+        self
+    }
+
+    /// Attach the deployment-owned authenticated HF credential provider.
+    #[must_use]
+    pub(crate) fn with_hf_inference_credential_provider(
+        mut self,
+        provider: Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>,
+    ) -> Self {
+        self.hf_inference_credential_provider = Some(provider);
         self
     }
 
@@ -4067,7 +4098,7 @@ impl SoracloudRuntimeManager {
     /// persisted state cannot be restored, or the initial authoritative
     /// reconciliation does not complete.
     pub fn start(
-        self,
+        mut self,
         shutdown_signal: ShutdownSignal,
     ) -> eyre::Result<(SoracloudRuntimeManagerHandle, Child)> {
         if self.config.production_mode {
@@ -4081,6 +4112,42 @@ impl SoracloudRuntimeManager {
                 .ensure_production_qualified()
                 .wrap_err("revalidate production Soracloud runtime mutation sink")?;
         }
+        if self.config.hf.allow_inference_bridge_fallback {
+            let configured = self
+                .config
+                .hf
+                .inference_credential_provider
+                .as_ref()
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "authenticated HF inference requires an exact credential-provider binding"
+                    )
+                })?;
+            let exact = crate::soracloud_hf_credential::
+                SoracloudHfCredentialProviderBindingV1::try_from_config(configured)
+                .map_err(|_| {
+                    eyre::eyre!(
+                        "authenticated HF inference credential-provider binding is invalid"
+                    )
+                })?;
+            let provider = self
+                .hf_inference_credential_provider
+                .take()
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "authenticated HF inference requires a deployment-owned credential provider"
+                    )
+                })?;
+            self.hf_inference_credential_provider = Some(
+                crate::soracloud_hf_credential::
+                    qualify_soracloud_hf_inference_credential_provider_v1(exact, provider)
+                    .map_err(|_| {
+                        eyre::eyre!(
+                            "authenticated HF inference credential provider is missing, substituted, stale, unavailable, or test-marked"
+                        )
+                    })?,
+            );
+        }
         let manager = Arc::new(self);
         manager.initialize_for_startup()?;
         let handle = SoracloudRuntimeManagerHandle {
@@ -4091,6 +4158,10 @@ impl SoracloudRuntimeManager {
             hf_local_workers: Arc::clone(&manager.hf_local_workers),
             host_violation_reporter: Arc::clone(&manager.host_violation_reporter),
             mutation_sink: manager.mutation_sink.as_ref().map(Arc::clone),
+            hf_inference_credential_provider: manager
+                .hf_inference_credential_provider
+                .as_ref()
+                .map(Arc::clone),
             generated_hf_reconcile_attempts_ms: Arc::new(Mutex::new(BTreeMap::new())),
             ivm_runtime_cache: Arc::new(SoracloudPreparedRuntimeCache::from_config(
                 &manager.config,
@@ -5413,6 +5484,19 @@ impl SoracloudRuntimeManager {
             build_portable_vm_allowlist_hosts_overlay(&network_plan.allowlist_hosts);
         let network_config = build_inrou_portable_network_config();
         let portable_bundle_max_bytes = archive_limits.max_compressed_bytes;
+        let (portable_bundle_path, portable_bundle_exact_bytes) =
+            stage_portable_vm_bundle_block_device(
+                &materialization_dir,
+                &PathBuf::from(&plan.bundle_cache_path),
+                bundle.container.bundle_hash,
+                portable_bundle_max_bytes,
+            )
+            .wrap_err("stage verified PortableVm app-bundle block device")?;
+        let portable_bundle = PortableVmBundleBinding {
+            expected_hash: bundle.container.bundle_hash,
+            exact_bytes: portable_bundle_exact_bytes,
+            maximum_bytes: portable_bundle_max_bytes,
+        };
         let user_data = build_inrou_user_data(
             plan,
             &cache_key,
@@ -5420,8 +5504,7 @@ impl SoracloudRuntimeManager {
             &shared_filesystem_mounts,
             bootstrap_user_data.as_deref(),
             hosts_overlay.as_deref(),
-            Some(&plan.bundle_hash),
-            Some(portable_bundle_max_bytes),
+            Some(portable_bundle),
         )?;
         let cloud_init_root = write_inrou_cloud_init_documents(
             &materialization_dir,
@@ -5430,23 +5513,6 @@ impl SoracloudRuntimeManager {
             &user_data,
         )
         .wrap_err("write PortableVm cloud-init documents")?;
-        stage_portable_vm_metadata_bundle(
-            &cloud_init_root,
-            &PathBuf::from(&plan.bundle_cache_path),
-            bundle.container.bundle_hash,
-            portable_bundle_max_bytes,
-        )
-        .wrap_err("stage PortableVm app bundle for metadata download")?;
-        let metadata_server = start_portable_vm_metadata_server(
-            &cloud_init_root,
-            bundle.container.bundle_hash,
-            portable_bundle_max_bytes,
-        )
-        .wrap_err("start PortableVm cloud-init metadata server")?;
-        let datasource_base_url = metadata_server.datasource_base_url();
-        let mut portable_attachment = PortableVmAttachment {
-            metadata_server: Some(metadata_server),
-        };
         let memory_mib = portable_vm_memory_mib(&bundle.container.resources);
         let machine_arg = format!(
             "{},accel={},memory-backend=vmmem",
@@ -5474,7 +5540,7 @@ impl SoracloudRuntimeManager {
         }
         command
             .arg("-append")
-            .arg(portable_vm_kernel_cmdline(profile, &datasource_base_url))
+            .arg(portable_vm_kernel_cmdline(profile))
             .arg("-nodefaults")
             .arg("-no-reboot")
             .arg("-display")
@@ -5498,7 +5564,21 @@ impl SoracloudRuntimeManager {
             root_disk_format,
             false,
             true,
-        );
+        )
+        .wrap_err("attach PortableVm mutable root disk")?;
+        append_portable_vm_vvfat_drive(&mut command, profile, &cloud_init_root)
+            .wrap_err("attach read-only PortableVm cloud-init seed")?;
+        append_portable_vm_drive_with_serial(
+            &mut command,
+            profile,
+            "bundle",
+            &portable_bundle_path,
+            "raw",
+            true,
+            false,
+            Some(INROU_PORTABLE_BUNDLE_DEVICE_SERIAL),
+        )
+        .wrap_err("attach read-only PortableVm app-bundle block device")?;
         for (index, disk) in lease_disks.iter().enumerate() {
             append_portable_vm_drive_with_serial(
                 &mut command,
@@ -5509,13 +5589,13 @@ impl SoracloudRuntimeManager {
                 false,
                 true,
                 Some(&disk.device_serial),
-            );
+            )
+            .wrap_err_with(|| format!("attach PortableVm lease disk {index}"))?;
         }
 
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
-                portable_attachment.cleanup();
                 return Err(error)
                     .wrap_err_with(|| format!("spawn Inrou PortableVm via {}", qemu.display()));
             }
@@ -5536,7 +5616,6 @@ impl SoracloudRuntimeManager {
             {
                 let stderr = stderr_log_excerpt(&stderr_log_path);
                 let console = stderr_log_excerpt(&console_log_path);
-                portable_attachment.cleanup();
                 eyre::bail!(
                     "Inrou PortableVm process exited during startup with status {status}{}{}",
                     if stderr.is_empty() {
@@ -5561,7 +5640,7 @@ impl SoracloudRuntimeManager {
                         child,
                         network_plan.listen_base_url,
                         egress_accounting_offset_bytes,
-                        Some(HostedHttpWorkerAttachment::PortableVm(portable_attachment)),
+                        None,
                         stderr_log_path,
                     ));
                 }
@@ -5572,7 +5651,6 @@ impl SoracloudRuntimeManager {
                 Err(error) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    portable_attachment.cleanup();
                     let stderr = stderr_log_excerpt(&stderr_log_path);
                     eyre::bail!(
                         "Inrou PortableVm failed healthcheck during startup: {}{}",
@@ -7722,6 +7800,9 @@ fn execute_query_local_read(
     state_dir: &Path,
     egress: &iroha_config::parameters::actual::SoracloudRuntimeEgress,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_inference_credential_provider: Option<
+        &dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+    >,
     hf_local_workers: &SharedHfLocalRunnerWorkers,
     host_violation_reporter: &Arc<SoracloudModelHostViolationReporter>,
     ivm_runtime_cache: &SoracloudPreparedRuntimeCache,
@@ -7735,6 +7816,7 @@ fn execute_query_local_read(
             context,
             state_dir,
             hf_config,
+            hf_inference_credential_provider,
             hf_local_workers,
             host_violation_reporter,
             &binding,
@@ -8332,6 +8414,9 @@ fn execute_generated_hf_local_read(
     context: &ResolvedLocalReadContext,
     state_dir: &Path,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_inference_credential_provider: Option<
+        &dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+    >,
     hf_local_workers: &SharedHfLocalRunnerWorkers,
     host_violation_reporter: &Arc<SoracloudModelHostViolationReporter>,
     binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
@@ -8346,6 +8431,7 @@ fn execute_generated_hf_local_read(
             context,
             state_dir,
             hf_config,
+            hf_inference_credential_provider,
             hf_local_workers,
             host_violation_reporter,
             binding,
@@ -8429,10 +8515,8 @@ fn execute_generated_hf_metadata_local_read(
             .as_ref()
             .and_then(|manifest| manifest.import_error.clone()),
         inference_local_enabled: hf_config.local_execution_enabled,
-        inference_bridge_enabled: hf_config
-            .inference_token
-            .as_ref()
-            .is_some_and(|token| !token.trim().is_empty()),
+        inference_bridge_enabled: hf_config.allow_inference_bridge_fallback
+            && hf_config.inference_credential_provider.is_some(),
     };
     let response_bytes = norito::json::to_vec(&response).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
@@ -8467,6 +8551,9 @@ fn execute_generated_hf_infer_local_read(
     context: &ResolvedLocalReadContext,
     state_dir: &Path,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_inference_credential_provider: Option<
+        &dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+    >,
     hf_local_workers: &SharedHfLocalRunnerWorkers,
     host_violation_reporter: &Arc<SoracloudModelHostViolationReporter>,
     binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
@@ -8518,7 +8605,11 @@ fn execute_generated_hf_infer_local_read(
 
     let bridge_response = if hf_config.allow_inference_bridge_fallback && bridge_fallback_opt_in {
         Some(execute_generated_hf_inference_bridge_local_read(
-            request, context, hf_config, binding,
+            request,
+            context,
+            hf_config,
+            hf_inference_credential_provider,
+            binding,
         ))
     } else {
         None
@@ -8945,18 +9036,16 @@ fn execute_generated_hf_inference_bridge_local_read(
     request: &SoracloudLocalReadRequest,
     context: &ResolvedLocalReadContext,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_inference_credential_provider: Option<
+        &dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+    >,
     binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
 ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
-    let Some(token) = hf_config
-        .inference_token
-        .as_ref()
-        .map(|token| token.trim())
-        .filter(|token| !token.is_empty())
-    else {
+    let Some(provider) = hf_inference_credential_provider else {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "generated HF inference for source `{}` requires `soracloud_runtime.hf.inference_token`",
+                "generated HF inference for source `{}` requires a qualified runtime credential provider",
                 binding.source_id
             ),
         ));
@@ -8969,71 +9058,57 @@ fn execute_generated_hf_inference_bridge_local_read(
             )
         })?;
     url.set_query(request.request_query.as_deref());
-    let client = reqwest::blocking::Client::builder()
-        .timeout(hf_config.request_timeout)
-        .build()
-        .map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Internal,
-                format!("build generated HF inference HTTP client: {error}"),
-            )
-        })?;
-    let mut builder = client
-        .post(url.clone())
-        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
-    if let Some(content_type) = request.request_headers.get("content-type") {
-        builder = builder.header(reqwest::header::CONTENT_TYPE, content_type);
-    } else {
-        builder = builder.header(reqwest::header::CONTENT_TYPE, "application/json");
-    }
-    if let Some(accept) = request.request_headers.get("accept") {
-        builder = builder.header(reqwest::header::ACCEPT, accept);
-    }
-    let response = builder
-        .body(request.request_body.clone())
-        .send()
-        .map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!("forward generated HF inference request to {url}: {error}"),
-            )
-        })?;
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(ToOwned::to_owned);
-    let content_encoding = response
-        .headers()
-        .get(reqwest::header::CONTENT_ENCODING)
-        .and_then(|value| value.to_str().ok())
-        .map(ToOwned::to_owned);
-    let response_bytes = read_soracloud_http_response_bounded(
-        response,
-        hf_config.inference_max_response_bytes,
-        "generated Hugging Face inference",
-    )
-    .map_err(|error| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!("read generated HF inference response from {url}: {error}"),
+    let provider_request =
+        crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceRequestV1::try_new(
+            url.to_string(),
+            request
+                .request_headers
+                .get("content-type")
+                .cloned()
+                .unwrap_or_else(|| "application/json".to_owned()),
+            request.request_headers.get("accept").cloned(),
+            request.request_body.clone(),
+            hf_config.inference_max_response_bytes,
         )
-    })?;
-    if !status.is_success() {
-        let detail = String::from_utf8_lossy(&response_bytes).into_owned();
+        .map_err(|_| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                "generated HF inference request exceeds the credential-provider boundary"
+                    .to_owned(),
+            )
+        })?;
+    let provider_response = provider
+        .execute_authenticated(&provider_request)
+        .map_err(|error| {
+            use crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1 as Error;
+            let kind = if error == Error::Refused {
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest
+            } else {
+                SoracloudRuntimeExecutionErrorKind::Unavailable
+            };
+            SoracloudRuntimeExecutionError::new(
+                kind,
+                "authenticated HF inference provider refused or could not complete the request"
+                    .to_owned(),
+            )
+        })?;
+    let status = provider_response.status();
+    let content_type = provider_response.content_type().map(ToOwned::to_owned);
+    let content_encoding = provider_response.content_encoding().map(ToOwned::to_owned);
+    if !(200..=299).contains(&status) {
         return Err(SoracloudRuntimeExecutionError::new(
-            if status.is_client_error() {
+            if (400..=499).contains(&status) {
                 SoracloudRuntimeExecutionErrorKind::InvalidRequest
             } else {
                 SoracloudRuntimeExecutionErrorKind::Unavailable
             },
             format!(
-                "generated HF inference request for `{}` failed with {}: {}",
-                binding.repo_id, status, detail
+                "authenticated HF inference request for `{}` failed with status {}",
+                binding.repo_id, status
             ),
         ));
     }
+    let response_bytes = provider_response.into_body();
     let result_commitment = Hash::new(&response_bytes);
     Ok(SoracloudLocalReadResponse {
         response_bytes,
@@ -12568,49 +12643,13 @@ impl HostedHttpWorkerAttachment {
     fn cleanup(&mut self) {
         match self {
             Self::FirecrackerKvm(attachment) => attachment.cleanup(),
-            Self::PortableVm(attachment) => attachment.cleanup(),
         }
     }
 
     fn accounted_egress_bytes(&self) -> io::Result<Option<u64>> {
         match self {
             Self::FirecrackerKvm(attachment) => attachment.accounted_egress_bytes().map(Some),
-            Self::PortableVm(attachment) => attachment.accounted_egress_bytes(),
         }
-    }
-}
-
-impl PortableVmAttachment {
-    fn cleanup(&mut self) {
-        if let Some(mut metadata_server) = self.metadata_server.take() {
-            metadata_server.cleanup();
-        }
-    }
-
-    fn accounted_egress_bytes(&self) -> io::Result<Option<u64>> {
-        Ok(None)
-    }
-}
-
-impl PortableVmMetadataServer {
-    fn datasource_base_url(&self) -> String {
-        portable_vm_metadata_base_url(self.bind_addr.port())
-    }
-
-    fn cleanup(&mut self) {
-        if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            let _ = shutdown_tx.send(());
-        }
-        let _ = std::net::TcpStream::connect(self.bind_addr);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-impl Drop for PortableVmMetadataServer {
-    fn drop(&mut self) {
-        self.cleanup();
     }
 }
 
@@ -13035,6 +13074,13 @@ struct PortableVmGuestMachineProfile {
     root_label: &'static str,
     block_device: &'static str,
     net_device: &'static str,
+}
+
+#[derive(Clone, Copy)]
+struct PortableVmBundleBinding {
+    expected_hash: Hash,
+    exact_bytes: u64,
+    maximum_bytes: u64,
 }
 
 #[cfg(target_os = "linux")]
@@ -13507,201 +13553,39 @@ fn write_inrou_cloud_init_documents(
     Ok(seed_root)
 }
 
-fn start_portable_vm_metadata_server(
-    seed_root: &Path,
-    expected_bundle_hash: Hash,
-    maximum_bundle_bytes: u64,
-) -> eyre::Result<PortableVmMetadataServer> {
-    let assets =
-        prepare_portable_vm_metadata_assets(seed_root, expected_bundle_hash, maximum_bundle_bytes)?;
-    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .wrap_err("bind PortableVm cloud-init metadata server")?;
-    listener
-        .set_nonblocking(true)
-        .wrap_err("configure PortableVm metadata listener as nonblocking")?;
-    let bind_addr = listener
-        .local_addr()
-        .wrap_err("query PortableVm metadata listener address")?;
-    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
-    let thread = thread::Builder::new()
-        .name("inrou-portable-metadata".to_owned())
-        .spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let _ = serve_portable_vm_metadata_request(&mut stream, &assets);
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        match shutdown_rx.try_recv() {
-                            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
-                            Err(mpsc::TryRecvError::Empty) => {
-                                thread::sleep(Duration::from_millis(50));
-                            }
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        })
-        .wrap_err("spawn PortableVm metadata server thread")?;
-
-    Ok(PortableVmMetadataServer {
-        bind_addr,
-        shutdown_tx: Some(shutdown_tx),
-        thread: Some(thread),
-    })
-}
-
-fn prepare_portable_vm_metadata_assets(
-    seed_root: &Path,
-    expected_bundle_hash: Hash,
-    maximum_bundle_bytes: u64,
-) -> eyre::Result<BTreeMap<String, PortableVmMetadataAsset>> {
-    let mut assets = BTreeMap::new();
-    for (route, member, content_type) in [
-        ("/meta-data", "meta-data", "text/plain; charset=utf-8"),
-        (
-            "/network-config",
-            "network-config",
-            "text/plain; charset=utf-8",
-        ),
-        ("/user-data", "user-data", "text/plain; charset=utf-8"),
-        (
-            INROU_PORTABLE_BUNDLE_METADATA_PATH,
-            INROU_PORTABLE_BUNDLE_METADATA_MEMBER,
-            "application/gzip",
-        ),
-    ] {
-        let path = seed_root.join(member);
-        let fingerprint = if route == INROU_PORTABLE_BUNDLE_METADATA_PATH {
-            verify_cached_soracloud_artifact(&path, expected_bundle_hash, maximum_bundle_bytes)
-                .map_err(|error| {
-                    eyre::eyre!(
-                        "bind PortableVm metadata bundle {}: {}",
-                        path.display(),
-                        error.message
-                    )
-                })?
-        } else {
-            let (_file, fingerprint) =
-                open_soracloud_artifact_for_validation(&path).map_err(|error| {
-                    eyre::eyre!(
-                        "bind PortableVm metadata document {}: {}",
-                        path.display(),
-                        error.message
-                    )
-                })?;
-            fingerprint
-        };
-        assets.insert(
-            route.to_owned(),
-            PortableVmMetadataAsset {
-                path,
-                content_type,
-                fingerprint,
-            },
-        );
-    }
-    Ok(assets)
-}
-
-fn serve_portable_vm_metadata_request(
-    stream: &mut std::net::TcpStream,
-    assets: &BTreeMap<String, PortableVmMetadataAsset>,
-) -> io::Result<()> {
-    use io::{Read as _, Write as _};
-
-    stream.set_nonblocking(false)?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    let mut request = [0_u8; 4096];
-    let read = stream.read(&mut request)?;
-    if read == 0 {
-        return Ok(());
-    }
-    let request = String::from_utf8_lossy(&request[..read]);
-    let mut parts = request
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .split_whitespace();
-    let method = parts.next().unwrap_or_default();
-    let path = parts.next().unwrap_or_default();
-    if method != "GET" {
-        stream.write_all(
-            b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        )?;
-        return Ok(());
-    }
-    let Some(asset) = assets.get(path) else {
-        stream.write_all(
-            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        )?;
-        return Ok(());
-    };
-    let (mut body, fingerprint) = open_soracloud_artifact_for_validation(&asset.path)
-        .map_err(|error| io::Error::other(error.message))?;
-    if fingerprint != asset.fingerprint {
-        return Err(io::Error::other(format!(
-            "PortableVm metadata asset {} changed after it was bound",
-            asset.path.display()
-        )));
-    }
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
-        fingerprint.bytes,
-        content_type = asset.content_type,
-    );
-    stream.write_all(response.as_bytes())?;
-    let observed_bytes = io::copy(
-        &mut io::Read::by_ref(&mut body).take(fingerprint.bytes.saturating_add(1)),
-        stream,
-    )?;
-    validate_opened_soracloud_artifact_after_read(
-        &body,
-        &asset.path,
-        &asset.fingerprint,
-        observed_bytes,
-    )
-    .map_err(|error| io::Error::other(error.message))?;
-    Ok(())
-}
-
-fn stage_portable_vm_metadata_bundle(
-    seed_root: &Path,
+fn stage_portable_vm_bundle_block_device(
+    materialization_dir: &Path,
     bundle_cache_path: &Path,
     expected_hash: Hash,
     maximum_bytes: u64,
-) -> eyre::Result<()> {
-    let bundle_path = seed_root.join(INROU_PORTABLE_BUNDLE_METADATA_MEMBER);
-    fs::create_dir_all(
-        bundle_path
-            .parent()
-            .ok_or_else(|| eyre::eyre!("path must have parent: {}", bundle_path.display()))?,
-    )
-    .wrap_err_with(|| format!("create parent for {}", bundle_path.display()))?;
-    let bundle_bytes =
+) -> eyre::Result<(PathBuf, u64)> {
+    let mut bundle_bytes =
         read_and_verify_cached_artifact(bundle_cache_path, expected_hash, maximum_bytes).map_err(
             |error| {
                 eyre::eyre!(
-                    "verify PortableVm metadata bundle {}: {}",
+                    "verify PortableVm block-device bundle {}: {}",
                     bundle_cache_path.display(),
                     error.message
                 )
             },
         )?;
-    write_bytes_atomic(&bundle_path, &bundle_bytes).wrap_err_with(|| {
-        format!(
-            "stage verified {} at {}",
-            bundle_cache_path.display(),
-            bundle_path.display()
-        )
-    })?;
-    Ok(())
-}
+    if bundle_bytes.is_empty() {
+        eyre::bail!("PortableVm bundle block device cannot be empty");
+    }
+    let exact_bytes = u64::try_from(bundle_bytes.len())
+        .wrap_err("PortableVm bundle length does not fit into u64")?;
+    let padded_bytes = bundle_bytes
+        .len()
+        .checked_add(INROU_PORTABLE_BLOCK_SECTOR_BYTES - 1)
+        .ok_or_else(|| eyre::eyre!("PortableVm bundle block-device length overflow"))?
+        / INROU_PORTABLE_BLOCK_SECTOR_BYTES
+        * INROU_PORTABLE_BLOCK_SECTOR_BYTES;
+    bundle_bytes.resize(padded_bytes, 0);
 
-fn portable_vm_metadata_base_url(port: u16) -> String {
-    format!("http://10.0.2.2:{port}/")
+    let bundle_path = materialization_dir.join(INROU_PORTABLE_BUNDLE_BLOCK_MEMBER);
+    write_bytes_atomic(&bundle_path, &bundle_bytes)
+        .wrap_err_with(|| format!("stage verified bundle block {}", bundle_path.display()))?;
+    Ok((bundle_path, exact_bytes))
 }
 
 fn build_portable_vm_allowlist_hosts_overlay(
@@ -13719,13 +13603,10 @@ fn build_portable_vm_allowlist_hosts_overlay(
     })
 }
 
-fn portable_vm_kernel_cmdline(
-    profile: PortableVmGuestMachineProfile,
-    datasource_base_url: &str,
-) -> String {
+fn portable_vm_kernel_cmdline(profile: PortableVmGuestMachineProfile) -> String {
     format!(
-        "console={} root=LABEL={} rw rootwait rootfstype=ext4 panic=1 ds=nocloud-net;s={}",
-        profile.serial_console, profile.root_label, datasource_base_url
+        "console={} root=LABEL={} rw rootwait rootfstype=ext4 panic=1",
+        profile.serial_console, profile.root_label
     )
 }
 
@@ -13745,7 +13626,7 @@ fn append_portable_vm_drive(
     format: &str,
     read_only: bool,
     discard_on_unmap: bool,
-) {
+) -> eyre::Result<()> {
     append_portable_vm_drive_with_serial(
         command,
         profile,
@@ -13755,7 +13636,7 @@ fn append_portable_vm_drive(
         read_only,
         discard_on_unmap,
         None,
-    );
+    )
 }
 
 fn append_portable_vm_drive_with_serial(
@@ -13767,7 +13648,8 @@ fn append_portable_vm_drive_with_serial(
     read_only: bool,
     discard_on_unmap: bool,
     serial: Option<&str>,
-) {
+) -> eyre::Result<()> {
+    let file_path = qemu_option_path(file_path)?;
     let mut device = format!("{},drive={drive_id}", profile.block_device);
     if let Some(serial) = serial {
         device.push_str(",serial=");
@@ -13779,10 +13661,34 @@ fn append_portable_vm_drive_with_serial(
             "if=none,id={drive_id},format={format},readonly={},discard={},file={}",
             if read_only { "on" } else { "off" },
             if discard_on_unmap { "unmap" } else { "ignore" },
-            file_path.display(),
+            file_path,
         ))
         .arg("-device")
         .arg(device);
+    Ok(())
+}
+
+fn append_portable_vm_vvfat_drive(
+    command: &mut Command,
+    profile: PortableVmGuestMachineProfile,
+    seed_root: &Path,
+) -> eyre::Result<()> {
+    let seed_root = qemu_option_path(seed_root)?;
+    command
+        .arg("-blockdev")
+        .arg(format!(
+            "driver=vvfat,node-name=seed,dir={seed_root},label=cidata,read-only=on"
+        ))
+        .arg("-device")
+        .arg(format!("{},drive=seed", profile.block_device));
+    Ok(())
+}
+
+fn qemu_option_path(path: &Path) -> eyre::Result<String> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| eyre::eyre!("QEMU option path is not valid UTF-8: {}", path.display()))?;
+    Ok(path.replace(',', ",,"))
 }
 
 #[cfg(target_os = "linux")]
@@ -13803,7 +13709,6 @@ fn build_inrou_bootstrap_seed(
         guest_port,
         shared_filesystem_mounts,
         bootstrap_user_data_overlay,
-        None,
         None,
         None,
     )?;
@@ -14387,13 +14292,19 @@ fn build_inrou_user_data(
     shared_filesystem_mounts: &[InrouSharedFilesystemMount],
     bootstrap_user_data_overlay: Option<&str>,
     allowlist_hosts_overlay: Option<&str>,
-    portable_bundle_hash: Option<&str>,
-    portable_bundle_max_bytes: Option<u64>,
+    portable_bundle: Option<PortableVmBundleBinding>,
 ) -> eyre::Result<String> {
-    if portable_bundle_hash.is_some() != portable_bundle_max_bytes.is_some() {
-        eyre::bail!(
-            "PortableVm bundle hash and maximum compressed-byte bound must be configured together"
-        );
+    if let Some(bundle) = portable_bundle {
+        if bundle.exact_bytes == 0 {
+            eyre::bail!("PortableVm bundle exact byte length must be positive");
+        }
+        if bundle.exact_bytes > bundle.maximum_bytes {
+            eyre::bail!(
+                "PortableVm bundle exact byte length {} exceeds its {}-byte bound",
+                bundle.exact_bytes,
+                bundle.maximum_bytes
+            );
+        }
     }
     let mut prepare_script = String::from("#!/bin/sh\nset -eu\n");
     prepare_script.push_str(
@@ -14405,9 +14316,7 @@ fn build_inrou_user_data(
     prepare_script.push_str(
         "chown -R inrou:inrou /var/lib/soracloud/service /var/lib/soracloud/materialization 2>/dev/null || true\n",
     );
-    if let Some(bundle_hash) = portable_bundle_hash {
-        let bundle_max_bytes = portable_bundle_max_bytes
-            .ok_or_else(|| eyre::eyre!("PortableVm bundle byte bound is missing"))?;
+    if let Some(bundle) = portable_bundle {
         let relative_entrypoint =
             canonical_inrou_bundle_member_components(&cache_key.entrypoint)?.join("/");
         let guest_entrypoint = format!(
@@ -14424,10 +14333,13 @@ fn build_inrou_user_data(
         prepare_script.push_str(&shell_single_quote(&relative_entrypoint));
         prepare_script.push('\n');
         prepare_script.push_str("bundle_expected_hash=");
-        prepare_script.push_str(&shell_single_quote(bundle_hash));
+        prepare_script.push_str(&shell_single_quote(&bundle.expected_hash.to_string()));
+        prepare_script.push('\n');
+        prepare_script.push_str("bundle_exact_bytes=");
+        prepare_script.push_str(&shell_single_quote(&bundle.exact_bytes.to_string()));
         prepare_script.push('\n');
         prepare_script.push_str("bundle_max_bytes=");
-        prepare_script.push_str(&shell_single_quote(&bundle_max_bytes.to_string()));
+        prepare_script.push_str(&shell_single_quote(&bundle.maximum_bytes.to_string()));
         prepare_script.push('\n');
         prepare_script.push_str("if ! command -v python3 >/dev/null 2>&1; then\n");
         prepare_script.push_str(
@@ -14441,12 +14353,20 @@ fn build_inrou_user_data(
         );
         prepare_script.push_str("  exit 1\n");
         prepare_script.push_str("fi\n");
+        prepare_script.push_str("bundle_device=");
+        prepare_script.push_str(&shell_single_quote(&format!(
+            "/dev/disk/by-id/virtio-{INROU_PORTABLE_BUNDLE_DEVICE_SERIAL}"
+        )));
+        prepare_script.push('\n');
+        prepare_script.push_str("attempt=0\n");
+        prepare_script
+            .push_str("while [ ! -b \"$bundle_device\" ] && [ \"$attempt\" -lt 50 ]; do\n");
+        prepare_script.push_str("  attempt=$((attempt + 1))\n");
+        prepare_script.push_str("  sleep 0.2\n");
+        prepare_script.push_str("done\n");
+        prepare_script.push_str("if [ ! -b \"$bundle_device\" ]; then\n");
         prepare_script.push_str(
-            "datasource_url=$(sed -n 's/.*ds=nocloud-net;s=\\([^ ]*\\).*/\\1/p' /proc/cmdline | head -n 1)\n",
-        );
-        prepare_script.push_str("if [ -z \"$datasource_url\" ]; then\n");
-        prepare_script.push_str(
-            "  echo 'Inrou PortableVm metadata datasource URL not found in /proc/cmdline' >&2\n",
+            "  echo \"Inrou PortableVm bundle block device not found: $bundle_device\" >&2\n",
         );
         prepare_script.push_str("  exit 1\n");
         prepare_script.push_str("fi\n");
@@ -14504,64 +14424,37 @@ fn build_inrou_user_data(
         prepare_script.push_str("trap 'exit 129' HUP\n");
         prepare_script.push_str("trap 'exit 130' INT\n");
         prepare_script.push_str("trap 'exit 143' TERM\n");
-        prepare_script.push_str("python3 - \"${datasource_url%/}");
-        prepare_script.push_str(INROU_PORTABLE_BUNDLE_METADATA_PATH);
         prepare_script.push_str(
-            "\" \"$bundle_tmp\" \"$bundle_expected_hash\" \"$bundle_max_bytes\" <<'PY'\n",
+            "python3 - \"$bundle_device\" \"$bundle_tmp\" \"$bundle_expected_hash\" \"$bundle_exact_bytes\" \"$bundle_max_bytes\" <<'PY'\n",
         );
         prepare_script.push_str("import hashlib\n");
         prepare_script.push_str("import sys\n");
-        prepare_script.push_str("import urllib.request\n");
         prepare_script
-            .push_str("url, dest, expected_hash, maximum_bytes = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])\n");
-        prepare_script.push_str("class RejectRedirects(urllib.request.HTTPRedirectHandler):\n");
+            .push_str("source, dest, expected_hash = sys.argv[1], sys.argv[2], sys.argv[3]\n");
+        prepare_script.push_str("exact_bytes = int(sys.argv[4])\n");
+        prepare_script.push_str("maximum_bytes = int(sys.argv[5])\n");
+        prepare_script.push_str("if exact_bytes <= 0 or exact_bytes > maximum_bytes:\n");
         prepare_script
-            .push_str("    def redirect_request(self, req, fp, code, msg, headers, newurl):\n");
-        prepare_script.push_str("        return None\n");
-        prepare_script.push_str("opener = urllib.request.build_opener(RejectRedirects)\n");
+            .push_str("    raise RuntimeError('PortableVm bundle length binding is invalid')\n");
         prepare_script.push_str("hasher = hashlib.blake2b(digest_size=32)\n");
         prepare_script.push_str("total = 0\n");
-        prepare_script.push_str("with opener.open(url, timeout=30) as response:\n");
-        prepare_script.push_str("    if response.geturl() != url:\n");
-        prepare_script.push_str(
-            "        raise RuntimeError('PortableVm bundle metadata redirect rejected')\n",
-        );
-        prepare_script
-            .push_str("    content_lengths = response.headers.get_all('Content-Length', [])\n");
-        prepare_script.push_str("    if len(content_lengths) != 1:\n");
-        prepare_script.push_str(
-            "        raise RuntimeError('PortableVm bundle metadata requires exactly one Content-Length')\n",
-        );
-        prepare_script.push_str("    raw_length = content_lengths[0]\n");
-        prepare_script.push_str(
-            "    if raw_length is None or not raw_length.isascii() or not raw_length.isdecimal():\n",
-        );
-        prepare_script.push_str(
-            "        raise RuntimeError('PortableVm bundle metadata requires canonical Content-Length')\n",
-        );
-        prepare_script.push_str("    if raw_length != str(int(raw_length)):\n");
-        prepare_script.push_str(
-            "        raise RuntimeError('PortableVm bundle metadata requires canonical Content-Length')\n",
-        );
-        prepare_script.push_str("    if int(raw_length) > maximum_bytes:\n");
-        prepare_script.push_str(
-            "        raise RuntimeError('PortableVm bundle metadata exceeds byte bound')\n",
-        );
+        prepare_script.push_str("remaining = exact_bytes\n");
+        prepare_script.push_str("with open(source, 'rb', buffering=0) as source_handle:\n");
         prepare_script.push_str("    with open(dest, 'wb') as handle:\n");
-        prepare_script.push_str("        while True:\n");
-        prepare_script.push_str("            chunk = response.read(65536)\n");
+        prepare_script.push_str("        while remaining:\n");
+        prepare_script.push_str("            chunk = source_handle.read(min(65536, remaining))\n");
         prepare_script.push_str("            if not chunk:\n");
-        prepare_script.push_str("                break\n");
-        prepare_script.push_str("            total += len(chunk)\n");
-        prepare_script.push_str("            if total > maximum_bytes:\n");
         prepare_script.push_str(
-            "                raise RuntimeError('PortableVm bundle download exceeds byte bound')\n",
+            "                raise RuntimeError('PortableVm bundle block device ended before its authenticated length')\n",
         );
+        prepare_script.push_str("            total += len(chunk)\n");
+        prepare_script.push_str("            remaining -= len(chunk)\n");
         prepare_script.push_str("            hasher.update(chunk)\n");
         prepare_script.push_str("            handle.write(chunk)\n");
-        prepare_script.push_str("if total != int(raw_length):\n");
-        prepare_script
-            .push_str("    raise RuntimeError('PortableVm bundle download length mismatch')\n");
+        prepare_script.push_str("if total != exact_bytes:\n");
+        prepare_script.push_str(
+            "    raise RuntimeError('PortableVm bundle block-device length verification failed')\n",
+        );
         prepare_script.push_str("digest = bytearray(hasher.digest())\n");
         prepare_script.push_str("digest[-1] |= 1\n");
         prepare_script.push_str("if digest.hex() != expected_hash:\n");
@@ -14818,7 +14711,7 @@ fn build_inrou_user_data(
     launcher_script.push_str("export PORT=");
     launcher_script.push_str(&shell_single_quote(&guest_port.to_string()));
     launcher_script.push('\n');
-    let launcher_entrypoint = match portable_bundle_hash {
+    let launcher_entrypoint = match portable_bundle {
         Some(_) => format!(
             "{}/{}",
             INROU_PORTABLE_BUNDLE_GUEST_ROOT,
@@ -17452,6 +17345,49 @@ mod tests {
     };
 
     #[test]
+    fn cooldown_tracker_expires_history_and_fails_closed_at_its_hard_cap() {
+        let mut attempts = BTreeMap::new();
+        assert!(bounded_cooldown_allows_attempt(
+            &mut attempts,
+            &1_u8,
+            100,
+            10,
+            2,
+        ));
+        assert!(!bounded_cooldown_allows_attempt(
+            &mut attempts,
+            &1_u8,
+            109,
+            10,
+            2,
+        ));
+        assert!(bounded_cooldown_allows_attempt(
+            &mut attempts,
+            &2_u8,
+            109,
+            10,
+            2,
+        ));
+        assert!(!bounded_cooldown_allows_attempt(
+            &mut attempts,
+            &3_u8,
+            109,
+            10,
+            2,
+        ));
+        assert_eq!(attempts.len(), 2);
+
+        assert!(bounded_cooldown_allows_attempt(
+            &mut attempts,
+            &3_u8,
+            110,
+            10,
+            2,
+        ));
+        assert_eq!(attempts, BTreeMap::from([(2, 109), (3, 110)]));
+    }
+
+    #[test]
     fn bounded_soracloud_http_response_accepts_exact_limit() -> Result<()> {
         for declared_length in [None, Some(8)] {
             let mut reader = io::Cursor::new(b"12345678");
@@ -17645,6 +17581,57 @@ mod tests {
             .expect("allocate owned HEAP TLV");
         vm.store_bytes(pointer, tlv).expect("store owned HEAP TLV");
         pointer
+    }
+
+    #[test]
+    fn soracloud_ivm_host_rejects_the_state_backed_axt_surface() -> Result<()> {
+        let bundle = load_deployment_bundle_fixture()?;
+        let temp_dir = tempfile::tempdir()?;
+        let runtime_request = sample_ordered_mailbox_request(
+            &bundle,
+            "query",
+            sample_mailbox_message(&bundle, "query", b"axt-boundary".to_vec()),
+        );
+        let mut host = SoracloudIvmHost::new(
+            runtime_request,
+            temp_dir.path().to_path_buf(),
+            test_runtime_manager_config(temp_dir.path().to_path_buf()).egress,
+            BTreeMap::new(),
+        );
+        assert!(
+            host.allows_syscall(ivm::SyscallPolicy::AbiV1, ivm_syscalls::SYSCALL_IROHA_HASH,),
+            "state-free core helpers remain available"
+        );
+
+        for syscall in [
+            ivm_syscalls::SYSCALL_AXT_BEGIN,
+            ivm_syscalls::SYSCALL_AXT_TOUCH,
+            ivm_syscalls::SYSCALL_AXT_COMMIT,
+            ivm_syscalls::SYSCALL_VERIFY_DS_PROOF,
+            ivm_syscalls::SYSCALL_USE_ASSET_HANDLE,
+        ] {
+            assert!(!host.allows_syscall(ivm::SyscallPolicy::AbiV1, syscall));
+
+            let mut vm = IVM::new(u64::MAX);
+            assert_eq!(
+                host.prepare_syscall(syscall, &vm),
+                Err(VMError::UnknownSyscall(syscall))
+            );
+            assert_eq!(
+                host.syscall(syscall, &mut vm),
+                Err(VMError::UnknownSyscall(syscall))
+            );
+
+            let mut code = Vec::new();
+            code.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            vm.load_code(&code)?;
+            assert_eq!(
+                vm.run_with_host(&mut host),
+                Err(VMError::UnknownSyscall(syscall))
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -18122,58 +18109,140 @@ mod tests {
     }
 
     #[test]
-    fn portable_vm_metadata_stage_verifies_source_before_replacement() -> Result<()> {
+    fn portable_vm_bundle_block_stage_verifies_and_pads_before_replacement() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
-        let seed_root = temp_dir.path().join("seed");
         let cache_path = temp_dir.path().join("bundle.tgz");
         let bundle_bytes = b"authenticated-bundle";
         let expected_hash = Hash::new(bundle_bytes);
         fs::write(&cache_path, bundle_bytes)?;
 
-        stage_portable_vm_metadata_bundle(
-            &seed_root,
+        let (staged, exact_bytes) = stage_portable_vm_bundle_block_device(
+            temp_dir.path(),
             &cache_path,
             expected_hash,
             u64::try_from(bundle_bytes.len())?,
         )?;
-        let staged = seed_root.join(INROU_PORTABLE_BUNDLE_METADATA_MEMBER);
-        assert_eq!(fs::read(&staged)?, bundle_bytes);
+        assert_eq!(exact_bytes, u64::try_from(bundle_bytes.len())?);
+        let staged_bytes = fs::read(&staged)?;
+        assert_eq!(staged_bytes.len() % INROU_PORTABLE_BLOCK_SECTOR_BYTES, 0);
+        assert_eq!(&staged_bytes[..bundle_bytes.len()], bundle_bytes);
+        assert!(
+            staged_bytes[bundle_bytes.len()..]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
 
         fs::write(&cache_path, b"substituted-bundle")?;
-        let _ = stage_portable_vm_metadata_bundle(&seed_root, &cache_path, expected_hash, u64::MAX)
-            .expect_err("substituted bundle must fail before replacing staged metadata");
-        assert_eq!(fs::read(staged)?, bundle_bytes);
+        let _ = stage_portable_vm_bundle_block_device(
+            temp_dir.path(),
+            &cache_path,
+            expected_hash,
+            u64::MAX,
+        )
+        .expect_err("substituted bundle must fail before replacing the verified block device");
+        assert_eq!(fs::read(staged)?, staged_bytes);
         Ok(())
     }
 
     #[test]
-    fn portable_vm_metadata_serving_rejects_post_binding_substitution() -> Result<()> {
+    fn portable_vm_cloud_init_seed_contains_only_nocloud_documents() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let secret_bytes = b"portable-seed-secret-sentinel".to_vec();
+        let mut deployment = sample_deployment_state(&bundle);
+        deployment.service_secrets.insert(
+            "db/portable-seed-password".to_owned(),
+            SoraServiceSecretEntryV1 {
+                schema_version: iroha_data_model::soracloud::SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+                secret_name: "db/portable-seed-password".to_owned(),
+                envelope: SecretEnvelopeV1 {
+                    schema_version: SECRET_ENVELOPE_VERSION_V1,
+                    encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+                    key_id: "kms/portable-seed-test".to_owned(),
+                    key_version: std::num::NonZeroU32::new(1).expect("non-zero"),
+                    nonce: vec![1, 2, 3, 4],
+                    ciphertext: secret_bytes.clone(),
+                    commitment: Hash::new(&secret_bytes),
+                    aad_digest: None,
+                },
+                last_update_sequence: 1,
+            },
+        );
+        let effective_env = build_effective_service_environment(&bundle, &deployment)?;
+        assert!(
+            effective_env
+                .values()
+                .all(|value| !value.contains("portable-seed-secret-sentinel"))
+        );
+        let (_plan_root, replica_plan, mut cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        cache_key.effective_env = effective_env;
         let temp_dir = tempfile::tempdir()?;
-        let seed_root = temp_dir.path().join("seed");
-        fs::create_dir_all(seed_root.join("soracloud"))?;
-        for member in ["meta-data", "network-config", "user-data"] {
-            write_bytes_atomic(&seed_root.join(member), member.as_bytes())?;
-        }
-        let bundle_path = seed_root.join(INROU_PORTABLE_BUNDLE_METADATA_MEMBER);
-        let bundle_bytes = b"authenticated-bundle";
-        write_bytes_atomic(&bundle_path, bundle_bytes)?;
-        let assets = prepare_portable_vm_metadata_assets(
-            &seed_root,
-            Hash::new(bundle_bytes),
-            u64::try_from(bundle_bytes.len())?,
+        let user_data =
+            build_inrou_user_data(&replica_plan, &cache_key, 8080, &[], None, None, None)?;
+        assert!(!user_data.contains("portable-seed-secret-sentinel"));
+        assert!(!user_data.contains("db/portable-seed-password"));
+        assert!(!user_data.contains("kms/portable-seed-test"));
+        let seed_root = write_inrou_cloud_init_documents(
+            temp_dir.path(),
+            &cache_key,
+            &build_inrou_portable_network_config(),
+            &user_data,
+        )?;
+        let mut members = fs::read_dir(&seed_root)?
+            .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+            .collect::<io::Result<Vec<_>>>()?;
+        members.sort();
+        assert_eq!(
+            members,
+            vec![
+                "meta-data".to_owned(),
+                "network-config".to_owned(),
+                "user-data".to_owned()
+            ]
+        );
+        assert!(!seed_root.join(INROU_PORTABLE_BUNDLE_BLOCK_MEMBER).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn portable_vm_qemu_args_attach_seed_and_bundle_read_only_without_url() -> Result<()> {
+        let profile = portable_vm_guest_machine_profile(SoraInrouGuestIsaV1::X8664);
+        let mut command = Command::new("qemu-system-test");
+        append_portable_vm_vvfat_drive(&mut command, profile, Path::new("seed,documents"))?;
+        append_portable_vm_drive_with_serial(
+            &mut command,
+            profile,
+            "bundle",
+            Path::new("bundle,verified.raw"),
+            "raw",
+            true,
+            false,
+            Some(INROU_PORTABLE_BUNDLE_DEVICE_SERIAL),
         )?;
 
-        write_bytes_atomic(&bundle_path, b"post-binding-substitution")?;
-        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-        let mut client = std::net::TcpStream::connect(listener.local_addr()?)?;
-        std::io::Write::write_all(
-            &mut client,
-            b"GET /soracloud/bundle.tgz HTTP/1.1\r\nHost: metadata\r\n\r\n",
-        )?;
-        let (mut server, _) = listener.accept()?;
-        let error = serve_portable_vm_metadata_request(&mut server, &assets)
-            .expect_err("a post-binding metadata substitution must fail closed");
-        assert!(error.to_string().contains("changed after it was bound"));
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.iter().any(|arg| {
+            arg == "driver=vvfat,node-name=seed,dir=seed,,documents,label=cidata,read-only=on"
+        }));
+        assert!(args.iter().any(|arg| arg == "virtio-blk-pci,drive=seed"));
+        assert!(args.iter().any(|arg| {
+            arg == "if=none,id=bundle,format=raw,readonly=on,discard=ignore,file=bundle,,verified.raw"
+        }));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "virtio-blk-pci,drive=bundle,serial=sora_bundle")
+        );
+        assert!(
+            args.iter()
+                .all(|arg| !arg.contains("http://") && !arg.contains("https://"))
+        );
+        let kernel_cmdline = portable_vm_kernel_cmdline(profile);
+        assert!(!kernel_cmdline.contains("ds=nocloud-net"));
+        assert!(!kernel_cmdline.contains("http://"));
+        assert!(!kernel_cmdline.contains("https://"));
         Ok(())
     }
 
@@ -19714,6 +19783,16 @@ mod tests {
             remote_manifest_response_for_fixture(&fixture)?,
             1_024,
         )?;
+        let bounded_response = remote_manifest_response_for_fixture(&fixture)?;
+        assert_report_contains(
+            validate_remote_manifest_response(
+                &source,
+                bounded_response.clone(),
+                bounded_response.content_length.saturating_sub(1),
+            )
+            .expect_err("remote manifest beyond the configured hydration budget must fail"),
+            "content length is zero, inconsistent, or exceeds",
+        );
 
         let mut noncanonical_base64 = remote_manifest_response_for_fixture(&fixture)?;
         noncanonical_base64.manifest_b64.push('\n');
@@ -20440,6 +20519,129 @@ mod tests {
         ))
     }
 
+    const TEST_HF_CREDENTIAL_PROVIDER_HANDLE: &str = "kms://soracloud/hf-inference-fixture";
+    const TEST_HF_CREDENTIAL_PROVIDER_REVISION: u64 = 7;
+    const TEST_HF_CREDENTIAL_PROVIDER_POLICY_DIGEST: [u8; 32] = [0xA7; 32];
+
+    fn test_hf_credential_provider_binding()
+    -> iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding {
+        iroha_config::parameters::actual::SoracloudRuntimeHfCredentialProviderBinding {
+            handle: TEST_HF_CREDENTIAL_PROVIDER_HANDLE.to_owned(),
+            revision: TEST_HF_CREDENTIAL_PROVIDER_REVISION,
+            policy_digest: TEST_HF_CREDENTIAL_PROVIDER_POLICY_DIGEST,
+        }
+    }
+
+    struct TestHfCredentialProvider {
+        bearer_token: String,
+    }
+
+    impl fmt::Debug for TestHfCredentialProvider {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("TestHfCredentialProvider")
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1
+        for TestHfCredentialProvider
+    {
+        fn handle(&self) -> &str {
+            TEST_HF_CREDENTIAL_PROVIDER_HANDLE
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1,
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1,
+        > {
+            Ok(
+                crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1::new(
+                    TEST_HF_CREDENTIAL_PROVIDER_REVISION,
+                    TEST_HF_CREDENTIAL_PROVIDER_POLICY_DIGEST,
+                    true,
+                    false,
+                ),
+            )
+        }
+
+        fn check_readiness(
+            &self,
+        ) -> Result<(), crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1>
+        {
+            Ok(())
+        }
+
+        fn execute_authenticated(
+            &self,
+            request: &crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceRequestV1,
+        ) -> Result<
+            crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1,
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
+        > {
+            use crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1 as Error;
+
+            let client = reqwest::blocking::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| Error::Unavailable)?;
+            let mut send = client
+                .post(request.url())
+                .bearer_auth(&self.bearer_token)
+                .header(reqwest::header::CONTENT_TYPE, request.content_type())
+                .body(request.body().to_vec());
+            if let Some(accept) = request.accept() {
+                send = send.header(reqwest::header::ACCEPT, accept);
+            }
+            let response = send.send().map_err(|_| Error::Unavailable)?;
+            let status = response.status().as_u16();
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(ToOwned::to_owned);
+            let content_encoding = response
+                .headers()
+                .get(reqwest::header::CONTENT_ENCODING)
+                .and_then(|value| value.to_str().ok())
+                .map(ToOwned::to_owned);
+            let body = read_soracloud_http_response_bounded(
+                response,
+                request.maximum_response_bytes(),
+                "test authenticated HF inference",
+            )
+            .map_err(|_| Error::InvalidResponse)?;
+            crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+                status,
+                content_type,
+                content_encoding,
+                body,
+                request.maximum_response_bytes(),
+            )
+        }
+    }
+
+    fn test_hf_credential_provider(
+        token: &str,
+    ) -> Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1> {
+        let provider: Arc<
+            dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1,
+        > = Arc::new(TestHfCredentialProvider {
+            bearer_token: token.to_owned(),
+        });
+        let binding =
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1::try_from_config(
+                &test_hf_credential_provider_binding(),
+            )
+            .expect("test credential-provider binding must be valid");
+        crate::soracloud_hf_credential::qualify_soracloud_hf_inference_credential_provider_v1(
+            binding, provider,
+        )
+        .expect("test credential provider must qualify")
+    }
+
     fn spawn_remote_hydration_fixture(
         fixtures: &[RemoteManifestFixture],
     ) -> Result<HttpRouteFixture> {
@@ -20900,6 +21102,10 @@ mod tests {
             hf_local_workers: Arc::clone(&manager.hf_local_workers),
             host_violation_reporter: Arc::clone(&manager.host_violation_reporter),
             mutation_sink: manager.mutation_sink.as_ref().map(Arc::clone),
+            hf_inference_credential_provider: manager
+                .hf_inference_credential_provider
+                .as_ref()
+                .map(Arc::clone),
             generated_hf_reconcile_attempts_ms: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
             ivm_runtime_cache: Arc::new(SoracloudPreparedRuntimeCache::from_config(
                 &manager.config,
@@ -21604,7 +21810,7 @@ mod tests {
                 model_info_max_response_bytes: 4 * 1024 * 1024,
                 inference_max_response_bytes: 16 * 1024 * 1024,
                 import_file_allowlist: vec!["config.json".to_owned(), "*.safetensors".to_owned()],
-                inference_token: Some("fixture-token".to_owned()),
+                inference_credential_provider: Some(test_hf_credential_provider_binding()),
             },
         };
 
@@ -23082,9 +23288,11 @@ mod tests {
         config.hf.hub_base_url = server.base_url.clone();
         config.hf.api_base_url = format!("{}/api", server.base_url);
         config.hf.import_file_allowlist = vec!["config.json".to_owned()];
-        config.hf.inference_token = Some("hf-runtime-token".to_owned());
+        config.hf.allow_inference_bridge_fallback = true;
+        config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
 
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_hf_inference_credential_provider(test_hf_credential_provider("hf-runtime-token"));
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
 
@@ -23296,11 +23504,11 @@ mod tests {
     }
 
     #[test]
-    fn execute_local_read_generated_hf_infer_requires_configured_token() -> Result<()> {
+    fn execute_local_read_generated_hf_infer_requires_injected_credential_provider() -> Result<()> {
         let mut state = test_state()?;
         let fixture = insert_generated_hf_service_fixture(
             &mut state,
-            "hf_infer_requires_token",
+            "hf_infer_requires_provider",
             "openai-community/gpt2",
             "main",
             "gpt2",
@@ -23319,6 +23527,7 @@ mod tests {
         config.hf.inference_base_url = format!("{}/hf-inference/models", server.base_url);
         config.hf.local_execution_enabled = false;
         config.hf.allow_inference_bridge_fallback = true;
+        config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
@@ -23340,14 +23549,34 @@ mod tests {
                     "1".to_owned(),
                 )]),
                 request_body: br#"{"inputs":"hello"}"#.to_vec(),
-                request_commitment: Hash::new(b"hf-infer-no-token"),
+                request_commitment: Hash::new(b"hf-infer-no-credential-provider"),
             })
-            .expect_err("generated HF inference should require a configured token");
+            .expect_err("generated HF inference should require an injected credential provider");
         assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
         assert!(
             error
                 .message
-                .contains("requires `soracloud_runtime.hf.inference_token`")
+                .contains("requires a qualified runtime credential provider")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_start_rejects_missing_hf_credential_provider() -> Result<()> {
+        let state = test_state()?;
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.allow_inference_bridge_fallback = true;
+        config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
+
+        let error = match SoracloudRuntimeManager::new(config, state).start(ShutdownSignal::new()) {
+            Ok(_) => panic!("startup must reject a missing HF credential provider"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("requires a deployment-owned credential provider")
         );
         Ok(())
     }
@@ -23377,8 +23606,9 @@ mod tests {
         config.hf.inference_base_url = format!("{}/hf-inference/models", server.base_url);
         config.hf.local_execution_enabled = false;
         config.hf.allow_inference_bridge_fallback = true;
-        config.hf.inference_token = Some("hf-test-token".to_owned());
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_hf_inference_credential_provider(test_hf_credential_provider("hf-test-token"));
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
 
@@ -24779,9 +25009,10 @@ mod tests {
         config.hf.local_execution_enabled = false;
         config.hf.allow_inference_bridge_fallback = true;
         config.hf.import_file_allowlist = vec!["config.json".to_owned()];
-        config.hf.inference_token = Some("hf-test-token".to_owned());
+        config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
 
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
+            .with_hf_inference_credential_provider(test_hf_credential_provider("hf-test-token"));
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
 
@@ -27872,26 +28103,31 @@ mod tests {
             &shared_mounts,
             Some("package_update: true\npackages:\n  - python3-minimal\n"),
             Some("127.0.0.1 api.sora.internal\n10.0.0.5 rpc.sora.internal\n"),
-            Some(&replica_plan.bundle_hash),
-            Some(512 * 1024 * 1024),
+            Some(PortableVmBundleBinding {
+                expected_hash: bundle.container.bundle_hash,
+                exact_bytes: 21,
+                maximum_bytes: 512 * 1024 * 1024,
+            }),
         )?;
 
-        assert!(user_data.contains("/soracloud/bundle.tgz"));
+        assert!(user_data.contains("/dev/disk/by-id/virtio-sora_bundle"));
         assert!(user_data.contains("/var/lib/soracloud/materialization/bundle"));
         assert!(user_data.contains("hashlib.blake2b(digest_size=32)"));
-        assert!(user_data.contains("response.geturl() != url"));
-        assert!(user_data.contains("class RejectRedirects"));
-        assert!(user_data.contains("urllib.request.build_opener(RejectRedirects)"));
-        assert!(user_data.contains("response.headers.get_all('Content-Length', [])"));
-        assert!(user_data.contains("raw_length != str(int(raw_length))"));
+        assert!(user_data.contains("bundle_exact_bytes='21'"));
         assert!(user_data.contains("bundle_max_bytes='536870912'"));
+        assert!(user_data.contains("while remaining:"));
+        assert!(user_data.contains("source_handle.read(min(65536, remaining))"));
+        assert!(user_data.contains("if total != exact_bytes:"));
         assert!(user_data.contains(".bundle-stage.XXXXXX"));
         assert!(user_data.contains(".bundle-backup.XXXXXX"));
         assert!(user_data.contains("multiple interrupted PortableVm bundle backups"));
         assert!(user_data.contains("mv -- \"$bundle_backup\" \"$bundle_root\""));
         assert!(user_data.contains("mv -- \"$bundle_stage\" \"$bundle_root\""));
         assert!(!user_data.contains(".bundle_hash"));
-        assert!(!user_data.contains("response.read()"));
+        assert!(!user_data.contains("urllib"));
+        assert!(!user_data.contains("datasource_url"));
+        assert!(!user_data.contains("http://"));
+        assert!(!user_data.contains("https://"));
         assert!(!user_data.contains("rm -rf \"$bundle_root\""));
         assert!(user_data.contains(
             "chown -R inrou:inrou /var/lib/soracloud/service /var/lib/soracloud/materialization"
@@ -27917,7 +28153,7 @@ mod tests {
     }
 
     #[test]
-    fn build_inrou_user_data_requires_paired_portable_bundle_binding() -> Result<()> {
+    fn build_inrou_user_data_rejects_invalid_portable_bundle_lengths() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let (_temp_dir, replica_plan, cache_key) =
             materialize_inrou_replica_plan_for_tests(&bundle)?;
@@ -27929,10 +28165,13 @@ mod tests {
             &[],
             None,
             None,
-            Some(&replica_plan.bundle_hash),
-            None,
+            Some(PortableVmBundleBinding {
+                expected_hash: bundle.container.bundle_hash,
+                exact_bytes: 0,
+                maximum_bytes: 1024,
+            }),
         )
-        .expect_err("portable bundle hash without a byte bound must fail");
+        .expect_err("empty portable bundle binding must fail");
         let _ = build_inrou_user_data(
             &replica_plan,
             &cache_key,
@@ -27940,10 +28179,13 @@ mod tests {
             &[],
             None,
             None,
-            None,
-            Some(1024),
+            Some(PortableVmBundleBinding {
+                expected_hash: bundle.container.bundle_hash,
+                exact_bytes: 1025,
+                maximum_bytes: 1024,
+            }),
         )
-        .expect_err("portable bundle byte bound without a hash must fail");
+        .expect_err("portable bundle binding beyond its byte limit must fail");
         Ok(())
     }
 
@@ -27975,7 +28217,6 @@ mod tests {
                 .get(),
             &shared_mounts,
             Some("package_update: true\npackages:\n  - python3-minimal\n"),
-            None,
             None,
             None,
         )?;
@@ -29425,433 +29666,5 @@ exec python3 /tmp/inrou-shared-volume.py
         Ok(())
     }
 
-    #[test]
-    fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_summary()
-    -> Result<()> {
-        let mut state = test_state()?;
-        let fixture = insert_generated_hf_service_fixture(
-            &mut state,
-            "hf_agent_service",
-            "openai-community/gpt2",
-            "main",
-            "gpt2",
-        )?;
-        set_generated_hf_service_route_visibility(
-            &mut state,
-            &fixture,
-            SoraRouteVisibilityV1::Public,
-        );
-        let apartment_name: Name = "hf_agent".parse().expect("valid apartment name");
-        let manifest = iroha_core::soracloud_runtime::build_soracloud_hf_generated_agent_manifest(
-            apartment_name.clone(),
-            &fixture.bundle,
-        );
-        let run = SoraAgentAutonomyRunRecordV1 {
-            run_id: "hf_agent:autonomy:42".to_owned(),
-            artifact_hash: "hash:HFAGENT#01".to_owned(),
-            provenance_hash: Some("hash:HFPROV#01".to_owned()),
-            budget_units: 75,
-            run_label: "fallback label".to_owned(),
-            workflow_input_json: Some(
-                "{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}"
-                    .to_owned(),
-            ),
-            approved_process_generation: 1,
-            request_commitment: Hash::new(b"hf-agent-run"),
-            approved_sequence: 42,
-        };
-        let apartment = SoraAgentApartmentRecordV1 {
-            schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-            manifest_hash: Hash::new(Encode::encode(&manifest)),
-            status: SoraAgentRuntimeStatusV1::Running,
-            deployed_sequence: 1,
-            lease_started_sequence: 1,
-            lease_expires_sequence: 400,
-            last_renewed_sequence: 1,
-            restart_count: 0,
-            last_restart_sequence: None,
-            last_restart_reason: None,
-            process_generation: 1,
-            process_started_sequence: 1,
-            last_active_sequence: 42,
-            last_checkpoint_sequence: Some(42),
-            checkpoint_count: 1,
-            persistent_state: SoraAgentPersistentStateV1 {
-                total_bytes: 128,
-                key_sizes: BTreeMap::from([("/autonomy/hf_agent:autonomy:42".to_owned(), 128)]),
-            },
-            revoked_policy_capabilities: BTreeSet::new(),
-            pending_wallet_requests: BTreeMap::new(),
-            wallet_daily_spend: BTreeMap::new(),
-            mailbox_queue: Vec::new(),
-            autonomy_budget_ceiling_units: 1_000,
-            autonomy_budget_remaining_units: 925,
-            artifact_allowlist: BTreeMap::from([(
-                run.artifact_hash.clone(),
-                SoraAgentArtifactAllowRuleV1 {
-                    artifact_hash: run.artifact_hash.clone(),
-                    provenance_hash: run.provenance_hash.clone(),
-                    added_sequence: 41,
-                },
-            )]),
-            autonomy_run_history: vec![run.clone()],
-            manifest,
-        };
-        {
-            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_agent_apartments_mut_for_testing()
-                .insert(apartment_name.to_string(), apartment.clone());
-        }
-        let local_peer_id = "12D3KooWHfAgentAutonomyRuntimeHost";
-        insert_generated_hf_placement_fixture(
-            &mut state,
-            &fixture,
-            SoraHfPlacementHostRoleV1::Primary,
-            SoraHfPlacementHostStatusV1::Warm,
-            local_peer_id,
-        );
-
-        let temp_dir = tempfile::tempdir()?;
-        let source_root = temp_dir
-            .path()
-            .join("hf_sources")
-            .join(sanitize_path_component(&fixture.source_id.to_string()));
-        let files_root = source_root.join("files");
-        fs::create_dir_all(&files_root)?;
-        let config_json = br#"{
-  "model_type": "gpt2",
-  "_soracloud_fixture": {
-    "mode": "echo",
-    "prefix": "agent:"
-  }
-}"#;
-        let config_path = files_root.join("config.json");
-        write_bytes_atomic(&config_path, config_json)?;
-        write_json_atomic(
-            &source_root.join("import_manifest.json"),
-            &HfLocalImportManifestV1 {
-                schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-                source_id: fixture.source_id.to_string(),
-                repo_id: "openai-community/gpt2".to_owned(),
-                requested_revision: "main".to_owned(),
-                resolved_commit: Some("main".to_owned()),
-                model_name: "gpt2".to_owned(),
-                adapter_id: "hf.shared.v1".to_owned(),
-                pipeline_tag: Some("text-generation".to_owned()),
-                library_name: Some("transformers".to_owned()),
-                tags: vec!["text-generation".to_owned()],
-                imported_at_ms: 20,
-                imported_files: vec![HfImportedFileV1 {
-                    path: "config.json".to_owned(),
-                    content_length: u64::try_from(config_json.len()).unwrap_or(u64::MAX),
-                    payload_hash: Hash::new(config_json).to_string(),
-                    local_path: config_path.display().to_string(),
-                }],
-                skipped_files: Vec::new(),
-                raw_model_info_path: None,
-                import_error: None,
-            },
-        )?;
-
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf())
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        );
-        manager.reconcile_once()?;
-        let handle = test_runtime_handle(&manager, Arc::clone(&state));
-
-        let request = SoracloudApartmentExecutionRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            apartment_name: apartment_name.to_string(),
-            process_generation: apartment.process_generation,
-            operation: format!("autonomy-run:{}", run.run_id),
-            request_commitment: run.request_commitment,
-        };
-        let result = handle
-            .execute_apartment(request.clone())
-            .map_err(|error| eyre::eyre!("{error:?}"))?;
-        assert_eq!(result.status, SoraAgentRuntimeStatusV1::Running);
-        assert!(result.checkpoint_artifact_hash.is_some());
-        assert!(result.journal_artifact_hash.is_some());
-
-        let (summary, journal_hash) = read_apartment_autonomy_execution_summary(
-            temp_dir.path(),
-            apartment_name.as_ref(),
-            &run.run_id,
-        )
-        .map_err(|error| eyre::eyre!("{error:?}"))?
-        .expect("persisted autonomy execution summary");
-        assert!(summary.succeeded);
-        assert!(summary.workflow_steps.is_empty());
-        assert_eq!(
-            summary.service_name.as_deref(),
-            Some(fixture.bundle.service.service_name.as_ref())
-        );
-        let runtime_receipt = summary
-            .runtime_receipt
-            .as_ref()
-            .expect("runtime receipt persisted");
-        assert_eq!(
-            runtime_receipt.service_name.as_ref(),
-            fixture.bundle.service.service_name.as_ref()
-        );
-        assert_eq!(runtime_receipt.handler_name.as_ref(), "infer");
-        let response_json = summary.response_json.as_ref().expect("response json");
-        assert_eq!(
-            response_json
-                .get("backend")
-                .and_then(norito::json::Value::as_str),
-            Some("local_fixture")
-        );
-        assert_eq!(
-            response_json
-                .get("inputs")
-                .and_then(norito::json::Value::as_array)
-                .and_then(|inputs| inputs.first())
-                .and_then(norito::json::Value::as_str),
-            Some("alpha")
-        );
-        assert_eq!(
-            response_json
-                .get("inputs")
-                .and_then(norito::json::Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
-        assert_eq!(
-            response_json
-                .get("parameters")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|parameters| parameters.get("max_new_tokens"))
-                .and_then(norito::json::Value::as_u64),
-            Some(4)
-        );
-        assert_eq!(
-            response_json
-                .get("text")
-                .and_then(norito::json::Value::as_str),
-            Some("agent:['alpha', 'beta']")
-        );
-        assert_eq!(result.journal_artifact_hash, Some(journal_hash));
-        assert_eq!(
-            result.checkpoint_artifact_hash,
-            summary.checkpoint_artifact_hash
-        );
-
-        let second = handle
-            .execute_apartment(request)
-            .map_err(|error| eyre::eyre!("{error:?}"))?;
-        assert_eq!(second.result_commitment, result.result_commitment);
-        assert_eq!(second.journal_artifact_hash, result.journal_artifact_hash);
-        assert_eq!(
-            second.checkpoint_artifact_hash,
-            result.checkpoint_artifact_hash
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_locally()
-    -> Result<()> {
-        let mut state = test_state()?;
-        let fixture = insert_generated_hf_service_fixture(
-            &mut state,
-            "hf_agent_workflow_service",
-            "openai-community/gpt2",
-            "main",
-            "gpt2",
-        )?;
-        set_generated_hf_service_route_visibility(
-            &mut state,
-            &fixture,
-            SoraRouteVisibilityV1::Public,
-        );
-        let apartment_name: Name = "hf_workflow_agent".parse().expect("valid apartment name");
-        let manifest = iroha_core::soracloud_runtime::build_soracloud_hf_generated_agent_manifest(
-            apartment_name.clone(),
-            &fixture.bundle,
-        );
-        let run = SoraAgentAutonomyRunRecordV1 {
-            run_id: "hf_workflow_agent:autonomy:9".to_owned(),
-            artifact_hash: "hash:HFAGENT#WF".to_owned(),
-            provenance_hash: Some("hash:HFPROV#WF".to_owned()),
-            budget_units: 90,
-            run_label: "workflow".to_owned(),
-            workflow_input_json: Some(
-                "{\"workflow_version\":1,\"steps\":[{\"step_id\":\"draft\",\"request\":{\"inputs\":\"alpha\"}},{\"step_id\":\"refine\",\"request\":{\"inputs\":\"${steps.draft.text}\",\"parameters\":{\"max_new_tokens\":2}}}]}"
-                    .to_owned(),
-            ),
-            approved_process_generation: 1,
-            request_commitment: Hash::new(b"hf-agent-workflow-run"),
-            approved_sequence: 9,
-        };
-        let apartment = SoraAgentApartmentRecordV1 {
-            schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-            manifest_hash: Hash::new(Encode::encode(&manifest)),
-            status: SoraAgentRuntimeStatusV1::Running,
-            deployed_sequence: 1,
-            lease_started_sequence: 1,
-            lease_expires_sequence: 400,
-            last_renewed_sequence: 1,
-            restart_count: 0,
-            last_restart_sequence: None,
-            last_restart_reason: None,
-            process_generation: 1,
-            process_started_sequence: 1,
-            last_active_sequence: 9,
-            last_checkpoint_sequence: Some(9),
-            checkpoint_count: 1,
-            persistent_state: SoraAgentPersistentStateV1 {
-                total_bytes: 128,
-                key_sizes: BTreeMap::from([(
-                    "/autonomy/hf_workflow_agent:autonomy:9".to_owned(),
-                    128,
-                )]),
-            },
-            revoked_policy_capabilities: BTreeSet::new(),
-            pending_wallet_requests: BTreeMap::new(),
-            wallet_daily_spend: BTreeMap::new(),
-            mailbox_queue: Vec::new(),
-            autonomy_budget_ceiling_units: 1_000,
-            autonomy_budget_remaining_units: 910,
-            artifact_allowlist: BTreeMap::from([(
-                run.artifact_hash.clone(),
-                SoraAgentArtifactAllowRuleV1 {
-                    artifact_hash: run.artifact_hash.clone(),
-                    provenance_hash: run.provenance_hash.clone(),
-                    added_sequence: 8,
-                },
-            )]),
-            autonomy_run_history: vec![run.clone()],
-            manifest,
-        };
-        {
-            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_agent_apartments_mut_for_testing()
-                .insert(apartment_name.to_string(), apartment.clone());
-        }
-        let local_peer_id = "12D3KooWHfWorkflowAutonomyRuntimeHost";
-        insert_generated_hf_placement_fixture(
-            &mut state,
-            &fixture,
-            SoraHfPlacementHostRoleV1::Primary,
-            SoraHfPlacementHostStatusV1::Warm,
-            local_peer_id,
-        );
-
-        let temp_dir = tempfile::tempdir()?;
-        let source_root = temp_dir
-            .path()
-            .join("hf_sources")
-            .join(sanitize_path_component(&fixture.source_id.to_string()));
-        let files_root = source_root.join("files");
-        fs::create_dir_all(&files_root)?;
-        let config_json = br#"{
-  "model_type": "gpt2",
-  "_soracloud_fixture": {
-    "mode": "echo",
-    "prefix": "wf:"
-  }
-}"#;
-        let config_path = files_root.join("config.json");
-        write_bytes_atomic(&config_path, config_json)?;
-        write_json_atomic(
-            &source_root.join("import_manifest.json"),
-            &HfLocalImportManifestV1 {
-                schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-                source_id: fixture.source_id.to_string(),
-                repo_id: "openai-community/gpt2".to_owned(),
-                requested_revision: "main".to_owned(),
-                resolved_commit: Some("main".to_owned()),
-                model_name: "gpt2".to_owned(),
-                adapter_id: "hf.shared.v1".to_owned(),
-                pipeline_tag: Some("text-generation".to_owned()),
-                library_name: Some("transformers".to_owned()),
-                tags: vec!["text-generation".to_owned()],
-                imported_at_ms: 20,
-                imported_files: vec![HfImportedFileV1 {
-                    path: "config.json".to_owned(),
-                    content_length: u64::try_from(config_json.len()).unwrap_or(u64::MAX),
-                    payload_hash: Hash::new(config_json).to_string(),
-                    local_path: config_path.display().to_string(),
-                }],
-                skipped_files: Vec::new(),
-                raw_model_info_path: None,
-                import_error: None,
-            },
-        )?;
-
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf())
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        );
-        manager.reconcile_once()?;
-        let handle = test_runtime_handle(&manager, Arc::clone(&state));
-
-        let result = handle
-            .execute_apartment(SoracloudApartmentExecutionRequest {
-                observed_height: 0,
-                observed_block_hash: None,
-                apartment_name: apartment_name.to_string(),
-                process_generation: apartment.process_generation,
-                operation: format!("autonomy-run:{}", run.run_id),
-                request_commitment: run.request_commitment,
-            })
-            .map_err(|error| eyre::eyre!("{error:?}"))?;
-
-        let (summary, _journal_hash) = read_apartment_autonomy_execution_summary(
-            temp_dir.path(),
-            apartment_name.as_ref(),
-            &run.run_id,
-        )
-        .map_err(|error| eyre::eyre!("{error:?}"))?
-        .expect("persisted workflow summary");
-        assert!(summary.succeeded);
-        assert_eq!(summary.workflow_steps.len(), 2);
-        assert_eq!(summary.workflow_steps[0].step_id.as_deref(), Some("draft"));
-        assert_eq!(
-            summary.workflow_steps[0]
-                .response_json
-                .as_ref()
-                .and_then(|value| value.get("text"))
-                .and_then(norito::json::Value::as_str),
-            Some("wf:alpha")
-        );
-        assert_eq!(summary.workflow_steps[1].step_id.as_deref(), Some("refine"));
-        assert_eq!(
-            summary.workflow_steps[1]
-                .response_json
-                .as_ref()
-                .and_then(|value| value.get("inputs"))
-                .and_then(norito::json::Value::as_str),
-            Some("wf:alpha")
-        );
-        let response_json = summary
-            .response_json
-            .as_ref()
-            .expect("workflow response json");
-        assert_eq!(
-            response_json
-                .get("step_count")
-                .and_then(norito::json::Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            response_json
-                .get("final_response")
-                .and_then(|value| value.get("text"))
-                .and_then(norito::json::Value::as_str),
-            Some("wf:wf:alpha")
-        );
-        assert_eq!(
-            result.checkpoint_artifact_hash,
-            summary.checkpoint_artifact_hash
-        );
-        Ok(())
-    }
+    include!("soracloud_runtime/autonomy_execution_tests.rs");
 }

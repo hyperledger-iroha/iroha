@@ -12,7 +12,7 @@ script/add-grammar https://github.com/<org>/language-kotodama
 ```
 
 The current grammar targets the syntax described in:
-- `docs/source/kotodama_grammar.md`
+- `specs/kotodama_grammar.md`
 - `crates/kotodama_lang/src/lexer.rs`
 - `crates/kotodama_lang/src/parser.rs`
 

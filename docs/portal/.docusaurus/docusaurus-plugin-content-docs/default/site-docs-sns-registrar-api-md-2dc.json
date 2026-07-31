@@ -1,0 +1,29 @@
+{
+  "id": "sns/registrar-api",
+  "title": "Sora Name Service Registrar API & Governance Hooks",
+  "description": "Torii REST surfaces, Norito DTOs, and governance artifacts for ledger-backed SNS names (SN-2b).",
+  "source": "@site/docs/sns/registrar-api.md",
+  "sourceDirName": "sns",
+  "slug": "/sns/registrar-api",
+  "permalink": "/next/sns/registrar-api",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sns/registrar-api.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "registrar-api",
+    "title": "Sora Name Service Registrar API & Governance Hooks",
+    "sidebar_label": "Registrar API",
+    "description": "Torii REST surfaces, Norito DTOs, and governance artifacts for ledger-backed SNS names (SN-2b)."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Suffix catalog",
+    "permalink": "/next/sns/suffix-catalog"
+  },
+  "next": {
+    "title": "governance-playbook",
+    "permalink": "/next/sns/governance-playbook"
+  }
+}

@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     error::Error,
     fs,
     path::{Path, PathBuf},
@@ -21,169 +20,8 @@ const DISPUTE_WARNING_MULTIPLIER: f64 = 1.5;
 const MONITOR_DEADLINE_DAYS: u32 = 5;
 const REPLACEMENT_DEADLINE_DAYS: u32 = 14;
 const ADVISORY_ACK_DAYS: i64 = 2;
-const STEWARD_PLAYBOOK_PATH: &str = "docs/source/sns/steward_replacement_playbook.md";
-const GOVERNANCE_PLAYBOOK_PATH: &str = "docs/source/sns/governance_playbook.md";
-
-#[cfg(test)]
-mod portal_stub_tests {
-    use std::fs;
-
-    use tempfile::tempdir;
-
-    use super::*;
-
-    #[test]
-    fn portal_stub_writes_expected_content() {
-        let dir = tempdir().expect("tempdir");
-        let output = dir.path().join("eu-dsa-2026-10.md");
-        write_portal_stub(PortalStubOptions {
-            cycle: "2026-10".into(),
-            suffixes: vec![".sora".into(), ".nexus".into()],
-            output: output.clone(),
-            overwrite: false,
-        })
-        .expect("portal stub");
-        let body = fs::read_to_string(&output).expect("read stub");
-        assert!(body.contains("id: regulatory-eu-dsa-2026-10"));
-        assert!(body.contains("sidebar_label: EU DSA (Oct 2026)"));
-        assert!(body.contains("docs/source/sns/regulatory/eu-dsa/2026-10.md"));
-        assert!(body.contains("sns-annex:sora-2026-10:start"));
-        assert!(body.contains("sns-annex:nexus-2026-10:start"));
-        assert!(
-            body.contains("scripts/add_sns_annex_cycle.py 2026-10 --suffix .sora --suffix .nexus")
-        );
-    }
-
-    #[test]
-    fn portal_stub_requires_force_for_explicit_suffixes() {
-        let dir = tempdir().expect("tempdir");
-        let output = dir.path().join("eu-dsa-2026-11.md");
-        fs::write(&output, "existing").expect("write existing");
-        let err = write_portal_stub(PortalStubOptions {
-            cycle: "2026-11".into(),
-            suffixes: vec![".dao".into()],
-            output: output.clone(),
-            overwrite: false,
-        })
-        .expect_err("should require force");
-        assert!(err.to_string().contains("already exists"));
-        write_portal_stub(PortalStubOptions {
-            cycle: "2026-11".into(),
-            suffixes: vec![".dao".into()],
-            output: output.clone(),
-            overwrite: true,
-        })
-        .expect("overwrite portal stub");
-        let body = fs::read_to_string(&output).expect("read overwritten");
-        assert!(body.contains("sns-annex:dao-2026-11:start"));
-    }
-
-    #[test]
-    fn portal_stub_rejects_missing_suffixes() {
-        let dir = tempdir().expect("tempdir");
-        let output = dir.path().join("eu-dsa-2026-11.md");
-        let err = write_portal_stub(PortalStubOptions {
-            cycle: "2026-11".into(),
-            suffixes: Vec::new(),
-            output,
-            overwrite: false,
-        })
-        .expect_err("missing explicit suffixes must fail");
-        assert!(
-            err.to_string()
-                .contains("requires at least one --suffix <.suffix>")
-        );
-    }
-
-    #[test]
-    fn portal_stub_rejects_noncanonical_or_duplicate_suffixes() {
-        let dir = tempdir().expect("tempdir");
-        for (index, suffixes) in [
-            vec!["nexus".into()],
-            vec!["../escape".into()],
-            vec![".UPPER".into()],
-            vec![" .sora".into()],
-            vec![".sora".into(), ".sora".into()],
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let error = write_portal_stub(PortalStubOptions {
-                cycle: "2026-11".into(),
-                suffixes,
-                output: dir.path().join(format!("invalid-{index}.md")),
-                overwrite: false,
-            })
-            .expect_err("unsafe or duplicate suffix must fail closed");
-            assert!(error.to_string().contains("suffix"));
-        }
-    }
-
-    #[test]
-    fn portal_annex_block_prefills_front_matter_metadata() {
-        let dir = tempdir().expect("tempdir");
-        let annex_dir = dir.path().join("docs/source/sns/reports/.sora");
-        fs::create_dir_all(&annex_dir).expect("create annex dir");
-        let annex_body = r#"---
-generated_at: "2026-12-31T01:02:03Z"
-dashboard_export:
-  path: "artifacts/custom/sns.json"
-  sha256: "facefeed"
----
-"#;
-        fs::write(annex_dir.join("2026-12.md"), annex_body).expect("write annex");
-
-        let block = render_portal_annex_block_at_root(dir.path(), ".sora", "2026-12");
-        assert!(
-            block.contains("facefeed"),
-            "sha should be inlined from front matter"
-        );
-        assert!(block.contains("2026-12-31T01:02:03Z"));
-        assert!(
-            block.contains("artifacts/custom/sns.json"),
-            "custom dashboard path should be propagated"
-        );
-    }
-
-    #[test]
-    fn portal_annex_block_hashes_artifact_when_available() {
-        let dir = tempdir().expect("tempdir");
-        let artifact_dir = dir.path().join("artifacts/sns/regulatory/.sora/2026-11");
-        fs::create_dir_all(&artifact_dir).expect("create artifact dir");
-        let artifact_path = artifact_dir.join("sns_suffix_analytics.json");
-        let payload = br#"{"demo":true}"#;
-        fs::write(&artifact_path, payload).expect("write dashboard export");
-
-        let block = render_portal_annex_block_at_root(dir.path(), ".sora", "2026-11");
-        let expected_sha = sha256_hex(payload);
-        assert!(
-            block.contains(&expected_sha),
-            "artifact hash should replace the placeholder"
-        );
-        assert!(
-            block.contains("artifacts/sns/regulatory/.sora/2026-11/sns_suffix_analytics.json"),
-            "default dashboard path should be used when front matter is missing"
-        );
-        assert!(
-            !block.contains("pending"),
-            "metadata should be filled when the artifact exists"
-        );
-    }
-
-    #[test]
-    fn portal_annex_block_handles_missing_artifact_without_placeholder() {
-        let dir = tempdir().expect("tempdir");
-        let block = render_portal_annex_block_at_root(dir.path(), ".sora", "2026-10");
-        assert!(
-            !block.contains("pending"),
-            "annex block should not emit placeholder text when metadata is missing"
-        );
-        assert!(
-            block.contains("unavailable"),
-            "annex block should mark missing generated_at as unavailable"
-        );
-    }
-}
+const STEWARD_PLAYBOOK_PATH: &str = "specs/sns/steward_replacement_playbook.md";
+const GOVERNANCE_PLAYBOOK_PATH: &str = "specs/sns/governance_playbook.md";
 
 #[derive(Clone)]
 pub struct ScorecardOptions {
@@ -1358,15 +1196,6 @@ pub struct AnnexOptions {
     pub dashboard_label: Option<String>,
     pub dashboard_artifact: Option<PathBuf>,
     pub regulatory_entry: Option<PathBuf>,
-    pub portal_entry: Option<PathBuf>,
-}
-
-#[derive(Clone)]
-pub struct PortalStubOptions {
-    pub cycle: String,
-    pub suffixes: Vec<String>,
-    pub output: PathBuf,
-    pub overwrite: bool,
 }
 
 pub fn generate_annex(opts: AnnexOptions) -> Result<(), Box<dyn Error>> {
@@ -1378,7 +1207,6 @@ pub fn generate_annex(opts: AnnexOptions) -> Result<(), Box<dyn Error>> {
         dashboard_label,
         dashboard_artifact,
         regulatory_entry,
-        portal_entry,
     } = opts;
 
     let bytes = fs::read(&dashboard_path).map_err(|err| {
@@ -1426,255 +1254,7 @@ pub fn generate_annex(opts: AnnexOptions) -> Result<(), Box<dyn Error>> {
     if let Some(regulatory_path) = regulatory_entry {
         update_regulatory_entry(&regulatory_path, &document)?;
     }
-    if let Some(portal_path) = portal_entry {
-        update_portal_entry(&portal_path, &document)?;
-    }
     Ok(())
-}
-
-pub fn default_portal_stub_path(cycle: &str) -> PathBuf {
-    workspace_root()
-        .join("docs/portal/docs/sns/regulatory")
-        .join(format!("eu-dsa-{cycle}.md"))
-}
-
-pub fn write_portal_stub(opts: PortalStubOptions) -> Result<(), Box<dyn Error>> {
-    let PortalStubOptions {
-        cycle,
-        suffixes,
-        output,
-        overwrite,
-    } = opts;
-    let normalized_suffixes = normalize_suffixes(suffixes)?;
-    if output.exists() && !overwrite {
-        return Err(format!(
-            "portal memo `{}` already exists (pass --force to overwrite)",
-            output.display()
-        )
-        .into());
-    }
-    let sidebar_label = sidebar_label_for_cycle(&cycle)?;
-    let suffix_scope = normalized_suffixes
-        .iter()
-        .map(|suffix| format!("  - {suffix}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let annex_blocks = normalized_suffixes
-        .iter()
-        .map(|suffix| render_portal_annex_block(suffix, &cycle))
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let annex_cycle_suffix_args = normalized_suffixes
-        .iter()
-        .map(|suffix| format!(" --suffix {suffix}"))
-        .collect::<String>();
-    let body = format!(
-        "---\nid: regulatory-eu-dsa-{cycle}\ntitle: EU DSA Hosting & Transparency Guidance – Intake Memo\nsidebar_label: EU DSA ({sidebar_label})\ndescription: Regulatory intake memo stub for the SNS EU DSA KPI annex program ({cycle}).\njurisdiction: EU\nregulation: Digital Services Act (EU) – KPI annex program\nsuffix_scope:\n{suffix_scope}\nowners:\n  guardian: guardian-board\n  rapporteur: gov-council-seat-4\n  steward_ack: sora-foundation-suffix-ops\nstatus: scheduled\ncycle: {cycle}\n---\n\n:::note Canonical Source\nThis page mirrors `docs/source/sns/regulatory/eu-dsa/{cycle}.md` and will be updated once the governance memo is final.\n:::\n\n## 1. Intake Summary (Pending)\n\n- **Bulletin:** Pending governance bulletin for cycle {cycle}.\n- **Key requirements:** reserve annex jobs, capture KPI exports, and update localization stubs before submission.\n- **Submission window:** TBD.\n\n## 2. Checklist\n\n1. Append `{cycle}` to `docs/source/sns/regulatory/annex_jobs.json`.\n2. Run `scripts/add_sns_annex_cycle.py {cycle}{annex_cycle_suffix_args}` to populate annex/resolver stubs.\n3. Replace this stub when the EU DSA memo is finalised and governance publishes the bulletin.\n\n{annex_blocks}\n",
-    );
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&output, body)?;
-    println!(
-        "wrote sns portal stub {} (suffixes: {})",
-        output.display(),
-        normalized_suffixes.join(", ")
-    );
-    Ok(())
-}
-
-fn normalize_suffixes(values: Vec<String>) -> Result<Vec<String>, Box<dyn Error>> {
-    if values.is_empty() {
-        return Err("sns-portal-stub requires at least one --suffix <.suffix>".into());
-    }
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-    for value in values {
-        if !is_valid_suffix_literal(&value) {
-            return Err(
-                "suffix must be a dot followed by 1-64 lowercase ASCII letters or digits".into(),
-            );
-        }
-        if !seen.insert(value.clone()) {
-            return Err("suffix values must be unique".into());
-        }
-        result.push(value);
-    }
-    if result.is_empty() {
-        return Err("sns-portal-stub requires at least one non-empty --suffix <.suffix>".into());
-    }
-    Ok(result)
-}
-
-fn is_valid_suffix_literal(value: &str) -> bool {
-    let label = value.strip_prefix('.').unwrap_or_default();
-    !label.is_empty()
-        && label.len() <= 64
-        && label
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-}
-
-fn sidebar_label_for_cycle(cycle: &str) -> Result<String, Box<dyn Error>> {
-    let (year, month) = parse_cycle(cycle)?;
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let label = MONTHS
-        .get((month - 1) as usize)
-        .ok_or_else(|| format!("month {month} is out of range"))?;
-    Ok(format!("{label} {year}"))
-}
-
-fn parse_cycle(cycle: &str) -> Result<(u32, u32), Box<dyn Error>> {
-    let (year_str, month_str) = cycle
-        .split_once('-')
-        .ok_or_else(|| format!("cycle `{cycle}` must be formatted as YYYY-MM"))?;
-    let year: u32 = year_str
-        .parse()
-        .map_err(|err| format!("invalid year component `{year_str}`: {err}"))?;
-    let month: u32 = month_str
-        .parse()
-        .map_err(|err| format!("invalid month component `{month_str}`: {err}"))?;
-    if !(1..=12).contains(&month) {
-        return Err(format!("month `{month}` must be between 01 and 12").into());
-    }
-    Ok((year, month))
-}
-
-fn render_portal_annex_block(suffix: &str, cycle: &str) -> String {
-    render_portal_annex_block_at_root(&workspace_root(), suffix, cycle)
-}
-
-fn render_portal_annex_block_at_root(root: &Path, suffix: &str, cycle: &str) -> String {
-    let marker_id = regulatory_marker_id(suffix, cycle);
-    let annex_path = format!("docs/source/sns/reports/{suffix}/{cycle}.md");
-    let artifact_path =
-        format!("artifacts/sns/regulatory/{suffix}/{cycle}/sns_suffix_analytics.json");
-    let metadata = portal_annex_metadata(root, &annex_path, &artifact_path);
-    let sha = metadata
-        .dashboard_sha256
-        .unwrap_or_else(|| "unavailable".to_string());
-    let generated_at = metadata
-        .generated_at
-        .unwrap_or_else(|| "unavailable".to_string());
-    format!(
-        "<!-- sns-annex:{marker_id}:start -->\n### KPI Dashboard Annex ({suffix} — {cycle})\n\n- Annex report: `{annex_path}`\n- Dashboard export: `{dashboard_path}`\n- Dashboard SHA-256: `{sha}`\n- Generated: `{generated_at}`\n\n<!-- sns-annex:{marker_id}:end -->",
-        dashboard_path = metadata.dashboard_path
-    )
-}
-
-struct PortalAnnexMetadata {
-    dashboard_path: String,
-    dashboard_sha256: Option<String>,
-    generated_at: Option<String>,
-}
-
-struct AnnexFrontMatter {
-    dashboard_path: Option<String>,
-    dashboard_sha256: Option<String>,
-    generated_at: Option<String>,
-}
-
-fn portal_annex_metadata(
-    root: &Path,
-    annex_path: &str,
-    default_dashboard_path: &str,
-) -> PortalAnnexMetadata {
-    let annex_fs_path = root.join(annex_path);
-    let mut metadata = PortalAnnexMetadata {
-        dashboard_path: default_dashboard_path.to_string(),
-        dashboard_sha256: None,
-        generated_at: None,
-    };
-
-    if let Ok(contents) = fs::read_to_string(&annex_fs_path)
-        && let Some(front_matter) = parse_annex_front_matter(&contents)
-    {
-        if let Some(path) = front_matter.dashboard_path {
-            metadata.dashboard_path = path;
-        }
-        metadata.dashboard_sha256 = front_matter.dashboard_sha256;
-        metadata.generated_at = front_matter.generated_at;
-    }
-
-    let dashboard_fs_path = root.join(&metadata.dashboard_path);
-    if metadata.dashboard_sha256.is_none()
-        && let Ok(bytes) = fs::read(&dashboard_fs_path)
-    {
-        metadata.dashboard_sha256 = Some(sha256_hex(&bytes));
-    }
-
-    if metadata.generated_at.is_none() {
-        metadata.generated_at = modified_timestamp(&annex_fs_path)
-            .or_else(|| modified_timestamp(&dashboard_fs_path))
-            .or_else(|| Some("unavailable".to_string()));
-    }
-
-    metadata
-}
-
-fn modified_timestamp(path: &Path) -> Option<String> {
-    let modified = fs::metadata(path).ok()?.modified().ok()?;
-    let datetime: OffsetDateTime = modified.into();
-    datetime.format(&Rfc3339).ok()
-}
-
-fn parse_annex_front_matter(body: &str) -> Option<AnnexFrontMatter> {
-    let mut lines = body.lines();
-    if !matches!(lines.next(), Some(line) if line.trim() == "---") {
-        return None;
-    }
-
-    let mut result = AnnexFrontMatter {
-        dashboard_path: None,
-        dashboard_sha256: None,
-        generated_at: None,
-    };
-    let mut in_dashboard_export = false;
-    for raw_line in lines {
-        let trimmed_end = raw_line.trim_end();
-        let line = trimmed_end.trim();
-        if line == "---" {
-            break;
-        }
-        let indent = trimmed_end.len() - line.len();
-        if indent == 0 {
-            in_dashboard_export = line.starts_with("dashboard_export:");
-        }
-        if let Some(value) = line.strip_prefix("generated_at:") {
-            result.generated_at = parse_front_matter_value(value);
-            continue;
-        }
-        if in_dashboard_export {
-            if let Some(value) = line.strip_prefix("path:") {
-                result.dashboard_path = parse_front_matter_value(value);
-            } else if let Some(value) = line.strip_prefix("sha256:") {
-                result.dashboard_sha256 = parse_front_matter_value(value);
-            }
-        }
-    }
-
-    Some(result)
-}
-
-fn parse_front_matter_value(raw: &str) -> Option<String> {
-    let value = raw.trim();
-    if value.is_empty() || value.eq_ignore_ascii_case("null") {
-        return None;
-    }
-
-    let unquoted = value
-        .strip_prefix('"')
-        .and_then(|v| v.strip_suffix('"'))
-        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-        .unwrap_or(value);
-
-    if unquoted.is_empty() {
-        None
-    } else {
-        Some(unquoted.to_string())
-    }
 }
 
 struct DashboardMetadata {
@@ -1923,37 +1503,6 @@ fn update_regulatory_entry(path: &Path, doc: &AnnexDocument) -> Result<(), Box<d
     Ok(())
 }
 
-fn update_portal_entry(path: &Path, doc: &AnnexDocument) -> Result<(), Box<dyn Error>> {
-    let mut memo = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read portal memo {}: {err}", path.display()))?;
-    let marker_id = regulatory_marker_id(&doc.suffix, &doc.cycle);
-    let start_marker = format!("<!-- sns-annex:{marker_id}:start -->");
-    let end_marker = format!("<!-- sns-annex:{marker_id}:end -->");
-    let block = render_regulatory_block(doc, &marker_id);
-    if let Some(start_idx) = memo.find(&start_marker) {
-        let relative_end = memo[start_idx..].find(&end_marker).ok_or_else(|| {
-            format!(
-                "portal memo {} missing end marker {}",
-                path.display(),
-                end_marker
-            )
-        })?;
-        let end_idx = start_idx + relative_end + end_marker.len();
-        memo.replace_range(start_idx..end_idx, &block);
-    } else {
-        if !memo.ends_with('\n') {
-            memo.push('\n');
-        }
-        memo.push('\n');
-        memo.push_str(&block);
-    }
-    if !memo.ends_with('\n') {
-        memo.push('\n');
-    }
-    write_text(path, &memo)?;
-    Ok(())
-}
-
 fn render_regulatory_block(doc: &AnnexDocument, marker_id: &str) -> String {
     format!(
         "<!-- sns-annex:{marker_id}:start -->\n\
@@ -2016,9 +1565,9 @@ fn relative_to_root(path: &Path) -> String {
 fn default_regulatory_hint(suffix: &str, cycle: &str) -> String {
     let sanitized = suffix.trim_start_matches('.');
     if sanitized.is_empty() {
-        format!("docs/source/sns/regulatory/{cycle}.md")
+        format!("specs/sns/regulatory/{cycle}.md")
     } else {
-        format!("docs/source/sns/regulatory/{sanitized}/{cycle}.md")
+        format!("specs/sns/regulatory/{sanitized}/{cycle}.md")
     }
 }
 
@@ -2185,10 +1734,8 @@ mod tests {
         let scorecard = build_scorecard(&source).expect("scorecard");
         let packet = build_handoff_packet(
             &scorecard,
-            Path::new("docs/examples/sns/steward_scorecard_2026q1.json"),
-            Some(Path::new(
-                "docs/source/sns/reports/steward_scorecard_2026q1.md",
-            )),
+            Path::new("fixtures/documentation/sns/steward_scorecard_2026q1.json"),
+            Some(Path::new("specs/sns/reports/steward_scorecard_2026q1.md")),
         )
         .expect("handoff");
         assert_eq!(packet.motions.len(), 1);
@@ -2220,13 +1767,13 @@ mod tests {
         let scorecard = build_scorecard(&source).expect("scorecard");
         let packet = build_handoff_packet(
             &scorecard,
-            Path::new("docs/examples/sns/steward_scorecard_2026q1.json"),
+            Path::new("fixtures/documentation/sns/steward_scorecard_2026q1.json"),
             None,
         )
         .expect("handoff packet");
         let markdown = render_handoff_markdown(&packet);
         assert!(markdown.contains("SNS Steward Hand-off Packet"));
-        assert!(markdown.contains("docs/examples/sns/steward_scorecard_2026q1.json"));
+        assert!(markdown.contains("fixtures/documentation/sns/steward_scorecard_2026q1.json"));
         assert!(markdown.contains("Council replacement motion"));
         assert!(markdown.contains("DAO ratification"));
     }
@@ -2301,7 +1848,7 @@ mod tests {
             suffix: ".sora".into(),
             cycle: "2026-03".into(),
             generated_at: "2026-03-30T00:00:00Z".into(),
-            annex_path: "docs/source/sns/reports/.sora/2026-03.md".into(),
+            annex_path: "specs/sns/reports/.sora/2026-03.md".into(),
             dashboard_path: "dashboards/grafana/sns_suffix_analytics.json".into(),
             dashboard_sha256: "abc123".into(),
             dashboard_title: Some("SNS KPIs".into()),
@@ -2316,12 +1863,12 @@ mod tests {
                 label: Some("Suffix".into()),
                 selection: Some("All".into()),
             }],
-            regulatory_hint: "docs/source/sns/regulatory/sora/2026-03.md".into(),
+            regulatory_hint: "specs/sns/regulatory/sora/2026-03.md".into(),
         };
         let markdown = render_annex_document(&doc);
         assert!(markdown.contains(".sora KPI Annex"));
         assert!(markdown.contains("Grafana dashboard export"));
-        assert!(markdown.contains("docs/source/sns/regulatory/sora/2026-03.md"));
+        assert!(markdown.contains("specs/sns/regulatory/sora/2026-03.md"));
     }
 
     #[test]
@@ -2354,7 +1901,6 @@ mod tests {
             dashboard_label: None,
             dashboard_artifact: Some(artifact.clone()),
             regulatory_entry: None,
-            portal_entry: None,
         };
 
         generate_annex(options).expect("annex generation");
@@ -2378,7 +1924,7 @@ mod tests {
             suffix: ".sora".into(),
             cycle: "2026-03".into(),
             generated_at: "2026-03-05T00:00:00Z".into(),
-            annex_path: "docs/source/sns/reports/.sora/2026-03.md".into(),
+            annex_path: "specs/sns/reports/.sora/2026-03.md".into(),
             dashboard_path: "dashboards/grafana/sns_suffix_analytics.json".into(),
             dashboard_sha256: "deadbeef".into(),
             dashboard_title: None,
@@ -2389,7 +1935,7 @@ mod tests {
             time_from: None,
             time_to: None,
             templating: vec![],
-            regulatory_hint: "docs/source/sns/regulatory/sora/2026-03.md".into(),
+            regulatory_hint: "specs/sns/regulatory/sora/2026-03.md".into(),
         };
         update_regulatory_entry(temp.path(), &doc).expect("append block");
         let appended = fs::read_to_string(temp.path()).expect("read memo");

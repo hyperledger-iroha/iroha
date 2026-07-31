@@ -1,6 +1,6 @@
 use p256::elliptic_curve::bigint::Encoding as _;
 use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use super::*;
 
@@ -100,6 +100,22 @@ fn external_rng_failure_and_stuck_sentinels_fail_closed() {
             Err(SamplingErrorV1::RandomnessHealthCheckFailed)
         ));
     }
+}
+
+#[test]
+fn successful_proof_seed_is_owned_by_zeroizing_storage() {
+    fn require_zeroizing_seed(_: &Zeroizing<[u8; 32]>) {}
+
+    let mut rng = TestRng {
+        state: 1,
+        fail: false,
+        stuck: None,
+    };
+    let mut randomness = ProofRandomnessV1::from_rng(&mut rng).expect("healthy proof seed");
+    require_zeroizing_seed(&randomness.seed);
+    assert_ne!(*randomness.seed, [0; 32]);
+    randomness.seed.zeroize();
+    assert_eq!(*randomness.seed, [0; 32]);
 }
 
 #[test]
@@ -706,7 +722,7 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
     );
     assert_eq!(
         hex::encode(baseline_digest),
-        "ca1b5f131bbd477faa1b5e75ea8c3ea28fe843c7985ee161efc63da28d6c7f00"
+        "6e037c7342b327b75df5621f999506799174254ca7a7846d7549a6526f6ef897"
     );
 
     macro_rules! assert_mutation {

@@ -22,6 +22,7 @@ on:
       - "crates/kotodama_lang/src/samples/native_escrow.ko"
       - "crates/kotodama_lang/src/samples/native_escrow.to"
       - "fixtures/sorafs_chunker/**"
+      - "fixtures/sorafs_manifest/**"
       - "fixtures/sorafs_manifest/appeal_finance/**"
       - "fixtures/sorafs_manifest/provider_admission/**"
       - "fixtures/sorafs_manifest/reference_sdk/**"

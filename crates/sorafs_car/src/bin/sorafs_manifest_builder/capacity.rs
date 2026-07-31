@@ -74,7 +74,7 @@ Options:
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
-The spec schema is documented in `docs/source/sorafs/storage_capacity_marketplace.md`.
+The spec schema is documented in `specs/sorafs/storage_capacity_marketplace.md`.
 "#
 }
 
@@ -89,7 +89,7 @@ Options:
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
-The spec schema is documented in `docs/source/sorafs/storage_capacity_marketplace.md`.
+The spec schema is documented in `specs/sorafs/storage_capacity_marketplace.md`.
 When present, `effective_capacity_gib` (or `effective_gib`) overrides the default effective GiB
 derived from `utilised_capacity_gib` in the generated summary.
 "#
@@ -106,7 +106,7 @@ Options:
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
-The spec schema is documented in `docs/source/sorafs/storage_capacity_marketplace.md`.
+The spec schema is documented in `specs/sorafs/storage_capacity_marketplace.md`.
 "#
 }
 
@@ -121,7 +121,7 @@ Options:
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
-The spec schema is documented in `docs/source/sorafs/storage_capacity_marketplace.md`.
+The spec schema is documented in `specs/sorafs/storage_capacity_marketplace.md`.
 "#
 }
 
@@ -618,9 +618,7 @@ fn lookup_canonical_profile(
     handle: &str,
 ) -> Result<&'static chunker_registry::ChunkerProfileDescriptor, String> {
     let descriptor = chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
-        format!(
-            "unknown chunker profile handle `{handle}`; see docs/source/sorafs/chunker_registry.md"
-        )
+        format!("unknown chunker profile handle `{handle}`; see specs/sorafs/chunker_registry.md")
     })?;
     let canonical = format!(
         "{}.{}@{}",

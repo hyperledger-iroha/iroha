@@ -1,0 +1,36 @@
+{
+  "root": "specs/sdk/android/generated",
+  "tree_sha256": "262c1486df6d95d7ccd3e10e5e73055ecc444b761380613919a2cf334a859c52",
+  "files": [
+    {
+      "path": "specs/sdk/android/generated/builders.md",
+      "sha256": "4b5ca5c37e91d93e7bc355a62c0a684edd3b3cc2caca8434a81e03a151524ac9",
+      "size": 42353
+    },
+    {
+      "path": "specs/sdk/android/generated/codegen_manifest_metadata.json",
+      "sha256": "f62dcf7fb74bb0e6e549131addf8a3f6caec3057085afeb9f566f250d2aaf347",
+      "size": 272
+    },
+    {
+      "path": "specs/sdk/android/generated/fixtures/smart_contract_code_executor_hashes.json",
+      "sha256": "b2470c8e0f926a0fc34c7be9e45c487b7244953963f67edd9b9f91f4d8ccc846",
+      "size": 379
+    },
+    {
+      "path": "specs/sdk/android/generated/fixtures/sorafs_register_pin_manifest_multi_peer_parity_v1.json",
+      "sha256": "807f144f981bf1452bad7aa92e2a27678a8c9d6edd0c74236f30320ee4a6276b",
+      "size": 1432
+    },
+    {
+      "path": "specs/sdk/android/generated/instructions.md",
+      "sha256": "7b98146f85486f11e758d875bca42264dcb4ac50d397c55e3877ab28b0136f65",
+      "size": 55861
+    },
+    {
+      "path": "specs/sdk/android/generated/manifest_catalog.md",
+      "sha256": "b97b7f849f4e5830cc606e37fb1e85ce7cdf2e53afca7b826eb0d78aff86cadd",
+      "size": 55572
+    }
+  ]
+}

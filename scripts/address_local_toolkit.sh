@@ -6,7 +6,7 @@ usage() {
 Usage: scripts/address_local_toolkit.sh --input PATH [options]
 
 Automates the Local → Global address migration workflow described in
-docs/source/sns/local_to_global_toolkit.md. The script wraps the iroha CLI to
+specs/sns/local_to_global_toolkit.md. The script wraps the iroha CLI to
 emit a JSON audit report and (optionally) a converted address list that replaces
 Local-domain selectors with canonical I105 strings.
 

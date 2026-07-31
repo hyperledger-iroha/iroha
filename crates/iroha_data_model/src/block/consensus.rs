@@ -2184,12 +2184,50 @@ impl NativeAmxAttestationBodyV2 {
     }
 }
 
+/// Error returned when a native AMX validator set and its proofs of possession
+/// are not aligned one-for-one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeAmxAttestationQcV2AlignmentError {
+    validator_count: usize,
+    proof_count: usize,
+}
+
+impl NativeAmxAttestationQcV2AlignmentError {
+    const fn new(validator_count: usize, proof_count: usize) -> Self {
+        Self {
+            validator_count,
+            proof_count,
+        }
+    }
+
+    /// Number of validators supplied to the rejected constructor or decoder.
+    #[must_use]
+    pub const fn validator_count(self) -> usize {
+        self.validator_count
+    }
+
+    /// Number of proofs of possession supplied to the rejected constructor or decoder.
+    #[must_use]
+    pub const fn proof_count(self) -> usize {
+        self.proof_count
+    }
+}
+
+impl fmt::Display for NativeAmxAttestationQcV2AlignmentError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "native AMX validator set has {} validators but {} proofs of possession",
+            self.validator_count, self.proof_count
+        )
+    }
+}
+
+impl std::error::Error for NativeAmxAttestationQcV2AlignmentError {}
+
 /// Validator-set proof for a context-bound native AMX v2 attestation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
 pub struct NativeAmxAttestationQcV2 {
     /// Context-bound body certified by the aggregate signature.
     pub body: NativeAmxAttestationBodyV2,
@@ -2198,16 +2236,137 @@ pub struct NativeAmxAttestationQcV2 {
     /// Stable hash of the validator set that produced the certificate.
     pub validator_set_hash: HashOf<Vec<PeerId>>,
     /// Ordered validator set used when assembling the certificate.
-    pub validator_set: Vec<PeerId>,
+    validator_set: Vec<PeerId>,
     /// Historical BLS proofs-of-possession aligned exactly with `validator_set`.
     ///
     /// Embedding the full aligned vector keeps a certificate independently
     /// verifiable after consensus-key rotation or lane retirement.
-    pub validator_set_pops: Vec<Vec<u8>>,
+    validator_set_pops: Vec<Vec<u8>>,
     /// Compact signer bitmap (LSB-first).
     pub signers_bitmap: Vec<u8>,
     /// BLS12-381 aggregate signature bytes (compressed).
     pub bls_aggregate_signature: Vec<u8>,
+}
+
+impl NativeAmxAttestationQcV2 {
+    /// Construct a certificate with an aligned validator set and proof vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `validator_set` and `validator_set_pops` do not
+    /// contain exactly the same number of entries.
+    pub fn try_new(
+        body: NativeAmxAttestationBodyV2,
+        validator_set_hash_version: u16,
+        validator_set_hash: HashOf<Vec<PeerId>>,
+        validator_set: Vec<PeerId>,
+        validator_set_pops: Vec<Vec<u8>>,
+        signers_bitmap: Vec<u8>,
+        bls_aggregate_signature: Vec<u8>,
+    ) -> Result<Self, NativeAmxAttestationQcV2AlignmentError> {
+        if validator_set.len() != validator_set_pops.len() {
+            return Err(NativeAmxAttestationQcV2AlignmentError::new(
+                validator_set.len(),
+                validator_set_pops.len(),
+            ));
+        }
+        Ok(Self {
+            body,
+            validator_set_hash_version,
+            validator_set_hash,
+            validator_set,
+            validator_set_pops,
+            signers_bitmap,
+            bls_aggregate_signature,
+        })
+    }
+
+    /// Return the ordered validator set certified by this QC.
+    #[must_use]
+    pub fn validator_set(&self) -> &[PeerId] {
+        &self.validator_set
+    }
+
+    /// Return the proofs of possession aligned with [`Self::validator_set`].
+    #[must_use]
+    pub fn validator_set_pops(&self) -> &[Vec<u8>] {
+        &self.validator_set_pops
+    }
+
+    /// Recompute the canonical hash of the embedded validator set.
+    #[must_use]
+    pub fn computed_validator_set_hash(&self) -> HashOf<Vec<PeerId>> {
+        HashOf::new(&self.validator_set)
+    }
+
+    /// Iterate over validator/proof pairs without independent indexing.
+    pub fn validators_with_pops(&self) -> impl ExactSizeIterator<Item = (&PeerId, &[u8])> {
+        self.validator_set
+            .iter()
+            .zip(&self.validator_set_pops)
+            .map(|(validator, pop)| (validator, pop.as_slice()))
+    }
+}
+
+#[derive(Clone, Debug, Encode, Decode)]
+#[cfg_attr(feature = "json", derive(crate::DeriveJsonDeserialize))]
+struct NativeAmxAttestationQcV2Wire {
+    body: NativeAmxAttestationBodyV2,
+    validator_set_hash_version: u16,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_set: Vec<PeerId>,
+    validator_set_pops: Vec<Vec<u8>>,
+    signers_bitmap: Vec<u8>,
+    bls_aggregate_signature: Vec<u8>,
+}
+
+impl TryFrom<NativeAmxAttestationQcV2Wire> for NativeAmxAttestationQcV2 {
+    type Error = NativeAmxAttestationQcV2AlignmentError;
+
+    fn try_from(wire: NativeAmxAttestationQcV2Wire) -> Result<Self, Self::Error> {
+        Self::try_new(
+            wire.body,
+            wire.validator_set_hash_version,
+            wire.validator_set_hash,
+            wire.validator_set,
+            wire.validator_set_pops,
+            wire.signers_bitmap,
+            wire.bls_aggregate_signature,
+        )
+    }
+}
+
+impl<'de> norito::core::NoritoDeserialize<'de> for NativeAmxAttestationQcV2 {
+    fn schema_hash() -> [u8; 16] {
+        <Self as norito::core::NoritoSerialize>::schema_hash()
+    }
+
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("native AMX attestation QC wire invariant must hold")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let wire =
+            <NativeAmxAttestationQcV2Wire as norito::core::NoritoDeserialize>::try_deserialize(
+                archived.cast(),
+            )?;
+        Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for NativeAmxAttestationQcV2 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let wire =
+            <NativeAmxAttestationQcV2Wire as norito::json::JsonDeserialize>::json_deserialize(
+                parser,
+            )?;
+        Self::try_from(wire).map_err(|error| norito::json::Error::Message(error.to_string()))
+    }
 }
 
 /// Per-dataspace native AMX v2 leg committed by the routing-plan coordinator.
@@ -2471,7 +2630,7 @@ fn validate_native_amx_qc_shape(
     expected_phase: NativeAmxPhase,
 ) -> Result<(), &'static str> {
     let body = &qc.body;
-    let validator_count = qc.validator_set.len();
+    let validator_count = qc.validator_set().len();
     let advertised_validator_count = usize::try_from(body.participant_validator_count)
         .map_err(|_| "Native AMX participant validator count is invalid")?;
     let advertised_min_quorum = usize::try_from(body.participant_min_quorum)
@@ -2515,16 +2674,15 @@ fn validate_native_amx_qc_shape(
         || validator_count > NATIVE_AMX_VALIDATORS_MAX
         || advertised_validator_count != validator_count
         || advertised_min_quorum != expected_quorum
-        || qc.validator_set.windows(2).any(|pair| pair[0] >= pair[1])
+        || qc.validator_set().windows(2).any(|pair| pair[0] >= pair[1])
         || qc
-            .validator_set
+            .validator_set()
             .iter()
             .any(|peer| peer.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal))
-        || qc.validator_set_hash != HashOf::new(&qc.validator_set)
+        || qc.validator_set_hash != qc.computed_validator_set_hash()
         || body.participant_validator_set_hash != qc.validator_set_hash
-        || qc.validator_set_pops.len() != validator_count
         || qc
-            .validator_set_pops
+            .validator_set_pops()
             .iter()
             .any(|pop| pop.len() != NATIVE_AMX_BLS_PROOF_BYTES || !native_amx_nonzero(pop))
         || qc.signers_bitmap.len() != expected_bitmap_len
@@ -2562,8 +2720,8 @@ fn validate_native_amx_leg_shape(
     if commit.body != expected_commit_body
         || prepare.validator_set_hash_version != commit.validator_set_hash_version
         || prepare.validator_set_hash != commit.validator_set_hash
-        || prepare.validator_set != commit.validator_set
-        || prepare.validator_set_pops != commit.validator_set_pops
+        || prepare.validator_set() != commit.validator_set()
+        || prepare.validator_set_pops() != commit.validator_set_pops()
     {
         return Err("Native AMX prepare and commit certificates disagree");
     }
@@ -2596,7 +2754,7 @@ fn validate_native_amx_leg_shape(
         || leg.participant_proposal.proposal_hash != body.participant_proposal_hash
         || descriptor.validator_set_hash_version != prepare.validator_set_hash_version
         || descriptor.validator_set_hash != prepare.validator_set_hash
-        || descriptor.validator_set != prepare.validator_set
+        || descriptor.validator_set.as_slice() != prepare.validator_set()
         || descriptor.validator_count != body.participant_validator_count
         || descriptor.min_quorum != body.participant_min_quorum
     {
@@ -5770,15 +5928,108 @@ mod tests {
         body.participant_settlement_commitment = body
             .computed_grouped_participant_settlement_commitment(&[body.source_id])
             .expect("single-source test fixture settlement is valid");
-        NativeAmxAttestationQcV2 {
+        NativeAmxAttestationQcV2::try_new(
             body,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
             validator_set,
             validator_set_pops,
-            signers_bitmap: vec![0b0000_0111],
-            bls_aggregate_signature: vec![0xA5; 96],
+            vec![0b0000_0111],
+            vec![0xA5; 96],
+        )
+        .expect("fixture validator set and proofs must align")
+    }
+
+    fn sample_native_amx_invariant_qc() -> NativeAmxAttestationQcV2 {
+        sample_native_amx_qc(
+            NativeAmxPhase::Prepare,
+            [0x81; 32],
+            Hash::new(b"native-amx-validator-material-invariant"),
+            (LaneId::new(1), DataSpaceId::new(7)),
+            (LaneId::new(2), DataSpaceId::new(8)),
+            sample_roster(),
+        )
+    }
+
+    fn native_amx_qc_wire(qc: &NativeAmxAttestationQcV2) -> NativeAmxAttestationQcV2Wire {
+        NativeAmxAttestationQcV2Wire {
+            body: qc.body,
+            validator_set_hash_version: qc.validator_set_hash_version,
+            validator_set_hash: qc.validator_set_hash,
+            validator_set: qc.validator_set().to_vec(),
+            validator_set_pops: qc.validator_set_pops().to_vec(),
+            signers_bitmap: qc.signers_bitmap.clone(),
+            bls_aggregate_signature: qc.bls_aggregate_signature.clone(),
         }
+    }
+
+    #[test]
+    fn native_amx_qc_constructor_rejects_misaligned_validator_material() {
+        let qc = sample_native_amx_invariant_qc();
+        let validator_count = qc.validator_set().len();
+        let error = NativeAmxAttestationQcV2::try_new(
+            qc.body,
+            qc.validator_set_hash_version,
+            qc.validator_set_hash,
+            qc.validator_set().to_vec(),
+            Vec::new(),
+            qc.signers_bitmap.clone(),
+            qc.bls_aggregate_signature.clone(),
+        )
+        .expect_err("a validator set without one proof per validator must be rejected");
+
+        assert_eq!(error.validator_count(), validator_count);
+        assert_eq!(error.proof_count(), 0);
+    }
+
+    #[test]
+    fn native_amx_qc_binary_decode_preserves_layout_and_rejects_misalignment() {
+        let qc = sample_native_amx_invariant_qc();
+        let wire = native_amx_qc_wire(&qc);
+        assert_eq!(
+            qc.encode(),
+            wire.encode(),
+            "checked construction must retain the canonical flat V1 wire layout"
+        );
+        assert_eq!(
+            NativeAmxAttestationQcV2::decode(&mut qc.encode().as_slice())
+                .expect("aligned QC decodes"),
+            qc
+        );
+
+        let mut malformed_wire = wire;
+        malformed_wire
+            .validator_set_pops
+            .pop()
+            .expect("fixture contains validator proofs");
+        assert!(
+            NativeAmxAttestationQcV2::decode(&mut malformed_wire.encode().as_slice()).is_err(),
+            "binary decoding must not construct misaligned validator material"
+        );
+    }
+
+    #[test]
+    fn native_amx_qc_json_decode_rejects_misaligned_validator_material() {
+        let qc = sample_native_amx_invariant_qc();
+        let mut value = norito::json::to_value(&qc).expect("serialize aligned QC");
+        value
+            .as_object_mut()
+            .and_then(|object| object.get_mut("validator_set_pops"))
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(Vec::pop)
+            .expect("fixture JSON contains validator proofs");
+
+        assert!(
+            norito::json::from_value::<NativeAmxAttestationQcV2>(value).is_err(),
+            "JSON decoding must not construct misaligned validator material"
+        );
+        assert_eq!(
+            norito::json::from_value::<NativeAmxAttestationQcV2>(
+                norito::json::to_value(&qc).expect("serialize aligned QC")
+            )
+            .expect("aligned QC JSON decodes"),
+            qc
+        );
     }
 
     fn sample_native_amx_participant_proposal(
@@ -5842,7 +6093,7 @@ mod tests {
         );
         let participant_proposal = sample_native_amx_participant_proposal(
             &prepare_qc.body,
-            prepare_qc.validator_set.clone(),
+            prepare_qc.validator_set().to_vec(),
         );
         debug_assert_eq!(
             prepare_qc.body.participant_proposal_hash,
@@ -8363,41 +8614,5 @@ mod tests {
             .expect("independently proven queue-finalized row");
     }
 
-    #[test]
-    fn npos_diagnostics_reject_zero_seed_and_invalid_windows() {
-        let mut value = npos_diagnostics();
-        value.epoch_seed = [0; 32];
-        assert_eq!(
-            value.validate(),
-            Err("NPoS diagnostics epoch seed must be non-zero")
-        );
-
-        let mut value = npos_diagnostics();
-        value.vrf_reveal_deadline_offset = value.vrf_commit_deadline_offset;
-        assert_eq!(
-            value.validate(),
-            Err("NPoS diagnostics reveal deadline must follow commit deadline")
-        );
-
-        let mut value = npos_diagnostics();
-        value.vrf_reveal_deadline_offset = NonZeroU64::new(101).unwrap();
-        assert_eq!(
-            value.validate(),
-            Err("NPoS diagnostics reveal deadline must not exceed epoch length")
-        );
-    }
-
-    #[test]
-    fn npos_diagnostics_json_rejects_zero_nonzero_fields() {
-        let mut value =
-            norito::json::to_value(&npos_diagnostics()).expect("serialize NPoS diagnostics");
-        value
-            .as_object_mut()
-            .expect("NPoS diagnostics object")
-            .insert(
-                "epoch_length_blocks".to_owned(),
-                norito::json::Value::from(0_u64),
-            );
-        assert!(norito::json::from_value::<SumeragiNposDiagnostics>(value).is_err());
-    }
+    include!("consensus/npos_diagnostics_tests.rs");
 }

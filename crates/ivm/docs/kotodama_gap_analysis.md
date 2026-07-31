@@ -2,7 +2,7 @@
 
 This is a non-normative guide for contributors aligning the implementation
 with the first release. The sole source-language specification is
-[`docs/source/kotodama_grammar.md`](../../../docs/source/kotodama_grammar.md).
+[`specs/kotodama_grammar.md`](../../../specs/kotodama_grammar.md).
 `status.md` records verified work and `roadmap.md` records only outstanding
 work.
 
@@ -288,7 +288,10 @@ identities and none of the 13 candidate-only identities. The revision does not
 contain `Cargo.lock`, however, so the commands below are a release procedure,
 not completed evidence, until its independently archived original lock and
 toolchain provenance are recovered. Never synthesize that provenance from the
-candidate lock or harness.
+candidate lock or harness. `PREDECESSOR_CARGO_LOCK_SHA256` therefore remains
+deliberately unset in `scripts/check_kotodama_perf.py`; the checker fails before
+reading or comparing medians until that authenticated historical digest is
+recovered and reviewed.
 
 ```console
 # In the base checkout:
@@ -306,7 +309,9 @@ cargo bench --locked -p iroha_core --bench kotodama_runtime_cache -- --save-base
 cargo bench --locked -p iroha_core --bench queries -- \
   typed_core_query_ --save-baseline candidate
 python3 scripts/check_kotodama_perf.py \
-  --criterion-dir "$CARGO_TARGET_DIR/criterion" --threshold 0.05
+  --criterion-dir "$CARGO_TARGET_DIR/criterion" \
+  --predecessor-root /path/to/base/checkout \
+  --threshold 0.05
 ```
 
 The checker fails closed on missing/malformed samples or benchmark coverage
@@ -314,16 +319,27 @@ changes. It extracts and whitespace-normalizes the actual Criterion timed
 closure for every one of the 33 comparable identities, binds each closure to
 the audited predecessor SHA-256 inventory, and requires exact base/candidate
 body equality. Shared rounded-Quantity and typed-query loops also bind each
-name to its mode or family declaration. Its threshold cannot be loosened above
-5%; a stable release runner may set a tighter threshold with `--threshold`.
+name to its mode or family declaration. The typed-query contract separately
+requires exact base/candidate equality for the full-entity `QueryResponse`
+generator and its encoded-byte measurement, so inflating the raw comparator
+cannot make the projection-size assertion pass. Its threshold cannot be
+loosened above 5%; a stable release runner may set a tighter threshold with
+`--threshold`.
+Before any comparison it also requires `--predecessor-root` to resolve to the
+exact selected Git commit, rejects tracked-source drift, and hashes a regular,
+non-symlink `Cargo.lock` against the independently authenticated policy digest.
+There is no portable `--baseline` or candidate `--write-baseline` path: timing
+samples are runner-local, and a candidate sample is never predecessor evidence.
 
-The `.github/workflows/kotodama_perf.yml` definition checks out the pull request
-base and candidate and is configured to measure both on one runner with
-Criterion's named baseline. It is not the required release evidence unless the
-base resolves to the pinned predecessor and both original lock files are
-present and authenticated. Timing baselines are deliberately runner-local;
-they are not portable across CPU models or loaded hosts. The policy requires
-every pre-reset comparable workload on the base and the complete V1 workload
+The `.github/workflows/kotodama_perf.yml` definition checks out the selected
+predecessor and candidate and is configured to measure both on one runner with
+Criterion's named baseline. Its provenance corridor currently fails
+intentionally: clean checkouts lack the required original lockfiles, and the
+authenticated original predecessor lock digest is unavailable. It becomes
+eligible to produce release evidence only after that provenance is recovered,
+reviewed, and pinned. Timing baselines are deliberately runner-local; they are
+not portable across CPU models or loaded hosts. The policy requires every
+pre-reset comparable workload on the base and the complete V1 workload
 inventory on the candidate; it never manufactures a candidate self-baseline.
 
 The seven direct exact-decimal identities (`add`, `sub`, `mul`, exact division,
@@ -342,8 +358,9 @@ candidate run itself is never accepted as that predecessor.
 Comparable parse, semantic, lowering, code-generation, numeric, query, and
 runtime identities receive the five-percent regression ceiling. Before timing
 each typed-query family, the benchmark asserts one host query, one decode, and a
-projection smaller than the raw query envelope; the timed iterations reset and
-black-box those counters. The List comprehension runtime has a separate
-zero-slowdown gate against its manual-loop baseline; the general five-percent
-allowance cannot loosen that parity requirement. Missing required base samples,
-candidate samples, or coverage fail closed.
+projection payload smaller than the raw entity `QueryResponse`; the timed
+iterations reset and black-box those counters. The List comprehension runtime
+has a separate zero-slowdown gate against its manual-loop baseline; the general
+five-percent allowance cannot loosen that parity requirement. Missing required
+base samples, candidate samples, coverage, or authenticated predecessor
+provenance fail closed.

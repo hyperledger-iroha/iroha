@@ -2,7 +2,7 @@
 //! (MINFO-7).
 //!
 //! The congestion-aware deposit formula matches the specification in
-//! `docs/source/sorafs_appeal_pricing_plan.md`. The settlement helpers wire in
+//! `specs/sorafs_appeal_pricing_plan.md`. The settlement helpers wire in
 //! the initial escrow/payout policy so treasury dashboards, CLI tools, and SDKs
 //! can deterministically compute refund/slash amounts and panel rewards.
 

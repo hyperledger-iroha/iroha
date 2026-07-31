@@ -101,7 +101,7 @@ Utility scripts for Android telemetry readiness and SoraFS chaos drill tracking.
 - `check_nexus_audit_outcome.py`: inspects a telemetry JSON log for
   `nexus.audit.outcome` events, enforces that the routed-trace audit completed
   successfully within the configured window, and archives the payload under
-  `docs/examples/nexus_audit_outcomes/`. Use it to gate TRACE rehearsals and
+  `fixtures/documentation/nexus_audit_outcomes/`. Use it to gate TRACE rehearsals and
   automate the “no event within 30 minutes” alert requirement.
 - `run_soradns_transparency_tail.sh`: wraps the SoraDNS transparency tailer,
   exporting JSONL/TSV artefacts and Prometheus metrics for resolver events, and

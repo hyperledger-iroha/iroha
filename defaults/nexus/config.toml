@@ -83,7 +83,7 @@ max_deletions_per_run = 500
 retention_grace_secs = 86400
 
 [genesis]
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
 # Joining nodes must set the exact expected_hash and enable remote bootstrap explicitly.
 bootstrap_enabled = false
 

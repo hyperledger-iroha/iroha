@@ -1,7 +1,7 @@
 # DA-6 Reconstruction Fixtures
 
 This directory contains the canonical RS parity fixture referenced by the
-`da_reconstruct` harness and the documentation in `docs/source/da/ingest_plan.md`.
+`da_reconstruct` harness and the documentation in `specs/da/ingest_plan.md`.
 It is generated via the ignored test
 
 ```
@@ -16,5 +16,5 @@ Artifacts:
   digest, parity flag).
 - `chunks/` — `chunk_{index:05}.bin` payload slices (data + parity).
 - `payload.bin` — contiguous reconstructed payload used by round-trip tests.
-- `commitment_bundle.{json,norito.hex}` — sample commitment bundle with a
-  deterministic KZG commitment for docs/tests.
+- `commitment_bundle.{json,norito.hex}` — sample V1 Merkle commitment bundle
+  for docs/tests.

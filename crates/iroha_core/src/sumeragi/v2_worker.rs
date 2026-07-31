@@ -87,10 +87,10 @@ use super::{
     v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
-        CompletionDisposition, ConsensusSignTask, DurableApplyCompletion, EffectExecutorError,
-        EffectExecutorStatus, EffectRuntime, EffectTransportError, EffectWorkId,
-        PendingTipRecoveryAttemptResult, PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
-        V2EffectExecutor, V2EffectServices,
+        CertifiedBodyFetchCompletionDisposition, CompletionDisposition, ConsensusSignTask,
+        DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectRuntime,
+        EffectTransportError, EffectWorkId, PendingTipRecoveryAttemptResult,
+        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{DurableLaneRolloverAuthority, V2LaneWorkEffect, lane_output_identity},
     v2_runtime::{
@@ -98,7 +98,7 @@ use super::{
     },
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
-        authenticate_certified_body_request_identity,
+        authenticate_certified_body_request, authenticate_certified_body_request_identity,
     },
 };
 use crate::{
@@ -290,7 +290,7 @@ const LOCAL_IO_CONTROL_RESERVE: usize = 1;
 const CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
 const CERTIFIED_SERVE_STATE_FILE: &str = "certified-serve-state.norito";
 const CERTIFIED_SERVE_STATE_MAGIC: &[u8; 8] = b"SUMV2SRV";
-const CERTIFIED_SERVE_STATE_VERSION: u16 = 2;
+const CERTIFIED_SERVE_STATE_VERSION: u16 = 5;
 const CERTIFIED_SERVE_STATE_HASH_BYTES: usize = 32;
 const CERTIFIED_SERVE_STATE_HEADER_BYTES: usize =
     CERTIFIED_SERVE_STATE_MAGIC.len() + 2 + 8 + CERTIFIED_SERVE_STATE_HASH_BYTES;
@@ -299,10 +299,11 @@ const CERTIFIED_SERVE_TOMBSTONE_FIXED_HEADROOM_BYTES: u64 = 64 * 1024;
 
 /// Immutable height-local owner of one exact certified-body Serve lifecycle.
 ///
-/// The ordinal is minted once, before fair ingress releases the request, and
-/// is retained through queueing, execution, completion, and the terminal
-/// replay tombstone. The high-watermark and completed identities are persisted
-/// under the height context's existing storage root before external exposure.
+/// The ordinal is minted once as part of hidden fair-ingress acceptance and is
+/// retained through physical carrier replacement, queueing, execution,
+/// completion, and the terminal replay tombstone. The high-watermark and exact
+/// identity are persisted under the height context's existing storage root
+/// before external exposure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) struct CertifiedServeLifecycleId {
     admission_ordinal: u128,
@@ -348,18 +349,48 @@ struct PersistedCertifiedServeLifecycle {
     request: wire::CertifiedBodyRequest,
 }
 
+/// Bounded deterministic negative outcome for an exact Serve lifecycle.
+///
+/// Free-form validation text is deliberately excluded from durable state.
+/// These tags name only outcomes which cannot become serviceable through a
+/// later transport retry at the same immutable height context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub(crate) enum CertifiedServeNegativeOutcome {
+    /// The authenticated request carried a quorum certificate rejected by the
+    /// frozen height verifier.
+    InvalidCertificate,
+    /// This process is not one of the certificate's frozen retention owners.
+    LocalRetentionAuthorityAbsent,
+    /// A replayed durable Core Decision names another exact subject.
+    SupersededByDurableDecision(wire::BlockSubject),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+struct PersistedCertifiedServeNegativeTombstone {
+    lifecycle_id: CertifiedServeLifecycleId,
+    owner: CertifiedServeOwnerKey,
+    request: wire::CertifiedBodyRequest,
+    outcome: CertifiedServeNegativeOutcome,
+}
+
 /// Durable pre-selector owner of one authenticated exact Serve request.
 ///
-/// The record remains after its volatile fair-ingress carrier disappears.
-/// An exact retransmission therefore resumes the same immutable ingress
-/// ordinal while that physical occurrence remains undrained, while a restart
-/// never exposes route or runnable work which was not itself durably retained.
-/// Once an occurrence drains, the logical Serve lifecycle remains retained but
-/// a later wire retransmission receives a fresh scheduler ordinal.
+/// While the process is live, an unserved logical lifecycle must be backed by
+/// exactly one volatile fair-ingress carrier. Losing that carrier is fail-stop
+/// evidence; a wire retry cannot repair or resume its consumed position.
+/// Restart cannot assume that any particular requester is responsive, even
+/// when it is in the frozen roster, so production startup discharges every
+/// restored lifecycle or terminal replay occurrence before exposing any
+/// producer. Its physical ticket is consumed in that same source-sealed batch;
+/// no requester retransmission is needed to clear debt. Inside one
+/// uninterrupted process, a drained nonterminal lifecycle remains retained
+/// without its consumed scheduler ticket until local service seals it.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedCertifiedServeIngressWaiter {
     ingress_ordinal: u128,
+    lifecycle_id: CertifiedServeLifecycleId,
     owner: CertifiedServeOwnerKey,
     request: wire::CertifiedBodyRequest,
 }
@@ -374,6 +405,7 @@ struct PersistedCertifiedServeState {
     next_lifecycle_admission_ordinal: u128,
     ingress_waiters: Vec<PersistedCertifiedServeIngressWaiter>,
     unsealed_lifecycles: Vec<PersistedCertifiedServeLifecycle>,
+    negative_tombstones: Vec<PersistedCertifiedServeNegativeTombstone>,
     terminal_tombstones: Vec<PersistedCertifiedServeTombstone>,
 }
 
@@ -387,6 +419,7 @@ impl PersistedCertifiedServeState {
             next_lifecycle_admission_ordinal: 0,
             ingress_waiters: Vec::new(),
             unsealed_lifecycles: Vec::new(),
+            negative_tombstones: Vec::new(),
             terminal_tombstones: Vec::new(),
         }
     }
@@ -509,11 +542,13 @@ impl CertifiedServeStateStore {
         }
         if state.ingress_waiters.len() > self.max_tombstones
             || state.terminal_tombstones.len() > self.max_tombstones
+            || state.negative_tombstones.len() > self.max_tombstones
             || state.unsealed_lifecycles.len() > self.max_tombstones
             || state
                 .ingress_waiters
                 .len()
                 .checked_add(state.terminal_tombstones.len())
+                .and_then(|records| records.checked_add(state.negative_tombstones.len()))
                 .and_then(|records| records.checked_add(state.unsealed_lifecycles.len()))
                 .is_none_or(|records| records > self.max_tombstones.saturating_mul(3))
         {
@@ -525,7 +560,8 @@ impl CertifiedServeStateStore {
         if state
             .terminal_tombstones
             .len()
-            .checked_add(state.unsealed_lifecycles.len())
+            .checked_add(state.negative_tombstones.len())
+            .and_then(|records| records.checked_add(state.unsealed_lifecycles.len()))
             .is_none_or(|records| records > self.max_tombstones.saturating_mul(2))
         {
             return Err(format!(
@@ -542,17 +578,20 @@ impl CertifiedServeStateStore {
             || state.height != self.height
             || state.ingress_waiters.len() > self.max_tombstones
             || state.terminal_tombstones.len() > self.max_tombstones
+            || state.negative_tombstones.len() > self.max_tombstones
             || state.unsealed_lifecycles.len() > self.max_tombstones
             || state
                 .ingress_waiters
                 .len()
                 .checked_add(state.terminal_tombstones.len())
+                .and_then(|records| records.checked_add(state.negative_tombstones.len()))
                 .and_then(|records| records.checked_add(state.unsealed_lifecycles.len()))
                 .is_none_or(|records| records > self.max_tombstones.saturating_mul(3))
             || state
                 .terminal_tombstones
                 .len()
-                .checked_add(state.unsealed_lifecycles.len())
+                .checked_add(state.negative_tombstones.len())
+                .and_then(|records| records.checked_add(state.unsealed_lifecycles.len()))
                 .is_none_or(|records| records > self.max_tombstones.saturating_mul(2))
         {
             return Err("Sumeragi v2 Serve state crossed its immutable store geometry".to_owned());
@@ -718,14 +757,13 @@ pub(crate) enum CertifiedServePrepareError {
     Service(String),
 }
 
-fn combine_certified_serve_abort_error(
-    primary: String,
-    abort: Result<(), String>,
-) -> String {
+fn combine_certified_serve_abort_error(primary: String, abort: Result<(), String>) -> String {
     match abort {
         Ok(()) => primary,
         Err(abort_error) => {
-            format!("{primary}; additionally failed to abort the exact Serve handoff: {abort_error}")
+            format!(
+                "{primary}; additionally failed to abort the exact Serve handoff: {abort_error}"
+            )
         }
     }
 }
@@ -746,6 +784,10 @@ struct CertifiedServeIngressProjection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CertifiedServeIngressReservationState {
     Provisional,
+    /// The serialized runner completed a deterministic rejection while the
+    /// exact fair carrier was still selected. Physical drain persists this
+    /// outcome and retires the scheduler ticket in one transaction.
+    DeterministicallyRejected(CertifiedServeNegativeOutcome),
     Prepared(CertifiedServeLifecycleId),
     /// Fair ingress durably removed this exact physical occurrence, while the
     /// volatile handoff remains installed until Commit or Abort consumes the
@@ -769,19 +811,23 @@ enum CertifiedServeRuntimeEpisodeState {
 #[derive(Debug)]
 struct V2IoCertifiedServeIngressReservation {
     id: CertifiedServeIngressReservationId,
+    /// Immutable logical Serve identity allocated before this raw occurrence
+    /// becomes selector-visible. Unlike `id`, this survives physical drain and
+    /// any later post-drain replay of an already terminal lifecycle.
+    lifecycle_id: CertifiedServeLifecycleId,
     projection: CertifiedServeIngressProjection,
     request: wire::CertifiedBodyRequest,
     state: CertifiedServeIngressReservationState,
     handed_off: Option<Arc<AtomicBool>>,
     /// Volatile fair-ingress occurrence order for the currently attached
-    /// carrier. Retries retain `id` but receive a fresh fair occurrence, so
-    /// selecting by this value cannot move a late retry ahead of an already
-    /// queued carrier.
+    /// carrier. A post-drain replay receives both a fresh `id` and a fresh
+    /// carrier ordinal. An undrained occurrence never changes either value.
     carrier_ordinal: Option<u64>,
     /// Bounded older-runtime closure for this exact ticket occurrence.
     ///
     /// Each claimed turn admits or services at most one strictly older owner.
-    /// Exact carrier retries retain the state with the immutable ordinal.
+    /// A lost carrier closes the height instead of resuming this state from a
+    /// requester retry.
     runtime_episode: CertifiedServeRuntimeEpisodeState,
 }
 
@@ -798,13 +844,15 @@ impl V2IoCertifiedServeIngressReservation {
         }
         Ok(CertifiedServeBarrier {
             request_hash: self.projection.request_hash,
-            lifecycle_ordinal: self.id.0,
+            scheduler_ordinal: self.id.0,
+            lifecycle_id: self.lifecycle_id,
             carrier_ordinal,
         })
     }
 
     fn matches_barrier(&self, barrier: CertifiedServeBarrier) -> bool {
-        self.id.0 == barrier.lifecycle_ordinal
+        self.id.0 == barrier.scheduler_ordinal
+            && self.lifecycle_id == barrier.lifecycle_id
             && self.projection.request_hash == barrier.request_hash
             && self.carrier_ordinal == Some(barrier.carrier_ordinal)
             && self.handed_off.is_some()
@@ -815,7 +863,8 @@ impl V2IoCertifiedServeIngressReservation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CertifiedServeBarrier {
     request_hash: HashOf<wire::CertifiedBodyRequest>,
-    lifecycle_ordinal: u128,
+    scheduler_ordinal: u128,
+    lifecycle_id: CertifiedServeLifecycleId,
     carrier_ordinal: u64,
 }
 
@@ -825,9 +874,14 @@ impl CertifiedServeBarrier {
         self.request_hash
     }
 
-    /// Actor-global immutable lifecycle ordinal of this logical ticket.
-    pub(crate) const fn lifecycle_ordinal(self) -> u128 {
-        self.lifecycle_ordinal
+    /// Actor-global scheduler ordinal of this physical ingress ticket.
+    pub(crate) const fn scheduler_ordinal(self) -> u128 {
+        self.scheduler_ordinal
+    }
+
+    /// Immutable logical Serve lifecycle retained by every retransmission.
+    pub(crate) const fn lifecycle_id(self) -> CertifiedServeLifecycleId {
+        self.lifecycle_id
     }
 
     /// Fresh process-local position of the currently attached fair carrier.
@@ -892,21 +946,28 @@ impl std::fmt::Debug for CertifiedServeIngressGate {
 pub(crate) struct CertifiedServeIngressReservation {
     gate: CertifiedServeIngressGate,
     id: CertifiedServeIngressReservationId,
+    lifecycle_id: CertifiedServeLifecycleId,
     handed_off: Arc<AtomicBool>,
 }
 
 impl CertifiedServeIngressReservation {
+    /// Actor-global scheduler ordinal retained by this exact Serve occurrence.
+    pub(crate) const fn scheduler_ordinal(&self) -> u128 {
+        self.id.0
+    }
+
     /// Return whether this volatile fair owner is the selected barrier ticket.
     pub(crate) fn matches_barrier(&self, barrier: CertifiedServeBarrier) -> bool {
-        self.id.0 == barrier.lifecycle_ordinal
+        self.id.0 == barrier.scheduler_ordinal && self.lifecycle_id == barrier.lifecycle_id
     }
 
     /// Publish physical dequeue before fair ingress removes this carrier.
     ///
     /// On failure the caller must retain the ingress entry. On success Drop is
-    /// inert: the queue either retired a provisional occurrence immediately or
-    /// retained a prepared volatile handoff whose durable snapshot is already
-    /// free of the consumed physical ordinal.
+    /// inert: the queue either atomically retired a deterministic negative
+    /// outcome or retained a prepared volatile handoff whose durable snapshot
+    /// is already free of the consumed physical ordinal. A Provisional
+    /// current-height occurrence is rejected and cannot leave fair ingress.
     pub(crate) fn publish_physical_drain(&self) -> Result<(), String> {
         self.gate
             .queue
@@ -942,12 +1003,22 @@ impl CertifiedServeIngressGate {
         Arc::ptr_eq(&self.queue, &other.queue)
     }
 
+    /// Return whether this gate shares the supplied actor-global ordinal source.
+    pub(crate) fn shares_lifecycle_ordinals(&self, source: &RuntimeLifecycleOrdinalSource) -> bool {
+        self.queue.lifecycle_ordinals.ptr_eq(source)
+    }
+
+    /// Mint one ordinary fair-ingress lifecycle from the shared actor source.
+    pub(crate) fn reserve_ordinary_lifecycle_ordinal(&self) -> Result<u128, String> {
+        self.queue.lifecycle_ordinals.reserve_one()
+    }
+
     /// Return the exact live carrier currently selected by this gate.
     pub(crate) fn selected_barrier(&self) -> Result<Option<CertifiedServeBarrier>, String> {
         self.queue.serve_barrier()
     }
 
-    /// Return the least scheduler ordinal owned by an admitted Serve carrier.
+    /// Return the least scheduler ordinal owned by an admitted Serve request.
     ///
     /// The selected off-queue reservation and every bounded waiter are part of
     /// one immutable admission prefix.  Fair ingress compares this value with
@@ -972,6 +1043,78 @@ impl CertifiedServeIngressGate {
         Ok(earliest)
     }
 
+    /// Return the least durable owner ordinal whose physical carrier is absent.
+    ///
+    /// Production startup discharges restored owners before exposing this
+    /// gate. A dormant owner observed by the live runner is therefore
+    /// invariant evidence: it forces restart so startup can terminalize the
+    /// lifecycle locally. Test-only preserved snapshots use this query to
+    /// inspect crash cuts; production liveness never waits for retransmission.
+    pub(crate) fn dormant_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
+        let state = self.queue.lock();
+        let mut dormant = None;
+        let mut reservations_by_lifecycle = BTreeMap::new();
+        for reservation in state
+            .serve_ingress_reservation
+            .iter()
+            .chain(state.serve_ingress_waiters.values())
+        {
+            let has_handoff = reservation.handed_off.is_some();
+            let has_carrier = reservation.carrier_ordinal.is_some();
+            if has_handoff != has_carrier {
+                return Err(
+                    "Sumeragi v2 Serve waiter split its volatile carrier ownership".to_owned(),
+                );
+            }
+            if reservation.lifecycle_id.request_hash != reservation.projection.request_hash
+                || HashOf::new(&reservation.request) != reservation.lifecycle_id.request_hash
+            {
+                return Err(
+                    "Sumeragi v2 Serve waiter changed its immutable lifecycle identity".to_owned(),
+                );
+            }
+            let ownership = reservations_by_lifecycle
+                .entry(reservation.lifecycle_id)
+                .or_insert((0_usize, false));
+            ownership.0 = ownership.0.saturating_add(1);
+            ownership.1 |= has_handoff;
+            if !has_handoff {
+                if !matches!(
+                    reservation.state,
+                    CertifiedServeIngressReservationState::Provisional
+                ) {
+                    return Err(
+                        "Sumeragi v2 dormant Serve waiter retained a prepared handoff".to_owned(),
+                    );
+                }
+                dormant = Some(dormant.map_or(reservation.id.0, |current: u128| {
+                    current.min(reservation.id.0)
+                }));
+            }
+        }
+        for (lifecycle_id, tracked) in &state.serves {
+            if tracked.state != V2IoServeState::AwaitingRetry {
+                continue;
+            }
+            let exactly_one_matching_reservation = reservations_by_lifecycle
+                .get(lifecycle_id)
+                .is_some_and(|(count, _)| *count == 1);
+            if !exactly_one_matching_reservation {
+                // A legacy/corrupt snapshot may retain only the logical
+                // lifecycle after consuming its physical ticket. Report its
+                // admission ordinal as a deterministic diagnostic when no
+                // scheduler ordinal survives; the runner latches restart and
+                // startup reconstructs the terminal outcome locally.
+                dormant = Some(
+                    dormant.map_or(lifecycle_id.admission_ordinal, |current: u128| {
+                        current.min(lifecycle_id.admission_ordinal)
+                    }),
+                );
+            }
+        }
+        Ok(dormant)
+    }
+
     /// Reserve one internal future-slot ticket for a raw exact occurrence.
     ///
     /// # Errors
@@ -991,9 +1134,18 @@ impl CertifiedServeIngressGate {
                 // Historical requests are authenticated and authorized against
                 // their immutable persisted HeightContext by `v2_block_sync`.
                 // They do not consume the active height's exact-Serve ordinal
-                // or capacity geometry.
+                // or capacity geometry. A dormant active target closes this
+                // admission cut so the runner restarts into local discharge;
+                // historical service never waits for its requester to repair it.
                 authenticate_certified_body_request_identity(request, &request.requester)
                     .map_err(|_| CertifiedServeIngressReserveError::Rejected)?;
+                if self
+                    .dormant_ingress_scheduler_ordinal()
+                    .map_err(|_| CertifiedServeIngressReserveError::Closed)?
+                    .is_some()
+                {
+                    return Err(CertifiedServeIngressReserveError::Closed);
+                }
                 return Ok(None);
             }
             if request.round.height > context.height {
@@ -1381,11 +1533,14 @@ struct V2IoTrackedWork {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoServeState {
-    /// Durable unsealed lifecycle restored after a same-height restart.
+    /// Durable unsealed lifecycle admitted before selector visibility or
+    /// reconstructed inside production startup before queue exposure.
     ///
     /// It owns semantic request/family identity and its original ordinal, but
-    /// no volatile route, physical admission unit, or runnable command. The
-    /// exact retry resumes this lifecycle instead of minting another.
+    /// no runnable command until its selected physical carrier is prepared.
+    /// Production startup locally discharges restored instances to a response
+    /// or negative terminal; only test-preserved crash snapshots expose one
+    /// without a live reservation.
     AwaitingRetry,
     /// Authenticated ingress owns the least future auxiliary slot. All later
     /// ordinary I/O admission is saturated until predecessors release it.
@@ -1397,6 +1552,9 @@ enum V2IoServeState {
     Active,
     CompletionPending,
     Terminal,
+    /// Durable negative terminal. Exact transport retries are rejected before
+    /// reserving another actor-global scheduler ordinal.
+    Rejected(CertifiedServeNegativeOutcome),
     /// The local QC retention-owner contract was violated. Consensus is
     /// fail-stopped; this state is never eligible for transport resurrection.
     Failed,
@@ -1467,6 +1625,13 @@ struct V2IoCommandQueueState {
         BTreeMap<CertifiedServeIngressReservationId, V2IoCertifiedServeIngressReservation>,
     next_serve_ingress_reservation_ordinal: u128,
     next_serve_admission_ordinal: u128,
+    /// True only across one serialized runtime WAL step. Exact Serve ingress
+    /// observes this under the same mutex as both ordinal sources and returns
+    /// bounded backpressure until the post-step Decision is published.
+    decision_reconciliation_pending: bool,
+    /// Monotone durable Decision subject for this frozen height, rehydrated
+    /// from the consensus WAL at startup.
+    durable_decided_subject: Option<wire::BlockSubject>,
     /// Finite serialized-runner episode which preceded any later exact ticket.
     producer_episode_active: bool,
     sender_open: bool,
@@ -1555,8 +1720,439 @@ fn v2_io_command_channel(
         BTreeMap::new(),
         0,
         0,
+        None,
         lifecycle_ordinals,
     )
+}
+
+enum CertifiedServeRestartDischarge<'a> {
+    Production {
+        key_pair: &'a KeyPair,
+        validator_set_pops: &'a [Vec<u8>],
+    },
+    #[cfg(test)]
+    PreserveFixtureState,
+}
+
+fn fully_authenticate_persisted_certified_serve_request(
+    context: &wire::HeightContext,
+    request: wire::CertifiedBodyRequest,
+    validator_set_pops: &[Vec<u8>],
+) -> Result<AuthenticatedCertifiedBodyRequest, String> {
+    let requester = request.requester.clone();
+    authenticate_certified_body_request(context, request, &requester, |context, certificate| {
+        wire::finality::verify_quorum_certificate_with_validator_pops(
+            context,
+            certificate,
+            validator_set_pops,
+        )
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn validate_persisted_certified_serve_terminal_outcomes(
+    persisted: &PersistedCertifiedServeState,
+    context: &wire::HeightContext,
+    local_validator: Option<wire::ValidatorIndex>,
+    durable_decided_subject: Option<wire::BlockSubject>,
+    validator_set_pops: &[Vec<u8>],
+) -> Result<(), String> {
+    for tombstone in &persisted.terminal_tombstones {
+        let _ = fully_authenticate_persisted_certified_serve_request(
+            context,
+            tombstone.request.clone(),
+            validator_set_pops,
+        )
+        .map_err(|error| {
+            format!("durable successful Serve tombstone failed full authentication: {error}")
+        })?;
+        if local_validator != Some(tombstone.response_responder)
+            || local_validator.is_none_or(|responder| {
+                tombstone
+                    .request
+                    .certificate
+                    .signers
+                    .binary_search(&responder)
+                    .is_err()
+            })
+        {
+            return Err(
+                "durable successful Serve tombstone changed local retention authority".to_owned(),
+            );
+        }
+    }
+    for tombstone in &persisted.negative_tombstones {
+        let authenticated = fully_authenticate_persisted_certified_serve_request(
+            context,
+            tombstone.request.clone(),
+            validator_set_pops,
+        );
+        let expected = match (tombstone.outcome, authenticated) {
+            (CertifiedServeNegativeOutcome::SupersededByDurableDecision(claimed), Ok(_))
+                if durable_decided_subject == Some(claimed)
+                    && tombstone.request.subject != claimed =>
+            {
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(claimed)
+            }
+            (CertifiedServeNegativeOutcome::InvalidCertificate, Err(_)) => {
+                CertifiedServeNegativeOutcome::InvalidCertificate
+            }
+            (CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent, Ok(_))
+                if local_validator.is_none_or(|responder| {
+                    tombstone
+                        .request
+                        .certificate
+                        .signers
+                        .binary_search(&responder)
+                        .is_err()
+                }) =>
+            {
+                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent
+            }
+            _ => {
+                return Err(
+                    "durable negative Serve tombstone does not match its reconstructed authority"
+                        .to_owned(),
+                );
+            }
+        };
+        if tombstone.outcome != expected {
+            return Err(
+                "durable negative Serve tombstone changed its deterministic outcome".to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn discharge_restored_certified_serve_lifecycles(
+    store: &CertifiedServeStateStore,
+    persisted: &mut PersistedCertifiedServeState,
+    context: &wire::HeightContext,
+    local_validator: Option<wire::ValidatorIndex>,
+    durable_decided_subject: Option<wire::BlockSubject>,
+    body_store: &V2BodyStore,
+    key_pair: &KeyPair,
+    validator_set_pops: &[Vec<u8>],
+) -> Result<(), String> {
+    if let Some(responder) = local_validator {
+        let responder_index = usize::try_from(responder)
+            .map_err(|_| "local Serve responder index is not representable".to_owned())?;
+        let expected = context
+            .roster
+            .get(responder_index)
+            .ok_or_else(|| "local Serve responder is outside the frozen roster".to_owned())?
+            .validator
+            .clone();
+        if expected != PeerId::new(key_pair.public_key().clone()) {
+            return Err(
+                "local Serve signing key does not match its frozen validator index".to_owned(),
+            );
+        }
+    }
+    // Every persisted physical waiter must name exactly one durable logical
+    // outcome. In particular, a negative tombstone can never own a retry
+    // waiter: exact negative retransmissions are rejected before admission.
+    // Validate this union before mutating any source-sealed restart record.
+    for waiter in &persisted.ingress_waiters {
+        let unsealed = persisted
+            .unsealed_lifecycles
+            .iter()
+            .find(|lifecycle| lifecycle.lifecycle_id == waiter.lifecycle_id);
+        let negative = persisted
+            .negative_tombstones
+            .iter()
+            .find(|tombstone| tombstone.lifecycle_id == waiter.lifecycle_id);
+        let terminal = persisted
+            .terminal_tombstones
+            .iter()
+            .find(|tombstone| tombstone.lifecycle_id == waiter.lifecycle_id);
+        let outcome_count = usize::from(unsealed.is_some())
+            + usize::from(negative.is_some())
+            + usize::from(terminal.is_some());
+        if outcome_count != 1 {
+            return Err(
+                "durable Serve waiter does not name exactly one logical lifecycle outcome"
+                    .to_owned(),
+            );
+        }
+        let owner_and_request = unsealed
+            .map(|lifecycle| (&lifecycle.owner, &lifecycle.request))
+            .or_else(|| negative.map(|tombstone| (&tombstone.owner, &tombstone.request)))
+            .or_else(|| terminal.map(|tombstone| (&tombstone.owner, &tombstone.request)))
+            .expect("exactly one durable waiter outcome was counted");
+        if owner_and_request.0 != &waiter.owner || owner_and_request.1 != &waiter.request {
+            return Err(
+                "durable Serve waiter changed its logical lifecycle owner or exact request"
+                    .to_owned(),
+            );
+        }
+        if negative.is_some() {
+            return Err(
+                "durable negative Serve tombstone retained an impossible physical retry waiter"
+                    .to_owned(),
+            );
+        }
+    }
+    validate_persisted_certified_serve_terminal_outcomes(
+        persisted,
+        context,
+        local_validator,
+        durable_decided_subject,
+        validator_set_pops,
+    )?;
+
+    // Order the union by the immutable physical ingress ordinal where one
+    // survives. Drained unsealed owners and superseded terminal records have
+    // no physical predecessor and follow the bounded waiter prefix in logical
+    // admission order.
+    let mut discharge_by_lifecycle = BTreeMap::new();
+    for waiter in &persisted.ingress_waiters {
+        discharge_by_lifecycle
+            .entry(waiter.lifecycle_id)
+            .and_modify(|ordinal: &mut u128| *ordinal = (*ordinal).min(waiter.ingress_ordinal))
+            .or_insert(waiter.ingress_ordinal);
+    }
+    for lifecycle in &persisted.unsealed_lifecycles {
+        discharge_by_lifecycle
+            .entry(lifecycle.lifecycle_id)
+            .or_insert(u128::MAX);
+    }
+    if let Some(decided) = durable_decided_subject {
+        for tombstone in &persisted.terminal_tombstones {
+            if tombstone.request.subject != decided {
+                discharge_by_lifecycle
+                    .entry(tombstone.lifecycle_id)
+                    .or_insert(u128::MAX);
+            }
+        }
+    }
+    let mut discharge_order = discharge_by_lifecycle.into_iter().collect::<Vec<_>>();
+    discharge_order
+        .sort_by_key(|(lifecycle_id, scheduler_ordinal)| (*scheduler_ordinal, *lifecycle_id));
+
+    for (lifecycle_id, _) in discharge_order {
+        let Some(lifecycle) = persisted
+            .unsealed_lifecycles
+            .iter()
+            .find(|retained| retained.lifecycle_id == lifecycle_id)
+            .cloned()
+        else {
+            let Some(tombstone) = persisted
+                .terminal_tombstones
+                .iter()
+                .find(|retained| retained.lifecycle_id == lifecycle_id)
+                .cloned()
+            else {
+                if persisted
+                    .ingress_waiters
+                    .iter()
+                    .any(|waiter| waiter.lifecycle_id == lifecycle_id)
+                {
+                    return Err(
+                        "Sumeragi v2 startup discharge lost a terminal replay waiter".to_owned(),
+                    );
+                }
+                // A same-family successor discharged earlier in this ordered
+                // batch may already have atomically pruned its predecessor.
+                continue;
+            };
+            let family = CertifiedServeFamilyKey {
+                requester: tombstone.request.requester.clone(),
+                phase: tombstone.request.certificate.phase,
+            };
+            let superseded =
+                durable_decided_subject.filter(|decided| tombstone.request.subject != *decided);
+            if superseded.is_some()
+                && persisted.unsealed_lifecycles.iter().any(|lifecycle| {
+                    CertifiedServeFamilyKey {
+                        requester: lifecycle.request.requester.clone(),
+                        phase: lifecycle.request.certificate.phase,
+                    } == family
+                })
+            {
+                if persisted
+                    .ingress_waiters
+                    .iter()
+                    .any(|waiter| waiter.lifecycle_id == lifecycle_id)
+                {
+                    return Err(
+                        "superseded Serve response waiter conflicts with an unsealed family successor"
+                            .to_owned(),
+                    );
+                }
+                // The successor transition below prunes this displaced
+                // response and publishes the final family outcome atomically.
+                continue;
+            }
+            let _authenticated = fully_authenticate_persisted_certified_serve_request(
+                context,
+                tombstone.request.clone(),
+                validator_set_pops,
+            )
+            .map_err(|error| {
+                format!("durable terminal Serve replay failed independent authentication: {error}")
+            })?;
+            let mut next = persisted.clone();
+            let waiters_before = next.ingress_waiters.len();
+            next.ingress_waiters
+                .retain(|waiter| waiter.lifecycle_id != lifecycle_id);
+            let waiter_was_retired = next.ingress_waiters.len() != waiters_before;
+            if let Some(decided) = superseded {
+                let terminals_before = next.terminal_tombstones.len();
+                next.terminal_tombstones
+                    .retain(|retained| retained.lifecycle_id != lifecycle_id);
+                if next.terminal_tombstones.len().checked_add(1) != Some(terminals_before) {
+                    return Err(
+                        "durable Decision did not consume exactly one superseded Serve response"
+                            .to_owned(),
+                    );
+                }
+                next.negative_tombstones
+                    .push(PersistedCertifiedServeNegativeTombstone {
+                        lifecycle_id,
+                        owner: tombstone.owner,
+                        request: tombstone.request,
+                        outcome: CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                            decided,
+                        ),
+                    });
+                next.negative_tombstones
+                    .sort_by_key(|negative| negative.lifecycle_id);
+            } else if !waiter_was_retired {
+                continue;
+            }
+            // The terminal response/signature and both ordinal high-watermarks
+            // are unchanged for an exact replay. A superseded response and its
+            // physical replay waiter cross to the negative tombstone together.
+            store.persist(&next)?;
+            *persisted = next;
+            continue;
+        };
+
+        let authenticated = fully_authenticate_persisted_certified_serve_request(
+            context,
+            lifecycle.request.clone(),
+            validator_set_pops,
+        );
+        let negative = match &authenticated {
+            Err(_) => Some(CertifiedServeNegativeOutcome::InvalidCertificate),
+            Ok(_)
+                if durable_decided_subject
+                    .is_some_and(|decided| lifecycle.request.subject != decided) =>
+            {
+                Some(CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                    durable_decided_subject
+                        .expect("superseded startup lifecycle has a durable Decision"),
+                ))
+            }
+            Ok(_)
+                if local_validator.is_none_or(|responder| {
+                    lifecycle
+                        .request
+                        .certificate
+                        .signers
+                        .binary_search(&responder)
+                        .is_err()
+                }) =>
+            {
+                Some(CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent)
+            }
+            Ok(_) => None,
+        };
+
+        let mut next = persisted.clone();
+        next.ingress_waiters
+            .retain(|waiter| waiter.lifecycle_id != lifecycle.lifecycle_id);
+        let before_unsealed = next.unsealed_lifecycles.len();
+        next.unsealed_lifecycles
+            .retain(|retained| retained.lifecycle_id != lifecycle.lifecycle_id);
+        if next.unsealed_lifecycles.len().checked_add(1) != Some(before_unsealed) {
+            return Err(
+                "Sumeragi v2 startup discharge did not consume exactly one lifecycle".to_owned(),
+            );
+        }
+        let family = CertifiedServeFamilyKey {
+            requester: lifecycle.request.requester.clone(),
+            phase: lifecycle.request.certificate.phase,
+        };
+        next.terminal_tombstones.retain(|tombstone| {
+            CertifiedServeFamilyKey {
+                requester: tombstone.request.requester.clone(),
+                phase: tombstone.request.certificate.phase,
+            } != family
+        });
+        next.negative_tombstones.retain(|tombstone| {
+            CertifiedServeFamilyKey {
+                requester: tombstone.request.requester.clone(),
+                phase: tombstone.request.certificate.phase,
+            } != family
+        });
+
+        if let Some(outcome) = negative {
+            next.negative_tombstones
+                .push(PersistedCertifiedServeNegativeTombstone {
+                    lifecycle_id: lifecycle.lifecycle_id,
+                    owner: lifecycle.owner.clone(),
+                    request: lifecycle.request.clone(),
+                    outcome,
+                });
+            next.negative_tombstones
+                .sort_by_key(|tombstone| tombstone.lifecycle_id);
+        } else {
+            let authenticated = authenticated
+                .expect("non-negative startup Serve lifecycle has an authenticated request");
+            let completion = serve_certified_body(
+                body_store,
+                key_pair,
+                local_validator,
+                lifecycle.lifecycle_id,
+                authenticated,
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to discharge restored serviceable Serve lifecycle {}: {error}",
+                    lifecycle.lifecycle_id.admission_ordinal
+                )
+            })?;
+            let V2IoCompletion::CertifiedResponse { response, .. } = completion else {
+                return Err(
+                    "restored Serve discharge returned a non-response completion".to_owned(),
+                );
+            };
+            next.terminal_tombstones
+                .push(PersistedCertifiedServeTombstone {
+                    lifecycle_id: lifecycle.lifecycle_id,
+                    owner: lifecycle.owner.clone(),
+                    request: lifecycle.request.clone(),
+                    response_manifest: response.manifest,
+                    response_responder: response.responder,
+                    response_signature: response.signature,
+                });
+            next.terminal_tombstones
+                .sort_by_key(|tombstone| tombstone.lifecycle_id);
+        }
+
+        // No queue or producer is exposed until the entire bounded batch is
+        // complete. Each individual terminal transition is durable before the
+        // next scheduler-ordered record is considered.
+        store.persist(&next)?;
+        *persisted = next;
+    }
+
+    if !persisted.unsealed_lifecycles.is_empty() || !persisted.ingress_waiters.is_empty() {
+        return Err(
+            "Sumeragi v2 startup discharge left requester-dependent Serve ownership".to_owned(),
+        );
+    }
+    validate_persisted_certified_serve_terminal_outcomes(
+        persisted,
+        context,
+        local_validator,
+        durable_decided_subject,
+        validator_set_pops,
+    )?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1569,16 +2165,46 @@ fn persistent_v2_io_command_channel(
     root: &Path,
     context: &wire::HeightContext,
     local_validator: Option<wire::ValidatorIndex>,
+    durable_decided_subject: Option<wire::BlockSubject>,
     body_store: &V2BodyStore,
     lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+    restart_discharge: CertifiedServeRestartDischarge<'_>,
 ) -> Result<(V2IoCommandSender, V2IoCommandReceiver), String> {
     let serve_family_capacity = certified_serve_family_capacity(
         roster_serve_capacity,
         observer_source_capacity,
         observer_per_source_capacity,
     )?;
-    let (store, persisted) = CertifiedServeStateStore::open(root, context, serve_family_capacity)?;
+    let (store, mut persisted) =
+        CertifiedServeStateStore::open(root, context, serve_family_capacity)?;
     lifecycle_ordinals.advance_past(persisted.next_ingress_reservation_ordinal)?;
+    let _ = restore_certified_serve_tombstones(
+        context,
+        local_validator,
+        body_store,
+        roster_serve_capacity,
+        observer_source_capacity,
+        observer_per_source_capacity,
+        serve_family_capacity,
+        &persisted,
+    )?;
+    match restart_discharge {
+        CertifiedServeRestartDischarge::Production {
+            key_pair,
+            validator_set_pops,
+        } => discharge_restored_certified_serve_lifecycles(
+            &store,
+            &mut persisted,
+            context,
+            local_validator,
+            durable_decided_subject,
+            body_store,
+            key_pair,
+            validator_set_pops,
+        )?,
+        #[cfg(test)]
+        CertifiedServeRestartDischarge::PreserveFixtureState => {}
+    }
     let (serves, serve_by_request, serve_by_family, serve_replacements, serve_ingress_waiters) =
         restore_certified_serve_tombstones(
             context,
@@ -1605,6 +2231,7 @@ fn persistent_v2_io_command_channel(
         serve_ingress_waiters,
         persisted.next_ingress_reservation_ordinal,
         persisted.next_lifecycle_admission_ordinal,
+        durable_decided_subject,
         lifecycle_ordinals,
     ))
 }
@@ -1653,6 +2280,7 @@ fn build_v2_io_command_channel(
     >,
     next_serve_ingress_reservation_ordinal: u128,
     next_serve_admission_ordinal: u128,
+    durable_decided_subject: Option<wire::BlockSubject>,
     lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
 ) -> (V2IoCommandSender, V2IoCommandReceiver) {
     let serve_family_capacity = certified_serve_family_capacity(
@@ -1685,6 +2313,8 @@ fn build_v2_io_command_channel(
             serve_ingress_waiters,
             next_serve_ingress_reservation_ordinal,
             next_serve_admission_ordinal,
+            decision_reconciliation_pending: false,
+            durable_decided_subject,
             producer_episode_active: false,
             sender_open: true,
             receiver_open: true,
@@ -1724,17 +2354,20 @@ fn restore_certified_serve_tombstones(
         || persisted.height != context.height
         || persisted.ingress_waiters.len() > serve_family_capacity
         || persisted.unsealed_lifecycles.len() > serve_family_capacity
+        || persisted.negative_tombstones.len() > serve_family_capacity
         || persisted.terminal_tombstones.len() > serve_family_capacity
         || persisted
             .ingress_waiters
             .len()
             .checked_add(persisted.unsealed_lifecycles.len())
+            .and_then(|records| records.checked_add(persisted.negative_tombstones.len()))
             .and_then(|records| records.checked_add(persisted.terminal_tombstones.len()))
             .is_none_or(|records| records > serve_family_capacity.saturating_mul(3))
         || persisted
             .unsealed_lifecycles
             .len()
-            .checked_add(persisted.terminal_tombstones.len())
+            .checked_add(persisted.negative_tombstones.len())
+            .and_then(|records| records.checked_add(persisted.terminal_tombstones.len()))
             .is_none_or(|records| records > serve_family_capacity.saturating_mul(2))
     {
         return Err(
@@ -1811,6 +2444,68 @@ fn restore_certified_serve_tombstones(
         };
         if serves.insert(unsealed.lifecycle_id, tracked).is_some() {
             return Err("Sumeragi v2 durable unsealed lifecycle is duplicated".to_owned());
+        }
+    }
+
+    prior_lifecycle_id = None;
+    for tombstone in &persisted.negative_tombstones {
+        validate_persisted_serve_identity(
+            context,
+            roster_serve_capacity,
+            observer_source_capacity,
+            observer_per_source_capacity,
+            persisted.next_lifecycle_admission_ordinal,
+            tombstone.lifecycle_id,
+            &tombstone.owner,
+            &tombstone.request,
+            &mut roster_requesters,
+            &mut observer_sources,
+            &mut observer_requesters_by_source,
+        )?;
+        if prior_lifecycle_id.is_some_and(|prior| prior >= tombstone.lifecycle_id) {
+            return Err(
+                "Sumeragi v2 durable negative Serve tombstones are not in canonical lifecycle order"
+                    .to_owned(),
+            );
+        }
+        prior_lifecycle_id = Some(tombstone.lifecycle_id);
+        if !all_lifecycle_ids.insert(tombstone.lifecycle_id)
+            || !all_request_hashes.insert(tombstone.lifecycle_id.request_hash)
+        {
+            return Err("Sumeragi v2 durable negative Serve identity is duplicated".to_owned());
+        }
+        let request = &tombstone.request;
+        let family = CertifiedServeFamilyKey {
+            requester: request.requester.clone(),
+            phase: request.certificate.phase,
+        };
+        if !all_families.insert(family.clone())
+            || serve_by_request
+                .insert(tombstone.lifecycle_id.request_hash, tombstone.lifecycle_id)
+                .is_some()
+            || serve_by_family
+                .insert(family, tombstone.lifecycle_id)
+                .is_some()
+        {
+            return Err(
+                "Sumeragi v2 durable negative Serve tombstones contain a duplicate family"
+                    .to_owned(),
+            );
+        }
+        let tracked = V2IoTrackedServe {
+            owner: tombstone.owner.clone(),
+            request: request.clone(),
+            recipient: request.requester.clone(),
+            phase: request.certificate.phase,
+            round: request.round,
+            subject: request.subject,
+            state: V2IoServeState::Rejected(tombstone.outcome),
+            reply_routes: None,
+            ingress_ownership: None,
+            terminal: None,
+        };
+        if serves.insert(tombstone.lifecycle_id, tracked).is_some() {
+            return Err("Sumeragi v2 durable negative Serve lifecycle is duplicated".to_owned());
         }
     }
 
@@ -1963,6 +2658,7 @@ fn restore_certified_serve_tombstones(
 
     let mut serve_ingress_waiters = BTreeMap::new();
     let mut waiter_by_family = BTreeMap::new();
+    let mut waiter_lifecycle_ids = BTreeSet::new();
     let mut prior_ingress_ordinal = None;
     for waiter in &persisted.ingress_waiters {
         if waiter.ingress_ordinal == 0
@@ -1974,17 +2670,24 @@ fn restore_certified_serve_tombstones(
             );
         }
         prior_ingress_ordinal = Some(waiter.ingress_ordinal);
-        validate_persisted_serve_request_owner(
+        validate_persisted_serve_identity(
             context,
             roster_serve_capacity,
             observer_source_capacity,
             observer_per_source_capacity,
+            persisted.next_lifecycle_admission_ordinal,
+            waiter.lifecycle_id,
             &waiter.owner,
             &waiter.request,
             &mut roster_requesters,
             &mut observer_sources,
             &mut observer_requesters_by_source,
         )?;
+        if !waiter_lifecycle_ids.insert(waiter.lifecycle_id) {
+            return Err(
+                "Sumeragi v2 durable Serve waiters duplicate one logical lifecycle".to_owned(),
+            );
+        }
         let request_hash = HashOf::new(&waiter.request);
         let family = CertifiedServeFamilyKey {
             requester: waiter.request.requester.clone(),
@@ -2002,40 +2705,26 @@ fn restore_certified_serve_tombstones(
                 "Sumeragi v2 durable Serve union exceeds its derived family bound".to_owned(),
             );
         }
-        if let Some(lifecycle_id) = serve_by_family.get(&family).copied() {
-            let tracked = serves.get(&lifecycle_id).ok_or_else(|| {
-                "durable Serve family index lost its lifecycle while restoring its waiter"
-                    .to_owned()
-            })?;
-            if tracked.owner != waiter.owner
-                || tracked.round.context_id != waiter.request.round.context_id
-                || tracked.round.height != waiter.request.round.height
-            {
-                return Err(
-                    "durable Serve waiter changed its retained lifecycle owner or context"
-                        .to_owned(),
-                );
-            }
-            if lifecycle_id.request_hash != request_hash {
-                if waiter.request.round.view <= tracked.round.view
-                    || !matches!(
-                        tracked.state,
-                        V2IoServeState::AwaitingRetry | V2IoServeState::Terminal
-                    )
-                    || serve_replacements.contains_key(&lifecycle_id)
-                {
-                    return Err(
-                        "durable Serve waiter is not a strict admissible family successor"
-                            .to_owned(),
-                    );
-                }
-            } else if waiter.request != tracked.request {
-                return Err("durable Serve waiter changed exact bytes for its lifecycle".to_owned());
-            }
+        if serve_by_request.get(&request_hash) != Some(&waiter.lifecycle_id)
+            || serve_by_family.get(&family) != Some(&waiter.lifecycle_id)
+        {
+            return Err(
+                "durable Serve waiter lost its atomically admitted logical lifecycle".to_owned(),
+            );
+        }
+        let tracked = serves.get(&waiter.lifecycle_id).ok_or_else(|| {
+            "durable Serve waiter lifecycle is missing while restoring exact ingress".to_owned()
+        })?;
+        if tracked.owner != waiter.owner || tracked.request != waiter.request {
+            return Err(
+                "durable Serve waiter changed its retained lifecycle owner or exact bytes"
+                    .to_owned(),
+            );
         }
         let id = CertifiedServeIngressReservationId(waiter.ingress_ordinal);
         let reservation = V2IoCertifiedServeIngressReservation {
             id,
+            lifecycle_id: waiter.lifecycle_id,
             projection: CertifiedServeIngressProjection {
                 request_hash,
                 requester: waiter.request.requester.clone(),
@@ -2159,6 +2848,209 @@ impl V2IoCommandQueue {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn begin_decision_serve_reconciliation(&self) -> Result<(), String> {
+        let mut state = self.lock();
+        if !state.sender_open || !state.receiver_open {
+            return Err(
+                "Sumeragi v2 I/O queue is closed before Decision reconciliation".to_owned(),
+            );
+        }
+        if state.decision_reconciliation_pending {
+            return Err("Decision/Serve reconciliation fence is already active".to_owned());
+        }
+        state.decision_reconciliation_pending = true;
+        Ok(())
+    }
+
+    fn finish_decision_serve_reconciliation(
+        &self,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> Result<(), String> {
+        let mut state = self.lock();
+        if !state.decision_reconciliation_pending {
+            return Err("Decision/Serve reconciliation fence is not active".to_owned());
+        }
+        match (state.durable_decided_subject, decided_subject) {
+            (Some(retained), Some(observed)) if retained != observed => {
+                return Err(
+                    "one height published two different durable Serve Decision subjects".to_owned(),
+                );
+            }
+            (Some(_), None) => {
+                return Err(
+                    "runtime lost its durable Decision while clearing the Serve admission fence"
+                        .to_owned(),
+                );
+            }
+            (Some(_), Some(_)) | (None, Some(_)) | (None, None) => {}
+        }
+
+        let mut converted = Vec::new();
+        if let Some(observed) = decided_subject {
+            let carrier_owned = state
+                .serve_ingress_reservation
+                .iter()
+                .chain(state.serve_ingress_waiters.values())
+                .map(|reservation| reservation.lifecycle_id)
+                .collect::<BTreeSet<_>>();
+            let convertible = state
+                .serves
+                .iter()
+                .filter_map(|(lifecycle_id, tracked)| {
+                    (tracked.subject != observed
+                        && tracked.state == V2IoServeState::Terminal
+                        && matches!(
+                            tracked.terminal.as_ref(),
+                            Some(V2IoServeTerminal::Response(_))
+                        )
+                        && !carrier_owned.contains(lifecycle_id))
+                    .then_some(*lifecycle_id)
+                })
+                .collect::<Vec<_>>();
+            for lifecycle_id in convertible {
+                let tracked = state
+                    .serves
+                    .get_mut(&lifecycle_id)
+                    .expect("convertible terminal Serve lifecycle remains indexed");
+                converted.push((
+                    lifecycle_id,
+                    tracked.state,
+                    tracked.terminal.take(),
+                    tracked.reply_routes.take(),
+                    tracked.ingress_ownership.take(),
+                ));
+                tracked.state = V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(observed),
+                );
+            }
+            if !converted.is_empty()
+                && let Err(error) = self.persist_serve_state(
+                    &state,
+                    state.next_serve_ingress_reservation_ordinal,
+                    state.next_serve_admission_ordinal,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            {
+                for (
+                    lifecycle_id,
+                    previous_state,
+                    previous_terminal,
+                    previous_routes,
+                    previous_ownership,
+                ) in converted
+                {
+                    let tracked = state
+                        .serves
+                        .get_mut(&lifecycle_id)
+                        .expect("failed Decision publication retains its terminal lifecycle");
+                    tracked.state = previous_state;
+                    tracked.terminal = previous_terminal;
+                    tracked.reply_routes = previous_routes;
+                    tracked.ingress_ownership = previous_ownership;
+                }
+                // Keep the fence raised. The executor closes the height after
+                // this callback failure, and no ingress can cross the failed
+                // atomic publication before restart.
+                return Err(error);
+            }
+            for (lifecycle_id, ..) in &converted {
+                let _ = state.serve_replacements.remove(lifecycle_id);
+            }
+            state.durable_decided_subject = Some(observed);
+        }
+        state.decision_reconciliation_pending = false;
+        drop(state);
+        self.ready.notify_all();
+        Ok(())
+    }
+
+    fn convert_exact_terminal_retry_after_decision(
+        &self,
+        state: &mut V2IoCommandQueueState,
+        request: &wire::CertifiedBodyRequest,
+        decided_subject: wire::BlockSubject,
+    ) -> Result<bool, String> {
+        if request.subject == decided_subject {
+            return Ok(false);
+        }
+        let request_hash = HashOf::new(request);
+        let Some(lifecycle_id) = state.serve_by_request.get(&request_hash).copied() else {
+            return Ok(false);
+        };
+        let tracked = state.serves.get(&lifecycle_id).ok_or_else(|| {
+            "durable Serve request index lost its lifecycle during Decision supersession".to_owned()
+        })?;
+        if &tracked.request != request || lifecycle_id.request_hash != request_hash {
+            return Err(
+                "Decision supersession changed the exact durable Serve request identity".to_owned(),
+            );
+        }
+        if !matches!(
+            (tracked.state, tracked.terminal.as_ref()),
+            (
+                V2IoServeState::Terminal,
+                Some(V2IoServeTerminal::Response(_))
+            )
+        ) {
+            return Ok(false);
+        }
+        if state
+            .serve_ingress_reservation
+            .iter()
+            .chain(state.serve_ingress_waiters.values())
+            .any(|reservation| reservation.lifecycle_id == lifecycle_id)
+        {
+            // A carrier admitted before the WAL fence retains its immutable
+            // occurrence. The decided-lane drain/completion path converts it;
+            // this later retry is still rejected before any new ordinal.
+            return Ok(false);
+        }
+
+        let (previous_state, previous_terminal, previous_routes, previous_ownership) = {
+            let tracked = state
+                .serves
+                .get_mut(&lifecycle_id)
+                .expect("validated terminal Serve lifecycle remains indexed");
+            let previous_state = tracked.state;
+            let previous_terminal = tracked.terminal.take();
+            let previous_routes = tracked.reply_routes.take();
+            let previous_ownership = tracked.ingress_ownership.take();
+            tracked.state = V2IoServeState::Rejected(
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+            );
+            (
+                previous_state,
+                previous_terminal,
+                previous_routes,
+                previous_ownership,
+            )
+        };
+        if let Err(error) = self.persist_serve_state(
+            state,
+            state.next_serve_ingress_reservation_ordinal,
+            state.next_serve_admission_ordinal,
+            None,
+            None,
+            None,
+            None,
+        ) {
+            let tracked = state
+                .serves
+                .get_mut(&lifecycle_id)
+                .expect("failed Decision supersession retains its terminal lifecycle");
+            tracked.state = previous_state;
+            tracked.terminal = previous_terminal;
+            tracked.reply_routes = previous_routes;
+            tracked.ingress_ownership = previous_ownership;
+            return Err(error);
+        }
+        let _ = state.serve_replacements.remove(&lifecycle_id);
+        Ok(true)
+    }
+
     fn persist_serve_state(
         &self,
         state: &V2IoCommandQueueState,
@@ -2198,6 +3090,9 @@ impl V2IoCommandQueue {
         let Some(store) = self.serve_state_store.as_ref() else {
             return Ok(());
         };
+        let admitted_lifecycle_id = admitted_unsealed
+            .as_ref()
+            .map(|(lifecycle_id, _, _)| *lifecycle_id);
         let mut ingress_waiters = BTreeMap::new();
         let mut retired_ingress_seen = false;
         for reservation in state
@@ -2208,6 +3103,9 @@ impl V2IoCommandQueue {
             let request_hash = HashOf::new(&reservation.request);
             if reservation.id.0 == 0
                 || reservation.id.0 > next_ingress_reservation_ordinal
+                || reservation.lifecycle_id.admission_ordinal == 0
+                || reservation.lifecycle_id.admission_ordinal > next_lifecycle_admission_ordinal
+                || reservation.lifecycle_id.request_hash != request_hash
                 || reservation.projection.request_hash != request_hash
                 || reservation.projection.requester != reservation.request.requester
                 || reservation.projection.round != reservation.request.round
@@ -2216,6 +3114,23 @@ impl V2IoCommandQueue {
             {
                 return Err(
                     "Sumeragi v2 Serve waiter changed its durable ingress projection".to_owned(),
+                );
+            }
+            if state.serve_by_request.get(&request_hash) != Some(&reservation.lifecycle_id)
+                && admitted_lifecycle_id != Some(reservation.lifecycle_id)
+            {
+                return Err(
+                    "Sumeragi v2 Serve waiter lost its atomically admitted lifecycle".to_owned(),
+                );
+            }
+            if matches!(
+                reservation.state,
+                CertifiedServeIngressReservationState::Prepared(lifecycle_id)
+                    | CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(lifecycle_id)
+                    if lifecycle_id != reservation.lifecycle_id
+            ) {
+                return Err(
+                    "Sumeragi v2 Serve waiter changed lifecycle during physical handoff".to_owned(),
                 );
             }
             if matches!(
@@ -2233,6 +3148,7 @@ impl V2IoCommandQueue {
             }
             let persisted = PersistedCertifiedServeIngressWaiter {
                 ingress_ordinal: reservation.id.0,
+                lifecycle_id: reservation.lifecycle_id,
                 owner: reservation.projection.owner.clone(),
                 request: reservation.request.clone(),
             };
@@ -2246,30 +3162,45 @@ impl V2IoCommandQueue {
             );
         }
         let mut unsealed_lifecycles = BTreeMap::new();
+        let mut negative_tombstones = BTreeMap::new();
         let mut terminal_tombstones = BTreeMap::new();
         for (lifecycle_id, tracked) in &state.serves {
-            let Some(V2IoServeTerminal::Response(response)) = tracked.terminal.as_ref() else {
-                unsealed_lifecycles.insert(
-                    *lifecycle_id,
-                    PersistedCertifiedServeLifecycle {
-                        lifecycle_id: *lifecycle_id,
-                        owner: tracked.owner.clone(),
-                        request: tracked.request.clone(),
-                    },
-                );
-                continue;
-            };
-            terminal_tombstones.insert(
-                *lifecycle_id,
-                PersistedCertifiedServeTombstone {
-                    lifecycle_id: *lifecycle_id,
-                    owner: tracked.owner.clone(),
-                    request: tracked.request.clone(),
-                    response_manifest: response.manifest.clone(),
-                    response_responder: response.responder,
-                    response_signature: response.signature.clone(),
-                },
-            );
+            match (tracked.state, tracked.terminal.as_ref()) {
+                (_, Some(V2IoServeTerminal::Response(response))) => {
+                    terminal_tombstones.insert(
+                        *lifecycle_id,
+                        PersistedCertifiedServeTombstone {
+                            lifecycle_id: *lifecycle_id,
+                            owner: tracked.owner.clone(),
+                            request: tracked.request.clone(),
+                            response_manifest: response.manifest.clone(),
+                            response_responder: response.responder,
+                            response_signature: response.signature.clone(),
+                        },
+                    );
+                }
+                (V2IoServeState::Rejected(outcome), None) => {
+                    negative_tombstones.insert(
+                        *lifecycle_id,
+                        PersistedCertifiedServeNegativeTombstone {
+                            lifecycle_id: *lifecycle_id,
+                            owner: tracked.owner.clone(),
+                            request: tracked.request.clone(),
+                            outcome,
+                        },
+                    );
+                }
+                (_, None) => {
+                    unsealed_lifecycles.insert(
+                        *lifecycle_id,
+                        PersistedCertifiedServeLifecycle {
+                            lifecycle_id: *lifecycle_id,
+                            owner: tracked.owner.clone(),
+                            request: tracked.request.clone(),
+                        },
+                    );
+                }
+            }
         }
         if let Some((lifecycle_id, owner, request)) = admitted_unsealed {
             if lifecycle_id.request_hash != HashOf::new(request) {
@@ -2288,6 +3219,12 @@ impl V2IoCommandQueue {
                 CertifiedServeFamilyKey {
                     requester: lifecycle.request.requester.clone(),
                     phase: lifecycle.request.certificate.phase,
+                } != admitted_family
+            });
+            negative_tombstones.retain(|_, tombstone| {
+                CertifiedServeFamilyKey {
+                    requester: tombstone.request.requester.clone(),
+                    phase: tombstone.request.certificate.phase,
                 } != admitted_family
             });
             unsealed_lifecycles.insert(
@@ -2326,6 +3263,22 @@ impl V2IoCommandQueue {
                         );
                     }
                 }
+                None if matches!(previous.state, V2IoServeState::Rejected(_)) => {
+                    if restore_displaced_for == Some(*replacement_id) {
+                        let V2IoServeState::Rejected(outcome) = previous.state else {
+                            unreachable!("negative replacement state was matched above")
+                        };
+                        negative_tombstones.insert(
+                            *previous_id,
+                            PersistedCertifiedServeNegativeTombstone {
+                                lifecycle_id: *previous_id,
+                                owner: previous.owner.clone(),
+                                request: previous.request.clone(),
+                                outcome,
+                            },
+                        );
+                    }
+                }
                 None => {
                     return Err(
                         "Sumeragi v2 Serve replacement crossed a non-retired unsealed owner"
@@ -2333,6 +3286,23 @@ impl V2IoCommandQueue {
                     );
                 }
             }
+        }
+        // A deterministic negative is itself the current family high-watermark.
+        // Once that outcome is published, any displaced response predecessor
+        // is no longer a replay candidate. A strictly higher request may later
+        // replace the negative tombstone through the normal bounded successor
+        // transaction.
+        for negative in negative_tombstones.values() {
+            let negative_family = CertifiedServeFamilyKey {
+                requester: negative.request.requester.clone(),
+                phase: negative.request.certificate.phase,
+            };
+            terminal_tombstones.retain(|_, tombstone| {
+                CertifiedServeFamilyKey {
+                    requester: tombstone.request.requester.clone(),
+                    phase: tombstone.request.certificate.phase,
+                } != negative_family
+            });
         }
         if let Some(replacement_id) = restore_displaced_for {
             if !state.serve_replacements.contains_key(&replacement_id) {
@@ -2359,6 +3329,12 @@ impl V2IoCommandQueue {
                     phase: tombstone.request.certificate.phase,
                 } != sealed_family
             });
+            negative_tombstones.retain(|_, tombstone| {
+                CertifiedServeFamilyKey {
+                    requester: tombstone.request.requester.clone(),
+                    phase: tombstone.request.certificate.phase,
+                } != sealed_family
+            });
             unsealed_lifecycles.remove(&lifecycle_id);
             terminal_tombstones.insert(
                 lifecycle_id,
@@ -2374,15 +3350,18 @@ impl V2IoCommandQueue {
         }
         if ingress_waiters.len() > self.serve_family_capacity
             || unsealed_lifecycles.len() > self.serve_family_capacity
+            || negative_tombstones.len() > self.serve_family_capacity
             || terminal_tombstones.len() > self.serve_family_capacity
             || ingress_waiters
                 .len()
                 .checked_add(unsealed_lifecycles.len())
+                .and_then(|records| records.checked_add(negative_tombstones.len()))
                 .and_then(|records| records.checked_add(terminal_tombstones.len()))
                 .is_none_or(|records| records > self.serve_family_capacity.saturating_mul(3))
             || unsealed_lifecycles
                 .len()
-                .checked_add(terminal_tombstones.len())
+                .checked_add(negative_tombstones.len())
+                .and_then(|records| records.checked_add(terminal_tombstones.len()))
                 .is_none_or(|records| records > self.serve_family_capacity.saturating_mul(2))
         {
             return Err(
@@ -2397,6 +3376,7 @@ impl V2IoCommandQueue {
             next_lifecycle_admission_ordinal,
             ingress_waiters: ingress_waiters.into_values().collect(),
             unsealed_lifecycles: unsealed_lifecycles.into_values().collect(),
+            negative_tombstones: negative_tombstones.into_values().collect(),
             terminal_tombstones: terminal_tombstones.into_values().collect(),
         })
     }
@@ -2423,20 +3403,20 @@ impl V2IoCommandQueue {
             }),
             "a consumed Serve occurrence cannot re-enter selector waiters"
         );
-        let next = state
-            .serve_ingress_waiters
-            .iter()
-            .filter_map(|(id, reservation)| {
-                reservation
-                    .carrier_ordinal
-                    .zip(reservation.handed_off.as_ref())
-                    .map(|(carrier_ordinal, _)| (*id, carrier_ordinal))
-            })
-            .min_by_key(|(id, carrier_ordinal)| (*carrier_ordinal, id.0))
-            .map(|(id, _)| id);
-        let Some(next) = next else {
+        let Some((&next, reservation)) = state.serve_ingress_waiters.first_key_value() else {
             return false;
         };
+        assert_eq!(
+            reservation.handed_off.is_some(),
+            reservation.carrier_ordinal.is_some(),
+            "Serve waiter cannot split its volatile carrier ownership"
+        );
+        if reservation.handed_off.is_none() {
+            // Production treats this as fail-stop evidence and restarts into
+            // local startup discharge. Keeping the head unpromoted here also
+            // makes crash-cut fixtures preserve the immutable admission order.
+            return false;
+        }
         let reservation = state
             .serve_ingress_waiters
             .remove(&next)
@@ -2460,17 +3440,51 @@ impl V2IoCommandQueue {
             "a consumed Serve occurrence cannot enter selector waiters"
         );
         let id = reservation.id;
-        if state.serve_ingress_reservation.is_none() && state.serve_barrier.is_none() {
-            state.serve_ingress_reservation = Some(reservation);
-        } else {
-            assert!(
-                state
-                    .serve_ingress_waiters
-                    .insert(id, reservation)
-                    .is_none(),
-                "new Serve ingress waiter ordinal is unique"
-            );
+        assert!(
+            state
+                .serve_ingress_waiters
+                .insert(id, reservation)
+                .is_none(),
+            "new Serve ingress waiter ordinal is unique"
+        );
+        let _ = Self::promote_next_serve_ingress_waiter(state);
+    }
+
+    fn awaiting_retry_lifecycles_are_backed_once(state: &V2IoCommandQueueState) -> bool {
+        let mut reservations_by_lifecycle = BTreeMap::new();
+        for reservation in state
+            .serve_ingress_reservation
+            .iter()
+            .chain(state.serve_ingress_waiters.values())
+        {
+            let count = reservations_by_lifecycle
+                .entry(reservation.lifecycle_id)
+                .or_insert(0_usize);
+            *count = count.saturating_add(1);
         }
+        state.serves.iter().all(|(lifecycle_id, tracked)| {
+            tracked.state != V2IoServeState::AwaitingRetry
+                || reservations_by_lifecycle.get(lifecycle_id) == Some(&1)
+        })
+    }
+
+    fn serve_lifecycle_has_live_ingress_carrier(
+        state: &V2IoCommandQueueState,
+        lifecycle_id: CertifiedServeLifecycleId,
+    ) -> bool {
+        state
+            .serve_ingress_reservation
+            .iter()
+            .chain(state.serve_ingress_waiters.values())
+            .any(|reservation| {
+                reservation.lifecycle_id == lifecycle_id
+                    && reservation.handed_off.is_some()
+                    && reservation.carrier_ordinal.is_some()
+                    && !matches!(
+                        reservation.state,
+                        CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_)
+                    )
+            })
     }
 
     fn detach_selected_serve_ingress_carrier(
@@ -2647,6 +3661,41 @@ impl V2IoCommandQueue {
         if !state.sender_open || !state.receiver_open {
             return Err(CertifiedServeIngressReserveError::Closed);
         }
+        if state.decision_reconciliation_pending {
+            // This mutex is also the Serve ordinal linearization point. The
+            // runtime WAL step therefore cannot leave a post-Decision request
+            // with a pre-publication ingress or lifecycle ordinal.
+            return Err(CertifiedServeIngressReserveError::Busy);
+        }
+        if let Some(decided_subject) = state.durable_decided_subject
+            && request.subject != decided_subject
+        {
+            if let Err(reason) = self.convert_exact_terminal_retry_after_decision(
+                &mut state,
+                request,
+                decided_subject,
+            ) {
+                iroha_logger::error!(
+                    %reason,
+                    "failed to persist live Decision supersession of a terminal Serve response"
+                );
+                // The in-memory terminal was rolled back. Close producer
+                // admission so no request can cross the failed durable
+                // transaction; restart rehydrates from the consensus WAL.
+                state.sender_open = false;
+                drop(state);
+                self.ready.notify_all();
+                return Err(CertifiedServeIngressReserveError::Closed);
+            }
+            return Err(CertifiedServeIngressReserveError::Rejected);
+        }
+        if !Self::awaiting_retry_lifecycles_are_backed_once(&state) {
+            // This check is under the same lock as ordinal allocation. A raw
+            // retry therefore cannot race the runner's dormant-owner poll,
+            // mint a replacement ticket, and mask an admitted lifecycle whose
+            // sole physical owner was lost.
+            return Err(CertifiedServeIngressReserveError::Closed);
+        }
         if state.producer_episode_active {
             // The runner claimed this finite episode while holding the same
             // mutex and may still acquire I/O ownership. Do not mint or attach
@@ -2684,28 +3733,36 @@ impl V2IoCommandQueue {
                     .get(&retained_waiter_id)
                     .expect("indexed Serve waiter remains installed")
             };
+            let retained_is_live =
+                retained.handed_off.is_some() && retained.carrier_ordinal.is_some();
+            let retained_is_dormant =
+                retained.handed_off.is_none() && retained.carrier_ordinal.is_none();
+            if !retained_is_live && !retained_is_dormant {
+                return Err(CertifiedServeIngressReserveError::Closed);
+            }
             if retained.projection.request_hash == request_hash {
-                if &retained.request != request {
+                let lifecycle_id = retained.lifecycle_id;
+                if lifecycle_id.request_hash != request_hash
+                    || &retained.request != request
+                    || state.serve_by_request.get(&request_hash) != Some(&lifecycle_id)
+                {
                     return Err(CertifiedServeIngressReserveError::Rejected);
                 }
-                if retained.handed_off.is_some() || retained.carrier_ordinal.is_some() {
+                if retained_is_live {
                     return Err(CertifiedServeIngressReserveError::Busy);
                 }
-                let handed_off = Arc::new(AtomicBool::new(false));
-                let retained = state
-                    .serve_ingress_waiters
-                    .get_mut(&retained_waiter_id)
-                    .expect("a dormant retained waiter cannot be selected");
-                retained.handed_off = Some(Arc::clone(&handed_off));
-                retained.carrier_ordinal = Some(carrier_ordinal);
-                let _ = Self::promote_next_serve_ingress_waiter(&mut state);
-                return Ok(CertifiedServeIngressReservation {
-                    gate: CertifiedServeIngressGate {
-                        queue: Arc::clone(self),
-                    },
-                    id: retained_waiter_id,
-                    handed_off,
-                });
+                // Production startup never exposes a restored dormant owner.
+                // Seeing one in a live queue means its physical carrier was
+                // lost after admission. Close this ingress attempt so the
+                // runner fail-stops and restarts into local terminalization;
+                // do not make correctness depend on requester retransmission.
+                return Err(CertifiedServeIngressReserveError::Closed);
+            }
+            if retained_is_dormant {
+                // A distinct request cannot repair an invariant-broken dormant
+                // family. Force restart so the admitted target is terminalized
+                // locally before any successor is considered.
+                return Err(CertifiedServeIngressReserveError::Closed);
             }
             if retained.projection.round.context_id != request.round.context_id
                 || retained.projection.round.height != request.round.height
@@ -2713,24 +3770,18 @@ impl V2IoCommandQueue {
             {
                 return Err(CertifiedServeIngressReserveError::Rejected);
             }
-            if retained.handed_off.is_some() || retained.carrier_ordinal.is_some() {
-                return Err(CertifiedServeIngressReserveError::Busy);
-            }
-            if let Some(existing_id) = state.serve_by_family.get(&family).copied() {
-                let Some(existing) = state.serves.get(&existing_id) else {
-                    state.sender_open = false;
-                    drop(state);
-                    self.ready.notify_all();
-                    return Err(CertifiedServeIngressReserveError::Closed);
-                };
-                if !matches!(
-                    existing.state,
-                    V2IoServeState::AwaitingRetry | V2IoServeState::Terminal
-                ) || state.serve_replacements.contains_key(&existing_id)
-                {
-                    return Err(CertifiedServeIngressReserveError::Busy);
-                }
-            }
+            // A live target owns the family until its current physical
+            // occurrence drains. Signed higher-view traffic is bounded
+            // contention, not fail-stop evidence.
+            return Err(CertifiedServeIngressReserveError::Busy);
+        }
+
+        if state.serve_ingress_waiters.values().any(|reservation| {
+            reservation.handed_off.is_none() || reservation.carrier_ordinal.is_none()
+        }) {
+            // No packet may acquire a physical position around invariant-broken
+            // dormant debt. The runner restarts into local startup discharge.
+            return Err(CertifiedServeIngressReserveError::Closed);
         }
 
         let inherited_owner = state
@@ -2754,7 +3805,8 @@ impl V2IoCommandQueue {
             return Err(CertifiedServeIngressReserveError::Rejected);
         }
 
-        if let Some(existing_id) = state.serve_by_family.get(&family).copied() {
+        let replacement_id = if let Some(existing_id) = state.serve_by_family.get(&family).copied()
+        {
             let Some(existing) = state.serves.get(&existing_id) else {
                 // A broken high-watermark index cannot safely authorize another
                 // producer. Close producer admission while the receiver drains
@@ -2770,15 +3822,64 @@ impl V2IoCommandQueue {
                 if !same_height_context || request.round.view <= existing.round.view {
                     return Err(CertifiedServeIngressReserveError::Rejected);
                 }
+                // `AwaitingRetry` is an admitted but unserved logical target.
+                // A later view may replace a completed response or negative
+                // tombstone, never a lifecycle still awaiting local service.
                 if !matches!(
                     existing.state,
-                    V2IoServeState::AwaitingRetry | V2IoServeState::Terminal
+                    V2IoServeState::Terminal | V2IoServeState::Rejected(_)
                 ) || state.serve_replacements.contains_key(&existing_id)
                 {
                     return Err(CertifiedServeIngressReserveError::Busy);
                 }
+                Some(existing_id)
+            } else {
+                if &existing.request != request || existing.owner != owner {
+                    return Err(CertifiedServeIngressReserveError::Rejected);
+                }
+                if matches!(existing.state, V2IoServeState::Rejected(_)) {
+                    // A deterministic negative outcome is a durable family
+                    // tombstone, not another producer episode. Reject before
+                    // touching the actor-global scheduler ordinal source.
+                    return Err(CertifiedServeIngressReserveError::Rejected);
+                }
+                None
             }
+        } else {
+            None
+        };
+        let existing_lifecycle_id = state.serve_by_request.get(&request_hash).copied();
+        let indexed_family_lifecycle_id = state.serve_by_family.get(&family).copied();
+        if existing_lifecycle_id != indexed_family_lifecycle_id
+            && (existing_lifecycle_id.is_some()
+                || indexed_family_lifecycle_id
+                    .is_some_and(|lifecycle_id| lifecycle_id.request_hash == request_hash))
+        {
+            state.sender_open = false;
+            drop(state);
+            self.ready.notify_all();
+            return Err(CertifiedServeIngressReserveError::Closed);
         }
+        let (lifecycle_id, lifecycle_is_new, next_lifecycle_admission_ordinal) =
+            if let Some(lifecycle_id) = existing_lifecycle_id {
+                (lifecycle_id, false, state.next_serve_admission_ordinal)
+            } else {
+                let Some(admission_ordinal) = state.next_serve_admission_ordinal.checked_add(1)
+                else {
+                    state.sender_open = false;
+                    drop(state);
+                    self.ready.notify_all();
+                    return Err(CertifiedServeIngressReserveError::Closed);
+                };
+                (
+                    CertifiedServeLifecycleId {
+                        admission_ordinal,
+                        request_hash,
+                    },
+                    true,
+                    admission_ordinal,
+                )
+            };
         let ordinal = match self.lifecycle_ordinals.reserve_one() {
             Ok(ordinal) if ordinal > state.next_serve_ingress_reservation_ordinal => ordinal,
             Ok(_) | Err(_) => {
@@ -2797,13 +3898,14 @@ impl V2IoCommandQueue {
         let handed_off = Arc::new(AtomicBool::new(false));
         let reservation = V2IoCertifiedServeIngressReservation {
             id,
+            lifecycle_id,
             projection: CertifiedServeIngressProjection {
                 request_hash,
                 requester: request.requester.clone(),
                 round: request.round,
                 subject: request.subject,
                 phase: request.certificate.phase,
-                owner,
+                owner: owner.clone(),
             },
             request: request.clone(),
             state: CertifiedServeIngressReservationState::Provisional,
@@ -2811,21 +3913,19 @@ impl V2IoCommandQueue {
             carrier_ordinal: Some(carrier_ordinal),
             runtime_episode: CertifiedServeRuntimeEpisodeState::Ready,
         };
-        let displaced_waiter = retained_waiter_id
-            .and_then(|retained_waiter_id| state.serve_ingress_waiters.remove(&retained_waiter_id));
         Self::insert_serve_ingress_waiter(&mut state, reservation);
         if let Err(reason) = self.persist_serve_state(
             &state,
             ordinal,
-            state.next_serve_admission_ordinal,
+            next_lifecycle_admission_ordinal,
             None,
-            None,
+            lifecycle_is_new.then_some((lifecycle_id, &owner, request)),
             None,
             None,
         ) {
             iroha_logger::error!(
                 %reason,
-                "failed to persist the Sumeragi v2 Serve ingress high-watermark"
+                "failed to persist the atomic Sumeragi v2 Serve ingress lifecycle"
             );
             if state
                 .serve_ingress_reservation
@@ -2836,25 +3936,74 @@ impl V2IoCommandQueue {
             } else {
                 let _ = state.serve_ingress_waiters.remove(&id);
             }
-            if let Some(displaced) = displaced_waiter {
-                assert!(
-                    state
-                        .serve_ingress_waiters
-                        .insert(displaced.id, displaced)
-                        .is_none()
-                );
-            }
             state.sender_open = false;
             drop(state);
             self.ready.notify_all();
             return Err(CertifiedServeIngressReserveError::Closed);
         }
         state.next_serve_ingress_reservation_ordinal = ordinal;
+        state.next_serve_admission_ordinal = next_lifecycle_admission_ordinal;
+        if lifecycle_is_new {
+            let replaced_owner = replacement_id.map(|previous| {
+                let retired = state
+                    .serves
+                    .remove(&previous)
+                    .expect("validated Serve family remains indexed until raw replacement");
+                assert!(matches!(
+                    retired.state,
+                    V2IoServeState::AwaitingRetry
+                        | V2IoServeState::Terminal
+                        | V2IoServeState::Rejected(_)
+                ));
+                assert_eq!(
+                    state.serve_by_request.remove(&previous.request_hash),
+                    Some(previous)
+                );
+                assert_eq!(state.serve_by_family.remove(&family), Some(previous));
+                (previous, retired)
+            });
+            assert!(
+                state
+                    .serves
+                    .insert(
+                        lifecycle_id,
+                        V2IoTrackedServe {
+                            owner,
+                            request: request.clone(),
+                            recipient: request.requester.clone(),
+                            phase: request.certificate.phase,
+                            round: request.round,
+                            subject: request.subject,
+                            state: V2IoServeState::AwaitingRetry,
+                            reply_routes: None,
+                            ingress_ownership: None,
+                            terminal: None,
+                        },
+                    )
+                    .is_none(),
+                "new raw Serve lifecycle ordinal is unique"
+            );
+            assert_eq!(
+                state.serve_by_request.insert(request_hash, lifecycle_id),
+                None
+            );
+            assert_eq!(state.serve_by_family.insert(family, lifecycle_id), None);
+            if let Some((previous, retired)) = replaced_owner {
+                assert!(
+                    state
+                        .serve_replacements
+                        .insert(lifecycle_id, (previous, retired))
+                        .is_none(),
+                    "one raw Serve replacement has one displaced family owner"
+                );
+            }
+        }
         Ok(CertifiedServeIngressReservation {
             gate: CertifiedServeIngressGate {
                 queue: Arc::clone(self),
             },
             id,
+            lifecycle_id,
             handed_off,
         })
     }
@@ -2866,7 +4015,33 @@ impl V2IoCommandQueue {
         if !state.sender_open || !state.receiver_open {
             return Err("Sumeragi v2 I/O worker is disconnected".to_owned());
         }
-        if state.serve_ingress_reservation.is_some() || state.serve_barrier.is_some() {
+        let mut live_reservations_by_lifecycle = BTreeMap::new();
+        for reservation in state
+            .serve_ingress_reservation
+            .iter()
+            .chain(state.serve_ingress_waiters.values())
+            .filter(|reservation| {
+                reservation.handed_off.is_some() && reservation.carrier_ordinal.is_some()
+            })
+        {
+            let count = live_reservations_by_lifecycle
+                .entry(reservation.lifecycle_id)
+                .or_insert(0_usize);
+            *count = count.saturating_add(1);
+        }
+        if state.serves.iter().any(|(lifecycle_id, tracked)| {
+            tracked.state == V2IoServeState::AwaitingRetry
+                && live_reservations_by_lifecycle.get(lifecycle_id) != Some(&1)
+        }) {
+            return Err(
+                "Sumeragi v2 I/O producer episode found an unbacked AwaitingRetry Serve lifecycle"
+                    .to_owned(),
+            );
+        }
+        if state.serve_ingress_reservation.is_some()
+            || !state.serve_ingress_waiters.is_empty()
+            || state.serve_barrier.is_some()
+        {
             return Ok(None);
         }
         if state.producer_episode_active {
@@ -2904,22 +4079,43 @@ impl V2IoCommandQueue {
             return;
         }
         let reservation_state = reservation.state;
+        let reservation_lifecycle_id = reservation.lifecycle_id;
+        let staged_prepared_decision_loser = matches!(
+            reservation_state,
+            CertifiedServeIngressReservationState::DeterministicallyRejected(
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided)
+            ) if state.durable_decided_subject == Some(decided)
+                && state.serve_barrier == Some(reservation_lifecycle_id)
+                && state.serves.get(&reservation_lifecycle_id).is_some_and(|tracked| {
+                    tracked.subject != decided
+                        && matches!(
+                            tracked.state,
+                            V2IoServeState::PendingCapacity | V2IoServeState::Reserved
+                        )
+                })
+        );
         let prepared_lifecycle = match reservation_state {
             CertifiedServeIngressReservationState::Prepared(lifecycle_id)
             | CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(lifecycle_id) => {
                 Some(lifecycle_id)
             }
-            CertifiedServeIngressReservationState::Provisional => None,
+            CertifiedServeIngressReservationState::DeterministicallyRejected(_)
+                if staged_prepared_decision_loser =>
+            {
+                Some(reservation_lifecycle_id)
+            }
+            CertifiedServeIngressReservationState::Provisional
+            | CertifiedServeIngressReservationState::DeterministicallyRejected(_) => None,
         };
-        if prepared_lifecycle.is_some_and(|lifecycle_id| state.serve_barrier == Some(lifecycle_id)) {
+        if prepared_lifecycle.is_some_and(|lifecycle_id| state.serve_barrier == Some(lifecycle_id))
+        {
             // Rollback publishes its retry-only snapshot before changing any
             // queue state. Failure here intentionally panics out of Drop:
             // detaching after a failed durable write would expose a partial
             // transaction, while fail-stop leaves the exact handoff intact
             // for process restart.
-            self.rollback_serve_barrier(&mut state).expect(
-                "unhanded exact-ingress reservation rolls its Serve transaction back",
-            );
+            self.rollback_serve_barrier(&mut state)
+                .expect("unhanded exact-ingress reservation rolls its Serve transaction back");
         }
         if matches!(
             reservation_state,
@@ -2938,6 +4134,72 @@ impl V2IoCommandQueue {
         if promoted {
             self.ready.notify_all();
         }
+    }
+
+    fn stage_selected_serve_rejection(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> Result<(), String> {
+        let mut state = self.lock();
+        let reservation = state.serve_ingress_reservation.as_ref().ok_or_else(|| {
+            "deterministic Serve rejection lost its selected ingress occurrence".to_owned()
+        })?;
+        if reservation.lifecycle_id.request_hash != request_hash
+            || reservation.projection.request_hash != request_hash
+        {
+            return Err(
+                "deterministic Serve rejection changed the selected exact request".to_owned(),
+            );
+        }
+        let reservation_state = reservation.state;
+        let lifecycle_id = reservation.lifecycle_id;
+        if let CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject) = outcome
+        {
+            let tracked = state.serves.get(&lifecycle_id).ok_or_else(|| {
+                "Decision-superseded Serve occurrence lost its logical lifecycle".to_owned()
+            })?;
+            if state.durable_decided_subject != Some(decided_subject)
+                || tracked.subject == decided_subject
+            {
+                return Err(
+                    "Serve rejection does not match the durable Decision successor".to_owned(),
+                );
+            }
+        }
+        match reservation_state {
+            CertifiedServeIngressReservationState::Provisional => {}
+            CertifiedServeIngressReservationState::Prepared(prepared_lifecycle_id) => {
+                if prepared_lifecycle_id != lifecycle_id
+                    || !matches!(
+                        outcome,
+                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(_)
+                    )
+                {
+                    return Err(
+                        "prepared Serve handoff can only lose to its matching durable Decision"
+                            .to_owned(),
+                    );
+                }
+            }
+            CertifiedServeIngressReservationState::DeterministicallyRejected(retained)
+                if retained == outcome =>
+            {
+                return Ok(());
+            }
+            CertifiedServeIngressReservationState::DeterministicallyRejected(_)
+            | CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_) => {
+                return Err(
+                    "deterministic Serve rejection crossed another handoff outcome".to_owned(),
+                );
+            }
+        }
+        state
+            .serve_ingress_reservation
+            .as_mut()
+            .expect("validated selected Serve occurrence remains installed")
+            .state = CertifiedServeIngressReservationState::DeterministicallyRejected(outcome);
+        Ok(())
     }
 
     fn publish_serve_ingress_physical_drain(
@@ -2961,12 +4223,222 @@ impl V2IoCommandQueue {
                 "fair ingress attempted to drain one Serve occurrence more than once".to_owned(),
             );
         }
+        if matches!(
+            reservation_state,
+            CertifiedServeIngressReservationState::Provisional
+        ) {
+            return Err(
+                "current-height certified-body ingress requires a prepared response or deterministic negative outcome before physical drain"
+                    .to_owned(),
+            );
+        }
+
+        let mut uncommitted_barrier = None;
+        let rejected_lifecycle = match reservation_state {
+            CertifiedServeIngressReservationState::DeterministicallyRejected(outcome) => {
+                let lifecycle_id = state
+                    .serve_ingress_reservation
+                    .as_ref()
+                    .expect("validated rejected Serve occurrence remains selected")
+                    .lifecycle_id;
+                let (
+                    previous_state,
+                    previous_terminal,
+                    tracked_request_hash,
+                    tracked_subject,
+                    tracked_family,
+                ) = {
+                    let tracked = state.serves.get(&lifecycle_id).ok_or_else(|| {
+                        "deterministically rejected Serve occurrence lost its logical lifecycle"
+                            .to_owned()
+                    })?;
+                    (
+                        tracked.state,
+                        tracked.terminal.clone(),
+                        HashOf::new(&tracked.request),
+                        tracked.subject,
+                        CertifiedServeFamilyKey {
+                            requester: tracked.recipient.clone(),
+                            phase: tracked.phase,
+                        },
+                    )
+                };
+                if state.serve_by_request.get(&lifecycle_id.request_hash) != Some(&lifecycle_id)
+                    || state.serve_by_family.get(&tracked_family) != Some(&lifecycle_id)
+                    || state
+                        .serve_by_request
+                        .values()
+                        .filter(|indexed| **indexed == lifecycle_id)
+                        .count()
+                        != 1
+                    || state
+                        .serve_by_family
+                        .values()
+                        .filter(|indexed| **indexed == lifecycle_id)
+                        .count()
+                        != 1
+                {
+                    return Err(
+                        "deterministically rejected Serve occurrence lost its exact lifecycle indexes"
+                            .to_owned(),
+                    );
+                }
+                let superseded_by_decision =
+                    if let CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided) =
+                        outcome
+                    {
+                        if state.durable_decided_subject != Some(decided)
+                            || tracked_subject == decided
+                        {
+                            return Err(
+                                "Serve physical drain does not match the durable Decision successor"
+                                    .to_owned(),
+                            );
+                        }
+                        true
+                    } else {
+                        false
+                    };
+                let terminalize_logical_lifecycle = (previous_state
+                    == V2IoServeState::AwaitingRetry
+                    && previous_terminal.is_none())
+                    || (superseded_by_decision
+                        && matches!(
+                            previous_state,
+                            V2IoServeState::PendingCapacity
+                                | V2IoServeState::Reserved
+                                | V2IoServeState::Terminal
+                        )
+                        && (previous_state != V2IoServeState::Terminal
+                            || matches!(
+                                previous_terminal.as_ref(),
+                                Some(V2IoServeTerminal::Response(_))
+                            )));
+                let retire_retry_carrier_only = superseded_by_decision
+                    && (matches!(
+                        previous_state,
+                        V2IoServeState::Queued
+                            | V2IoServeState::Active
+                            | V2IoServeState::CompletionPending
+                    ) || matches!(
+                        previous_state,
+                        V2IoServeState::Rejected(retained) if retained == outcome
+                    ));
+                if (!terminalize_logical_lifecycle && !retire_retry_carrier_only)
+                    || tracked_request_hash != lifecycle_id.request_hash
+                {
+                    return Err(
+                        "deterministically rejected Serve occurrence crossed a non-terminalizable lifecycle"
+                            .to_owned(),
+                    );
+                }
+                if matches!(
+                    previous_state,
+                    V2IoServeState::PendingCapacity | V2IoServeState::Reserved
+                ) {
+                    if !superseded_by_decision
+                        || state.serve_barrier != Some(lifecycle_id)
+                        || state.serve_barrier_predecessors.contains(&lifecycle_id)
+                    {
+                        return Err(
+                            "Decision-superseded prepared Serve carrier lost its uncommitted barrier"
+                                .to_owned(),
+                        );
+                    }
+                    let command_indices = state
+                        .commands
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, command)| {
+                            (command.serve_lifecycle_id() == Some(lifecycle_id)).then_some(index)
+                        })
+                        .collect::<Vec<_>>();
+                    let command_requests_are_exact = state.commands.iter().all(|command| {
+                        !matches!(
+                            command,
+                            V2IoCommand::Serve {
+                                lifecycle_id: command_lifecycle_id,
+                                request,
+                            } if *command_lifecycle_id == lifecycle_id
+                                && request.request_hash() != lifecycle_id.request_hash
+                        )
+                    });
+                    match previous_state {
+                        V2IoServeState::PendingCapacity => {
+                            if !state.pending_serve_requests.get(&lifecycle_id).is_some_and(
+                                |request| request.request_hash() == lifecycle_id.request_hash,
+                            ) || !command_indices.is_empty()
+                                || !command_requests_are_exact
+                            {
+                                return Err(
+                                    "Decision-superseded pending Serve carrier changed its off-queue ownership"
+                                        .to_owned(),
+                                );
+                            }
+                            uncommitted_barrier = Some((lifecycle_id, previous_state, None));
+                        }
+                        V2IoServeState::Reserved => {
+                            if state.pending_serve_requests.contains_key(&lifecycle_id)
+                                || command_indices.len() != 1
+                                || !command_requests_are_exact
+                            {
+                                return Err(
+                                    "Decision-superseded reserved Serve carrier changed its FIFO placeholder ownership"
+                                        .to_owned(),
+                                );
+                            }
+                            uncommitted_barrier = Some((
+                                lifecycle_id,
+                                previous_state,
+                                command_indices.first().copied(),
+                            ));
+                        }
+                        V2IoServeState::AwaitingRetry
+                        | V2IoServeState::Queued
+                        | V2IoServeState::Active
+                        | V2IoServeState::CompletionPending
+                        | V2IoServeState::Terminal
+                        | V2IoServeState::Rejected(_)
+                        | V2IoServeState::Failed => {
+                            unreachable!("uncommitted Decision loser was matched above")
+                        }
+                    }
+                }
+                terminalize_logical_lifecycle.then(|| {
+                    let tracked = state
+                        .serves
+                        .get_mut(&lifecycle_id)
+                        .expect("validated rejected Serve lifecycle remains indexed");
+                    tracked.state = V2IoServeState::Rejected(outcome);
+                    tracked.terminal = None;
+                    let previous_reply_routes = tracked.reply_routes.take();
+                    let previous_ingress_ownership = tracked.ingress_ownership.take();
+                    (
+                        lifecycle_id,
+                        previous_state,
+                        previous_terminal,
+                        previous_reply_routes,
+                        previous_ingress_ownership,
+                    )
+                })
+            }
+            CertifiedServeIngressReservationState::Prepared(_)
+            | CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_) => None,
+            CertifiedServeIngressReservationState::Provisional => {
+                unreachable!("provisional physical drain was rejected above")
+            }
+        };
+        let terminalized_lifecycle = rejected_lifecycle
+            .as_ref()
+            .map(|(lifecycle_id, previous_state, ..)| (*lifecycle_id, *previous_state));
 
         // This write is the physical-dequeue transaction. It runs while both
         // fair ingress and the Serve queue still retain the exact carrier, so
         // an I/O failure leaves the ingress entry selectable for a later
-        // checked attempt. A crash after success cannot restore this ordinal.
-        self.persist_serve_state(
+        // checked attempt. Deterministic rejection and physical retirement are
+        // encoded in this same snapshot, so neither a crash nor an exact retry
+        // can recreate the consumed scheduler occurrence.
+        if let Err(error) = self.persist_serve_state(
             &state,
             state.next_serve_ingress_reservation_ordinal,
             state.next_serve_admission_ordinal,
@@ -2974,10 +4446,67 @@ impl V2IoCommandQueue {
             None,
             None,
             Some(reservation_id),
-        )?;
+        ) {
+            if let Some((
+                lifecycle_id,
+                previous_state,
+                previous_terminal,
+                previous_reply_routes,
+                previous_ingress_ownership,
+            )) = rejected_lifecycle
+            {
+                let tracked = state
+                    .serves
+                    .get_mut(&lifecycle_id)
+                    .expect("failed rejection persistence retains its lifecycle");
+                tracked.state = previous_state;
+                tracked.terminal = previous_terminal;
+                tracked.reply_routes = previous_reply_routes;
+                tracked.ingress_ownership = previous_ingress_ownership;
+            }
+            return Err(error);
+        }
+        if let Some((lifecycle_id, previous_state, command_index)) = uncommitted_barrier {
+            match previous_state {
+                V2IoServeState::PendingCapacity => {
+                    let removed = state
+                        .pending_serve_requests
+                        .remove(&lifecycle_id)
+                        .expect("prevalidated pending Serve request remains installed");
+                    debug_assert_eq!(removed.request_hash(), lifecycle_id.request_hash);
+                }
+                V2IoServeState::Reserved => {
+                    let removed = state
+                        .commands
+                        .remove(command_index.expect("prevalidated reserved Serve has an index"))
+                        .expect("prevalidated Serve placeholder remains queued");
+                    debug_assert_eq!(removed.serve_lifecycle_id(), Some(lifecycle_id));
+                    self.admission.release();
+                }
+                V2IoServeState::AwaitingRetry
+                | V2IoServeState::Queued
+                | V2IoServeState::Active
+                | V2IoServeState::CompletionPending
+                | V2IoServeState::Terminal
+                | V2IoServeState::Rejected(_)
+                | V2IoServeState::Failed => {
+                    unreachable!("uncommitted Decision loser was prevalidated above")
+                }
+            }
+            state.serve_barrier = None;
+            state.serve_barrier_predecessors.clear();
+        }
+        if let Some((lifecycle_id, _)) = terminalized_lifecycle {
+            // The durable negative snapshot already discarded any displaced
+            // response/negative predecessor for this family. Retire the
+            // in-memory rollback owner only after that atomic write succeeds,
+            // so a strict higher-view successor may replace the negative
+            // high-watermark.
+            let _ = state.serve_replacements.remove(&lifecycle_id);
+        }
 
         let promoted = match reservation_state {
-            CertifiedServeIngressReservationState::Provisional => {
+            CertifiedServeIngressReservationState::DeterministicallyRejected(_) => {
                 Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id)
             }
             CertifiedServeIngressReservationState::Prepared(lifecycle_id) => {
@@ -2992,9 +4521,12 @@ impl V2IoCommandQueue {
             CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_) => {
                 unreachable!("duplicate physical drain was rejected above")
             }
+            CertifiedServeIngressReservationState::Provisional => {
+                unreachable!("provisional physical drain was rejected above")
+            }
         };
         drop(state);
-        if promoted {
+        if promoted || uncommitted_barrier.is_some() {
             self.ready.notify_all();
         }
         Ok(())
@@ -3115,10 +4647,11 @@ impl V2IoCommandQueue {
     ///
     /// Shutdown cannot enqueue behind a `Reserved` Serve placeholder because
     /// the worker deliberately waits for fair ingress to commit that exact
-    /// occurrence. Rewrite the durable retry-only owner before releasing its
+    /// occurrence. Rewrite the durable non-runnable owner before releasing its
     /// physical placeholder. The lifecycle ordinal and family high-watermark
-    /// remain consumed, so a later exact carrier resumes this owner and an
-    /// older carrier cannot resurrect a prior stage.
+    /// remain consumed. Production restart terminalizes that owner locally
+    /// before exposing ingress; a later requester carrier cannot repair or
+    /// resurrect the drained stage.
     fn rollback_serve_barrier(&self, state: &mut V2IoCommandQueueState) -> Result<bool, String> {
         let Some(lifecycle_id) = state.serve_barrier else {
             return Ok(false);
@@ -3167,19 +4700,24 @@ impl V2IoCommandQueue {
             | V2IoServeState::Active
             | V2IoServeState::CompletionPending
             | V2IoServeState::Terminal
+            | V2IoServeState::Rejected(_)
             | V2IoServeState::Failed => {
                 unreachable!("uncommitted Serve state was validated above");
             }
         }
 
-        // The on-disk representation deliberately records every unsealed
-        // lifecycle as retry-only. Republish it before the volatile FIFO owner
-        // disappears so a crash cannot recreate runnable work that fair
-        // ingress never committed.
-        let restore_displaced = state
-            .serve_replacements
-            .contains_key(&lifecycle_id)
-            .then_some(lifecycle_id);
+        // Raw fair-ingress admission already committed both this lifecycle and
+        // its replacement tombstone before the carrier became visible. It must
+        // roll back only to retry-only ownership. The cfg-test/internal
+        // pre-gate path (`prepare_serve(None)`) remains transactional and may
+        // restore its displaced terminal owner when aborted before admission.
+        let raw_admission_committed = state
+            .serve_ingress_reservation
+            .as_ref()
+            .is_some_and(|reservation| reservation.lifecycle_id == lifecycle_id);
+        let restore_displaced = (!raw_admission_committed
+            && state.serve_replacements.contains_key(&lifecycle_id))
+        .then_some(lifecycle_id);
         self.persist_serve_state(
             state,
             state.next_serve_ingress_reservation_ordinal,
@@ -3197,7 +4735,11 @@ impl V2IoCommandQueue {
                 .expect("validated Serve placeholder remains queued")
         });
         let _ = state.pending_serve_requests.remove(&lifecycle_id);
-        if let Some((previous_id, previous)) = state.serve_replacements.remove(&lifecycle_id) {
+        if restore_displaced.is_some() {
+            let (previous_id, previous) = state
+                .serve_replacements
+                .remove(&lifecycle_id)
+                .expect("validated pre-gate replacement retains its displaced owner");
             let current = state
                 .serves
                 .remove(&lifecycle_id)
@@ -3247,18 +4789,19 @@ impl V2IoCommandQueue {
             .serve_ingress_reservation
             .as_ref()
             .map(|reservation| (reservation.id, reservation.state));
-        let settled_ingress = selected_ingress.is_some_and(|(reservation_id, reservation_state)| {
-            if matches!(
-                reservation_state,
-                CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_)
-            ) {
-                let _ =
-                    Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
-            } else {
-                let _ = Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
-            }
-            true
-        });
+        let settled_ingress =
+            selected_ingress.is_some_and(|(reservation_id, reservation_state)| {
+                if matches!(
+                    reservation_state,
+                    CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_)
+                ) {
+                    let _ =
+                        Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
+                } else {
+                    let _ = Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
+                }
+                true
+            });
         drop(state);
         if rolled_back || settled_ingress {
             self.ready.notify_all();
@@ -3270,6 +4813,15 @@ impl V2IoCommandQueue {
         let state = self.lock();
         let ingress = state.serve_ingress_reservation.as_ref();
         let ingress_hash = ingress.map(|reservation| reservation.projection.request_hash);
+        if let Some(reservation) = ingress
+            && (state
+                .serve_by_request
+                .get(&reservation.projection.request_hash)
+                != Some(&reservation.lifecycle_id)
+                || !state.serves.contains_key(&reservation.lifecycle_id))
+        {
+            return Err("Sumeragi v2 Serve barrier lost its raw-admission lifecycle".to_owned());
+        }
         let Some(lifecycle_id) = state.serve_barrier else {
             return ingress
                 .map(V2IoCertifiedServeIngressReservation::barrier)
@@ -3296,7 +4848,8 @@ impl V2IoCommandQueue {
             "Sumeragi v2 active-height Serve barrier lost its ingress lifecycle ordinal".to_owned()
         })?;
         let barrier = reservation.barrier()?;
-        if barrier.request_hash != lifecycle_id.request_hash {
+        if barrier.request_hash != lifecycle_id.request_hash || barrier.lifecycle_id != lifecycle_id
+        {
             return Err("Sumeragi v2 Serve barrier changed its lifecycle request".to_owned());
         }
         Ok(Some(barrier))
@@ -3310,6 +4863,17 @@ impl V2IoCommandQueue {
             .serve_ingress_reservation
             .as_ref()
             .map(|reservation| reservation.projection.request_hash);
+        if let Some(reservation) = state.serve_ingress_reservation.as_ref()
+            && (state
+                .serve_by_request
+                .get(&reservation.projection.request_hash)
+                != Some(&reservation.lifecycle_id)
+                || !state.serves.contains_key(&reservation.lifecycle_id))
+        {
+            return Err(
+                "Sumeragi v2 Serve barrier hash lost its raw-admission lifecycle".to_owned(),
+            );
+        }
         let Some(lifecycle_id) = state.serve_barrier else {
             return Ok(ingress_hash);
         };
@@ -3441,6 +5005,7 @@ impl V2IoCommandQueue {
             | V2IoServeState::Active
             | V2IoServeState::CompletionPending
             | V2IoServeState::Terminal
+            | V2IoServeState::Rejected(_)
             | V2IoServeState::Failed => {
                 Err("Sumeragi v2 Serve barrier crossed a non-admission lifecycle state".to_owned())
             }
@@ -3453,6 +5018,7 @@ impl V2IoCommandQueue {
         state.sender_open
             && state.receiver_open
             && state.serve_ingress_reservation.is_none()
+            && state.serve_ingress_waiters.is_empty()
             && state.serve_barrier.is_none()
             && state.commands.len() < self.capacity
             && self.admission.has_capacity(class)
@@ -3460,6 +5026,7 @@ impl V2IoCommandQueue {
 
     fn prepare_serve(
         &self,
+        expected_lifecycle_id: Option<CertifiedServeLifecycleId>,
         proposed_owner: CertifiedServeOwnerKey,
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
@@ -3485,6 +5052,16 @@ impl V2IoCommandQueue {
         if !state.sender_open || !state.receiver_open {
             return Err(CertifiedServePrepareError::Service(
                 "Sumeragi v2 I/O worker is disconnected".to_owned(),
+            ));
+        }
+        if let Some(expected_lifecycle_id) = expected_lifecycle_id
+            && (expected_lifecycle_id.request_hash != request_hash
+                || expected_lifecycle_id.admission_ordinal == 0
+                || expected_lifecycle_id.admission_ordinal > state.next_serve_admission_ordinal
+                || state.serve_by_request.get(&request_hash) != Some(&expected_lifecycle_id))
+        {
+            return Err(CertifiedServePrepareError::Service(
+                "raw certified-body admission lost its immutable Serve lifecycle".to_owned(),
             ));
         }
         let _ = self.materialize_serve_barrier(&mut state);
@@ -3559,6 +5136,9 @@ impl V2IoCommandQueue {
                 V2IoServeState::Failed => Err(CertifiedServePrepareError::Service(
                     "Sumeragi v2 Serve retention contract already failed".to_owned(),
                 )),
+                V2IoServeState::Rejected(_) => Err(CertifiedServePrepareError::Rejected(
+                    "certified-body request already has a durable negative outcome".to_owned(),
+                )),
                 V2IoServeState::Queued
                 | V2IoServeState::Active
                 | V2IoServeState::CompletionPending
@@ -3569,6 +5149,11 @@ impl V2IoCommandQueue {
                     ingress_reservation_id: None,
                 }),
             };
+        }
+        if expected_lifecycle_id.is_some() {
+            return Err(CertifiedServePrepareError::Service(
+                "raw certified-body admission attempted to mint a replacement lifecycle".to_owned(),
+            ));
         }
         // The least admitted future-slot owner freezes every later ordinary
         // I/O producer until it acquires and commits its physical position.
@@ -3614,16 +5199,18 @@ impl V2IoCommandQueue {
                         .to_owned(),
                 ));
             }
+            // An unsealed `AwaitingRetry` owner is still the admitted target.
+            // A completed response or deterministic negative tombstone may
+            // yield its family high-watermark to a strictly newer view.
             if !matches!(
                 tracked.state,
-                V2IoServeState::AwaitingRetry | V2IoServeState::Terminal
+                V2IoServeState::Terminal | V2IoServeState::Rejected(_)
             ) {
                 return Err(CertifiedServePrepareError::Backpressure);
             }
-            // Higher views replace either a terminal lifecycle or an unsealed
-            // retry-only lifecycle, but retain the original roster/source
-            // capacity charge. Route migration cannot multiply owner slots or
-            // resurrect an older lifecycle.
+            // A higher view replaces only a terminal lifecycle and retains the
+            // original roster/source capacity charge. Route migration cannot
+            // multiply owner slots or resurrect an older lifecycle.
             (Some(existing), tracked.owner.clone())
         } else {
             // Prepare and Commit are independent high-watermark families but
@@ -3726,7 +5313,9 @@ impl V2IoCommandQueue {
                 .expect("Serve high-watermark remains indexed until replacement");
             assert!(matches!(
                 retired.state,
-                V2IoServeState::AwaitingRetry | V2IoServeState::Terminal
+                V2IoServeState::AwaitingRetry
+                    | V2IoServeState::Terminal
+                    | V2IoServeState::Rejected(_)
             ));
             assert_eq!(
                 state.serve_by_request.remove(&previous.request_hash),
@@ -3810,7 +5399,7 @@ impl V2IoCommandQueue {
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
         let request_hash = request.request_hash();
         let request_value = request.request();
-        let retained_owner = {
+        let (retained_owner, expected_lifecycle_id) = {
             let state = self.lock();
             let reservation = state.serve_ingress_reservation.as_ref().ok_or_else(|| {
                 CertifiedServePrepareError::Service(
@@ -3827,7 +5416,11 @@ impl V2IoCommandQueue {
                         .to_owned(),
                 ));
             }
-            if reservation.projection.request_hash != request_hash
+            if reservation.lifecycle_id.request_hash != request_hash
+                || reservation.lifecycle_id.admission_ordinal == 0
+                || reservation.lifecycle_id.admission_ordinal > state.next_serve_admission_ordinal
+                || state.serve_by_request.get(&request_hash) != Some(&reservation.lifecycle_id)
+                || reservation.projection.request_hash != request_hash
                 || reservation.projection.requester != request_value.requester
                 || reservation.projection.round != request_value.round
                 || reservation.projection.subject != request_value.subject
@@ -3856,7 +5449,10 @@ impl V2IoCommandQueue {
                     "certified-body ingress reservation changed exact request ownership".to_owned(),
                 ));
             }
-            reservation.projection.owner.clone()
+            (
+                reservation.projection.owner.clone(),
+                reservation.lifecycle_id,
+            )
         };
         let expected = CertifiedServeIngressProjection {
             request_hash,
@@ -3867,24 +5463,41 @@ impl V2IoCommandQueue {
             owner: retained_owner.clone(),
         };
 
-        let mut prepared = self.prepare_serve(retained_owner, request);
+        let mut prepared = self.prepare_serve(Some(expected_lifecycle_id), retained_owner, request);
         let mut state = self.lock();
         let backpressure_lifecycle =
             matches!(&prepared, Err(CertifiedServePrepareError::Backpressure))
                 .then(|| state.serve_by_request.get(&request_hash).copied())
                 .flatten();
+        let backpressure_lifecycle_valid = backpressure_lifecycle.is_none_or(|lifecycle_id| {
+            lifecycle_id == expected_lifecycle_id
+                && state.serve_barrier == Some(expected_lifecycle_id)
+        });
         let Some(reservation) = state.serve_ingress_reservation.as_mut() else {
             return Err(CertifiedServePrepareError::Service(
                 "certified-body ingress lost its atomic reservation during preparation".to_owned(),
             ));
         };
-        if reservation.projection != expected {
+        if reservation.projection != expected
+            || reservation.lifecycle_id != expected_lifecycle_id
+            || !backpressure_lifecycle_valid
+        {
             return Err(CertifiedServePrepareError::Service(
-                "certified-body ingress reservation changed during preparation".to_owned(),
+                "certified-body ingress lifecycle changed during preparation".to_owned(),
             ));
+        }
+        if let Err(CertifiedServePrepareError::Rejected(reason)) = &prepared {
+            prepared = Err(CertifiedServePrepareError::Service(format!(
+                "authenticated raw Serve handoff crossed an impossible identity rejection: {reason}"
+            )));
         }
         match &mut prepared {
             Ok(admission) => {
+                if admission.lifecycle_id != expected_lifecycle_id {
+                    return Err(CertifiedServePrepareError::Service(
+                        "certified-body preparation returned another logical lifecycle".to_owned(),
+                    ));
+                }
                 reservation.state =
                     CertifiedServeIngressReservationState::Prepared(admission.lifecycle_id);
                 admission.ingress_reservation_id = Some(reservation.id);
@@ -3895,9 +5508,10 @@ impl V2IoCommandQueue {
                         CertifiedServeIngressReservationState::Prepared(lifecycle_id);
                 }
             }
-            Err(
-                CertifiedServePrepareError::Rejected(_) | CertifiedServePrepareError::Service(_),
-            ) => {}
+            Err(CertifiedServePrepareError::Rejected(_)) => {
+                unreachable!("raw identity rejection was converted to fail-stop service error")
+            }
+            Err(CertifiedServePrepareError::Service(_)) => {}
         }
         prepared
     }
@@ -3917,6 +5531,7 @@ impl V2IoCommandQueue {
                 "prepared certified-body Serve lost its ingress reservation".to_owned()
             })?;
             if reservation.id != reservation_id
+                || reservation.lifecycle_id != admission.lifecycle_id
                 || reservation.state
                     != CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(
                         admission.lifecycle_id,
@@ -3927,8 +5542,9 @@ impl V2IoCommandQueue {
                 );
             }
         } else if state.serve_ingress_reservation.is_some() {
-            // Production current-height admissions are minted only by
-            // `prepare_reserved_serve` under this same queue mutex. An
+            // Production current-height lifecycle identity is minted by raw
+            // gate admission, while `prepare_reserved_serve` is the only path
+            // that transfers its physical carrier into the I/O FIFO. An
             // ingress-free token is therefore an internal/pre-gate caller and
             // may not cross an unrelated selected physical owner.
             return Err(
@@ -3957,12 +5573,9 @@ impl V2IoCommandQueue {
                 "Sumeragi v2 Serve commit lost its future-slot barrier identity".to_owned(),
             );
         }
-        let tracked = state
-            .serves
-            .get(&admission.lifecycle_id)
-            .ok_or_else(|| {
-                "prepared Sumeragi v2 Serve lifecycle lost its bounded owner".to_owned()
-            })?;
+        let tracked = state.serves.get(&admission.lifecycle_id).ok_or_else(|| {
+            "prepared Sumeragi v2 Serve lifecycle lost its bounded owner".to_owned()
+        })?;
         match admission.kind {
             CertifiedServeAdmissionKind::New if tracked.state != V2IoServeState::Reserved => {
                 return Err(
@@ -3984,33 +5597,31 @@ impl V2IoCommandQueue {
             _ => {}
         }
 
-        let (merged_reply_routes, merged_ingress_ownership) =
-            if let (Some(retained_routes), Some(retained_ownership)) = (
-                tracked.reply_routes.as_ref(),
-                tracked.ingress_ownership.as_ref(),
-            ) {
-                let mut route_candidate = retained_routes.clone();
-                let receipt = route_candidate
-                    .merge_observed_with_receipt(&reply_routes)
-                    .map_err(|error| {
-                        format!(
-                            "invalid authenticated route on exact Sumeragi v2 Serve retry: {error}"
-                        )
-                    })?;
-                let mut ownership_candidate = retained_ownership.clone();
-                let merged_routes = ownership_candidate
-                    .merge_downstream_with_observed_receipt(ingress_ownership, receipt)
-                    .ok_or_else(|| {
-                        "exact Sumeragi v2 Serve retry changed fair-ingress identity".to_owned()
-                    })?;
-                (merged_routes, ownership_candidate)
-            } else if tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none() {
-                (reply_routes, ingress_ownership)
-            } else {
-                return Err(
-                    "Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned(),
-                );
-            };
+        let (merged_reply_routes, merged_ingress_ownership) = if let (
+            Some(retained_routes),
+            Some(retained_ownership),
+        ) = (
+            tracked.reply_routes.as_ref(),
+            tracked.ingress_ownership.as_ref(),
+        ) {
+            let mut route_candidate = retained_routes.clone();
+            let receipt = route_candidate
+                .merge_observed_with_receipt(&reply_routes)
+                .map_err(|error| {
+                    format!("invalid authenticated route on exact Sumeragi v2 Serve retry: {error}")
+                })?;
+            let mut ownership_candidate = retained_ownership.clone();
+            let merged_routes = ownership_candidate
+                .merge_downstream_with_observed_receipt(ingress_ownership, receipt)
+                .ok_or_else(|| {
+                    "exact Sumeragi v2 Serve retry changed fair-ingress identity".to_owned()
+                })?;
+            (merged_routes, ownership_candidate)
+        } else if tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none() {
+            (reply_routes, ingress_ownership)
+        } else {
+            return Err("Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned());
+        };
 
         let committed = match tracked.state {
             V2IoServeState::AwaitingRetry => {
@@ -4042,6 +5653,9 @@ impl V2IoCommandQueue {
                         response,
                     },
                 }
+            }
+            V2IoServeState::Rejected(_) => {
+                return Err("Sumeragi v2 Serve request has a durable negative outcome".to_owned());
             }
             V2IoServeState::Failed => {
                 return Err("Sumeragi v2 Serve retention contract failed".to_owned());
@@ -4084,6 +5698,7 @@ impl V2IoCommandQueue {
                     .to_owned()
             })?;
             if reservation.id != reservation_id
+                || reservation.lifecycle_id != admission.lifecycle_id
                 || reservation.state
                     != CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(
                         admission.lifecycle_id,
@@ -4136,41 +5751,115 @@ impl V2IoCommandQueue {
         Ok(())
     }
 
-    fn serve_completion_ownership(
+    fn serve_completion_delivery_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
         response_request_hash: HashOf<wire::CertifiedBodyRequest>,
-    ) -> Result<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence), String> {
+    ) -> Result<Option<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence)>, String> {
         if response_request_hash != lifecycle_id.request_hash {
             return Err(
                 "certified-body response changed its exact Serve request hash before delivery"
                     .to_owned(),
             );
         }
-        let state = self.lock();
+        let mut state = self.lock();
+        let tracked_subject = {
+            let tracked = state.serves.get(&lifecycle_id).ok_or_else(|| {
+                "certified-body completion lost its Serve lifecycle owner".to_owned()
+            })?;
+            if tracked.state != V2IoServeState::CompletionPending {
+                return Err(
+                    "certified-body completion crossed a non-pending Serve lifecycle".to_owned(),
+                );
+            }
+            tracked.subject
+        };
+        if let Some(decided_subject) = state.durable_decided_subject
+            && tracked_subject != decided_subject
+        {
+            if Self::serve_lifecycle_has_live_ingress_carrier(&state, lifecycle_id) {
+                return Err(
+                    "Decision-superseded Serve completion reached delivery before its retry carrier drained"
+                        .to_owned(),
+                );
+            }
+            let (previous_terminal, previous_routes, previous_ownership) = {
+                let tracked = state
+                    .serves
+                    .get_mut(&lifecycle_id)
+                    .expect("pending superseded Serve lifecycle remains indexed");
+                let previous_terminal = tracked.terminal.take();
+                let previous_routes = tracked.reply_routes.take();
+                let previous_ownership = tracked.ingress_ownership.take();
+                tracked.state = V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+                );
+                (previous_terminal, previous_routes, previous_ownership)
+            };
+            if let Err(error) = self.persist_serve_state(
+                &state,
+                state.next_serve_ingress_reservation_ordinal,
+                state.next_serve_admission_ordinal,
+                None,
+                None,
+                None,
+                None,
+            ) {
+                let tracked = state
+                    .serves
+                    .get_mut(&lifecycle_id)
+                    .expect("failed delivery supersession retains its pending lifecycle");
+                tracked.state = V2IoServeState::CompletionPending;
+                tracked.terminal = previous_terminal;
+                tracked.reply_routes = previous_routes;
+                tracked.ingress_ownership = previous_ownership;
+                return Err(error);
+            }
+            let _ = state.serve_replacements.remove(&lifecycle_id);
+            if state.serve_barrier != Some(lifecycle_id) {
+                let _ = state.serve_barrier_predecessors.remove(&lifecycle_id);
+            }
+            self.admission.release();
+            let materialized = self.materialize_serve_barrier(&mut state);
+            drop(state);
+            if materialized {
+                self.ready.notify_all();
+            }
+            return Ok(None);
+        }
         let tracked = state
             .serves
             .get(&lifecycle_id)
-            .ok_or_else(|| "certified-body completion lost its Serve lifecycle owner".to_owned())?;
-        if tracked.state != V2IoServeState::CompletionPending {
-            return Err(
-                "certified-body completion crossed a non-pending Serve lifecycle".to_owned(),
-            );
-        }
+            .expect("validated pending Serve lifecycle remains indexed");
         let reply_routes = tracked.reply_routes.clone().ok_or_else(|| {
             "certified-body completion lost its authenticated reply routes".to_owned()
         })?;
         let ingress_ownership = tracked.ingress_ownership.clone().ok_or_else(|| {
             "certified-body completion lost its fair-ingress ownership".to_owned()
         })?;
-        Ok((tracked.recipient.clone(), reply_routes, ingress_ownership))
+        Ok(Some((
+            tracked.recipient.clone(),
+            reply_routes,
+            ingress_ownership,
+        )))
+    }
+
+    fn serve_completion_ownership(
+        &self,
+        lifecycle_id: CertifiedServeLifecycleId,
+        response_request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Result<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence), String> {
+        self.serve_completion_delivery_ownership(lifecycle_id, response_request_hash)?
+            .ok_or_else(|| {
+                "durable Decision superseded the certified-body response before delivery".to_owned()
+            })
     }
 
     fn complete_serve_response(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
         response: &wire::CertifiedBodyResponse,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let mut state = self.lock();
         let tracked = state
             .serves
@@ -4183,6 +5872,54 @@ impl V2IoCommandQueue {
         }
         if response.request_hash != lifecycle_id.request_hash {
             return Err("completed Serve work changed its exact response request hash".to_owned());
+        }
+        let carrier_owned = Self::serve_lifecycle_has_live_ingress_carrier(&state, lifecycle_id);
+        if let Some(decided_subject) = state.durable_decided_subject
+            && tracked.subject != decided_subject
+            && !carrier_owned
+        {
+            let (previous_state, previous_routes, previous_ownership) = {
+                let tracked = state
+                    .serves
+                    .get_mut(&lifecycle_id)
+                    .expect("active superseded Serve lifecycle remains indexed");
+                let previous_state = tracked.state;
+                let previous_routes = tracked.reply_routes.take();
+                let previous_ownership = tracked.ingress_ownership.take();
+                tracked.state = V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+                );
+                (previous_state, previous_routes, previous_ownership)
+            };
+            if let Err(error) = self.persist_serve_state(
+                &state,
+                state.next_serve_ingress_reservation_ordinal,
+                state.next_serve_admission_ordinal,
+                None,
+                None,
+                None,
+                None,
+            ) {
+                let tracked = state
+                    .serves
+                    .get_mut(&lifecycle_id)
+                    .expect("failed worker supersession retains its active lifecycle");
+                tracked.state = previous_state;
+                tracked.reply_routes = previous_routes;
+                tracked.ingress_ownership = previous_ownership;
+                return Err(error);
+            }
+            let _ = state.serve_replacements.remove(&lifecycle_id);
+            if state.serve_barrier != Some(lifecycle_id) {
+                let _ = state.serve_barrier_predecessors.remove(&lifecycle_id);
+            }
+            self.admission.release();
+            let materialized = self.materialize_serve_barrier(&mut state);
+            drop(state);
+            if materialized {
+                self.ready.notify_all();
+            }
+            return Ok(false);
         }
         self.persist_serve_state(
             &state,
@@ -4200,7 +5937,7 @@ impl V2IoCommandQueue {
         tracked.state = V2IoServeState::CompletionPending;
         tracked.terminal = Some(V2IoServeTerminal::Response(response.clone()));
         let _ = state.serve_replacements.remove(&lifecycle_id);
-        Ok(())
+        Ok(true)
     }
 
     fn fail_serve(&self, lifecycle_id: CertifiedServeLifecycleId) {
@@ -4246,9 +5983,23 @@ impl V2IoCommandQueue {
                     .to_owned(),
             );
         }
+        let durable_decided_subject = state.durable_decided_subject;
         let tracked = state.serves.get_mut(&lifecycle_id).ok_or_else(|| {
             "delivered certified-body completion lost its lifecycle owner".to_owned()
         })?;
+        if matches!(
+            tracked.state,
+            V2IoServeState::Rejected(
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided)
+            ) if durable_decided_subject == Some(decided)
+                && tracked.subject != decided
+                && tracked.terminal.is_none()
+        ) {
+            // Delivery ownership already atomically converted this queued
+            // response to the durable negative and released its physical
+            // admission. Only the completion-channel ownership remains.
+            return Ok(());
+        }
         if tracked.state != V2IoServeState::CompletionPending {
             return Err(
                 "delivered certified-body completion crossed a non-pending lifecycle".to_owned(),
@@ -4319,8 +6070,9 @@ impl V2IoCommandQueue {
                         | CertifiedServeRuntimeEpisodeState::Complete => None,
                     }
                 });
-        let exact_target_active =
-            state.serve_ingress_reservation.is_some() || state.serve_barrier.is_some();
+        let exact_target_active = state.serve_ingress_reservation.is_some()
+            || !state.serve_ingress_waiters.is_empty()
+            || state.serve_barrier.is_some();
         if exact_target_active && exact_predecessor_ordinal.is_none() {
             return Err(V2IoTrySendError::Full(command));
         }
@@ -4559,11 +6311,9 @@ impl V2IoCommandQueue {
                 reservation_state,
                 CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(_)
             ) {
-                let _ =
-                    Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
+                let _ = Self::retire_selected_serve_ingress_occurrence(&mut state, reservation_id);
             } else {
-                let _ =
-                    Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
+                let _ = Self::detach_selected_serve_ingress_carrier(&mut state, reservation_id);
             }
         }
         for reservation in state.serve_ingress_waiters.values_mut() {
@@ -4593,6 +6343,7 @@ impl V2IoCommandQueue {
                 V2IoServeState::AwaitingRetry
                 | V2IoServeState::CompletionPending
                 | V2IoServeState::Terminal
+                | V2IoServeState::Rejected(_)
                 | V2IoServeState::Failed => {}
                 V2IoServeState::PendingCapacity => {
                     unreachable!("the sole uncommitted Serve barrier was retired above");
@@ -4614,6 +6365,18 @@ impl V2IoCommandQueue {
 }
 
 impl V2IoCommandSender {
+    fn begin_decision_serve_reconciliation(&self) -> Result<(), String> {
+        self.queue.begin_decision_serve_reconciliation()
+    }
+
+    fn finish_decision_serve_reconciliation(
+        &self,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> Result<(), String> {
+        self.queue
+            .finish_decision_serve_reconciliation(decided_subject)
+    }
+
     #[cfg(test)]
     fn try_send(&self, command: V2IoCommand) -> Result<(), V2IoTrySendError> {
         self.queue.try_send_as(command.admission_class(), command)
@@ -4633,7 +6396,7 @@ impl V2IoCommandSender {
         owner: CertifiedServeOwnerKey,
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
-        self.queue.prepare_serve(owner, request)
+        self.queue.prepare_serve(None, owner, request)
     }
 
     fn prepare_reserved_serve(
@@ -4642,6 +6405,15 @@ impl V2IoCommandSender {
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
         self.queue.prepare_reserved_serve(owner, request)
+    }
+
+    fn stage_selected_serve_rejection(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> Result<(), String> {
+        self.queue
+            .stage_selected_serve_rejection(request_hash, outcome)
     }
 
     fn try_begin_producer_episode(&self) -> Result<Option<CertifiedServeProducerEpisode>, String> {
@@ -4710,6 +6482,15 @@ impl V2IoCommandSender {
             .serve_completion_ownership(lifecycle_id, response_request_hash)
     }
 
+    fn serve_completion_delivery_ownership(
+        &self,
+        lifecycle_id: CertifiedServeLifecycleId,
+        response_request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Result<Option<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence)>, String> {
+        self.queue
+            .serve_completion_delivery_ownership(lifecycle_id, response_request_hash)
+    }
+
     fn cancel(
         &self,
         work_id: EffectWorkId,
@@ -4761,7 +6542,7 @@ impl V2IoCommandReceiver {
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
         response: &wire::CertifiedBodyResponse,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         self.queue.complete_serve_response(lifecycle_id, response)
     }
 
@@ -5019,6 +6800,8 @@ impl V2IoHandle {
         serve_state_root: &Path,
         key_pair: KeyPair,
         local_validator: Option<wire::ValidatorIndex>,
+        durable_decided_subject: Option<wire::BlockSubject>,
+        validator_set_pops: &[Vec<u8>],
         auxiliary_queue_capacity: usize,
         consensus_queue_capacity: usize,
         observer_serve_capacity: usize,
@@ -5042,8 +6825,13 @@ impl V2IoHandle {
             serve_state_root,
             &context,
             local_validator,
+            durable_decided_subject,
             &body_store,
             lifecycle_ordinals,
+            CertifiedServeRestartDischarge::Production {
+                key_pair: &key_pair,
+                validator_set_pops,
+            },
         )?;
         let (completion_tx, completion_rx) = mpsc::sync_channel(capacity);
         let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
@@ -5199,47 +6987,60 @@ impl V2IoHandle {
                                     if let Some(work_id) = work_id {
                                         command_rx.complete_work(work_id);
                                     }
-                                    let seal_error = match &completion {
+                                    let seal_result = match &completion {
                                         V2IoCompletion::CertifiedResponse {
                                             lifecycle_id,
                                             response,
                                         } => command_rx
-                                            .complete_serve_response(*lifecycle_id, response)
-                                            .err(),
-                                        _ => None,
+                                            .complete_serve_response(*lifecycle_id, response),
+                                        _ => Ok(true),
                                     };
-                                    if let Some(reason) = seal_error {
-                                        iroha_logger::error!(
-                                            %reason,
-                                            "failed to seal Sumeragi v2 certified-body completion"
-                                        );
-                                        if let Some(lifecycle_id) = serve_lifecycle_id {
-                                            command_rx.fail_serve(lifecycle_id);
+                                    match seal_result {
+                                        Err(reason) => {
+                                            iroha_logger::error!(
+                                                %reason,
+                                                "failed to seal Sumeragi v2 certified-body completion"
+                                            );
+                                            if let Some(lifecycle_id) = serve_lifecycle_id {
+                                                command_rx.fail_serve(lifecycle_id);
+                                            }
+                                            let _ = try_send_tracked_completion(
+                                                &completion_tx,
+                                                &worker_admission,
+                                                serve_lifecycle_id.map_or_else(
+                                                    || {
+                                                        V2IoCompletion::RecoveryRequired(
+                                                            reason.clone(),
+                                                        )
+                                                    },
+                                                    |lifecycle_id| {
+                                                        V2IoCompletion::CertifiedRequestFailed {
+                                                            lifecycle_id,
+                                                            reason: reason.clone(),
+                                                        }
+                                                    },
+                                                ),
+                                            );
+                                            true
                                         }
-                                        let _ = try_send_tracked_completion(
-                                            &completion_tx,
-                                            &worker_admission,
-                                            serve_lifecycle_id.map_or_else(
-                                                || {
-                                                    V2IoCompletion::RecoveryRequired(reason.clone())
-                                                },
-                                                |lifecycle_id| {
-                                                    V2IoCompletion::CertifiedRequestFailed {
-                                                        lifecycle_id,
-                                                        reason: reason.clone(),
-                                                    }
-                                                },
-                                            ),
-                                        );
-                                        true
-                                    } else {
-                                        send_completion_with_lifecycle_ordinal(
-                                            &completion_tx,
-                                            &worker_admission,
-                                            Ok(completion),
-                                            runtime_lifecycle_ordinal,
-                                        );
-                                        false
+                                        Ok(false) => {
+                                            // A durable Decision installed
+                                            // while this command was active.
+                                            // The queue atomically published
+                                            // the typed negative and released
+                                            // admission, so no stale response
+                                            // completion is exposed.
+                                            false
+                                        }
+                                        Ok(true) => {
+                                            send_completion_with_lifecycle_ordinal(
+                                                &completion_tx,
+                                                &worker_admission,
+                                                Ok(completion),
+                                                runtime_lifecycle_ordinal,
+                                            );
+                                            false
+                                        }
                                     }
                                 }
                             };
@@ -5271,6 +7072,18 @@ impl V2IoHandle {
         })
     }
 
+    fn begin_decision_serve_reconciliation(&self) -> Result<(), String> {
+        self.command_tx.begin_decision_serve_reconciliation()
+    }
+
+    fn finish_decision_serve_reconciliation(
+        &self,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> Result<(), String> {
+        self.command_tx
+            .finish_decision_serve_reconciliation(decided_subject)
+    }
+
     fn try_enqueue(&self, command: V2IoCommand) -> Result<(), V2IoTrySendError> {
         let class = command.admission_class();
         self.try_enqueue_as(class, command)
@@ -5297,6 +7110,15 @@ impl V2IoHandle {
         self.command_tx.prepare_reserved_serve(owner, request)
     }
 
+    fn stage_selected_serve_rejection(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> Result<(), String> {
+        self.command_tx
+            .stage_selected_serve_rejection(request_hash, outcome)
+    }
+
     fn try_begin_producer_episode(&self) -> Result<Option<CertifiedServeProducerEpisode>, String> {
         self.command_tx.try_begin_producer_episode()
     }
@@ -5305,6 +7127,11 @@ impl V2IoHandle {
         CertifiedServeIngressGate {
             queue: Arc::clone(&self.command_tx.queue),
         }
+    }
+
+    fn dormant_serve_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
+        self.certified_serve_ingress_gate()
+            .dormant_ingress_scheduler_ordinal()
     }
 
     fn serve_barrier_request_hash(
@@ -5361,9 +7188,9 @@ impl V2IoHandle {
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
         response_request_hash: HashOf<wire::CertifiedBodyRequest>,
-    ) -> Result<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence), String> {
+    ) -> Result<Option<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence)>, String> {
         self.command_tx
-            .serve_completion_ownership(lifecycle_id, response_request_hash)
+            .serve_completion_delivery_ownership(lifecycle_id, response_request_hash)
     }
 
     fn cancel(
@@ -11438,6 +13265,7 @@ impl ProductionV2Services {
     pub(crate) fn start(
         context: wire::HeightContext,
         initial_tag: EventTag,
+        durable_decided_subject: Option<wire::BlockSubject>,
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
@@ -11525,6 +13353,7 @@ impl ProductionV2Services {
         )?;
         std::fs::create_dir_all(&context_chunk_root).map_err(|error| error.to_string())?;
         let durable_history = Arc::clone(&kura);
+        let certified_serve_validator_set_pops = validator_set_pops.clone();
         let apply_service = V2ApplyService::new(
             state,
             queue,
@@ -11544,6 +13373,8 @@ impl ProductionV2Services {
             &context_chunk_root,
             key_pair.clone(),
             local_validator,
+            durable_decided_subject,
+            &certified_serve_validator_set_pops,
             auxiliary_io_capacity,
             consensus_io_capacity,
             reply_route_source_capacity,
@@ -11790,8 +13621,12 @@ impl ProductionV2Services {
         Ok(BodyFetchServiceOwner::None)
     }
 
-    fn remove_exact_body_fetch_owner(&mut self, task: &BodyFetchTask) -> Result<(), String> {
-        match self.body_fetch_service_owner(task.id())? {
+    fn plan_exact_body_fetch_owner_removal(
+        &self,
+        task: &BodyFetchTask,
+    ) -> Result<BodyFetchServiceOwner, String> {
+        let owner = self.body_fetch_service_owner(task.id())?;
+        match owner {
             BodyFetchServiceOwner::Live => {
                 let existing = self
                     .fetches
@@ -11802,14 +13637,6 @@ impl ProductionV2Services {
                         "Sumeragi v2 body-fetch work {} differs from executor ownership",
                         task.id().get()
                     ));
-                }
-                let manifest_hash = existing.task.manifest().map(HashOf::new);
-                self.fetches
-                    .remove(&task.id())
-                    .expect("live body-fetch owner was classified above");
-                if let Some(manifest_hash) = manifest_hash {
-                    let removed = self.fetch_by_manifest.remove(&manifest_hash);
-                    debug_assert_eq!(removed, Some(task.id()));
                 }
             }
             BodyFetchServiceOwner::Reconstructed(index) => {
@@ -11825,9 +13652,6 @@ impl ProductionV2Services {
                         task.id().get()
                     ));
                 }
-                self.local_completions
-                    .remove(index)
-                    .expect("queued body-fetch owner was classified above");
             }
             BodyFetchServiceOwner::None => {
                 return Err(format!(
@@ -11836,14 +13660,47 @@ impl ProductionV2Services {
                 ));
             }
         }
+        Ok(owner)
+    }
+
+    fn commit_exact_body_fetch_owner_removal(
+        &mut self,
+        task: &BodyFetchTask,
+        owner: BodyFetchServiceOwner,
+    ) {
+        match owner {
+            BodyFetchServiceOwner::Live => {
+                self.fetches
+                    .remove(&task.id())
+                    .expect("preflighted live body-fetch owner remains present");
+                if let Some(manifest_hash) = task.manifest().map(HashOf::new) {
+                    let removed = self.fetch_by_manifest.remove(&manifest_hash);
+                    debug_assert_eq!(removed, Some(task.id()));
+                }
+            }
+            BodyFetchServiceOwner::Reconstructed(index) => {
+                self.local_completions
+                    .remove(index)
+                    .expect("preflighted queued body-fetch owner remains present");
+            }
+            BodyFetchServiceOwner::None => {
+                unreachable!("exact body-fetch removal preflight excludes an absent owner")
+            }
+        }
+    }
+
+    fn remove_exact_body_fetch_owner(&mut self, task: &BodyFetchTask) -> Result<(), String> {
+        let owner = self.plan_exact_body_fetch_owner_removal(task)?;
+        self.commit_exact_body_fetch_owner_removal(task, owner);
         Ok(())
     }
 
     /// Reserve an immutable Serve lifecycle before fair ingress releases it.
     ///
-    /// A new request installs a non-runnable placeholder at the physical FIFO
-    /// tail. Exact retries reuse their existing lifecycle even while the
-    /// auxiliary prefix is full.
+    /// A new request atomically installs a durable non-runnable lifecycle and
+    /// future-slot ticket. Predicate-time preparation materializes its physical
+    /// FIFO placeholder; exact retries reuse the original lifecycle even while
+    /// the auxiliary prefix is full.
     pub(crate) fn certified_serve_barrier_request_hash(
         &self,
     ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
@@ -11860,10 +13717,11 @@ impl ProductionV2Services {
     /// Claim one bounded older-runtime turn for this exact ticket.
     ///
     /// A claimed turn must be settled after the executor re-evaluates the
-    /// strictly older owner set. Ordinary carrier retries retain this state. A
-    /// process restart reconstructs it as ready only after the shared source
-    /// was advanced beyond the waiter, so no reconstructed runtime owner can
-    /// be older than that restored ticket.
+    /// strictly older owner set. The same undrained physical occurrence
+    /// retains this state across bounded selector retries. A process restart
+    /// locally terminalizes its durable lifecycle before exposing producers,
+    /// so correctness never depends on a requester minting a replacement
+    /// carrier.
     pub(crate) fn claim_certified_serve_runtime_episode(
         &self,
         barrier: CertifiedServeBarrier,
@@ -11911,6 +13769,38 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())
     }
 
+    /// Return the least admitted Serve owner waiting for an exact physical retry.
+    pub(crate) fn dormant_certified_serve_ingress_scheduler_ordinal(
+        &self,
+    ) -> Result<Option<u128>, String> {
+        self.io
+            .as_ref()
+            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
+            .dormant_serve_ingress_scheduler_ordinal()
+    }
+
+    /// Latch process restart when a carrierless live Serve lifecycle appears.
+    ///
+    /// Production startup locally discharges every restored lifecycle before
+    /// constructing this service. A later dormant owner therefore proves that
+    /// a live physical carrier was lost; continuing would reintroduce
+    /// requester-dependent liveness.
+    pub(crate) fn fail_closed_dormant_certified_serve(
+        &mut self,
+        scheduler_ordinal: u128,
+    ) -> String {
+        let reason = format!(
+            "Sumeragi v2 Serve lifecycle {scheduler_ordinal} lost its live physical carrier; restart is required for local discharge"
+        );
+        self.output_guard.activate_restart_required();
+        self.fatal_reason = Some(reason.clone());
+        iroha_logger::error!(
+            scheduler_ordinal,
+            "Sumeragi v2 Serve lifecycle became dormant after startup"
+        );
+        reason
+    }
+
     /// Start one finite local-producer episode if no exact ingress ticket owns
     /// the next runner turn.
     pub(crate) fn try_begin_certified_serve_producer_episode(
@@ -11928,6 +13818,11 @@ impl ProductionV2Services {
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
         let Some(responder) = self.local_validator else {
+            self.stage_certified_serve_rejection(
+                request.request_hash(),
+                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent,
+            )
+            .map_err(CertifiedServePrepareError::Service)?;
             return Err(CertifiedServePrepareError::Rejected(
                 "local observer has no certified-body Serve authority".to_owned(),
             ));
@@ -11939,6 +13834,11 @@ impl ProductionV2Services {
             .binary_search(&responder)
             .is_err()
         {
+            self.stage_certified_serve_rejection(
+                request.request_hash(),
+                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent,
+            )
+            .map_err(CertifiedServePrepareError::Service)?;
             return Err(CertifiedServePrepareError::Rejected(
                 "local validator is not a certified-body retention owner".to_owned(),
             ));
@@ -11964,6 +13864,20 @@ impl ProductionV2Services {
             CertifiedServeOwnerKey::AuthenticatedSource(authenticated_via.clone())
         };
         io.prepare_reserved_serve(owner, request)
+    }
+
+    /// Stage a deterministic negative outcome while the exact fair carrier is
+    /// still selected. The following checked physical drain persists the
+    /// tombstone and scheduler-ticket retirement atomically.
+    pub(crate) fn stage_certified_serve_rejection(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> Result<(), String> {
+        self.io
+            .as_ref()
+            .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())?
+            .stage_selected_serve_rejection(request_hash, outcome)
     }
 
     /// Queue an authenticated certified-body request with every independent return route.
@@ -12344,9 +14258,9 @@ impl ProductionV2Services {
                 }
                 Ok(disposition)
             }
-            OrphanPayloadChunkBufferResult::ProductiveRetentionConflict => Err(
-                "bounded orphan storage could not retain an exact leader-wire owner".to_owned(),
-            ),
+            OrphanPayloadChunkBufferResult::ProductiveRetentionConflict => {
+                Err("bounded orphan storage could not retain an exact leader-wire owner".to_owned())
+            }
         }
     }
 
@@ -12405,9 +14319,7 @@ impl ProductionV2Services {
             || chunk.bytes.is_empty()
             || chunk_len > u64::from(self.context.da_layout.chunk_size_bytes)
         {
-            return OrphanPayloadChunkBufferResult::Disposition(
-                PayloadChunkDisposition::Rejected,
-            );
+            return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
         }
         let mut replaced_proofless = None;
         if let Some(buffered) = self.orphan_chunks.get_mut(&manifest_hash) {
@@ -12419,9 +14331,7 @@ impl ProductionV2Services {
                 let incumbent_productive = existing
                     .ingress_ownership
                     .as_ref()
-                    .is_some_and(|ownership| {
-                        ownership.leader_wire_runtime_receipt().is_some()
-                    });
+                    .is_some_and(|ownership| ownership.leader_wire_runtime_receipt().is_some());
                 if productive_owner && !incumbent_productive {
                     let Some(candidate) = ingress_ownership else {
                         return OrphanPayloadChunkBufferResult::ProductiveRetentionConflict;
@@ -12459,18 +14369,13 @@ impl ProductionV2Services {
             // productive, manifest-bound owner replaces a proofless reordered
             // claim in the same slot. Otherwise the conflict cannot be
             // resolved until an existing productive owner retires.
-            if let Some(position) = buffered
-                .iter()
-                .position(|existing| {
-                    existing.sender == sender && existing.chunk.index == chunk.index
-                })
-            {
+            if let Some(position) = buffered.iter().position(|existing| {
+                existing.sender == sender && existing.chunk.index == chunk.index
+            }) {
                 let incumbent_productive = buffered[position]
                     .ingress_ownership
                     .as_ref()
-                    .is_some_and(|ownership| {
-                        ownership.leader_wire_runtime_receipt().is_some()
-                    });
+                    .is_some_and(|ownership| ownership.leader_wire_runtime_receipt().is_some());
                 if productive_owner && !incumbent_productive {
                     replaced_proofless = buffered.remove(position);
                 } else {
@@ -12485,11 +14390,9 @@ impl ProductionV2Services {
             }
         }
         if let Some(replaced) = replaced_proofless {
-            let replaced_bytes =
-                u64::try_from(replaced.chunk.bytes.len()).unwrap_or(u64::MAX);
+            let replaced_bytes = u64::try_from(replaced.chunk.bytes.len()).unwrap_or(u64::MAX);
             self.orphan_chunk_count = self.orphan_chunk_count.saturating_sub(1);
-            self.orphan_chunk_bytes =
-                self.orphan_chunk_bytes.saturating_sub(replaced_bytes);
+            self.orphan_chunk_bytes = self.orphan_chunk_bytes.saturating_sub(replaced_bytes);
             if self
                 .orphan_chunks
                 .get(&manifest_hash)
@@ -12500,8 +14403,7 @@ impl ProductionV2Services {
         }
         while productive_owner
             && (self.orphan_chunk_count >= self.max_orphan_chunks
-                || self.orphan_chunk_bytes.saturating_add(chunk_len)
-                    > self.max_orphan_chunk_bytes)
+                || self.orphan_chunk_bytes.saturating_add(chunk_len) > self.max_orphan_chunk_bytes)
         {
             if !self.evict_one_proofless_orphan_chunk() {
                 return OrphanPayloadChunkBufferResult::ProductiveRetentionConflict;
@@ -12510,9 +14412,7 @@ impl ProductionV2Services {
         if self.orphan_chunk_count >= self.max_orphan_chunks
             || self.orphan_chunk_bytes.saturating_add(chunk_len) > self.max_orphan_chunk_bytes
         {
-            return OrphanPayloadChunkBufferResult::Disposition(
-                PayloadChunkDisposition::Rejected,
-            );
+            return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
         }
         let buffered = self.orphan_chunks.entry(manifest_hash).or_default();
         buffered.push_back(BufferedPayloadChunk {
@@ -12526,19 +14426,19 @@ impl ProductionV2Services {
     }
 
     fn evict_one_proofless_orphan_chunk(&mut self) -> bool {
-        let selected = self.orphan_chunks.iter().find_map(|(manifest_hash, chunks)| {
-            chunks
-                .iter()
-                .position(|buffered| {
-                    buffered
-                        .ingress_ownership
-                        .as_ref()
-                        .is_none_or(|ownership| {
+        let selected = self
+            .orphan_chunks
+            .iter()
+            .find_map(|(manifest_hash, chunks)| {
+                chunks
+                    .iter()
+                    .position(|buffered| {
+                        buffered.ingress_ownership.as_ref().is_none_or(|ownership| {
                             ownership.leader_wire_runtime_receipt().is_none()
                         })
-                })
-                .map(|position| (*manifest_hash, position))
-        });
+                    })
+                    .map(|position| (*manifest_hash, position))
+            });
         let Some((manifest_hash, position)) = selected else {
             return false;
         };
@@ -12595,9 +14495,7 @@ impl ProductionV2Services {
                             .leader_wire_ingress
                             .mark_leader_wire_volatile_terminal(runtime)
                     {
-                        if let Err(tail_error) =
-                            self.retire_buffered_payload_chunk_tail(chunks)
-                        {
+                        if let Err(tail_error) = self.retire_buffered_payload_chunk_tail(chunks) {
                             return Err(format!(
                                 "{error}; additionally failed to retire buffered payload tail: {tail_error}"
                             ));
@@ -12624,9 +14522,7 @@ impl ProductionV2Services {
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        if let Err(tail_error) =
-                            self.retire_buffered_payload_chunk_tail(chunks)
-                        {
+                        if let Err(tail_error) = self.retire_buffered_payload_chunk_tail(chunks) {
                             return Err(format!(
                                 "{error}; additionally failed to retire buffered payload tail: {tail_error}"
                             ));
@@ -13018,11 +14914,19 @@ impl ProductionV2Services {
                             },
                             |io| io.serve_completion_ownership(lifecycle_id, response.request_hash),
                         );
-                        let (recipient, reply_routes, ingress_ownership) = match ownership {
+                        let ownership = match ownership {
                             Ok(ownership) => ownership,
                             Err(reason) => {
                                 return Err(executor.external_service_failed(reason, self));
                             }
+                        };
+                        let Some((recipient, reply_routes, ingress_ownership)) = ownership else {
+                            // The completion linearized before the runtime WAL
+                            // fence, but delivery linearized after its durable
+                            // Decision. Queue ownership has already crossed to
+                            // the typed negative tombstone; publish no stale
+                            // response.
+                            return Ok(());
                         };
                         let message = wire::ConsensusMessageV2::new(
                             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
@@ -15001,6 +16905,18 @@ impl Drop for ProductionV2Services {
 impl V2EffectServices for ProductionV2Services {
     type Error = String;
 
+    fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error> {
+        self.io()?.begin_decision_serve_reconciliation()
+    }
+
+    fn finish_decision_serve_reconciliation(
+        &mut self,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> Result<(), Self::Error> {
+        self.io()?
+            .finish_decision_serve_reconciliation(decided_subject)
+    }
+
     fn complete_leader_wire_runtime_terminal(
         &mut self,
         terminal: LeaderWireRuntimeTerminal,
@@ -15371,20 +17287,27 @@ impl V2EffectServices for ProductionV2Services {
         Ok(())
     }
 
-    fn complete_certified_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+    fn complete_certified_body_fetch(
+        &mut self,
+        task: &BodyFetchTask,
+    ) -> Result<CertifiedBodyFetchCompletionDisposition, Self::Error> {
         if task.certified_request().is_none() {
             return Err(format!(
                 "Sumeragi v2 body-fetch work {} completed without certified authority",
                 task.id().get()
             ));
         }
-        self.remove_exact_body_fetch_owner(task)?;
+        // Complete every fallible ownership check before arming the fail-stop
+        // boundary. The guarded tail is then one infallible removal, so every
+        // returned error leaves the exact service owner byte-for-byte intact.
+        let owner = self.plan_exact_body_fetch_owner_removal(task)?;
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        self.commit_exact_body_fetch_owner_removal(task, owner);
         operation.complete();
-        Ok(())
+        Ok(CertifiedBodyFetchCompletionDisposition::Completed)
     }
 
     fn accept_authenticated_chunk(
@@ -15694,7 +17617,8 @@ pub(super) mod tests {
     use crate::sumeragi::{
         FairV2Ingress, FairV2IngressClass, FairV2IngressPushDisposition, FairV2IngressPushError,
         FairV2IngressSource, FairV2IngressWireKey, InboundBlockMessage,
-        fair_v2_ingress_admit_with_roster_for_test,
+        fair_v2_ingress_admit_with_roster_for_test, fair_v2_ingress_is_certified_body_request,
+        fair_v2_ingress_required_capacity,
         v2::AdapterEffect,
         v2_block_sync::tests::durable_history_fixture,
         v2_body_store::DurableBodyReceipt,
@@ -15761,10 +17685,179 @@ pub(super) mod tests {
             root,
             context,
             Some(0),
+            None,
             body_store,
             RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            CertifiedServeRestartDischarge::PreserveFixtureState,
         )?;
         Ok((sender, receiver, admission))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn production_persistent_test_io_command_channel(
+        capacity: usize,
+        root: &Path,
+        context: &wire::HeightContext,
+        body_store: &V2BodyStore,
+        key_pair: &KeyPair,
+        validator_set_pops: &[Vec<u8>],
+        local_validator: Option<wire::ValidatorIndex>,
+        durable_decided_subject: Option<wire::BlockSubject>,
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+    ) -> Result<(V2IoCommandSender, V2IoCommandReceiver, Arc<V2IoAdmission>), String> {
+        let admission = V2IoAdmission::unbounded_for_tests();
+        let (sender, receiver) = persistent_v2_io_command_channel(
+            capacity,
+            context.roster.len(),
+            capacity.max(1),
+            capacity.max(1),
+            Arc::clone(&admission),
+            root,
+            context,
+            local_validator,
+            durable_decided_subject,
+            body_store,
+            lifecycle_ordinals,
+            CertifiedServeRestartDischarge::Production {
+                key_pair,
+                validator_set_pops,
+            },
+        )?;
+        Ok((sender, receiver, admission))
+    }
+
+    fn persist_unsealed_serve_fixture(
+        root: &Path,
+        context: &wire::HeightContext,
+        request: &AuthenticatedCertifiedBodyRequest,
+        owner: CertifiedServeOwnerKey,
+        lifecycle_ordinal: u128,
+        scheduler_ordinal: Option<u128>,
+    ) -> CertifiedServeLifecycleId {
+        let family_capacity = certified_serve_family_capacity(context.roster.len(), 8, 8)
+            .expect("fixture Serve family capacity");
+        let (store, mut persisted) = CertifiedServeStateStore::open(root, context, family_capacity)
+            .expect("open fixture durable Serve state");
+        let lifecycle_id = CertifiedServeLifecycleId {
+            admission_ordinal: lifecycle_ordinal,
+            request_hash: request.request_hash(),
+        };
+        persisted.next_lifecycle_admission_ordinal = persisted
+            .next_lifecycle_admission_ordinal
+            .max(lifecycle_ordinal);
+        if let Some(scheduler_ordinal) = scheduler_ordinal {
+            persisted.next_ingress_reservation_ordinal = persisted
+                .next_ingress_reservation_ordinal
+                .max(scheduler_ordinal);
+            persisted
+                .ingress_waiters
+                .push(PersistedCertifiedServeIngressWaiter {
+                    ingress_ordinal: scheduler_ordinal,
+                    lifecycle_id,
+                    owner: owner.clone(),
+                    request: request.request().clone(),
+                });
+            persisted
+                .ingress_waiters
+                .sort_by_key(|waiter| waiter.ingress_ordinal);
+        }
+        persisted
+            .unsealed_lifecycles
+            .push(PersistedCertifiedServeLifecycle {
+                lifecycle_id,
+                owner,
+                request: request.request().clone(),
+            });
+        persisted
+            .unsealed_lifecycles
+            .sort_by_key(|lifecycle| lifecycle.lifecycle_id);
+        store
+            .persist(&persisted)
+            .expect("persist fixture unsealed Serve lifecycle");
+        lifecycle_id
+    }
+
+    fn persist_terminal_serve_fixture(
+        root: &Path,
+        context: &wire::HeightContext,
+        request: &AuthenticatedCertifiedBodyRequest,
+        owner: CertifiedServeOwnerKey,
+        lifecycle_ordinal: u128,
+        response: &wire::CertifiedBodyResponse,
+    ) -> CertifiedServeLifecycleId {
+        assert_eq!(response.request_hash, request.request_hash());
+        let lifecycle_id = persist_unsealed_serve_fixture(
+            root,
+            context,
+            request,
+            owner.clone(),
+            lifecycle_ordinal,
+            None,
+        );
+        let family_capacity = certified_serve_family_capacity(context.roster.len(), 8, 8)
+            .expect("fixture Serve family capacity");
+        let (store, mut persisted) = CertifiedServeStateStore::open(root, context, family_capacity)
+            .expect("reopen fixture durable Serve state");
+        persisted
+            .unsealed_lifecycles
+            .retain(|lifecycle| lifecycle.lifecycle_id != lifecycle_id);
+        persisted
+            .terminal_tombstones
+            .push(PersistedCertifiedServeTombstone {
+                lifecycle_id,
+                owner,
+                request: request.request().clone(),
+                response_manifest: response.manifest.clone(),
+                response_responder: response.responder,
+                response_signature: response.signature.clone(),
+            });
+        persisted
+            .terminal_tombstones
+            .sort_by_key(|tombstone| tombstone.lifecycle_id);
+        store
+            .persist(&persisted)
+            .expect("persist fixture terminal Serve lifecycle");
+        lifecycle_id
+    }
+
+    fn persist_negative_serve_fixture(
+        root: &Path,
+        context: &wire::HeightContext,
+        request: &AuthenticatedCertifiedBodyRequest,
+        owner: CertifiedServeOwnerKey,
+        lifecycle_ordinal: u128,
+        outcome: CertifiedServeNegativeOutcome,
+    ) -> CertifiedServeLifecycleId {
+        let lifecycle_id = persist_unsealed_serve_fixture(
+            root,
+            context,
+            request,
+            owner.clone(),
+            lifecycle_ordinal,
+            None,
+        );
+        let family_capacity = certified_serve_family_capacity(context.roster.len(), 8, 8)
+            .expect("fixture Serve family capacity");
+        let (store, mut persisted) = CertifiedServeStateStore::open(root, context, family_capacity)
+            .expect("reopen fixture durable Serve state");
+        persisted
+            .unsealed_lifecycles
+            .retain(|lifecycle| lifecycle.lifecycle_id != lifecycle_id);
+        persisted
+            .negative_tombstones
+            .push(PersistedCertifiedServeNegativeTombstone {
+                lifecycle_id,
+                owner,
+                request: request.request().clone(),
+                outcome,
+            });
+        persisted
+            .negative_tombstones
+            .sort_by_key(|tombstone| tombstone.lifecycle_id);
+        store
+            .persist(&persisted)
+            .expect("persist fixture negative Serve lifecycle");
+        lifecycle_id
     }
 
     fn authenticated_serve_request(
@@ -15805,6 +17898,71 @@ pub(super) mod tests {
             Ok::<(), &'static str>(())
         })
         .expect("authenticate certified Serve fixture")
+    }
+
+    fn production_authenticated_serve_request(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+        requester_key: &KeyPair,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        phase: wire::GlobalPhase,
+        signer_indices: &[usize],
+    ) -> (AuthenticatedCertifiedBodyRequest, Vec<Vec<u8>>) {
+        let mut request =
+            authenticated_serve_request(context, requester_key, round, subject, phase)
+                .request()
+                .clone();
+        let signers = signer_indices
+            .iter()
+            .map(|index| u32::try_from(*index).expect("fixture signer index fits u32"))
+            .collect::<Vec<_>>();
+        let vote_preimage = wire::Vote {
+            round: request.certificate.round,
+            proposal_round: request.certificate.proposal_round,
+            phase: request.certificate.phase,
+            subject: request.certificate.subject,
+            execution_commitment: request.certificate.execution_commitment,
+            signer: *signers
+                .first()
+                .expect("production Serve fixture has a signer"),
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let signature_shares = signer_indices
+            .iter()
+            .map(|index| {
+                Signature::new(keys[*index].private_key(), &vote_preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let signature_share_refs = signature_shares
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        request.certificate.signers = signers;
+        request.certificate.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_share_refs)
+                .expect("aggregate production Serve fixture certificate");
+        request.signature =
+            Signature::new(requester_key.private_key(), &request.signature_preimage())
+                .payload()
+                .to_vec();
+        let requester = request.requester.clone();
+        let authenticated =
+            authenticate_certified_body_request(context, request, &requester, |_, _| {
+                Ok::<(), &'static str>(())
+            })
+            .expect("authenticate production Serve fixture after certificate replacement");
+        let validator_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator proof of possession")
+            })
+            .collect();
+        (authenticated, validator_pops)
     }
 
     fn certified_serve_response(
@@ -15971,13 +18129,17 @@ pub(super) mod tests {
         request: &wire::CertifiedBodyRequest,
         authenticated_via: PeerId,
     ) -> InboundBlockMessage {
-        InboundBlockMessage::from_transport(
+        let mut routes = NetworkReplyRouteTestFixture::new(authenticated_via.clone());
+        let route = routes.mint_via(request.requester.clone(), authenticated_via.clone());
+        InboundBlockMessage::try_from_transport_with_reply_route(
             BlockMessage::V2(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
             )),
             request.requester.clone(),
             authenticated_via,
+            route,
         )
+        .expect("fixture exact Serve route matches requester and authenticated hop")
     }
 
     fn certified_serve_inbound_with_route(
@@ -16508,6 +18670,7 @@ pub(super) mod tests {
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"v2-worker-test-context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 8,
@@ -16563,13 +18726,7 @@ pub(super) mod tests {
             last_status: None,
             fatal_reason: None,
             output_guard: ConsensusOutputGuard::isolated(),
-            leader_wire_ingress: Arc::new(FairV2Ingress::new(
-                1,
-                1024 * 1024,
-                1024 * 1024,
-                0,
-                0,
-            )),
+            leader_wire_ingress: Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0)),
             clean_teardown: true,
         };
         (service, keys)
@@ -16982,2385 +19139,7 @@ pub(super) mod tests {
         signature.message_digest
     }
 
-    #[test]
-    fn responder_control_retry_coalesces_alternate_return_route() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        for message in [
-            certified_sidecar_close_ack(&service.local_peer, &peer, 17),
-            certified_sidecar_generation_hint(&service.local_peer, &peer, 18),
-        ] {
-            let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-            let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-            let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-            let first_route = routes.mint_via(peer.clone(), hub_a);
-            let second_route = routes.mint_via(peer.clone(), hub_b);
-            let fanout_for = |message: CertifiedMergeSidecarMessage, route: NetworkReplyRoute| {
-                let message_hash = HashOf::new(&message);
-                PendingExactFanout::claimed_with_reply_routes(
-                    vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(message))],
-                    peer.clone(),
-                    NetworkReplyRoutes::try_from_route(route)
-                        .expect("worker retry keeps one actor-owned return route"),
-                    ExactOutputRolloverClaim::CertifiedSidecarControl {
-                        scope: service.exact_output_scope(),
-                        target: peer.clone(),
-                        message_hash,
-                    },
-                )
-                .expect("valid actor-owned worker sidecar-control rollover claim")
-                .expect("one exact actor-owned worker sidecar-control fanout")
-            };
-            let first = fanout_for(message.clone(), first_route);
-            let second = fanout_for(message, second_route);
-            let ExactTargetRoute::Reply(first_route) = &first.targets[0].route else {
-                unreachable!("first responder control keeps an exact reply route")
-            };
-            let ExactTargetRoute::Reply(second_route) = &second.targets[0].route else {
-                unreachable!("second responder control keeps an exact reply route")
-            };
-            assert!(!first_route.same_delivery(second_route));
-            let first_route = first_route.clone();
-            let second_route = second_route.clone();
-            let mut pending = PendingExactOutput::new(4, 1, 2, std::slice::from_ref(&peer))
-                .expect("two independent control sources fit the bounded corridor");
-
-            assert_eq!(
-                pending.enqueue_owned_reply_transfer(first),
-                Ok(ExactFanoutOwnership::Owned)
-            );
-            assert_eq!(
-                pending.enqueue_owned_reply_transfer(second),
-                Ok(ExactFanoutOwnership::Owned),
-                "exact retry must merge before same-target responder-control dedup"
-            );
-            assert_eq!(pending.fanouts.len(), 1);
-            assert_eq!(pending.fanouts[0].targets.len(), 2);
-            assert!(pending.fanouts[0].targets.iter().any(
-                |target| matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&first_route))
-            ));
-            assert!(pending.fanouts[0].targets.iter().any(
-                |target| matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&second_route))
-            ));
-            let control_reservation = ExactTargetReservation {
-                semantic_target: peer.clone(),
-                class: ExactOutputClass::Lane,
-                kind: ExactTargetReservationKind::SidecarReplyControl,
-            };
-            assert_eq!(
-                pending.reservation_owner_counts.get(&control_reservation),
-                Some(&1),
-                "alternate exact routes share one fanout-level control credit"
-            );
-            assert_eq!(pending.ownership_units, 1);
-            assert_eq!(pending.shared_ownership_units, 0);
-
-            let mut admitted_routes = Vec::new();
-            assert_eq!(
-                pending.drive_with_budget(1, |_post, ticket, route| {
-                    assert!(ticket.is_none());
-                    let ExactTargetRoute::Reply(route) = route else {
-                        panic!("responder control changed route kind")
-                    };
-                    admitted_routes.push(route.clone());
-                    Ok(())
-                }),
-                Ok(ExactOutputDriveOutcome::BudgetExhausted {
-                    closest_backpressure_rank: None,
-                })
-            );
-            assert_eq!(pending.ownership_units, 1);
-            assert_eq!(
-                pending.reservation_owner_counts.get(&control_reservation),
-                Some(&1),
-                "the fanout credit survives until its last exact route flushes"
-            );
-            assert_eq!(
-                pending.drive_with_budget(1, |_post, ticket, route| {
-                    assert!(ticket.is_none());
-                    let ExactTargetRoute::Reply(route) = route else {
-                        panic!("responder control changed route kind")
-                    };
-                    admitted_routes.push(route.clone());
-                    Ok(())
-                }),
-                Ok(ExactOutputDriveOutcome::Drained)
-            );
-            assert_eq!(admitted_routes.len(), 2);
-            assert!(
-                admitted_routes
-                    .iter()
-                    .any(|route| route.same_delivery(&first_route))
-            );
-            assert!(
-                admitted_routes
-                    .iter()
-                    .any(|route| route.same_delivery(&second_route))
-            );
-            assert_eq!(pending.ownership_units, 0);
-            assert_eq!(pending.shared_ownership_units, 0);
-            assert!(
-                !pending
-                    .reservation_owner_counts
-                    .contains_key(&control_reservation)
-            );
-        }
-    }
-
-    #[test]
-    fn responder_control_uses_ordinary_reply_flush_ownership() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let expected_route = routes.mint_via(peer.clone(), hub_a);
-        let fanout = certified_sidecar_reply_control_fanout(
-            service.exact_output_scope(),
-            &peer,
-            certified_sidecar_close_ack(&service.local_peer, &peer, 19),
-            NetworkReplyRoutes::try_from_route(expected_route.clone())
-                .expect("CloseAck keeps one exact reply route"),
-        );
-        let mut pending = PendingExactOutput::new(2, 1, 1, std::slice::from_ref(&peer))
-            .expect("one exact responder control fits");
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(fanout),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        let mut flush_control = None;
-        let _ = pending
-            .drive_with_budget_ack(1, |post, _ticket, route, timeout_attempt| {
-                let ExactTargetRoute::Reply(route) = route else {
-                    unreachable!("CloseAck must not use topology output")
-                };
-                assert!(route.same_delivery(&expected_route));
-                assert!(matches!(
-                    &post.data,
-                    NetworkMessage::CertifiedMergeSidecar(message)
-                        if matches!(
-                            message.as_ref(),
-                            CertifiedMergeSidecarMessage::CloseAck(_)
-                        )
-                ));
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply_at_attempt(
-                    &post,
-                    route,
-                    timeout_attempt,
-                );
-                flush_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            })
-            .expect("retain the ordinary CloseAck writer-flush receipt");
-        assert!(pending.admitted_sidecar_chunks.is_empty());
-        assert!(
-            pending.fanouts[0].targets[0]
-                .pending_flush
-                .as_ref()
-                .is_some_and(|flush| flush.sidecar_admission.is_none()),
-            "responder controls must never enter chunk-admission ownership"
-        );
-        assert!(
-            routes.mark_reply_unwritable_while_delivery_active(&expected_route),
-            "the old route may drain while its admitted write still owns a flush"
-        );
-        let alternate_route = routes.mint_via(peer.clone(), hub_b);
-        let alternate_message = certified_sidecar_generation_hint(&service.local_peer, &peer, 21);
-        let alternate = certified_sidecar_reply_control_fanout(
-            service.exact_output_scope(),
-            &peer,
-            alternate_message.clone(),
-            NetworkReplyRoutes::try_from_route(alternate_route.clone())
-                .expect("the alternate source attempt has one live reply route"),
-        );
-        assert_eq!(
-            pending.can_enqueue(&alternate),
-            Ok(false),
-            "a pending old writer flush cannot be replaced"
-        );
-        assert_eq!(
-            pending.enqueue(alternate),
-            Ok(ExactFanoutOwnership::SourceRetained)
-        );
-        assert!(pending.fanouts[0].targets[0].pending_flush.is_some());
-        assert!(matches!(
-            pending.fanouts[0].messages.as_slice(),
-            [NetworkMessage::CertifiedMergeSidecar(message)]
-                if matches!(message.as_ref(), CertifiedMergeSidecarMessage::CloseAck(_))
-        ));
-        assert!(
-            flush_control
-                .as_mut()
-                .expect("the exact reply minted one writer receipt")
-                .flush()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("consume the ordinary CloseAck writer flush");
-        assert!(pending.fanouts.is_empty());
-        assert!(pending.admitted_sidecar_chunks.is_empty());
-
-        let alternate = certified_sidecar_reply_control_fanout(
-            service.exact_output_scope(),
-            &peer,
-            alternate_message,
-            NetworkReplyRoutes::try_from_route(alternate_route)
-                .expect("the retained alternate control keeps its exact route"),
-        );
-        assert_eq!(pending.can_enqueue(&alternate), Ok(true));
-        assert_eq!(pending.enqueue(alternate), Ok(ExactFanoutOwnership::Owned));
-    }
-
-    #[test]
-    fn generation_hint_uses_ordinary_reply_flush_ownership() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let fanout = certified_sidecar_control_fanout(
-            service.exact_output_scope(),
-            &peer,
-            certified_sidecar_generation_hint(&service.local_peer, &peer, 20),
-        );
-        let ExactTargetRoute::Reply(expected_route) = &fanout.targets[0].route else {
-            unreachable!("GenerationHint keeps an exact reply route")
-        };
-        let expected_route = expected_route.clone();
-        let mut pending = PendingExactOutput::new(2, 1, 1, std::slice::from_ref(&peer))
-            .expect("one exact GenerationHint fits");
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(fanout),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-
-        let mut flush_control = None;
-        let _ = pending
-            .drive_with_budget_ack(1, |post, _ticket, route, timeout_attempt| {
-                let ExactTargetRoute::Reply(route) = route else {
-                    unreachable!("GenerationHint must not use topology output")
-                };
-                assert!(route.same_delivery(&expected_route));
-                assert!(matches!(
-                    &post.data,
-                    NetworkMessage::CertifiedMergeSidecar(message)
-                        if matches!(
-                            message.as_ref(),
-                            CertifiedMergeSidecarMessage::GenerationHint(_)
-                        )
-                ));
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply_at_attempt(
-                    &post,
-                    route,
-                    timeout_attempt,
-                );
-                flush_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            })
-            .expect("retain the ordinary GenerationHint writer-flush receipt");
-        assert!(pending.admitted_sidecar_chunks.is_empty());
-        assert!(
-            pending.fanouts[0].targets[0]
-                .pending_flush
-                .as_ref()
-                .is_some_and(|flush| flush.sidecar_admission.is_none()),
-            "GenerationHint must not enter chunk-admission ownership"
-        );
-        assert!(
-            flush_control
-                .as_mut()
-                .expect("the exact reply minted one writer receipt")
-                .flush()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("consume the ordinary GenerationHint writer flush");
-        assert!(pending.fanouts.is_empty());
-        assert!(pending.admitted_sidecar_chunks.is_empty());
-    }
-
-    #[test]
-    fn writable_responder_control_source_retains_one_distinct_pending_control() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let scope = service.exact_output_scope();
-        let mut controls = Vec::new();
-        for ordinal in 0..32 {
-            controls.push(certified_sidecar_generation_hint(
-                &service.local_peer,
-                &peer,
-                ordinal,
-            ));
-            controls.push(certified_sidecar_close_ack(
-                &service.local_peer,
-                &peer,
-                ordinal,
-            ));
-        }
-        let retry_after_drain = controls
-            .get(1)
-            .expect("the adversarial control set contains a close acknowledgement")
-            .clone();
-        let first_control_hash = HashOf::new(
-            controls
-                .first()
-                .expect("the adversarial control set is non-empty"),
-        );
-        let mut pending = PendingExactOutput::new(controls.len(), 1, 1, &[])
-            .expect("the unconstrained test corridor could retain every control");
-
-        for (index, message) in controls.into_iter().enumerate() {
-            match &message {
-                CertifiedMergeSidecarMessage::GenerationHint(hint) => {
-                    assert_eq!(hint.hint_id, hint.canonical_hint_id());
-                }
-                CertifiedMergeSidecarMessage::CloseAck(ack) => {
-                    assert_eq!(ack.close_id, ack.canonical_close_id());
-                }
-                _ => unreachable!("the adversarial set contains only responder controls"),
-            }
-            let fanout = certified_sidecar_control_fanout(scope, &peer, message);
-            assert!(
-                fanout.is_retryable_certified_sidecar_responder_control_fanout(),
-                "only stateless responder controls exercise the bounded-control rule"
-            );
-            let expected_available = index == 0;
-            assert_eq!(pending.can_enqueue(&fanout), Ok(expected_available));
-            assert_eq!(
-                pending.enqueue(fanout),
-                Ok(if expected_available {
-                    ExactFanoutOwnership::Owned
-                } else {
-                    ExactFanoutOwnership::SourceRetained
-                }),
-                "one distinct pending control remains owned by upstream lane work"
-            );
-            assert_eq!(
-                pending.fanouts.len(),
-                1,
-                "distinct canonical responder controls must not accumulate"
-            );
-            let retained = pending
-                .fanouts
-                .front()
-                .expect("one responder control remains retained");
-            let [NetworkMessage::CertifiedMergeSidecar(retained)] = retained.messages.as_slice()
-            else {
-                unreachable!("retained worker control keeps its exact sidecar message")
-            };
-            assert_eq!(
-                HashOf::new(retained.as_ref()),
-                first_control_hash,
-                "a writable incumbent is never displaced by a distinct control"
-            );
-        }
-
-        let mut drained = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(ticket.is_none());
-                assert!(matches!(route, ExactTargetRoute::Reply(_)));
-                let NetworkMessage::CertifiedMergeSidecar(message) = post.data else {
-                    unreachable!("drained worker control keeps its exact sidecar message")
-                };
-                drained.push(HashOf::new(message.as_ref()));
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert_eq!(drained, vec![first_control_hash]);
-        assert!(pending.fanouts.is_empty());
-
-        let retried_hash = HashOf::new(&retry_after_drain);
-        let retried = certified_sidecar_control_fanout(scope, &peer, retry_after_drain);
-        assert_eq!(pending.can_enqueue(&retried), Ok(true));
-        assert_eq!(pending.enqueue(retried), Ok(ExactFanoutOwnership::Owned));
-        assert_eq!(pending.fanouts.len(), 1);
-        let [NetworkMessage::CertifiedMergeSidecar(retained)] =
-            pending.fanouts[0].messages.as_slice()
-        else {
-            unreachable!("retried worker control keeps its exact sidecar message")
-        };
-        assert_eq!(
-            HashOf::new(retained.as_ref()),
-            retried_hash,
-            "a retried control may enter once the prior control drains"
-        );
-        assert!(matches!(
-            retained.as_ref(),
-            CertifiedMergeSidecarMessage::CloseAck(_)
-        ));
-    }
-
-    #[test]
-    fn ordinary_exact_output_does_not_suppress_retryable_sidecar_control_ownership() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let scope = service.exact_output_scope();
-        let progress = merge_share_message(b"progress before retryable sidecar control");
-        let progress_hash = HashOf::new(&progress);
-        let mut pending = PendingExactOutput::new(8, 1, 1, &[]).expect("eight exact fanouts fit");
-        assert_eq!(
-            pending.enqueue(
-                PendingExactFanout::new(vec![progress], vec![peer.clone()])
-                    .expect("one exact progress fanout"),
-            ),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-
-        let control = certified_sidecar_control_fanout(
-            scope,
-            &peer,
-            certified_sidecar_generation_hint(&service.local_peer, &peer, 91),
-        );
-        assert_eq!(pending.can_enqueue(&control), Ok(true));
-        assert_eq!(
-            pending.enqueue(control),
-            Ok(ExactFanoutOwnership::Owned),
-            "ordinary output for the target does not own its responder-control occurrence"
-        );
-        assert_eq!(
-            pending.fanouts.len(),
-            2,
-            "one ordinary fanout and one retryable responder control coexist"
-        );
-        assert_eq!(pending.fanouts[0].message_hashes, vec![progress_hash]);
-        assert!(pending.fanouts[1].is_retryable_certified_sidecar_responder_control_fanout());
-
-        let (request_message, chunk_message) =
-            certified_sidecar_outputs(&service.local_peer, &peer);
-        let CertifiedMergeSidecarMessage::Request(request) = &request_message else {
-            unreachable!("worker sidecar fixture returns one request")
-        };
-        let request_transfer = CertifiedSidecarTransferIdentity::from_request(request);
-        let request_hash = HashOf::new(request);
-        let request_service_generation = request.service_generation;
-        let request_stream_epoch = request.stream_epoch;
-        let request_semantic_sequence = request.semantic_sequence;
-        let request_fanout = PendingExactFanout::claimed(
-            vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(
-                request_message,
-            ))],
-            vec![peer.clone()],
-            ExactOutputRolloverClaim::CertifiedSidecarRequest {
-                scope,
-                target: peer.clone(),
-                transfer: request_transfer,
-                request_hash,
-            },
-        )
-        .expect("valid exact sidecar request claim")
-        .expect("one exact sidecar request fanout");
-
-        let mut close = crate::merge_sidecar::CertifiedMergeSidecarCloseV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation: request_service_generation,
-            stream_epoch: request_stream_epoch,
-            closed_through: request_semantic_sequence.get(),
-            close_id: Hash::prehashed([0; Hash::LENGTH]),
-            requester: service.local_peer.clone(),
-            responder: peer.clone(),
-        };
-        close.close_id = close.canonical_close_id();
-        let close_message = CertifiedMergeSidecarMessage::Close(close);
-        let close_fanout = certified_sidecar_control_fanout(scope, &peer, close_message);
-
-        let CertifiedMergeSidecarMessage::Chunk(chunk) = &chunk_message else {
-            unreachable!("worker sidecar fixture returns one response chunk")
-        };
-        let chunk_transfer = CertifiedSidecarTransferIdentity::from_chunk(chunk);
-        let chunk_index = chunk.chunk_index;
-        let chunk_count = chunk.chunk_count;
-        let response_hash = HashOf::new(chunk);
-        let chunk_fanout = PendingExactFanout::claimed(
-            vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(
-                chunk_message,
-            ))],
-            vec![peer.clone()],
-            ExactOutputRolloverClaim::CertifiedSidecarChunk {
-                scope,
-                target: peer.clone(),
-                transfer: chunk_transfer,
-                chunk_index,
-                chunk_count,
-                response_hash,
-            },
-        )
-        .expect("valid exact sidecar chunk claim")
-        .expect("one exact sidecar chunk fanout");
-
-        for fanout in [request_fanout, close_fanout, chunk_fanout] {
-            assert!(
-                !fanout.is_retryable_certified_sidecar_responder_control_fanout(),
-                "request, close, and chunk output retain ordinary exact ownership"
-            );
-            assert_eq!(pending.can_enqueue(&fanout), Ok(true));
-            assert_eq!(pending.enqueue(fanout), Ok(ExactFanoutOwnership::Owned));
-        }
-        assert_eq!(
-            pending.fanouts.len(),
-            5,
-            "request, close, and chunk fanouts still enter behind existing progress"
-        );
-
-        let later_progress = PendingExactFanout::new(
-            vec![merge_share_message(
-                b"non-control progress after retryable sidecar control",
-            )],
-            vec![peer],
-        )
-        .expect("one later exact progress fanout");
-        assert_eq!(pending.can_enqueue(&later_progress), Ok(true));
-        assert_eq!(
-            pending.enqueue(later_progress),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        assert_eq!(
-            pending.fanouts.len(),
-            6,
-            "the bounded-control exception must not change non-control admission"
-        );
-    }
-
-    #[test]
-    fn unrelated_parked_reply_does_not_suppress_responsive_target_control() {
-        let (service, _) = fixture();
-        let peer_a = service.context.roster[1].validator.clone();
-        let peer_b = service.context.roster[2].validator.clone();
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 1);
-        let route_a = routes.mint_via(peer_a.clone(), hub_a);
-        let reply_routes =
-            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("one live reply route");
-        let parked_candidate = PendingExactFanout::new_with_reply_routes(
-            vec![merge_share_message(
-                b"unrelated reply parked before peer B control",
-            )],
-            peer_a.clone(),
-            reply_routes,
-        )
-        .expect("one unrelated exact reply fanout");
-        let frozen = vec![peer_a.clone(), peer_b.clone()];
-        let mut pending = PendingExactOutput::new(3, 1, 1, &frozen)
-            .expect("ordinary and sidecar progress reservations for each frozen target");
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(parked_candidate),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        assert!(routes.retire(&route_a));
-        assert_eq!(
-            pending.drive_with(|_post, _ticket, _route| {
-                panic!("the retired reply route must park before actor admission")
-            }),
-            Ok(None)
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert!(pending.fanouts[0].targets[0].parked);
-
-        let control_b = certified_sidecar_control_fanout(
-            service.exact_output_scope(),
-            &peer_b,
-            certified_sidecar_generation_hint(&service.local_peer, &peer_b, 201),
-        );
-        assert_eq!(
-            pending.can_enqueue(&control_b),
-            Ok(true),
-            "peer B keeps its independent frozen target reservation"
-        );
-        assert_eq!(pending.enqueue(control_b), Ok(ExactFanoutOwnership::Owned));
-        assert_eq!(
-            pending.fanouts.len(),
-            2,
-            "peer A's parked reply cannot impersonate peer B's control owner"
-        );
-
-        let mut admitted = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(ticket.is_none());
-                assert!(matches!(route, ExactTargetRoute::Reply(_)));
-                admitted.push(post.peer_id);
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert_eq!(admitted, vec![peer_b]);
-        assert_eq!(
-            pending.fanouts.len(),
-            1,
-            "only the unrelated parked reply remains"
-        );
-        assert!(pending.fanouts[0].targets[0].parked);
-    }
-
-    #[test]
-    fn generation_hint_uses_exact_reply_ownership_without_topology_fallback() {
-        let (service, _) = fixture();
-        let target = service.context.roster[1].validator.clone();
-        let control = certified_sidecar_control_fanout(
-            service.exact_output_scope(),
-            &target,
-            certified_sidecar_generation_hint(&service.local_peer, &target, 251),
-        );
-        assert_eq!(
-            control.certified_sidecar_topology_progress_target(),
-            None,
-            "GenerationHint must not consume topology-progress ownership"
-        );
-        assert!(
-            matches!(
-                control.targets.as_slice(),
-                [PendingExactTarget {
-                    route: ExactTargetRoute::Reply(_),
-                    ..
-                }]
-            ),
-            "GenerationHint must retain an exact reply route"
-        );
-        assert!(control.is_retryable_certified_sidecar_responder_control_fanout());
-
-        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
-            .expect("one exact generation Hint fits its responder-control reservation");
-        assert_eq!(pending.can_enqueue(&control), Ok(true));
-        assert_eq!(pending.enqueue(control), Ok(ExactFanoutOwnership::Owned));
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 0);
-        assert_eq!(
-            pending
-                .reservation_owner_counts
-                .get(&ExactTargetReservation {
-                    semantic_target: target.clone(),
-                    class: ExactOutputClass::Lane,
-                    kind: ExactTargetReservationKind::SidecarReplyControl,
-                }),
-            Some(&1)
-        );
-        assert!(
-            !pending
-                .reservation_owner_counts
-                .contains_key(&ExactTargetReservation {
-                    semantic_target: target.clone(),
-                    class: ExactOutputClass::Lane,
-                    kind: ExactTargetReservationKind::SidecarTopologyProgress,
-                })
-        );
-
-        let blocker = PeerId::new(KeyPair::random().public_key().clone());
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
-        let parked_route = routes.mint_via(target.clone(), hub);
-        let parked_reply = PendingExactFanout::new_with_reply_routes(
-            vec![merge_share_message(
-                b"same-target reliable reply before exact GenerationHint",
-            )],
-            target.clone(),
-            NetworkReplyRoutes::try_from_route(parked_route.clone())
-                .expect("one live same-target reply route"),
-        )
-        .expect("one same-target reliable reply");
-        let mut saturated = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
-            .expect("one shared unit plus frozen responder-control reservation");
-        assert_eq!(
-            saturated.enqueue_owned_reply_transfer(parked_reply),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        assert!(routes.retire(&parked_route));
-        assert_eq!(
-            saturated.drive_with(|_post, _ticket, _route| {
-                panic!("the retired same-target reliable reply must park")
-            }),
-            Ok(None)
-        );
-        assert_eq!(
-            saturated.enqueue(
-                PendingExactFanout::new(
-                    vec![merge_share_message(
-                        b"non-frozen blocker saturates shared ownership before Hint",
-                    )],
-                    vec![blocker],
-                )
-                .expect("one non-frozen blocking fanout"),
-            ),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        assert_eq!(saturated.shared_ownership_units, 1);
-        let hint = certified_sidecar_control_fanout(
-            service.exact_output_scope(),
-            &target,
-            certified_sidecar_generation_hint(&service.local_peer, &target, 252),
-        );
-        assert_eq!(
-            saturated.can_enqueue(&hint),
-            Ok(true),
-            "parked reliable output and a full shared pool cannot starve the exact Hint"
-        );
-        assert_eq!(saturated.enqueue(hint), Ok(ExactFanoutOwnership::Owned));
-        assert_eq!(saturated.ownership_units, 3);
-        assert_eq!(saturated.shared_ownership_units, 1);
-        assert_eq!(
-            saturated
-                .reservation_owner_counts
-                .get(&ExactTargetReservation {
-                    semantic_target: target,
-                    class: ExactOutputClass::Lane,
-                    kind: ExactTargetReservationKind::SidecarReplyControl,
-                }),
-            Some(&1)
-        );
-    }
-
-    #[test]
-    fn stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger() {
-        let (service, _) = fixture();
-        let target = service.context.roster[1].validator.clone();
-        let scope = service.exact_output_scope();
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_d = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 4);
-        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
-            .expect("one frozen responder-control slot plus one shared unit");
-
-        let unwritable_route = routes.mint_via(target.clone(), hub_a);
-        let unwritable = certified_sidecar_reply_control_fanout(
-            scope,
-            &target,
-            certified_sidecar_generation_hint(&service.local_peer, &target, 281),
-            NetworkReplyRoutes::try_from_route(unwritable_route.clone())
-                .expect("one exact old responder-control route"),
-        );
-        assert_eq!(pending.enqueue(unwritable), Ok(ExactFanoutOwnership::Owned));
-        let old_fifo_id = pending.fanouts[0]
-            .fifo_id
-            .expect("the old responder control owns FIFO age");
-        let old_source = ExactTargetRoute::Reply(unwritable_route.clone())
-            .source(&target, ExactOutputClass::Lane);
-        let writable_route = routes.mint_via(target.clone(), hub_b);
-        let older_same_source = PendingExactFanout::new_with_reply_routes(
-            vec![merge_share_message(
-                b"older exact reply sharing the replacement source",
-            )],
-            target.clone(),
-            NetworkReplyRoutes::try_from_route(writable_route.clone())
-                .expect("one older exact reply source"),
-        )
-        .expect("one older same-source exact reply");
-        let older_message_hash = older_same_source.message_hashes[0];
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(older_same_source),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        let older_fifo_id = pending.fanouts[1]
-            .fifo_id
-            .expect("the older same-source reply owns FIFO age");
-        let replacement_source =
-            ExactTargetRoute::Reply(writable_route.clone()).source(&target, ExactOutputClass::Lane);
-        assert_eq!(
-            pending.source_fifo_owners.get(&replacement_source),
-            Some(&BTreeSet::from([older_fifo_id]))
-        );
-        assert!(
-            routes.mark_reply_unwritable_while_delivery_active(&unwritable_route),
-            "the old source enters its monotonic draining interval"
-        );
-        assert!(!pending.fanouts[0].targets[0].parked);
-
-        let writable = certified_sidecar_reply_control_fanout(
-            scope,
-            &target,
-            certified_sidecar_close_ack(&service.local_peer, &target, 282),
-            NetworkReplyRoutes::try_from_route(writable_route.clone())
-                .expect("one exact replacement responder-control route"),
-        );
-        let replacement_message_hash = writable.message_hashes[0];
-        assert_eq!(
-            pending.can_enqueue(&writable),
-            Ok(true),
-            "writability is checked before the worker has a chance to park the old route"
-        );
-        pending.next_fanout_fifo_id = ExactFanoutFifoId::MAX;
-        assert_eq!(pending.enqueue(writable), Ok(ExactFanoutOwnership::Owned));
-        assert_eq!(pending.fanouts.len(), 2);
-        let replacement = pending
-            .fanouts
-            .back()
-            .expect("the replacement rejoins at the worker tail");
-        let replacement_fifo_id = replacement
-            .fifo_id
-            .expect("the replacement owns fresh FIFO age");
-        assert_ne!(
-            replacement_fifo_id, old_fifo_id,
-            "a different authenticated source must not inherit old source age"
-        );
-        assert!(matches!(
-            replacement.messages.as_slice(),
-            [NetworkMessage::CertifiedMergeSidecar(message)]
-                if matches!(message.as_ref(), CertifiedMergeSidecarMessage::CloseAck(_))
-        ));
-        assert!(matches!(
-            replacement.targets.as_slice(),
-            [PendingExactTarget {
-                route: ExactTargetRoute::Reply(route),
-                parked: false,
-                ..
-            }] if route.same_delivery(&writable_route)
-        ));
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 0);
-        assert!(!pending.source_fifo_owners.contains_key(&old_source));
-        assert_eq!(
-            pending.source_fifo_owners.get(&replacement_source),
-            Some(&BTreeSet::from([older_fifo_id, replacement_fifo_id])),
-            "forced rebase and replacement must keep older exact-source work first"
-        );
-        pending.next_fanout_fifo_id = ExactFanoutFifoId::MAX;
-        pending
-            .rebase_source_fifo()
-            .expect("a later FIFO exhaustion preserves replacement age");
-        let older_rebased_fifo_id = pending.fanouts[0]
-            .fifo_id
-            .expect("the older reply keeps a rebased FIFO identity");
-        let replacement_rebased_fifo_id = pending.fanouts[1]
-            .fifo_id
-            .expect("the replacement keeps a rebased FIFO identity");
-        assert_eq!(
-            pending.source_fifo_owners.get(&replacement_source),
-            Some(&BTreeSet::from([
-                older_rebased_fifo_id,
-                replacement_rebased_fifo_id,
-            ])),
-            "later rebasing must preserve the tail-rejoined replacement's age"
-        );
-
-        let mut admitted_hashes = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(ticket.is_none());
-                assert_eq!(post.peer_id, target);
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route)
-                        if route.same_delivery(&writable_route)
-                ));
-                admitted_hashes.push(HashOf::new(&post.data));
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert_eq!(
-            admitted_hashes,
-            vec![older_message_hash, replacement_message_hash],
-            "fresh replacement work must not inherit the retired occurrence's queue age"
-        );
-
-        let retired_route = routes.mint_via(target.clone(), hub_c);
-        let retired = certified_sidecar_reply_control_fanout(
-            scope,
-            &target,
-            certified_sidecar_generation_hint(&service.local_peer, &target, 283),
-            NetworkReplyRoutes::try_from_route(retired_route.clone())
-                .expect("one exact route which will retire"),
-        );
-        assert_eq!(pending.enqueue(retired), Ok(ExactFanoutOwnership::Owned));
-        assert!(routes.retire(&retired_route));
-        assert_eq!(
-            pending.drive_with(|_post, _ticket, _route| {
-                panic!("a retired responder-control route must park before admission")
-            }),
-            Ok(None)
-        );
-        assert!(pending.fanouts[0].targets[0].parked);
-
-        let live_after_park = routes.mint_via(target.clone(), hub_d);
-        let replacement = certified_sidecar_reply_control_fanout(
-            scope,
-            &target,
-            certified_sidecar_close_ack(&service.local_peer, &target, 284),
-            NetworkReplyRoutes::try_from_route(live_after_park.clone())
-                .expect("one exact live route after parking"),
-        );
-        assert_eq!(
-            pending.enqueue(replacement),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert!(matches!(
-            pending.fanouts[0].targets.as_slice(),
-            [PendingExactTarget {
-                route: ExactTargetRoute::Reply(route),
-                parked: false,
-                ..
-            }] if route.same_delivery(&live_after_park)
-        ));
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 0);
-    }
-
-    #[test]
-    fn responder_control_replacement_cancels_ticket_after_index_commit() {
-        let (service, _) = fixture();
-        let target = service.context.roster[1].validator.clone();
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let old_route = routes.mint_via(target.clone(), hub_a);
-        let old = certified_sidecar_reply_control_fanout(
-            service.exact_output_scope(),
-            &target,
-            certified_sidecar_generation_hint(&service.local_peer, &target, 285),
-            NetworkReplyRoutes::try_from_route(old_route.clone())
-                .expect("one old responder-control route"),
-        );
-        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
-            .expect("one dedicated responder-control slot");
-        assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
-
-        let old_post = Post {
-            data: pending.fanouts[0].messages[0].clone(),
-            peer_id: target.clone(),
-            priority: Priority::High,
-        };
-        let (ticket_fixture, ticket) =
-            NetworkActorAdmissionTicketTestFixture::for_reply(&old_post, &old_route);
-        assert_eq!(ticket.rank(), Some(1));
-        assert_eq!(ticket_fixture.waiter_count(), 1);
-        assert_eq!(ticket_fixture.ticket_drop_cancellations(), 0);
-        pending.fanouts[0].targets[0].current = Some(old_post);
-        pending.fanouts[0].targets[0].ticket = Some(ticket);
-        assert!(routes.mark_reply_unwritable_while_delivery_active(&old_route));
-
-        let replacement_route = routes.mint_via(target.clone(), hub_b);
-        let replacement = certified_sidecar_reply_control_fanout(
-            service.exact_output_scope(),
-            &target,
-            certified_sidecar_close_ack(&service.local_peer, &target, 286),
-            NetworkReplyRoutes::try_from_route(replacement_route.clone())
-                .expect("one replacement responder-control route"),
-        );
-        let replacement_hash = replacement.message_hashes[0];
-        let replacement_source = ExactTargetRoute::Reply(replacement_route.clone())
-            .source(&target, ExactOutputClass::Lane);
-        let retired = pending
-            .commit_stranded_responder_control_replacement(replacement)
-            .expect("replacement planning must remain valid")
-            .expect("the unwritable responder control must be replaced");
-
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.next_fanout_index, 0);
-        assert_eq!(pending.fanouts[0].message_hashes, vec![replacement_hash]);
-        let replacement_fifo_id = pending.fanouts[0]
-            .fifo_id
-            .expect("replacement owns a committed FIFO identity");
-        assert_eq!(
-            pending.next_fanout_fifo_id,
-            replacement_fifo_id
-                .checked_add(1)
-                .expect("bounded replacement FIFO identity must advance")
-        );
-        assert_eq!(
-            pending.source_fifo_owners,
-            BTreeMap::from([(replacement_source, BTreeSet::from([replacement_fifo_id]))])
-        );
-        assert_eq!(pending.target_is_global_head(0, 0), Ok(true));
-        assert_eq!(
-            pending.reservation_owner_counts,
-            BTreeMap::from([(
-                ExactTargetReservation {
-                    semantic_target: target,
-                    class: ExactOutputClass::Lane,
-                    kind: ExactTargetReservationKind::SidecarReplyControl,
-                },
-                1,
-            )])
-        );
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 0);
-        assert!(pending.fanouts[0].targets[0].ticket.is_none());
-        assert_eq!(
-            retired.targets[0]
-                .ticket
-                .as_ref()
-                .and_then(NetworkActorAdmissionTicket::rank),
-            Some(1),
-            "the retired external owner remains live after every worker index commits"
-        );
-        assert_eq!(ticket_fixture.waiter_count(), 1);
-        assert_eq!(
-            ticket_fixture.ticket_drop_cancellations(),
-            0,
-            "the commit phase cannot trigger actor cancellation"
-        );
-
-        drop(retired);
-        assert_eq!(ticket_fixture.waiter_count(), 0);
-        assert_eq!(
-            ticket_fixture.ticket_drop_cancellations(),
-            1,
-            "terminal destruction cancels the exact actor waiter once"
-        );
-        drop(pending);
-        assert_eq!(
-            ticket_fixture.ticket_drop_cancellations(),
-            1,
-            "the replacement owns no alias of the retired actor ticket"
-        );
-    }
-
-    #[test]
-    fn multi_route_stranded_responder_control_uses_one_dedicated_reservation() {
-        let (service, _) = fixture();
-        let target = service.context.roster[1].validator.clone();
-        let blocker = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let old_route = routes.mint_via(target.clone(), hub_a);
-        let old = certified_sidecar_reply_control_fanout(
-            service.exact_output_scope(),
-            &target,
-            certified_sidecar_close_ack(&service.local_peer, &target, 285),
-            NetworkReplyRoutes::try_from_route(old_route.clone())
-                .expect("one old responder-control route"),
-        );
-        let mut pending = PendingExactOutput::new(1, 1, 2, std::slice::from_ref(&target))
-            .expect("one shared unit and two candidate reply sources");
-        assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
-        assert_eq!(
-            pending.enqueue(
-                PendingExactFanout::new(
-                    vec![merge_share_message(
-                        b"shared-unit blocker for fail-atomic responder replacement",
-                    )],
-                    vec![blocker],
-                )
-                .expect("one non-frozen blocker"),
-            ),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        let old_post = Post {
-            data: pending.fanouts[0].messages[0].clone(),
-            peer_id: target.clone(),
-            priority: Priority::High,
-        };
-        pending.fanouts[0].targets[0].current = Some(old_post);
-        assert!(
-            routes.mark_reply_unwritable_while_delivery_active(&old_route),
-            "the actor-returned old source becomes unwritable"
-        );
-
-        let route_b = routes.mint_via(target.clone(), hub_b);
-        let route_c = routes.mint_via(target.clone(), hub_c);
-        let mut candidate_routes = NetworkReplyRoutes::try_from_route(route_b)
-            .expect("the replacement starts with one source");
-        candidate_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_c)
-                    .expect("the replacement has a second source"),
-            )
-            .expect("two live replacement sources fit their route bound");
-        let candidate = certified_sidecar_reply_control_fanout(
-            service.exact_output_scope(),
-            &target,
-            certified_sidecar_generation_hint(&service.local_peer, &target, 286),
-            candidate_routes,
-        );
-
-        assert_eq!(
-            pending.can_enqueue(&candidate),
-            Ok(true),
-            "alternate authenticated routes must not borrow shared capacity"
-        );
-        assert_eq!(pending.enqueue(candidate), Ok(ExactFanoutOwnership::Owned));
-        assert_eq!(pending.fanouts.len(), 2);
-        let replacement = pending
-            .fanouts
-            .back()
-            .expect("the multi-route replacement rejoins at the tail");
-        assert_eq!(replacement.targets.len(), 2);
-        assert_eq!(
-            pending
-                .reservation_owner_counts
-                .get(&ExactTargetReservation {
-                    semantic_target: target,
-                    class: ExactOutputClass::Lane,
-                    kind: ExactTargetReservationKind::SidecarReplyControl,
-                }),
-            Some(&1),
-            "all exact routes share the target's one responder-control credit"
-        );
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(
-            pending.shared_ownership_units, 1,
-            "only the unrelated non-frozen blocker consumes shared capacity"
-        );
-    }
-
-    #[test]
-    fn stranded_responder_control_fifo_collision_is_fail_atomic() {
-        let (service, _) = fixture();
-        let target = service.context.roster[1].validator.clone();
-        let blocker = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 1);
-        let old_route = routes.mint_via(target.clone(), hub_a);
-        let old = certified_sidecar_reply_control_fanout(
-            service.exact_output_scope(),
-            &target,
-            certified_sidecar_close_ack(&service.local_peer, &target, 287),
-            NetworkReplyRoutes::try_from_route(old_route.clone())
-                .expect("one old responder-control route"),
-        );
-        let mut pending = PendingExactOutput::new(2, 1, 1, std::slice::from_ref(&target))
-            .expect("one control plus one independent blocker");
-        assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
-        assert_eq!(
-            pending.enqueue(
-                PendingExactFanout::new(
-                    vec![merge_share_message(
-                        b"live FIFO owner colliding with the replacement sequence",
-                    )],
-                    vec![blocker],
-                )
-                .expect("one independent FIFO owner"),
-            ),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        let old_post = Post {
-            data: pending.fanouts[0].messages[0].clone(),
-            peer_id: target.clone(),
-            priority: Priority::High,
-        };
-        pending.fanouts[0].targets[0].current = Some(old_post);
-        assert!(routes.mark_reply_unwritable_while_delivery_active(&old_route));
-
-        let replacement_route = routes.mint_via(target.clone(), hub_b);
-        let candidate = certified_sidecar_reply_control_fanout(
-            service.exact_output_scope(),
-            &target,
-            certified_sidecar_generation_hint(&service.local_peer, &target, 288),
-            NetworkReplyRoutes::try_from_route(replacement_route)
-                .expect("one live replacement route"),
-        );
-        let colliding_fifo_id = pending.fanouts[1]
-            .fifo_id
-            .expect("the independent blocker owns one FIFO identity");
-        pending.next_fanout_fifo_id = colliding_fifo_id;
-        let fanout_fifo_before = pending
-            .fanouts
-            .iter()
-            .map(|fanout| fanout.fifo_id)
-            .collect::<Vec<_>>();
-        let next_fanout_index_before = pending.next_fanout_index;
-        let source_owners_before = pending.source_fifo_owners.clone();
-        let reservations_before = pending.reservation_owner_counts.clone();
-        let ownership_units_before = pending.ownership_units;
-        let shared_units_before = pending.shared_ownership_units;
-        let retained_hash_before = pending.fanouts[0].message_hashes.clone();
-
-        assert_eq!(pending.can_enqueue(&candidate), Ok(true));
-        assert_eq!(
-            pending.enqueue(candidate),
-            Err("Sumeragi v2 responder-control replacement reused a live FIFO identity".to_owned())
-        );
-        assert_eq!(pending.fanouts.len(), 2);
-        assert_eq!(
-            pending
-                .fanouts
-                .iter()
-                .map(|fanout| fanout.fifo_id)
-                .collect::<Vec<_>>(),
-            fanout_fifo_before
-        );
-        assert_eq!(pending.next_fanout_fifo_id, colliding_fifo_id);
-        assert_eq!(pending.next_fanout_index, next_fanout_index_before);
-        assert_eq!(pending.source_fifo_owners, source_owners_before);
-        assert_eq!(pending.reservation_owner_counts, reservations_before);
-        assert_eq!(pending.ownership_units, ownership_units_before);
-        assert_eq!(pending.shared_ownership_units, shared_units_before);
-        assert_eq!(pending.fanouts[0].message_hashes, retained_hash_before);
-        assert!(
-            pending.fanouts[0].targets[0].current.is_some(),
-            "failed planning preserves the actor-returned old attempt"
-        );
-    }
-
-    #[test]
-    fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close() {
-        let (service, _) = fixture();
-        let target = service.context.roster[1].validator.clone();
-        let scope = service.exact_output_scope();
-        let cases = [
-            (
-                "request",
-                certified_sidecar_request_fanout(scope, &service.local_peer, &target),
-                certified_sidecar_request_fanout(scope, &service.local_peer, &target),
-            ),
-            (
-                "close",
-                certified_sidecar_control_fanout(
-                    scope,
-                    &target,
-                    certified_sidecar_close(&service.local_peer, &target, 271),
-                ),
-                certified_sidecar_control_fanout(
-                    scope,
-                    &target,
-                    certified_sidecar_close(&service.local_peer, &target, 272),
-                ),
-            ),
-        ];
-
-        for (kind, progress, later_progress) in cases {
-            assert_eq!(
-                progress.certified_sidecar_topology_progress_target(),
-                Some(&target)
-            );
-            assert!(
-                !progress.is_retryable_certified_sidecar_responder_control_fanout(),
-                "{kind} must remain non-droppable"
-            );
-
-            let blocker = PeerId::new(KeyPair::random().public_key().clone());
-            let hub = PeerId::new(KeyPair::random().public_key().clone());
-            let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
-            let parked_route = routes.mint_via(target.clone(), hub);
-            let parked_reply = PendingExactFanout::new_with_reply_routes(
-                vec![merge_share_message(
-                    b"same target parked reply before non-droppable sidecar progress",
-                )],
-                target.clone(),
-                NetworkReplyRoutes::try_from_route(parked_route.clone())
-                    .expect("one live same-target reply route"),
-            )
-            .expect("one same-target reply fanout");
-            let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
-                .expect("one shared unit plus frozen topology-progress reservation");
-            assert_eq!(
-                pending.enqueue_owned_reply_transfer(parked_reply),
-                Ok(ExactFanoutOwnership::Owned)
-            );
-            assert!(routes.retire(&parked_route));
-            assert_eq!(
-                pending.drive_with(|_post, _ticket, _route| {
-                    panic!("the retired same-target reply must park before actor admission")
-                }),
-                Ok(None)
-            );
-            assert!(pending.fanouts[0].targets[0].parked);
-
-            assert_eq!(
-                pending.enqueue(
-                    PendingExactFanout::new(
-                        vec![merge_share_message(
-                            b"non-frozen blocker saturates shared ownership",
-                        )],
-                        vec![blocker.clone()],
-                    )
-                    .expect("one non-frozen blocking fanout"),
-                ),
-                Ok(ExactFanoutOwnership::Owned)
-            );
-            assert_eq!(pending.shared_ownership_units, 1);
-
-            assert_eq!(
-                pending.can_enqueue(&progress),
-                Ok(true),
-                "{kind} keeps the frozen target's independent topology-progress credit"
-            );
-            assert_eq!(pending.enqueue(progress), Ok(ExactFanoutOwnership::Owned));
-            assert_eq!(pending.ownership_units, 3);
-            assert_eq!(pending.shared_ownership_units, 1);
-            let progress_reservation = ExactTargetReservation {
-                semantic_target: target.clone(),
-                class: ExactOutputClass::Lane,
-                kind: ExactTargetReservationKind::SidecarTopologyProgress,
-            };
-            assert_eq!(
-                pending.reservation_owner_counts.get(&progress_reservation),
-                Some(&1)
-            );
-
-            assert_eq!(
-                pending.can_enqueue(&later_progress),
-                Ok(false),
-                "a second non-droppable {kind} must not bypass the saturated shared bound"
-            );
-            assert_eq!(
-                pending.enqueue(later_progress),
-                Ok(ExactFanoutOwnership::SourceRetained),
-                "a second non-droppable {kind} remains owned by lane work"
-            );
-            assert_eq!(pending.fanouts.len(), 3);
-            assert_eq!(
-                pending.reservation_owner_counts.get(&progress_reservation),
-                Some(&1)
-            );
-
-            let mut progress_admitted = false;
-            assert_eq!(
-                pending.drive_with(|post, ticket, route| {
-                    assert!(ticket.is_none());
-                    assert!(matches!(route, ExactTargetRoute::Topology));
-                    if post.peer_id == blocker {
-                        return Err(NetworkActorAdmissionError::Backpressured {
-                            message: post,
-                            ticket,
-                            rank: 37,
-                        });
-                    }
-                    assert_eq!(post.peer_id, target);
-                    let NetworkMessage::CertifiedMergeSidecar(message) = &post.data else {
-                        panic!("sidecar progress changed message kind")
-                    };
-                    match (kind, message.as_ref()) {
-                        ("request", CertifiedMergeSidecarMessage::Request(_))
-                        | ("close", CertifiedMergeSidecarMessage::Close(_)) => {}
-                        other => panic!("sidecar progress changed variant: {other:?}"),
-                    }
-                    progress_admitted = true;
-                    Ok(())
-                }),
-                Ok(Some(37)),
-                "shared-pool backpressure must not suppress the responsive target's {kind}"
-            );
-            assert!(progress_admitted);
-            assert_eq!(pending.fanouts.len(), 2);
-            assert_eq!(pending.ownership_units, 2);
-            assert_eq!(pending.shared_ownership_units, 1);
-            assert!(
-                !pending
-                    .reservation_owner_counts
-                    .contains_key(&progress_reservation)
-            );
-
-            let retried_progress = match kind {
-                "request" => certified_sidecar_request_fanout(scope, &service.local_peer, &target),
-                "close" => certified_sidecar_control_fanout(
-                    scope,
-                    &target,
-                    certified_sidecar_close(&service.local_peer, &target, 273),
-                ),
-                _ => unreachable!("the bounded topology-progress cases are exhaustive"),
-            };
-            assert_eq!(
-                pending.can_enqueue(&retried_progress),
-                Ok(true),
-                "the retained {kind} can retry as soon as the topology-progress credit drains"
-            );
-            assert_eq!(
-                pending.enqueue(retried_progress),
-                Ok(ExactFanoutOwnership::Owned)
-            );
-            assert_eq!(pending.ownership_units, 3);
-            assert_eq!(pending.shared_ownership_units, 1);
-            assert_eq!(
-                pending.reservation_owner_counts.get(&progress_reservation),
-                Some(&1)
-            );
-        }
-    }
-
-    #[test]
-    fn non_frozen_responder_controls_remain_strictly_shared_bounded() {
-        let (service, _) = fixture();
-        let first = PeerId::new(KeyPair::random().public_key().clone());
-        let second = PeerId::new(KeyPair::random().public_key().clone());
-        let scope = service.exact_output_scope();
-        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one shared ownership unit");
-
-        let first_control = certified_sidecar_control_fanout(
-            scope,
-            &first,
-            certified_sidecar_generation_hint(&service.local_peer, &first, 261),
-        );
-        assert_eq!(
-            pending.enqueue(first_control),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-
-        let second_control = certified_sidecar_control_fanout(
-            scope,
-            &second,
-            certified_sidecar_close_ack(&service.local_peer, &second, 262),
-        );
-        assert_eq!(pending.can_enqueue(&second_control), Ok(false));
-        assert_eq!(
-            pending.enqueue(second_control),
-            Ok(ExactFanoutOwnership::SourceRetained),
-            "arbitrary non-frozen targets receive no unbounded control side channel"
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-    }
-
-    #[test]
-    fn retryable_sidecar_controls_are_bounded_and_fair_per_semantic_target() {
-        let (service, _) = fixture();
-        let peer_a = service.context.roster[1].validator.clone();
-        let peer_b = service.context.roster[2].validator.clone();
-        let scope = service.exact_output_scope();
-        let frozen = vec![peer_a.clone(), peer_b.clone()];
-        let mut pending = PendingExactOutput::new(3, 1, 1, &frozen)
-            .expect("reliable and responder-control reservations for each frozen target");
-
-        for (peer, message) in [
-            (
-                peer_a.clone(),
-                certified_sidecar_generation_hint(&service.local_peer, &peer_a, 301),
-            ),
-            (
-                peer_b.clone(),
-                certified_sidecar_close_ack(&service.local_peer, &peer_b, 301),
-            ),
-        ] {
-            let fanout = certified_sidecar_control_fanout(scope, &peer, message);
-            assert_eq!(pending.can_enqueue(&fanout), Ok(true));
-            assert_eq!(pending.enqueue(fanout), Ok(ExactFanoutOwnership::Owned));
-        }
-        assert_eq!(pending.fanouts.len(), 2);
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(
-            pending.shared_ownership_units, 0,
-            "one control for each frozen target consumes only its reply-control reservation"
-        );
-
-        for ordinal in 302..334 {
-            for (peer, message) in [
-                (
-                    peer_a.clone(),
-                    certified_sidecar_close_ack(&service.local_peer, &peer_a, ordinal),
-                ),
-                (
-                    peer_b.clone(),
-                    certified_sidecar_generation_hint(&service.local_peer, &peer_b, ordinal),
-                ),
-            ] {
-                let duplicate = certified_sidecar_control_fanout(scope, &peer, message);
-                assert_eq!(
-                    pending.can_enqueue(&duplicate),
-                    Ok(false),
-                    "a distinct same-target control remains source-owned"
-                );
-                assert_eq!(
-                    pending.enqueue(duplicate),
-                    Ok(ExactFanoutOwnership::SourceRetained)
-                );
-            }
-            assert_eq!(
-                pending.fanouts.len(),
-                2,
-                "each semantic target retains at most one retryable control"
-            );
-            assert_eq!(pending.ownership_units, 2);
-            assert_eq!(pending.shared_ownership_units, 0);
-        }
-        let retained_targets = pending
-            .fanouts
-            .iter()
-            .filter_map(PendingExactFanout::retryable_certified_sidecar_responder_control_target)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            retained_targets,
-            BTreeSet::from([peer_a.clone(), peer_b.clone()])
-        );
-
-        let mut peer_b_admitted = false;
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(ticket.is_none());
-                if post.peer_id == peer_a {
-                    assert!(matches!(route, ExactTargetRoute::Reply(_)));
-                    return Err(NetworkActorAdmissionError::Backpressured {
-                        message: post,
-                        ticket,
-                        rank: 29,
-                    });
-                }
-                assert_eq!(post.peer_id, peer_b);
-                assert!(matches!(route, ExactTargetRoute::Reply(_)));
-                peer_b_admitted = true;
-                Ok(())
-            }),
-            Ok(Some(29)),
-            "peer A backpressure must not suppress peer B's independent control"
-        );
-        assert!(peer_b_admitted);
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(
-            pending.fanouts[0].retryable_certified_sidecar_responder_control_target(),
-            Some(&peer_a)
-        );
-
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(ticket.is_none());
-                assert!(matches!(route, ExactTargetRoute::Reply(_)));
-                assert_eq!(post.peer_id, peer_a);
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert!(pending.fanouts.is_empty());
-        assert_eq!(pending.ownership_units, 0);
-        assert_eq!(pending.shared_ownership_units, 0);
-    }
-
-    #[test]
-    fn reliable_flush_projection_preserves_exact_stream_epoch() {
-        let (service, _) = fixture();
-        let requester = service.context.roster[1].validator.clone();
-        let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &requester);
-        let CertifiedMergeSidecarMessage::Chunk(mut chunk) = chunk_message else {
-            unreachable!("sidecar fixture returns one response chunk")
-        };
-        let stream_epoch = CertifiedMergeSidecarStreamEpochV1(
-            NonZeroU64::new(73).expect("non-zero adversarial stream epoch"),
-        );
-        let service_generation = crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1(
-            NonZeroU64::new(29).expect("non-zero adversarial service generation"),
-        );
-        chunk.service_generation = service_generation;
-        chunk.stream_epoch = stream_epoch;
-        chunk.semantic_sequence = CertifiedMergeSidecarSemanticSequenceV1(
-            NonZeroU64::new(11).expect("adversarial semantic sequence is non-zero"),
-        );
-
-        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
-        let route = routes.mint(requester);
-        let (_control, _ack, admission) = certified_sidecar_flush_fixture(&chunk, &route);
-        let projection = reliable_flush_trace_projection(
-            &admission,
-            NetworkReplyFlushAckStatus::Flushed,
-            1,
-            0,
-            0,
-            1,
-            2,
-        )
-        .expect("project an exact successful sidecar flush");
-
-        assert_eq!(projection.service_generation, service_generation.get());
-        assert_eq!(projection.stream_epoch, stream_epoch.get());
-        assert_eq!(projection.semantic_sequence, 11);
-        assert!(
-            production_reliable_flush_trace_refines_outbound_ownership_kernel(projection),
-            "the live worker projection must retain the non-zero stream incarnation"
-        );
-        let timed_out = reliable_flush_trace_projection(
-            &admission,
-            NetworkReplyFlushAckStatus::TimedOut,
-            1,
-            0,
-            0,
-            0,
-            2,
-        )
-        .expect("project a non-advancing sidecar writer timeout");
-        assert_eq!(timed_out.status, 3);
-        assert_eq!(
-            timed_out.message_cursor_after, timed_out.message_cursor_before,
-            "TimedOut must reuse the existing non-advancing ownership transition"
-        );
-        assert!(
-            production_reliable_flush_trace_refines_outbound_ownership_kernel(timed_out),
-            "TimedOut must refine the same no-progress kernel edge as Closed"
-        );
-        let mut absent_epoch = projection;
-        absent_epoch.stream_epoch = 0;
-        assert!(
-            !production_reliable_flush_trace_refines_outbound_ownership_kernel(absent_epoch),
-            "the refinement kernel must reject a projection that erases stream incarnation"
-        );
-        let mut absent_generation = projection;
-        absent_generation.service_generation = 0;
-        assert!(
-            !production_reliable_flush_trace_refines_outbound_ownership_kernel(absent_generation),
-            "the refinement kernel must reject an erased responder generation"
-        );
-        let mut absent_sequence = projection;
-        absent_sequence.semantic_sequence = 0;
-        assert!(
-            !production_reliable_flush_trace_refines_outbound_ownership_kernel(absent_sequence),
-            "the refinement kernel must reject an erased semantic occurrence"
-        );
-    }
-
-    #[test]
-    fn certified_sidecar_transfer_identity_binds_stream_epoch() {
-        let (service, _) = fixture();
-        let responder = service.context.roster[1].validator.clone();
-        let (request_message, chunk_message) =
-            certified_sidecar_outputs(&service.local_peer, &responder);
-        let CertifiedMergeSidecarMessage::Request(request) = request_message else {
-            unreachable!("sidecar fixture returns one request")
-        };
-        let CertifiedMergeSidecarMessage::Chunk(chunk) = chunk_message else {
-            unreachable!("sidecar fixture returns one response chunk")
-        };
-        let successor_epoch = CertifiedMergeSidecarStreamEpochV1(
-            NonZeroU64::new(
-                request
-                    .stream_epoch
-                    .get()
-                    .checked_add(1)
-                    .expect("fixture stream epoch has a successor"),
-            )
-            .expect("successor stream epoch is non-zero"),
-        );
-        let mut successor_request = request.clone();
-        successor_request.stream_epoch = successor_epoch;
-        let mut successor_chunk = chunk.clone();
-        successor_chunk.stream_epoch = successor_epoch;
-
-        assert_ne!(
-            CertifiedSidecarTransferIdentity::from_request(&request),
-            CertifiedSidecarTransferIdentity::from_request(&successor_request)
-        );
-        assert_ne!(
-            CertifiedSidecarTransferIdentity::from_chunk(&chunk),
-            CertifiedSidecarTransferIdentity::from_chunk(&successor_chunk)
-        );
-        let mut successor_generation_request = request.clone();
-        successor_generation_request.service_generation =
-            crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1(
-                NonZeroU64::new(
-                    request
-                        .service_generation
-                        .get()
-                        .checked_add(1)
-                        .expect("fixture service generation has a successor"),
-                )
-                .expect("successor service generation is non-zero"),
-            );
-        let mut successor_generation_chunk = chunk.clone();
-        successor_generation_chunk.service_generation =
-            successor_generation_request.service_generation;
-        assert_ne!(
-            CertifiedSidecarTransferIdentity::from_request(&request),
-            CertifiedSidecarTransferIdentity::from_request(&successor_generation_request)
-        );
-        assert_ne!(
-            CertifiedSidecarTransferIdentity::from_chunk(&chunk),
-            CertifiedSidecarTransferIdentity::from_chunk(&successor_generation_chunk)
-        );
-    }
-
-    #[test]
-    fn certified_sidecar_close_cancels_only_the_exact_stream_epoch() {
-        let (service, _) = fixture();
-        let requester = service.context.roster[1].validator.clone();
-        let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &requester);
-        let CertifiedMergeSidecarMessage::Chunk(old_chunk) = chunk_message else {
-            unreachable!("sidecar fixture returns one response chunk")
-        };
-        let old_epoch = old_chunk.stream_epoch;
-        let mut successor_chunk = old_chunk.clone();
-        successor_chunk.stream_epoch = CertifiedMergeSidecarStreamEpochV1(
-            NonZeroU64::new(
-                old_epoch
-                    .get()
-                    .checked_add(1)
-                    .expect("fixture stream epoch has a successor"),
-            )
-            .expect("successor stream epoch is non-zero"),
-        );
-
-        let sidecar_fanout = |chunk: &CertifiedMergeSidecarChunkV1| {
-            let rollover_claim = ExactOutputRolloverClaim::CertifiedSidecarChunk {
-                scope: service.exact_output_scope(),
-                target: requester.clone(),
-                transfer: CertifiedSidecarTransferIdentity::from_chunk(chunk),
-                chunk_index: chunk.chunk_index,
-                chunk_count: chunk.chunk_count,
-                response_hash: HashOf::new(chunk),
-            };
-            PendingExactFanout::claimed(
-                vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(
-                    CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
-                ))],
-                vec![requester.clone()],
-                rollover_claim,
-            )
-            .expect("valid epoch-bound sidecar rollover claim")
-            .expect("one exact epoch-bound sidecar fanout")
-        };
-
-        let mut pending =
-            PendingExactOutput::new(4, 1, 1, &[]).expect("two fanouts and admissions fit");
-        for chunk in [&old_chunk, &successor_chunk] {
-            assert_eq!(
-                pending.enqueue(sidecar_fanout(chunk)),
-                Ok(ExactFanoutOwnership::Owned)
-            );
-        }
-
-        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
-        let route = routes.mint(requester.clone());
-        for chunk in [&old_chunk, &successor_chunk] {
-            let (_control, _ack, admission) = certified_sidecar_flush_fixture(chunk, &route);
-            pending.admitted_sidecar_chunks.push_back(admission);
-        }
-        assert_eq!(pending.fanouts.len(), 2);
-        assert_eq!(pending.admitted_sidecar_chunks.len(), 2);
-
-        assert_eq!(
-            pending
-                .close_certified_sidecar_prefix(&CertifiedMergeSidecarClosedPrefix {
-                    requester,
-                    service_generation: old_chunk.service_generation,
-                    stream_epoch: old_epoch,
-                    closed_through: old_chunk.semantic_sequence.get(),
-                })
-                .expect("close only the terminated stream incarnation"),
-            1
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-        assert_eq!(pending.source_fifo_owners.len(), 1);
-        assert!(matches!(
-            &pending
-                .fanouts
-                .front()
-                .expect("successor stream fanout remains")
-                .rollover_claim,
-            ExactOutputRolloverClaim::CertifiedSidecarChunk { transfer, .. }
-                if transfer.stream_epoch == successor_chunk.stream_epoch
-        ));
-        assert_eq!(
-            pending
-                .admitted_sidecar_chunks
-                .front()
-                .expect("successor stream admission remains")
-                .projection()
-                .stream_epoch,
-            successor_chunk.stream_epoch
-        );
-    }
-
-    #[test]
-    fn generation_close_dominance_cancels_queued_and_admitted_sidecar_occurrences() {
-        let (service, _) = fixture();
-        let requester = service.context.roster[1].validator.clone();
-        let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &requester);
-        let CertifiedMergeSidecarMessage::Chunk(base_chunk) = chunk_message else {
-            unreachable!("sidecar fixture returns one response chunk")
-        };
-        let generation = |value| {
-            crate::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1(
-                NonZeroU64::new(value).expect("test generation is non-zero"),
-            )
-        };
-        let epoch = |value| {
-            CertifiedMergeSidecarStreamEpochV1(
-                NonZeroU64::new(value).expect("test stream epoch is non-zero"),
-            )
-        };
-        let occurrence = |service_generation, stream_epoch, semantic_sequence| {
-            let mut chunk = base_chunk.clone();
-            chunk.service_generation = generation(service_generation);
-            chunk.stream_epoch = epoch(stream_epoch);
-            chunk.semantic_sequence = CertifiedMergeSidecarSemanticSequenceV1(
-                NonZeroU64::new(semantic_sequence)
-                    .expect("generation-close semantic sequence is non-zero"),
-            );
-            chunk.request_id = Hash::new_from_chunks(&[
-                b"worker generation-close occurrence",
-                &service_generation.to_le_bytes(),
-                &stream_epoch.to_le_bytes(),
-                &semantic_sequence.to_le_bytes(),
-            ]);
-            chunk
-        };
-        let occurrences = [
-            occurrence(1, 1, 1),
-            occurrence(1, 2, 2),
-            occurrence(2, 2, 1),
-            occurrence(2, 3, 4),
-            occurrence(2, 3, 5),
-        ];
-        let sidecar_fanout = |chunk: &CertifiedMergeSidecarChunkV1| {
-            PendingExactFanout::claimed(
-                vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(
-                    CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
-                ))],
-                vec![requester.clone()],
-                ExactOutputRolloverClaim::CertifiedSidecarChunk {
-                    scope: service.exact_output_scope(),
-                    target: requester.clone(),
-                    transfer: CertifiedSidecarTransferIdentity::from_chunk(chunk),
-                    chunk_index: chunk.chunk_index,
-                    chunk_count: chunk.chunk_count,
-                    response_hash: HashOf::new(chunk),
-                },
-            )
-            .expect("valid generation-bound sidecar rollover claim")
-            .expect("one exact generation-bound sidecar fanout")
-        };
-
-        let mut pending =
-            PendingExactOutput::new(occurrences.len(), 1, 1, &[]).expect("bounded occurrences fit");
-        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
-        let route = routes.mint(requester.clone());
-        for chunk in &occurrences {
-            assert_eq!(
-                pending.enqueue(sidecar_fanout(chunk)),
-                Ok(ExactFanoutOwnership::Owned)
-            );
-            let (_control, _ack, admission) = certified_sidecar_flush_fixture(chunk, &route);
-            pending.admitted_sidecar_chunks.push_back(admission);
-        }
-        assert_eq!(pending.fanouts.len(), occurrences.len());
-        assert_eq!(pending.admitted_sidecar_chunks.len(), occurrences.len());
-
-        assert_eq!(
-            pending
-                .close_certified_sidecar_prefix(&CertifiedMergeSidecarClosedPrefix {
-                    requester,
-                    service_generation: generation(2),
-                    stream_epoch: epoch(3),
-                    closed_through: 4,
-                })
-                .expect("generation-wide close preserves only uncovered occurrences"),
-            4
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
-        assert_eq!(pending.sidecar_control_units(), 1);
-        assert_eq!(pending.ownership_units, 1);
-        let retained = pending
-            .admitted_sidecar_chunks
-            .front()
-            .expect("the same-generation successor remains")
-            .projection();
-        assert_eq!(retained.service_generation, generation(2));
-        assert_eq!(retained.stream_epoch, epoch(3));
-        assert_eq!(retained.semantic_sequence.get(), 5);
-    }
-
-    #[test]
-    fn actor_backpressure_retains_exact_final_lane_commit_qc_post() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("bounded output corridor");
-        pending
-            .enqueue(
-                PendingExactFanout::new(
-                    vec![lane_commit_qc_message(peer.clone())],
-                    vec![peer.clone()],
-                )
-                .expect("non-empty final QC fanout"),
-            )
-            .expect("retain final QC fanout");
-        assert_eq!(pending.source_fifo_owners.len(), 1);
-        assert_eq!(pending.fanouts[0].current_source_targets.len(), 1);
-
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                assert!(ticket.is_none());
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket: None,
-                    rank: 3,
-                })
-            }),
-            Ok(Some(3))
-        );
-        let retained = pending
-            .fanouts
-            .front()
-            .and_then(|fanout| fanout.targets[0].current.as_ref())
-            .expect("actor-returned final QC post remains owned");
-        assert_eq!(retained.peer_id, peer);
-        assert_eq!(retained.priority, Priority::High);
-        let NetworkMessage::SumeragiBlock(wire) = &retained.data else {
-            panic!("retained output must be a lane CommitQC");
-        };
-        let BlockMessage::LaneBlockQc(qc) = wire.as_message() else {
-            panic!("retained Sumeragi output must be a lane CommitQC");
-        };
-        assert_eq!(qc.body.phase, CertPhase::Commit);
-
-        let mut admitted = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                assert!(ticket.is_none());
-                admitted.push(post.peer_id);
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert_eq!(admitted, vec![peer]);
-        assert!(!pending.is_pending());
-        assert!(pending.source_fifo_owners.is_empty());
-    }
-
-    #[test]
-    fn actor_backpressure_retains_complete_merge_share_fanout() {
-        let (service, _) = fixture();
-        let peers = service.remote_voters();
-        let digest = Hash::new(b"outbound corridor merge share");
-        let message = merge_share_message(b"outbound corridor merge share");
-        let mut pending = PendingExactOutput::new(1, 1, peers.len(), &peers)
-            .expect("bounded merge output corridor with exact frozen targets");
-        pending
-            .enqueue(
-                PendingExactFanout::new(vec![message], peers.clone())
-                    .expect("non-empty merge fanout"),
-            )
-            .expect("retain merge fanout");
-
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                assert!(ticket.is_none());
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket: None,
-                    rank: 2,
-                })
-            }),
-            Ok(Some(2))
-        );
-        let retained = pending
-            .fanouts
-            .front()
-            .and_then(|fanout| fanout.targets[0].current.as_ref())
-            .expect("actor-returned merge post remains owned");
-        assert_eq!(retained.peer_id, peers[0]);
-        let NetworkMessage::MergeCommitteeSignature(signature) = &retained.data else {
-            panic!("retained output must be the merge share");
-        };
-        assert_eq!(signature.message_digest, digest);
-
-        let mut admitted = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                assert!(ticket.is_none());
-                let NetworkMessage::MergeCommitteeSignature(signature) = &post.data else {
-                    panic!("every fanout post must retain the merge share");
-                };
-                assert_eq!(signature.message_digest, digest);
-                admitted.push(post.peer_id);
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert_eq!(admitted, peers);
-        assert!(!pending.is_pending());
-    }
-
-    #[test]
-    fn same_tenure_updates_and_reconnect_preserve_current_item() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let second_digest = Hash::new(b"source update second");
-        let messages = vec![
-            merge_share_message(b"source update first"),
-            merge_share_message(b"source update second"),
-        ];
-        let response_class = exact_output_class(&messages[0]).expect("classified response");
-        assert!(
-            messages
-                .iter()
-                .all(|message| exact_output_class(message) == Ok(response_class))
-        );
-        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-        let prior_route = routes.mint(peer.clone());
-        let prior_source =
-            ExactTargetRoute::Reply(prior_route.clone()).source(&peer, response_class);
-        let mut predecessor = PendingExactFanout::new_with_routes(
-            messages.clone(),
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(prior_route.clone())],
-        )
-        .expect("two-message exact response");
-        let returned_second = predecessor.messages[1].clone();
-        let target = predecessor
-            .targets
-            .first_mut()
-            .expect("response has one target");
-        target.message_index = 1;
-        target.current = Some(Post {
-            data: returned_second.clone(),
-            peer_id: peer.clone(),
-            priority: Priority::High,
-        });
-        predecessor
-            .rebuild_current_source_targets()
-            .expect("manual predecessor cursor has a valid local FIFO index");
-
-        let mut pending = PendingExactOutput::new(1, 2, 1, &[]).expect("one-response corridor");
-        assert_eq!(
-            pending.enqueue(predecessor).expect("predecessor fits"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.ownership_units, 1);
-        let predecessor_fifo_id = pending.fanouts[0]
-            .fifo_id
-            .expect("retained predecessor has a stable FIFO identity");
-        assert_eq!(
-            pending
-                .source_fifo_owners
-                .get(&prior_source)
-                .and_then(BTreeSet::first),
-            Some(&predecessor_fifo_id)
-        );
-        let same_tenure_retry = PendingExactFanout::new_with_routes(
-            messages.clone(),
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(prior_route.clone())],
-        )
-        .expect("same-tenure exact retry");
-        assert_eq!(
-            pending
-                .enqueue(same_tenure_retry)
-                .expect("same-tenure retry coalesces"),
-            ExactFanoutOwnership::Owned
-        );
-        let retained = pending
-            .fanouts
-            .front()
-            .and_then(|fanout| fanout.targets.first())
-            .expect("predecessor remains queued");
-        assert_eq!(retained.message_index, 1);
-        assert_eq!(
-            retained
-                .current
-                .as_ref()
-                .map(|post| HashOf::new(&post.data)),
-            Some(HashOf::new(&returned_second))
-        );
-
-        let later_delivery = routes
-            .redeliver(&prior_route)
-            .expect("same-tenure later delivery");
-        let later_delivery_retry = PendingExactFanout::new_with_routes(
-            messages.clone(),
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(later_delivery.clone())],
-        )
-        .expect("later-delivery exact retry");
-        assert_eq!(
-            pending
-                .enqueue(later_delivery_retry)
-                .expect("later delivery updates only its source route"),
-            ExactFanoutOwnership::Owned
-        );
-        let retained = &pending.fanouts[0].targets[0];
-        assert_eq!(retained.message_index, 1);
-        assert_eq!(
-            retained
-                .current
-                .as_ref()
-                .map(|post| HashOf::new(&post.data)),
-            Some(HashOf::new(&returned_second))
-        );
-        assert!(matches!(
-            &retained.route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&later_delivery)
-        ));
-        let stale_retry = PendingExactFanout::new_with_routes(
-            messages.clone(),
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(prior_route.clone())],
-        )
-        .expect("out-of-order same-source retry");
-        assert!(
-            pending
-                .enqueue(stale_retry)
-                .expect_err("an older delivery must be rejected atomically")
-                .contains("stale capability")
-        );
-        let retained = &pending.fanouts[0].targets[0];
-        assert_eq!(retained.message_index, 1);
-        assert_eq!(
-            retained
-                .current
-                .as_ref()
-                .map(|post| HashOf::new(&post.data)),
-            Some(HashOf::new(&returned_second))
-        );
-        assert!(matches!(
-            &retained.route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&later_delivery)
-        ));
-
-        assert!(routes.retire(&prior_route));
-        assert_eq!(
-            pending.drive_with(|_post, _ticket, _route| {
-                panic!("inactive source must park before actor admission")
-            }),
-            Ok(None)
-        );
-        let parked = &pending.fanouts[0].targets[0];
-        assert!(parked.parked);
-        assert_eq!(parked.message_index, 1);
-        assert!(parked.current.is_none());
-        assert!(parked.ticket.is_none());
-        assert_eq!(pending.fanouts[0].fifo_id, Some(predecessor_fifo_id));
-        assert_eq!(pending.fanouts[0].message_hashes.len(), 2);
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-        assert_eq!(pending.reservation_owner_counts.values().sum::<usize>(), 1);
-        assert_eq!(
-            pending.source_fifo_owners.get(&prior_source),
-            Some(&BTreeSet::from([predecessor_fifo_id]))
-        );
-        let reconnected_route = routes.mint(peer.clone());
-        let reconnected_source =
-            ExactTargetRoute::Reply(reconnected_route.clone()).source(&peer, response_class);
-        let reconnect = PendingExactFanout::new_with_routes(
-            messages,
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(reconnected_route.clone())],
-        )
-        .expect("same-source reconnect retry");
-        assert_eq!(
-            pending
-                .enqueue(reconnect)
-                .expect("same-source reconnect updates its route"),
-            ExactFanoutOwnership::Owned
-        );
-        let resumed = pending
-            .fanouts
-            .front()
-            .and_then(|fanout| fanout.targets.first())
-            .expect("reconnected source remains queued");
-        assert_eq!(resumed.message_index, 1);
-        assert!(!resumed.parked);
-        assert!(resumed.current.is_none());
-        assert!(resumed.ticket.is_none());
-        assert!(matches!(
-            &resumed.route,
-            ExactTargetRoute::Reply(route) if route.same_tenure(&reconnected_route)
-        ));
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-        assert_eq!(pending.reservation_owner_counts.values().sum::<usize>(), 1);
-        assert_eq!(prior_source, reconnected_source);
-        assert_eq!(
-            pending
-                .source_fifo_owners
-                .get(&reconnected_source)
-                .and_then(BTreeSet::first),
-            Some(&predecessor_fifo_id),
-            "reconnect must retain the authenticated source's FIFO age"
-        );
-
-        let mut admitted = Vec::new();
-        let mut admit = |post: Post<NetworkMessage>,
-                         ticket: Option<NetworkActorAdmissionTicket>,
-                         route: &ExactTargetRoute| {
-            assert!(ticket.is_none());
-            assert!(matches!(
-                route,
-                ExactTargetRoute::Reply(route) if route.same_tenure(&reconnected_route)
-            ));
-            admitted.push(merge_share_digest(&post.data));
-            Ok(())
-        };
-        assert_eq!(pending.drive_with(&mut admit), Ok(None));
-        assert_eq!(admitted, vec![second_digest]);
-        assert_eq!(pending.ownership_units, 0);
-        assert_eq!(pending.shared_ownership_units, 0);
-        assert!(pending.source_fifo_owners.is_empty());
-
-        let replay_bulk = ProductionV2Services::preencode_v2_network_message(
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
-                manifest_hash(b"source reconnect bulk"),
-                0,
-                b"source reconnect bulk",
-                0,
-            ))),
-        )
-        .expect("encode reconnect bulk output");
-        assert_eq!(exact_output_class(&replay_bulk), Ok(ExactOutputClass::Bulk));
-        let replay_messages = vec![lane_commit_qc_message(peer.clone()), replay_bulk.clone()];
-        let mut replay_routes = NetworkReplyRouteTestFixture::new(peer.clone());
-        let replay_prior_route = replay_routes.mint(peer.clone());
-        let mut replay_predecessor = PendingExactFanout::new_with_routes(
-            replay_messages.clone(),
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(replay_prior_route.clone())],
-        )
-        .expect("mixed-class replay predecessor");
-        let replay_returned = replay_predecessor.messages[1].clone();
-        let replay_target = replay_predecessor
-            .targets
-            .first_mut()
-            .expect("mixed-class predecessor has one target");
-        replay_target.message_index = 1;
-        replay_target.current = Some(Post {
-            data: replay_returned,
-            peer_id: peer.clone(),
-            priority: Priority::High,
-        });
-        replay_predecessor
-            .rebuild_current_source_targets()
-            .expect("mixed-class predecessor cursor has a valid local FIFO index");
-
-        let mut replay_pending = PendingExactOutput::new(1, 2, 1, std::slice::from_ref(&peer))
-            .expect("one shared replay unit plus frozen target units");
-        assert_eq!(
-            replay_pending
-                .enqueue(replay_predecessor)
-                .expect("retain replay predecessor"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            replay_pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(peer.clone())],
-                        vec![peer.clone()],
-                    )
-                    .expect("newer lane owner"),
-                )
-                .expect("newer lane owner uses its frozen unit"),
-            ExactFanoutOwnership::Owned
-        );
-        let blocker_hub = PeerId::new(KeyPair::random().public_key().clone());
-        let blocker_route = replay_routes.mint_via(peer.clone(), blocker_hub);
-        assert_eq!(
-            replay_pending
-                .enqueue(
-                    PendingExactFanout::new_with_routes(
-                        vec![replay_bulk],
-                        vec![peer.clone()],
-                        vec![ExactTargetRoute::Reply(blocker_route.clone())],
-                    )
-                    .expect("duplicate bulk reservation blocker"),
-                )
-                .expect("bulk blocker consumes the only shared unit"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(replay_pending.shared_ownership_units, 1);
-        assert!(replay_routes.retire(&replay_prior_route));
-        let replay_reconnected_route = replay_routes.mint(peer.clone());
-        let source_index_before = replay_pending.source_fifo_owners.clone();
-        let ownership_before = replay_pending.reservation_owner_counts.clone();
-        assert_eq!(
-            replay_pending
-                .enqueue(
-                    PendingExactFanout::new_with_routes(
-                        replay_messages.clone(),
-                        vec![peer.clone()],
-                        vec![ExactTargetRoute::Reply(replay_reconnected_route.clone())],
-                    )
-                    .expect("same-source reconnect under full shared capacity"),
-                )
-                .expect("reconnect reuses its already-owned suffix reservation"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(replay_pending.source_fifo_owners, source_index_before);
-        assert_eq!(replay_pending.reservation_owner_counts, ownership_before);
-        let replay_target = &replay_pending.fanouts[0].targets[0];
-        assert_eq!(replay_target.message_index, 1);
-        assert!(replay_target.current.is_none());
-        assert!(matches!(
-            &replay_target.route,
-            ExactTargetRoute::Reply(route) if route.same_tenure(&replay_reconnected_route)
-        ));
-
-        assert!(replay_routes.retire(&blocker_route));
-        let blocker_index = replay_pending
-            .fanouts
-            .iter()
-            .position(|fanout| {
-                matches!(
-                    &fanout.targets[0].route,
-                    ExactTargetRoute::Reply(route) if route.same_tenure(&blocker_route)
-                )
-            })
-            .expect("retired capacity blocker remains queued");
-        replay_pending
-            .retire_inactive_reply_target(blocker_index, 0)
-            .expect("retiring the blocker parks its payload without erasing ownership");
-        assert!(replay_pending.fanouts[blocker_index].targets[0].parked);
-        assert_eq!(replay_pending.shared_ownership_units, 1);
-        assert!(replay_pending.source_fifo_owners.values().any(|owners| {
-            owners.contains(
-                &replay_pending.fanouts[blocker_index]
-                    .fifo_id
-                    .expect("parked fanout retains stable age"),
-            )
-        }));
-        assert_eq!(
-            replay_pending
-                .enqueue(
-                    PendingExactFanout::new_with_routes(
-                        replay_messages.clone(),
-                        vec![peer],
-                        vec![ExactTargetRoute::Reply(replay_reconnected_route.clone())],
-                    )
-                    .expect("exact reconnect retry under retained capacity"),
-                )
-                .expect("exact retry reuses the retained source reservation"),
-            ExactFanoutOwnership::Owned
-        );
-        let replay_target = &replay_pending.fanouts[0].targets[0];
-        assert_eq!(replay_target.message_index, 1);
-        assert!(replay_target.current.is_none());
-        assert!(matches!(
-            &replay_target.route,
-            ExactTargetRoute::Reply(route) if route.same_tenure(&replay_reconnected_route)
-        ));
-        assert_eq!(replay_pending.shared_ownership_units, 1);
-    }
-
-    #[test]
-    fn delayed_old_tenure_delivery_cannot_replace_newer_worker_reply_route() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let message = merge_share_message(b"worker rejects delayed superseded tenure");
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
-        let old_route = routes.mint_via(peer.clone(), hub.clone());
-        let current_route = routes.mint_via(peer.clone(), hub);
-        let delayed_old_route = routes
-            .redeliver(&old_route)
-            .expect("old tenure delivers after the replacement was observed");
-        assert_eq!(
-            delayed_old_route.source_update_from(&current_route),
-            Err(NetworkReplyRouteError::Stale)
-        );
-
-        let fanout = |route: &NetworkReplyRoute| {
-            PendingExactFanout::new_with_reply_routes(
-                vec![message.clone()],
-                peer.clone(),
-                NetworkReplyRoutes::try_from_route(route.clone()).expect("one live route"),
-            )
-            .expect("one ordinary reply fanout")
-        };
-        let mut pending =
-            PendingExactOutput::new(1, 1, 1, &[]).expect("one reply source attempt fits");
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(fanout(&current_route)),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        let ownership_before = pending.reservation_owner_counts.clone();
-        let source_fifo_before = pending.source_fifo_owners.clone();
-
-        let error = pending
-            .enqueue_owned_reply_transfer(fanout(&delayed_old_route))
-            .expect_err("superseded tenure cannot rebind the worker target");
-        assert!(error.contains("stale capability"));
-        let target = &pending.fanouts[0].targets[0];
-        assert_eq!(target.message_index, 0);
-        assert!(target.current.is_none());
-        assert!(matches!(
-            &target.route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&current_route)
-        ));
-        assert_eq!(pending.reservation_owner_counts, ownership_before);
-        assert_eq!(pending.source_fifo_owners, source_fifo_before);
-    }
+    include!("tests/v2_worker_reply_route_cases.rs");
 
     #[test]
     fn ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses() {
@@ -19758,2490 +19537,7 @@ pub(super) mod tests {
         assert_eq!(pending.ownership_units, 1);
     }
 
-    #[test]
-    fn closed_flush_racing_final_receiver_retirement_is_nonfatal() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let message = merge_share_message(b"closed reply retirement race");
-        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-        let route = routes.mint(peer.clone());
-        let mut pending =
-            PendingExactOutput::new(1, 1, 1, &[]).expect("one retirement-race reply attempt fits");
-        pending
-            .enqueue(
-                PendingExactFanout::new_with_routes(
-                    vec![message],
-                    vec![peer],
-                    vec![ExactTargetRoute::Reply(route.clone())],
-                )
-                .expect("one retirement-race reply fanout"),
-            )
-            .expect("retain the retirement-race reply");
-
-        let mut control = None;
-        pending
-            .drive_with_budget_ack(usize::MAX, |post, _ticket, attempted, _timeout_attempt| {
-                let ExactTargetRoute::Reply(attempted) = attempted else {
-                    panic!("retirement-race response changed route kind")
-                };
-                let (writer, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, attempted);
-                control = Some(writer);
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            })
-            .expect("queue the retirement-race writer flush");
-        assert!(routes.mark_reply_unwritable_while_delivery_active(&route));
-        assert!(control.as_mut().expect("writer controller").close());
-        assert!(routes.retire(&route));
-        pending
-            .poll_reply_flushes()
-            .expect("final receiver retirement after Closed must not fail stop output");
-
-        let target = &pending.fanouts[0].targets[0];
-        assert_eq!(target.message_index, 0);
-        assert!(target.current.is_none());
-        assert!(target.pending_flush.is_none());
-        assert!(target.parked);
-        assert!(!pending.source_fifo_owners.is_empty());
-    }
-
-    #[test]
-    fn unavailable_admission_racing_retirement_is_nonfatal() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let message = merge_share_message(b"unavailable reply retirement race");
-        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-        let route = routes.mint(peer.clone());
-        let mut pending =
-            PendingExactOutput::new(1, 1, 1, &[]).expect("one unavailable-race reply attempt fits");
-        pending
-            .enqueue(
-                PendingExactFanout::new_with_routes(
-                    vec![message],
-                    vec![peer],
-                    vec![ExactTargetRoute::Reply(route.clone())],
-                )
-                .expect("one unavailable-race reply fanout"),
-            )
-            .expect("retain the unavailable-race reply");
-
-        assert_eq!(
-            pending.drive_with_budget_ack(
-                usize::MAX,
-                |_post, _ticket, attempted, _timeout_attempt| {
-                    let ExactTargetRoute::Reply(attempted) = attempted else {
-                        panic!("unavailable-race response changed route kind")
-                    };
-                    assert!(attempted.same_delivery(&route));
-                    assert!(routes.mark_reply_unwritable_while_delivery_active(&route));
-                    assert!(routes.retire(&route));
-                    Ok(ExactOutputAttemptOutcome::Unavailable)
-                }
-            ),
-            Ok(ExactOutputDriveOutcome::Drained)
-        );
-        let target = &pending.fanouts[0].targets[0];
-        assert_eq!(target.message_index, 0);
-        assert!(target.current.is_none());
-        assert!(target.parked);
-        assert!(!pending.source_fifo_owners.is_empty());
-    }
-
-    #[test]
-    fn ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let messages = vec![
-            merge_share_message(b"ordinary late flush first"),
-            merge_share_message(b"ordinary late flush second"),
-        ];
-        let first_hash = HashOf::new(&messages[0]);
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
-        let old_route = routes.mint_via(peer.clone(), hub.clone());
-        let mut pending =
-            PendingExactOutput::new(1, 2, 1, &[]).expect("one two-message reply attempt fits");
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(
-                PendingExactFanout::new_with_reply_routes(
-                    messages.clone(),
-                    peer.clone(),
-                    NetworkReplyRoutes::try_from_route(old_route.clone())
-                        .expect("old source route set"),
-                )
-                .expect("two-message ordinary reply fanout"),
-            ),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-
-        let mut old_control = None;
-        let mut cloned_completion_identity = None;
-        assert_eq!(
-            pending.drive_with_budget_ack(1, |post, ticket, route, _timeout_attempt| {
-                assert!(ticket.is_none());
-                assert_eq!(HashOf::new(&post.data), first_hash);
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("ordinary reply changed route kind")
-                };
-                assert!(route.same_delivery(&old_route));
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
-                cloned_completion_identity = Some(ack.identity().clone());
-                old_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-            }),
-            Ok(ExactOutputDriveOutcome::BudgetExhausted {
-                closest_backpressure_rank: None,
-            })
-        );
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 0);
-        assert!(pending.fanouts[0].targets[0].pending_flush.is_some());
-
-        assert!(routes.retire(&old_route));
-        let replacement_route = routes.mint_via(peer.clone(), hub);
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(
-                PendingExactFanout::new_with_reply_routes(
-                    messages,
-                    peer,
-                    NetworkReplyRoutes::try_from_route(replacement_route.clone())
-                        .expect("replacement source route set"),
-                )
-                .expect("replacement route retry candidate"),
-            ),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        let target = &pending.fanouts[0].targets[0];
-        assert_eq!(target.message_index, 0);
-        assert!(target.pending_flush.is_some());
-        assert!(matches!(
-            &target.route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&replacement_route)
-        ));
-
-        assert!(
-            old_control
-                .as_mut()
-                .expect("old writer retains its sole completion controller")
-                .flush()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("late old flush retains canonical source authority");
-        let target = &pending.fanouts[0].targets[0];
-        assert_eq!(target.message_index, 1);
-        assert!(target.pending_flush.is_none());
-        assert_eq!(pending.ownership_units, 1);
-        assert!(
-            !cloned_completion_identity
-                .as_ref()
-                .expect("retain clone-shared completion identity")
-                .claim_writer_flush_once(),
-            "a clone of the consumed writer occurrence cannot advance another cursor"
-        );
-
-        pending
-            .poll_reply_flushes()
-            .expect("polling after terminal ownership consumption is idempotent");
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
-        assert_eq!(pending.ownership_units, 1);
-    }
-
-    #[test]
-    fn closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &peer);
-        let chunk = match &chunk_message {
-            CertifiedMergeSidecarMessage::Chunk(chunk) => chunk.clone(),
-            CertifiedMergeSidecarMessage::Request(_)
-            | CertifiedMergeSidecarMessage::Close(_)
-            | CertifiedMergeSidecarMessage::CloseAck(_)
-            | CertifiedMergeSidecarMessage::GenerationHint(_) => {
-                unreachable!("sidecar fixture returns one response chunk")
-            }
-        };
-        let rollover_claim = ExactOutputRolloverClaim::CertifiedSidecarChunk {
-            scope: service.exact_output_scope(),
-            target: peer.clone(),
-            transfer: CertifiedSidecarTransferIdentity::from_chunk(&chunk),
-            chunk_index: chunk.chunk_index,
-            chunk_count: chunk.chunk_count,
-            response_hash: HashOf::new(&chunk),
-        };
-        let shared_payload = Arc::new(chunk_message);
-        let message = NetworkMessage::CertifiedMergeSidecar(Arc::clone(&shared_payload));
-        let response_class = exact_output_class(&message).expect("classify sidecar response");
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = routes.mint_via(peer.clone(), hub_a.clone());
-        let route_b = routes.mint_via(peer.clone(), hub_b);
-        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
-        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
-        let mut reply_routes =
-            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
-        reply_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
-            )
-            .expect("retain both authenticated response sources");
-
-        let mut pending =
-            PendingExactOutput::new(2, 1, 2, &[]).expect("two-source sidecar response corridor");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::claimed_with_reply_routes(
-                        vec![message.clone()],
-                        peer.clone(),
-                        reply_routes,
-                        rollover_claim.clone(),
-                    )
-                    .expect("valid two-source sidecar claim")
-                    .expect("two-source sidecar fanout"),
-                )
-                .expect("retain both sidecar sources"),
-            ExactFanoutOwnership::Owned
-        );
-        let fifo_id = pending.fanouts[0]
-            .fifo_id
-            .expect("sidecar fanout owns stable FIFO age");
-        let (mut source_a_flush_control, source_a_flush_ack, _source_a_admission) =
-            certified_sidecar_flush_fixture(&chunk, &route_a);
-        let mut source_a_flush_ack = Some(source_a_flush_ack);
-        assert_eq!(
-            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
-                let NetworkMessage::CertifiedMergeSidecar(payload) = &post.data else {
-                    panic!("sidecar fanout reconstructed another network payload")
-                };
-                assert!(
-                    Arc::ptr_eq(payload, &shared_payload),
-                    "source A and B must retain the worker's immutable payload carrier"
-                );
-                if matches!(route, ExactTargetRoute::Reply(route) if route.same_source(&route_a)) {
-                    assert!(ticket.is_none());
-                    return Ok(ExactOutputAttemptOutcome::SidecarFlush(
-                        source_a_flush_ack
-                            .take()
-                            .expect("source A sidecar chunk is handed to one writer"),
-                    ));
-                }
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route) if route.same_source(&route_b)
-                ));
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 17,
-                })
-            }),
-            Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 17 })
-        );
-        assert!(source_a_flush_ack.is_none());
-        assert_eq!(pending.pending_sidecar_flushes(), 1);
-        assert!(pending.admitted_sidecar_chunks.is_empty());
-        assert!(source_a_flush_control.close());
-        pending
-            .poll_reply_flushes()
-            .expect("closed exact writer identity remains well formed");
-        assert_eq!(pending.pending_sidecar_flushes(), 0);
-        assert!(
-            pending.admitted_sidecar_chunks.is_empty(),
-            "a closed writer without Flushed must not advance the sidecar cursor"
-        );
-        let a_index = pending.fanouts[0]
-            .targets
-            .iter()
-            .position(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
-            })
-            .expect("source A target retains the current item");
-        let b_index = pending.fanouts[0]
-            .targets
-            .iter()
-            .position(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_b))
-            })
-            .expect("source B target remains backpressured");
-        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
-        assert!(pending.fanouts[0].targets[a_index].current.is_none());
-        assert!(pending.fanouts[0].targets[a_index].pending_flush.is_none());
-        assert!(!pending.fanouts[0].target_is_complete(a_index));
-        assert_eq!(pending.fanouts[0].targets[b_index].message_index, 0);
-        assert!(pending.fanouts[0].targets[b_index].current.is_some());
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 2);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-
-        let exact_duplicate = NetworkReplyRoutes::try_from_route(route_a.clone())
-            .expect("exact pending-source duplicate");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::claimed_with_reply_routes(
-                        vec![message.clone()],
-                        peer.clone(),
-                        exact_duplicate,
-                        rollover_claim.clone(),
-                    )
-                    .expect("valid exact pending-source claim")
-                    .expect("exact pending-source retry"),
-                )
-                .expect("exact duplicate coalesces without resetting the cursor"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
-
-        let later_a = routes
-            .redeliver(&route_a)
-            .expect("later delivery on the same source tenure");
-        let later_delivery = NetworkReplyRoutes::try_from_route(later_a.clone())
-            .expect("later pending-source delivery");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::claimed_with_reply_routes(
-                        vec![message.clone()],
-                        peer.clone(),
-                        later_delivery,
-                        rollover_claim.clone(),
-                    )
-                    .expect("valid later pending-source claim")
-                    .expect("later pending-source retry"),
-                )
-                .expect("later delivery updates without resetting the cursor"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
-        assert!(matches!(
-            &pending.fanouts[0].targets[a_index].route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&later_a)
-        ));
-        assert_eq!(pending.ownership_units, 2);
-
-        assert!(routes.retire(&later_a));
-        let reconnected_a = routes.mint_via(peer.clone(), hub_a.clone());
-        let reconnect = NetworkReplyRoutes::try_from_route(reconnected_a.clone())
-            .expect("same-source reconnect route set");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::claimed_with_reply_routes(
-                        vec![message],
-                        peer.clone(),
-                        reconnect,
-                        rollover_claim,
-                    )
-                    .expect("valid same-source reconnect claim")
-                    .expect("same-source reconnect fanout"),
-                )
-                .expect("closed source reconnect preserves the current item"),
-            ExactFanoutOwnership::Owned
-        );
-        let fanout = &pending.fanouts[0];
-        let [NetworkMessage::CertifiedMergeSidecar(reconnected_payload)] =
-            fanout.messages.as_slice()
-        else {
-            panic!("reconnected sidecar fanout changed payload kind")
-        };
-        assert!(
-            Arc::ptr_eq(reconnected_payload, &shared_payload),
-            "same-source reconnect must reuse the worker's current payload carrier"
-        );
-        assert_eq!(fanout.fifo_id, Some(fifo_id));
-        assert_eq!(fanout.targets[a_index].message_index, 0);
-        assert!(fanout.targets[a_index].current.is_none());
-        assert!(fanout.targets[a_index].ticket.is_none());
-        assert!(!fanout.target_is_complete(a_index));
-        assert!(matches!(
-            &fanout.targets[a_index].route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected_a)
-        ));
-        assert_eq!(fanout.targets[b_index].message_index, 0);
-        assert!(fanout.targets[b_index].current.is_some());
-        assert!(matches!(
-            &fanout.targets[b_index].route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&route_b)
-        ));
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 2);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-
-        assert!(routes.retire(&reconnected_a));
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                let NetworkMessage::CertifiedMergeSidecar(payload) = &post.data else {
-                    panic!("sidecar retry reconstructed another network payload")
-                };
-                assert!(Arc::ptr_eq(payload, &shared_payload));
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route) if route.same_source(&route_b)
-                ));
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 13,
-                })
-            }),
-            Ok(Some(13))
-        );
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 2);
-        assert!(pending.fanouts[0].targets[a_index].parked);
-        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
-        let [NetworkMessage::CertifiedMergeSidecar(retry_payload)] =
-            pending.fanouts[0].messages.as_slice()
-        else {
-            panic!("second reconnect changed sidecar payload kind")
-        };
-        assert!(Arc::ptr_eq(retry_payload, &shared_payload));
-        assert!(!pending.fanouts[0].target_is_complete(a_index));
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-
-        let second_reconnect_a = routes.mint_via(peer.clone(), hub_a);
-        let retry_routes = NetworkReplyRoutes::try_from_route(second_reconnect_a.clone())
-            .expect("second source A reconnect route set");
-        let retry_messages = pending.fanouts[0].messages.clone();
-        let retry_claim = pending.fanouts[0].rollover_claim.clone();
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::claimed_with_reply_routes(
-                        retry_messages,
-                        peer,
-                        retry_routes,
-                        retry_claim,
-                    )
-                    .expect("valid second source A reconnect claim")
-                    .expect("second source A reconnect fanout"),
-                )
-                .expect("second reconnect restores source A's retained current item"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
-        assert!(!pending.fanouts[0].targets[a_index].parked);
-        assert!(!pending.fanouts[0].target_is_complete(a_index));
-        assert!(matches!(
-            &pending.fanouts[0].targets[a_index].route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&second_reconnect_a)
-        ));
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 2);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-    }
-
-    #[test]
-    fn completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &peer);
-        let CertifiedMergeSidecarMessage::Chunk(chunk) = &chunk_message else {
-            unreachable!("sidecar fixture returns one response chunk")
-        };
-        let rollover_claim = ExactOutputRolloverClaim::CertifiedSidecarChunk {
-            scope: service.exact_output_scope(),
-            target: peer.clone(),
-            transfer: CertifiedSidecarTransferIdentity::from_chunk(chunk),
-            chunk_index: chunk.chunk_index,
-            chunk_count: chunk.chunk_count,
-            response_hash: HashOf::new(chunk),
-        };
-        let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(chunk_message));
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = routes.mint_via(peer.clone(), hub_a.clone());
-        let route_b = routes.mint_via(peer.clone(), hub_b);
-        let response_class = exact_output_class(&message).expect("classify sidecar response");
-        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
-        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
-        let fanout = |reply_routes: NetworkReplyRoutes| {
-            PendingExactFanout::claimed_with_reply_routes(
-                vec![message.clone()],
-                peer.clone(),
-                reply_routes,
-                rollover_claim.clone(),
-            )
-            .expect("valid certified sidecar claim")
-            .expect("one exact sidecar response")
-        };
-
-        let mut initial_routes =
-            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
-        initial_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
-            )
-            .expect("retain both response sources");
-        let retained = fanout(initial_routes);
-        let a_index = retained
-            .targets
-            .iter()
-            .position(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
-            })
-            .expect("source A target");
-        let b_index = retained
-            .targets
-            .iter()
-            .position(|target| {
-                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_b))
-            })
-            .expect("source B target");
-
-        let mut pending =
-            PendingExactOutput::new(2, 1, 2, &[]).expect("two shared ownership units fit");
-        assert_eq!(
-            pending
-                .enqueue(retained)
-                .expect("retain terminal A and live B"),
-            ExactFanoutOwnership::Owned
-        );
-        let fifo_id = pending.fanouts[0]
-            .fifo_id
-            .expect("sidecar fanout owns stable FIFO age");
-        assert_eq!(pending.ownership_units, 2);
-
-        let mut source_a_flush_control = None;
-        assert_eq!(
-            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
-                assert!(ticket.is_none());
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("sidecar response must retain its exact reply route")
-                };
-                if route.same_source(&route_a) {
-                    let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
-                    source_a_flush_control = Some(control);
-                    return Ok(ExactOutputAttemptOutcome::SidecarFlush(ack));
-                }
-                assert!(route.same_source(&route_b));
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 19,
-                })
-            }),
-            Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 19 })
-        );
-        assert!(
-            source_a_flush_control
-                .as_mut()
-                .expect("source A owns its exact writer-flush witness")
-                .flush()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("source A successful writer flush advances one cursor");
-        assert_eq!(
-            pending.fanouts[0].targets[a_index].message_index,
-            pending.fanouts[0].messages.len()
-        );
-        assert_eq!(pending.fanouts[0].targets[b_index].message_index, 0);
-        assert_eq!(pending.ownership_units, 1);
-        let _applied_admission = pending
-            .admitted_sidecar_chunks
-            .pop_front()
-            .expect("the successful writer flush publishes one lane receipt");
-        assert!(pending.admitted_sidecar_chunks.is_empty());
-        assert_eq!(pending.ownership_units, 1);
-
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![merge_share_message(b"terminal sidecar capacity blocker")],
-                        vec![peer.clone()],
-                    )
-                    .expect("one unrelated capacity blocker"),
-                )
-                .expect("fill the last shared ownership unit"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.shared_ownership_units, 2);
-
-        assert!(routes.retire(&route_a));
-        let reconnected_a = routes.mint_via(peer.clone(), hub_a);
-        let reconnect = || {
-            fanout(
-                NetworkReplyRoutes::try_from_route(reconnected_a.clone())
-                    .expect("reconnected source A route set"),
-            )
-        };
-        assert!(
-            pending
-                .can_enqueue_owned_reply_transfer(reconnect())
-                .expect("terminal source reattachment preflight observes no new reservation"),
-            "a terminal source reattachment must fit even when shared capacity is full"
-        );
-        assert_eq!(
-            pending
-                .enqueue_owned_reply_transfer(reconnect())
-                .expect("full corridor updates only the terminal route capability"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.ownership_units, 2);
-        let terminal_a = &pending.fanouts[0].targets[a_index];
-        assert_eq!(terminal_a.message_index, 1);
-        assert!(matches!(
-            &terminal_a.route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected_a)
-        ));
-        assert!(
-            !pending.source_fifo_owners.contains_key(&source_a),
-            "terminal source A must not regain FIFO or reservation ownership"
-        );
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-
-        assert_eq!(
-            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
-                assert!(ticket.is_none());
-                if matches!(route, ExactTargetRoute::Topology) {
-                    return Ok(ExactOutputAttemptOutcome::Admitted);
-                }
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route) if route.same_source(&route_b)
-                ));
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 11,
-                })
-            }),
-            Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 11 })
-        );
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-        assert_eq!(
-            pending.fanouts[0].targets[a_index].message_index,
-            pending.fanouts[0].messages.len(),
-            "service progress cannot reopen a terminal sidecar source"
-        );
-        assert!(!pending.source_fifo_owners.contains_key(&source_a));
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-        assert_eq!(pending.pending_sidecar_flushes(), 0);
-        assert!(pending.admitted_sidecar_chunks.is_empty());
-    }
-
-    #[test]
-    fn later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_attempts_progress()
-     {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &peer);
-        let CertifiedMergeSidecarMessage::Chunk(_chunk) = &chunk_message else {
-            unreachable!("sidecar fixture returns one response chunk")
-        };
-        let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(chunk_message));
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let first_route = routes.mint_via(peer.clone(), hub_a.clone());
-        let fanout = |route: &NetworkReplyRoute| {
-            PendingExactFanout::new_with_reply_routes(
-                vec![message.clone()],
-                peer.clone(),
-                NetworkReplyRoutes::try_from_route(route.clone()).expect("live reply route set"),
-            )
-            .expect("one exact sidecar response")
-        };
-
-        let mut pending = PendingExactOutput::new(3, 1, 2, &[])
-            .expect("one response attempt and two capacity blockers fit");
-        assert_eq!(
-            pending
-                .enqueue_owned_reply_transfer(fanout(&first_route))
-                .expect("retain the first response attempt"),
-            ExactFanoutOwnership::Owned
-        );
-        let mut flush_control = None;
-        assert_eq!(
-            pending.drive_with_budget_ack(1, |post, ticket, route, _timeout_attempt| {
-                assert!(ticket.is_none());
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("sidecar response must retain its reply route")
-                };
-                assert!(route.same_delivery(&first_route));
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
-                flush_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::SidecarFlush(ack))
-            }),
-            Ok(ExactOutputDriveOutcome::BudgetExhausted {
-                closest_backpressure_rank: None,
-            })
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 0);
-        assert_eq!(pending.pending_sidecar_flushes(), 1);
-
-        for label in [
-            b"pending flush capacity blocker a".as_slice(),
-            b"pending flush capacity blocker b".as_slice(),
-        ] {
-            assert_eq!(
-                pending
-                    .enqueue(
-                        PendingExactFanout::new(
-                            vec![merge_share_message(label)],
-                            vec![peer.clone()],
-                        )
-                        .expect("one unrelated capacity blocker"),
-                    )
-                    .expect("fill the shared exact-output corridor"),
-                ExactFanoutOwnership::Owned
-            );
-        }
-        assert_eq!(pending.shared_ownership_units, 3);
-
-        let pending_later = routes
-            .redeliver(&first_route)
-            .expect("later delivery on the pending writer tenure");
-        assert!(
-            pending
-                .can_enqueue_owned_reply_transfer(fanout(&pending_later))
-                .expect("preflight recognizes retained flush ownership"),
-            "a same-tenure replay consumes no additional shared capacity"
-        );
-        let blocker_count = pending.fanouts.len();
-        assert_eq!(
-            pending
-                .enqueue_owned_reply_transfer(fanout(&pending_later))
-                .expect("coalesce the pending same-tenure replay"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.fanouts.len(), blocker_count);
-        assert_eq!(
-            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
-                assert!(ticket.is_none());
-                assert!(matches!(route, ExactTargetRoute::Topology));
-                assert!(
-                    !matches!(post.data, NetworkMessage::CertifiedMergeSidecar(_)),
-                    "same-tenure sidecar replay must not cross actor admission twice"
-                );
-                Ok(ExactOutputAttemptOutcome::Admitted)
-            }),
-            Ok(ExactOutputDriveOutcome::Drained)
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.pending_sidecar_flushes(), 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-
-        assert!(
-            flush_control
-                .as_mut()
-                .expect("first sidecar writer owns its flush controller")
-                .flush()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("exact writer flush publishes one unapplied receipt");
-        assert_eq!(pending.pending_sidecar_flushes(), 0);
-        assert!(pending.fanouts.is_empty());
-        assert_eq!(pending.shared_ownership_units, 0);
-        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
-
-        let unapplied_later = routes
-            .redeliver(&pending_later)
-            .expect("later delivery while the exact receipt remains unapplied");
-        assert!(
-            pending
-                .can_enqueue_owned_reply_transfer(fanout(&unapplied_later))
-                .expect("preflight recognizes the unapplied receipt")
-        );
-        assert_eq!(
-            pending
-                .enqueue_owned_reply_transfer(fanout(&unapplied_later))
-                .expect("coalesce the unapplied same-tenure replay"),
-            ExactFanoutOwnership::Owned
-        );
-        assert!(pending.fanouts.is_empty());
-        assert_eq!(
-            pending.drive_with_budget_ack(1, |_post, _ticket, _route, _timeout_attempt| {
-                panic!("unapplied receipt must retain exact actor ownership")
-            }),
-            Ok(ExactOutputDriveOutcome::Drained)
-        );
-
-        let alternate = routes.mint_via(peer.clone(), hub_b);
-        assert_eq!(
-            pending
-                .enqueue_owned_reply_transfer(fanout(&alternate))
-                .expect("an alternate source keeps an independent attempt"),
-            ExactFanoutOwnership::Owned
-        );
-        let reconnected = routes.mint_via(peer.clone(), hub_a);
-        assert_eq!(
-            pending
-                .enqueue_owned_reply_transfer(fanout(&reconnected))
-                .expect("a replacement tenure observes the unapplied exact receipt"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.fanouts[0].targets.len(), 1);
-        assert!(pending.fanouts[0].targets.iter().all(|target| {
-            target.message_index == 0 && target.current.is_none() && target.ticket.is_none()
-        }));
-        assert!(pending.fanouts[0].targets.iter().any(|target| {
-            matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&alternate))
-        }));
-        assert!(pending.fanouts[0].targets.iter().all(|target| {
-            !matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&reconnected))
-        }));
-        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
-    }
-
-    #[test]
-    fn mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblings() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &peer);
-        let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(chunk_message));
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 3);
-        let route_a = routes.mint_via(peer.clone(), hub_a);
-        let route_b = routes.mint_via(peer.clone(), hub_b);
-        let route_c = routes.mint_via(peer.clone(), hub_c);
-        let fanout = |reply_routes: NetworkReplyRoutes| {
-            PendingExactFanout::new_with_reply_routes(
-                vec![message.clone()],
-                peer.clone(),
-                reply_routes,
-            )
-            .expect("one exact sidecar response")
-        };
-
-        let mut pending = PendingExactOutput::new(3, 1, 3, &[])
-            .expect("three authenticated response sources fit");
-        assert_eq!(
-            pending
-                .enqueue_owned_reply_transfer(fanout(
-                    NetworkReplyRoutes::try_from_route(route_a.clone())
-                        .expect("source A route set"),
-                ))
-                .expect("retain source A response"),
-            ExactFanoutOwnership::Owned
-        );
-        let mut flush_control = None;
-        assert_eq!(
-            pending.drive_with_budget_ack(1, |post, ticket, route, _timeout_attempt| {
-                assert!(ticket.is_none());
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("sidecar response must retain source A")
-                };
-                assert!(route.same_delivery(&route_a));
-                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
-                flush_control = Some(control);
-                Ok(ExactOutputAttemptOutcome::SidecarFlush(ack))
-            }),
-            Ok(ExactOutputDriveOutcome::BudgetExhausted {
-                closest_backpressure_rank: None,
-            })
-        );
-        assert_eq!(pending.pending_sidecar_flushes(), 1);
-        assert_eq!(pending.fanouts.len(), 1);
-
-        assert_eq!(
-            pending
-                .enqueue_owned_reply_transfer(fanout(
-                    NetworkReplyRoutes::try_from_route(route_c.clone())
-                        .expect("source C route set"),
-                ))
-                .expect("retain independent source C"),
-            ExactFanoutOwnership::Owned
-        );
-        let later_a = routes
-            .redeliver(&route_a)
-            .expect("rebind source A while its writer flush is pending");
-        let mut mixed_routes =
-            NetworkReplyRoutes::try_from_route(later_a.clone()).expect("later source A route set");
-        mixed_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone())
-                    .expect("new source B route set"),
-            )
-            .expect("candidate carries pending A and independent B");
-        let mixed = fanout(mixed_routes);
-        assert!(
-            pending
-                .can_enqueue_owned_reply_transfer(mixed)
-                .expect("mixed-source preflight preserves exact ownership")
-        );
-
-        let mut mixed_routes =
-            NetworkReplyRoutes::try_from_route(later_a.clone()).expect("later source A route set");
-        mixed_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone())
-                    .expect("new source B route set"),
-            )
-            .expect("rebuild the exact mixed-source candidate");
-        assert_eq!(
-            pending
-                .enqueue_owned_reply_transfer(fanout(mixed_routes))
-                .expect("merge pending A without losing live B or C"),
-            ExactFanoutOwnership::Owned
-        );
-
-        assert_eq!(pending.fanouts.len(), 1);
-        let retained = &pending.fanouts[0];
-        assert_eq!(retained.targets.len(), 3);
-        assert_eq!(
-            retained
-                .reply_routes
-                .as_ref()
-                .expect("mixed fanout retains route history")
-                .len(),
-            3
-        );
-        let target_for = |expected: &NetworkReplyRoute| {
-            retained
-                .targets
-                .iter()
-                .find(|target| {
-                    matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(expected))
-                })
-                .expect("retained fanout contains the expected source")
-        };
-        let pending_a = target_for(&later_a);
-        assert_eq!(pending_a.message_index, 0);
-        assert!(pending_a.current.is_none());
-        assert!(pending_a.ticket.is_none());
-        assert!(pending_a.pending_flush.is_some());
-        assert_eq!(target_for(&route_b).message_index, 0);
-        assert_eq!(target_for(&route_c).message_index, 0);
-        assert_eq!(pending.ownership_units, 3);
-        assert_eq!(pending.shared_ownership_units, 3);
-        assert_eq!(retained.current_source_targets.len(), 3);
-
-        assert_eq!(
-            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
-                assert!(ticket.is_none());
-                assert!(
-                    !matches!(route, ExactTargetRoute::Reply(route) if route.same_source(&later_a)),
-                    "source A already owns this exact chunk in the flush queue"
-                );
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 9,
-                })
-            }),
-            Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 9 })
-        );
-        assert_eq!(pending.pending_sidecar_flushes(), 1);
-        assert!(flush_control.is_some());
-    }
-
-    #[test]
-    fn sidecar_flush_ack_identity_mismatch_fails_closed() {
-        let (service, _) = fixture();
-        let requester = service.context.roster[1].validator.clone();
-        let (_, message) = certified_sidecar_outputs(&service.local_peer, &requester);
-        let CertifiedMergeSidecarMessage::Chunk(chunk) = message else {
-            unreachable!("sidecar fixture returns one response chunk")
-        };
-        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
-        let route = routes.mint(requester.clone());
-        let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
-            CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
-        ));
-        let fanout = || {
-            PendingExactFanout::new_with_reply_routes(
-                vec![message.clone()],
-                requester.clone(),
-                NetworkReplyRoutes::try_from_route(route.clone()).expect("one reply route"),
-            )
-            .expect("one routed sidecar response")
-        };
-        let (_admission_control, _admission_ack, admission) =
-            certified_sidecar_flush_fixture(&chunk, &route);
-        let (mut substituted_control, substituted_ack, _substituted_admission) =
-            certified_sidecar_flush_fixture(&chunk, &route);
-        assert!(substituted_control.flush());
-
-        let mut pending =
-            PendingExactOutput::new(1, 1, 1, &[]).expect("one exact sidecar flush witness fits");
-        assert_eq!(pending.enqueue(fanout()), Ok(ExactFanoutOwnership::Owned));
-        pending.fanouts[0].targets[0].pending_flush = Some(PendingExactReplyFlush {
-            sidecar_admission: Some(admission),
-            flush_ack: substituted_ack,
-            reply_writer_timeout_attempt: 0,
-        });
-        let error = pending
-            .poll_reply_flushes()
-            .expect_err("substituted writer occurrence must fail closed");
-        assert!(error.contains("different actor output"));
-        assert_eq!(pending.pending_sidecar_flushes(), 1);
-        assert!(pending.admitted_sidecar_chunks.is_empty());
-
-        let (mut exact_control, exact_ack, exact_admission) =
-            certified_sidecar_flush_fixture(&chunk, &route);
-        assert!(exact_control.flush());
-        let mut exact_pending =
-            PendingExactOutput::new(1, 1, 1, &[]).expect("one exact sidecar flush witness fits");
-        assert_eq!(
-            exact_pending.enqueue(fanout()),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        exact_pending.fanouts[0].targets[0].pending_flush = Some(PendingExactReplyFlush {
-            sidecar_admission: Some(exact_admission),
-            flush_ack: exact_ack,
-            reply_writer_timeout_attempt: 0,
-        });
-        exact_pending
-            .poll_reply_flushes()
-            .expect("the exact actor output satisfies the shared flush kernel");
-        assert_eq!(exact_pending.pending_sidecar_flushes(), 0);
-        assert!(exact_pending.fanouts.is_empty());
-        assert_eq!(exact_pending.admitted_sidecar_chunks.len(), 1);
-    }
-
-    #[test]
-    fn inactive_reply_target_tombstone_rejects_cross_source_equal_ordinal_collision() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let message = merge_share_message(b"worker tombstone collision");
-        let response_class = exact_output_class(&message).expect("classified response");
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 3);
-        let route_a = routes.mint_via(peer.clone(), hub_a);
-        let route_b = routes.mint_via(peer.clone(), hub_b);
-        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
-        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
-        let mut reply_routes =
-            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
-        reply_routes
-            .merge(
-                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
-            )
-            .expect("retain two authenticated sources");
-        let mut pending =
-            PendingExactOutput::new(3, 1, 3, &[]).expect("three-source history corridor");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new_with_reply_routes(
-                        vec![message.clone()],
-                        peer.clone(),
-                        reply_routes,
-                    )
-                    .expect("two-source retained fanout"),
-                )
-                .expect("retain source history"),
-            ExactFanoutOwnership::Owned
-        );
-        assert!(routes.retire(&route_a));
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route) if route.same_delivery(&route_b)
-                ));
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 19,
-                })
-            }),
-            Ok(Some(19))
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.ownership_units, 2);
-        let parked_a = pending.fanouts[0]
-            .targets
-            .iter()
-            .find(|target| {
-                matches!(
-                    &target.route,
-                    ExactTargetRoute::Reply(route) if route.same_source(&route_a)
-                )
-            })
-            .expect("retired source A keeps its independent target");
-        assert!(parked_a.parked);
-        assert_eq!(parked_a.message_index, 0);
-        assert!(parked_a.current.is_none());
-        assert!(parked_a.ticket.is_none());
-        assert_eq!(pending.source_fifo_owners.len(), 2);
-        let fifo_id = pending.fanouts[0]
-            .fifo_id
-            .expect("parked source retains its stable fanout age");
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-        let fifo_before = pending.source_fifo_owners.clone();
-        let collision = routes
-            .forge_equal_ordinal_different_tenure(&route_a, peer.clone(), hub_c)
-            .expect("forge cross-source reuse of the retired ordinal");
-        assert!(route_a.equal_ordinal_different_tenure(&collision));
-        let targets_before = pending.fanouts[0].targets.len();
-        let reservations_before = pending.reservation_owner_counts.clone();
-        assert!(matches!(
-            NetworkReplyRoutes::try_from_route(collision),
-            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
-        ));
-        assert_eq!(pending.fanouts[0].targets.len(), targets_before);
-        assert_eq!(pending.reservation_owner_counts, reservations_before);
-        assert_eq!(pending.source_fifo_owners, fifo_before);
-        assert_eq!(pending.ownership_units, 2);
-        assert!(
-            pending.fanouts[0]
-                .reply_routes
-                .as_ref()
-                .is_some_and(|history| history.iter().any(|route| route.same_delivery(&route_b)))
-        );
-    }
-
-    #[test]
-    fn owned_reply_history_merge_retries_candidate_retirement_after_prune() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let message = merge_share_message(b"worker route-history retirement race");
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = routes.mint_via(peer.clone(), hub_a);
-        let route_b = routes.mint_via(peer.clone(), hub_b);
-        let retained = PendingExactFanout::new_with_reply_routes(
-            vec![message.clone()],
-            peer.clone(),
-            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route history"),
-        )
-        .expect("retained source A fanout");
-        let candidate = PendingExactFanout::new_with_reply_routes(
-            vec![message],
-            peer.clone(),
-            NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route history"),
-        )
-        .expect("candidate source B fanout");
-
-        let mut hook_calls = 0usize;
-        let plan = retained
-            .reply_target_merge_plan_after_candidate_prune(&candidate, |attempt| {
-                hook_calls = hook_calls.saturating_add(1);
-                if attempt == 0 {
-                    assert!(
-                        routes.retire(&route_b),
-                        "candidate retires after its owned-transfer prune"
-                    );
-                }
-            })
-            .expect("inactive-only retry prunes the raced candidate atomically");
-        assert_eq!(hook_calls, 2);
-        assert!(plan.targets.is_empty());
-        assert_eq!(plan.reply_routes.len(), 1);
-        assert!(
-            plan.reply_routes
-                .iter()
-                .any(|route| route.same_delivery(&route_a))
-        );
-
-        let collision = routes
-            .forge_equal_ordinal_different_tenure(&route_b, peer, hub_c)
-            .expect("forge reuse of the raced delivery ordinal");
-        assert!(matches!(
-            NetworkReplyRoutes::try_from_route(collision),
-            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
-        ));
-        assert_eq!(plan.reply_routes.len(), 1);
-        assert!(
-            plan.reply_routes
-                .iter()
-                .any(|route| route.same_delivery(&route_a))
-        );
-    }
-
-    #[test]
-    fn newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let first_digest = Hash::new(b"fallback first");
-        let second_digest = Hash::new(b"fallback second");
-        let messages = vec![
-            merge_share_message(b"fallback first"),
-            merge_share_message(b"fallback second"),
-        ];
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = routes.mint_via(peer.clone(), hub_a.clone());
-        let route_b = routes.mint_via(peer.clone(), hub_b);
-        let response_class = exact_output_class(&messages[0]).expect("classified response");
-        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
-        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
-        let mut predecessor = PendingExactFanout::new_with_routes(
-            messages.clone(),
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(route_a.clone())],
-        )
-        .expect("two-message source A response");
-        let returned_second = predecessor.messages[1].clone();
-        let target = predecessor
-            .targets
-            .first_mut()
-            .expect("response has one target");
-        target.message_index = 1;
-        target.current = Some(Post {
-            data: returned_second,
-            peer_id: peer.clone(),
-            priority: Priority::High,
-        });
-        predecessor
-            .rebuild_current_source_targets()
-            .expect("manual fallback cursor has a valid local FIFO index");
-
-        let mut pending = PendingExactOutput::new(2, 2, 2, &[])
-            .expect("two independent authenticated sources fit");
-        assert_eq!(
-            pending.enqueue(predecessor).expect("predecessor fits"),
-            ExactFanoutOwnership::Owned
-        );
-        let fifo_id = pending.fanouts[0]
-            .fifo_id
-            .expect("semantic response owns one stable FIFO age");
-        assert!(routes.retire(&route_a));
-        assert_eq!(
-            pending.drive_with(|_post, _ticket, _route| {
-                panic!("inactive source A must park before actor admission")
-            }),
-            Ok(None)
-        );
-        let parked_a = &pending.fanouts[0].targets[0];
-        assert!(parked_a.parked);
-        assert_eq!(parked_a.message_index, 1);
-        assert!(parked_a.current.is_none());
-        assert_eq!(pending.fanouts[0].fifo_id, Some(fifo_id));
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-
-        let alternate = PendingExactFanout::new_with_routes(
-            messages.clone(),
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(route_b.clone())],
-        )
-        .expect("new source B response");
-        assert_eq!(
-            pending
-                .enqueue(alternate)
-                .expect("new source gets an independent bounded attempt"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.fanouts[0].targets.len(), 2);
-        assert!(pending.fanouts[0].targets[0].parked);
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
-        assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
-        assert!(!pending.fanouts[0].targets[1].parked);
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 2);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-
-        let mut admitted_b = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(ticket.is_none());
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
-                ));
-                admitted_b.push(merge_share_digest(&post.data));
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert_eq!(admitted_b, vec![first_digest, second_digest]);
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
-        assert!(pending.fanouts[0].targets[0].parked);
-        assert!(pending.fanouts[0].target_is_complete(1));
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fifo_id]))
-        );
-        assert!(!pending.source_fifo_owners.contains_key(&source_b));
-
-        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
-        let route_c = routes.mint_via(peer.clone(), hub_c);
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new_with_routes(
-                        messages.clone(),
-                        vec![peer.clone()],
-                        vec![ExactTargetRoute::Reply(route_c)],
-                    )
-                    .expect("third authenticated source candidate"),
-                )
-                .expect("configured source geometry returns bounded backpressure"),
-            ExactFanoutOwnership::SourceRetained
-        );
-        assert_eq!(pending.fanouts[0].targets.len(), 2);
-        assert_eq!(pending.ownership_units, 1);
-
-        let reconnected_a = routes.mint_via(peer.clone(), hub_a);
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new_with_routes(
-                        messages,
-                        vec![peer.clone()],
-                        vec![ExactTargetRoute::Reply(reconnected_a.clone())],
-                    )
-                    .expect("same-source reconnect response"),
-                )
-                .expect("source A reconnect reuses its retained ownership"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
-        assert!(!pending.fanouts[0].targets[0].parked);
-        assert!(pending.fanouts[0].targets[0].current.is_none());
-        let mut admitted_a = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(ticket.is_none());
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route) if route.same_tenure(&reconnected_a)
-                ));
-                admitted_a.push(merge_share_digest(&post.data));
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert_eq!(admitted_a, vec![second_digest]);
-        assert!(pending.fanouts.is_empty());
-
-        let retired_without_alternate_source = routes.mint(peer.clone());
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new_with_routes(
-                        vec![merge_share_message(
-                            b"retired reply without alternate source"
-                        )],
-                        vec![peer.clone()],
-                        vec![ExactTargetRoute::Reply(
-                            retired_without_alternate_source.clone(),
-                        )],
-                    )
-                    .expect("retirable reply output"),
-                )
-                .expect("retain reply before its tenure retires"),
-            ExactFanoutOwnership::Owned
-        );
-        assert!(routes.retire(&retired_without_alternate_source));
-        assert_eq!(
-            pending.drive_with(|_post, _ticket, _route| {
-                panic!("an already-inactive reply route must retire before actor admission")
-            }),
-            Ok(None)
-        );
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-        assert_eq!(pending.fanouts.len(), 1);
-        assert!(pending.fanouts[0].targets[0].parked);
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 0);
-        assert!(!pending.source_fifo_owners.is_empty());
-
-        let inactive_before_enqueue = routes.mint(peer.clone());
-        assert!(routes.retire(&inactive_before_enqueue));
-        let inactive_candidate = PendingExactFanout::new_with_routes(
-            vec![merge_share_message(
-                b"inactive before exact-output admission",
-            )],
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(inactive_before_enqueue)],
-        )
-        .expect("inactive unowned candidate");
-        assert!(
-            pending
-                .can_enqueue(&inactive_candidate)
-                .expect_err("read-only admission rejects an already-dead source")
-                .contains("inactive capability")
-        );
-        assert!(
-            pending
-                .enqueue(inactive_candidate)
-                .expect_err("an all-dead candidate must be rejected atomically")
-                .contains("inactive capability")
-        );
-        assert!(!pending.is_pending());
-        assert_eq!(pending.ownership_units, 1);
-
-        let retired_during_admission = routes.mint(peer.clone());
-        let mut race_pending = PendingExactOutput::new(1, 1, 1, &[])
-            .expect("one independent admission-race source fits");
-        assert_eq!(
-            race_pending
-                .enqueue(
-                    PendingExactFanout::new_with_routes(
-                        vec![merge_share_message(b"reply retirement admission race")],
-                        vec![peer.clone()],
-                        vec![ExactTargetRoute::Reply(retired_during_admission.clone())],
-                    )
-                    .expect("racing reply output"),
-                )
-                .expect("retain reply before its admission race"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            race_pending.drive_with(|post, _ticket, _route| {
-                assert!(routes.retire(&retired_during_admission));
-                Err(NetworkActorAdmissionError::Rejected {
-                    message: post,
-                    reason: NetworkActorAdmissionRejection::InactiveReplyRoute,
-                })
-            }),
-            Ok(None)
-        );
-        assert!(!race_pending.is_pending());
-        assert_eq!(race_pending.ownership_units, 1);
-        assert_eq!(race_pending.shared_ownership_units, 1);
-        assert_eq!(race_pending.fanouts.len(), 1);
-        assert!(race_pending.fanouts[0].targets[0].parked);
-        assert!(!race_pending.source_fifo_owners.is_empty());
-
-        let older_same_source = routes.mint(peer.clone());
-        let younger_same_source = routes.mint(peer.clone());
-        assert_eq!(
-            older_same_source.source_key(),
-            younger_same_source.source_key()
-        );
-        let mut blocked_pending = PendingExactOutput::new(1, 1, 2, std::slice::from_ref(&peer))
-            .expect("one shared duplicate-source unit");
-        let error = blocked_pending
-            .enqueue(
-                PendingExactFanout::new_with_routes(
-                    vec![merge_share_message(b"duplicate-source retirement")],
-                    vec![peer.clone(), peer.clone()],
-                    vec![
-                        ExactTargetRoute::Reply(older_same_source),
-                        ExactTargetRoute::Reply(younger_same_source),
-                    ],
-                )
-                .expect("malformed duplicate-source fanout fixture"),
-            )
-            .expect_err("one semantic request retains at most one attempt per source");
-        assert!(error.contains("duplicated an authenticated source"));
-        assert!(!blocked_pending.is_pending());
-
-        let older_global_route = routes.mint(peer.clone());
-        let younger_global_route = routes.mint(peer.clone());
-        let global_class = exact_output_class(&merge_share_message(b"global FIFO class"))
-            .expect("classified global FIFO response");
-        let global_source =
-            ExactTargetRoute::Reply(older_global_route.clone()).source(&peer, global_class);
-        let mut global_pending =
-            PendingExactOutput::new(2, 1, 1, &[]).expect("two global FIFO owners fit");
-        for (route, label) in [
-            (older_global_route.clone(), b"older global owner".as_slice()),
-            (
-                younger_global_route.clone(),
-                b"younger global owner".as_slice(),
-            ),
-        ] {
-            assert_eq!(
-                global_pending
-                    .enqueue(
-                        PendingExactFanout::new_with_routes(
-                            vec![merge_share_message(label)],
-                            vec![peer.clone()],
-                            vec![ExactTargetRoute::Reply(route)],
-                        )
-                        .expect("global FIFO reply fanout"),
-                    )
-                    .expect("global FIFO reply fanout fits"),
-                ExactFanoutOwnership::Owned
-            );
-        }
-        let older_fifo_id = global_pending.fanouts[0]
-            .fifo_id
-            .expect("older reply fanout has FIFO identity");
-        let younger_fifo_id = global_pending.fanouts[1]
-            .fifo_id
-            .expect("younger reply fanout has FIFO identity");
-        assert_eq!(
-            global_pending.source_fifo_owners.get(&global_source),
-            Some(&BTreeSet::from([older_fifo_id, younger_fifo_id]))
-        );
-        assert!(routes.retire(&younger_global_route));
-        assert_eq!(
-            global_pending.drive_with(|post, ticket, route| {
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route) if route.same_tenure(&older_global_route)
-                ));
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 23,
-                })
-            }),
-            Ok(Some(23))
-        );
-        assert_eq!(global_pending.fanouts.len(), 2);
-        assert_eq!(global_pending.ownership_units, 2);
-        assert_eq!(global_pending.shared_ownership_units, 2);
-        assert!(global_pending.fanouts[1].targets[0].parked);
-        assert_eq!(
-            global_pending.source_fifo_owners.get(&global_source),
-            Some(&BTreeSet::from([older_fifo_id, younger_fifo_id]))
-        );
-
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut mixed_routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let live_route = mixed_routes.mint_via(peer.clone(), hub_a);
-        let retired_route = mixed_routes.mint_via(peer.clone(), hub_b);
-        assert!(mixed_routes.retire(&retired_route));
-        let mut mixed_pending =
-            PendingExactOutput::new(2, 1, 2, &[]).expect("two-source candidate corridor");
-        let mixed_fanout = PendingExactFanout::new_with_routes(
-            vec![merge_share_message(b"mixed live and retired sources")],
-            vec![peer.clone(), peer],
-            vec![
-                ExactTargetRoute::Reply(live_route.clone()),
-                ExactTargetRoute::Reply(retired_route),
-            ],
-        )
-        .expect("mixed-liveness response fanout");
-        assert!(
-            mixed_pending
-                .can_enqueue(&mixed_fanout)
-                .expect_err("preflight must reject one inactive source")
-                .contains("inactive capability")
-        );
-        assert!(
-            mixed_pending
-                .enqueue(mixed_fanout)
-                .expect_err("one inactive source must reject the whole fanout")
-                .contains("inactive capability")
-        );
-        assert_eq!(mixed_pending.ownership_units, 0);
-        assert_eq!(mixed_pending.shared_ownership_units, 0);
-        assert!(mixed_pending.reservation_owner_counts.is_empty());
-        assert!(mixed_pending.source_fifo_owners.is_empty());
-        assert!(!mixed_pending.is_pending());
-    }
-
-    #[test]
-    fn owned_reply_transfer_retirement_after_validation_is_atomic() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = routes.mint_via(peer.clone(), hub_a);
-        let route_b = routes.mint_via(peer.clone(), hub_b);
-        let message = merge_share_message(b"owned transfer retirement race");
-        let mut pending =
-            PendingExactOutput::new(2, 1, 2, &[]).expect("two independent owned reply sources fit");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new_with_routes(
-                        vec![message.clone()],
-                        vec![peer.clone()],
-                        vec![ExactTargetRoute::Reply(route_a)],
-                    )
-                    .expect("retained source fanout"),
-                )
-                .expect("retain first source"),
-            ExactFanoutOwnership::Owned
-        );
-        let mut candidate = PendingExactFanout::new_with_routes(
-            vec![message],
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(route_b.clone())],
-        )
-        .expect("owned alternate-source transfer");
-        assert!(
-            pending
-                .validate_owned_reply_transfer(&mut candidate)
-                .expect("candidate is live at strict validation")
-        );
-        let fifo_before = pending.source_fifo_owners.clone();
-        let reservations_before = pending.reservation_owner_counts.clone();
-        let units_before = pending.ownership_units;
-        assert!(routes.retire(&route_b));
-        assert_eq!(
-            pending
-                .enqueue_validated(candidate)
-                .expect("post-validation retirement drops only the raced occurrence"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.source_fifo_owners, fifo_before);
-        assert_eq!(pending.reservation_owner_counts, reservations_before);
-        assert_eq!(pending.ownership_units, units_before);
-        assert_eq!(pending.fanouts[0].targets.len(), 1);
-    }
-
-    #[test]
-    fn a_b_a_hub_reconnect_preserves_each_source_cursor() {
-        let (service, _) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let first_digest = Hash::new(b"independent route first");
-        let second_digest = Hash::new(b"independent route second");
-        let messages = vec![
-            merge_share_message(b"independent route first"),
-            merge_share_message(b"independent route second"),
-        ];
-        let response_class = exact_output_class(&messages[0]).expect("classified response");
-        assert!(
-            messages
-                .iter()
-                .all(|message| exact_output_class(message) == Ok(response_class))
-        );
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let route_a = routes.mint_via(peer.clone(), hub_a.clone());
-        let route_b = routes.mint_via(peer.clone(), hub_b);
-        let mut fanout = PendingExactFanout::new_with_routes(
-            messages.clone(),
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(route_a.clone())],
-        )
-        .expect("first-source response fanout");
-        fanout.targets[0].message_index = 1;
-        fanout.targets[0].current = Some(Post {
-            data: messages[1].clone(),
-            peer_id: peer.clone(),
-            priority: Priority::High,
-        });
-        fanout
-            .rebuild_current_source_targets()
-            .expect("advanced source A cursor remains indexed");
-
-        let mut pending = PendingExactOutput::new(2, 2, 2, &[])
-            .expect("two authenticated response sources fit exactly");
-        assert_eq!(
-            pending
-                .enqueue(fanout)
-                .expect("retain first source attempt"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new_with_routes(
-                        messages.clone(),
-                        vec![peer.clone()],
-                        vec![ExactTargetRoute::Reply(route_b.clone())],
-                    )
-                    .expect("second-source response retry"),
-                )
-                .expect("append the independent source attempt"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.fanouts[0].targets.len(), 2);
-        assert_eq!(pending.ownership_units, 2);
-        let fanout_fifo_id = pending.fanouts[0]
-            .fifo_id
-            .expect("multi-source response has one stable FIFO identity");
-        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
-        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fanout_fifo_id]))
-        );
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fanout_fifo_id]))
-        );
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                if matches!(route, ExactTargetRoute::Reply(route) if route.same_tenure(&route_a)) {
-                    return Err(NetworkActorAdmissionError::Backpressured {
-                        message: post,
-                        ticket,
-                        rank: 31,
-                    });
-                }
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
-                ));
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 29,
-                })
-            }),
-            Ok(Some(29))
-        );
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
-        assert!(pending.fanouts[0].targets[0].current.is_some());
-        assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
-        assert!(pending.fanouts[0].targets[1].current.is_some());
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fanout_fifo_id]))
-        );
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fanout_fifo_id]))
-        );
-        assert!(routes.retire(&route_a));
-        let route_a_reconnected = routes.mint_via(peer.clone(), hub_a.clone());
-        let retry = PendingExactFanout::new_with_routes(
-            messages,
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(route_a_reconnected.clone())],
-        )
-        .expect("same-source reconnect retry");
-        assert_eq!(
-            pending.enqueue(retry).expect("merge A/B/A route ownership"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.fanouts[0].targets.len(), 2);
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
-        assert!(pending.fanouts[0].targets[0].current.is_none());
-        assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
-        assert!(pending.fanouts[0].targets[1].current.is_some());
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fanout_fifo_id]))
-        );
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fanout_fifo_id]))
-        );
-        assert!(matches!(
-            &pending.fanouts[0].targets[0].route,
-            ExactTargetRoute::Reply(route) if route.same_tenure(&route_a_reconnected)
-        ));
-        assert!(matches!(
-            &pending.fanouts[0].targets[1].route,
-            ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
-        ));
-
-        let mut completed_a = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(ticket.is_none());
-                if matches!(route, ExactTargetRoute::Reply(route) if route.same_tenure(&route_a_reconnected))
-                {
-                    completed_a.push(merge_share_digest(&post.data));
-                    return Ok(());
-                }
-                assert!(matches!(
-                    route,
-                    ExactTargetRoute::Reply(route) if route.same_tenure(&route_b)
-                ));
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 23,
-                })
-            }),
-            Ok(Some(23))
-        );
-        assert_eq!(completed_a, vec![second_digest]);
-        assert!(pending.fanouts[0].target_is_complete(0));
-        assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
-        assert_eq!(pending.ownership_units, 1);
-        assert!(!pending.source_fifo_owners.contains_key(&source_a));
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_b),
-            Some(&BTreeSet::from([fanout_fifo_id]))
-        );
-
-        assert!(routes.retire(&route_a_reconnected));
-        let route_a_completed_reconnect = routes.mint_via(peer.clone(), hub_a);
-        let completed_retry = PendingExactFanout::new_with_routes(
-            vec![
-                merge_share_message(b"independent route first"),
-                merge_share_message(b"independent route second"),
-            ],
-            vec![peer.clone()],
-            vec![ExactTargetRoute::Reply(route_a_completed_reconnect.clone())],
-        )
-        .expect("completed same-source reconnect retry");
-        assert_eq!(
-            pending
-                .enqueue(completed_retry)
-                .expect("completed reconnect preserves terminal ownership"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.fanouts[0].targets[0].message_index, 2);
-        assert!(pending.fanouts[0].targets[0].current.is_none());
-        assert_eq!(pending.fanouts[0].targets[1].message_index, 0);
-        assert_eq!(pending.ownership_units, 1);
-        assert!(!pending.source_fifo_owners.contains_key(&source_a));
-        assert!(matches!(
-            &pending.fanouts[0].targets[0].route,
-            ExactTargetRoute::Reply(route) if route.same_tenure(&route_a_completed_reconnect)
-        ));
-
-        let mut admitted_a = Vec::new();
-        let mut admitted_b = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, route| {
-                assert!(ticket.is_none());
-                let digest = merge_share_digest(&post.data);
-                match route {
-                    ExactTargetRoute::Reply(route)
-                        if route.same_tenure(&route_a_completed_reconnect) =>
-                    {
-                        admitted_a.push(digest);
-                    }
-                    ExactTargetRoute::Reply(route) if route.same_tenure(&route_b) => {
-                        admitted_b.push(digest);
-                    }
-                    _ => panic!("unexpected response route"),
-                }
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert!(admitted_a.is_empty());
-        assert_eq!(admitted_b, vec![first_digest, second_digest]);
-    }
-
-    #[test]
-    fn bulk_backpressure_does_not_block_reserved_lane_or_safety_output() {
-        let (service, keys) = fixture();
-        let peer = service.context.roster[1].validator.clone();
-        let (_, artifact) = durable_finality_fixture(&service, &keys);
-        let safety =
-            ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
-                .expect("encode safety output");
-        let lane = lane_commit_qc_message(peer.clone());
-        let bulk = ProductionV2Services::preencode_v2_network_message(
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
-                manifest_hash(b"cross-class scheduler manifest"),
-                0,
-                b"bulk",
-                0,
-            ))),
-        )
-        .expect("encode bulk output");
-        assert_eq!(exact_output_class(&safety), Ok(ExactOutputClass::Safety));
-        assert_eq!(exact_output_class(&lane), Ok(ExactOutputClass::Lane));
-        assert_eq!(exact_output_class(&bulk), Ok(ExactOutputClass::Bulk));
-        assert!(
-            PendingExactFanout::classified_with_routes(
-                vec![bulk.clone(), safety.clone()],
-                vec![peer.clone()],
-                vec![ExactTargetRoute::Topology],
-            )
-            .is_err(),
-            "a blocked lower-priority prefix must not own a later safety source"
-        );
-
-        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&peer))
-            .expect("shared slot plus three reserved classes");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(vec![bulk], vec![peer.clone()]).expect("bulk fanout"),
-                )
-                .expect("bulk fanout within bounds"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 9,
-                })
-            }),
-            Ok(Some(9))
-        );
-
-        for message in [safety, lane] {
-            assert_eq!(
-                pending
-                    .enqueue(
-                        PendingExactFanout::new(vec![message], vec![peer.clone()])
-                            .expect("reserved class fanout"),
-                    )
-                    .expect("reserved class fanout within bounds"),
-                ExactFanoutOwnership::Owned,
-                "each unopened class for one semantic target has reserved ownership"
-            );
-        }
-
-        let mut admitted = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                let class = exact_output_class(&post.data)
-                    .expect("test messages have exact output classes");
-                if class == ExactOutputClass::Bulk {
-                    return Err(NetworkActorAdmissionError::Backpressured {
-                        message: post,
-                        ticket,
-                        rank: 9,
-                    });
-                }
-                assert!(ticket.is_none());
-                admitted.push(class);
-                Ok(())
-            }),
-            Ok(Some(9))
-        );
-        assert_eq!(
-            admitted,
-            vec![ExactOutputClass::Safety, ExactOutputClass::Lane]
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                assert_eq!(exact_output_class(&post.data), Ok(ExactOutputClass::Bulk));
-                assert!(ticket.is_none());
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert!(!pending.is_pending());
-    }
-
-    #[test]
-    fn non_roster_targets_cannot_consume_frozen_validator_reservations() {
-        let (service, keys) = fixture();
-        assert!(validate_shared_ownership_geometry(2, 1).is_err());
-        assert_eq!(validate_shared_ownership_geometry(3, 1), Ok(()));
-        let validator = service.context.roster[1].validator.clone();
-        let frozen_validators = service
-            .context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>();
-        let mut frozen_pending =
-            PendingExactOutput::new(3, 1, frozen_validators.len(), &frozen_validators)
-                .expect("source-sized shared pool plus frozen roster reservations");
-        assert_eq!(
-            frozen_pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(validator.clone())],
-                        frozen_validators,
-                    )
-                    .expect("one full frozen-roster fanout"),
-                )
-                .expect("frozen reservations admit a roster wider than the reply-source bound"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            frozen_pending.shared_ownership_units, 0,
-            "the first roster target/class occurrences use only frozen credits"
-        );
-        let observer_a = PeerId::new(KeyPair::random().public_key().clone());
-        let observer_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&validator))
-            .expect("one shared slot plus frozen validator and control reservations");
-        assert_eq!(pending.shared_ownership_unit_capacity, 1);
-        assert_eq!(pending.reserved_target_classes.len(), 5);
-        assert_eq!(pending.ownership_unit_capacity, 6);
-
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(observer_a.clone())],
-                        vec![observer_a.clone()],
-                    )
-                    .expect("first observer response"),
-                )
-                .expect("first observer response is within bounds"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                assert_eq!(post.peer_id, observer_a);
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 11,
-                })
-            }),
-            Ok(Some(11))
-        );
-
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(observer_b.clone())],
-                        vec![observer_b],
-                    )
-                    .expect("second observer response"),
-                )
-                .expect("second observer response is within bounds"),
-            ExactFanoutOwnership::SourceRetained,
-            "a novel non-roster identity must not claim a frozen validator slot"
-        );
-
-        let (_, artifact) = durable_finality_fixture(&service, &keys);
-        let safety =
-            ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
-                .expect("encode safety output");
-        let lane = lane_commit_qc_message(validator.clone());
-        let bulk = ProductionV2Services::preencode_v2_network_message(
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::PayloadChunk(chunk(
-                manifest_hash(b"frozen reservation regression manifest"),
-                0,
-                b"bulk",
-                0,
-            ))),
-        )
-        .expect("encode bulk output");
-        for message in [safety, lane, bulk] {
-            assert_eq!(
-                pending
-                    .enqueue(
-                        PendingExactFanout::new(vec![message], vec![validator.clone()])
-                            .expect("frozen validator fanout"),
-                    )
-                    .expect("frozen validator fanout is within bounds"),
-                ExactFanoutOwnership::Owned,
-                "each frozen validator class retains its own slot"
-            );
-        }
-
-        let mut admitted = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                if post.peer_id == observer_a {
-                    return Err(NetworkActorAdmissionError::Backpressured {
-                        message: post,
-                        ticket,
-                        rank: 11,
-                    });
-                }
-                assert_eq!(post.peer_id, validator);
-                assert!(ticket.is_none());
-                admitted.push(exact_output_class(&post.data).expect("classified validator output"));
-                Ok(())
-            }),
-            Ok(Some(11))
-        );
-        assert_eq!(
-            admitted,
-            vec![
-                ExactOutputClass::Safety,
-                ExactOutputClass::Lane,
-                ExactOutputClass::Bulk,
-            ]
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-    }
-
-    #[test]
-    fn partial_fanout_progress_releases_only_the_completed_target_unit() {
-        let (service, _) = fixture();
-        let first = service.context.roster[1].validator.clone();
-        let second = service.context.roster[2].validator.clone();
-        let frozen = vec![first.clone(), second.clone()];
-        let mut pending =
-            PendingExactOutput::new(1, 1, 2, &frozen).expect("frozen two-validator corridor");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(first.clone())],
-                        vec![first.clone(), second.clone()],
-                    )
-                    .expect("two-target lane fanout"),
-                )
-                .expect("two-target lane fanout is within bounds"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 0);
-
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                if post.peer_id == first {
-                    assert!(ticket.is_none());
-                    return Ok(());
-                }
-                assert_eq!(post.peer_id, second);
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 13,
-                })
-            }),
-            Ok(Some(13))
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 0);
-        assert!(
-            !pending
-                .reservation_owner_counts
-                .contains_key(&ExactTargetReservation {
-                    semantic_target: first.clone(),
-                    class: ExactOutputClass::Lane,
-                    kind: ExactTargetReservationKind::Reliable,
-                })
-        );
-
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(first.clone())],
-                        vec![first.clone()],
-                    )
-                    .expect("new output for completed target"),
-                )
-                .expect("new completed-target output is within bounds"),
-            ExactFanoutOwnership::Owned,
-            "partial progress must free the completed target/class reservation"
-        );
-        assert_eq!(
-            pending
-                .reservation_owner_counts
-                .get(&ExactTargetReservation {
-                    semantic_target: first,
-                    class: ExactOutputClass::Lane,
-                    kind: ExactTargetReservationKind::Reliable,
-                }),
-            Some(&1)
-        );
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 0);
-    }
-
-    #[test]
-    fn ownership_units_reject_reservation_spill_and_release_exact_target() {
-        let (service, _) = fixture();
-        let constrained = service.context.roster[1].validator.clone();
-        let alternate = service.context.roster[2].validator.clone();
-        let observer = PeerId::new(KeyPair::random().public_key().clone());
-        let frozen = vec![constrained.clone(), alternate.clone()];
-        let mut pending =
-            PendingExactOutput::new(1, 1, 2, &frozen).expect("frozen two-validator corridor");
-
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(observer.clone())],
-                        vec![observer],
-                    )
-                    .expect("observer fanout"),
-                )
-                .expect("observer consumes the only shared slot"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(constrained.clone())],
-                        vec![constrained.clone(), alternate.clone()],
-                    )
-                    .expect("flexible validator fanout"),
-                )
-                .expect("flexible fanout owns both exact frozen units"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(constrained.clone())],
-                        vec![constrained.clone()],
-                    )
-                    .expect("constrained validator fanout"),
-                )
-                .expect("duplicate target/class must consume shared ownership"),
-            ExactFanoutOwnership::SourceRetained,
-            "a multi-target fanout already owns the constrained unit; it cannot be undercharged"
-        );
-        assert_eq!(pending.ownership_units, 3);
-        assert_eq!(pending.shared_ownership_units, 1);
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                if post.peer_id == constrained {
-                    assert!(ticket.is_none());
-                    return Ok(());
-                }
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 17,
-                })
-            }),
-            Ok(Some(17))
-        );
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 1);
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![lane_commit_qc_message(constrained.clone())],
-                        vec![constrained],
-                    )
-                    .expect("released exact target fanout"),
-                )
-                .expect("released frozen unit remains independently available"),
-            ExactFanoutOwnership::Owned
-        );
-    }
-
-    #[test]
-    fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() {
-        let (service, _) = fixture();
-        let blocked = service.context.roster[1].validator.clone();
-        let same_fanout_responsive = service.context.roster[2].validator.clone();
-        let later_fanout_responsive = service.context.roster[3].validator.clone();
-        let observer = PeerId::new(KeyPair::random().public_key().clone());
-        let oldest_first_digest = Hash::new(b"oldest blocked-peer fanout first");
-        let oldest_second_digest = Hash::new(b"oldest blocked-peer fanout second");
-        let responsive_digest = Hash::new(b"later responsive fanout");
-        let later_blocked_digest = Hash::new(b"later blocked-peer fanout");
-        let frozen = vec![
-            blocked.clone(),
-            same_fanout_responsive.clone(),
-            later_fanout_responsive.clone(),
-        ];
-        let mut pending = PendingExactOutput::new(1, 2, 2, &frozen)
-            .expect("one shared unit plus exact frozen target units");
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![merge_share_message(b"shared observer blocker")],
-                        vec![observer.clone()],
-                    )
-                    .expect("observer blocker"),
-                )
-                .expect("observer consumes the shared ownership unit"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            pending
-                .enqueue(
-                    PendingExactFanout::new(
-                        vec![
-                            merge_share_message(b"oldest blocked-peer fanout first"),
-                            merge_share_message(b"oldest blocked-peer fanout second"),
-                        ],
-                        vec![blocked.clone(), same_fanout_responsive.clone()],
-                    )
-                    .expect("mixed-target fanout"),
-                )
-                .expect("fanout within bounds"),
-            ExactFanoutOwnership::Owned
-        );
-
-        let mut blocked_attempts = 0usize;
-        let mut admitted = Vec::new();
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                if post.peer_id == observer {
-                    return Err(NetworkActorAdmissionError::Backpressured {
-                        message: post,
-                        ticket,
-                        rank: 7,
-                    });
-                }
-                if post.peer_id == blocked {
-                    blocked_attempts = blocked_attempts.saturating_add(1);
-                    return Err(NetworkActorAdmissionError::Backpressured {
-                        message: post,
-                        ticket,
-                        rank: 7,
-                    });
-                }
-                assert!(ticket.is_none());
-                admitted.push((post.peer_id, merge_share_digest(&post.data)));
-                Ok(())
-            }),
-            Ok(Some(7))
-        );
-        assert_eq!(blocked_attempts, 1);
-        assert_eq!(
-            admitted,
-            vec![
-                (same_fanout_responsive.clone(), oldest_first_digest),
-                (same_fanout_responsive.clone(), oldest_second_digest),
-            ]
-        );
-
-        let responsive_fanout = PendingExactFanout::new(
-            vec![merge_share_message(b"later responsive fanout")],
-            vec![later_fanout_responsive.clone()],
-        )
-        .expect("later responsive fanout");
-        assert_eq!(
-            pending
-                .enqueue(responsive_fanout)
-                .expect("responsive fanout within bounds"),
-            ExactFanoutOwnership::Owned
-        );
-        let later_blocked_fanout = PendingExactFanout::new(
-            vec![merge_share_message(b"later blocked-peer fanout")],
-            vec![blocked.clone()],
-        )
-        .expect("later same-source fanout");
-        assert_eq!(
-            pending
-                .enqueue(later_blocked_fanout)
-                .expect("same-source fanout within protocol bounds"),
-            ExactFanoutOwnership::SourceRetained,
-            "a blocked source cannot consume the slot reserved for another source/class"
-        );
-
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                if post.peer_id == observer {
-                    return Err(NetworkActorAdmissionError::Backpressured {
-                        message: post,
-                        ticket,
-                        rank: 7,
-                    });
-                }
-                if post.peer_id == blocked {
-                    blocked_attempts = blocked_attempts.saturating_add(1);
-                    return Err(NetworkActorAdmissionError::Backpressured {
-                        message: post,
-                        ticket,
-                        rank: 7,
-                    });
-                }
-                assert!(ticket.is_none());
-                admitted.push((post.peer_id, merge_share_digest(&post.data)));
-                Ok(())
-            }),
-            Ok(Some(7))
-        );
-        assert_eq!(blocked_attempts, 2);
-        assert_eq!(
-            admitted,
-            vec![
-                (same_fanout_responsive.clone(), oldest_first_digest),
-                (same_fanout_responsive, oldest_second_digest),
-                (later_fanout_responsive, responsive_digest),
-            ]
-        );
-        assert_eq!(pending.fanouts.len(), 2);
-        assert!(pending.fanouts[0].targets[0].current.is_some());
-        assert!(pending.fanouts[1].targets[0].current.is_some());
-        assert!(pending.fanouts[1].target_is_complete(1));
-
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                assert!(ticket.is_none());
-                if post.peer_id == blocked {
-                    admitted.push((post.peer_id, merge_share_digest(&post.data)));
-                } else {
-                    assert_eq!(post.peer_id, observer);
-                }
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert!(!pending.is_pending());
-
-        let later_blocked_fanout = PendingExactFanout::new(
-            vec![merge_share_message(b"later blocked-peer fanout")],
-            vec![blocked.clone()],
-        )
-        .expect("reconstructed same-source fanout");
-        assert_eq!(
-            pending
-                .enqueue(later_blocked_fanout)
-                .expect("reconstructed fanout within bounds"),
-            ExactFanoutOwnership::Owned
-        );
-        assert_eq!(
-            pending.drive_with(|post, ticket, _route| {
-                assert_eq!(post.peer_id, blocked);
-                assert!(ticket.is_none());
-                admitted.push((post.peer_id, merge_share_digest(&post.data)));
-                Ok(())
-            }),
-            Ok(None)
-        );
-        assert_eq!(
-            admitted.last(),
-            Some(&(blocked.clone(), later_blocked_digest)),
-            "the producer-owned suffix becomes schedulable after the older FIFO head completes"
-        );
-        let admitted_to_recovered_target = admitted
-            .iter()
-            .filter_map(|(peer, digest)| (peer == &blocked).then_some(*digest))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            admitted_to_recovered_target,
-            vec![
-                oldest_first_digest,
-                oldest_second_digest,
-                later_blocked_digest,
-            ]
-        );
-        assert!(!pending.is_pending());
-    }
+    include!("tests/v2_worker_backpressure_cases.rs");
 
     /// Exercise a dead-target output through synthesized durable-height handoff.
     ///
@@ -24262,6 +21558,12 @@ pub(super) mod tests {
         context.validate().expect("widened fixture context");
     }
 
+    fn fixture_with_block_payload() -> (ProductionV2Services, Vec<KeyPair>) {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        (service, keys)
+    }
+
     fn install_temporary_chunk_root(service: &mut ProductionV2Services) -> TempDir {
         let directory = TempDir::new().expect("temporary chunk root");
         service.chunk_root = directory.path().to_path_buf();
@@ -25080,7 +22382,7 @@ pub(super) mod tests {
 
     #[test]
     fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
-        let (mut service, keys) = fixture();
+        let (mut service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
             &service.context,
@@ -25110,7 +22412,7 @@ pub(super) mod tests {
             .serve_barrier()
             .expect("inspect repeated-claim barrier")
             .expect("admitted exact request owns a barrier");
-        assert_eq!(barrier.lifecycle_ordinal(), 5);
+        assert_eq!(barrier.scheduler_ordinal(), 5);
         assert_eq!(
             command_tx
                 .queue
@@ -25192,7 +22494,7 @@ pub(super) mod tests {
         assert!(matches!(
             service.take_exact_serve_predecessor_completion(
                 true,
-                barrier.lifecycle_ordinal()
+                barrier.scheduler_ordinal()
             ),
             IoCompletionTake {
                 completion: Some(PendingServiceCompletion::Io {
@@ -25221,7 +22523,7 @@ pub(super) mod tests {
             completion:
                 Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed { task, .. })),
             retained_runtime: false,
-        } = service.take_exact_serve_predecessor_completion(true, barrier.lifecycle_ordinal())
+        } = service.take_exact_serve_predecessor_completion(true, barrier.scheduler_ordinal())
         else {
             panic!("the second turn must select the same-rank replacement owner");
         };
@@ -25230,7 +22532,7 @@ pub(super) mod tests {
             .complete_body_reconstruction_fetch(&task)
             .expect("retire second strictly older source");
         assert!(matches!(
-            service.take_exact_serve_predecessor_completion(true, barrier.lifecycle_ordinal()),
+            service.take_exact_serve_predecessor_completion(true, barrier.scheduler_ordinal()),
             IoCompletionTake {
                 completion: None,
                 retained_runtime: false,
@@ -25255,7 +22557,7 @@ pub(super) mod tests {
             "later-rank completion remains outside runtime until after target ingress"
         );
         assert!(matches!(
-            service.take_exact_serve_predecessor_completion(true, barrier.lifecycle_ordinal()),
+            service.take_exact_serve_predecessor_completion(true, barrier.scheduler_ordinal()),
             IoCompletionTake {
                 completion: None,
                 retained_runtime: false,
@@ -25271,7 +22573,7 @@ pub(super) mod tests {
 
     #[test]
     fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
             &service.context,
@@ -25309,7 +22611,7 @@ pub(super) mod tests {
             .serve_barrier()
             .expect("inspect the exact barrier")
             .expect("the admitted target owns a barrier");
-        assert_eq!(barrier.lifecycle_ordinal(), 2);
+        assert_eq!(barrier.scheduler_ordinal(), 2);
         assert!(
             command_tx
                 .claim_serve_runtime_episode(barrier)
@@ -26341,6 +23643,66 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn certified_completion_preflight_rejects_mismatched_task_without_owner_mutation() {
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let live_task = certified_fetch_task(
+            &service,
+            55,
+            tag,
+            Some(payload.manifest().clone()),
+            proposal.round,
+            proposal.subject,
+        );
+        service
+            .enqueue_body_fetch(live_task.clone())
+            .expect("start exact hybrid fetch");
+        let mismatched_tag = EventTag::new(
+            tag.height(),
+            tag.view(),
+            Generation::new(tag.generation().get().saturating_add(1)),
+        );
+        let mismatched = certified_fetch_task(
+            &service,
+            55,
+            mismatched_tag,
+            Some(payload.manifest().clone()),
+            proposal.round,
+            proposal.subject,
+        );
+        let manifest_hash = HashOf::new(payload.manifest());
+
+        let error = service
+            .complete_certified_body_fetch(&mismatched)
+            .expect_err("a different executor task cannot retire the live service owner");
+
+        assert!(error.contains("differs from executor ownership"));
+        assert_eq!(
+            service
+                .fetches
+                .get(&live_task.id())
+                .map(|fetch| &fetch.task),
+            Some(&live_task),
+        );
+        assert_eq!(
+            service.fetch_by_manifest.get(&manifest_hash),
+            Some(&live_task.id()),
+        );
+        assert!(service.local_completions.is_empty());
+        assert!(
+            !service.output_guard.restart_required(),
+            "preflight rejection occurs before the guarded mutation boundary",
+        );
+    }
+
+    #[test]
     fn cancellation_rejects_a_different_task_without_consuming_exact_owner() {
         let (mut service, keys) = fixture();
         let _chunk_root = install_temporary_chunk_root(&mut service);
@@ -26795,8 +24157,8 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn selected_serve_target_excludes_later_ingress_without_waiting_for_its_prefix() {
-        let (service, keys) = fixture();
+    fn selected_serve_target_waits_for_complete_physical_prefix_and_excludes_later_ingress() {
+        let (service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
             &service.context,
@@ -26869,6 +24231,40 @@ pub(super) mod tests {
                 .is_none(),
             "a post-target occurrence cannot enter the selected Serve union"
         );
+        assert!(
+            ingress
+                .try_recv_if(|inbound| {
+                    matches!(
+                        inbound.message(),
+                        BlockMessage::V2(wire::ConsensusMessageV2 {
+                            payload:
+                                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                            ..
+                        }) if HashOf::new(candidate) == request.request_hash()
+                    )
+                })
+                .is_none(),
+            "a predicate which rejects the predecessor cannot select the exact target"
+        );
+        let predecessor = ingress
+            .try_recv_if(|inbound| {
+                matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload:
+                            wire::ConsensusMessageV2Payload::CommitCertificateRequest(candidate),
+                        ..
+                    }) if candidate.height == predecessor_height
+                )
+            })
+            .expect("the finite frozen predecessor remains separately serviceable");
+        assert!(matches!(
+            predecessor.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::CommitCertificateRequest(candidate),
+                ..
+            }) if candidate.height == predecessor_height
+        ));
 
         let mut prepared = None;
         let mut target = ingress
@@ -26892,7 +24288,7 @@ pub(super) mod tests {
                 }
                 is_target
             })
-            .expect("the exact target remains a rank goal beside its frozen prefix");
+            .expect("the exact target becomes eligible after its frozen prefix drains");
         let admission = prepared.expect("target predicate prepared its exact reservation");
         let ownership = target
             .take_ingress_ownership()
@@ -26908,19 +24304,26 @@ pub(super) mod tests {
                 .expect("commit selected Serve target"),
             CertifiedServeCommit::Queued
         ));
-        assert_eq!(ingress.len(), 2);
+        assert_eq!(ingress.len(), 1);
     }
 
     #[test]
     fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle() {
-        let (service, keys) = fixture();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let (service, keys) = fixture_with_block_payload();
+        let (canonical_wire, payload, proposal) =
+            proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
             &service.context,
             &keys[1],
             proposal.round,
             proposal.subject,
             wire::GlobalPhase::Prepare,
+        );
+        let response = certified_serve_response(
+            &request,
+            payload.manifest().clone(),
+            canonical_wire,
+            &keys[0],
         );
         let requester = request.request().requester.clone();
         let via = service.context.roster[0].validator.clone();
@@ -26935,7 +24338,7 @@ pub(super) mod tests {
             unreachable!("leader fixture is a v2 envelope");
         };
 
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
+        let (command_tx, command_rx, _admission) = test_io_command_channel(4);
         let leader_scheduler_ordinal = (1_u128..=41)
             .map(|expected| {
                 let ordinal = command_tx
@@ -27073,7 +24476,9 @@ pub(super) mod tests {
                 service.context.height,
             )
             .expect("bind the restored leader lifecycle to the shared source");
-        ingress.open().expect("open the combined production ingress");
+        ingress
+            .open()
+            .expect("open the combined production ingress");
 
         let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
         let route = route_fixture.mint_via(requester.clone(), via.clone());
@@ -27089,14 +24494,11 @@ pub(super) mod tests {
             .selected_barrier()
             .expect("inspect the bound Serve gate")
             .expect("the exact Serve request owns the selected barrier");
-        assert_eq!(serve_barrier.lifecycle_ordinal(), 42);
+        assert_eq!(serve_barrier.scheduler_ordinal(), 42);
         assert_eq!(serve_barrier.carrier_ordinal(), 8);
 
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::new(
-                leader_message,
-                Some(proposer),
-            )),
+            ingress.try_push(InboundBlockMessage::new(leader_message, Some(proposer),)),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
         let leader_carrier_ordinal = {
@@ -27105,7 +24507,10 @@ pub(super) mod tests {
                 .leader_wire_lifecycles
                 .get(&leader_token.slot)
                 .expect("reactivated leader lifecycle remains indexed");
-            assert_eq!(record.status, super::super::FairV2IngressLeaderWireStatus::Ingress);
+            assert_eq!(
+                record.status,
+                super::super::FairV2IngressLeaderWireStatus::Ingress
+            );
             assert_eq!(record.token, leader_token);
             state
                 .lanes
@@ -27117,7 +24522,7 @@ pub(super) mod tests {
         };
         assert_eq!(leader_carrier_ordinal, 9);
         assert!(
-            serve_barrier.lifecycle_ordinal() > leader_token.scheduler_ordinal(),
+            serve_barrier.scheduler_ordinal() > leader_token.scheduler_ordinal(),
             "the retained leader scheduler identity is older than the selected Serve identity"
         );
         assert!(
@@ -27148,7 +24553,7 @@ pub(super) mod tests {
             "an older retained scheduler identity cannot cross the earlier Serve carrier"
         );
 
-        let (_admission, committed) = drain_and_commit_gated_serve(
+        let (admission, committed) = drain_and_commit_gated_serve(
             &ingress,
             &command_tx,
             CertifiedServeOwnerKey::Roster(requester),
@@ -27160,6 +24565,26 @@ pub(super) mod tests {
                 .selected_barrier()
                 .expect("inspect Serve gate after physical retirement")
                 .is_none()
+        );
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Serve {
+                lifecycle_id,
+                ..
+            }) if lifecycle_id == admission.lifecycle_id
+        ));
+        command_rx
+            .complete_serve_response(admission.lifecycle_id, &response)
+            .expect("seal exact Serve response before later leader I/O");
+        command_tx
+            .acknowledge_serve_completion(
+                admission.lifecycle_id,
+                V2IoServeTerminal::Response(response),
+            )
+            .expect("retain the drained logical request as a terminal tombstone");
+        assert!(
+            command_tx.queue.lock().serves.is_empty(),
+            "acknowledged Serve leaves no recreatable live lifecycle"
         );
 
         let mut leader = ingress
@@ -27189,11 +24614,27 @@ pub(super) mod tests {
         ingress
             .mark_leader_wire_volatile_terminal(runtime)
             .expect("retire the validated leader runtime owner");
+        command_tx
+            .try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(720),
+                    subject: proposal.subject,
+                },
+            )
+            .expect("leader-caused I/O becomes admissible only after Serve terminalization");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(720),
+                ..
+            })
+        ));
     }
 
     #[test]
     fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
             &service.context,
@@ -27253,8 +24694,13 @@ pub(super) mod tests {
                 CertifiedServeIngressReservationState::Provisional
             );
             assert_eq!(reservation.projection.request_hash, request.request_hash());
+            assert_eq!(reservation.lifecycle_id.admission_ordinal, 1);
+            assert_eq!(
+                reservation.lifecycle_id.request_hash,
+                request.request_hash()
+            );
             assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-            assert_eq!(state.next_serve_admission_ordinal, 0);
+            assert_eq!(state.next_serve_admission_ordinal, 1);
         }
         assert_eq!(
             command_tx
@@ -27266,7 +24712,7 @@ pub(super) mod tests {
             .serve_barrier()
             .expect("inspect exact actor-global barrier")
             .expect("provisional target retains its barrier");
-        assert_eq!(first_barrier.lifecycle_ordinal(), 1);
+        assert_eq!(first_barrier.scheduler_ordinal(), 1);
         assert_eq!(first_barrier.carrier_ordinal(), 1);
         let stale_carrier = CertifiedServeBarrier {
             carrier_ordinal: first_barrier
@@ -27348,6 +24794,7 @@ pub(super) mod tests {
                 "the first live fair carrier remains the selected exact target"
             );
             assert_eq!(state.serve_ingress_waiters.len(), 1);
+            assert_eq!(state.next_serve_admission_ordinal, 2);
         }
         assert!(
             command_tx
@@ -27411,7 +24858,7 @@ pub(super) mod tests {
                 state.next_serve_ingress_reservation_ordinal, 2,
                 "promotion moves a frozen waiter without minting a replacement"
             );
-            assert_eq!(state.next_serve_admission_ordinal, 1);
+            assert_eq!(state.next_serve_admission_ordinal, 2);
         }
         assert!(
             command_tx
@@ -27523,7 +24970,7 @@ pub(super) mod tests {
 
     #[test]
     fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
             &service.context,
@@ -27575,6 +25022,7 @@ pub(super) mod tests {
             &request,
         );
         assert!(matches!(first_commit, CertifiedServeCommit::Queued));
+        assert_eq!(first_barrier.lifecycle_id(), first_admission.lifecycle_id);
         assert!(command_tx.queue.lock().serve_ingress_waiters.is_empty());
 
         assert!(matches!(
@@ -27590,7 +25038,12 @@ pub(super) mod tests {
             .expect("inspect post-drain retransmission barrier")
             .expect("post-drain retransmission owns a fresh barrier");
         assert_eq!(retry_barrier.request_hash(), first_barrier.request_hash());
-        assert!(retry_barrier.lifecycle_ordinal() > first_barrier.lifecycle_ordinal());
+        assert!(retry_barrier.scheduler_ordinal() > first_barrier.scheduler_ordinal());
+        assert_eq!(
+            retry_barrier.lifecycle_id(),
+            first_barrier.lifecycle_id(),
+            "fresh physical scheduler ownership retains immutable logical lineage"
+        );
         assert!(
             retry_barrier.carrier_ordinal() > first_barrier.carrier_ordinal(),
             "a drained exact retransmission receives a fresh physical carrier position"
@@ -27628,7 +25081,7 @@ pub(super) mod tests {
 
     #[test]
     fn checked_serve_dequeue_persistence_failure_retains_exact_entry() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let context = service.context.clone();
         let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
         let request = authenticated_serve_request(
@@ -27690,11 +25143,24 @@ pub(super) mod tests {
             ingress.try_push(ordinary(context.height.saturating_add(2), &later_source)),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
+        let predecessor = ingress
+            .try_recv_if(|inbound| {
+                matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload:
+                            wire::ConsensusMessageV2Payload::CommitCertificateRequest(request),
+                        ..
+                    }) if request.height == context.height.saturating_add(1)
+                )
+            })
+            .expect("drain the frozen physical predecessor before testing target publication");
+        assert_eq!(predecessor.sender(), Some(&predecessor_source));
         let admitted = fair_ingress_accounting_snapshot(&ingress);
         assert_eq!(
             admitted.ready.len(),
-            3,
-            "fixture must cover rejected, failing, and later ready sources"
+            2,
+            "fixture must cover the failing target and later ready source"
         );
         let barrier = command_tx
             .serve_barrier()
@@ -27748,7 +25214,7 @@ pub(super) mod tests {
                     .as_ref()
                     .map(|reservation| (reservation.id.0, reservation.state)),
                 Some((
-                    barrier.lifecycle_ordinal(),
+                    barrier.scheduler_ordinal(),
                     CertifiedServeIngressReservationState::Prepared(lifecycle_id),
                 )),
                 "failed publication leaves the selected physical occurrence live"
@@ -27766,7 +25232,7 @@ pub(super) mod tests {
             persisted
                 .ingress_waiters
                 .iter()
-                .any(|waiter| waiter.ingress_ordinal == barrier.lifecycle_ordinal()),
+                .any(|waiter| waiter.ingress_ordinal == barrier.scheduler_ordinal()),
             "failed publication must not consume the durable ingress occurrence"
         );
         {
@@ -27777,10 +25243,7 @@ pub(super) mod tests {
                     .serve_ingress_reservation
                     .as_ref()
                     .map(|reservation| (reservation.id, reservation.state)),
-                state
-                    .serves
-                    .get(&lifecycle_id)
-                    .map(|serve| serve.state),
+                state.serves.get(&lifecycle_id).map(|serve| serve.state),
                 state.commands.len(),
             );
             assert!(
@@ -27796,10 +25259,7 @@ pub(super) mod tests {
                     .serve_ingress_reservation
                     .as_ref()
                     .map(|reservation| (reservation.id, reservation.state)),
-                state
-                    .serves
-                    .get(&lifecycle_id)
-                    .map(|serve| serve.state),
+                state.serves.get(&lifecycle_id).map(|serve| serve.state),
                 state.commands.len(),
             );
             assert_eq!(
@@ -27869,7 +25329,7 @@ pub(super) mod tests {
             persisted
                 .ingress_waiters
                 .iter()
-                .all(|waiter| waiter.ingress_ordinal != barrier.lifecycle_ordinal()),
+                .all(|waiter| waiter.ingress_ordinal != barrier.scheduler_ordinal()),
             "successful checked dequeue publishes retirement before returning"
         );
         let ingress_ownership = inbound
@@ -27895,8 +25355,180 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn durable_provisional_dequeue_cannot_restore_consumed_ordinal() {
-        let (service, keys) = fixture();
+    fn negative_checked_dequeue_persistence_failure_rolls_back_without_losing_carrier() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let invalid = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = context.roster[3].validator.clone();
+        let body_root = TempDir::new().expect("negative rollback body root");
+        let serve_root = TempDir::new().expect("negative rollback Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let (command_tx, _command_rx, _admission) =
+            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                .expect("open negative rollback queue");
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(invalid.request(), via.clone())),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let barrier = command_tx
+            .serve_barrier()
+            .expect("inspect negative rollback barrier")
+            .expect("invalid raw admission owns a selected occurrence");
+        let fair_before = fair_ingress_accounting_snapshot(&ingress);
+        let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+        let durable_before = fs::read(&state_path).expect("read pre-rejection Serve snapshot");
+        let temporary_state = state_path.with_extension("norito.tmp");
+
+        let error = ingress
+            .try_recv_if_checked(|inbound| {
+                let selected = matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                        ..
+                    }) if HashOf::new(candidate) == invalid.request_hash()
+                );
+                if !selected {
+                    return false;
+                }
+                command_tx
+                    .stage_selected_serve_rejection(
+                        invalid.request_hash(),
+                        CertifiedServeNegativeOutcome::InvalidCertificate,
+                    )
+                    .expect("stage deterministic invalid-certificate outcome");
+                fs::create_dir(&temporary_state)
+                    .expect("block atomic negative Serve-state publication");
+                true
+            })
+            .expect_err("failed negative publication retains the exact fair carrier");
+        assert!(
+            error.contains("failed to create Sumeragi v2 Serve temporary state"),
+            "unexpected negative publication error: {error}"
+        );
+        assert_eq!(
+            fair_ingress_accounting_snapshot(&ingress),
+            fair_before,
+            "failed negative publication cannot consume or reorder the fair carrier"
+        );
+        {
+            let state = command_tx.queue.lock();
+            assert_eq!(
+                state
+                    .serve_ingress_reservation
+                    .as_ref()
+                    .map(|reservation| (reservation.id.0, reservation.state)),
+                Some((
+                    barrier.scheduler_ordinal(),
+                    CertifiedServeIngressReservationState::DeterministicallyRejected(
+                        CertifiedServeNegativeOutcome::InvalidCertificate,
+                    ),
+                )),
+                "the selected negative outcome remains staged for an exact retry"
+            );
+            let tracked = state
+                .serves
+                .get(&barrier.lifecycle_id())
+                .expect("failed publication retains the logical lifecycle");
+            assert_eq!(tracked.state, V2IoServeState::AwaitingRetry);
+            assert!(tracked.terminal.is_none());
+            assert!(tracked.reply_routes.is_none());
+            assert!(tracked.ingress_ownership.is_none());
+        }
+        assert_eq!(
+            fs::read(&state_path).expect("reload failed negative publication"),
+            durable_before,
+            "failed negative publication cannot alter the last durable snapshot"
+        );
+
+        fs::remove_dir(&temporary_state).expect("unblock negative Serve-state publication");
+        let drained = ingress
+            .try_recv_if_checked(|inbound| {
+                let selected = matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                        ..
+                    }) if HashOf::new(candidate) == invalid.request_hash()
+                );
+                if selected {
+                    command_tx
+                        .stage_selected_serve_rejection(
+                            invalid.request_hash(),
+                            CertifiedServeNegativeOutcome::InvalidCertificate,
+                        )
+                        .expect("retain the exact staged negative outcome");
+                }
+                selected
+            })
+            .expect("retry publishes negative retirement")
+            .expect("retry drains the retained exact carrier");
+        drop(drained);
+        {
+            let state = command_tx.queue.lock();
+            assert!(state.serve_ingress_reservation.is_none());
+            let tracked = state
+                .serves
+                .get(&barrier.lifecycle_id())
+                .expect("successful publication retains one negative tombstone");
+            assert_eq!(
+                tracked.state,
+                V2IoServeState::Rejected(CertifiedServeNegativeOutcome::InvalidCertificate)
+            );
+            assert!(tracked.terminal.is_none());
+            assert!(tracked.reply_routes.is_none());
+            assert!(tracked.ingress_ownership.is_none());
+        }
+        let persisted = command_tx
+            .queue
+            .serve_state_store
+            .as_ref()
+            .expect("negative rollback fixture retains a durable store")
+            .load(&context)
+            .expect("reload successful negative publication");
+        assert!(persisted.ingress_waiters.is_empty());
+        assert!(persisted.unsealed_lifecycles.is_empty());
+        assert_eq!(
+            persisted
+                .negative_tombstones
+                .iter()
+                .map(|tombstone| (tombstone.lifecycle_id, tombstone.outcome))
+                .collect::<Vec<_>>(),
+            vec![(
+                barrier.lifecycle_id(),
+                CertifiedServeNegativeOutcome::InvalidCertificate,
+            )]
+        );
+        let actor_ordinal_after_negative =
+            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(invalid.request(), via)),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
+        assert_eq!(
+            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
+            actor_ordinal_after_negative,
+            "an exact negative retry cannot consume another actor-global ordinal"
+        );
+
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire negative rollback gate");
+    }
+
+    #[test]
+    fn provisional_current_height_drain_is_rejected_and_unbacked_lifecycle_is_detected() {
+        let (service, keys) = fixture_with_block_payload();
         let context = service.context.clone();
         let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
         let request = authenticated_serve_request(
@@ -27907,85 +25539,2229 @@ pub(super) mod tests {
             wire::GlobalPhase::Prepare,
         );
         let via = context.roster[0].validator.clone();
-        let body_root = TempDir::new().expect("provisional-drain body root");
-        let serve_root = TempDir::new().expect("provisional-drain Serve root");
+        let body_root = TempDir::new().expect("provisional guard body root");
+        let serve_root = TempDir::new().expect("provisional guard Serve root");
         let body_store =
             V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let (command_tx, _command_rx, _admission) =
+            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                .expect("open provisional guard queue");
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let barrier = command_tx
+            .serve_barrier()
+            .expect("inspect provisional guard barrier")
+            .expect("current-height request owns one raw reservation");
+        let before = fair_ingress_accounting_snapshot(&ingress);
+        let error = ingress
+            .try_recv_if_checked(|_| true)
+            .expect_err("untyped current-height Serve drain must fail closed");
+        assert!(
+            error.contains(
+                "requires a prepared response or deterministic negative outcome before physical drain"
+            ),
+            "unexpected provisional-drain rejection: {error}"
+        );
+        assert_eq!(
+            fair_ingress_accounting_snapshot(&ingress),
+            before,
+            "the mechanical guard retains the exact physical carrier"
+        );
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("inspect live provisional owner"),
+            None,
+            "a live raw admission is backed by exactly one physical carrier"
+        );
+
         {
+            let mut state = command_tx.queue.lock();
+            let removed = state
+                .serve_ingress_reservation
+                .take()
+                .expect("mutation removes the raw reservation");
+            assert_eq!(removed.lifecycle_id, barrier.lifecycle_id());
+            assert_eq!(
+                state
+                    .serves
+                    .get(&barrier.lifecycle_id())
+                    .map(|tracked| tracked.state),
+                Some(V2IoServeState::AwaitingRetry)
+            );
+        }
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("detect legacy unbacked AwaitingRetry shape"),
+            Some(barrier.lifecycle_id().admission_ordinal),
+            "the loop-facing invariant reports logical debt even when no waiter survives"
+        );
+        let actor_ordinal_before_retry =
+            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
+        let lifecycle_ordinal_before_retry = command_tx.queue.lock().next_serve_admission_ordinal;
+        assert!(matches!(
+            gate.reserve(request.request(), &via, true, 99),
+            Err(CertifiedServeIngressReserveError::Closed)
+        ));
+        assert_eq!(
+            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
+            actor_ordinal_before_retry,
+            "an exact retry cannot mint an actor-global owner around unbacked debt"
+        );
+        assert_eq!(
+            command_tx.queue.lock().next_serve_admission_ordinal,
+            lifecycle_ordinal_before_retry,
+            "an exact retry cannot mint or mask a logical lifecycle around unbacked debt"
+        );
+        let producer_error = match command_tx.try_begin_producer_episode() {
+            Err(error) => error,
+            Ok(_) => panic!("direct producers cannot cross unbacked AwaitingRetry debt"),
+        };
+        assert!(
+            producer_error.contains("unbacked AwaitingRetry"),
+            "the queue lock enforces the same invariant between runner polls"
+        );
+
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire provisional guard gate");
+    }
+
+    #[test]
+    fn live_waiter_rejects_higher_view_without_restart_or_ordinal_mutation() {
+        let (service, keys) = fixture_with_block_payload();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let higher = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            wire::ConsensusRound {
+                view: proposal.round.view.saturating_add(1),
+                ..proposal.round
+            },
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = service.context.roster[0].validator.clone();
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(2);
+        let gate = CertifiedServeIngressGate {
+            queue: Arc::clone(&command_tx.queue),
+        };
+        let retained = gate
+            .reserve(request.request(), &via, true, 10)
+            .expect("reserve the original exact owner")
+            .expect("current-height request owns one physical reservation");
+        let barrier_before = command_tx
+            .serve_barrier()
+            .expect("inspect live exact owner")
+            .expect("the original exact owner is selected");
+        let actor_ordinal_before = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
+        let lifecycle_ordinal_before = command_tx.queue.lock().next_serve_admission_ordinal;
+
+        assert!(matches!(
+            gate.reserve(higher.request(), &via, true, 11),
+            Err(CertifiedServeIngressReserveError::Busy)
+        ));
+        assert_eq!(
+            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
+            actor_ordinal_before,
+            "live higher-view contention cannot mint an actor-global owner"
+        );
+        assert_eq!(
+            command_tx.queue.lock().next_serve_admission_ordinal,
+            lifecycle_ordinal_before,
+            "live higher-view contention cannot replace the admitted lifecycle"
+        );
+        assert_eq!(
+            command_tx
+                .serve_barrier()
+                .expect("reinspect live exact owner"),
+            Some(barrier_before),
+            "higher-view traffic cannot dislodge the selected physical owner"
+        );
+        assert!(command_tx.queue.lock().sender_open);
+        assert!(command_tx.queue.lock().receiver_open);
+        drop(retained);
+    }
+
+    #[test]
+    fn checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal() {
+        let (service, keys) = fixture_with_block_payload();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = service.context.roster[0].validator.clone();
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(2);
+        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let barrier = command_tx
+            .serve_barrier()
+            .expect("inspect mutation fixture barrier")
+            .expect("exact request owns one selected barrier");
+        let mutated_ordinal = gate
+            .reserve_ordinary_lifecycle_ordinal()
+            .expect("mint a distinct but source-valid mutation ordinal");
+        assert_ne!(mutated_ordinal, barrier.scheduler_ordinal());
+        {
+            let mut state = ingress.state.lock();
+            let entry = state
+                .lanes
+                .values_mut()
+                .flat_map(|lane| lane.entries.iter_mut())
+                .next()
+                .expect("mutation fixture retains one fair carrier");
+            let inbound = Arc::make_mut(&mut entry.inbound);
+            let ownership = inbound
+                .ingress_ownership
+                .as_mut()
+                .expect("fair carrier retains exact ownership");
+            ownership.first.lifecycle_ordinal = Some(mutated_ordinal);
+            ownership.latest.lifecycle_ordinal = Some(mutated_ordinal);
+            assert!(
+                ownership.validate_exact(),
+                "the mutation weakens only the reservation/evidence binding"
+            );
+        }
+
+        let error = ingress
+            .try_recv_if_checked(|_| true)
+            .expect_err("checked dequeue must reject the mismatched lifecycle owner");
+        assert!(
+            error.contains("Serve carrier ownership disagreed with its reserved lifecycle ordinal"),
+            "unexpected lifecycle-binding rejection: {error}"
+        );
+        assert_eq!(ingress.len(), 1);
+        assert_eq!(
+            command_tx
+                .serve_barrier()
+                .expect("failed mutation dequeue retains the durable barrier"),
+            Some(barrier)
+        );
+
+        {
+            let mut state = ingress.state.lock();
+            let entry = state
+                .lanes
+                .values_mut()
+                .flat_map(|lane| lane.entries.iter_mut())
+                .next()
+                .expect("failed mutation dequeue retains the fair carrier");
+            let inbound = Arc::make_mut(&mut entry.inbound);
+            let ownership = inbound
+                .ingress_ownership
+                .as_mut()
+                .expect("retained carrier keeps ownership");
+            ownership.first.lifecycle_ordinal = Some(barrier.scheduler_ordinal());
+            ownership.latest.lifecycle_ordinal = Some(barrier.scheduler_ordinal());
+            assert!(ownership.validate_exact());
+        }
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire restored mutation fixture");
+    }
+
+    #[test]
+    fn restored_serviceable_lifecycle_seals_response_before_exposing_producers() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let body_root = TempDir::new().expect("startup-discharge body root");
+        let serve_root = TempDir::new().expect("startup-discharge Serve root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
+        let _ = body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("retain canonical startup-discharge body");
+        let lifecycle_id = persist_unsealed_serve_fixture(
+            serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            Some(7),
+        );
+        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+        let (command_tx, command_rx, _admission) = production_persistent_test_io_command_channel(
+            4,
+            serve_root.path(),
+            &context,
+            &body_store,
+            &keys[0],
+            &validator_pops,
+            Some(0),
+            None,
+            lifecycle_ordinals.clone(),
+        )
+        .expect("startup locally discharges valid retained Serve owner");
+        {
+            let state = command_tx.queue.lock();
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert!(state.serve_ingress_reservation.is_none());
+            assert_eq!(
+                state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
+                Some(V2IoServeState::Terminal)
+            );
+            assert_eq!(state.next_serve_admission_ordinal, 1);
+            assert_eq!(state.next_serve_ingress_reservation_ordinal, 7);
+        }
+        let persisted = command_tx
+            .queue
+            .serve_state_store
+            .as_ref()
+            .expect("production fixture has durable Serve store")
+            .load(&context)
+            .expect("reload startup-discharge response");
+        assert!(persisted.ingress_waiters.is_empty());
+        assert!(persisted.unsealed_lifecycles.is_empty());
+        assert!(persisted.negative_tombstones.is_empty());
+        assert_eq!(persisted.terminal_tombstones.len(), 1);
+
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                request.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let replay_barrier = command_tx
+            .serve_barrier()
+            .expect("inspect startup response replay barrier")
+            .expect("response replay owns one fresh physical occurrence");
+        assert_eq!(replay_barrier.lifecycle_id(), lifecycle_id);
+        assert!(replay_barrier.scheduler_ordinal() > 7);
+        let (admission, replay) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            &request,
+        );
+        assert_eq!(admission.lifecycle_id, lifecycle_id);
+        assert!(matches!(replay, CertifiedServeCommit::Replay { .. }));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire startup-discharge replay gate");
+    }
+
+    #[test]
+    fn restored_serviceable_lifecycle_missing_or_corrupt_body_preserves_serve_snapshot() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+
+        let missing_body_root = TempDir::new().expect("missing-body root");
+        let missing_serve_root = TempDir::new().expect("missing-body Serve root");
+        let missing_body_store = V2BodyStore::open(missing_body_root.path(), context.clone())
+            .expect("open empty missing-body store");
+        persist_unsealed_serve_fixture(
+            missing_serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            Some(3),
+        );
+        let missing_state_path = missing_serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+        let missing_before =
+            fs::read(&missing_state_path).expect("read pre-discharge missing-body snapshot");
+        let missing_result = production_persistent_test_io_command_channel(
+            4,
+            missing_serve_root.path(),
+            &context,
+            &missing_body_store,
+            &keys[0],
+            &validator_pops,
+            Some(0),
+            None,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        );
+        let Err(missing_error) = missing_result else {
+            panic!("missing canonical body must fail startup discharge")
+        };
+        assert!(
+            missing_error.contains("failed to discharge restored serviceable Serve lifecycle"),
+            "unexpected missing-body startup error: {missing_error}"
+        );
+        assert_eq!(
+            fs::read(&missing_state_path).expect("reload missing-body Serve snapshot"),
+            missing_before,
+            "a missing canonical body cannot publish a terminal Serve transition"
+        );
+
+        let corrupt_body_root = TempDir::new().expect("corrupt-body root");
+        let corrupt_serve_root = TempDir::new().expect("corrupt-body Serve root");
+        let mut corrupt_body_store = V2BodyStore::open(corrupt_body_root.path(), context.clone())
+            .expect("open corrupt-body store");
+        let _ = corrupt_body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("store canonical body before corrupting its final frame");
+        let context_directory = corrupt_body_root
+            .path()
+            .join(hex::encode(context.id().0.as_ref()));
+        let final_body_path = fs::read_dir(&context_directory)
+            .expect("list corrupt-body context directory")
+            .map(|entry| entry.expect("read corrupt-body directory entry").path())
+            .find(|path| path.extension().and_then(|value| value.to_str()) == Some("norito"))
+            .expect("find durable body frame");
+        let mut corrupt_bytes =
+            fs::read(&final_body_path).expect("read durable body frame before corruption");
+        *corrupt_bytes
+            .last_mut()
+            .expect("durable body frame is non-empty") ^= 0x80;
+        fs::write(&final_body_path, corrupt_bytes).expect("corrupt durable body frame");
+        persist_unsealed_serve_fixture(
+            corrupt_serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            Some(4),
+        );
+        let corrupt_state_path = corrupt_serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+        let corrupt_before =
+            fs::read(&corrupt_state_path).expect("read pre-discharge corrupt-body snapshot");
+        let corrupt_result = production_persistent_test_io_command_channel(
+            4,
+            corrupt_serve_root.path(),
+            &context,
+            &corrupt_body_store,
+            &keys[0],
+            &validator_pops,
+            Some(0),
+            None,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        );
+        let Err(corrupt_error) = corrupt_result else {
+            panic!("corrupt canonical body must fail startup discharge")
+        };
+        assert!(
+            corrupt_error.contains("failed to discharge restored serviceable Serve lifecycle"),
+            "unexpected corrupt-body startup error: {corrupt_error}"
+        );
+        assert_eq!(
+            fs::read(&corrupt_state_path).expect("reload corrupt-body Serve snapshot"),
+            corrupt_before,
+            "a corrupt canonical body cannot publish a terminal Serve transition"
+        );
+    }
+
+    #[test]
+    fn restored_serviceable_lifecycle_rejects_wrong_local_signing_key_before_mutation() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let body_root = TempDir::new().expect("wrong-key body root");
+        let serve_root = TempDir::new().expect("wrong-key Serve root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let _ = body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("retain canonical wrong-key fixture body");
+        persist_unsealed_serve_fixture(
+            serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            Some(6),
+        );
+        let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+        let before = fs::read(&state_path).expect("read wrong-key Serve snapshot");
+        let result = production_persistent_test_io_command_channel(
+            4,
+            serve_root.path(),
+            &context,
+            &body_store,
+            &keys[1],
+            &validator_pops,
+            Some(0),
+            None,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        );
+        let Err(error) = result else {
+            panic!("mismatched local validator key must fail startup")
+        };
+        assert!(
+            error.contains("signing key does not match its frozen validator index"),
+            "unexpected wrong-key startup error: {error}"
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("reload wrong-key Serve snapshot"),
+            before,
+            "the key/index binding is checked before any response is signed or persisted"
+        );
+    }
+
+    #[test]
+    fn restored_invalid_qc_is_negative_and_exact_retry_consumes_no_new_ordinal() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let invalid = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let validator_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let body_root = TempDir::new().expect("invalid startup body root");
+        let serve_root = TempDir::new().expect("invalid startup Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open empty body store");
+        let lifecycle_id = persist_unsealed_serve_fixture(
+            serve_root.path(),
+            &context,
+            &invalid,
+            CertifiedServeOwnerKey::Roster(invalid.request().requester.clone()),
+            1,
+            Some(5),
+        );
+        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+        let (command_tx, _command_rx, _admission) = production_persistent_test_io_command_channel(
+            4,
+            serve_root.path(),
+            &context,
+            &body_store,
+            &keys[0],
+            &validator_pops,
+            Some(0),
+            None,
+            lifecycle_ordinals,
+        )
+        .expect("startup negatively terminalizes invalid QC");
+        assert_eq!(
+            command_tx
+                .queue
+                .lock()
+                .serves
+                .get(&lifecycle_id)
+                .map(|tracked| tracked.state),
+            Some(V2IoServeState::Rejected(
+                CertifiedServeNegativeOutcome::InvalidCertificate
+            ))
+        );
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        let ordinal_before = command_tx
+            .queue
+            .lock()
+            .next_serve_ingress_reservation_ordinal;
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                invalid.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
+        let state = command_tx.queue.lock();
+        assert_eq!(
+            state.next_serve_ingress_reservation_ordinal, ordinal_before,
+            "negative exact retry is rejected before reserving a scheduler ordinal"
+        );
+        assert_eq!(state.next_serve_admission_ordinal, 1);
+        drop(state);
+        let persisted = command_tx
+            .queue
+            .serve_state_store
+            .as_ref()
+            .expect("production fixture has durable Serve store")
+            .load(&context)
+            .expect("reload invalid-QC negative");
+        assert_eq!(
+            persisted
+                .negative_tombstones
+                .iter()
+                .map(|tombstone| tombstone.outcome)
+                .collect::<Vec<_>>(),
+            vec![CertifiedServeNegativeOutcome::InvalidCertificate]
+        );
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire invalid-QC negative gate");
+    }
+
+    #[test]
+    fn restored_valid_qc_without_local_retention_authority_is_negative() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        for (case, local_validator, signers) in [
+            ("observer", None, vec![0, 1, 2, 3]),
+            ("non-signer", Some(0), vec![1, 2, 3]),
+        ] {
+            let (request, validator_pops) = production_authenticated_serve_request(
+                &context,
+                &keys,
+                &keys[1],
+                proposal.round,
+                proposal.subject,
+                wire::GlobalPhase::Prepare,
+                &signers,
+            );
+            let body_root = TempDir::new().expect("nonowner startup body root");
+            let serve_root = TempDir::new().expect("nonowner startup Serve root");
+            let body_store = V2BodyStore::open(body_root.path(), context.clone())
+                .expect("open empty nonowner body store");
+            let lifecycle_id = persist_unsealed_serve_fixture(
+                serve_root.path(),
+                &context,
+                &request,
+                CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+                1,
+                Some(3),
+            );
             let (command_tx, _command_rx, _admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open provisional-drain queue");
+                production_persistent_test_io_command_channel(
+                    4,
+                    serve_root.path(),
+                    &context,
+                    &body_store,
+                    &keys[0],
+                    &validator_pops,
+                    local_validator,
+                    None,
+                    RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+                )
+                .unwrap_or_else(|error| panic!("{case} startup discharge failed: {error}"));
+            assert_eq!(
+                command_tx
+                    .queue
+                    .lock()
+                    .serves
+                    .get(&lifecycle_id)
+                    .map(|tracked| tracked.state),
+                Some(V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent
+                )),
+                "{case} must deterministically negative-terminalize the lifecycle"
+            );
+        }
+    }
+
+    #[test]
+    fn restored_negative_outcome_tags_must_match_reconstructed_authority() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let (valid, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let invalid = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let foreign_decision = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"foreign durable Decision tag mutation",
+            )),
+            ..proposal.subject
+        };
+        let other_decision = wire::BlockSubject {
+            payload_hash: Hash::new(b"other durable Decision tag mutation"),
+            ..foreign_decision
+        };
+        let body_root = TempDir::new().expect("negative-tag body root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open empty body store");
+        for (case, request, outcome, durable_decided_subject) in [
+            (
+                "invalid certificate tagged as missing authority",
+                &invalid,
+                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent,
+                None,
+            ),
+            (
+                "valid certificate tagged as invalid",
+                &valid,
+                CertifiedServeNegativeOutcome::InvalidCertificate,
+                None,
+            ),
+            (
+                "local signer tagged as missing authority",
+                &valid,
+                CertifiedServeNegativeOutcome::LocalRetentionAuthorityAbsent,
+                None,
+            ),
+            (
+                "supersession tag without Decision",
+                &valid,
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(foreign_decision),
+                None,
+            ),
+            (
+                "supersession tag equal to request subject",
+                &valid,
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(proposal.subject),
+                Some(proposal.subject),
+            ),
+            (
+                "supersession tag names another Decision",
+                &valid,
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(foreign_decision),
+                Some(other_decision),
+            ),
+        ] {
+            let serve_root = TempDir::new().expect("negative-tag Serve root");
+            persist_negative_serve_fixture(
+                serve_root.path(),
+                &context,
+                request,
+                CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+                1,
+                outcome,
+            );
+            let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+            let before = fs::read(&state_path).expect("read mutated negative snapshot");
+            let result = production_persistent_test_io_command_channel(
+                4,
+                serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                durable_decided_subject,
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            );
+            let Err(error) = result else {
+                panic!("{case} must fail source-bound negative validation")
+            };
+            assert!(
+                error.contains(
+                    "durable negative Serve tombstone does not match its reconstructed authority"
+                ),
+                "{case} produced an unexpected error: {error}"
+            );
+            assert_eq!(
+                fs::read(&state_path).expect("reload rejected negative tag"),
+                before,
+                "{case} cannot mutate durable Serve state"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_higher_view_replaces_negative_without_resurrecting_exact_request() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (canonical_wire, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let invalid = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let higher_round = wire::ConsensusRound {
+            view: proposal.round.view + 1,
+            ..proposal.round
+        };
+        let (higher, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            higher_round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let _ = fully_authenticate_persisted_certified_serve_request(
+            &context,
+            higher.request().clone(),
+            &validator_pops,
+        )
+        .expect("strict higher fixture has a valid production QC");
+        let body_root = TempDir::new().expect("negative successor body root");
+        let serve_root = TempDir::new().expect("negative successor Serve root");
+        let (higher_manifest, _) =
+            encode_payload(&context, higher_round, proposal.subject, &canonical_wire)
+                .expect("encode strict higher canonical body")
+                .into_parts();
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let _ = body_store
+            .store(higher_manifest.clone(), canonical_wire.clone())
+            .expect("retain strict higher canonical body");
+        let response = certified_serve_response(&higher, higher_manifest, canonical_wire, &keys[0]);
+        let negative_id = persist_unsealed_serve_fixture(
+            serve_root.path(),
+            &context,
+            &invalid,
+            CertifiedServeOwnerKey::Roster(invalid.request().requester.clone()),
+            1,
+            Some(4),
+        );
+        let (command_tx, command_rx, _admission) = production_persistent_test_io_command_channel(
+            4,
+            serve_root.path(),
+            &context,
+            &body_store,
+            &keys[0],
+            &validator_pops,
+            Some(0),
+            None,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        )
+        .expect("install initial invalid-QC negative");
+        assert_eq!(
+            command_tx
+                .queue
+                .lock()
+                .serves
+                .get(&negative_id)
+                .map(|tracked| tracked.state),
+            Some(V2IoServeState::Rejected(
+                CertifiedServeNegativeOutcome::InvalidCertificate
+            ))
+        );
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                invalid.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
+        assert_eq!(
+            command_tx
+                .queue
+                .lock()
+                .next_serve_ingress_reservation_ordinal,
+            4
+        );
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                higher.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let barrier = command_tx
+            .serve_barrier()
+            .expect("inspect strict negative successor")
+            .expect("strict higher view owns one fresh occurrence");
+        assert_eq!(barrier.scheduler_ordinal(), 5);
+        assert_eq!(barrier.lifecycle_id().admission_ordinal, 2);
+        assert_ne!(barrier.lifecycle_id(), negative_id);
+        {
+            let state = command_tx.queue.lock();
+            assert!(!state.serves.contains_key(&negative_id));
+            assert_eq!(
+                state
+                    .serve_by_family
+                    .get(&CertifiedServeFamilyKey {
+                        requester: higher.request().requester.clone(),
+                        phase: higher.request().certificate.phase,
+                    })
+                    .copied(),
+                Some(barrier.lifecycle_id())
+            );
+        }
+        let (admission, committed) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(higher.request().requester.clone()),
+            &higher,
+        );
+        assert_eq!(admission.lifecycle_id, barrier.lifecycle_id());
+        assert!(matches!(committed, CertifiedServeCommit::Queued));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Serve { lifecycle_id, .. })
+                if lifecycle_id == admission.lifecycle_id
+        ));
+        command_rx
+            .complete_serve_response(admission.lifecycle_id, &response)
+            .expect("seal strict higher response");
+        command_tx
+            .acknowledge_serve_completion(
+                admission.lifecycle_id,
+                V2IoServeTerminal::Response(response),
+            )
+            .expect("acknowledge strict higher response");
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire strict negative-successor gate");
+        drop(ingress);
+        drop(command_rx);
+        drop(command_tx);
+
+        let (restart_tx, _restart_rx, _admission) = production_persistent_test_io_command_channel(
+            4,
+            serve_root.path(),
+            &context,
+            &body_store,
+            &keys[0],
+            &validator_pops,
+            Some(0),
+            None,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        )
+        .expect("restart validates the strict higher terminal");
+        assert_eq!(
+            restart_tx
+                .queue
+                .lock()
+                .serves
+                .get(&barrier.lifecycle_id())
+                .map(|tracked| tracked.state),
+            Some(V2IoServeState::Terminal)
+        );
+        let (restart_ingress, restart_gate) = gated_fair_ingress(&context, &restart_tx);
+        let actor_ordinal_before_old_retry =
+            restart_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
+        assert!(matches!(
+            restart_ingress.try_push(certified_serve_inbound(
+                invalid.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
+        assert_eq!(
+            restart_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
+            actor_ordinal_before_old_retry,
+            "the displaced lower negative cannot resurrect after successor restart"
+        );
+        assert!(matches!(
+            restart_ingress.try_push(certified_serve_inbound(
+                higher.request(),
+                context.roster[3].validator.clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(
+            restart_tx
+                .serve_barrier()
+                .expect("inspect restarted higher replay")
+                .expect("higher terminal replay owns one fresh occurrence")
+                .lifecycle_id(),
+            barrier.lifecycle_id()
+        );
+        restart_ingress.close();
+        restart_ingress
+            .unbind_certified_serve_gate(&restart_gate)
+            .expect("retire restarted strict higher gate");
+    }
+
+    #[test]
+    fn terminal_response_and_raw_restart_are_superseded_by_durable_decision() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let _ = fully_authenticate_persisted_certified_serve_request(
+            &context,
+            request.request().clone(),
+            &validator_pops,
+        )
+        .expect("supersession fixture request has a valid production QC");
+        let decided_subject = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"durable Decision superseding retained Serve response",
+            )),
+            payload_hash: Hash::new(b"durable Decision exact payload"),
+            ..proposal.subject
+        };
+        assert_ne!(decided_subject, proposal.subject);
+        let body_root = TempDir::new().expect("superseded response body root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let _ = body_store
+            .store(payload.manifest().clone(), canonical_wire.clone())
+            .expect("retain canonical body for response reconstruction");
+        let response = certified_serve_response(
+            &request,
+            payload.manifest().clone(),
+            canonical_wire,
+            &keys[0],
+        );
+
+        let live_serve_root = TempDir::new().expect("live supersession Serve root");
+        let live_lifecycle_id = {
+            let (command_tx, command_rx, _admission) = persistent_test_io_command_channel(
+                4,
+                live_serve_root.path(),
+                &context,
+                &body_store,
+            )
+            .expect("open live supersession queue");
             let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+            let via = context.roster[3].validator.clone();
             assert!(matches!(
                 ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
                 Ok(FairV2IngressPushDisposition::Enqueued)
             ));
-            let drained_ordinal = command_tx
-                .serve_barrier()
-                .expect("inspect provisional drain barrier")
-                .expect("provisional request owns a physical barrier")
-                .lifecycle_ordinal();
-            let inbound = ingress
-                .try_recv_if_checked(|_| true)
-                .expect("publish provisional physical retirement")
-                .expect("drain provisional exact carrier");
-            drop(inbound);
+            let (admission, committed) = drain_and_commit_gated_serve(
+                &ingress,
+                &command_tx,
+                CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+                &request,
+            );
+            assert!(matches!(committed, CertifiedServeCommit::Queued));
+            assert!(matches!(
+                command_rx.try_recv(),
+                Ok(V2IoCommand::Serve { lifecycle_id, .. })
+                    if lifecycle_id == admission.lifecycle_id
+            ));
+            command_rx
+                .complete_serve_response(admission.lifecycle_id, &response)
+                .expect("seal the exact certified-body response");
+            command_tx
+                .acknowledge_serve_completion(
+                    admission.lifecycle_id,
+                    V2IoServeTerminal::Response(response.clone()),
+                )
+                .expect("acknowledge the exact certified-body response");
             {
                 let state = command_tx.queue.lock();
+                let tracked = state
+                    .serves
+                    .get(&admission.lifecycle_id)
+                    .expect("terminal response remains indexed");
+                assert_eq!(tracked.state, V2IoServeState::Terminal);
+                assert!(tracked.terminal.is_some());
+                assert!(tracked.reply_routes.is_some());
+                assert!(tracked.ingress_ownership.is_some());
+            }
+
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let superseding_occurrence = command_tx
+                .serve_barrier()
+                .expect("inspect live supersession barrier")
+                .expect("terminal replay owns one physical occurrence");
+            assert_eq!(
+                superseding_occurrence.lifecycle_id(),
+                admission.lifecycle_id
+            );
+            let actor_ordinal_before_decision =
+                command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
+            let (ingress_highwater_before_decision, lifecycle_highwater_before_decision) = {
+                let state = command_tx.queue.lock();
+                (
+                    state.next_serve_ingress_reservation_ordinal,
+                    state.next_serve_admission_ordinal,
+                )
+            };
+            command_tx
+                .begin_decision_serve_reconciliation()
+                .expect("fence Serve admission before the durable Decision step");
+            command_tx
+                .finish_decision_serve_reconciliation(Some(decided_subject))
+                .expect("publish the durable Decision under the Serve queue lock");
+            {
+                let state = command_tx.queue.lock();
+                let retained = state
+                    .serves
+                    .get(&admission.lifecycle_id)
+                    .expect("pre-fence terminal replay retains its logical lifecycle");
+                assert_eq!(retained.state, V2IoServeState::Terminal);
+                assert_eq!(
+                    retained.terminal.as_ref(),
+                    Some(&V2IoServeTerminal::Response(response.clone()))
+                );
+                assert_eq!(
+                    state
+                        .serve_ingress_reservation
+                        .as_ref()
+                        .map(|reservation| reservation.lifecycle_id),
+                    Some(admission.lifecycle_id),
+                    "Decision publication must not detach or eagerly rewrite a pre-fence carrier"
+                );
+                assert_eq!(state.durable_decided_subject, Some(decided_subject));
+                assert!(!state.decision_reconciliation_pending);
+                assert_eq!(
+                    state.next_serve_ingress_reservation_ordinal,
+                    ingress_highwater_before_decision
+                );
+                assert_eq!(
+                    state.next_serve_admission_ordinal,
+                    lifecycle_highwater_before_decision
+                );
+            }
+            assert_eq!(
+                command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
+                actor_ordinal_before_decision
+            );
+            let fair_before_supersession = fair_ingress_accounting_snapshot(&ingress);
+            let state_path = live_serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
+            let durable_before_supersession =
+                fs::read(&state_path).expect("read terminal response before supersession");
+            let temporary_state = state_path.with_extension("norito.tmp");
+            let error = ingress
+                .try_recv_if_checked(|inbound| {
+                    let selected = matches!(
+                        inbound.message(),
+                        BlockMessage::V2(wire::ConsensusMessageV2 {
+                            payload:
+                                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                            ..
+                        }) if HashOf::new(candidate) == request.request_hash()
+                    );
+                    if selected {
+                        command_tx
+                            .stage_selected_serve_rejection(
+                                request.request_hash(),
+                                CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                                    decided_subject,
+                                ),
+                            )
+                            .expect("stage Decision supersession before fault injection");
+                        fs::create_dir(&temporary_state)
+                            .expect("block atomic supersession publication");
+                    }
+                    selected
+                })
+                .expect_err("failed supersession publication retains the terminal replay");
+            assert!(
+                error.contains("failed to create Sumeragi v2 Serve temporary state"),
+                "unexpected supersession publication error: {error}"
+            );
+            assert_eq!(
+                fair_ingress_accounting_snapshot(&ingress),
+                fair_before_supersession,
+                "failed supersession publication retains the exact fair carrier"
+            );
+            {
+                let state = command_tx.queue.lock();
+                let tracked = state
+                    .serves
+                    .get(&admission.lifecycle_id)
+                    .expect("failed supersession retains the response lifecycle");
+                assert_eq!(tracked.state, V2IoServeState::Terminal);
+                assert_eq!(
+                    tracked.terminal.as_ref(),
+                    Some(&V2IoServeTerminal::Response(response.clone()))
+                );
+                assert!(
+                    tracked.reply_routes.is_some() && tracked.ingress_ownership.is_some(),
+                    "failed supersession restores response transport ownership"
+                );
+                assert_eq!(
+                    state
+                        .serve_ingress_reservation
+                        .as_ref()
+                        .map(|reservation| reservation.state),
+                    Some(
+                        CertifiedServeIngressReservationState::DeterministicallyRejected(
+                            CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                                decided_subject,
+                            ),
+                        ),
+                    )
+                );
+            }
+            assert_eq!(
+                fs::read(&state_path).expect("reload failed supersession snapshot"),
+                durable_before_supersession,
+                "failed supersession cannot alter the terminal durable snapshot"
+            );
+            fs::remove_dir(&temporary_state).expect("unblock supersession publication");
+            let drained = ingress
+                .try_recv_if_checked(|inbound| {
+                    let selected = matches!(
+                        inbound.message(),
+                        BlockMessage::V2(wire::ConsensusMessageV2 {
+                            payload:
+                                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(candidate),
+                            ..
+                        }) if HashOf::new(candidate) == request.request_hash()
+                    );
+                    if selected {
+                        command_tx
+                            .stage_selected_serve_rejection(
+                                request.request_hash(),
+                                CertifiedServeNegativeOutcome::SupersededByDurableDecision(
+                                    decided_subject,
+                                ),
+                            )
+                            .expect("stage the fully authenticated Decision supersession");
+                    }
+                    selected
+                })
+                .expect("publish live Decision supersession")
+                .expect("drain live superseded replay");
+            drop(drained);
+            {
+                let state = command_tx.queue.lock();
+                let tracked = state
+                    .serves
+                    .get(&admission.lifecycle_id)
+                    .expect("negative terminal remains indexed");
+                assert_eq!(
+                    tracked.state,
+                    V2IoServeState::Rejected(
+                        CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject,),
+                    )
+                );
+                assert!(tracked.terminal.is_none());
+                assert!(
+                    tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none(),
+                    "Decision supersession retires stale response transport ownership"
+                );
                 assert!(state.serve_ingress_reservation.is_none());
-                assert!(state.serve_ingress_waiters.is_empty());
-                assert!(state.serves.is_empty());
             }
             let persisted = command_tx
                 .queue
                 .serve_state_store
                 .as_ref()
-                .expect("fixture retains its Serve state store")
+                .expect("live supersession retains a durable store")
                 .load(&context)
-                .expect("reload provisional drain snapshot");
-            assert!(
+                .expect("reload live supersession");
+            assert!(persisted.terminal_tombstones.is_empty());
+            assert_eq!(
                 persisted
-                    .ingress_waiters
+                    .negative_tombstones
                     .iter()
-                    .all(|waiter| waiter.ingress_ordinal != drained_ordinal)
+                    .map(|tombstone| (tombstone.lifecycle_id, tombstone.outcome))
+                    .collect::<Vec<_>>(),
+                vec![(
+                    admission.lifecycle_id,
+                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+                )]
+            );
+            let actor_ordinal_after_negative =
+                command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(request.request(), via)),
+                Err(FairV2IngressPushError::Rejected(_))
+            ));
+            assert_eq!(
+                command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
+                actor_ordinal_after_negative
             );
             ingress.close();
             ingress
                 .unbind_certified_serve_gate(&gate)
-                .expect("retire provisional-drain fixture gate");
-        }
+                .expect("retire live supersession gate");
+            admission.lifecycle_id
+        };
 
+        let (live_restart_tx, _live_restart_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                4,
+                live_serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                Some(decided_subject),
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect("restart validates the live supersession outcome");
+        assert_eq!(
+            live_restart_tx
+                .queue
+                .lock()
+                .serves
+                .get(&live_lifecycle_id)
+                .map(|tracked| tracked.state),
+            Some(V2IoServeState::Rejected(
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+            ))
+        );
+
+        let terminal_serve_root = TempDir::new().expect("startup terminal supersession root");
+        let terminal_lifecycle_id = persist_terminal_serve_fixture(
+            terminal_serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            &response,
+        );
+        let (terminal_restart_tx, _terminal_restart_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                4,
+                terminal_serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                Some(decided_subject),
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect("startup converts a superseded response before producer exposure");
+        assert_eq!(
+            terminal_restart_tx
+                .queue
+                .lock()
+                .serves
+                .get(&terminal_lifecycle_id)
+                .map(|tracked| tracked.state),
+            Some(V2IoServeState::Rejected(
+                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+            ))
+        );
+
+        let raw_serve_root = TempDir::new().expect("post-Decision raw admission root");
+        let raw_lifecycle_id = persist_unsealed_serve_fixture(
+            raw_serve_root.path(),
+            &context,
+            &request,
+            CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
+            1,
+            Some(9),
+        );
+        let (raw_restart_tx, _raw_restart_rx, _admission) =
+            production_persistent_test_io_command_channel(
+                4,
+                raw_serve_root.path(),
+                &context,
+                &body_store,
+                &keys[0],
+                &validator_pops,
+                Some(0),
+                Some(decided_subject),
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+            )
+            .expect("post-Decision raw admission is terminalized during startup");
+        {
+            let state = raw_restart_tx.queue.lock();
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert!(state.serve_ingress_reservation.is_none());
+            assert_eq!(
+                state
+                    .serves
+                    .get(&raw_lifecycle_id)
+                    .map(|tracked| tracked.state),
+                Some(V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided_subject),
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn missing_or_retargeted_reply_capability_is_rejected_before_serve_admission() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let request = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = context.roster[0].validator.clone();
+        let body_root = TempDir::new().expect("route-less Serve body root");
+        let serve_root = TempDir::new().expect("route-less Serve state root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
         let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("restart after provisional physical drain");
+            persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
+                .expect("open route-less Serve queue");
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        let actor_ordinal_before = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
+        let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.request().clone()),
+        ));
+        for _ in 0..2 {
+            let without_route = InboundBlockMessage::from_transport(
+                message.clone(),
+                request.request().requester.clone(),
+                via.clone(),
+            );
+            assert!(matches!(
+                ingress.try_push(without_route),
+                Err(FairV2IngressPushError::Rejected(_))
+            ));
+        }
+        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
+        let wrong_target = context.roster[2].validator.clone();
+        let wrong_route = routes.mint_via(wrong_target, via.clone());
+        let retargeted = InboundBlockMessage {
+            message,
+            sender: Some(request.request().requester.clone()),
+            via: Some(via),
+            reply_routes: Some(
+                NetworkReplyRoutes::try_from_route(wrong_route)
+                    .expect("wrong-target fixture still forms a bounded route set"),
+            ),
+            ingress_ownership: None,
+        };
+        assert!(matches!(
+            ingress.try_push(retargeted),
+            Err(FairV2IngressPushError::Rejected(_))
+        ));
         {
             let state = command_tx.queue.lock();
+            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
+            assert_eq!(state.next_serve_admission_ordinal, 0);
+            assert!(state.serves.is_empty());
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert!(state.serve_ingress_reservation.is_none());
+        }
+        assert_eq!(
+            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
+            actor_ordinal_before,
+            "missing or retargeted reply capabilities are rejected before the actor-global ordinal source"
+        );
+        let persisted = command_tx
+            .queue
+            .serve_state_store
+            .as_ref()
+            .expect("route-less fixture has durable Serve store")
+            .load(&context)
+            .expect("reload route-less snapshot");
+        assert!(persisted.ingress_waiters.is_empty());
+        assert!(persisted.unsealed_lifecycles.is_empty());
+        assert!(persisted.negative_tombstones.is_empty());
+        assert!(persisted.terminal_tombstones.is_empty());
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire route-less Serve gate");
+    }
+
+    #[test]
+    fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let invalid = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let mut honest_request = authenticated_serve_request(
+            &context,
+            &keys[2],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Commit,
+        )
+        .request()
+        .clone();
+        let validator_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let honest_signers = (0..context.roster.len())
+            .map(|index| u32::try_from(index).expect("fixture roster index fits u32"))
+            .collect::<Vec<_>>();
+        let honest_vote_preimage = wire::Vote {
+            round: honest_request.certificate.round,
+            proposal_round: honest_request.certificate.proposal_round,
+            phase: honest_request.certificate.phase,
+            subject: honest_request.certificate.subject,
+            execution_commitment: honest_request.certificate.execution_commitment,
+            signer: honest_signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let honest_signature_shares = honest_signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("fixture signer index fits usize")]
+                        .private_key(),
+                    &honest_vote_preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let honest_signature_share_refs = honest_signature_shares
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        honest_request.certificate.signers = honest_signers;
+        honest_request.certificate.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&honest_signature_share_refs)
+                .expect("aggregate honest Serve certificate");
+        honest_request.signature =
+            Signature::new(keys[2].private_key(), &honest_request.signature_preimage())
+                .payload()
+                .to_vec();
+        let honest = authenticate_certified_body_request(
+            &context,
+            honest_request,
+            &PeerId::new(keys[2].public_key().clone()),
+            |context, certificate| {
+                wire::finality::verify_quorum_certificate_with_validator_pops(
+                    context,
+                    certificate,
+                    &validator_pops,
+                )
+            },
+        )
+        .expect("production verification accepts the distinct honest Serve QC");
+        assert!(
+            authenticate_certified_body_request(
+                &context,
+                invalid.request().clone(),
+                &invalid.request().requester,
+                |context, certificate| {
+                    wire::finality::verify_quorum_certificate_with_validator_pops(
+                        context,
+                        certificate,
+                        &validator_pops,
+                    )
+                },
+            )
+            .is_err(),
+            "the requester signature is valid, but production QC verification must reject the fixture certificate"
+        );
+
+        let via = context.roster[0].validator.clone();
+        let retry_via = context.roster[3].validator.clone();
+        let body_root = TempDir::new().expect("invalid-QC quarantine body root");
+        let serve_root = TempDir::new().expect("invalid-QC quarantine Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let invalid_lifecycle = {
+            let (command_tx, command_rx, _admission) =
+                persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
+                    .expect("open invalid-QC quarantine queue");
+            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(invalid.request(), via.clone())),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let invalid_lifecycle = command_tx
+                .serve_barrier()
+                .expect("inspect invalid-QC barrier")
+                .expect("raw invalid-QC admission owns one physical occurrence")
+                .lifecycle_id();
+            assert_eq!(invalid_lifecycle.admission_ordinal, 1);
+
+            let mut reject_invalid_qc = |inbound: &InboundBlockMessage| {
+                let BlockMessage::V2(message) = inbound.message() else {
+                    panic!("invalid-QC fixture changed transport message class")
+                };
+                let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) =
+                    &message.payload
+                else {
+                    panic!("invalid-QC fixture changed v2 payload class")
+                };
+                assert_eq!(request, invalid.request());
+                let requester = inbound
+                    .sender()
+                    .expect("invalid-QC fixture retains its authenticated requester");
+                assert_eq!(requester, &request.requester);
+                assert!(
+                    authenticate_certified_body_request(
+                        &context,
+                        request.clone(),
+                        requester,
+                        |context, certificate| {
+                            wire::finality::verify_quorum_certificate_with_validator_pops(
+                                context,
+                                certificate,
+                                &validator_pops,
+                            )
+                        },
+                    )
+                    .is_err(),
+                    "checked dequeue must observe production QC rejection before draining"
+                );
+                command_tx
+                    .stage_selected_serve_rejection(
+                        invalid.request_hash(),
+                        CertifiedServeNegativeOutcome::InvalidCertificate,
+                    )
+                    .expect("stage invalid-QC outcome before checked physical drain");
+                true
+            };
+            let rejected = ingress
+                .try_recv_if_checked(&mut reject_invalid_qc)
+                .expect("publish runner-side invalid-QC rejection")
+                .expect("drain the rejected invalid-QC carrier");
+            drop(rejected);
+            {
+                let state = command_tx.queue.lock();
+                let tracked = state
+                    .serves
+                    .get(&invalid_lifecycle)
+                    .expect("invalid family retains one durable quarantine owner");
+                assert_eq!(
+                    tracked.state,
+                    V2IoServeState::Rejected(CertifiedServeNegativeOutcome::InvalidCertificate)
+                );
+                assert!(tracked.reply_routes.is_none());
+                assert!(tracked.ingress_ownership.is_none());
+                assert!(tracked.terminal.is_none());
+                assert!(state.serve_barrier.is_none());
+                assert!(state.serve_barrier_predecessors.is_empty());
+                assert!(state.serve_ingress_reservation.is_none());
+                assert!(state.serve_ingress_waiters.is_empty());
+                assert!(state.pending_serve_requests.is_empty());
+                assert!(state.serve_replacements.is_empty());
+                assert!(state.commands.is_empty());
+                assert_eq!(state.serves.len(), 1);
+                assert_eq!(state.serve_by_request.len(), 1);
+                assert_eq!(state.serve_by_family.len(), 1);
+                assert_eq!(state.next_serve_admission_ordinal, 1);
+            }
+            assert!(matches!(
+                command_rx.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+
+            for _ in 0..2 {
+                assert!(matches!(
+                    ingress.try_push(certified_serve_inbound(
+                        invalid.request(),
+                        retry_via.clone()
+                    )),
+                    Err(FairV2IngressPushError::Rejected(_))
+                ));
+                assert_eq!(
+                    command_tx
+                        .queue
+                        .lock()
+                        .next_serve_ingress_reservation_ordinal,
+                    1,
+                    "negative retries cannot mint another physical occurrence"
+                );
+            }
+            ingress.close();
+            ingress
+                .unbind_certified_serve_gate(&gate)
+                .expect("retire invalid-QC quarantine gate");
+            invalid_lifecycle
+        };
+
+        let (command_tx, _command_rx, _admission) =
+            persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
+                .expect("restart invalid-QC quarantine queue");
+        {
+            let state = command_tx.queue.lock();
+            let tracked = state
+                .serves
+                .get(&invalid_lifecycle)
+                .expect("restart retains the exact invalid family owner");
+            assert_eq!(
+                tracked.state,
+                V2IoServeState::Rejected(CertifiedServeNegativeOutcome::InvalidCertificate)
+            );
+            assert!(tracked.reply_routes.is_none());
+            assert!(tracked.ingress_ownership.is_none());
+            assert!(tracked.terminal.is_none());
+            assert_eq!(state.serves.len(), 1);
+            assert!(state.serve_barrier.is_none());
             assert!(state.serve_ingress_reservation.is_none());
             assert!(state.serve_ingress_waiters.is_empty());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
+            assert!(state.pending_serve_requests.is_empty());
+            assert!(state.commands.is_empty());
+            assert_eq!(state.next_serve_admission_ordinal, 1);
         }
+        assert!(matches!(
+            command_tx.try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(8_002),
+                    subject: proposal.subject,
+                },
+            ),
+            Ok(())
+        ));
+
         let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
         assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via)),
+            ingress.try_push(certified_serve_inbound(honest.request(), via)),
             Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let honest_lifecycle = command_tx
+            .serve_barrier()
+            .expect("inspect distinct honest Serve barrier")
+            .expect("distinct honest family retains physical Serve capacity")
+            .lifecycle_id();
+        assert_ne!(honest_lifecycle, invalid_lifecycle);
+        {
+            let state = command_tx.queue.lock();
+            assert_eq!(state.serves.len(), 2);
+            assert_eq!(state.serve_by_request.len(), 2);
+            assert_eq!(state.serve_by_family.len(), 2);
+            assert_eq!(state.next_serve_admission_ordinal, 2);
+            assert_eq!(
+                state
+                    .serves
+                    .get(&invalid_lifecycle)
+                    .map(|tracked| tracked.state),
+                Some(V2IoServeState::Rejected(
+                    CertifiedServeNegativeOutcome::InvalidCertificate
+                ))
+            );
+            assert_eq!(
+                state
+                    .serves
+                    .get(&honest_lifecycle)
+                    .map(|tracked| tracked.state),
+                Some(V2IoServeState::AwaitingRetry)
+            );
+            assert!(
+                state.commands.iter().any(|command| matches!(
+                    command,
+                    V2IoCommand::LoadCandidate {
+                        acquisition_id: LockedCandidateAcquisitionId(8_002),
+                        subject,
+                    } if *subject == proposal.subject
+                )),
+                "the quarantined Byzantine family cannot consume ordinary honest I/O capacity"
+            );
+        }
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire honest-capacity quarantine gate");
+    }
+
+    #[test]
+    fn durable_raw_admission_restart_locally_seals_before_later_producers() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let higher = authenticated_serve_request(
+            &context,
+            &keys[1],
+            wire::ConsensusRound {
+                view: proposal.round.view + 1,
+                ..proposal.round
+            },
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let requester = request.request().requester.clone();
+        let via = context.roster[0].validator.clone();
+        let replay_via = context.roster[3].validator.clone();
+        let body_root = TempDir::new().expect("raw-admission restart body root");
+        let serve_root = TempDir::new().expect("raw-admission restart Serve root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let _ = body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("retain raw-admission restart body");
+
+        let (scheduler_ordinal, lifecycle_id) = {
+            let (command_tx, _command_rx, _admission) =
+                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                    .expect("open pre-crash raw-admission queue");
+            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let barrier = command_tx
+                .serve_barrier()
+                .expect("inspect raw-admission barrier")
+                .expect("raw exact admission owns its barrier");
+            assert_eq!(barrier.scheduler_ordinal(), 1);
+            assert_eq!(barrier.lifecycle_id().admission_ordinal, 1);
+            let before_higher = fair_ingress_accounting_snapshot(&ingress);
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(higher.request(), via.clone())),
+                Err(FairV2IngressPushError::Full(_))
+            ));
+            assert_eq!(
+                fair_ingress_accounting_snapshot(&ingress),
+                before_higher,
+                "a later family view cannot replace an admitted exact raw target"
+            );
+            {
+                let state = command_tx.queue.lock();
+                assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
+                assert_eq!(state.next_serve_admission_ordinal, 1);
+                assert_eq!(
+                    state
+                        .serves
+                        .get(&barrier.lifecycle_id())
+                        .map(|tracked| tracked.state),
+                    Some(V2IoServeState::AwaitingRetry)
+                );
+            }
+            let persisted = command_tx
+                .queue
+                .serve_state_store
+                .as_ref()
+                .expect("fixture retains durable Serve state")
+                .load(&context)
+                .expect("reload raw-admission snapshot");
+            assert_eq!(
+                persisted
+                    .ingress_waiters
+                    .iter()
+                    .map(|waiter| (waiter.ingress_ordinal, waiter.lifecycle_id))
+                    .collect::<Vec<_>>(),
+                vec![(barrier.scheduler_ordinal(), barrier.lifecycle_id())]
+            );
+            ingress.close();
+            ingress
+                .unbind_certified_serve_gate(&gate)
+                .expect("detach pre-crash raw carrier");
+            (barrier.scheduler_ordinal(), barrier.lifecycle_id())
+        };
+
+        let (command_tx, command_rx, _admission) = production_persistent_test_io_command_channel(
+            2,
+            serve_root.path(),
+            &context,
+            &body_store,
+            &keys[0],
+            &validator_pops,
+            Some(0),
+            None,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        )
+        .expect("restart locally discharges raw admission");
+        {
+            let state = command_tx.queue.lock();
+            assert!(
+                state.serve_ingress_waiters.is_empty(),
+                "startup discharge retires every requester-dependent scheduler ticket"
+            );
+            assert_eq!(
+                state.next_serve_ingress_reservation_ordinal,
+                scheduler_ordinal
+            );
+            assert_eq!(
+                state.next_serve_admission_ordinal,
+                lifecycle_id.admission_ordinal
+            );
+            assert_eq!(
+                state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
+                Some(V2IoServeState::Terminal)
+            );
+        }
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("inspect discharged durable admission debt"),
+            None
+        );
+        drop(
+            command_tx
+                .try_begin_producer_episode()
+                .expect("inspect producer admission after startup discharge")
+                .expect("startup discharge exposes later finite producers"),
+        );
+        assert!(command_tx.queue.can_enqueue_as(V2IoAdmissionClass::Control));
+        assert!(matches!(
+            command_tx.try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(8_001),
+                    subject: proposal.subject,
+                },
+            ),
+            Ok(())
+        ));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(8_001),
+                ..
+            })
+        ));
+        let unrelated = InboundBlockMessage::from_transport(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CommitCertificateRequest(
+                    wire::CommitCertificateRequest {
+                        protocol_version: wire::PROTOCOL_VERSION,
+                        chain_id: context.chain_id.clone(),
+                        context_id: context.id(),
+                        height: context.height.saturating_add(1),
+                        requester: replay_via.clone(),
+                        signature: vec![0x5A],
+                    },
+                ),
+            )),
+            replay_via.clone(),
+            replay_via.clone(),
+        );
+        assert!(matches!(
+            ingress.try_push(unrelated),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(
+            ingress.try_recv_if(|_| true).is_some(),
+            "unrelated traffic drains after local startup service"
+        );
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                request.request(),
+                replay_via.clone()
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let restored_barrier = command_tx
+            .serve_barrier()
+            .expect("inspect restored raw barrier")
+            .expect("exact retransmission owns a fresh replay occurrence");
+        assert!(restored_barrier.scheduler_ordinal() > scheduler_ordinal);
+        assert_eq!(restored_barrier.lifecycle_id(), lifecycle_id);
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("exact head retry clears physical admission debt"),
+            None
+        );
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                request.request(),
+                replay_via.clone()
+            )),
+            Ok(FairV2IngressPushDisposition::Coalesced)
         ));
         assert_eq!(
             command_tx
                 .serve_barrier()
-                .expect("inspect post-provisional-restart barrier")
-                .expect("retransmission owns a fresh barrier")
-                .lifecycle_ordinal(),
-            2
+                .expect("inspect coalesced restored barrier"),
+            Some(restored_barrier)
         );
+
+        let (admission, committed) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(requester),
+            &request,
+        );
+        assert_eq!(admission.lifecycle_id, lifecycle_id);
+        assert!(matches!(committed, CertifiedServeCommit::Replay { .. }));
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), replay_via)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let post_drain = command_tx
+            .serve_barrier()
+            .expect("inspect post-drain exact replay")
+            .expect("post-drain replay owns a fresh scheduler ticket");
+        assert!(post_drain.scheduler_ordinal() > scheduler_ordinal);
+        assert_eq!(post_drain.lifecycle_id(), lifecycle_id);
+        assert_eq!(
+            command_tx.queue.lock().next_serve_admission_ordinal,
+            lifecycle_id.admission_ordinal,
+            "physical replay cannot mint another logical Serve lifecycle"
+        );
+
         ingress.close();
         ingress
             .unbind_certified_serve_gate(&gate)
-            .expect("retire post-provisional-restart gate");
+            .expect("retire raw-admission restart fixture gate");
+    }
+
+    #[test]
+    fn restored_observer_waiter_is_locally_serviced_without_requester_fairness() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let observer = KeyPair::random();
+        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
+        let (request, validator_pops) = production_authenticated_serve_request(
+            &context,
+            &keys,
+            &observer,
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+            &[0, 1, 2, 3],
+        );
+        let authenticated_source = PeerId::new(KeyPair::random().public_key().clone());
+        let body_root = TempDir::new().expect("observer-waiter body root");
+        let serve_root = TempDir::new().expect("observer-waiter Serve root");
+        let mut body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let _ = body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("retain observer startup-discharge body");
+
+        let (scheduler_ordinal, lifecycle_id) = {
+            let (command_tx, _command_rx, _admission) =
+                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                    .expect("open pre-crash observer queue");
+            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(
+                    request.request(),
+                    authenticated_source.clone(),
+                )),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            let barrier = command_tx
+                .serve_barrier()
+                .expect("inspect observer raw barrier")
+                .expect("observer raw admission owns a scheduler ticket");
+            let persisted = command_tx
+                .queue
+                .serve_state_store
+                .as_ref()
+                .expect("fixture retains durable Serve state")
+                .load(&context)
+                .expect("reload observer raw-admission snapshot");
+            assert_eq!(persisted.ingress_waiters.len(), 1);
+            assert!(matches!(
+                &persisted.ingress_waiters[0].owner,
+                CertifiedServeOwnerKey::AuthenticatedSource(source)
+                    if source == &authenticated_source
+            ));
+            ingress.close();
+            ingress
+                .unbind_certified_serve_gate(&gate)
+                .expect("detach pre-crash observer carrier");
+            (barrier.scheduler_ordinal(), barrier.lifecycle_id())
+        };
+
+        let (command_tx, command_rx, _admission) = production_persistent_test_io_command_channel(
+            2,
+            serve_root.path(),
+            &context,
+            &body_store,
+            &keys[0],
+            &validator_pops,
+            Some(0),
+            None,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        )
+        .expect("restore and locally service observer raw admission");
+        {
+            let state = command_tx.queue.lock();
+            assert!(
+                state.serve_ingress_waiters.is_empty(),
+                "a non-responsive observer cannot retain global scheduler debt after restore"
+            );
+            assert_eq!(
+                state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
+                Some(V2IoServeState::Terminal),
+                "observer scheduler retirement must locally finish the exact lifecycle"
+            );
+            assert_eq!(
+                state.next_serve_ingress_reservation_ordinal, scheduler_ordinal,
+                "retired observer ordinals remain consumed"
+            );
+        }
+        let persisted = command_tx
+            .queue
+            .serve_state_store
+            .as_ref()
+            .expect("restored fixture retains durable Serve state")
+            .load(&context)
+            .expect("reload locally retired observer snapshot");
+        assert!(
+            persisted.ingress_waiters.is_empty(),
+            "observer scheduler retirement is durable across another crash"
+        );
+        assert!(
+            persisted.unsealed_lifecycles.is_empty()
+                && persisted
+                    .terminal_tombstones
+                    .iter()
+                    .any(|lifecycle| lifecycle.lifecycle_id == lifecycle_id)
+        );
+
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        assert_eq!(
+            gate.dormant_ingress_scheduler_ordinal()
+                .expect("inspect restored observer scheduler debt"),
+            None
+        );
+        let producer_episode = command_tx
+            .try_begin_producer_episode()
+            .expect("inspect producer admission after observer restore")
+            .expect("external restored debt cannot block local producers");
+        drop(producer_episode);
+        assert!(command_tx.queue.can_enqueue_as(V2IoAdmissionClass::Control));
+        command_tx
+            .try_send_as(
+                V2IoAdmissionClass::Control,
+                V2IoCommand::LoadCandidate {
+                    acquisition_id: LockedCandidateAcquisitionId(8_101),
+                    subject: proposal.subject,
+                },
+            )
+            .expect("local control work proceeds without observer retransmission");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(8_101),
+                ..
+            })
+        ));
+
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(
+                request.request(),
+                authenticated_source.clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let retry = command_tx
+            .serve_barrier()
+            .expect("inspect post-restore observer retry")
+            .expect("exact observer retry takes a new scheduler position");
+        assert_eq!(retry.lifecycle_id(), lifecycle_id);
+        assert!(retry.scheduler_ordinal() > scheduler_ordinal);
+        let (admission, replay) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::AuthenticatedSource(authenticated_source),
+            &request,
+        );
+        assert_eq!(admission.lifecycle_id, lifecycle_id);
+        assert!(matches!(replay, CertifiedServeCommit::Replay { .. }));
+
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire observer restore fixture gate");
+    }
+
+    #[test]
+    fn durable_raw_waiter_rejects_mutated_logical_lineage() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let request = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = context.roster[0].validator.clone();
+        let body_root = TempDir::new().expect("raw-lineage mutation body root");
+        let serve_root = TempDir::new().expect("raw-lineage mutation Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        {
+            let (command_tx, _command_rx, _admission) =
+                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                    .expect("open raw-lineage queue");
+            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(request.request(), via)),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+            ingress.close();
+            ingress
+                .unbind_certified_serve_gate(&gate)
+                .expect("detach raw-lineage carrier");
+        }
+
+        let family_capacity = certified_serve_family_capacity(context.roster.len(), 2, 2)
+            .expect("raw-lineage family capacity");
+        let (store, mut persisted) =
+            CertifiedServeStateStore::open(serve_root.path(), &context, family_capacity)
+                .expect("open raw-lineage durable state");
+        let waiter = persisted
+            .ingress_waiters
+            .first_mut()
+            .expect("raw admission persists one waiter");
+        waiter.lifecycle_id = CertifiedServeLifecycleId {
+            admission_ordinal: 2,
+            request_hash: request.request_hash(),
+        };
+        persisted.next_lifecycle_admission_ordinal = 2;
+        store
+            .persist(&persisted)
+            .expect("publish canonically checksummed lineage mutation");
+
+        let error =
+            match persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store) {
+                Ok(_) => panic!("mutated raw lifecycle lineage must fail closed"),
+                Err(error) => error,
+            };
+        assert!(
+            error.contains("atomically admitted logical lifecycle"),
+            "unexpected raw-lineage rejection: {error}"
+        );
     }
 
     #[test]
     fn certified_serve_abort_mismatch_preserves_logical_and_physical_handoff() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
             &service.context,
@@ -28122,8 +27898,72 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn raw_admission_persistence_failure_rolls_back_logical_lineage() {
+        let (service, keys) = fixture_with_block_payload();
+        let context = service.context.clone();
+        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
+        let request = authenticated_serve_request(
+            &context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let via = context.roster[0].validator.clone();
+        let body_root = TempDir::new().expect("raw-admission failure body root");
+        let serve_root = TempDir::new().expect("raw-admission failure Serve root");
+        let body_store =
+            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
+        let (command_tx, _command_rx, _admission) =
+            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
+                .expect("open raw-admission failure queue");
+        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
+        let temporary_state = serve_root
+            .path()
+            .join(CERTIFIED_SERVE_STATE_FILE)
+            .with_extension("norito.tmp");
+        fs::create_dir(&temporary_state).expect("block atomic raw-admission temporary file");
+        let before = fair_ingress_accounting_snapshot(&ingress);
+
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), via)),
+            Err(FairV2IngressPushError::Closed(_))
+        ));
+        let after = fair_ingress_accounting_snapshot(&ingress);
+        assert_eq!(after.last_admission_ordinal, before.last_admission_ordinal);
+        assert_eq!(after.len, before.len);
+        assert_eq!(after.bytes, before.bytes);
+        assert!(!after.open);
+        {
+            let state = command_tx.queue.lock();
+            assert!(!state.sender_open);
+            assert!(state.receiver_open);
+            assert!(state.serve_ingress_reservation.is_none());
+            assert!(state.serve_ingress_waiters.is_empty());
+            assert!(state.serves.is_empty());
+            assert!(state.serve_by_request.is_empty());
+            assert!(state.serve_by_family.is_empty());
+            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
+            assert_eq!(state.next_serve_admission_ordinal, 0);
+            assert_eq!(
+                command_tx
+                    .queue
+                    .lifecycle_ordinals
+                    .next_ordinal_for_test()
+                    .expect("inspect fail-closed shared scheduler source"),
+                Some(2),
+                "failed persistence may consume a scheduler candidate, but the closed queue cannot reuse it"
+            );
+        }
+        fs::remove_dir(&temporary_state).expect("unblock raw-admission state path");
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("detach failed raw-admission gate");
+    }
+
+    #[test]
     fn fair_ingress_gate_overflow_closes_without_partial_admission() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
             &service.context,
@@ -28285,7 +28125,7 @@ pub(super) mod tests {
         let active_serve_root = TempDir::new().expect("historical-gate Serve root");
         let active_body_store = V2BodyStore::open(active_body_root.path(), active_context.clone())
             .expect("open active-height body store");
-        let (active_tx, _active_rx, _active_admission) = persistent_test_io_command_channel(
+        let (active_tx, active_rx, _active_admission) = persistent_test_io_command_channel(
             2,
             active_serve_root.path(),
             &active_context,
@@ -28344,36 +28184,29 @@ pub(super) mod tests {
             );
             assert!(state.serve_ingress_waiters.is_empty());
             assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-            assert_eq!(state.next_serve_admission_ordinal, 0);
+            assert_eq!(state.next_serve_admission_ordinal, 1);
         }
-        let barrier_hash = active.request_hash();
-        let selected = historical_ingress
-            .try_recv_if(|inbound| {
-                matches!(
-                    inbound.message(),
-                    BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
-                        ..
-                    }) if HashOf::new(request) == barrier_hash
-                )
-            })
-            .expect("historical request cannot hide the active exact-Serve target");
-        let BlockMessage::V2(wire::ConsensusMessageV2 {
-            payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(selected_request),
-            ..
-        }) = selected.message()
-        else {
-            panic!("mixed selector preserves the current certified request");
-        };
-        assert_eq!(selected_request, active.request());
-        assert_eq!(
+        let (active_admission, active_commit) = drain_and_commit_gated_serve(
+            &historical_ingress,
+            &active_tx,
+            CertifiedServeOwnerKey::Roster(active.request().requester.clone()),
+            &active,
+        );
+        assert!(matches!(active_commit, CertifiedServeCommit::Queued));
+        assert!(matches!(
+            active_rx.try_recv(),
+            Ok(V2IoCommand::Serve { lifecycle_id, .. })
+                if lifecycle_id == active_admission.lifecycle_id
+        ));
+        assert!(
             active_tx
                 .serve_barrier_request_hash()
-                .expect("dequeued unprepared target rolls its reservation back"),
-            None
+                .expect("prepared active target crosses the checked physical cut")
+                .is_none()
         );
         let delivered = historical_ingress
-            .try_recv_if(|_| true)
+            .try_recv_if_checked(|_| true)
+            .expect("historical physical drain cannot fail Serve publication")
             .expect("authenticated historical request reaches context-store service");
         let BlockMessage::V2(wire::ConsensusMessageV2 {
             payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(delivered_request),
@@ -28389,2375 +28222,12 @@ pub(super) mod tests {
             .expect("retire historical classification gate");
     }
 
-    #[test]
-    fn fair_ingress_rollover_retires_ticket_before_old_service_teardown() {
-        let (service, keys) = fixture();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let first = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let second = authenticated_serve_request(
-            &service.context,
-            &keys[2],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = service.context.roster[0].validator.clone();
-        let (first_tx, first_rx, _first_admission) = test_io_command_channel(2);
-        let (ingress, first_gate) = gated_fair_ingress(&service.context, &first_tx);
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(first.request(), via.clone())),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(first_tx.queue.lock().serve_ingress_reservation.is_some());
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&first_gate)
-            .expect("rollover retires every old-height ticket");
-        assert_eq!(ingress.len(), 0);
-        {
-            let state = first_tx.queue.lock();
-            assert!(state.sender_open);
-            assert!(state.receiver_open);
-            assert!(state.serve_ingress_reservation.is_none());
-            assert_eq!(
-                state.serve_ingress_waiters.len(),
-                1,
-                "rollover detaches only the volatile carrier"
-            );
-            assert!(state.serves.is_empty());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-        }
-
-        let (second_tx, _second_rx, _second_admission) = test_io_command_channel(2);
-        let second_gate = CertifiedServeIngressGate {
-            queue: Arc::clone(&second_tx.queue),
-        };
-        ingress
-            .configure_roster(
-                service
-                    .context
-                    .roster
-                    .iter()
-                    .map(|entry| entry.validator.clone()),
-            )
-            .expect("reconfigure next-height fair roster");
-        ingress
-            .bind_certified_serve_gate(second_gate.clone())
-            .expect("bind next-height Serve owner");
-        ingress.open().expect("open next-height fair ingress");
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(second.request(), via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert_eq!(
-            ingress.state.lock().last_admission_ordinal,
-            2,
-            "rollover preserves the process-local fair admission high-watermark"
-        );
-        assert_eq!(
-            second_tx
-                .queue
-                .lock()
-                .serve_ingress_reservation
-                .as_ref()
-                .map(|reservation| reservation.id),
-            Some(CertifiedServeIngressReservationId(1)),
-            "the new per-height queue starts its own bounded internal owner space"
-        );
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&second_gate)
-            .expect("retire next-height fixture ticket");
-        assert!(second_tx.queue.lock().serve_ingress_reservation.is_none());
-        assert_eq!(second_tx.queue.lock().serve_ingress_waiters.len(), 1);
-        drop(first_rx);
-    }
-
-    #[test]
-    fn fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = service.context.roster[0].validator.clone();
-        let (command_tx, _command_rx, _admission) = test_io_command_channel(2);
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-        let producer_episode = command_tx
-            .try_begin_producer_episode()
-            .expect("start finite producer episode")
-            .expect("no exact ticket precedes the episode");
-        let before = fair_ingress_accounting_snapshot(&ingress);
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via.clone())),
-            Err(FairV2IngressPushError::Full(_))
-        ));
-        assert_eq!(
-            fair_ingress_accounting_snapshot(&ingress),
-            before,
-            "a running producer episode cannot partially consume fair-ingress capacity"
-        );
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.serve_ingress_reservation.is_none());
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
-            assert_eq!(
-                command_tx
-                    .queue
-                    .lifecycle_ordinals
-                    .next_ordinal_for_test()
-                    .expect("inspect shared ordinal source"),
-                Some(1),
-                "Busy admission must not mint an actor-global ordinal"
-            );
-            assert!(state.producer_episode_active);
-        }
-
-        drop(producer_episode);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound(request.request(), via)),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.serve_ingress_reservation.is_some());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-            assert!(!state.producer_episode_active);
-        }
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire producer-race fixture ticket");
-    }
-
-    #[test]
-    fn fair_ingress_full_prefix_materializes_exact_serve_before_later_churn() {
-        let (service, keys) = fixture();
-        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
-        let route = route_fixture.mint_via(requester.clone(), via.clone());
-        let (command_tx, command_rx, _admission) = test_io_command_channel(1);
-        command_tx
-            .try_send_as(
-                V2IoAdmissionClass::Auxiliary,
-                V2IoCommand::LoadCandidate {
-                    acquisition_id: LockedCandidateAcquisitionId(700),
-                    subject: proposal.subject,
-                },
-            )
-            .expect("install the frozen physical predecessor");
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via,
-                route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-
-        let mut saw_backpressure = false;
-        assert!(
-            ingress
-                .try_recv_if(|_| {
-                    match command_tx.prepare_reserved_serve(
-                        CertifiedServeOwnerKey::Roster(requester.clone()),
-                        request.clone(),
-                    ) {
-                        Err(CertifiedServePrepareError::Backpressure) => {
-                            saw_backpressure = true;
-                            false
-                        }
-                        result => panic!("full prefix must retain target ownership: {result:?}"),
-                    }
-                })
-                .is_none()
-        );
-        assert!(saw_backpressure);
-        let retained = fair_ingress_accounting_snapshot(&ingress);
-        assert_eq!(retained.len, 1);
-        assert!(
-            retained
-                .lanes
-                .iter()
-                .flat_map(|lane| &lane.entries)
-                .all(|entry| entry.owns_certified_serve_ticket)
-        );
-        let lifecycle_id = {
-            let state = command_tx.queue.lock();
-            let lifecycle_id = state
-                .serve_barrier
-                .expect("backpressured target owns one off-queue barrier");
-            assert_eq!(
-                state
-                    .serve_ingress_reservation
-                    .as_ref()
-                    .map(|reservation| reservation.state),
-                Some(CertifiedServeIngressReservationState::Prepared(
-                    lifecycle_id
-                ))
-            );
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|serve| serve.state),
-                Some(V2IoServeState::PendingCapacity)
-            );
-            lifecycle_id
-        };
-        for ordinal in 701..705 {
-            assert!(matches!(
-                command_tx.try_send_as(
-                    V2IoAdmissionClass::Control,
-                    V2IoCommand::LoadCandidate {
-                        acquisition_id: LockedCandidateAcquisitionId(ordinal),
-                        subject: proposal.subject,
-                    },
-                ),
-                Err(V2IoTrySendError::Full(_))
-            ));
-        }
-
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::LoadCandidate {
-                acquisition_id: LockedCandidateAcquisitionId(700),
-                ..
-            })
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(
-                state
-                    .commands
-                    .front()
-                    .and_then(V2IoCommand::serve_lifecycle_id),
-                Some(lifecycle_id),
-                "predecessor release materializes the exact barrier under the queue lock"
-            );
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|serve| serve.state),
-                Some(V2IoServeState::Reserved)
-            );
-        }
-        let (admission, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert_eq!(admission.lifecycle_id, lifecycle_id);
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve {
-                lifecycle_id: drained,
-                ..
-            }) if drained == lifecycle_id
-        ));
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire full-prefix fixture gate");
-    }
-
-    #[test]
-    fn fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack() {
-        let (service, keys) = fixture();
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let predecessor = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let target = authenticated_serve_request(
-            &service.context,
-            &keys[2],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let predecessor_response = certified_serve_response(
-            &predecessor,
-            payload.manifest().clone(),
-            canonical_wire,
-            &keys[0],
-        );
-        let predecessor_requester = predecessor.request().requester.clone();
-        let target_requester = target.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let predecessor_route = routes.mint_via(predecessor_requester.clone(), via.clone());
-        let target_route = routes.mint_via(target_requester.clone(), via.clone());
-        let (command_tx, command_rx, admission) = test_io_command_channel(1);
-
-        let predecessor_admission = command_tx
-            .prepare_serve(
-                CertifiedServeOwnerKey::Roster(predecessor_requester.clone()),
-                predecessor.clone(),
-            )
-            .expect("reserve the sole Serve unit for the frozen predecessor");
-        let predecessor_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(
-                predecessor_admission.request.clone(),
-            ),
-        ));
-        let (predecessor_routes, predecessor_ownership) = fair_ingress_route_owner(
-            predecessor_message,
-            predecessor_requester,
-            via.clone(),
-            predecessor_route,
-        );
-        assert!(matches!(
-            command_tx
-                .commit_serve(
-                    &predecessor_admission,
-                    predecessor_routes,
-                    predecessor_ownership,
-                )
-                .expect("commit the frozen Serve predecessor"),
-            CertifiedServeCommit::Queued
-        ));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                if lifecycle_id == predecessor_admission.lifecycle_id
-        ));
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                target.request(),
-                via,
-                target_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert!(
-            ingress
-                .try_recv_if(|_| {
-                    matches!(
-                        command_tx.prepare_reserved_serve(
-                            CertifiedServeOwnerKey::Roster(target_requester.clone()),
-                            target.clone(),
-                        ),
-                        Ok(_)
-                    )
-                })
-                .is_none(),
-            "the exact carrier remains Fair-owned while its Serve predecessor owns capacity"
-        );
-        let target_id = {
-            let state = command_tx.queue.lock();
-            let target_id = state
-                .serve_barrier
-                .expect("the target owns the off-queue Serve barrier");
-            assert_eq!(
-                state.serves.get(&target_id).map(|tracked| tracked.state),
-                Some(V2IoServeState::PendingCapacity)
-            );
-            assert_eq!(
-                state.serve_barrier_predecessors,
-                BTreeSet::from([predecessor_admission.lifecycle_id])
-            );
-            target_id
-        };
-
-        command_rx
-            .complete_serve_response(predecessor_admission.lifecycle_id, &predecessor_response)
-            .expect("seal the frozen predecessor response");
-        command_tx
-            .acknowledge_serve_completion(
-                predecessor_admission.lifecycle_id,
-                V2IoServeTerminal::Response(predecessor_response),
-            )
-            .expect("acknowledge only the frozen Serve predecessor");
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(
-                state.serves.get(&target_id).map(|tracked| tracked.state),
-                Some(V2IoServeState::Reserved)
-            );
-            assert_eq!(
-                state
-                    .commands
-                    .front()
-                    .and_then(V2IoCommand::serve_lifecycle_id),
-                Some(target_id)
-            );
-            assert!(state.serve_barrier_predecessors.is_empty());
-        }
-
-        let (target_admission, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(target_requester),
-            &target,
-        );
-        assert_eq!(target_admission.lifecycle_id, target_id);
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire Serve-only prefix fixture gate");
-    }
-
-    #[test]
-    fn fair_ingress_terminal_retry_replays_without_lifecycle_resurrection() {
-        let (service, keys) = fixture();
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let request = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
-        let initial_route = route_fixture.mint_via(requester.clone(), via.clone());
-        let retry_route = route_fixture
-            .redeliver(&initial_route)
-            .expect("redeliver drained exact request");
-        let response = certified_serve_response(
-            &request,
-            payload.manifest().clone(),
-            canonical_wire,
-            &keys[0],
-        );
-        let (command_tx, command_rx, _admission) = test_io_command_channel(2);
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via.clone(),
-                initial_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let (original, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester.clone()),
-            &request,
-        );
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                if lifecycle_id == original.lifecycle_id
-        ));
-        command_rx
-            .complete_serve_response(original.lifecycle_id, &response)
-            .expect("seal original terminal response");
-        command_tx
-            .acknowledge_serve_completion(
-                original.lifecycle_id,
-                V2IoServeTerminal::Response(response.clone()),
-            )
-            .expect("terminalize original exact lifecycle");
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via,
-                retry_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let (retry, replay) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert_eq!(retry.lifecycle_id, original.lifecycle_id);
-        assert!(matches!(
-            replay,
-            CertifiedServeCommit::Replay {
-                response: replayed,
-                ..
-            } if replayed == response
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(state.next_serve_admission_ordinal, 1);
-            assert_eq!(
-                state.next_serve_ingress_reservation_ordinal, 2,
-                "an exact terminal retry retains its tombstone but mints a fresh physical scheduler ordinal"
-            );
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert_eq!(state.serves.len(), 1);
-            assert_eq!(
-                state
-                    .serves
-                    .get(&original.lifecycle_id)
-                    .map(|serve| serve.state),
-                Some(V2IoServeState::Terminal)
-            );
-            assert!(state.commands.is_empty());
-        }
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire terminal replay fixture gate");
-    }
-
-    #[test]
-    fn fair_ingress_higher_view_waits_out_active_family_before_admission() {
-        let (service, keys) = fixture();
-        let (canonical_wire, payload, proposal) =
-            proposal_body_and_payload(&service.context, &keys);
-        let original = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let higher = authenticated_serve_request(
-            &service.context,
-            &keys[1],
-            wire::ConsensusRound {
-                view: proposal.round.view + 1,
-                ..proposal.round
-            },
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = original.request().requester.clone();
-        let via = service.context.roster[0].validator.clone();
-        let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
-        let original_route = route_fixture.mint_via(requester.clone(), via.clone());
-        let blocked_higher_route = route_fixture.mint_via(requester.clone(), via.clone());
-        let admitted_higher_route = route_fixture
-            .redeliver(&blocked_higher_route)
-            .expect("retry higher-view route after terminalization");
-        let response = certified_serve_response(
-            &original,
-            payload.manifest().clone(),
-            canonical_wire,
-            &keys[0],
-        );
-        let (command_tx, command_rx, _admission) = test_io_command_channel(2);
-        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                original.request(),
-                via.clone(),
-                original_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let (original_admission, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester.clone()),
-            &original,
-        );
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        let before_higher = fair_ingress_accounting_snapshot(&ingress);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                higher.request(),
-                via.clone(),
-                blocked_higher_route,
-            )),
-            Err(FairV2IngressPushError::Full(_))
-        ));
-        assert_eq!(
-            fair_ingress_accounting_snapshot(&ingress),
-            before_higher,
-            "a replacement cannot become selector-visible while its family is active"
-        );
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                if lifecycle_id == original_admission.lifecycle_id
-        ));
-        command_rx
-            .complete_serve_response(original_admission.lifecycle_id, &response)
-            .expect("seal original family response");
-        command_tx
-            .acknowledge_serve_completion(
-                original_admission.lifecycle_id,
-                V2IoServeTerminal::Response(response),
-            )
-            .expect("terminalize original family");
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                higher.request(),
-                via.clone(),
-                admitted_higher_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let (replacement, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &higher,
-        );
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert_eq!(
-            replacement.lifecycle_id.admission_ordinal,
-            original_admission.lifecycle_id.admission_ordinal + 1
-        );
-        let resurrected_route =
-            route_fixture.mint_via(original.request().requester.clone(), via.clone());
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                original.request(),
-                via,
-                resurrected_route,
-            )),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 2);
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert_eq!(
-                state
-                    .serve_by_family
-                    .get(&CertifiedServeFamilyKey {
-                        requester: higher.request().requester.clone(),
-                        phase: higher.request().certificate.phase,
-                    })
-                    .copied(),
-                Some(replacement.lifecycle_id),
-                "the logical higher-view owner remains without resurrecting a drained ticket"
-            );
-        }
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire active-family fixture gate");
-    }
-
-    #[test]
-    fn durable_serve_restart_before_terminal_seal_uses_fresh_physical_ordinal() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let initial_route = routes.mint_via(requester.clone(), via.clone());
-        let retry_route = routes
-            .redeliver(&initial_route)
-            .expect("redeliver exact request after unsealed restart");
-        let body_root = TempDir::new().expect("durable Serve body root");
-        let serve_root = TempDir::new().expect("durable Serve state root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        let durable_receipt = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("persist exact body before serving");
-        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
-
-        let first_lifecycle = {
-            let (command_tx, command_rx, _admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open first durable Serve queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    request.request(),
-                    via.clone(),
-                    initial_route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let (admission, committed) = drain_and_commit_gated_serve(
-                &ingress,
-                &command_tx,
-                CertifiedServeOwnerKey::Roster(requester.clone()),
-                &request,
-            );
-            assert!(matches!(committed, CertifiedServeCommit::Queued));
-            assert!(matches!(
-                command_rx.try_recv(),
-                Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                    if lifecycle_id == admission.lifecycle_id
-            ));
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire unsealed crash fixture gate");
-            admission.lifecycle_id
-        };
-
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("restore queue after crash before terminal seal");
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-            assert_eq!(state.next_serve_admission_ordinal, 1);
-            assert_eq!(
-                state.serve_ingress_waiters.len(),
-                0,
-                "a successfully drained physical occurrence cannot be restored"
-            );
-            assert_eq!(
-                state.serves.get(&first_lifecycle).map(|serve| serve.state),
-                Some(V2IoServeState::AwaitingRetry),
-                "unsealed active work restores as a non-runnable exact retry owner"
-            );
-            assert!(state.commands.is_empty());
-        }
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via,
-                retry_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let restored_barrier = command_tx
-            .serve_barrier()
-            .expect("inspect retransmitted exact request")
-            .expect("retransmission reserves a fresh physical carrier");
-        assert_eq!(
-            restored_barrier.lifecycle_ordinal(),
-            2,
-            "restart retains the logical lifecycle but not its drained physical ordinal"
-        );
-        assert!(
-            command_tx
-                .claim_serve_runtime_episode(restored_barrier)
-                .expect("restart reconstructs the volatile episode claim"),
-            "the claim may reset across a crash; liveness assumes a suffix without infinitely recurring restarts, while the restored high-watermark keeps all new runtime owners younger"
-        );
-        let (retried, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert_eq!(
-            retried.lifecycle_id, first_lifecycle,
-            "a lost unsealed episode resumes its original monotone lifecycle"
-        );
-        assert_eq!(command_tx.queue.lock().next_serve_admission_ordinal, 1);
-        assert_eq!(
-            command_tx
-                .queue
-                .lock()
-                .next_serve_ingress_reservation_ordinal,
-            2,
-            "restart retry advances to a fresh physical scheduler ordinal"
-        );
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire restored unsealed fixture gate");
-    }
-
-    #[test]
-    fn durable_new_physical_drain_before_commit_restarts_at_fresh_ordinal() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let initial_route = routes.mint_via(requester.clone(), via.clone());
-        let retry_route = routes
-            .redeliver(&initial_route)
-            .expect("redeliver exact request after pre-commit crash");
-        let body_root = TempDir::new().expect("pre-commit crash body root");
-        let serve_root = TempDir::new().expect("pre-commit crash Serve root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-
-        let lifecycle_id = {
-            let (command_tx, _command_rx, _admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open pre-commit crash queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    request.request(),
-                    via.clone(),
-                    initial_route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let drained_ordinal = command_tx
-                .serve_barrier()
-                .expect("inspect pre-commit crash barrier")
-                .expect("new request owns a physical barrier")
-                .lifecycle_ordinal();
-            let mut admission = None;
-            let inbound = ingress
-                .try_recv_if_checked(|_| {
-                    admission = Some(
-                        command_tx
-                            .prepare_reserved_serve(
-                                CertifiedServeOwnerKey::Roster(requester.clone()),
-                                request.clone(),
-                            )
-                            .expect("prepare new pre-commit crash handoff"),
-                    );
-                    true
-                })
-                .expect("publish new physical drain")
-                .expect("drain new physical carrier");
-            drop(inbound);
-            let admission = admission.expect("retain new pre-commit admission");
-            assert!(matches!(
-                command_tx.prepare_reserved_serve(
-                    CertifiedServeOwnerKey::Roster(requester.clone()),
-                    request.clone(),
-                ),
-                Err(CertifiedServePrepareError::Service(reason))
-                    if reason.contains("attempted to prepare one physically drained occurrence twice")
-            ));
-            {
-                let state = command_tx.queue.lock();
-                assert_eq!(
-                    state
-                        .serve_ingress_reservation
-                        .as_ref()
-                        .map(|reservation| reservation.state),
-                    Some(
-                        CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(
-                            admission.lifecycle_id
-                        )
-                    )
-                );
-                command_tx
-                    .queue
-                    .persist_serve_state(
-                        &state,
-                        state.next_serve_ingress_reservation_ordinal,
-                        state.next_serve_admission_ordinal,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                    .expect("unrelated later snapshot keeps drained occurrence omitted");
-            }
-            let persisted = command_tx
-                .queue
-                .serve_state_store
-                .as_ref()
-                .expect("fixture retains its Serve state store")
-                .load(&context)
-                .expect("reload pre-commit crash snapshot");
-            assert!(
-                persisted
-                    .ingress_waiters
-                    .iter()
-                    .all(|waiter| waiter.ingress_ordinal != drained_ordinal),
-                "later snapshots cannot republish a physically drained occurrence"
-            );
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire pre-commit crash gate");
-            admission.lifecycle_id
-        };
-
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("restart after new physical drain before Commit");
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.commands.is_empty());
-            assert!(state.serve_ingress_reservation.is_none());
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|serve| serve.state),
-                Some(V2IoServeState::AwaitingRetry)
-            );
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-        }
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via,
-                retry_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert_eq!(
-            command_tx
-                .serve_barrier()
-                .expect("inspect post-crash retransmission")
-                .expect("post-crash retransmission owns a barrier")
-                .lifecycle_ordinal(),
-            2,
-            "post-crash retransmission receives a fresh physical ordinal"
-        );
-        let (resumed, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert_eq!(resumed.lifecycle_id, lifecycle_id);
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire restored pre-commit crash gate");
-    }
-
-    #[test]
-    fn drained_prepared_teardown_never_restores_a_waiter() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = context.roster[0].validator.clone();
-
-        for close_receiver in [false, true] {
-            let body_root = TempDir::new().expect("drained teardown body root");
-            let serve_root = TempDir::new().expect("drained teardown Serve root");
-            let body_store =
-                V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-            let (command_tx, command_rx, admission_owner) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open drained teardown queue");
-            let mut command_rx = Some(command_rx);
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-            let route = routes.mint_via(requester.clone(), via.clone());
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    request.request(),
-                    via.clone(),
-                    route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let drained_ordinal = command_tx
-                .serve_barrier()
-                .expect("inspect drained teardown barrier")
-                .expect("teardown request owns a physical barrier")
-                .lifecycle_ordinal();
-            let mut prepared = None;
-            let inbound = ingress
-                .try_recv_if_checked(|_| {
-                    prepared = Some(
-                        command_tx
-                            .prepare_reserved_serve(
-                                CertifiedServeOwnerKey::Roster(requester.clone()),
-                                request.clone(),
-                            )
-                            .expect("prepare drained teardown handoff"),
-                    );
-                    true
-                })
-                .expect("publish drained teardown occurrence")
-                .expect("drain teardown carrier");
-            drop(inbound);
-            let lifecycle_id = prepared
-                .as_ref()
-                .expect("retain teardown admission")
-                .lifecycle_id;
-
-            if close_receiver {
-                drop(command_rx.take());
-            } else {
-                command_tx
-                    .rollback_serve_barrier_for_shutdown()
-                    .expect("explicit shutdown retires drained prepared handoff");
-            }
-            {
-                let state = command_tx.queue.lock();
-                assert!(state.serve_barrier.is_none());
-                assert!(state.serve_ingress_reservation.is_none());
-                assert!(state.serve_ingress_waiters.is_empty());
-                assert!(state.commands.is_empty());
-                assert_eq!(
-                    state.serves.get(&lifecycle_id).map(|serve| serve.state),
-                    Some(V2IoServeState::AwaitingRetry)
-                );
-            }
-            assert_eq!(
-                admission_owner.queued.load(AtomicOrdering::Acquire),
-                0,
-                "teardown releases the uncommitted physical queue unit"
-            );
-            let persisted = command_tx
-                .queue
-                .serve_state_store
-                .as_ref()
-                .expect("fixture retains its Serve state store")
-                .load(&context)
-                .expect("reload drained teardown snapshot");
-            assert!(
-                persisted
-                    .ingress_waiters
-                    .iter()
-                    .all(|waiter| waiter.ingress_ordinal != drained_ordinal),
-                "neither shutdown nor receiver close can resurrect a drained waiter"
-            );
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire drained teardown fixture gate");
-        }
-    }
-
-    #[test]
-    fn durable_coalesced_retransmission_restart_uses_fresh_physical_ordinal() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let initial_route = routes.mint_via(requester.clone(), via.clone());
-        let coalesced_route = routes
-            .redeliver(&initial_route)
-            .expect("redeliver exact request while its command is queued");
-        let post_restart_route = routes
-            .redeliver(&coalesced_route)
-            .expect("redeliver exact request after coalesced-retry restart");
-        let body_root = TempDir::new().expect("coalesced-retry body root");
-        let serve_root = TempDir::new().expect("coalesced-retry Serve root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-
-        let (lifecycle_id, coalesced_ingress_ordinal) = {
-            let (command_tx, _command_rx, _admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open first coalesced-retry queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    request.request(),
-                    via.clone(),
-                    initial_route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let first_barrier = command_tx
-                .serve_barrier()
-                .expect("inspect first coalesced-retry barrier")
-                .expect("first request owns a physical barrier");
-            let (first_admission, first_commit) = drain_and_commit_gated_serve(
-                &ingress,
-                &command_tx,
-                CertifiedServeOwnerKey::Roster(requester.clone()),
-                &request,
-            );
-            assert!(matches!(first_commit, CertifiedServeCommit::Queued));
-
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    request.request(),
-                    via.clone(),
-                    coalesced_route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let coalesced_barrier = command_tx
-                .serve_barrier()
-                .expect("inspect coalesced retransmission barrier")
-                .expect("coalesced retransmission owns a fresh physical barrier");
-            assert!(
-                coalesced_barrier.lifecycle_ordinal() > first_barrier.lifecycle_ordinal()
-            );
-            let mut coalesced_admission = None;
-            let inbound = ingress
-                .try_recv_if_checked(|_| {
-                    coalesced_admission = Some(
-                        command_tx
-                            .prepare_reserved_serve(
-                                CertifiedServeOwnerKey::Roster(requester.clone()),
-                                request.clone(),
-                            )
-                            .expect("prepare coalesced retransmission handoff"),
-                    );
-                    true
-                })
-                .expect("publish coalesced physical drain")
-                .expect("drain coalesced physical carrier");
-            drop(inbound);
-            let coalesced_admission =
-                coalesced_admission.expect("retain coalesced pre-commit admission");
-            assert_eq!(
-                coalesced_admission.lifecycle_id, first_admission.lifecycle_id,
-                "coalescing retains the immutable logical Serve lifecycle"
-            );
-            {
-                let state = command_tx.queue.lock();
-                assert_eq!(
-                    state
-                        .serve_ingress_reservation
-                        .as_ref()
-                        .map(|reservation| reservation.state),
-                    Some(
-                        CertifiedServeIngressReservationState::PhysicallyDrainedPrepared(
-                            first_admission.lifecycle_id
-                        )
-                    ),
-                    "crash window retains only the volatile Commit handoff"
-                );
-                assert!(state.serve_ingress_waiters.is_empty());
-                assert_eq!(
-                    state
-                        .commands
-                        .iter()
-                        .filter(|command| {
-                            command.serve_lifecycle_id() == Some(first_admission.lifecycle_id)
-                        })
-                        .count(),
-                    1,
-                    "coalesced retransmission cannot duplicate its queued command"
-                );
-            }
-            let persisted = command_tx
-                .queue
-                .serve_state_store
-                .as_ref()
-                .expect("fixture retains its Serve state store")
-                .load(&context)
-                .expect("reload snapshot after coalesced drain");
-            assert!(
-                persisted.ingress_waiters.iter().all(|waiter| {
-                    waiter.ingress_ordinal != coalesced_barrier.lifecycle_ordinal()
-                }),
-                "coalesced physical occurrence is durable before Commit and restart"
-            );
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire first coalesced-retry gate");
-            (
-                first_admission.lifecycle_id,
-                coalesced_barrier.lifecycle_ordinal(),
-            )
-        };
-
-        let (command_tx, command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("restart after coalesced exact retransmission");
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.commands.is_empty());
-            assert!(state.serve_ingress_reservation.is_none());
-            assert!(state.serve_ingress_waiters.is_empty());
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|serve| serve.state),
-                Some(V2IoServeState::AwaitingRetry)
-            );
-            assert_eq!(
-                state.next_serve_ingress_reservation_ordinal,
-                coalesced_ingress_ordinal
-            );
-        }
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via,
-                post_restart_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let post_restart_barrier = command_tx
-            .serve_barrier()
-            .expect("inspect post-coalesced-restart barrier")
-            .expect("post-restart retransmission owns a physical barrier");
-        assert!(
-            post_restart_barrier.lifecycle_ordinal() > coalesced_ingress_ordinal,
-            "restart retransmission cannot restore the consumed coalesced ordinal"
-        );
-        let (resumed, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert_eq!(
-            resumed.lifecycle_id, lifecycle_id,
-            "restart resumes the same immutable logical lifecycle"
-        );
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Ok(V2IoCommand::Serve {
-                lifecycle_id: queued,
-                ..
-            }) if queued == lifecycle_id
-        ));
-        assert!(matches!(
-            command_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire post-coalesced-restart gate");
-    }
-
-    #[test]
-    fn restored_serve_waiter_advances_shared_runtime_source() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let body_root = TempDir::new().expect("restored waiter body root");
-        let serve_root = TempDir::new().expect("restored waiter state root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open body store");
-        let family_capacity = certified_serve_family_capacity(context.roster.len(), 4, 4)
-            .expect("fixture family capacity");
-        let (store, _) =
-            CertifiedServeStateStore::open(serve_root.path(), &context, family_capacity)
-                .expect("open durable Serve state");
-        let mut persisted = PersistedCertifiedServeState::empty(&context);
-        persisted.next_ingress_reservation_ordinal = 41;
-        persisted
-            .ingress_waiters
-            .push(PersistedCertifiedServeIngressWaiter {
-                ingress_ordinal: 41,
-                owner: CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-                request: request.request().clone(),
-            });
-        store
-            .persist(&persisted)
-            .expect("persist exact undrained waiter high-watermark");
-
-        let lifecycle_ordinals = RuntimeLifecycleOrdinalSource::after_high_watermark(0);
-        let admission = V2IoAdmission::unbounded_for_tests();
-        let (command_tx, _command_rx) = persistent_v2_io_command_channel(
-            4,
-            context.roster.len(),
-            4,
-            4,
-            Arc::clone(&admission),
-            serve_root.path(),
-            &context,
-            Some(0),
-            &body_store,
-            lifecycle_ordinals.clone(),
-        )
-        .expect("restore waiter with shared actor-global source");
-        assert!(
-            command_tx
-                .queue
-                .lock()
-                .serve_ingress_waiters
-                .contains_key(&CertifiedServeIngressReservationId(41))
-        );
-        assert_eq!(
-            lifecycle_ordinals
-                .reserve_one()
-                .expect("new runtime owner follows restored waiter"),
-            42
-        );
-    }
-
-    #[test]
-    fn durable_serve_abort_before_commit_restarts_retry_only_without_runnable_work() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let requester = request.request().requester.clone();
-        let via = context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let rejected_route = routes.mint_via(requester.clone(), via.clone());
-        let retry_route = routes
-            .redeliver(&rejected_route)
-            .expect("redeliver exact request after abort");
-        let body_root = TempDir::new().expect("durable Serve body root");
-        let serve_root = TempDir::new().expect("durable Serve state root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-
-        let lifecycle_id = {
-            let (command_tx, _command_rx, admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open first durable Serve queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    request.request(),
-                    via.clone(),
-                    rejected_route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let mut prepared = None;
-            let inbound = ingress
-                .try_recv_if(|_| {
-                    prepared = Some(
-                        command_tx
-                            .prepare_reserved_serve(
-                                CertifiedServeOwnerKey::Roster(requester.clone()),
-                                request.clone(),
-                            )
-                            .expect("prepare exact Serve before route rejection"),
-                    );
-                    true
-                })
-                .expect("remove the rejected exact carrier from Fair ingress");
-            drop(inbound);
-            let prepared = prepared.expect("prepared abort fixture lifecycle");
-            let lifecycle_id = prepared.lifecycle_id;
-            command_tx
-                .abort_serve(prepared)
-                .expect("abort prepared physical Serve handoff");
-            {
-                let state = command_tx.queue.lock();
-                assert!(state.serve_barrier.is_none());
-                assert!(state.serve_barrier_predecessors.is_empty());
-                assert!(state.serve_ingress_reservation.is_none());
-                assert!(state.commands.is_empty());
-                assert_eq!(
-                    state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
-                    Some(V2IoServeState::AwaitingRetry)
-                );
-                assert_eq!(state.next_serve_admission_ordinal, 1);
-            }
-            assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire abort-before-commit fixture gate");
-            lifecycle_id
-        };
-
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("restore retry-only owner after abort-before-commit");
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.commands.is_empty());
-            assert!(
-                state.serve_ingress_waiters.is_empty(),
-                "a completed abort cannot restore its drained physical occurrence"
-            );
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|tracked| tracked.state),
-                Some(V2IoServeState::AwaitingRetry)
-            );
-            assert_eq!(state.next_serve_admission_ordinal, 1);
-        }
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via,
-                retry_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        assert_eq!(
-            command_tx
-                .serve_barrier()
-                .expect("inspect post-abort retransmission")
-                .expect("post-abort retransmission owns a physical carrier")
-                .lifecycle_ordinal(),
-            2,
-            "post-abort retransmission must not reuse the drained scheduler ordinal"
-        );
-        let (resumed, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert_eq!(resumed.lifecycle_id, lifecycle_id);
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert_eq!(command_tx.queue.lock().next_serve_admission_ordinal, 1);
-        assert_eq!(
-            command_tx
-                .queue
-                .lock()
-                .next_serve_ingress_reservation_ordinal,
-            2
-        );
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire restored abort fixture gate");
-    }
-
-    #[test]
-    fn durable_serve_seal_before_completion_post_restores_terminal_replay() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let response = certified_serve_response(
-            &request,
-            payload.manifest().clone(),
-            canonical_wire.clone(),
-            &keys[0],
-        );
-        let requester = request.request().requester.clone();
-        let via = context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let initial_route = routes.mint_via(requester.clone(), via.clone());
-        let retry_route = routes
-            .redeliver(&initial_route)
-            .expect("redeliver exact request after sealed restart");
-        let post_replay_restart_route = routes
-            .redeliver(&retry_route)
-            .expect("redeliver exact request after terminal replay restart");
-        let body_root = TempDir::new().expect("durable Serve body root");
-        let serve_root = TempDir::new().expect("durable Serve state root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        let durable_receipt = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("persist exact body before serving");
-        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
-
-        let lifecycle_id = {
-            let (command_tx, command_rx, admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open first durable Serve queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    request.request(),
-                    via.clone(),
-                    initial_route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let (prepared, committed) = drain_and_commit_gated_serve(
-                &ingress,
-                &command_tx,
-                CertifiedServeOwnerKey::Roster(requester.clone()),
-                &request,
-            );
-            assert!(matches!(committed, CertifiedServeCommit::Queued));
-            assert!(matches!(
-                command_rx.try_recv(),
-                Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                    if lifecycle_id == prepared.lifecycle_id
-            ));
-            command_rx
-                .complete_serve_response(prepared.lifecycle_id, &response)
-                .expect("persist terminal seal before completion exposure");
-            assert_eq!(
-                admission.queued.load(AtomicOrdering::Acquire),
-                1,
-                "sealing retains the physical admission owner until ack"
-            );
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire sealed-before-post fixture gate");
-            prepared.lifecycle_id
-        };
-
-        let (command_tx, _command_rx, admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("restore sealed completion without its channel item");
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|serve| serve.state),
-                Some(V2IoServeState::Terminal)
-            );
-            assert_eq!(state.next_serve_admission_ordinal, 1);
-        }
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via.clone(),
-                retry_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let (retried, replay) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester.clone()),
-            &request,
-        );
-        assert_eq!(retried.lifecycle_id, lifecycle_id);
-        assert!(matches!(
-            replay,
-            CertifiedServeCommit::Replay {
-                response: replayed,
-                ..
-            } if replayed == response
-        ));
-        assert_eq!(command_tx.queue.lock().next_serve_admission_ordinal, 1);
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire restored sealed fixture gate");
-        drop(ingress);
-        drop(gate);
-        drop(command_tx);
-        drop(_command_rx);
-
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("restart after the terminal replay drained its physical ingress");
-        {
-            let state = command_tx.queue.lock();
-            assert!(state.serve_ingress_reservation.is_none());
-            assert!(
-                state.serve_ingress_waiters.is_empty(),
-                "a drained terminal replay cannot restore its old physical scheduler owner"
-            );
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 2);
-            assert_eq!(
-                state.serves.get(&lifecycle_id).map(|serve| serve.state),
-                Some(V2IoServeState::Terminal)
-            );
-        }
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via,
-                post_replay_restart_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let (retried_again, replayed_again) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert_eq!(retried_again.lifecycle_id, lifecycle_id);
-        assert!(matches!(
-            replayed_again,
-            CertifiedServeCommit::Replay {
-                response: replayed,
-                ..
-            } if replayed == response
-        ));
-        assert_eq!(
-            command_tx
-                .queue
-                .lock()
-                .next_serve_ingress_reservation_ordinal,
-            3,
-            "post-restart retransmission reserves a fresh physical scheduler ordinal"
-        );
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire post-replay restart fixture gate");
-    }
-
-    #[test]
-    fn durable_serve_seal_survives_post_before_physical_ack() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let response = certified_serve_response(
-            &request,
-            payload.manifest().clone(),
-            canonical_wire.clone(),
-            &keys[0],
-        );
-        let requester = request.request().requester.clone();
-        let via = context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let initial_route = routes.mint_via(requester.clone(), via.clone());
-        let retry_route = routes
-            .redeliver(&initial_route)
-            .expect("redeliver exact request after post-before-ack crash");
-        let body_root = TempDir::new().expect("durable Serve body root");
-        let serve_root = TempDir::new().expect("durable Serve state root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        let durable_receipt = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("persist exact body before serving");
-        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
-
-        let lifecycle_id = {
-            let (command_tx, command_rx, admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open first durable Serve queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    request.request(),
-                    via.clone(),
-                    initial_route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let (prepared, committed) = drain_and_commit_gated_serve(
-                &ingress,
-                &command_tx,
-                CertifiedServeOwnerKey::Roster(requester.clone()),
-                &request,
-            );
-            assert!(matches!(committed, CertifiedServeCommit::Queued));
-            assert!(matches!(
-                command_rx.try_recv(),
-                Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                    if lifecycle_id == prepared.lifecycle_id
-            ));
-            command_rx
-                .complete_serve_response(prepared.lifecycle_id, &response)
-                .expect("seal terminal response before external post");
-            let (recipient, reply_routes, ingress_ownership) = command_tx
-                .serve_completion_ownership(prepared.lifecycle_id, response.request_hash)
-                .expect("sealed completion retains exact post ownership");
-            service
-                .post_to_peer_on_reply_routes(
-                    recipient,
-                    reply_routes,
-                    ingress_ownership,
-                    wire::ConsensusMessageV2::new(
-                        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response.clone()),
-                    ),
-                )
-                .expect("admit sealed response to the external actor corridor");
-            assert_eq!(
-                admission.queued.load(AtomicOrdering::Acquire),
-                1,
-                "external post does not acknowledge the physical completion owner"
-            );
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire post-before-ack fixture gate");
-            prepared.lifecycle_id
-        };
-        drop(service);
-
-        let (command_tx, _command_rx, admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("restore after external post before physical ack");
-        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                request.request(),
-                via,
-                retry_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let (retried, replay) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &request,
-        );
-        assert_eq!(retried.lifecycle_id, lifecycle_id);
-        assert!(matches!(
-            replay,
-            CertifiedServeCommit::Replay {
-                response: replayed,
-                ..
-            } if replayed == response
-        ));
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire restored post-before-ack fixture gate");
-    }
-
-    #[test]
-    fn durable_serve_corruption_fails_closed_without_highwater_reset() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = context.roster[0].validator.clone();
-        let body_root = TempDir::new().expect("durable Serve body root");
-        let serve_root = TempDir::new().expect("durable Serve state root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        {
-            let (command_tx, _command_rx, _admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open durable Serve queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(request.request(), via)),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire corruption fixture ticket");
-        }
-        let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
-        let mut corrupted = fs::read(&state_path).expect("read durable Serve state");
-        let last = corrupted
-            .last_mut()
-            .expect("durable Serve frame has a checksum-protected payload");
-        *last ^= 0xA5;
-        fs::write(&state_path, &corrupted).expect("publish corrupt durable Serve state fixture");
-
-        let error =
-            match persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store) {
-                Ok(_) => panic!("corrupt durable Serve state must fail closed"),
-                Err(error) => error,
-            };
-        assert!(
-            error.contains("checksum")
-                || error.contains("decode")
-                || error.contains("canonically encoded"),
-            "unexpected corrupt restore error: {error}"
-        );
-        assert_eq!(
-            fs::read(&state_path).expect("failed restore leaves corrupt evidence intact"),
-            corrupted,
-            "startup failure cannot silently replace the lost ordinal high-watermark"
-        );
-    }
-
-    #[test]
-    fn durable_serve_frame_bound_covers_max_layout_manifest_hashes() {
-        let (service, keys) = fixture();
-        let mut context = service.context.clone();
-        context.da_layout = wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 256 * 1024,
-            data_shards: 4,
-            parity_shards: 2,
-            max_payload_size_bytes: 16 * 1024 * 1024,
-            max_chunk_count: 1_024,
-        };
-        context
-            .validate()
-            .expect("recommended maximum layout context");
-        let (_, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let lifecycle_id = CertifiedServeLifecycleId {
-            admission_ordinal: 1,
-            request_hash: request.request_hash(),
-        };
-        let mut manifest = payload.manifest().clone();
-        manifest.chunk_hashes = (0..context.da_layout.max_chunk_count)
-            .map(|index| Hash::new(index.to_le_bytes()))
-            .collect();
-        manifest.chunk_root = Hash::new(b"maximum durable Serve manifest hash vector");
-        let expected = PersistedCertifiedServeState {
-            format_version: CERTIFIED_SERVE_STATE_VERSION,
-            context_id: context.id(),
-            height: context.height,
-            next_ingress_reservation_ordinal: 1,
-            next_lifecycle_admission_ordinal: 1,
-            ingress_waiters: vec![PersistedCertifiedServeIngressWaiter {
-                ingress_ordinal: 1,
-                owner: CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-                request: request.request().clone(),
-            }],
-            unsealed_lifecycles: vec![PersistedCertifiedServeLifecycle {
-                lifecycle_id,
-                owner: CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-                request: request.request().clone(),
-            }],
-            terminal_tombstones: vec![PersistedCertifiedServeTombstone {
-                lifecycle_id,
-                owner: CertifiedServeOwnerKey::Roster(request.request().requester.clone()),
-                request: request.request().clone(),
-                response_manifest: manifest,
-                response_responder: 0,
-                response_signature: vec![0xA5; wire::MAX_CONSENSUS_SIGNATURE_BYTES],
-            }],
-        };
-        let root = TempDir::new().expect("maximum durable Serve frame root");
-        let (store, empty) =
-            CertifiedServeStateStore::open(root.path(), &context, 1).expect("open bounded store");
-        assert!(empty.terminal_tombstones.is_empty());
-        store
-            .persist(&expected)
-            .expect("maximum-layout terminal record fits its derived frame bound");
-        assert!(
-            fs::metadata(&store.path)
-                .expect("inspect maximum-layout durable frame")
-                .len()
-                <= store.max_frame_bytes
-        );
-        assert_eq!(
-            store
-                .load(&context)
-                .expect("roundtrip maximum-layout durable frame"),
-            expected
-        );
-    }
-
-    #[test]
-    fn durable_higher_view_abort_republishes_displaced_terminal_before_restart() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let lower = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let higher = authenticated_serve_request(
-            &context,
-            &keys[1],
-            wire::ConsensusRound {
-                view: proposal.round.view + 1,
-                ..proposal.round
-            },
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let response = certified_serve_response(
-            &lower,
-            payload.manifest().clone(),
-            canonical_wire.clone(),
-            &keys[0],
-        );
-        let requester = lower.request().requester.clone();
-        let via = context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let lower_route = routes.mint_via(requester.clone(), via.clone());
-        let replay_route = routes
-            .redeliver(&lower_route)
-            .expect("redeliver lower request after durable replacement abort");
-        let body_root = TempDir::new().expect("durable Serve body root");
-        let serve_root = TempDir::new().expect("durable Serve state root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        let durable_receipt = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("persist lower exact body");
-        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
-
-        let lower_id = {
-            let (command_tx, command_rx, _admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open durable replacement-abort queue");
-            let lower_admission = command_tx
-                .prepare_serve(
-                    CertifiedServeOwnerKey::Roster(requester.clone()),
-                    lower.clone(),
-                )
-                .expect("admit lower durable lifecycle");
-            let lower_id = commit_and_terminalize_serve(
-                &command_tx,
-                &command_rx,
-                &lower_admission,
-                via,
-                lower_route,
-                response,
-            );
-            let higher_admission = command_tx
-                .prepare_serve(CertifiedServeOwnerKey::Roster(requester.clone()), higher)
-                .expect("publish higher durable replacement");
-            assert_eq!(higher_admission.lifecycle_id.admission_ordinal, 2);
-            assert!(
-                command_tx
-                    .queue
-                    .lock()
-                    .serve_replacements
-                    .contains_key(&higher_admission.lifecycle_id)
-            );
-            command_tx
-                .abort_serve(higher_admission)
-                .expect("abort durable higher-view replacement");
-            {
-                let state = command_tx.queue.lock();
-                assert_eq!(
-                    state.serves.get(&lower_id).map(|tracked| tracked.state),
-                    Some(V2IoServeState::Terminal)
-                );
-                assert!(state.serve_replacements.is_empty());
-                assert_eq!(state.next_serve_admission_ordinal, 2);
-            }
-            lower_id
-        };
-
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("restore displaced terminal after higher abort");
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(
-                state.serves.get(&lower_id).map(|tracked| tracked.state),
-                Some(V2IoServeState::Terminal)
-            );
-            assert_eq!(state.next_serve_admission_ordinal, 2);
-            assert!(state.serve_replacements.is_empty());
-        }
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                lower.request(),
-                context.roster[0].validator.clone(),
-                replay_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let (retried, replay) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &lower,
-        );
-        assert_eq!(retried.lifecycle_id, lower_id);
-        assert!(matches!(replay, CertifiedServeCommit::Replay { .. }));
-        assert_eq!(command_tx.queue.lock().next_serve_admission_ordinal, 2);
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire durable replacement-abort replay gate");
-    }
-
-    #[test]
-    fn durable_higher_view_admission_crash_retains_lower_terminal_family() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let lower = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let higher = authenticated_serve_request(
-            &context,
-            &keys[1],
-            wire::ConsensusRound {
-                view: proposal.round.view + 1,
-                ..proposal.round
-            },
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let other_family = authenticated_serve_request(
-            &context,
-            &keys[2],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Commit,
-        );
-        let response = certified_serve_response(
-            &lower,
-            payload.manifest().clone(),
-            canonical_wire.clone(),
-            &keys[0],
-        );
-        let requester = lower.request().requester.clone();
-        let via = context.roster[0].validator.clone();
-        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
-        let lower_route = routes.mint_via(requester.clone(), via.clone());
-        let higher_route = routes.mint_via(requester.clone(), via.clone());
-        let higher_retry_route = routes
-            .redeliver(&higher_route)
-            .expect("redeliver higher request after replacement crash");
-        let other_route = routes.mint_via(other_family.request().requester.clone(), via.clone());
-        let replay_route = routes
-            .redeliver(&lower_route)
-            .expect("redeliver lower request after replacement crash");
-        let body_root = TempDir::new().expect("durable Serve body root");
-        let serve_root = TempDir::new().expect("durable Serve state root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        let durable_receipt = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("persist lower exact body");
-        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
-
-        let (lower_id, higher_id) = {
-            let (command_tx, command_rx, _admission) =
-                persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
-                    .expect("open first durable Serve queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    lower.request(),
-                    via.clone(),
-                    lower_route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let (lower_admission, committed) = drain_and_commit_gated_serve(
-                &ingress,
-                &command_tx,
-                CertifiedServeOwnerKey::Roster(requester.clone()),
-                &lower,
-            );
-            assert!(matches!(committed, CertifiedServeCommit::Queued));
-            assert!(matches!(
-                command_rx.try_recv(),
-                Ok(V2IoCommand::Serve { lifecycle_id, .. })
-                    if lifecycle_id == lower_admission.lifecycle_id
-            ));
-            command_rx
-                .complete_serve_response(lower_admission.lifecycle_id, &response)
-                .expect("seal lower terminal response");
-            command_tx
-                .acknowledge_serve_completion(
-                    lower_admission.lifecycle_id,
-                    V2IoServeTerminal::Response(response.clone()),
-                )
-                .expect("terminalize lower family");
-
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    higher.request(),
-                    via.clone(),
-                    higher_route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            let (higher_admission, committed) = drain_and_commit_gated_serve(
-                &ingress,
-                &command_tx,
-                CertifiedServeOwnerKey::Roster(requester.clone()),
-                &higher,
-            );
-            assert!(matches!(committed, CertifiedServeCommit::Queued));
-            assert_eq!(higher_admission.lifecycle_id.admission_ordinal, 2);
-            assert!(
-                command_tx
-                    .queue
-                    .lock()
-                    .serve_replacements
-                    .contains_key(&higher_admission.lifecycle_id),
-                "committed replacement retains the old tombstone until its own seal"
-            );
-
-            // Force one more durable high-watermark rewrite after the lower
-            // tombstone left `serves`. The displaced record must still be
-            // projected from `serve_replacements`.
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound_with_route(
-                    other_family.request(),
-                    via.clone(),
-                    other_route,
-                )),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire post-replacement provisional ticket");
-            (lower_admission.lifecycle_id, higher_admission.lifecycle_id)
-        };
-
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store)
-                .expect("restore durable lower tombstone after replacement crash");
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(state.next_serve_admission_ordinal, 2);
-            assert_eq!(
-                state.serves.get(&higher_id).map(|serve| serve.state),
-                Some(V2IoServeState::AwaitingRetry)
-            );
-            assert_eq!(state.serves.len(), 1);
-            assert_eq!(
-                state
-                    .serve_replacements
-                    .get(&higher_id)
-                    .map(|(previous_id, previous)| (*previous_id, previous.state)),
-                Some((lower_id, V2IoServeState::Terminal)),
-                "the lower response remains durable but cannot reclaim the active family"
-            );
-        }
-        let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                lower.request(),
-                via,
-                replay_route,
-            )),
-            Err(FairV2IngressPushError::Rejected(_))
-        ));
-        {
-            let state = command_tx.queue.lock();
-            assert_eq!(state.next_serve_admission_ordinal, 2);
-            assert_eq!(
-                state.serves.get(&higher_id).map(|serve| serve.state),
-                Some(V2IoServeState::AwaitingRetry),
-                "an older family request cannot replace the restored high-watermark owner"
-            );
-            assert_eq!(
-                state
-                    .serve_replacements
-                    .get(&higher_id)
-                    .map(|(previous_id, previous)| (*previous_id, previous.state)),
-                Some((lower_id, V2IoServeState::Terminal)),
-                "rejected resurrection preserves the displaced terminal tombstone"
-            );
-        }
-
-        assert!(matches!(
-            ingress.try_push(certified_serve_inbound_with_route(
-                higher.request(),
-                context.roster[0].validator.clone(),
-                higher_retry_route,
-            )),
-            Ok(FairV2IngressPushDisposition::Enqueued)
-        ));
-        let (resumed, committed) = drain_and_commit_gated_serve(
-            &ingress,
-            &command_tx,
-            CertifiedServeOwnerKey::Roster(requester),
-            &higher,
-        );
-        assert_eq!(resumed.lifecycle_id, higher_id);
-        assert!(matches!(committed, CertifiedServeCommit::Queued));
-        assert_eq!(command_tx.queue.lock().next_serve_admission_ordinal, 2);
-        ingress.close();
-        ingress
-            .unbind_certified_serve_gate(&gate)
-            .expect("retire restored lower replay fixture");
-    }
-
-    #[test]
-    fn durable_serve_restore_rejects_capacity_owner_swap_across_replacement() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let observer = KeyPair::random();
-        let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
-        let lower = authenticated_serve_request(
-            &context,
-            &observer,
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let higher = authenticated_serve_request(
-            &context,
-            &observer,
-            wire::ConsensusRound {
-                view: proposal.round.view + 1,
-                ..proposal.round
-            },
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let response = certified_serve_response(
-            &lower,
-            payload.manifest().clone(),
-            canonical_wire.clone(),
-            &keys[0],
-        );
-        let source_a = PeerId::new(KeyPair::random().public_key().clone());
-        let source_b = PeerId::new(KeyPair::random().public_key().clone());
-        let lower_id = CertifiedServeLifecycleId {
-            admission_ordinal: 1,
-            request_hash: lower.request_hash(),
-        };
-        let higher_id = CertifiedServeLifecycleId {
-            admission_ordinal: 2,
-            request_hash: higher.request_hash(),
-        };
-        let body_root = TempDir::new().expect("owner-swap durable body root");
-        let serve_root = TempDir::new().expect("owner-swap durable Serve root");
-        let mut body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        let durable_receipt = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("persist owner-swap terminal body");
-        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
-        let family_capacity = certified_serve_family_capacity(context.roster.len(), 4, 4)
-            .expect("owner-swap fixture family capacity");
-        let (store, _) =
-            CertifiedServeStateStore::open(serve_root.path(), &context, family_capacity)
-                .expect("open owner-swap durable state");
-        store
-            .persist(&PersistedCertifiedServeState {
-                format_version: CERTIFIED_SERVE_STATE_VERSION,
-                context_id: context.id(),
-                height: context.height,
-                next_ingress_reservation_ordinal: 2,
-                next_lifecycle_admission_ordinal: 2,
-                ingress_waiters: Vec::new(),
-                unsealed_lifecycles: vec![PersistedCertifiedServeLifecycle {
-                    lifecycle_id: higher_id,
-                    owner: CertifiedServeOwnerKey::AuthenticatedSource(source_b),
-                    request: higher.request().clone(),
-                }],
-                terminal_tombstones: vec![PersistedCertifiedServeTombstone {
-                    lifecycle_id: lower_id,
-                    owner: CertifiedServeOwnerKey::AuthenticatedSource(source_a),
-                    request: lower.request().clone(),
-                    response_manifest: response.manifest,
-                    response_responder: response.responder,
-                    response_signature: response.signature,
-                }],
-            })
-            .expect("publish canonically checksummed owner-swap mutation");
-
-        let error =
-            match persistent_test_io_command_channel(4, serve_root.path(), &context, &body_store) {
-                Ok(_) => panic!("replacement cannot switch its retained capacity owner"),
-                Err(error) => error,
-            };
-        assert!(
-            error.contains("same-owner strict predecessor"),
-            "unexpected owner-swap rejection: {error}"
-        );
-    }
-
-    #[test]
-    fn durable_serve_state_is_pruned_only_with_successor_rollover_root() {
-        let (service, keys) = fixture();
-        let context = service.context.clone();
-        let (_, _, proposal) = proposal_body_and_payload(&context, &keys);
-        let request = authenticated_serve_request(
-            &context,
-            &keys[1],
-            proposal.round,
-            proposal.subject,
-            wire::GlobalPhase::Prepare,
-        );
-        let via = context.roster[0].validator.clone();
-        let body_root = TempDir::new().expect("durable Serve body root");
-        let serve_root = TempDir::new().expect("durable Serve state root");
-        let body_store =
-            V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        {
-            let (command_tx, _command_rx, _admission) =
-                persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                    .expect("open durable Serve queue");
-            let (ingress, gate) = gated_fair_ingress(&context, &command_tx);
-            assert!(matches!(
-                ingress.try_push(certified_serve_inbound(request.request(), via)),
-                Ok(FairV2IngressPushDisposition::Enqueued)
-            ));
-            ingress.close();
-            ingress
-                .unbind_certified_serve_gate(&gate)
-                .expect("retire rollover fixture ticket");
-        }
-        let state_path = serve_root.path().join(CERTIFIED_SERVE_STATE_FILE);
-        assert!(state_path.is_file());
-
-        // `ProductionV2Services::finish_height` removes this exact per-context
-        // root only after typed successor rollover authority is established.
-        fs::remove_dir_all(serve_root.path()).expect("simulate established successor cleanup");
-        let (command_tx, _command_rx, _admission) =
-            persistent_test_io_command_channel(2, serve_root.path(), &context, &body_store)
-                .expect("a pruned successor root starts a fresh height-local store");
-        let state = command_tx.queue.lock();
-        assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
-        assert_eq!(state.next_serve_admission_ordinal, 0);
-        assert!(state.serves.is_empty());
-    }
+    include!("tests/v2_worker_serve_unsealed_cases.rs");
+    include!("tests/v2_worker_serve_decision_restart_cases.rs");
 
     #[test]
     fn certified_serve_future_slot_blocks_control_and_consensus_replenishment() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
@@ -30871,7 +28341,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_cross_relay_retry_replays_one_terminal_tombstone() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let observer = KeyPair::random();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
@@ -30944,7 +28414,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
         let terminal_request = authenticated_serve_request(
@@ -31184,7 +28654,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_terminal_replay_source_retains_retired_route_and_reconnects() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
@@ -31320,7 +28790,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_owner() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
         let request = authenticated_serve_request(
@@ -31410,7 +28880,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_observer_owner_contains_prepare_and_commit_subfamilies() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let observer = KeyPair::random();
         let other_observer = KeyPair::random();
         let (canonical_wire, payload, proposal) =
@@ -31499,7 +28969,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_higher_view_abort_restores_terminal_high_watermark() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
         let original = authenticated_serve_request(
@@ -31568,7 +29038,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_receiver_close_aborts_reserved_replacement_without_orphan() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
         let original = authenticated_serve_request(
@@ -31644,7 +29114,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_receiver_close_rolls_back_pending_capacity_replacement() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
         let original = authenticated_serve_request(
@@ -31742,7 +29212,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
         let original = authenticated_serve_request(
@@ -31854,7 +29324,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
         let original = authenticated_serve_request(
@@ -31986,7 +29456,7 @@ pub(super) mod tests {
 
     #[test]
     fn certified_serve_delayed_lower_view_cross_relay_cannot_resurrect() {
-        let (service, keys) = fixture();
+        let (service, keys) = fixture_with_block_payload();
         let observer = KeyPair::random();
         let (canonical_wire, payload, proposal) =
             proposal_body_and_payload(&service.context, &keys);
@@ -33559,11 +31029,9 @@ pub(super) mod tests {
         );
         let message = BlockMessage::V2(envelope.clone());
         let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut route_fixture =
-            NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
+        let mut route_fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
         let route = route_fixture.mint_via(sender.clone(), hub.clone());
-        let (_, proofless) =
-            fair_ingress_route_owner(message, sender.clone(), hub, route);
+        let (_, proofless) = fair_ingress_route_owner(message, sender.clone(), hub, route);
         let mut productive = proofless.clone();
 
         let token = super::super::FairV2IngressLeaderWireToken {
@@ -33602,35 +31070,33 @@ pub(super) mod tests {
                 0,
                 false,
             );
-        let (gate, _) =
-            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-                &directory.path().join("promoted-orphan.wal"),
-                service.context.id(),
-                service.context.height,
-                owner,
-                service
-                    .context
-                    .roster
-                    .iter()
-                    .map(|entry| entry.validator.clone())
-                    .collect(),
-                capacity,
-                service.context.da_layout.max_chunk_count,
-                recovery_authority,
-                &[],
-                &[],
-            )
-            .expect("open promoted-orphan lifecycle gate");
+        let (gate, _) = super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+            &directory.path().join("promoted-orphan.wal"),
+            service.context.id(),
+            service.context.height,
+            owner,
+            service
+                .context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            capacity,
+            service.context.da_layout.max_chunk_count,
+            recovery_authority,
+            &[],
+            &[],
+        )
+        .expect("open promoted-orphan lifecycle gate");
         gate.reserve(token.clone())
             .expect("reserve promoted-orphan token");
         gate.mark_ingress(&token)
             .expect("mark promoted-orphan ingress");
-        let runtime_owner =
-            super::super::serviced_candidate_store::LeaderWireRuntimeOwner::new(
-                token.identity_hash(),
-                token.scheduler_ordinal(),
-            )
-            .expect("construct promoted-orphan runtime owner");
+        let runtime_owner = super::super::serviced_candidate_store::LeaderWireRuntimeOwner::new(
+            token.identity_hash(),
+            token.scheduler_ordinal(),
+        )
+        .expect("construct promoted-orphan runtime owner");
         let runtime = gate
             .mark_runtime(&token, runtime_owner)
             .expect("mark promoted-orphan runtime");
@@ -33649,11 +31115,7 @@ pub(super) mod tests {
             PayloadChunkDisposition::Buffered
         );
         assert_eq!(
-            service.buffer_orphan_payload_chunk_owned(
-                sender,
-                payload_chunk.clone(),
-                productive,
-            ),
+            service.buffer_orphan_payload_chunk_owned(sender, payload_chunk.clone(), productive,),
             PayloadChunkDisposition::Duplicate
         );
         let promoted = service
@@ -34151,10 +31613,7 @@ pub(super) mod tests {
         let first_hash = manifest_hash(b"proofless-eviction-a");
         let second_hash = manifest_hash(b"proofless-eviction-b");
         assert_eq!(
-            service.buffer_orphan_payload_chunk(
-                sender.clone(),
-                chunk(first_hash, 0, b"a", 0),
-            ),
+            service.buffer_orphan_payload_chunk(sender.clone(), chunk(first_hash, 0, b"a", 0),),
             PayloadChunkDisposition::Buffered
         );
         assert_eq!(
@@ -34166,7 +31625,11 @@ pub(super) mod tests {
         assert_eq!(service.orphan_chunk_count, 1);
         assert_eq!(service.orphan_chunk_bytes, 1);
         assert_eq!(
-            service.orphan_chunks.values().map(VecDeque::len).sum::<usize>(),
+            service
+                .orphan_chunks
+                .values()
+                .map(VecDeque::len)
+                .sum::<usize>(),
             1
         );
         assert!(service.evict_one_proofless_orphan_chunk());

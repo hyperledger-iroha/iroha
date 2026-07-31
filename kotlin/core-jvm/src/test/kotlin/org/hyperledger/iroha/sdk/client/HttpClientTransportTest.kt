@@ -33,8 +33,10 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
+import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
+import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -44,6 +46,7 @@ import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class HttpClientTransportTest {
+    private val verifyingKeyChainId = "test-chain"
     private val validEd25519PublicKeyHex = TestEd25519Keys.publicKeyHex(0x22)
     private val ed25519IdentityKeyHex = "01" + "00".repeat(31)
 
@@ -972,43 +975,34 @@ class HttpClientTransportTest {
 
 
     @Test
-    fun callContractPostsSelectorPayloadAndParsesResponse() {
+    fun prepareContractCallPostsSecretFreeSelectorPayloadAndParsesDraft() {
+        val signingMessageB64 = Base64.getEncoder().encodeToString(ByteArray(32) { 7 })
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
                 {
                   "ok": true,
-                  "submitted": true,
+                  "submitted": false,
                   "dataspace": "router",
                   "code_hash_hex": "${"44".repeat(32)}",
                   "abi_hash_hex": "${"55".repeat(32)}",
                   "creation_time_ms": 1712345678901,
                   "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                  "tx_hash_hex": "${"66".repeat(32)}",
-                  "pipeline_status": {
-                    "hash": "${"66".repeat(32)}",
-                    "status": {"kind": "Queued"},
-                    "summary": "Queued",
-                    "diagnostics": [],
-                    "scope": "local",
-                    "resolved_from": "queue"
-                  },
                   "entrypoint": "contribute",
                   "transaction_ttl_ms": 60000,
                   "entrypoint_hash_hex": "${"77".repeat(32)}",
                   "transaction_scaffold_b64": "AQID",
-                  "signed_transaction_b64": "BAUG",
-                  "signing_message_b64": "BwgJ",
+                  "signed_transaction_b64": "AQID",
+                  "signing_message_b64": "$signingMessageB64",
                   "operation_receipt": {
                     "operation_kind": "contract_call",
-                    "status": "submitted",
+                    "status": "pending_signature",
                     "transport": "torii",
                     "dataspace": "router",
                     "contract_alias": "router::universal",
                     "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                     "code_hash_hex": "${"44".repeat(32)}",
                     "abi_hash_hex": "${"55".repeat(32)}",
-                    "tx_hash_hex": "${"66".repeat(32)}",
                     "entrypoint": "contribute",
                     "entrypoint_hash_hex": "${"77".repeat(32)}",
                     "gas_limit": 5000,
@@ -1027,9 +1021,8 @@ class HttpClientTransportTest {
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
         )
 
-        val response = transport.callContract(
+        val response = transport.prepareContractCall(
             authority = "alice",
-            privateKey = "privkey",
             feePayment = testFeePayment(5_000L),
             contractAlias = "router::universal",
             entrypoint = "contribute",
@@ -1037,19 +1030,19 @@ class HttpClientTransportTest {
         ).join()
 
         assertTrue(response.ok)
-        assertTrue(response.submitted)
+        assertFalse(response.submitted)
         assertEquals("router", response.dataspace)
         assertEquals("contribute", response.entrypoint)
         assertEquals(60_000L, response.transactionTtlMs)
         assertEquals("77".repeat(32), response.entrypointHashHex)
-        assertEquals("local", response.pipelineStatus?.get("scope"))
+        assertNull(response.pipelineStatus)
         assertEquals("contract_call", response.operationReceipt.operationKind)
         assertEquals(5_000L, response.operationReceipt.gasLimit)
         assertEquals(5_000L, response.operationReceipt.feePayment?.gasLimit)
         assertEquals("88".repeat(32), response.operationReceipt.payloadDigestHex)
         assertEquals("AQID", response.transactionScaffoldB64)
-        assertEquals("BAUG", response.signedTransactionB64)
-        assertEquals("BwgJ", response.signingMessageB64)
+        assertEquals("AQID", response.signedTransactionB64)
+        assertEquals(signingMessageB64, response.signingMessageB64)
 
         val request = executor.lastRequest
         assertNotNull(request)
@@ -1058,7 +1051,7 @@ class HttpClientTransportTest {
         @Suppress("UNCHECKED_CAST")
         val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals("alice", payload["authority"])
-        assertEquals("privkey", payload["private_key"])
+        assertFalse(payload.containsKey("private_key"))
         assertEquals("router::universal", payload["contract_alias"])
         assertFalse(payload.containsKey("contract_address"))
         assertEquals("contribute", payload["entrypoint"])
@@ -1090,9 +1083,8 @@ class HttpClientTransportTest {
             boundary["fee_payment"],
             "torii_boundary.fee_payment",
         )
-        val request = HttpClientTransport.buildContractCallPayload(
+        val request = HttpClientTransport.buildContractCallDraftPayload(
             authority = string(boundary, "authority"),
-            privateKey = "fixture-private-key",
             feePayment = boundaryFeePayment,
             contractAddress = null,
             contractAlias = string(boundary, "contract_alias"),
@@ -1101,7 +1093,7 @@ class HttpClientTransportTest {
         )
 
         assertEquals(string(boundary, "authority"), request["authority"])
-        assertEquals("fixture-private-key", request["private_key"])
+        assertFalse(request.containsKey("private_key"))
         assertEquals(string(boundary, "contract_alias"), request["contract_alias"])
         assertFalse(request.containsKey("contract_address"))
         assertEquals(string(boundary, "entrypoint"), request["entrypoint"])
@@ -1472,9 +1464,8 @@ class HttpClientTransportTest {
         )
 
         val error = assertFailsWith<IllegalArgumentException> {
-            transport.callContract(
+            transport.prepareContractCall(
                 authority = "alice",
-                privateKey = "privkey",
                 feePayment = testFeePayment(5_000L),
                 contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                 contractAlias = "router::universal",
@@ -1489,9 +1480,8 @@ class HttpClientTransportTest {
     fun callContractRejectsBlankEntrypointAndNonPositiveGas() {
         for (entrypoint in listOf("", "   ")) {
             val error = assertFailsWith<IllegalArgumentException> {
-                HttpClientTransport.buildContractCallPayload(
+                HttpClientTransport.buildContractCallDraftPayload(
                     authority = "alice",
-                    privateKey = "privkey",
                     feePayment = testFeePayment(1),
                     contractAddress = null,
                     contractAlias = "router::universal",
@@ -2494,45 +2484,68 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun verifierKeyRegisterAndUpdatePostSignedPayloads() {
+    fun verifierKeyRegisterAndUpdateReturnUnsignedDrafts() {
         val backend = "halo2/ipa"
         val registerBytes = byteArrayOf(1, 2, 3)
         val updateBytes = byteArrayOf(10)
-        val executor = QueueResponseExecutor(listOf(202 to "", 202 to ""))
+        val authority = testMultisigAccountId()
+        val registerRequestBody = verifierKeyRegisterRequest(
+            authority = " $authority ",
+            backend = backend,
+            name = " transfer_vk ",
+            publicInputsSchemaHashHex = "0x${"AA".repeat(32)}",
+            gasScheduleId = " halo2-default ",
+            activationHeight = 10,
+            withdrawHeight = 10,
+            commitmentHex = verifierKeyCommitment(backend, registerBytes).uppercase(),
+            verifyingKeyBytes = registerBytes,
+            status = "active",
+        )
+        val updateRequestBody = verifierKeyUpdateRequest(
+            authority = authority,
+            backend = backend,
+            name = "transfer_vk",
+            version = 2,
+            commitmentHex = verifierKeyCommitment(backend, updateBytes),
+            verifyingKeyBytes = updateBytes,
+            verifyingKeyLength = 1,
+            status = "withdrawn",
+        )
+        val expectedRegisterPayload =
+            HttpClientTransport.buildVerifyingKeyRegisterPayload(registerRequestBody)
+        val expectedUpdatePayload =
+            HttpClientTransport.buildVerifyingKeyUpdatePayload(updateRequestBody)
+        val registerTransactionPayload = verifyingKeyTransactionPayload(
+            expectedRegisterPayload,
+            VerifyingKeyDraftOperation.REGISTER,
+        )
+        val updateTransactionPayload = verifyingKeyTransactionPayload(
+            expectedUpdatePayload,
+            VerifyingKeyDraftOperation.UPDATE,
+        )
+        val executor = QueueResponseExecutor(
+            listOf(
+                200 to verifyingKeyDraftJson(registerTransactionPayload),
+                200 to verifyingKeyDraftJson(updateTransactionPayload),
+            ),
+        )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            config = ClientConfig.builder()
+                .setLocalSigningContext(LocalSigningContext(verifyingKeyChainId))
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .build(),
         )
 
-        val registerResponse = transport.registerVerifyingKey(
-            verifierKeyRegisterRequest(
-                authority = " alice ",
-                privateKey = " privkey ",
-                backend = backend,
-                name = " transfer_vk ",
-                publicInputsSchemaHashHex = "0x${"AA".repeat(32)}",
-                gasScheduleId = " halo2-default ",
-                activationHeight = 10,
-                withdrawHeight = 10,
-                commitmentHex = verifierKeyCommitment(backend, registerBytes).uppercase(),
-                verifyingKeyBytes = registerBytes,
-                status = "active",
-            ),
-        ).join()
-        val updateResponse = transport.updateVerifyingKey(
-            verifierKeyUpdateRequest(
-                backend = backend,
-                name = "transfer_vk",
-                version = 2,
-                commitmentHex = verifierKeyCommitment(backend, updateBytes),
-                verifyingKeyBytes = updateBytes,
-                verifyingKeyLength = 1,
-                status = "withdrawn",
-            ),
-        ).join()
+        val registerResponse = transport.registerVerifyingKey(registerRequestBody).join()
+        val updateResponse = transport.updateVerifyingKey(updateRequestBody).join()
 
-        assertEquals(202, registerResponse.statusCode)
-        assertEquals(202, updateResponse.statusCode)
+        assertFalse(registerResponse.submitted)
+        assertTrue(registerResponse.transactionPayloadBytes().contentEquals(registerTransactionPayload))
+        assertTrue(registerResponse.signingMessageBytes().contentEquals(IrohaHash.prehash(registerTransactionPayload)))
+        assertFalse(updateResponse.submitted)
+        assertTrue(updateResponse.transactionPayloadBytes().contentEquals(updateTransactionPayload))
+        assertTrue(updateResponse.signingMessageBytes().contentEquals(IrohaHash.prehash(updateTransactionPayload)))
         assertEquals(2, executor.requests.size)
 
         val registerRequest = executor.requests[0]
@@ -2540,8 +2553,8 @@ class HttpClientTransportTest {
         assertEquals("https://torii.example/api/v1/zk/vk/register", registerRequest.uri.toString())
         @Suppress("UNCHECKED_CAST")
         val registerPayload = JsonParser.parse(readBody(registerRequest)) as Map<String, Any?>
-        assertEquals("alice", registerPayload["authority"])
-        assertEquals("privkey", registerPayload["private_key"])
+        assertEquals(authority, registerPayload["authority"])
+        assertFalse(registerPayload.containsKey("private_key"))
         assertEquals(backend, registerPayload["backend"])
         assertEquals("transfer_vk", registerPayload["name"])
         assertEquals(1L, (registerPayload["version"] as Number).toLong())
@@ -2560,8 +2573,8 @@ class HttpClientTransportTest {
         assertEquals("https://torii.example/api/v1/zk/vk/update", updateRequest.uri.toString())
         @Suppress("UNCHECKED_CAST")
         val updatePayload = JsonParser.parse(readBody(updateRequest)) as Map<String, Any?>
-        assertEquals("alice", updatePayload["authority"])
-        assertEquals("privkey", updatePayload["private_key"])
+        assertEquals(authority, updatePayload["authority"])
+        assertFalse(updatePayload.containsKey("private_key"))
         assertEquals(backend, updatePayload["backend"])
         assertEquals("transfer_vk", updatePayload["name"])
         assertEquals(2L, (updatePayload["version"] as Number).toLong())
@@ -2582,7 +2595,10 @@ class HttpClientTransportTest {
         val executor = CapturingExecutor()
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            config = ClientConfig.builder()
+                .setLocalSigningContext(LocalSigningContext(verifyingKeyChainId))
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .build(),
         )
 
         fun expectReject(block: () -> Unit) {
@@ -2593,7 +2609,6 @@ class HttpClientTransportTest {
 
         expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(backend = "mock/dev")) }
         expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(authority = " ")) }
-        expectReject { transport.updateVerifyingKey(verifierKeyUpdateRequest(privateKey = " ")) }
         expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(name = "scope:vk")) }
         expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(version = 0)) }
         expectReject { transport.registerVerifyingKey(verifierKeyRegisterRequest(publicInputsSchemaHashHex = "abc")) }
@@ -2634,6 +2649,205 @@ class HttpClientTransportTest {
                 ),
             )
         }
+    }
+
+    @Test
+    fun verifierKeyDraftCanonicalInstructionUsesU8StatusDiscriminant() {
+        val fixture = loadSharedFixture("fixtures/zk/verifying_key_record_v1.json")
+        @Suppress("UNCHECKED_CAST")
+        val request = obj(fixture, "request") as Map<String, Any>
+        val payload = (
+            VerifyingKeyDraftBinding.expectedInstruction(
+                request,
+                VerifyingKeyDraftOperation.REGISTER,
+            ).payload as WirePayload
+        ).payloadBytes
+        val actualHex = hex(payload)
+        val backendTagFrame = obj(fixture, "backend_tag_frame")
+        val statusBoundary = obj(fixture, "status_boundary")
+        val backendTagOffset = (backendTagFrame.getValue("offset") as Number).toInt()
+        val backendTagHex = string(backendTagFrame, "hex")
+        val statusOffset = (statusBoundary.getValue("offset") as Number).toInt()
+        val statusHex = string(statusBoundary, "hex")
+
+        assertEquals(string(fixture, "expected_inner_frame_hex"), actualHex)
+        assertEquals(
+            (fixture.getValue("expected_inner_frame_bytes") as Number).toInt(),
+            payload.size,
+        )
+        assertEquals(
+            backendTagHex,
+            hex(payload.copyOfRange(backendTagOffset, backendTagOffset + backendTagHex.length / 2)),
+            "backend tag must remain a four-byte u32 field at the canonical offset",
+        )
+        assertEquals(
+            statusHex,
+            hex(payload.copyOfRange(statusOffset, statusOffset + statusHex.length / 2)),
+            "absent inline key must end immediately before the one-byte status field",
+        )
+    }
+
+    @Test
+    fun verifierKeyDraftParserRejectsNonExactOrTamperedResponses() {
+        val request = HttpClientTransport.buildVerifyingKeyRegisterPayload(
+            verifierKeyRegisterRequest(),
+        )
+        val transactionPayload = verifyingKeyTransactionPayload(
+            request,
+            VerifyingKeyDraftOperation.REGISTER,
+        )
+        val valid = verifyingKeyDraftJson(transactionPayload)
+        val parsed = VerifyingKeyTransactionDraftParser.parseRegister(
+            valid.toByteArray(StandardCharsets.UTF_8),
+            verifyingKeyChainId,
+            request,
+        )
+        assertFalse(parsed.submitted)
+        assertTrue(parsed.transactionPayloadBytes().contentEquals(transactionPayload))
+
+        fun expectReject(json: String) {
+            assertFailsWith<IllegalArgumentException> {
+                VerifyingKeyTransactionDraftParser.parseRegister(
+                    json.toByteArray(StandardCharsets.UTF_8),
+                    verifyingKeyChainId,
+                    request,
+                )
+            }
+        }
+
+        expectReject(
+            valid.replace(
+                "\"submitted\":false",
+                "\"submitted\":false,\"retired_private_key\":\"secret\"",
+            ),
+        )
+        expectReject(valid.replace("\"submitted\":false", "\"submitted\":true"))
+        val payloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
+        expectReject(valid.replace(payloadB64, "$payloadB64="))
+        val signingMessageB64 =
+            Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
+        expectReject(
+            valid.replace(
+                signingMessageB64,
+                Base64.getEncoder().encodeToString(ByteArray(31)),
+            ),
+        )
+        expectReject(
+            valid.replace(
+                signingMessageB64,
+                Base64.getEncoder().encodeToString(ByteArray(32) { 7 }),
+            ),
+        )
+        expectReject(verifyingKeyDraftJson(byteArrayOf(1, 2, 3, 4)))
+        expectReject(valid.replace("\"transaction_payload_b64\":", "\"payload_b64\":"))
+
+        val wrongStatusTransport = HttpClientTransport.withExecutor(
+            executor = StubResponseExecutor(202, valid.toByteArray(StandardCharsets.UTF_8)),
+            config = ClientConfig.builder()
+                .setLocalSigningContext(LocalSigningContext(verifyingKeyChainId))
+                .setBaseUri(URI.create("https://torii.example"))
+                .build(),
+        )
+        val error = assertFailsWith<CompletionException> {
+            val verifyingKeyBytes = byteArrayOf(9)
+            wrongStatusTransport.registerVerifyingKey(
+                verifierKeyRegisterRequest(
+                    verifyingKeyBytes = verifyingKeyBytes,
+                    commitmentHex = verifierKeyCommitment("halo2/ipa", verifyingKeyBytes),
+                ),
+            ).join()
+        }
+        assertTrue(error.cause?.message?.contains("status 202") == true)
+    }
+
+    @Test
+    fun verifierKeyDraftRejectsSemanticSubstitutionBeforeSigning() {
+        val request = HttpClientTransport.buildVerifyingKeyRegisterPayload(
+            verifierKeyRegisterRequest(
+                verifyingKeyBytes = byteArrayOf(1, 2, 3),
+            ),
+        )
+        val expectedInstruction = VerifyingKeyDraftBinding.expectedInstruction(
+            request,
+            VerifyingKeyDraftOperation.REGISTER,
+        )
+
+        fun expectReject(payload: ByteArray) {
+            assertFailsWith<IllegalArgumentException> {
+                VerifyingKeyTransactionDraftParser.parseRegister(
+                    verifyingKeyDraftJson(payload).toByteArray(StandardCharsets.UTF_8),
+                    verifyingKeyChainId,
+                    request,
+                )
+            }
+        }
+
+        expectReject(
+            verifyingKeyTransactionPayload(
+                request,
+                VerifyingKeyDraftOperation.UPDATE,
+            ),
+        )
+        expectReject(
+            verifyingKeyTransactionPayload(
+                request,
+                VerifyingKeyDraftOperation.REGISTER,
+                instructions = listOf(expectedInstruction, expectedInstruction),
+            ),
+        )
+        expectReject(
+            verifyingKeyTransactionPayload(
+                request,
+                VerifyingKeyDraftOperation.REGISTER,
+                chainId = "other-chain",
+            ),
+        )
+        expectReject(
+            verifyingKeyTransactionPayload(
+                request,
+                VerifyingKeyDraftOperation.REGISTER,
+                authority = testAccountId(0x59),
+            ),
+        )
+
+        val changedRecord = LinkedHashMap(request)
+        changedRecord["curve"] = "pasta"
+        expectReject(
+            verifyingKeyTransactionPayload(
+                changedRecord,
+                VerifyingKeyDraftOperation.REGISTER,
+            ),
+        )
+
+        val canonical = verifyingKeyTransactionPayload(
+            request,
+            VerifyingKeyDraftOperation.REGISTER,
+        )
+        require(canonical[0].toInt() and 0x80 == 0)
+        val noncanonical = ByteArray(canonical.size + 1)
+        noncanonical[0] = (canonical[0].toInt() or 0x80).toByte()
+        noncanonical[1] = 0
+        canonical.copyInto(noncanonical, destinationOffset = 2, startIndex = 1)
+        expectReject(noncanonical)
+    }
+
+    @Test
+    fun verifierKeyDraftRequiresLocalSigningContextBeforeRequest() {
+        val executor = CapturingExecutor()
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .build(),
+        )
+
+        assertFailsWith<IllegalStateException> {
+            transport.registerVerifyingKey(verifierKeyRegisterRequest())
+        }
+        assertFailsWith<IllegalStateException> {
+            transport.updateVerifyingKey(verifierKeyUpdateRequest())
+        }
+        assertEquals(0, executor.requestCount)
     }
 
     @Test
@@ -3370,29 +3584,6 @@ class HttpClientTransportTest {
         assertEquals("transaction queue is at capacity", HttpErrorMessageExtractor.extractMessage(body))
     }
 
-    @Test
-    fun submitTransactionJsonUsesJsonIngressWithConfiguredAccept() {
-        val executor = StubResponseExecutor(202, ByteArray(0))
-        val transport = HttpClientTransport.withExecutor(
-            executor = executor,
-            config = ClientConfig.builder()
-                .setBaseUri(URI.create("https://127.0.0.1:8080"))
-                .setWireFormatPreference(WireFormatPreference.JSON_PREFERRED)
-                .build(),
-        )
-        val body = """{"version":1,"content":{}}""".toByteArray(StandardCharsets.UTF_8)
-
-        val response = transport.submitTransactionJson(body).join()
-
-        assertEquals(202, response.statusCode)
-        val request = executor.lastRequest
-        assertEquals("POST", request.method)
-        assertEquals("https://127.0.0.1:8080/v1/pipeline/transactions", request.uri.toString())
-        assertEquals("application/json", request.headers["Content-Type"]?.first())
-        assertEquals(WireFormatPreference.JSON_PREFERRED.acceptHeader(), request.headers["Accept"]?.first())
-        assertTrue(body.contentEquals(request.body))
-    }
-
     private fun encodeErrorEnvelope(code: String, message: String, rejectCode: String): ByteArray {
         val optionalString = NoritoAdapters.option(NoritoAdapters.stringAdapter())
         val detailsAdapter = NoritoAdapters.struct(
@@ -3608,8 +3799,7 @@ class HttpClientTransportTest {
     }
 
     private fun verifierKeyRegisterRequest(
-        authority: String = "alice",
-        privateKey: String = "privkey",
+        authority: String = testMultisigAccountId(),
         backend: String = "halo2/ipa",
         name: String = "transfer_vk",
         version: Long = 1,
@@ -3623,13 +3813,12 @@ class HttpClientTransportTest {
         activationHeight: Long? = null,
         withdrawHeight: Long? = null,
         commitmentHex: String? = null,
-        verifyingKeyBytes: ByteArray? = null,
+        verifyingKeyBytes: ByteArray? = byteArrayOf(1),
         verifyingKeyLength: Long? = null,
         status: String? = null,
     ): VerifyingKeyRegisterRequest =
         VerifyingKeyRegisterRequest(
             authority = authority,
-            privateKey = privateKey,
             backend = backend,
             name = name,
             version = version,
@@ -3649,8 +3838,7 @@ class HttpClientTransportTest {
         )
 
     private fun verifierKeyUpdateRequest(
-        authority: String = "alice",
-        privateKey: String = "privkey",
+        authority: String = testMultisigAccountId(),
         backend: String = "halo2/ipa",
         name: String = "transfer_vk",
         version: Long = 1,
@@ -3664,13 +3852,12 @@ class HttpClientTransportTest {
         activationHeight: Long? = null,
         withdrawHeight: Long? = null,
         commitmentHex: String? = null,
-        verifyingKeyBytes: ByteArray? = null,
+        verifyingKeyBytes: ByteArray? = byteArrayOf(1),
         verifyingKeyLength: Long? = null,
         status: String? = null,
     ): VerifyingKeyUpdateRequest =
         VerifyingKeyUpdateRequest(
             authority = authority,
-            privateKey = privateKey,
             backend = backend,
             name = name,
             version = version,
@@ -3688,6 +3875,37 @@ class HttpClientTransportTest {
             verifyingKeyLength = verifyingKeyLength,
             status = status,
         )
+
+    private fun verifyingKeyDraftJson(transactionPayload: ByteArray): String {
+        val payloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
+        val signingMessageB64 =
+            Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
+        return """{"submitted":false,"transaction_payload_b64":"$payloadB64","signing_message_b64":"$signingMessageB64"}"""
+    }
+
+    private fun verifyingKeyTransactionPayload(
+        request: Map<String, Any>,
+        operation: VerifyingKeyDraftOperation,
+        chainId: String = verifyingKeyChainId,
+        authority: String = request["authority"] as String,
+        instructions: List<InstructionBox>? = null,
+    ): ByteArray {
+        val discriminant = requireNotNull(AccountAddress.detectI105Discriminant(authority))
+        val instructionList = instructions ?: listOf(
+            VerifyingKeyDraftBinding.expectedInstruction(request, operation),
+        )
+        return NoritoJavaCodecAdapter(discriminant).encodeTransaction(
+            TransactionPayload(
+                chainId = chainId,
+                authority = authority,
+                creationTimeMs = 1_700_000_000_000L,
+                executable = Executable.instructions(instructionList),
+                timeToLiveMs = 5_000L,
+                nonce = 1L,
+                feePayment = testFeePayment(),
+            ),
+        )
+    }
 
     private fun verifierKeyCommitment(backend: String, bytes: ByteArray): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -4495,6 +4713,9 @@ class HttpClientTransportTest {
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
             requestCount += 1
             lastRequest = request
+            if (request.uri.path.endsWith("/v1/node/capabilities")) {
+                return CompletableFuture.completedFuture(compatibleCapabilitiesResponse())
+            }
             return CompletableFuture.completedFuture(
                 TransportResponse.builder().setStatusCode(404).setBody(byteArrayOf()).build(),
             )
@@ -4508,6 +4729,9 @@ class HttpClientTransportTest {
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
             requestCount += 1
             lastRequest = request
+            if (request.uri.path.endsWith("/v1/node/capabilities")) {
+                return CompletableFuture.completedFuture(compatibleCapabilitiesResponse())
+            }
             return CompletableFuture.completedFuture(
                 TransportResponse.builder().setStatusCode(statusCode).setBody(body).build(),
             )
@@ -4543,6 +4767,9 @@ class HttpClientTransportTest {
         private var pollCount = 0
 
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            if (request.uri.path.endsWith("/v1/node/capabilities")) {
+                return CompletableFuture.completedFuture(compatibleCapabilitiesResponse())
+            }
             if (request.method == "POST") {
                 val builder = TransportResponse.builder()
                     .setStatusCode(202)
@@ -4573,5 +4800,19 @@ class HttpClientTransportTest {
             }
             throw IllegalStateException("Unexpected HTTP method ${request.method}")
         }
+    }
+
+    private companion object {
+        // Shared by executors that model the signed-transaction capability probe.
+        fun compatibleCapabilitiesResponse(): TransportResponse =
+            TransportResponse.builder()
+                .setStatusCode(200)
+                .setBody(
+                    (
+                        "{\"data_model_version\":4,\"signed_transaction_schema_hash_hex\":" +
+                            "\"7ab5ff9c572efb316deac478f19209c5\"}"
+                        ).toByteArray(StandardCharsets.UTF_8),
+                )
+                .build()
     }
 }

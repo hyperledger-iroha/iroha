@@ -210,7 +210,7 @@ use napi::{
 use napi_derive::napi;
 use norito::{
     codec::{DecodeAll, Encode},
-    core::{self as norito_core, DecodeFromSlice},
+    core::{self as norito_core},
     decode_from_bytes,
     json::{self, JsonDeserialize, Map, Value},
 };
@@ -2353,19 +2353,14 @@ pub fn axt_compute_binding(descriptor_bytes: Buffer) -> napi::Result<Buffer> {
 
 #[allow(unsafe_code)]
 fn decode_instruction_aligned(bytes: &[u8]) -> Result<InstructionBox, norito_core::Error> {
-    if let Ok(instruction) = decode_from_bytes::<InstructionBox>(bytes) {
-        return Ok(instruction);
+    let primary_error = match norito::decode_canonical::<InstructionBox>(bytes) {
+        Ok(instruction) => return Ok(instruction),
+        Err(error) => error,
+    };
+    match norito::decode_canonical::<ProposeValidationFeePolicy>(bytes) {
+        Ok(instruction) => Ok(instruction.into()),
+        Err(_) => Err(primary_error),
     }
-    if let Ok(instruction) = decode_from_bytes::<ProposeValidationFeePolicy>(bytes) {
-        return Ok(instruction.into());
-    }
-    let view = norito_core::from_bytes_view(bytes)?;
-    let payload = view.as_bytes();
-    let (instruction, used) = <InstructionBox as DecodeFromSlice>::decode_from_slice(payload)?;
-    if used != payload.len() {
-        return Err(norito_core::Error::LengthMismatch);
-    }
-    Ok(instruction)
 }
 /// Derive the confidential key hierarchy from a 32-byte spend key.
 #[napi]
@@ -2583,68 +2578,6 @@ pub fn build_confidential_transfer_proof_v2(
     )
     .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     Ok(JsConfidentialTransferProofEnvelopeV2 {
-        nullifiers: proof
-            .nullifiers
-            .into_iter()
-            .map(|entry| Buffer::from(entry.to_vec()))
-            .collect(),
-        output_commitments: proof
-            .output_commitments
-            .into_iter()
-            .map(|entry| Buffer::from(entry.to_vec()))
-            .collect(),
-        root: Buffer::from(proof.root.to_vec()),
-        proof: Buffer::from(proof.proof.bytes),
-    })
-}
-
-/// Build an asset-hidden transfer v1 proof envelope.
-#[napi]
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-pub fn build_confidential_asset_hidden_transfer_proof_v1(
-    chain_id: String,
-    pool_id: String,
-    asset_set_root_hex: String,
-    input_commitments_hex: Vec<String>,
-    nullifiers_hex: Vec<String>,
-    output_commitments_hex: Vec<String>,
-    root_hint_hex: String,
-    vk_backend: String,
-    vk_circuit_id: String,
-    vk_bytes: Uint8Array,
-) -> napi::Result<JsAssetHiddenTransferProofEnvelopeV1> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
-    let asset_set_root = parse_fixed_32_hex("asset_set_root_hex", &asset_set_root_hex)?;
-    let input_commitments =
-        parse_fixed_32_hex_list("input_commitments_hex", input_commitments_hex)?;
-    let nullifiers = parse_fixed_32_hex_list("nullifiers_hex", nullifiers_hex)?;
-    let output_commitments =
-        parse_fixed_32_hex_list("output_commitments_hex", output_commitments_hex)?;
-    let root_hint = parse_fixed_32_hex("root_hint_hex", &root_hint_hex)?;
-    let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(
-        vk_backend.trim().to_owned(),
-        vk_bytes.to_vec(),
-    );
-    let proof = confidential_v2::build_asset_hidden_transfer_proof_v1(
-        &chain_id,
-        pool_id.trim(),
-        asset_set_root,
-        &input_commitments,
-        &nullifiers,
-        &output_commitments,
-        root_hint,
-        vk_circuit_id.trim(),
-        &vk_box,
-    )
-    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
-    Ok(JsAssetHiddenTransferProofEnvelopeV1 {
-        input_commitments: proof
-            .input_commitments
-            .into_iter()
-            .map(|entry| Buffer::from(entry.to_vec()))
-            .collect(),
         nullifiers: proof
             .nullifiers
             .into_iter()
@@ -12305,21 +12238,6 @@ pub struct JsConfidentialReceiveAddressV2 {
 /// Result of building a confidential transfer v2 proof envelope.
 #[napi(object)]
 pub struct JsConfidentialTransferProofEnvelopeV2 {
-    /// Nullifiers consumed by the proof.
-    pub nullifiers: Vec<Buffer>,
-    /// Output commitments created by the proof.
-    pub output_commitments: Vec<Buffer>,
-    /// Merkle root bound into the proof.
-    pub root: Buffer,
-    /// Norito-encoded `OpenVerifyEnvelope` payload.
-    pub proof: Buffer,
-}
-
-/// Result of building an asset-hidden transfer v1 proof envelope.
-#[napi(object)]
-pub struct JsAssetHiddenTransferProofEnvelopeV1 {
-    /// Input commitments bound into the proof.
-    pub input_commitments: Vec<Buffer>,
     /// Nullifiers consumed by the proof.
     pub nullifiers: Vec<Buffer>,
     /// Output commitments created by the proof.

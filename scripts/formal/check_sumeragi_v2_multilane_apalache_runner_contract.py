@@ -85,8 +85,8 @@ def main() -> int:
     )
     _must_reject(
         source,
-        "inflight_first_release_fixed.cfg \\\n  10 \\",
-        "inflight_first_release_fixed.cfg \\\n  9 \\",
+        "inflight_first_release_fixed.cfg \\\n  18 \\",
+        "inflight_first_release_fixed.cfg \\\n  17 \\",
         "in-flight layout bound reduction",
     )
     _must_reject(

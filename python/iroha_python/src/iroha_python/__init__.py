@@ -1,9 +1,8 @@
-"""Python SDK helpers for interacting with Hyperledger Iroha v2 nodes.
+"""Python SDK for interacting with Hyperledger Iroha 3 nodes.
 
-The package currently focuses on re-exporting stable building blocks—most
-notably the Norito codec and Torii HTTP client—so applications can start
-targeting the upcoming SDK while richer functionality (crypto bindings,
-transaction builders, network pipelines) is implemented.
+The package exposes the Norito codec, Torii client, signing and cryptographic
+helpers, transaction builders, address and data-model types, and SoraFS
+workflows used by first-release Iroha 3 applications.
 """
 
 # ruff: noqa: F401, I001, F821
@@ -59,9 +58,12 @@ from .sorafs_replication import (
     decode_replication_order_instruction,
 )
 from .client import (
+    AppApiTransactionDraft,
     ContractCallIntent,
+    LocalSigningContext,
     ResolvedToriiClientConfig,
     ToriiClient,
+    ZkVerifyingKeyTransactionDraft,
     TransactionStatusError,
     DataModelMismatchError,
     create_torii_client,
@@ -406,6 +408,9 @@ _BASE_EXPORTS = [
     "AccountAddress",
     "AccountAddressError",
     "ToriiClient",
+    "AppApiTransactionDraft",
+    "LocalSigningContext",
+    "ZkVerifyingKeyTransactionDraft",
     "ContractCallIntent",
     "create_torii_client",
     "TransactionStatusError",
@@ -774,6 +779,7 @@ _CRYPTO_EXPORTS: List[str] = [
     "CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1",
     "PrivacyBootleLanternPresentationActionBuildResultV1",
     "PrivacyJindoActionBuildResultV1",
+    "PrivacyNativeActionBuildResultV1",
     "PrivacyVeRangeActionBuildResultV1",
     "PrivacyVegaActionPreparationV1",
     "PrivacyVegaActionBuildResultV1",
@@ -849,8 +855,6 @@ _CRYPTO_EXPORTS: List[str] = [
     "buildConfidentialTransferProofV2",
     "build_confidential_unshield_proof_v3",
     "buildConfidentialUnshieldProofV3",
-    "build_confidential_asset_hidden_transfer_proof_v1",
-    "buildConfidentialAssetHiddenTransferProofV1",
     "confidential_transfer_v2_verifying_key_registration_payload_v1",
     "confidential_unshield_v3_verifying_key_registration_payload_v1",
     "privacy_bridge_abi_version",
@@ -858,14 +862,21 @@ _CRYPTO_EXPORTS: List[str] = [
     "privacy_capabilities_v1",
     "canonical_genesis_header_hash_v1",
     "canonical_signed_transaction_hash_v1",
+    "signed_transaction_envelope_from_versioned_v1",
     "privacy_vega_device_authentication_digest_v1",
     "inspect_signed_privacy_zk_ace_transfer_action_v1",
     "inspect_signed_privacy_bootle_lantern_presentation_action_v1",
     "inspect_signed_privacy_jindo_action_v1",
     "inspect_signed_privacy_verange_action_v1",
     "inspect_signed_privacy_vega_action_v1",
+    "inspect_signed_privacy_zk_x509_identity_presentation_action_v1",
     "inspect_signed_privacy_zk_ams_batch_admission_action_v1",
     "inspect_signed_privacy_zk_ams_provision_account_action_v1",
+    "inspect_signed_privacy_anonymous_pgc_payment_action_v1",
+    "inspect_signed_privacy_orchard_note_action_v1",
+    "inspect_signed_privacy_fcmp_membership_payment_action_v1",
+    "inspect_signed_privacy_ivm_private_note_action_v1",
+    "inspect_signed_privacy_pq_masp_note_action_v1",
     "sm2_fixture_from_seed",
     "cuda_available",
     "cuda_disabled",
@@ -992,6 +1003,7 @@ try:
         Instruction,
         PrivacyBootleLanternPresentationActionBuildResultV1,
         PrivacyJindoActionBuildResultV1,
+        PrivacyNativeActionBuildResultV1,
         PrivacyVeRangeActionBuildResultV1,
         PrivacyVegaActionPreparationV1,
         PrivacyVegaActionBuildResultV1,
@@ -1045,8 +1057,6 @@ try:
         buildConfidentialTransferProofV2,
         build_confidential_unshield_proof_v3,
         buildConfidentialUnshieldProofV3,
-        build_confidential_asset_hidden_transfer_proof_v1,
-        buildConfidentialAssetHiddenTransferProofV1,
         confidential_transfer_v2_verifying_key_registration_payload_v1,
         confidential_unshield_v3_verifying_key_registration_payload_v1,
         privacy_bridge_abi_version,
@@ -1054,14 +1064,21 @@ try:
         privacy_capabilities_v1,
         canonical_genesis_header_hash_v1,
         canonical_signed_transaction_hash_v1,
+        signed_transaction_envelope_from_versioned_v1,
         privacy_vega_device_authentication_digest_v1,
         inspect_signed_privacy_zk_ace_transfer_action_v1,
         inspect_signed_privacy_bootle_lantern_presentation_action_v1,
         inspect_signed_privacy_jindo_action_v1,
         inspect_signed_privacy_verange_action_v1,
         inspect_signed_privacy_vega_action_v1,
+        inspect_signed_privacy_zk_x509_identity_presentation_action_v1,
         inspect_signed_privacy_zk_ams_batch_admission_action_v1,
         inspect_signed_privacy_zk_ams_provision_account_action_v1,
+        inspect_signed_privacy_anonymous_pgc_payment_action_v1,
+        inspect_signed_privacy_orchard_note_action_v1,
+        inspect_signed_privacy_fcmp_membership_payment_action_v1,
+        inspect_signed_privacy_ivm_private_note_action_v1,
+        inspect_signed_privacy_pq_masp_note_action_v1,
         sm2_fixture_from_seed,
     )
     from .sorafs import (

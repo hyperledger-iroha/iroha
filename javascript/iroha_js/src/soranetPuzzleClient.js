@@ -59,29 +59,26 @@ export class SoranetPuzzleClient {
 
   /**
    * Mint an Argon2 puzzle ticket.
+   * @param {string} transcriptHashHex Required nonzero 32-byte transcript binding (hex).
    * @param {object} [options]
    * @param {number | bigint} [options.ttlSecs] Optional TTL override.
-   * @param {string} [options.transcriptHashHex] Optional 32-byte transcript hash (hex) to bind.
    * @param {boolean} [options.signed] Request a relay-signed ticket when signing keys are configured.
    * @returns {Promise<{ ticketB64: string, signedTicketB64: string | null, signedTicketFingerprintHex: string | null, difficulty: number, ttlSecs: number, expiresAt: number }>}
    */
-  async mintPuzzleTicket(options = {}) {
-    const body = {};
+  async mintPuzzleTicket(transcriptHashHex, options = {}) {
+    const body = {
+      transcript_hash_hex: normalizeTranscriptHash(
+        transcriptHashHex,
+        "transcriptHashHex",
+      ),
+    };
     if (options.ttlSecs !== undefined && options.ttlSecs !== null) {
       body.ttl_secs = coercePositiveInteger(options.ttlSecs, "options.ttlSecs");
-    }
-    if (options.transcriptHashHex !== undefined && options.transcriptHashHex !== null) {
-      body.transcript_hash_hex = normalizeHexString(
-        options.transcriptHashHex,
-        32,
-        "options.transcriptHashHex",
-      );
     }
     if (options.signed !== undefined && options.signed !== null) {
       body.signed = coerceBoolean(options.signed, "options.signed");
     }
-    const finalBody = Object.keys(body).length === 0 ? undefined : body;
-    const payload = await this._request("POST", "/v1/puzzle/mint", finalBody, options);
+    const payload = await this._request("POST", "/v1/puzzle/mint", body, options);
     return normalizePuzzleMintResponse(payload, "puzzle mint response");
   }
 
@@ -113,7 +110,7 @@ export class SoranetPuzzleClient {
    * }>}
    */
   async mintAdmissionToken(transcriptHashHex, options = {}) {
-    const normalizedHash = normalizeHexString(transcriptHashHex, 32, "transcriptHashHex");
+    const normalizedHash = normalizeTranscriptHash(transcriptHashHex, "transcriptHashHex");
     const body = {
       transcript_hash_hex: normalizedHash,
     };
@@ -297,6 +294,14 @@ function normalizeHexString(value, expectedBytes, context) {
     );
   }
   return body.toLowerCase();
+}
+
+function normalizeTranscriptHash(value, context) {
+  const normalized = normalizeHexString(value, 32, context);
+  if (/^0+$/.test(normalized)) {
+    throw new TypeError(`${context} must not be all zeros`);
+  }
+  return normalized;
 }
 
 function normalizePuzzleConfig(payload, context) {

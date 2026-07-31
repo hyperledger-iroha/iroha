@@ -20,7 +20,6 @@ use iroha_data_model::{
             ResolveSorafsCapacityDispute, SetSorafsReputationJournalAuthorityPolicy,
         },
     },
-    name::Name,
     permission::Permission,
     query::{
         error::{FindError, QueryExecutionFail},
@@ -45,6 +44,7 @@ use iroha_data_model::{
             ReputationJournalSourceKindV1,
         },
     },
+    state_path::StatePath,
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
@@ -132,44 +132,44 @@ where
     Ok(value)
 }
 
-fn active_policy_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
+fn active_policy_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
-        Name::from_str(ACTIVE_POLICY_STATE_KEY).expect("static reputation policy key is valid")
+        StatePath::from_str(ACTIVE_POLICY_STATE_KEY).expect("static reputation policy key is valid")
     })
 }
 
-fn journal_head_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
+fn journal_head_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
-        Name::from_str(JOURNAL_HEAD_STATE_KEY).expect("static reputation head key is valid")
+        StatePath::from_str(JOURNAL_HEAD_STATE_KEY).expect("static reputation head key is valid")
     })
 }
 
-fn digest_key(prefix: &str, digest: &[u8; 32]) -> Name {
-    Name::from_str(&format!("{prefix}{}", hex::encode(digest)))
+fn digest_key(prefix: &str, digest: &[u8; 32]) -> StatePath {
+    StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static prefix plus lowercase hex is a valid state key")
 }
 
-fn policy_history_key(digest: &[u8; 32]) -> Name {
+fn policy_history_key(digest: &[u8; 32]) -> StatePath {
     digest_key(POLICY_HISTORY_STATE_KEY_PREFIX, digest)
 }
 
-fn event_key(sequence: u64) -> Name {
-    Name::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
+fn event_key(sequence: u64) -> StatePath {
+    StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static event prefix plus fixed-width lowercase hex is a valid state key")
 }
 
-fn event_id_key(event_id: ReputationJournalEventIdV1) -> Name {
+fn event_id_key(event_id: ReputationJournalEventIdV1) -> StatePath {
     digest_key(EVENT_ID_STATE_KEY_PREFIX, event_id.as_bytes())
 }
 
-fn source_head_key(source_id: ReputationJournalSourceIdV1) -> Name {
+fn source_head_key(source_id: ReputationJournalSourceIdV1) -> StatePath {
     digest_key(SOURCE_HEAD_STATE_KEY_PREFIX, source_id.as_bytes())
 }
 
 fn state_prefix_has_any(world: &impl WorldReadOnly, prefix: &str) -> bool {
-    let start = Name::from_str(prefix).expect("static state prefix is valid");
+    let start = StatePath::from_str(prefix).expect("static state prefix is valid");
     world
         .smart_contract_state()
         .range(start..)
@@ -732,7 +732,7 @@ fn ensure_no_event_after_head(
     world: &impl WorldReadOnly,
     head: Option<ReputationJournalHeadStateV1>,
 ) -> Result<(), InstructionExecutionError> {
-    let prefix = Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
+    let prefix = StatePath::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
     let first = world
         .smart_contract_state()
         .range(prefix..)

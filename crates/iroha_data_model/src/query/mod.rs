@@ -142,153 +142,7 @@ impl iroha_version::Version for SignedQuery {
 
 #[cfg(test)]
 mod signature_tests {
-    use std::num::NonZeroU64;
-
-    use super::*;
-
-    #[test]
-    fn query_signature_decode_from_slice_roundtrip() {
-        let key_pair =
-            iroha_crypto::KeyPair::try_from_seed(vec![0x51; 32], iroha_crypto::Algorithm::Ed25519)
-                .expect("generate checked query signature fixture keypair");
-        let public_key: PublicKey = key_pair.public_key().clone();
-        let authority = AccountId::new(public_key);
-
-        let cursor = ForwardCursor {
-            query: "cursor-1".to_owned(),
-            cursor: NonZeroU64::new(1).expect("nonzero"),
-            gas_budget: Some(5),
-        };
-        let payload = QueryRequestWithAuthority {
-            authority: authority.clone(),
-            request: QueryRequest::Continue(cursor),
-        };
-
-        let signature = iroha_crypto::SignatureOf::try_new(key_pair.private_key(), &payload)
-            .expect("checked query signature fixture");
-        signature
-            .verify(key_pair.public_key(), &payload)
-            .expect("checked query signature fixture verifies");
-        let query_signature = QuerySignature(signature.clone());
-
-        let encoded = norito::to_bytes(&query_signature).expect("encode query signature");
-        let decoded: QuerySignature =
-            norito::core::decode_from_bytes(&encoded).expect("decode query signature");
-        assert_eq!(decoded, query_signature);
-
-        let inner_encoded = norito::to_bytes(&signature).expect("encode inner signature");
-        let inner_decoded: iroha_crypto::SignatureOf<QueryRequestWithAuthority> =
-            norito::core::decode_from_bytes(&inner_encoded).expect("decode inner signature");
-        assert_eq!(inner_decoded, signature);
-    }
-
-    #[test]
-    fn query_signature_try_deserialize_rejects_empty_signature_material() {
-        let query_signature = QuerySignature(iroha_crypto::SignatureOf::from_signature(
-            iroha_crypto::Signature::from_bytes(&[]),
-        ));
-        let encoded = norito::to_bytes(&query_signature).expect("encode invalid query signature");
-        let archived = norito::from_bytes::<QuerySignature>(&encoded)
-            .expect("archive invalid query signature");
-
-        let err =
-            <QuerySignature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
-                .expect_err("empty query signature must fail closed");
-        let message = err.to_string();
-        assert!(
-            message.contains("empty"),
-            "unexpected query signature decode error: {message}"
-        );
-    }
-
-    #[test]
-    fn query_signature_try_deserialize_rejects_all_zero_signature_material() {
-        let query_signature = QuerySignature(iroha_crypto::SignatureOf::from_signature(
-            iroha_crypto::Signature::from_bytes(&[0_u8; 64]),
-        ));
-        let encoded = norito::to_bytes(&query_signature).expect("encode invalid query signature");
-        let archived = norito::from_bytes::<QuerySignature>(&encoded)
-            .expect("archive invalid query signature");
-
-        let err =
-            <QuerySignature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
-                .expect_err("all-zero query signature must fail closed");
-        let message = err.to_string();
-        assert!(
-            message.contains("all zero"),
-            "unexpected query signature decode error: {message}"
-        );
-    }
-
-    #[test]
-    fn query_request_try_sign_matches_compatibility_sign() {
-        let key_pair =
-            iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                .expect("generate checked query signing fixture keypair");
-        let make_payload = || {
-            let authority = AccountId::new(key_pair.public_key().clone());
-            let cursor = ForwardCursor {
-                query: "cursor-try-sign".to_owned(),
-                cursor: NonZeroU64::new(1).expect("nonzero"),
-                gas_budget: Some(5),
-            };
-            QueryRequestWithAuthority {
-                authority,
-                request: QueryRequest::Continue(cursor),
-            }
-        };
-
-        let fallible = make_payload()
-            .try_sign(&key_pair)
-            .expect("query signing should succeed");
-        let compatibility = make_payload().sign(&key_pair);
-
-        let fallible_bytes = norito::to_bytes(&fallible).expect("encode fallible signed query");
-        let compatibility_bytes =
-            norito::to_bytes(&compatibility).expect("encode compatibility signed query");
-        assert_eq!(fallible_bytes, compatibility_bytes);
-
-        let QuerySignature(signature) = &fallible.signature;
-        signature
-            .verify(key_pair.public_key(), &fallible.payload)
-            .expect("query signature should verify");
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn query_signature_json_rejects_empty_signature_material() {
-        let encoded = json_wrappers::base64_encode(&[]);
-        let err = norito::json::from_value::<QuerySignature>(norito::json::Value::from(encoded))
-            .expect_err("empty query signature JSON must fail closed");
-        let message = err.to_string();
-
-        assert!(
-            message.contains("QuerySignature"),
-            "unexpected query signature JSON error: {message}"
-        );
-        assert!(
-            message.contains("empty"),
-            "unexpected empty query signature JSON error: {message}"
-        );
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn query_signature_json_rejects_all_zero_signature_material() {
-        let encoded = json_wrappers::base64_encode(&[0_u8; 64]);
-        let err = norito::json::from_value::<QuerySignature>(norito::json::Value::from(encoded))
-            .expect_err("all-zero query signature JSON must fail closed");
-        let message = err.to_string();
-
-        assert!(
-            message.contains("QuerySignature"),
-            "unexpected query signature JSON error: {message}"
-        );
-        assert!(
-            message.contains("all zero"),
-            "unexpected all-zero query signature JSON error: {message}"
-        );
-    }
+    include!("tests/signatures.rs");
 }
 
 impl iroha_version::codec::EncodeVersioned for SignedQuery {
@@ -646,6 +500,15 @@ struct QueryRegistryEntry {
     ctor: QueryConstructor,
 }
 
+impl QueryRegistryEntry {
+    fn collides_with(&self, other: &Self) -> bool {
+        self.type_name != other.type_name
+            && (self.type_name == other.wire_id
+                || self.wire_id == other.type_name
+                || self.wire_id == other.wire_id)
+    }
+}
+
 /// Registry storing query constructors under both Rust type names and stable wire identifiers.
 #[derive(Default)]
 pub struct QueryRegistry {
@@ -690,12 +553,14 @@ impl QueryRegistry {
             wire_id,
             ctor: ctor::<T>,
         };
-        if let Some(previous) = self.entries.iter().find(|previous| {
-            previous.wire_id == entry.wire_id && previous.type_name != entry.type_name
-        }) {
+        if let Some(previous) = self
+            .entries
+            .iter()
+            .find(|previous| previous.collides_with(&entry))
+        {
             panic!(
-                "query wire id collision: `{}` is registered for both `{}` and `{}`",
-                entry.wire_id, previous.type_name, entry.type_name
+                "query registry key collision between `{}` and `{}`",
+                previous.type_name, entry.type_name
             );
         }
         if let Some(previous) = self
@@ -708,6 +573,21 @@ impl QueryRegistry {
             self.entries.push(entry);
         }
         self
+    }
+
+    fn assert_compatible_with(&self, other: &Self) {
+        for entry in &other.entries {
+            if let Some(previous) = self
+                .entries
+                .iter()
+                .find(|previous| previous.collides_with(entry))
+            {
+                panic!(
+                    "query registry key collision between `{}` and `{}`",
+                    previous.type_name, entry.type_name
+                );
+            }
+        }
     }
 
     /// Decode a query using a registered Rust type name or stable wire identifier.
@@ -804,7 +684,18 @@ define_builtin_query_registry! {
 /// If this function is never invoked, the data model falls back to a built-in
 /// registry covering the standard iterable query set, allowing JSON and Norito
 /// decoding to work out of the box in tests and utilities.
+///
+/// A custom registry may add an alias for the same concrete built-in type, but
+/// it cannot claim a type-name or wire-ID key owned by a different built-in.
+///
+/// # Panics
+///
+/// Panics if an entry collides with a key owned by a different built-in query.
 pub fn set_query_registry(registry: QueryRegistry) {
+    if QUERY_REGISTRY.get().is_some() {
+        return;
+    }
+    builtin_query_registry().assert_compatible_with(&registry);
     let _ = QUERY_REGISTRY.set(registry);
 }
 
@@ -844,6 +735,10 @@ fn decode_registered_query(
 fn builtin_query_registry() -> &'static QueryRegistry {
     DEFAULT_QUERY_REGISTRY.get_or_init(build_builtin_query_registry)
 }
+
+#[cfg(test)]
+#[path = "tests/wire_ids.rs"]
+mod wire_id_tests;
 
 #[model]
 mod model {
@@ -3484,8 +3379,9 @@ mod candidate {
         use crate::{
             account::{AccountId, MultisigMember, MultisigPolicy},
             query::{
-                FindExecutorDataModel, QueryRequest, SingularQueryBox,
-                candidate::SignedQueryCandidate, parameters,
+                FindExecutorDataModel, QueryRequest, QueryRequestWithAuthority,
+                SignedQueryValidationError, SingularQueryBox, candidate::SignedQueryCandidate,
+                parameters,
             },
         };
 
@@ -4127,72 +4023,6 @@ mod json_roundtrip_tests {
             "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>"
         );
         assert_eq!(cloned.params, original.params);
-    }
-
-    #[test]
-    fn builtin_query_wire_ids_match_v1_golden_inventory() {
-        let mut actual = BUILTIN_QUERY_WIRE_ASSIGNMENTS
-            .iter()
-            .map(|(type_label, wire_id)| format!("{type_label}\t{wire_id}"))
-            .collect::<Vec<_>>();
-        actual.sort_unstable();
-        assert!(
-            BUILTIN_QUERY_WIRE_ASSIGNMENTS
-                .iter()
-                .map(|(_, wire_id)| wire_id)
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                == BUILTIN_QUERY_WIRE_ASSIGNMENTS.len(),
-            "built-in query wire identifiers must be unique"
-        );
-
-        let expected = include_str!("../../tests/fixtures/query_wire_ids_v1.txt")
-            .lines()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn builtin_query_wire_ids_override_installed_registry_and_decode_falls_back() {
-        const WIRE_ID: &str =
-            "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>";
-        const CUSTOM_WIRE_ID: &str = "custom.domain.current-path";
-        type DomainQuery = ErasedIterQuery<Domain>;
-
-        let builtin = QueryRegistry::new().register_with_id::<DomainQuery>(WIRE_ID);
-        let installed = QueryRegistry::new().register_with_id::<DomainQuery>(CUSTOM_WIRE_ID);
-        let query = DomainQuery::new(
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-            vec![0xA5, 0x5A],
-        );
-        let payload = norito::codec::Encode::encode(&query);
-        let type_name = std::any::type_name::<DomainQuery>();
-
-        assert_eq!(
-            query_wire_id_from_registries(type_name, &builtin, Some(&installed)),
-            WIRE_ID
-        );
-        for lookup_key in [type_name, WIRE_ID, CUSTOM_WIRE_ID] {
-            let decoded =
-                decode_query_from_registries(lookup_key, &payload, &builtin, Some(&installed))
-                    .expect("query lookup key is registered")
-                    .expect("query payload decodes");
-            assert_eq!(decoded.as_ref().type_name_key(), type_name);
-            assert_eq!(decoded.as_ref().encode_bytes(), payload);
-        }
-    }
-
-    #[test]
-    #[should_panic(expected = "query wire id collision")]
-    fn query_registry_rejects_wire_id_collisions() {
-        type DomainQuery = ErasedIterQuery<Domain>;
-        type AccountQuery = ErasedIterQuery<crate::account::Account>;
-
-        let _registry = QueryRegistry::new()
-            .register_with_id::<DomainQuery>("query.collision")
-            .register_with_id::<AccountQuery>("query.collision");
     }
 
     #[cfg(feature = "fast_dsl")]

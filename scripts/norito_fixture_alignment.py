@@ -42,7 +42,7 @@ class FixtureDigest:
     encoded_len: int
     signed_len: int
     creation_time_ms: int
-    time_to_live_ms: Optional[int]
+    time_to_live_ms: int
     nonce: Optional[int]
 
 
@@ -91,6 +91,12 @@ def _fixture_digest(entry: Mapping[str, object]) -> FixtureDigest:
             raise SystemExit(f"[error] malformed fixture entry field {field!r}: {entry}")
         return value
 
+    def required_positive_int(field: str) -> int:
+        value = entry.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise SystemExit(f"[error] malformed fixture entry field {field!r}: {entry}")
+        return value
+
     name = required_string("name")
     encoded_file = required_string("encoded_file")
     chain = required_string("chain")
@@ -102,14 +108,8 @@ def _fixture_digest(entry: Mapping[str, object]) -> FixtureDigest:
     encoded_len = required_nonnegative_int("encoded_len")
     signed_len = required_nonnegative_int("signed_len")
     creation_time_ms = required_nonnegative_int("creation_time_ms")
-    time_to_live_ms = entry.get("time_to_live_ms")
+    time_to_live_ms = required_positive_int("time_to_live_ms")
     nonce = entry.get("nonce")
-    if (
-        not isinstance(time_to_live_ms, (int, type(None)))
-        or isinstance(time_to_live_ms, bool)
-        or (isinstance(time_to_live_ms, int) and time_to_live_ms < 0)
-    ):
-        raise SystemExit(f"[error] malformed fixture entry: {entry}")
     if (
         not isinstance(nonce, (int, type(None)))
         or isinstance(nonce, bool)

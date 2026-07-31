@@ -1,0 +1,191 @@
+---
+title: SNS Metrics & Onboarding Kit (SN-8)
+summary: Dashboards, pricing cheatsheets, and registrar tooling required by roadmap item SN-8.
+---
+
+# Sora Name Service Metrics & Onboarding Kit
+
+**Roadmap reference:** SN-8 “Metrics & Onboarding” (see `roadmap.md:432`).  
+**Related asset:** `dashboards/grafana/sns_suffix_analytics.json`. Public SNS
+guidance is published from the sibling `iroha-docs` repository.
+
+This guide bundles the analytics package and registrar onboarding collateral
+for explicitly selected live SNS policies. It ties together the Grafana
+dashboard, live policy inspection, DNS helpers, and developer automation so
+governance has deterministic evidence when approving registrars or suffixes.
+
+## 1. Metric bundle
+
+### 1.1 Grafana dashboard
+
+The checked-in `dashboards/grafana/sns_suffix_analytics.json` still contains
+pre-clean-break bulk-settlement series. Do not import it or treat it as
+financial evidence until those queries are regenerated from canonical alias
+plans and committed transaction receipts. A read-only reporting adapter may
+export those records to Grafana; it must never create payment evidence or
+participate in consensus.
+
+- Do not publish or present the legacy dashboard as current until its queries
+  satisfy the safe-source contract in this section.
+
+### 1.2 Panels & signals
+
+| Panel | Canonical source | Evidence produced |
+|-------|--------------------|-------------------|
+| Setup dispositions | `AliasTransactionPlanV1` plus the committed transaction result | No-op, repair, create, and conflict counts without inventing per-resource submissions. |
+| Native charges | Exact planner quotes matched to committed ledger debits | Totals by payment asset, policy version, and resource. |
+| Onboarding readiness | Sorted `AliasSetupReportV1` snapshots | Ready/Pending/Blocked history and stable diagnostic codes. |
+| Disputes & freezes | `guardian_freeze_active`, `sns_governance_activation_total`, `sns_dispute_outcome_total` | Shows open freezes, arbitration cadence, dispute backlog. |
+| Lifecycle operations | Verified renewal/auto-renew plans and transaction receipts | CAS failures, suspensions, retries, and successful renewals. |
+
+Export PDF or CSV snapshots from Grafana during the monthly review and attach
+them to the annex entry under
+`specs/sns/regulatory/<suffix>/YYYY-MM.md`. The `specs/sns/reports/`
+directory captures quarterly summaries (for example,
+`specs/sns/reports/steward_scorecard_2026q1.md`); include dashboard SHA-256
+hashes and Grafana URLs there for long-term audits.
+
+### 1.3 Regulatory annex automation
+
+Automate the KPI annex generation so governance reviewers receive a consistent
+snapshot only after the dashboard has passed the safe-source review above:
+
+```bash
+cargo xtask sns-annex \
+  --suffix .example \
+  --cycle 2026-03 \
+  --dashboard dashboards/grafana/sns_suffix_analytics.json \
+  --dashboard-artifact artifacts/sns/regulatory/.example/2026-03/sns_suffix_analytics.json \
+  --output specs/sns/reports/.example/2026-03.md \
+  --regulatory-entry specs/sns/regulatory/eu-dsa/2026-03.md
+```
+
+- The command hashes the exported JSON, records the dashboard metadata, and
+  writes a Markdown annex under `specs/sns/reports/<suffix>/<cycle>.md`.
+- Pass `--dashboard-artifact` to copy the export into
+  `artifacts/sns/regulatory/<suffix>/<cycle>/` automatically so the annex
+  references the canonical evidence path instead of your workstation file.
+- Use `--dashboard-label` only when the archive lives outside of the repo (for
+  example, a secure bucket); otherwise the helper records the relative artefact
+  path for you.
+- Pass `--regulatory-entry` to point at the governing memo for that cycle. The
+  helper inserts or updates a `KPI Dashboard Annex` block (bounded by
+  `<!-- sns-annex:... -->` markers) with the annex path, dashboard artefact
+  location, digest, and timestamp so auditors can diff memos without manual
+  edits.
+- If you omit `--regulatory-entry`, attach the generated file to the governing
+  memo manually. Upload the JSON bundle to artefact storage for auditors either
+  way.
+- For recurring reviews, add each suffix/cycle pair to
+  `specs/sns/regulatory/annex_jobs.json` and run
+  `python3 scripts/run_sns_annex_jobs.py --verbose` (optionally with
+  `--dry-run`) so the helper iterates over every entry, copies the dashboard
+  export, and updates the corresponding regulatory memos with the annex block
+  in one pass. The script defaults to
+  `dashboards/grafana/sns_suffix_analytics.json` when a job omits `dashboard`.
+- Run `python3 scripts/check_sns_annex_schedule.py --jobs specs/sns/regulatory/annex_jobs.json --regulatory-root specs/sns/regulatory --report-root specs/sns/reports` (or `make check-sns-annex`) to prove the job list stays sorted/deduped, every memo carries a matching `sns-annex` marker, and each canonical annex report exists. The helper emits `artifacts/sns/annex_schedule_summary.json` alongside the hash summary so governance packets can cite a single evidence bundle.
+This automation replaces ad-hoc copy/paste steps and ensures every annex entry
+captures the dashboard UID, tags, panel count, export digest, and schedule
+coverage required by SN-8.
+
+#### 1.3.1 Annex job runbook & cadence
+
+- Keep the annex job list in sync with the governance calendar. The schedule
+  check (`scripts/check_sns_annex_schedule.py`) fails if a memo marker lacks a
+  job entry or a canonical report is missing, forcing upcoming cycles to be booked before
+  exports land.
+- Follow {doc}`sns/regulatory/annex_job_runbook` when adding new cycles: create
+  the regulatory memo skeleton (`specs/sns/regulatory/<jurisdiction>/<cycle>.md`),
+  append the job entry, and run `scripts/run_sns_annex_jobs.py --verbose` to
+  refresh the annex blocks + artefacts.
+- Attach the resulting artefacts (`artifacts/sns/regulatory/<suffix>/<cycle>/`)
+  to the governance ticket and record the run in `status.md`.
+
+## 2. Onboarding kit contents
+
+### 2.1 Suffix wiring & DNS helpers
+
+- Registry schema and selector encoding live in
+  `specs/sns/registry_schema.md` and `specs/sns/local_to_global_toolkit.md`.
+- DNS/gateway teams convert registrar manifests into resolver skeletons via
+  `scripts/sns_zonefile_skeleton.py`; the workflow is documented in
+  `specs/sorafs_gateway_dns_owner_runbook.md`.
+- Zonefile metadata now records `{name, version, ttl, effective_at, cid, gar_digest, proof}`
+  at the top level (`zonefile.*`). When invoking the helper, provide a `--zonefile-version`
+  label, `--effective-at` timestamp aligned with the rollout window, and the GAR digest
+  (`--gar-digest`) produced by the signing automation so resolvers and auditors can tie
+  each skeleton back to the GAR evidence bundle.
+- When onboarding a new registrar or suffix, create a
+  `specs/sns/reports/<name>_launch.md` note that records the selector
+  samples, zonefile hashes, and GAR evidence.
+
+### 2.2 Pricing and lease-policy preflight
+
+Do not embed fee tables, suffix coefficients, term discounts, or lifecycle
+windows in onboarding collateral. Inspect the active SNS policy through the
+read-only policy surface and obtain an `AliasTransactionPlanV1` immediately
+before approval. The quote guard records the expected policy version, payment
+asset, maximum amount, and deadline; consensus recomputes and charges the exact
+amount. Record those live values and any planner blockers in the registrar's
+onboarding ticket.
+
+### 2.3 Premium auctions vs renewals
+
+1. **Premium commit/reveal** (SN-3) — an auction may determine acquisition
+   entitlement, but it does not restore a direct registration DTO or mutation
+   route. The winning resource is resolved and planned through the same signed
+   `AliasIntentV1`/`EnsureAlias` flow, with any required endorsement validated
+   before the atomic transaction executes. Publish the auction manifest under
+   `specs/sns/reports/` for future audits.
+2. **Dutch reopen** — when the policy-defined lifecycle permits reopening, the
+   registrar publishes the governed schedule without hard-coding multipliers
+   in client tooling. Track it in a read-only report keyed by the canonical
+   auction record and resulting alias plan hash.
+3. **Renewals** — archive the verified renewal plan and ordinary transaction
+   receipt. For auto-renew, also capture the configured revision and any native
+   retry or suspension status.
+
+### 2.4 Developer APIs & automation
+
+- The clean-break plan/local-sign/apply contract lives in
+  `specs/sns/registrar_api.md`.
+- `scripts/sns_bulk_onboard.py` (documented in
+  `specs/sns/bulk_onboarding_toolkit.md`) consumes typed, secret-free
+  setup intents and delegates signed planning plus atomic apply to `iroha app
+  alias setup`. It does not call a direct SNS mutation endpoint.
+- Persist the canonical `AliasTransactionPlanV1` beside the operator change
+  record. Its hash, live-state anchor, dispositions, framed instructions, and
+  exact asset totals replace ad-hoc payment-proof and per-resource submission
+  logs.
+- Use `irohad --check-config` and the authenticated onboarding-readiness report
+  as the preflight evidence for generated or manually operated peers.
+- Running `sns_bulk_onboard.py` without a mode flag only writes a verified plan.
+  An approved mutation must pass `--apply` explicitly; tokens and key material
+  remain outside the intent, plan, and command line.
+
+### 2.5 Evidence checklist
+
+1. Ticket in the registrar tracker including suffix, contact, expected payment
+   asset, policy version, and approved caps.
+2. DNS/resolver evidence bundle (`scripts/sns_zonefile_skeleton.py` output).
+3. Live policy snapshot plus the planner quote and quote-guard values.
+4. API smoke-test artefacts (signed plan, verified plan hash, and the single
+   ordinary transaction result).
+5. Safe read-only report export stored under
+   `specs/sns/regulatory/<suffix>/YYYY-MM.md`; do not attach output from
+   the legacy bulk-settlement dashboard.
+
+## 3. Readiness checklist
+
+| Step | Owner | Command / Artefact |
+|------|-------|--------------------|
+| Validate reporting source | Product Analytics | Query review plus a sample joining exact plan quotes to committed transaction debits; the legacy dashboard is not imported. |
+| Publish public guidance | Docs/DevRel | Coordinate the current SNS guidance and deployment checks in `iroha-docs`. |
+| Generate onboarding kit | DevRel | Copy this file, fill registrar-specific deltas, attach to ticket. |
+| DNS rehearsal | Networking/Ops | `scripts/sns_zonefile_skeleton.py` + `specs/sorafs_gateway_dns_owner_runbook.md` steps. |
+| Registrar automation dry run | Registrar eng | `python3 scripts/sns_bulk_onboard.py setup.json --plan-file setup.plan.json` |
+| Governance evidence | Governance Council | File annex updates + attach dashboard exports and artefacts. |
+
+Run this checklist before activating every registrar or suffix. Attach the
+resulting artefacts to the governance proposal so SN-8’s metrics/onboarding
+gate is auditable.

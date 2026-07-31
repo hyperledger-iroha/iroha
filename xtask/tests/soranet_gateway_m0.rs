@@ -104,7 +104,7 @@ metadata:\n\
   version: 2\n\
   rollout:\n\
     shadow_mode_seconds: 300\n\
-    rollback_playbook: docs/source/sorafs_gateway_deployment_handbook.md\n\
+    rollback_playbook: specs/sorafs_gateway_deployment_handbook.md\n\
     fp_harness: ci/check_sorafs_gateway_conformance.sh\n\
 rules:\n\
   - id: owasp-top10\n\

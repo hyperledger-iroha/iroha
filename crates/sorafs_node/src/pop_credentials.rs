@@ -90,6 +90,8 @@ pub const POP_ISSUER_CHECKPOINT_FILE_V1: &str = "issuer-checkpoint.to";
 const ENROLLMENT_ATTESTATION_DOMAIN_V1: &[u8] = b"sorafs.pop.enrollment-attestation.v1";
 const ENROLLMENT_ENVELOPE_DOMAIN_V1: &[u8] = b"sorafs.pop.encrypted-enrollment.v1";
 const ENROLLMENT_AAD_DOMAIN_V1: &[u8] = b"sorafs.pop.enrollment-aad.v1";
+const ENROLLMENT_RECIPIENT_PUBLIC_KEY_DOMAIN_V1: &[u8] =
+    b"sorafs.pop.enrollment-recipient-public-key.v1";
 const APPROVAL_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.pop.dual-control-approval.v1";
 const REGISTRY_OPERATION_DOMAIN_V1: &[u8] = b"sorafs.pop.registry-operation.v1";
 const REGISTRY_IDEMPOTENCY_DOMAIN_V1: &[u8] = b"sorafs.pop.registry-idempotency.v1";
@@ -110,6 +112,20 @@ fn digest_domain(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
     hasher.update(bytes);
+    *hasher.finalize().as_bytes()
+}
+
+/// Return the canonical V1 digest of one hybrid enrollment-recipient public key.
+///
+/// The digest is safe to place in public configuration. It lets startup prove
+/// that a runtime-only recipient secret is the exact configured key without
+/// exporting or logging either secret component.
+#[must_use]
+pub fn pop_enrollment_recipient_public_key_digest_v1(recipient: &HybridPublicKey) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(ENROLLMENT_RECIPIENT_PUBLIC_KEY_DOMAIN_V1);
+    hasher.update(&recipient.x25519_bytes());
+    hasher.update(recipient.kyber_bytes());
     *hasher.finalize().as_bytes()
 }
 
@@ -3559,6 +3575,31 @@ mod tests {
 
     fn ed25519(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("keypair")
+    }
+
+    #[test]
+    fn enrollment_recipient_public_key_digest_binds_both_hybrid_components() {
+        let mut first_rng = ChaCha20Rng::from_seed([0x31; 32]);
+        let first = HybridKeyPair::generate(&mut first_rng).expect("first hybrid key");
+        let mut replay_rng = ChaCha20Rng::from_seed([0x31; 32]);
+        let replay = HybridKeyPair::generate(&mut replay_rng).expect("replayed hybrid key");
+        let mut second_rng = ChaCha20Rng::from_seed([0x32; 32]);
+        let second = HybridKeyPair::generate(&mut second_rng).expect("second hybrid key");
+
+        let first_digest = pop_enrollment_recipient_public_key_digest_v1(first.public());
+        assert_ne!(first_digest, [0; 32]);
+        assert_eq!(
+            first_digest,
+            pop_enrollment_recipient_public_key_digest_v1(first.secret().public())
+        );
+        assert_eq!(
+            first_digest,
+            pop_enrollment_recipient_public_key_digest_v1(replay.public())
+        );
+        assert_ne!(
+            first_digest,
+            pop_enrollment_recipient_public_key_digest_v1(second.public())
+        );
     }
 
     fn public_key(keypair: &KeyPair) -> [u8; 32] {

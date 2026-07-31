@@ -1,16 +1,16 @@
 # IrohaAndroid
 
 `IrohaAndroid` provides a native Android library that wraps Hyperledger Iroha
-capabilities for Kotlin/Java mobile applications. The library will expose
-key management (including secure-element backed keys), transaction building and
+capabilities for Kotlin/Java mobile applications. The library includes key
+management (including secure-element-backed keys), transaction building and
 signing, Norito serialization helpers, and networking clients for interacting
 with Iroha nodes.
 
-This snapshot covers the offline key management façade, Norito encoding backed
+The current API covers the offline key management façade, Norito encoding backed
 by the shared `norito-java` implementation, the Android Keystore/StrongBox
 backend (with cached attestations + explicit deterministic software providers), and
-network client abstractions. The generated instruction helpers now include
-the first dedicated RWA lot builder slice alongside NFT helpers:
+network client abstractions. The instruction helpers include RWA lot builders
+alongside NFT helpers:
 `RegisterRwaInstruction`, `TransferRwaInstruction`,
 `MergeRwasInstruction`, `RedeemRwaInstruction`,
 `FreezeRwaInstruction`, `UnfreezeRwaInstruction`,
@@ -58,6 +58,48 @@ when publishing a new compatible Kotlin transport release. An explicit
 `irohaSdkVersion` property and finally `irohaAndroidVersion` when the more
 specific properties are absent. Composite builds substitute the in-tree
 Kotlin projects while preserving these exact coordinates in generated POMs.
+
+## DA commitment and pin-intent proofs
+
+`HttpClientTransport.newDaToriiClient()` returns the Java typed DA client. It
+covers the proof-policy, commitment list/prove/verify, and pin-intent
+list/prove/verify routes. Use `DaModels.Digest32` for manifest and storage-ticket
+digests and `BigInteger` for unsigned 64-bit counters.
+
+```java
+final DaToriiClient da = transport.newDaToriiClient();
+DaModels.PinIntentListResponse page =
+    da.listPinIntents(
+            new DaModels.PinIntentListRequest(BigInteger.valueOf(100), null))
+        .join();
+while (page.nextCursor() != null) {
+  page =
+      da.listPinIntents(
+              new DaModels.PinIntentListRequest(
+                  BigInteger.valueOf(100), page.nextCursor()))
+          .join();
+}
+final DaModels.PinIntentProof proof =
+    da.provePinIntent(
+            new DaModels.PinIntentQueryRequest(
+                null,
+                DaModels.Digest32.fromHex(ticketHex),
+                null, null, null, null))
+        .join();
+if (proof != null) {
+  assert da.verifyPinIntent(proof).join().valid();
+}
+```
+
+List routes use immutable, server-issued snapshot cursors and return an explicit
+nullable `nextCursor()`. Proof routes use separate selector-only request types;
+pagination fields are not accepted by proof requests.
+
+Responses are decoded into closed typed models. The client rejects unknown
+fields, malformed transparent byte wrappers, invalid checksummed hashes,
+contradictory verification responses, and Merkle paths whose direction/length
+does not match the advertised bundle location. Requests are capped at 64 KiB
+and buffered responses at 8 MiB.
 
 ## Offline peer transport V1 (Java)
 
@@ -318,7 +360,7 @@ System.out.println(formats.i105Warning);
 ```
 
 Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and
-network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`.
+network prefix stay aligned with `specs/sns/address_display_guidelines.md`.
 
 ## Kagemusha proof artifacts and device registration
 
@@ -373,11 +415,38 @@ applications never parse lineage paths.
 
 ## Native privacy bridge
 
-`PrivacyNativeBridge` is capability-only. `capabilitiesArchiveV1()` returns the
-canonical typed `PrivacyCapabilitySnapshotV1` Norito archive, and
+`PrivacyNativeBridge` exposes local build metadata only.
+`compiledProfileCatalogV1()` returns this binary's canonical typed
+`PrivacyCompiledProfileCatalogV1` Norito archive, and
 `protocolsV1()` exposes the closed `ProtocolIdV1` enum in exact wire order. The
 generic proof request/build/verify ABI and free-form algorithm selectors are
-absent; proofs must use protocol-specific typed APIs.
+absent; proofs must use protocol-specific typed APIs. The local catalog never
+establishes activation or readiness; proof submission requires a fresh
+committed `/v1/privacy/capabilities` snapshot from live Torii.
+
+Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
+fingerprints, never client-side proof or backend selectors.
+`ClientConfigManifestLoader` rejects those keys (and their camel-case aliases)
+at any depth. Proof construction must use Torii's committed
+`/v1/privacy/capabilities` response and the on-chain verifying-key registry.
+
+`PrivacyExact12FixtureCodecV1` decodes the first-release
+`PrivacyExact12FixtureBundleV1` entirely in Java; it does not load the native
+bridge. Pass one canonical standard-Base64 line (without the fixture file's
+final LF), or decode raw Norito bytes directly:
+
+```java
+PrivacyExact12FixtureBundleV1 bundle =
+    PrivacyExact12FixtureCodecV1.decodeCanonicalBase64(fixtureLine);
+byte[] canonicalArchive = PrivacyExact12FixtureCodecV1.encodeCanonical(bundle);
+PrivacyExact12FixtureCodecV1.requireCanonicalArchive(receivedArchive, canonicalArchive);
+```
+
+The codec requires the exact schema, version, twelve-row order, uncompressed
+`COMPACT_LEN` layout, and configured field/aggregate limits. It rejects
+alternate Base64, truncation, trailing or unknown data, and reordered rows.
+Use `requireCanonicalArchive` with an independently trusted fixture when exact
+cross-row and cross-field identity matters.
 
 The registry has exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
@@ -490,17 +559,34 @@ client.recordSubscriptionUsage(
 
 `HttpClientTransport` wraps Torii's `/v1/zk/vk/register` and
 `/v1/zk/vk/update` routes. The helpers validate production verifier backends,
-required signing fields, height ranges, and inline verifier-key commitments
-before sending the request:
+registry fields, height ranges, and inline verifier-key commitments before
+sending the request. Neither request accepts or transmits a private key. Torii
+returns HTTP 200 with an unsigned transaction draft. SDK `Signer`
+implementations apply Iroha's prehash themselves, so pass
+`transactionPayloadBytes()` to `Signer.sign`; use `signingMessageBytes()` only
+with a raw/HSM primitive that signs an already-prehashed message. Attach the
+signature to the transaction payload and use the standard transaction ingress.
+The `ClientConfig` used by the transport must include an immutable
+`LocalSigningContext`; read-only clients may omit it, but draft-producing
+mutation routes fail before network I/O when it is absent. The draft parser
+rejects non-canonical Norito, another chain or authority, extra/substituted
+instructions, any mismatch in the complete verifying-key record, and signing
+messages that do not match the payload prehash:
 
 ```java
+ClientConfig config =
+    ClientConfig.builder()
+        .setLocalSigningContext(new LocalSigningContext("production-chain"))
+        // Configure the Torii endpoint and other client policy here.
+        .build();
+HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 byte[] vkBytes = new byte[] {1, 2, 3};
 
-transport
+VerifyingKeyTransactionDraft registerDraft =
+    transport
     .registerVerifyingKey(
         VerifyingKeyRegisterRequest.builder()
-            .authority("alice")
-            .privateKey("ed25519:...")
+            .authority("<authority_i105>")
             .backend("halo2/ipa")
             .name("vk_main")
             .version(1L)
@@ -512,11 +598,11 @@ transport
             .build())
     .join();
 
-transport
+VerifyingKeyTransactionDraft updateDraft =
+    transport
     .updateVerifyingKey(
         VerifyingKeyUpdateRequest.builder()
-            .authority("alice")
-            .privateKey("ed25519:...")
+            .authority("<authority_i105>")
             .backend("halo2/ipa")
             .name("vk_main")
             .version(2L)
@@ -525,6 +611,13 @@ transport
             .status("Withdrawn")
             .build())
     .join();
+
+if (registerDraft.submitted()) {
+    throw new IllegalStateException("Torii must return an unsigned draft");
+}
+byte[] registerPayload = registerDraft.transactionPayloadBytes();
+byte[] registerSigningMessage = registerDraft.signingMessageBytes();
+byte[] registerSignature = signer.sign(registerPayload);
 ```
 
 ## Layout
@@ -861,19 +954,21 @@ Key evidence paths (also mirrored under `artifacts/android/reports/<version>`):
 
 Every publish invocation automatically runs the manifest/SBOM tasks so
 governance packets can attach the resulting JSON alongside the Maven repository
-snapshot. See `docs/source/sdk/android/publishing_plan.md` for the full release
+snapshot. See `specs/sdk/android/publishing_plan.md` for the full release
 checklist.
 
 ### Observability Hooks
 
 
-> **Note:** Instruction lists hydrate strongly typed builders for register,
-> transfer (asset/domain/asset-definition), mint/burn asset, and
-> grant/revoke permission and role instructions
-> and use key/value payloads for families that do not yet have Java
-> bindings.
-> Additional instruction variants will be added alongside upcoming code
-> generation work.
+> **Instruction APIs:** The Java SDK provides typed `InstructionTemplate`
+> builders for register, transfer, mint/burn, permission and role, trigger,
+> governance, RWA, confidential-asset, Kaigi, and other implemented instruction
+> families. `SetKeyValueInstruction` and `RemoveKeyValueInstruction` cover
+> domain, account, asset-definition, NFT, RWA, and trigger metadata;
+> `SetAssetKeyValueInstruction` and `RemoveAssetKeyValueInstruction` cover
+> concrete asset balances. `InstructionBox.fromWirePayload(...)` carries other
+> canonical Norito-framed instruction payloads without inventing a Java-side
+> schema.
 
 `ClientConfig` now exposes request-scoped instrumentation, static header support,
 and deterministic retry policies. Applications can attach `ClientObserver`
@@ -1062,7 +1157,7 @@ The deterministic seed/attempt mapping ensures reconnect telemetry stays aligned
 ### Connect error taxonomy
 
 `org.hyperledger.iroha.android.connect.error.ConnectError` mirrors the shared taxonomy
-(`docs/source/connect_error_taxonomy.md`) so Android apps emit the same `category`/`code`
+(`specs/connect_error_taxonomy.md`) so Android apps emit the same `category`/`code`
 pairs as the Swift and JavaScript SDKs. Wrap every transport, codec, or queue failure via
 `ConnectErrors.from(Throwable)` (or manually create a `ConnectError` using the builder)
 before forwarding attributes to OpenTelemetry:
@@ -1337,7 +1432,7 @@ active and no native library is loaded (avoiding security warnings in CI).
 Kotlin callers should use `CudaAcceleratorsKotlin.*OrNull` helpers to receive
 `Long?`/`LongArray?` outputs instead of `Optional` wrappers. See the CUDA
 operator guide for native setup and the manual smoke harness
-(`docs/source/sdk/android/gpu_operator_guide.md`), which exercises the JNI
+(`specs/sdk/android/gpu_operator_guide.md`), which exercises the JNI
 bridge on CUDA-capable devices when `IROHA_CUDA_SELFTEST=1` is set.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM
@@ -1433,17 +1528,6 @@ hashes and provenance metadata (including the asset-metadata and
 `SetParameter` parity vectors that exercise configuration and key/value
 instructions). Always commit the regenerated JSON, `.norito` payloads, and
 manifest together.
-
-## Roadmap
-
-- Harden the Android Keystore/StrongBox backend with device-matrix CI coverage,
-  alias rotation tooling, and production configuration wrappers surfaced through
-  `KeyGenParameters`.
-- Integrate Rust parity fixtures for transaction Norito schemas and extend the
-  data model beyond raw instruction blobs.
-- Expose transaction signing helpers that wrap Iroha manifests and Norito encoders.
-- Implement gRPC/HTTP networking clients with deterministic request handling.
-- Publish Gradle artifacts and sample applications.
 
 ## License
 

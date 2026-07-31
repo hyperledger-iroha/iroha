@@ -1,0 +1,56 @@
+{
+  "name": "unraw",
+  "version": "3.0.0",
+  "description": "Convert raw escape sequences to their respective characters (undo String.raw).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "repository": "https://github.com/iansan5653/unraw",
+  "scripts": {
+    "build": "tsc",
+    "test": "ts-mocha src/**/*.test.ts",
+    "lint": "eslint src/**/*.ts",
+    "check": "npm run build && npm run test && npm run lint",
+    "ensureCleanTree": "echo 'Checking to ensure all changes are committed...' && git diff --quiet --exit-code & git diff --quiet --cached --exit-code",
+    "prepublishOnly": "npm run ensureCleanTree && npm run check",
+    "postpublish": "cross-var git tag -a $npm_package_version -m \"See changelog.md for release notes.\" && git push --tags && cross-var git tag -d $npm_package_version",
+    "format": "prettier src/**/*.test.ts --write"
+  },
+  "author": {
+    "name": "Ian Sanders",
+    "url": "https://github.com/iansan5653"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/mocha": "^7.0.2",
+    "@types/node": "^13.9.5",
+    "@typescript-eslint/eslint-plugin": "^2.25.0",
+    "@typescript-eslint/parser": "^2.25.0",
+    "cross-var": "^1.1.0",
+    "eslint": "^6.8.0",
+    "eslint-config-google": "^0.14.0",
+    "eslint-plugin-jsdoc": "^22.1.0",
+    "eslint-plugin-mocha": "^6.3.0",
+    "mocha": "^7.1.1",
+    "mocha-junit-reporter": "^1.23.3",
+    "prettier": "^2.0.2",
+    "ts-mocha": "^7.0.0",
+    "typescript": "^3.8.3"
+  },
+  "dependencies": {},
+  "files": [
+    "dist/index.d.ts",
+    "dist/index.js",
+    "dist/errors.d.ts",
+    "dist/errors.js"
+  ],
+  "keywords": [
+    "strings",
+    "escapes",
+    "raw strings",
+    "cooked strings",
+    "template literal",
+    "unescape",
+    "unicode",
+    "decode"
+  ]
+}

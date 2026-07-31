@@ -43,7 +43,7 @@ pub const MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT: usize = MAX_VALIDATORS_PER_HEIGHT
 const MAX_LIVENESS_IGNORE_REASONS: usize = 12;
 /// Tight allocation bound for one consensus signature or aggregate.
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
-const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 4;
+const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 5;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// `NPoS` Sumeragi v2 handshake and domain-separation tag.
@@ -78,6 +78,14 @@ pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
     234, 106, 76, 240, 125, 39, 95, 30, 253, 3, 79, 200, 36, 73, 150, 119, 19, 65, 12, 108, 19,
     223, 247, 205, 27, 171, 181, 31, 56, 200, 112, 91,
 ];
+/// Canonical V1 boot execution-policy identity emitted by the recommended genesis template.
+///
+/// Genesis materialization replaces this template value with the identity derived from the
+/// complete staged runtime policy before signing. Startup never treats it as a fallback.
+pub const RECOMMENDED_EXECUTION_POLICY_HASH: [u8; 32] = [
+    63, 148, 116, 83, 117, 143, 142, 233, 11, 44, 102, 67, 122, 18, 143, 194, 45, 147, 196, 210,
+    224, 202, 96, 194, 97, 216, 40, 183, 224, 184, 151, 195,
+];
 
 /// Block height in the v2 protocol.
 pub type Height = u64;
@@ -105,6 +113,50 @@ pub enum ConsensusMode {
     Permissioned,
     /// Voting powers come from the finalized epoch stake snapshot.
     Npos,
+}
+
+impl ConsensusMode {
+    /// Return the canonical handshake and signing-domain tag for this mode.
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::Permissioned => PERMISSIONED_TAG,
+            Self::Npos => NPOS_TAG,
+        }
+    }
+
+    /// Return the canonical BLS domain for this mode.
+    #[must_use]
+    pub const fn bls_domain(self) -> &'static str {
+        match self {
+            Self::Permissioned => PERMISSIONED_BLS_DOMAIN,
+            Self::Npos => NPOS_BLS_DOMAIN,
+        }
+    }
+
+    /// Return whether this is permissioned consensus.
+    #[must_use]
+    pub const fn is_permissioned(self) -> bool {
+        matches!(self, Self::Permissioned)
+    }
+}
+
+impl From<crate::parameter::system::SumeragiConsensusMode> for ConsensusMode {
+    fn from(mode: crate::parameter::system::SumeragiConsensusMode) -> Self {
+        match mode {
+            crate::parameter::system::SumeragiConsensusMode::Permissioned => Self::Permissioned,
+            crate::parameter::system::SumeragiConsensusMode::Npos => Self::Npos,
+        }
+    }
+}
+
+impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
+    fn from(mode: ConsensusMode) -> Self {
+        match mode {
+            ConsensusMode::Permissioned => Self::Permissioned,
+            ConsensusMode::Npos => Self::Npos,
+        }
+    }
 }
 
 /// A validator and its voting power at one height.
@@ -271,6 +323,8 @@ pub struct SumeragiV2GenesisContextParameters {
     /// routing policy, deterministic AMX budgets, and active public-lane
     /// validator records after staged genesis execution.
     pub nexus_amx_context_hash: [u8; 32],
+    /// Canonical V1 identity of every process-local policy input which can affect execution.
+    pub execution_policy_hash: [u8; 32],
 }
 
 impl SumeragiV2GenesisContextParameters {
@@ -290,6 +344,7 @@ impl SumeragiV2GenesisContextParameters {
                 max_chunk_count: 1024,
             },
             nexus_amx_context_hash: RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
+            execution_policy_hash: RECOMMENDED_EXECUTION_POLICY_HASH,
         }
     }
 
@@ -299,8 +354,14 @@ impl SumeragiV2GenesisContextParameters {
     /// # Errors
     ///
     /// Returns [`ValidationError::InvalidDataAvailabilityLayout`] for a zero
-    /// limit or an encoding/shard mismatch.
+    /// limit or an encoding/shard mismatch, and rejects zero policy commitments.
     pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.nexus_amx_context_hash == [0; 32] {
+            return Err(ValidationError::InvalidNexusAmxContextHash);
+        }
+        if self.execution_policy_hash == [0; 32] {
+            return Err(ValidationError::InvalidExecutionPolicyHash);
+        }
         let layout = self.da_layout;
         if layout.chunk_size_bytes == 0
             || layout.max_payload_size_bytes == 0
@@ -442,6 +503,8 @@ pub struct HeightContext {
     /// Hash of all frozen Nexus/AMX inputs that proposal assembly and
     /// deterministic validation must bind.
     pub nexus_amx_context_hash: Hash,
+    /// Canonical V1 identity of process-local execution policy.
+    pub execution_policy_hash: Hash,
     /// Data-availability layout used by proposals at this height.
     pub da_layout: DataAvailabilityLayout,
     /// Finalized seed used to choose the view-zero roster offset.
@@ -481,6 +544,7 @@ impl HeightContext {
             roster: self.roster.clone(),
             quorum: self.quorum,
             nexus_amx_context_hash: self.nexus_amx_context_hash,
+            execution_policy_hash: self.execution_policy_hash,
             da_layout: self.da_layout,
             leader_seed: self.leader_seed,
         };
@@ -504,6 +568,12 @@ impl HeightContext {
         }
         if self.epoch_end_height < self.height {
             return Err(ValidationError::EpochEndsBeforeHeight);
+        }
+        if self.nexus_amx_context_hash == Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(ValidationError::InvalidNexusAmxContextHash);
+        }
+        if self.execution_policy_hash == Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(ValidationError::InvalidExecutionPolicyHash);
         }
         match (
             self.height == self.epoch_end_height,
@@ -627,6 +697,7 @@ struct HeightContextIdentity {
     roster: Vec<ValidatorPower>,
     quorum: DualQuorum,
     nexus_amx_context_hash: Hash,
+    execution_policy_hash: Hash,
     da_layout: DataAvailabilityLayout,
     leader_seed: [u8; 32],
 }
@@ -3693,6 +3764,10 @@ pub enum ValidationError {
     InvalidSnapshotBootstrap,
     /// The mandatory data-availability layout is internally inconsistent.
     InvalidDataAvailabilityLayout,
+    /// The mandatory Nexus/AMX context commitment is all zero.
+    InvalidNexusAmxContextHash,
+    /// The mandatory process-local execution-policy commitment is all zero.
+    InvalidExecutionPolicyHash,
     /// A certificate or message is bound to another height context.
     WrongHeightContext,
     /// Signer count cannot be represented on the wire.
@@ -3853,6 +3928,12 @@ impl fmt::Display for ValidationError {
             }
             Self::InvalidDataAvailabilityLayout => {
                 f.write_str("height context has an invalid data-availability layout")
+            }
+            Self::InvalidNexusAmxContextHash => {
+                f.write_str("height context has an invalid Nexus/AMX context hash")
+            }
+            Self::InvalidExecutionPolicyHash => {
+                f.write_str("height context has an invalid execution-policy hash")
             }
             Self::WrongHeightContext => f.write_str("message is bound to another height context"),
             Self::TooManySigners => f.write_str("signer count exceeds the wire range"),
@@ -4117,6 +4198,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn consensus_modes_project_canonical_protocol_identities() {
+        assert_eq!(ConsensusMode::Permissioned.tag(), PERMISSIONED_TAG);
+        assert_eq!(ConsensusMode::Npos.tag(), NPOS_TAG);
+        assert_eq!(
+            ConsensusMode::Permissioned.bls_domain(),
+            PERMISSIONED_BLS_DOMAIN
+        );
+        assert_eq!(ConsensusMode::Npos.bls_domain(), NPOS_BLS_DOMAIN);
+        assert!(ConsensusMode::Permissioned.is_permissioned());
+        assert!(!ConsensusMode::Npos.is_permissioned());
+
+        for mode in [ConsensusMode::Permissioned, ConsensusMode::Npos] {
+            let parameter_mode = crate::parameter::system::SumeragiConsensusMode::from(mode);
+            assert_eq!(ConsensusMode::from(parameter_mode), mode);
+        }
+    }
+
+    #[test]
     fn global_phase_wire_tags_are_explicit_and_schema_aligned() {
         let prepare = GlobalPhase::Prepare.encode();
         let commit = GlobalPhase::Commit.encode();
@@ -4347,16 +4446,26 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
-    fn genesis_context_json_uses_nexus_amx_context_name_only() {
+    fn genesis_context_json_uses_explicit_policy_hash_names_only() {
         let parameters = SumeragiV2GenesisContextParameters::recommended();
         let json = norito::json::to_json(&parameters).expect("serialize v2 genesis context");
         assert!(json.contains("\"nexus_amx_context_hash\""));
+        assert!(json.contains("\"execution_policy_hash\""));
         assert!(!json.contains("active_nexus_lane_hash"));
 
         let obsolete = json.replace("nexus_amx_context_hash", "active_nexus_lane_hash");
         assert!(
             norito::json::from_str::<SumeragiV2GenesisContextParameters>(&obsolete).is_err(),
             "the unreleased misleading field name must not remain an accepted live schema"
+        );
+        let missing_execution_policy = json.replace(
+            "\"execution_policy_hash\"",
+            "\"obsolete_execution_policy_hash\"",
+        );
+        assert!(
+            norito::json::from_str::<SumeragiV2GenesisContextParameters>(&missing_execution_policy)
+                .is_err(),
+            "signed v2 genesis context must require the execution-policy commitment"
         );
 
         let unknown = json.replacen('{', "{\"unknown\":1,", 1);
@@ -4399,6 +4508,7 @@ mod tests {
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
+            execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 4,
@@ -4613,6 +4723,17 @@ mod tests {
     }
 
     #[test]
+    fn height_context_rejects_zero_execution_policy_hash() {
+        let mut invalid = context(&[1, 1, 1, 1]);
+        invalid.execution_policy_hash = Hash::prehashed([0; Hash::LENGTH]);
+
+        assert_eq!(
+            invalid.validate(),
+            Err(ValidationError::InvalidExecutionPolicyHash)
+        );
+    }
+
+    #[test]
     fn height_context_rejects_noncanonical_rosters_and_quorums() {
         let mut empty = context(&[1, 1, 1, 1]);
         empty.roster.clear();
@@ -4725,9 +4846,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0xfd, 0x17, 0xf1, 0x0c, 0xb0, 0x48, 0x08, 0x31, 0x71, 0xfe, 0xd6, 0xf0, 0x7c, 0x41,
-                0x42, 0x7b, 0x32, 0xaf, 0x85, 0xac, 0xbb, 0xa6, 0x0a, 0x7a, 0x57, 0x25, 0x01, 0xa1,
-                0x58, 0xd0, 0xcb, 0x6b,
+                0x13, 0x00, 0xcf, 0x26, 0xd2, 0x40, 0x58, 0x12, 0x45, 0x68, 0xee, 0x55, 0xde, 0xa8,
+                0xee, 0xce, 0x18, 0xda, 0xf5, 0xed, 0x0d, 0xaf, 0x9b, 0xf0, 0x45, 0x63, 0x70, 0xac,
+                0x50, 0xfa, 0x41, 0x4d,
             ],
             "intentional identity-projection changes require updating this golden"
         );
@@ -4751,9 +4872,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x31, 0x7a, 0x74, 0xcd, 0x4a, 0x34, 0xdd, 0xb2, 0x2f, 0xe5, 0xcc, 0x7f, 0xc2, 0xf2,
-                0x0e, 0x2c, 0xbd, 0x11, 0x0b, 0xa7, 0x69, 0x79, 0x62, 0xc3, 0xde, 0xad, 0xbc, 0xd7,
-                0x87, 0x92, 0xc6, 0x93,
+                0x2d, 0xcb, 0xf6, 0x22, 0xa5, 0x46, 0x47, 0x3b, 0xf2, 0x5c, 0xf7, 0x88, 0x06, 0x22,
+                0xe2, 0x6e, 0x69, 0x28, 0xd5, 0x2b, 0x52, 0x1b, 0x6c, 0x3a, 0x47, 0xf4, 0xba, 0xe8,
+                0xf8, 0xb9, 0xb8, 0xa5,
             ],
             "intentional transition-identity changes require updating this golden"
         );

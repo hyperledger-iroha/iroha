@@ -6,15 +6,15 @@ set -euo pipefail
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
-readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|[0-9]+d) at \([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\)$'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly MODEL="SumeragiV2CommitImportProvenanceMutation.tla"
 readonly FIXED_EXECUTION_CONFIG="commit_import_provenance_fixed.cfg"
 readonly EXECUTION_BUG_CONFIG="commit_import_provenance_execution_bug.cfg"
 readonly FIXED_SUCCESSOR_CONFIG="commit_import_successor_fixed.cfg"
 readonly SUCCESSOR_BUG_CONFIG="commit_import_successor_replacement_bug.cfg"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if (($#)); then
   echo "usage: $0" >&2
@@ -84,7 +84,6 @@ run_tlc() {
   local expected_status="$3"
   local log="${run_dir}/${label}.log"
   local actual_status
-  local last_nonblank
   set +e
   (
     cd "$FORMAL_DIR"
@@ -98,18 +97,33 @@ run_tlc() {
     cat "$log" >&2
     exit 1
   fi
-  [[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]] || {
-    echo "${label} did not emit exactly one TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
-  last_nonblank="$(awk 'NF { line = $0 } END { print line }' "$log")"
-  grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank" || {
-    echo "${label} did not end at the TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  else
+    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
   printf '%s\n' "$log"
+}
+
+assert_exact_invariant_counterexample() {
+  local label="$1"
+  local log="$2"
+  local invariant_marker="$3"
+  local primary_diagnostic_count
+  sumeragi_v2_tlc_assert_exact_line "$label" "$log" "$invariant_marker"
+  sumeragi_v2_tlc_assert_exact_line \
+    "$label" "$log" "Error: The behavior up to this point is:"
+  primary_diagnostic_count="$(
+    grep -Ec \
+      "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+      "$log" || true
+  )"
+  [[ "$primary_diagnostic_count" -eq 1 ]] || {
+    echo "${label} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+    cat "$log" >&2
+    exit 1
+  }
 }
 
 fixed_execution_log="$(run_tlc fixed-execution "$FIXED_EXECUTION_CONFIG" 0)"
@@ -129,19 +143,15 @@ done
 
 execution_bug_log="$(run_tlc execution-guard-removed "$EXECUTION_BUG_CONFIG" 12)"
 readonly EXECUTION_INVARIANT_MARKER="Error: Invariant ExecutedImportsHaveExactLineage is violated."
-[[ "$(grep -Fxc "$EXECUTION_INVARIANT_MARKER" "$execution_bug_log" || true)" == 1 ]] || {
-  echo "execution-guard mutation missed the exact provenance invariant" >&2
-  cat "$execution_bug_log" >&2
-  exit 1
-}
+assert_exact_invariant_counterexample \
+  "execution-guard-removed" "$execution_bug_log" \
+  "$EXECUTION_INVARIANT_MARKER"
 
 successor_bug_log="$(run_tlc successor-origin-replaced "$SUCCESSOR_BUG_CONFIG" 12)"
 readonly SUCCESSOR_INVARIANT_MARKER="Error: Invariant ProducedSuccessorsRetainExactLineage is violated."
-[[ "$(grep -Fxc "$SUCCESSOR_INVARIANT_MARKER" "$successor_bug_log" || true)" == 1 ]] || {
-  echo "successor-origin mutation missed the exact lineage invariant" >&2
-  cat "$successor_bug_log" >&2
-  exit 1
-}
+assert_exact_invariant_counterexample \
+  "successor-origin-replaced" "$successor_bug_log" \
+  "$SUCCESSOR_INVARIANT_MARKER"
 
 echo "[tlc] repaired Commit-import execution and causal-successor provenance models passed"
 echo "[tlc] missing execution guard and successor-origin replacement produced exact invariant status 12"

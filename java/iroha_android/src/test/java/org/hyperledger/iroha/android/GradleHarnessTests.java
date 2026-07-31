@@ -33,6 +33,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.client.ClientConfigManifestLoaderTests",
         "org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests",
         "org.hyperledger.iroha.android.client.ConfidentialAssetToriiClientTests",
+        "org.hyperledger.iroha.android.client.DaToriiClientTests",
         "org.hyperledger.iroha.android.client.ConfigWatcherTests",
         "org.hyperledger.iroha.android.client.ContractManifestTests",
         "org.hyperledger.iroha.android.client.Ed25519RouteAdmissionTests",
@@ -40,7 +41,9 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.client.HttpClientTransportHarnessTests",
         "org.hyperledger.iroha.android.client.HttpClientTransportPendingQueueTests",
         "org.hyperledger.iroha.android.client.HttpClientTransportStatusTests",
+        "org.hyperledger.iroha.android.client.HttpClientTransportSubmissionContractTests",
         "org.hyperledger.iroha.android.client.HttpClientTransportTests",
+        "org.hyperledger.iroha.android.client.TransactionSubmissionCompatibilityTests",
         "org.hyperledger.iroha.android.client.HttpTransportExecutorFakeTests",
         "org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests",
         "org.hyperledger.iroha.android.client.JsonEncoderTests",
@@ -108,7 +111,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.tx.SignedTransactionHasherTests",
         "org.hyperledger.iroha.android.tx.TransactionBuilderTests",
         "org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests",
-        "org.hyperledger.iroha.android.tx.TransactionPayloadFixtureExporter",
         "org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests",
       };
 

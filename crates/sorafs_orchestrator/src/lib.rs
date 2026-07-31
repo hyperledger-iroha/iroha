@@ -6494,6 +6494,15 @@ mod tests {
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
+    use super::*;
+    use crate::{
+        bindings::{config_from_json, config_to_json},
+        soranet::{
+            CircuitId, CircuitRetirementReason, Endpoint, GuardRecord, GuardSet, PathMetadata,
+            RelayDescriptor, RelayDirectory, RelayRoles,
+        },
+        taikai_cache::TaikaiPullQueueConfig,
+    };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use futures::executor::block_on;
     #[cfg(feature = "local-quic-proxy")]
@@ -6515,16 +6524,6 @@ mod tests {
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
     use tokio::sync::Mutex as AsyncMutex;
-
-    use super::*;
-    use crate::{
-        bindings::{config_from_json, config_to_json},
-        soranet::{
-            CircuitId, CircuitRetirementReason, Endpoint, GuardRecord, GuardSet, PathMetadata,
-            RelayDescriptor, RelayDirectory, RelayRoles,
-        },
-        taikai_cache::TaikaiPullQueueConfig,
-    };
 
     fn relay_id(byte: u8) -> [u8; 32] {
         [byte; 32]
@@ -7240,7 +7239,8 @@ mod tests {
     #[test]
     fn compliance_example_config_parses() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let example_path = manifest_dir.join("../../docs/examples/sorafs_compliance_policy.json");
+        let example_path =
+            manifest_dir.join("../../fixtures/documentation/sorafs_compliance_policy.json");
         let file = File::open(&example_path).expect("open compliance example");
         let value: Value =
             norito::json::from_reader(file).expect("decode compliance example config");
@@ -9237,7 +9237,8 @@ mod tests {
     #[test]
     fn direct_mode_policy_example_is_valid() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let example_path = manifest_dir.join("../../docs/examples/sorafs_direct_mode_policy.json");
+        let example_path =
+            manifest_dir.join("../../fixtures/documentation/sorafs_direct_mode_policy.json");
         let file = File::open(&example_path).expect("open direct mode policy example");
         let value: Value = norito::json::from_reader(file).expect("decode config json");
         let config =
@@ -9640,7 +9641,6 @@ mod tests {
     #[test]
     fn pq_ratchet_fire_drill_records_metrics() {
         use futures::executor::block_on;
-
         fn pq_provider(id: &str) -> ProviderMetadata {
             provider_metadata(id)
         }

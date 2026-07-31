@@ -39,8 +39,8 @@ use iroha_data_model::{
             RevokeSpaceDirectoryManifest,
         },
         zk::{
-            AssetHiddenZkTransfer, CancelConfidentialPolicyTransition, RegisterAssetHiddenZkPool,
-            RegisterZkAsset, ScheduleConfidentialPolicyTransition, Shield, Unshield, ZkTransfer,
+            CancelConfidentialPolicyTransition, RegisterZkAsset,
+            ScheduleConfidentialPolicyTransition, Shield, Unshield, ZkTransfer,
         },
     },
     metadata::Metadata,
@@ -52,6 +52,7 @@ use iroha_data_model::{
     },
     permission::Permission,
     smart_contract::ContractAddress,
+    state_path::StatePath,
     transaction::{Executable, ExecutableBatchItem, signed::TransactionPayload},
 };
 use iroha_executor_data_model::isi::multisig::{
@@ -1426,48 +1427,6 @@ fn zk_asset_operation_dataspace_target_with_world<W: WorldReadOnly>(
         ),
         None,
         account_targets,
-    )
-}
-
-fn asset_hidden_pool_storage_asset_definition<W: WorldReadOnly>(
-    world: &W,
-    pool_id: &str,
-) -> Option<AssetDefinitionId> {
-    let pool_id = pool_id.trim();
-    world
-        .zk_assets()
-        .iter()
-        .find_map(|(asset_definition, state)| {
-            state
-                .asset_hidden_pool_id
-                .as_deref()
-                .is_some_and(|registered| registered == pool_id)
-                .then(|| asset_definition.clone())
-        })
-}
-
-fn asset_hidden_pool_dataspace_target(
-    pool_id: &str,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    state_view: Option<&StateView<'_>>,
-) -> Option<DataSpaceId> {
-    let view = state_view?;
-    let asset_definition_id = asset_hidden_pool_storage_asset_definition(view.world(), pool_id)?;
-    asset_balance_definition_dataspace_target(&asset_definition_id, dataspace_catalog, state_view)
-}
-
-fn asset_hidden_pool_dataspace_target_with_world<W: WorldReadOnly>(
-    pool_id: &str,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    world: &W,
-    ledger_time_ms: Option<u64>,
-) -> Option<DataSpaceId> {
-    let asset_definition_id = asset_hidden_pool_storage_asset_definition(world, pool_id)?;
-    asset_balance_definition_dataspace_target_with_world(
-        &asset_definition_id,
-        dataspace_catalog,
-        world,
-        ledger_time_ms,
     )
 }
 
@@ -3168,14 +3127,6 @@ fn instruction_transaction_dataspace_target(
         );
     }
 
-    if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
-        return asset_balance_definition_dataspace_target(
-            &register_pool.storage_asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
     if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
         return asset_balance_definition_dataspace_target(
             &schedule_transition.asset,
@@ -3208,14 +3159,6 @@ fn instruction_transaction_dataspace_target(
     if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
         return asset_balance_definition_dataspace_target(
             &transfer.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<AssetHiddenZkTransfer>() {
-        return asset_hidden_pool_dataspace_target(
-            &transfer.pool_id,
             dataspace_catalog,
             state_view,
         );
@@ -3614,15 +3557,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         );
     }
 
-    if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
-        return asset_balance_definition_dataspace_target_with_world(
-            &register_pool.storage_asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
     if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
         return asset_balance_definition_dataspace_target_with_world(
             &schedule_transition.asset,
@@ -3658,15 +3592,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
         return asset_balance_definition_dataspace_target_with_world(
             &transfer.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<AssetHiddenZkTransfer>() {
-        return asset_hidden_pool_dataspace_target_with_world(
-            &transfer.pool_id,
             dataspace_catalog,
             world,
             ledger_time_ms,
@@ -3802,17 +3727,17 @@ fn multisig_instruction(instruction: &dyn Instruction) -> Option<MultisigInstruc
 fn multisig_proposal_state_key(
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
-) -> Name {
+) -> StatePath {
     const DELIMITER: char = '/';
     const MULTISIG: &str = "multisig";
     const MULTISIG_PROPOSAL_STATE: &str = "proposal";
 
-    Name::from_str(&format!(
+    StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_STATE}{DELIMITER}{}{DELIMITER}{}",
         HashOf::new(multisig_account),
         instructions_hash
     ))
-    .expect("multisig proposal state path must be a valid name")
+    .expect("multisig proposal state path must be valid")
 }
 
 fn multisig_proposal_state<W: WorldReadOnly>(
@@ -4328,9 +4253,6 @@ fn confidential_asset_definition_target(any: &dyn std::any::Any) -> Option<&Asse
     if let Some(unshield) = any.downcast_ref::<Unshield>() {
         return Some(&unshield.asset);
     }
-    if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
-        return Some(&register_pool.storage_asset);
-    }
     None
 }
 
@@ -4571,14 +4493,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
         );
     }
 
-    if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
-        return asset_definition_requires_universal_coordinator(
-            &register_pool.storage_asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
     if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
         return asset_definition_requires_universal_coordinator(
             &schedule_transition.asset,
@@ -4609,20 +4523,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
             dataspace_catalog,
             state_view,
         );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<AssetHiddenZkTransfer>() {
-        let Some(view) = state_view else {
-            return false;
-        };
-        return asset_hidden_pool_storage_asset_definition(view.world(), &transfer.pool_id)
-            .is_some_and(|asset_definition_id| {
-                asset_definition_requires_universal_coordinator(
-                    &asset_definition_id,
-                    dataspace_catalog,
-                    state_view,
-                )
-            });
     }
 
     if let Some(unshield) = any.downcast_ref::<Unshield>() {
@@ -4745,15 +4645,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
         );
     }
 
-    if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
-        return asset_definition_requires_universal_coordinator_with_world(
-            &register_pool.storage_asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
     if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
         return asset_definition_requires_universal_coordinator_with_world(
             &schedule_transition.asset,
@@ -4787,19 +4678,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             dataspace_catalog,
             world,
             ledger_time_ms,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<AssetHiddenZkTransfer>() {
-        return asset_hidden_pool_storage_asset_definition(world, &transfer.pool_id).is_some_and(
-            |asset_definition_id| {
-                asset_definition_requires_universal_coordinator_with_world(
-                    &asset_definition_id,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
-                )
-            },
         );
     }
 
@@ -5237,7 +5115,6 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     }
 
     if any.downcast_ref::<RegisterZkAsset>().is_some()
-        || any.downcast_ref::<RegisterAssetHiddenZkPool>().is_some()
         || any
             .downcast_ref::<ScheduleConfidentialPolicyTransition>()
             .is_some()
@@ -5246,7 +5123,6 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
             .is_some()
         || any.downcast_ref::<Shield>().is_some()
         || any.downcast_ref::<ZkTransfer>().is_some()
-        || any.downcast_ref::<AssetHiddenZkTransfer>().is_some()
         || any.downcast_ref::<Unshield>().is_some()
     {
         return true;
@@ -7223,14 +7099,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         return matches_zk_instruction_label(matcher, "unshield");
     }
 
-    if any.is::<RegisterAssetHiddenZkPool>() {
-        return matches_zk_instruction_label(matcher, "register_asset_hidden_zk_pool");
-    }
-
-    if any.is::<AssetHiddenZkTransfer>() {
-        return matches_zk_instruction_label(matcher, "asset_hidden_zk_transfer");
-    }
-
     false
 }
 
@@ -7948,7 +7816,7 @@ mod tests {
                 FinalizeSmartContractCodeUpload, RegisterSmartContractBytes,
                 UploadSmartContractCodeChunk,
             },
-            zk::{AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, Shield, Unshield, ZkTransfer},
+            zk::{Shield, Unshield, ZkTransfer},
         },
         merge::{LaneDrainIntentV1, LaneDrainStateV1},
         metadata::Metadata,
@@ -11138,27 +11006,6 @@ mod tests {
                 )
                 .into(),
             ),
-            (
-                "register_asset_hidden_zk_pool",
-                RegisterAssetHiddenZkPool::new(
-                    "pool-a".to_owned(),
-                    asset_definition.clone(),
-                    [0xAA; 32],
-                    VerifyingKeyId::new("halo2/ipa", "asset-hidden-vk"),
-                )
-                .into(),
-            ),
-            (
-                "asset_hidden_zk_transfer",
-                AssetHiddenZkTransfer::new(
-                    "pool-a".to_owned(),
-                    vec![[0xBB; 32]],
-                    vec![[0xCC; 32]],
-                    proof(),
-                    Some([0xDD; 32]),
-                )
-                .into(),
-            ),
         ];
 
         for (matcher, instruction) in cases {
@@ -11258,16 +11105,6 @@ mod tests {
                     vec![[0x88; 32]],
                     proof(),
                     Some([0x99; 32]),
-                )
-                .into(),
-            ),
-            (
-                "register_asset_hidden_zk_pool",
-                RegisterAssetHiddenZkPool::new(
-                    "pool-a".to_owned(),
-                    asset_definition.clone(),
-                    [0xAA; 32],
-                    VerifyingKeyId::new("halo2/ipa", "asset-hidden-vk"),
                 )
                 .into(),
             ),
@@ -14213,70 +14050,6 @@ mod tests {
                 "{label} should route to universal"
             );
         }
-    }
-
-    #[test]
-    fn asset_hidden_zk_transfer_uses_global_storage_asset_route() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let lane_id = LaneId::new(2);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (lane_id, dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
-        let storage_asset = AssetDefinitionId::new(
-            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
-            "pool".parse().expect("asset definition name"),
-        );
-        let transfer = AssetHiddenZkTransfer::new(
-            "global-pool".to_owned(),
-            vec![[0x51; 32]],
-            vec![[0x52; 32]],
-            dummy_zk_proof_attachment(),
-            Some([0x53; 32]),
-        );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(transfer)],
-        );
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(storage_asset.clone())
-                    .with_name("pool".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::Global)
-                    .build(&alice_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        let mut zk_state = crate::state::ZkAssetState::default();
-        zk_state.asset_hidden_pool_id = Some("global-pool".to_owned());
-        state.world.zk_assets.insert(storage_asset, zk_state);
-        scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("asset-hidden pool route should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("asset-hidden pool route must resolve through storage asset policy"),
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-        );
     }
 
     #[test]

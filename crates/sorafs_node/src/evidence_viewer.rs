@@ -40,6 +40,9 @@ use crate::{
     read_local_checkpoint_bounded, write_local_checkpoint_atomic_bounded,
 };
 
+/// Deployment-owned monotonic transparency producer for signed viewer state.
+pub mod transparency_producer;
+
 /// Canonical evidence-viewer checkpoint schema version.
 pub const EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1: u16 = 1;
 /// Canonical external checkpoint-authority record schema version.
@@ -1552,19 +1555,35 @@ pub struct EvidenceViewerReceiptCursorV1 {
 
 /// Public Ed25519-authenticated anchor for one exact durable checkpoint.
 ///
-/// The signature covers the checkpoint digest, retained receipt count, and
-/// exact receipt-chain head. Audit GETs return this retained anchor without
-/// invoking the signer.
+/// The signature covers the checkpoint generation and predecessor, checkpoint
+/// digest, retained receipt count, exact receipt-chain and compaction-archive
+/// heads, plus the qualified checkpoint-store handle, revision, and policy
+/// digest. Audit GETs return this retained anchor without invoking the signer.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerSignedCheckpointAnchorV1 {
     /// Checkpoint/anchor schema version.
     pub version: u16,
+    /// Monotonic authoritative checkpoint-store generation.
+    pub checkpoint_generation: u64,
+    /// Exact predecessor checkpoint-store revision, absent only at genesis.
+    pub predecessor_checkpoint_revision: Option<[u8; 32]>,
+    /// Exact predecessor checkpoint digest, absent only at genesis.
+    pub predecessor_checkpoint_digest: Option<[u8; 32]>,
     /// Digest of the complete canonical durable checkpoint.
     pub checkpoint_digest: [u8; 32],
     /// Number of signed receipts committed by that checkpoint.
     pub receipt_count: u64,
     /// Exact receipt-chain head, or `None` for an empty checkpoint.
     pub chain_head: Option<EvidenceViewerReceiptCursorV1>,
+    /// Exact signed immutable compaction-archive head committed by this
+    /// checkpoint, or `None` before the first compaction.
+    pub compaction_archive_head_digest: Option<[u8; 32]>,
+    /// Stable public identity of the authoritative checkpoint store.
+    pub checkpoint_store_handle: String,
+    /// Exact checkpoint-store adapter/public-policy revision.
+    pub checkpoint_store_revision: u64,
+    /// Exact digest of the checkpoint-store public policy.
+    pub checkpoint_store_policy_digest: [u8; 32],
     /// Opaque governed runtime signer handle.
     pub signer_handle: String,
     /// Governed Ed25519 public key.
@@ -1586,13 +1605,34 @@ impl EvidenceViewerSignedCheckpointAnchorV1 {
         expected_signer_handle: &str,
         expected_signer_public_key: [u8; 32],
     ) -> Result<(), EvidenceViewerErrorV1> {
+        let valid_lineage = match self.checkpoint_generation {
+            1 => {
+                self.predecessor_checkpoint_revision.is_none()
+                    && self.predecessor_checkpoint_digest.is_none()
+            }
+            2.. => {
+                self.predecessor_checkpoint_revision
+                    .is_some_and(|digest| !is_zero_digest(digest))
+                    && self
+                        .predecessor_checkpoint_digest
+                        .is_some_and(|digest| !is_zero_digest(digest))
+            }
+            0 => false,
+        };
         if self.version != EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1
+            || !valid_lineage
             || is_zero_digest(self.checkpoint_digest)
             || !is_production_runtime_handle(&self.signer_handle)
             || is_zero_digest(self.signer_public_key)
             || self.signer_handle != expected_signer_handle
             || self.signer_public_key != expected_signer_public_key
             || !checkpoint_anchor_head_is_valid(self.receipt_count, self.chain_head)
+            || self
+                .compaction_archive_head_digest
+                .is_some_and(is_zero_digest)
+            || !is_production_runtime_handle(&self.checkpoint_store_handle)
+            || self.checkpoint_store_revision == 0
+            || is_zero_digest(self.checkpoint_store_policy_digest)
         {
             return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
         }
@@ -1710,6 +1750,13 @@ pub struct EvidenceViewerTransparencyProjectionV1 {
     pub version: u16,
     /// Exact signed durable checkpoint that this page projects.
     pub checkpoint_anchor: EvidenceViewerSignedCheckpointAnchorV1,
+    /// Exact signed immutable compaction-archive head committed by the same
+    /// checkpoint, or `None` before the first compaction.
+    ///
+    /// Carrying the authenticated head in the projection lets a
+    /// deployment-owned transparency producer verify archive identity and
+    /// monotonic lineage without reading private checkpoint state.
+    pub compaction_archive_head: Option<EvidenceViewerSignedCompactionArchiveHeadV1>,
     /// Exact exclusive predecessor supplied by the consumer, or genesis.
     pub predecessor: Option<EvidenceViewerReceiptCursorV1>,
     /// Exact bounded request page size committed into `projection_digest`.
@@ -1753,6 +1800,17 @@ impl EvidenceViewerTransparencyProjectionV1 {
         }
         self.checkpoint_anchor
             .verify(expected_signer_handle, expected_signer_public_key)?;
+        if let Some(head) = self.compaction_archive_head.as_ref() {
+            head.verify(expected_signer_handle, expected_signer_public_key)?;
+        }
+        if self.checkpoint_anchor.compaction_archive_head_digest
+            != self
+                .compaction_archive_head
+                .as_ref()
+                .map(|head| head.head_digest)
+        {
+            return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
+        }
         let mut expected_sequence = match self.predecessor {
             Some(cursor) => cursor
                 .sequence
@@ -1791,6 +1849,7 @@ impl EvidenceViewerTransparencyProjectionV1 {
             || self.projection_digest
                 != transparency_projection_digest(
                     &self.checkpoint_anchor,
+                    self.compaction_archive_head.as_ref(),
                     self.predecessor,
                     self.page_limit,
                     &self.receipts,
@@ -4192,8 +4251,10 @@ impl EvidenceViewerServiceV1 {
             .checked_add(receipts.len())
             .is_some_and(|consumed| consumed < state.receipts.len());
         let next_cursor = receipts.last().map(receipt_cursor).or(predecessor);
+        let compaction_archive_head = state.compaction_archive_head.clone();
         let projection_digest = transparency_projection_digest(
             &checkpoint_anchor,
+            compaction_archive_head.as_ref(),
             predecessor,
             page_limit,
             &receipts,
@@ -4203,6 +4264,7 @@ impl EvidenceViewerServiceV1 {
         Ok(EvidenceViewerTransparencyProjectionV1 {
             version: EVIDENCE_VIEWER_TRANSPARENCY_PROJECTION_VERSION_V1,
             checkpoint_anchor,
+            compaction_archive_head,
             predecessor,
             page_limit,
             receipts,
@@ -4608,11 +4670,35 @@ impl EvidenceViewerServiceV1 {
         let receipt_count = u64::try_from(checkpoint.receipts.len())
             .map_err(|_| EvidenceViewerErrorV1::ResourceExhausted)?;
         let chain_head = checkpoint.receipts.last().map(receipt_cursor);
+        let compaction_archive_head_digest = checkpoint
+            .compaction_archive_head
+            .as_ref()
+            .map(|head| head.head_digest);
+        let previous_record = state.checkpoint_record.clone();
+        let (checkpoint_generation, predecessor_checkpoint_revision, predecessor_checkpoint_digest) =
+            match previous_record.as_ref() {
+                Some(record) => (
+                    record
+                        .generation
+                        .checked_add(1)
+                        .ok_or(EvidenceViewerErrorV1::ResourceExhausted)?,
+                    Some(record.revision),
+                    Some(record.checkpoint_digest),
+                ),
+                None => (1, None, None),
+            };
         let mut checkpoint_anchor = EvidenceViewerSignedCheckpointAnchorV1 {
             version: EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1,
+            checkpoint_generation,
+            predecessor_checkpoint_revision,
+            predecessor_checkpoint_digest,
             checkpoint_digest,
             receipt_count,
             chain_head,
+            compaction_archive_head_digest,
+            checkpoint_store_handle: self.checkpoint_store.handle.clone(),
+            checkpoint_store_revision: self.checkpoint_store.qualification.revision(),
+            checkpoint_store_policy_digest: self.checkpoint_store.qualification.policy_digest(),
             signer_handle: self.config.receipt_signer_handle.clone(),
             signer_public_key: self.config.receipt_signer_public_key,
             signature: [0; 64],
@@ -4640,7 +4726,6 @@ impl EvidenceViewerServiceV1 {
         if len_u64(checkpoint_bytes.len()) > self.config.checkpoint_max_bytes {
             return Err(EvidenceViewerErrorV1::ResourceExhausted);
         }
-        let previous_record = state.checkpoint_record.clone();
         let next_record = self.sign_checkpoint_store_record(
             checkpoint_digest,
             checkpoint_bytes,
@@ -5089,6 +5174,7 @@ fn verify_compaction_archive_head_core(
         || !lineage_is_valid
         || is_zero_digest(head.operation_id)
         || head.source_checkpoint_generation == 0
+        || head.source_checkpoint_generation != head.source_checkpoint_anchor.checkpoint_generation
         || is_zero_digest(head.source_checkpoint_revision)
         || head.compacted_through_unix_ms == 0
         || head.maximum_records == 0
@@ -5283,7 +5369,14 @@ fn verify_checkpoint_store_record(
     )
     .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
     let (checkpoint, checkpoint_anchor) = verify_checkpoint_envelope(config, envelope)?;
-    if checkpoint_anchor.checkpoint_digest != record.checkpoint_digest {
+    if checkpoint_anchor.checkpoint_generation != record.generation
+        || checkpoint_anchor.predecessor_checkpoint_revision != record.predecessor_revision
+        || checkpoint_anchor.predecessor_checkpoint_digest != record.predecessor_checkpoint_digest
+        || checkpoint_anchor.checkpoint_digest != record.checkpoint_digest
+        || checkpoint_anchor.checkpoint_store_handle != record.checkpoint_store_handle
+        || checkpoint_anchor.checkpoint_store_revision != record.checkpoint_store_revision
+        || checkpoint_anchor.checkpoint_store_policy_digest != record.checkpoint_store_policy_digest
+    {
         return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
     }
     if let Some(head) = checkpoint.compaction_archive_head.as_ref() {
@@ -5397,6 +5490,19 @@ fn validated_checkpoint_anchor(
             != u64::try_from(state.receipts.len())
                 .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?
         || anchor.chain_head != state.receipts.last().map(receipt_cursor)
+        || anchor.compaction_archive_head_digest
+            != state
+                .compaction_archive_head
+                .as_ref()
+                .map(|head| head.head_digest)
+        || state.checkpoint_record.as_ref().is_none_or(|record| {
+            anchor.checkpoint_generation != record.generation
+                || anchor.predecessor_checkpoint_revision != record.predecessor_revision
+                || anchor.predecessor_checkpoint_digest != record.predecessor_checkpoint_digest
+                || anchor.checkpoint_store_handle != record.checkpoint_store_handle
+                || anchor.checkpoint_store_revision != record.checkpoint_store_revision
+                || anchor.checkpoint_store_policy_digest != record.checkpoint_store_policy_digest
+        })
     {
         return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
     }
@@ -5435,9 +5541,20 @@ fn checkpoint_anchor_signature_message(anchor: &EvidenceViewerSignedCheckpointAn
     let mut message = Vec::with_capacity(
         CHECKPOINT_SIGNATURE_DOMAIN_V1.len()
             + std::mem::size_of::<u16>()
+            + std::mem::size_of::<u64>()
+            + 1
+            + 32
+            + 1
+            + 32
             + anchor.checkpoint_digest.len()
             + std::mem::size_of::<u64>()
             + 1
+            + std::mem::size_of::<u64>()
+            + 32
+            + 1
+            + 32
+            + std::mem::size_of::<u64>()
+            + anchor.checkpoint_store_handle.len()
             + std::mem::size_of::<u64>()
             + 32
             + std::mem::size_of::<u64>()
@@ -5446,9 +5563,27 @@ fn checkpoint_anchor_signature_message(anchor: &EvidenceViewerSignedCheckpointAn
     );
     message.extend_from_slice(CHECKPOINT_SIGNATURE_DOMAIN_V1);
     message.extend_from_slice(&anchor.version.to_le_bytes());
+    message.extend_from_slice(&anchor.checkpoint_generation.to_le_bytes());
+    hash_optional_checkpoint_digest_bytes(&mut message, anchor.predecessor_checkpoint_revision);
+    hash_optional_checkpoint_digest_bytes(&mut message, anchor.predecessor_checkpoint_digest);
     message.extend_from_slice(&anchor.checkpoint_digest);
     message.extend_from_slice(&anchor.receipt_count.to_le_bytes());
     hash_optional_receipt_cursor_bytes(&mut message, anchor.chain_head);
+    match anchor.compaction_archive_head_digest {
+        Some(digest) => {
+            message.push(1);
+            message.extend_from_slice(&digest);
+        }
+        None => message.push(0),
+    }
+    message.extend_from_slice(
+        &u64::try_from(anchor.checkpoint_store_handle.len())
+            .expect("evidence-viewer checkpoint-store handle length is bounded to 256 bytes")
+            .to_le_bytes(),
+    );
+    message.extend_from_slice(anchor.checkpoint_store_handle.as_bytes());
+    message.extend_from_slice(&anchor.checkpoint_store_revision.to_le_bytes());
+    message.extend_from_slice(&anchor.checkpoint_store_policy_digest);
     message.extend_from_slice(
         &u64::try_from(anchor.signer_handle.len())
             .expect("evidence-viewer signer handle length is bounded to 256 bytes")
@@ -5457,6 +5592,16 @@ fn checkpoint_anchor_signature_message(anchor: &EvidenceViewerSignedCheckpointAn
     message.extend_from_slice(anchor.signer_handle.as_bytes());
     message.extend_from_slice(&anchor.signer_public_key);
     message
+}
+
+fn hash_optional_checkpoint_digest_bytes(output: &mut Vec<u8>, digest: Option<[u8; 32]>) {
+    match digest {
+        Some(digest) => {
+            output.push(1);
+            output.extend_from_slice(&digest);
+        }
+        None => output.push(0),
+    }
 }
 
 fn hash_optional_receipt_cursor_bytes(
@@ -6435,6 +6580,7 @@ fn receipt_cursor(receipt: &EvidenceViewerSignedReceiptV1) -> EvidenceViewerRece
 
 fn transparency_projection_digest(
     checkpoint_anchor: &EvidenceViewerSignedCheckpointAnchorV1,
+    compaction_archive_head: Option<&EvidenceViewerSignedCompactionArchiveHeadV1>,
     predecessor: Option<EvidenceViewerReceiptCursorV1>,
     page_limit: u16,
     receipts: &[EvidenceViewerSignedReceiptV1],
@@ -6452,6 +6598,22 @@ fn transparency_projection_digest(
             .to_le_bytes(),
     );
     hasher.update(&checkpoint_anchor_bytes);
+    match compaction_archive_head {
+        Some(head) => {
+            hasher.update(&[1]);
+            let bytes =
+                norito::to_bytes(head).map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
+            hasher.update(
+                &u64::try_from(bytes.len())
+                    .map_err(|_| EvidenceViewerErrorV1::ResourceExhausted)?
+                    .to_le_bytes(),
+            );
+            hasher.update(&bytes);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
     hash_optional_receipt_cursor(&mut hasher, predecessor);
     hasher.update(&page_limit.to_le_bytes());
     hasher.update(
@@ -8074,9 +8236,19 @@ mod tests {
     ) -> EvidenceViewerCheckpointEnvelopeV1 {
         let mut checkpoint_anchor = EvidenceViewerSignedCheckpointAnchorV1 {
             version: EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1,
+            checkpoint_generation: 1,
+            predecessor_checkpoint_revision: None,
+            predecessor_checkpoint_digest: None,
             checkpoint_digest: checkpoint_payload_digest(&checkpoint).expect("checkpoint digest"),
             receipt_count: u64::try_from(checkpoint.receipts.len()).expect("receipt count"),
             chain_head: checkpoint.receipts.last().map(receipt_cursor),
+            compaction_archive_head_digest: checkpoint
+                .compaction_archive_head
+                .as_ref()
+                .map(|head| head.head_digest),
+            checkpoint_store_handle: TEST_CHECKPOINT_STORE_HANDLE.to_owned(),
+            checkpoint_store_revision: TEST_CHECKPOINT_STORE_QUALIFICATION.revision(),
+            checkpoint_store_policy_digest: TEST_CHECKPOINT_STORE_QUALIFICATION.policy_digest(),
             signer_handle: config.receipt_signer_handle.clone(),
             signer_public_key: config.receipt_signer_public_key,
             signature: [0; 64],
@@ -8805,8 +8977,24 @@ mod tests {
             TEST_CHECKPOINT_STORE_QUALIFICATION.policy_digest()
         );
         assert_eq!(genesis.revision, checkpoint_store_record_revision(&genesis));
-        verify_checkpoint_store_record(&fixture.config, &service.checkpoint_store, &genesis)
-            .expect("genesis record signature and canonical checkpoint");
+        let (_, genesis_anchor) =
+            verify_checkpoint_store_record(&fixture.config, &service.checkpoint_store, &genesis)
+                .expect("genesis record signature and canonical checkpoint");
+        assert_eq!(genesis_anchor.checkpoint_generation, genesis.generation);
+        assert_eq!(genesis_anchor.predecessor_checkpoint_revision, None);
+        assert_eq!(genesis_anchor.predecessor_checkpoint_digest, None);
+        assert_eq!(
+            genesis_anchor.checkpoint_store_handle,
+            TEST_CHECKPOINT_STORE_HANDLE
+        );
+        assert_eq!(
+            genesis_anchor.checkpoint_store_revision,
+            TEST_CHECKPOINT_STORE_QUALIFICATION.revision()
+        );
+        assert_eq!(
+            genesis_anchor.checkpoint_store_policy_digest,
+            TEST_CHECKPOINT_STORE_QUALIFICATION.policy_digest()
+        );
         assert_eq!(fixture.checkpoint_store.cas_call_count(), 1);
         assert_eq!(fixture.checkpoint_store.load_call_count(), 4);
 
@@ -8825,6 +9013,18 @@ mod tests {
         assert_eq!(successor.predecessor_revision, Some(genesis.revision));
         assert_eq!(
             successor.predecessor_checkpoint_digest,
+            Some(genesis.checkpoint_digest)
+        );
+        let (_, successor_anchor) =
+            verify_checkpoint_store_record(&fixture.config, &service.checkpoint_store, &successor)
+                .expect("successor record signature and canonical checkpoint");
+        assert_eq!(successor_anchor.checkpoint_generation, successor.generation);
+        assert_eq!(
+            successor_anchor.predecessor_checkpoint_revision,
+            Some(genesis.revision)
+        );
+        assert_eq!(
+            successor_anchor.predecessor_checkpoint_digest,
             Some(genesis.checkpoint_digest)
         );
         assert_eq!(fixture.checkpoint_store.cas_call_count(), 2);
@@ -9052,6 +9252,30 @@ mod tests {
                 .compaction_archive_head()
                 .expect("read signed archive head"),
             Some(head.clone())
+        );
+        let compacted_checkpoint = current_checkpoint_digest(&service);
+        let projection = service
+            .transparency_projection(compacted_checkpoint, None, 16)
+            .expect("project exact signed compaction state");
+        assert_eq!(projection.compaction_archive_head, Some(head.clone()));
+        assert_eq!(
+            projection.checkpoint_anchor.compaction_archive_head_digest,
+            Some(head.head_digest)
+        );
+        projection
+            .verify(
+                &fixture.config.receipt_signer_handle,
+                fixture.config.receipt_signer_public_key,
+            )
+            .expect("verify archive-bound transparency projection");
+        let mut omitted_archive = projection;
+        omitted_archive.compaction_archive_head = None;
+        assert_eq!(
+            omitted_archive.verify(
+                &fixture.config.receipt_signer_handle,
+                fixture.config.receipt_signer_public_key,
+            ),
+            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
         );
 
         let install_calls = archive.install_call_count();
@@ -11032,273 +11256,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn provider_policy_drift_is_checked_before_and_after_external_operations() {
-        let fixture = EvidenceViewerFixture::new();
-        let service = fixture.open();
-        let request = |idempotency_key| EvidenceViewerChallengeRequestV1 {
-            case_id: CASE_ID.to_owned(),
-            round_id: ROUND_ID.to_owned(),
-            quarantine_id: fixture.quarantine_id,
-            viewer_account: JUROR_ACCOUNT.to_owned(),
-            role: EvidenceViewerRoleV1::Juror,
-            purpose: REVIEW_PURPOSE.to_owned(),
-            idempotency_key,
-            now_unix_ms: BASE_UNIX_MS,
-        };
-
-        fixture.webauthn.qualification.set_policy_digest([0xB1; 32]);
-        assert_eq!(
-            service
-                .issue_challenge(request([0x51; 32]))
-                .expect_err("pre-operation policy drift must fail closed"),
-            EvidenceViewerErrorV1::RuntimeUnavailable
-        );
-        assert_eq!(
-            fixture.webauthn.issue_call_count(),
-            0,
-            "provider operation must not run after failed preflight"
-        );
-
-        fixture.webauthn.qualification.set_policy_digest([0xA1; 32]);
-        fixture
-            .webauthn
-            .qualification
-            .drift_policy_after_next_operation([0xB2; 32]);
-        assert_eq!(
-            service
-                .issue_challenge(request([0x52; 32]))
-                .expect_err("post-operation policy drift must discard the result"),
-            EvidenceViewerErrorV1::RuntimeUnavailable
-        );
-        assert_eq!(fixture.webauthn.issue_call_count(), 1);
-        assert_eq!(
-            service
-                .audit_status()
-                .expect("failed external operation must not mutate checkpoint state")
-                .challenge_count,
-            0
-        );
-    }
-
-    #[test]
-    fn evidence_bytes_assertions_tokens_and_provider_diagnostics_are_debug_redacted() {
-        let fixture = EvidenceViewerFixture::new();
-        let service = fixture.open();
-        let challenge = fixture.issue_challenge(
-            &service,
-            JUROR_ACCOUNT,
-            EvidenceViewerRoleV1::Juror,
-            [0x41; 32],
-            BASE_UNIX_MS,
-        );
-        let challenge_token = challenge.challenge.expose().to_owned();
-        let debug_request = EvidenceViewerSessionRequestV1 {
-            case_id: CASE_ID.to_owned(),
-            round_id: ROUND_ID.to_owned(),
-            quarantine_id: fixture.quarantine_id,
-            viewer_account: JUROR_ACCOUNT.to_owned(),
-            role: EvidenceViewerRoleV1::Juror,
-            purpose: REVIEW_PURPOSE.to_owned(),
-            challenge: opaque(&challenge_token),
-            webauthn_assertion: b"WEBAUTHN-ASSERTION-SECRET-MUST-NOT-LEAK".to_vec(),
-            idempotency_key: [0x42; 32],
-            now_unix_ms: BASE_UNIX_MS + 1,
-        };
-        let request_debug = format!("{debug_request:?}");
-        assert!(!request_debug.contains(&challenge_token));
-        assert!(!request_debug.contains("WEBAUTHN-ASSERTION-SECRET-MUST-NOT-LEAK"));
-        assert!(request_debug.contains("<redacted>"));
-        drop(debug_request);
-
-        let issued = fixture
-            .create_session(
-                &service,
-                &challenge_token,
-                b"valid-webauthn-assertion",
-                [0x43; 32],
-                BASE_UNIX_MS + 2,
-            )
-            .expect("create session for range redaction");
-        let outcome = service
-            .read_range(
-                issued.session.local_session.session_id,
-                JUROR_ACCOUNT,
-                &opaque(issued.grant.expose()),
-                0,
-                EVIDENCE_PAYLOAD.len() as u64,
-                [0x44; 32],
-                [0xC4; 32],
-                BASE_UNIX_MS + 3,
-            )
-            .expect("read authenticated evidence range");
-        assert_eq!(outcome.range.payload.as_slice(), EVIDENCE_PAYLOAD);
-        let outcome_debug = format!("{outcome:?}");
-        assert!(!outcome_debug.contains(std::str::from_utf8(EVIDENCE_PAYLOAD).expect("ASCII")));
-        assert!(!outcome_debug.contains(outcome.rotated_grant.expose()));
-        assert!(outcome_debug.contains("payload: \"<redacted>\""));
-        let service_debug = format!("{service:?}");
-        assert!(!service_debug.contains(MOCK_PROVIDER_SECRET));
-        assert!(!service_debug.contains(std::str::from_utf8(EVIDENCE_PAYLOAD).expect("ASCII")));
-        for error in [
-            EvidenceViewerErrorV1::Forbidden,
-            EvidenceViewerErrorV1::AuthenticationRejected,
-            EvidenceViewerErrorV1::RuntimeUnavailable,
-            EvidenceViewerErrorV1::CheckpointUnavailable,
-        ] {
-            let rendered = format!("{error:?} {error}");
-            assert!(!rendered.contains(MOCK_PROVIDER_SECRET));
-            assert!(!rendered.contains(std::str::from_utf8(EVIDENCE_PAYLOAD).expect("ASCII")));
-        }
-    }
-
-    #[test]
-    fn signed_checkpoint_envelope_rejects_non_receipt_state_tampering() {
-        let key = SigningKey::from_bytes(&[0x43; 32]);
-        let config = valid_config(key.verifying_key().to_bytes());
-        let checkpoint = EvidenceViewerCheckpointV1::default();
-        let envelope = signed_checkpoint_envelope(&key, &config, checkpoint);
-        verify_checkpoint_envelope(&config, envelope.clone()).expect("signed checkpoint");
-
-        let mut tampered_checkpoint = envelope.clone();
-        tampered_checkpoint.checkpoint.version =
-            EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1.saturating_add(1);
-        assert_eq!(
-            verify_checkpoint_envelope(&config, tampered_checkpoint),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-
-        let mut tampered_count = envelope.clone();
-        tampered_count.checkpoint_anchor.receipt_count = 1;
-        assert_eq!(
-            verify_checkpoint_envelope(&config, tampered_count),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-
-        let mut tampered_head = envelope.clone();
-        tampered_head.checkpoint_anchor.chain_head = Some(EvidenceViewerReceiptCursorV1 {
-            sequence: 1,
-            receipt_digest: [0xA1; 32],
-        });
-        assert_eq!(
-            verify_checkpoint_envelope(&config, tampered_head),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-
-        let mut tampered_digest = envelope.clone();
-        tampered_digest.checkpoint_anchor.checkpoint_digest[0] ^= 1;
-        assert_eq!(
-            verify_checkpoint_envelope(&config, tampered_digest),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-
-        let mut tampered_signature = envelope;
-        tampered_signature.checkpoint_anchor.signature[0] ^= 1;
-        assert_eq!(
-            verify_checkpoint_envelope(&config, tampered_signature),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-
-        let mut substituted_handle =
-            signed_checkpoint_envelope(&key, &config, EvidenceViewerCheckpointV1::default())
-                .checkpoint_anchor;
-        substituted_handle.signer_handle = "pkcs11:rotated-evidence-receipts".to_owned();
-        assert_eq!(
-            substituted_handle.verify(
-                "pkcs11:rotated-evidence-receipts",
-                config.receipt_signer_public_key,
-            ),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint),
-            "the signature must bind the embedded signer handle, not only the expected identity"
-        );
-    }
-
-    #[test]
-    fn checkpoint_rejects_substituted_erasure_intent_operation_binding() {
-        let key = SigningKey::from_bytes(&[0x44; 32]);
-        let config = valid_config(key.verifying_key().to_bytes());
-        let idempotency_key = [0x45; 32];
-        let request_digest = [0x46; 32];
-        let quarantine_id = [0x47; 16];
-        let object_id = [0x48; 16];
-        let evidence_digest = [0x49; 32];
-        let intent = EvidenceViewerErasureIntentV1 {
-            operation_id: erasure_operation_id(
-                idempotency_key,
-                request_digest,
-                quarantine_id,
-                object_id,
-                evidence_digest,
-            ),
-            quarantine_id,
-            object_id,
-            evidence_digest,
-            case_id: CASE_ID.to_owned(),
-            round_id: ROUND_ID.to_owned(),
-            actor_account: LEGAL_ACCOUNT.to_owned(),
-            idempotency_key,
-            request_digest,
-            requested_at_unix_ms: BASE_UNIX_MS,
-        };
-        let mut checkpoint = EvidenceViewerCheckpointV1 {
-            erasure_intents: vec![intent],
-            ..EvidenceViewerCheckpointV1::default()
-        };
-        validate_checkpoint(&config, &checkpoint).expect("exact erasure intent");
-
-        checkpoint.erasure_intents[0].operation_id[0] ^= 1;
-        assert_eq!(
-            validate_checkpoint(&config, &checkpoint),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-    }
-
-    #[test]
-    fn signed_receipt_rejects_body_signature_and_chain_tampering() {
-        let key = SigningKey::from_bytes(&[0x42; 32]);
-        let receipt = signed_receipt(&key);
-        receipt
-            .verify(
-                "pkcs11:prod-evidence-receipts",
-                key.verifying_key().to_bytes(),
-            )
-            .expect("valid signed receipt");
-
-        let mut tampered_body = receipt.clone();
-        tampered_body.body.range_end = Some(2048);
-        assert_eq!(
-            tampered_body.verify(
-                "pkcs11:prod-evidence-receipts",
-                key.verifying_key().to_bytes()
-            ),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-
-        let mut tampered_signature = receipt.clone();
-        tampered_signature.signature[0] ^= 1;
-        assert_eq!(
-            tampered_signature.verify(
-                "pkcs11:prod-evidence-receipts",
-                key.verifying_key().to_bytes()
-            ),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-
-        let config = valid_config(key.verifying_key().to_bytes());
-        let mut second = signed_receipt(&key);
-        second.body.sequence = 2;
-        second.body.previous_receipt_digest = [0x99; 32];
-        second.receipt_digest = receipt_body_digest(&second.body).expect("second digest");
-        second.signature = key
-            .sign(&receipt_signature_message(second.receipt_digest))
-            .to_bytes();
-        let checkpoint = EvidenceViewerCheckpointV1 {
-            receipts: vec![receipt, second],
-            ..EvidenceViewerCheckpointV1::default()
-        };
-        assert_eq!(
-            validate_checkpoint(&config, &checkpoint),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-    }
+    // Keep provider-policy, redaction, and signed-state tamper regressions in this
+    // test module so their libtest paths and private-helper access remain stable.
+    include!("evidence_viewer/provider_security_tests.rs");
 }

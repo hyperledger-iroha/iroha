@@ -3745,7 +3745,7 @@ test("confidential transaction builders wrap expected instruction payloads", () 
   const proof = {
     backend: "halo2/ipa",
     proof: Buffer.from("proof"),
-    verifyingKeyRef: "halo2/ipa:vk_transfer",
+    verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
   };
   const register = captureInstructionObject(() =>
     buildRegisterZkAssetTransaction({

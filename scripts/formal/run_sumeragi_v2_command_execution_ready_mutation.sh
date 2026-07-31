@@ -4,7 +4,7 @@
 set -euo pipefail
 
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly NETWORK="${FORMAL_DIR}/SumeragiV2AsyncNetwork.tla"
 readonly PROOF="${FORMAL_DIR}/SumeragiV2CommandExecutionReadyProofs.tla"
 readonly REGULAR_FRAMED_HELPER="${FORMAL_DIR}/SumeragiV2RegularCommandFramedReadyProofs.tla"
@@ -96,6 +96,21 @@ tautology = replace_once(
 )
 (output_path / "tautological-ready-arm.tla").write_text(
     tautology, encoding="utf-8"
+)
+
+ownerless_core_delivery = replace_once(
+    network,
+    "ExecuteCoreDeliveryReady(command) ==\n"
+    "  LET item == command.item\n"
+    "  IN /\\ item \\in asyncSentItems\n"
+    "     /\\ AsyncControlServiceOccurrenceIsCurrentOwner(item)\n",
+    "ExecuteCoreDeliveryReady(command) ==\n"
+    "  LET item == command.item\n"
+    "  IN /\\ item \\in asyncSentItems\n",
+    "ownerless-core-delivery-ready",
+)
+(output_path / "ownerless-core-delivery-ready.tla").write_text(
+    ownerless_core_delivery, encoding="utf-8"
 )
 
 disconnected = replace_once(
@@ -204,6 +219,9 @@ run_rejected swapped-executor-arms \
 run_rejected tautological-ready-arm \
   "$run_dir/tautological-ready-arm.tla" "$PROOF" \
   "ExecuteDecisionFetchReady must be a non-tautological pure guard"
+run_rejected ownerless-core-delivery-ready \
+  "$run_dir/ownerless-core-delivery-ready.tla" "$PROOF" \
+  "ExecuteCoreDeliveryReady must retain its exact normalized production guard body"
 run_rejected disconnected-dispatch-call \
   "$run_dir/disconnected-dispatch-call.tla" "$PROOF" \
   "CommandDispatchable must call the exact pure CommandExecutionReady kernel once"
@@ -221,4 +239,4 @@ run_rejected vacuous-composed-helper \
   "$run_dir/vacuous-composed-helper/SumeragiV2CommandExecutionReadyProofs.tla" \
   "ExecuteDecisionFetchReadyIffEnabledComposed must compose the exact two directional production proofs"
 
-echo "[source] exact 13-arm readiness rejects omissions, swaps, tautologies, disconnected callers, broken cardinality induction, and vacuous arm/helper/aggregate proofs"
+echo "[source] exact 13-arm readiness rejects omissions, swaps, tautologies, ownerless Core delivery, disconnected callers, broken cardinality induction, and vacuous arm/helper/aggregate proofs"

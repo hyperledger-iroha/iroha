@@ -3,7 +3,10 @@
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
 
+pub mod privacy_native_actions;
+pub mod privacy_wallet_bundle;
 pub mod privacy_wallet_worker;
+mod zk_vk_draft;
 
 use core::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
@@ -97,7 +100,7 @@ use iroha_data_model::{
         },
         time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     },
-    executor::{ContractRejection, ValidationFail},
+    executor::ValidationFail,
     isi::{
         BatchMode, Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue,
         Revoke, SetAssetHoldingLimit, SetAssetTransferAvailability, SetAssetTransferBlacklist,
@@ -116,17 +119,14 @@ use iroha_data_model::{
         },
         smart_contract_code::CommitContractDeployment,
         sorafs::{CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder},
-        zk::{
-            AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAsset, Shield, Unshield,
-            VerifyProof, ZkAssetMode, ZkTransfer,
-        },
+        zk::{RegisterZkAsset, Shield, Unshield, VerifyProof, ZkAssetMode, ZkTransfer},
     },
     metadata::Metadata,
     name::Name,
     nexus::{
-        DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
-        LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof,
-        LaneRelayEnvelope, compute_settlement_hash,
+        DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision,
+        LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneId, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        LaneLifecycleStatusV1, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
     },
     nft::NftId,
     parameter::Parameter,
@@ -137,7 +137,7 @@ use iroha_data_model::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAttributeValueV1,
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
         BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, IrohaZkAmsProofV1,
-        IrohaZkAmsStatementV1, PRIVACY_BRIDGE_ABI_VERSION_V1,
+        IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1, PRIVACY_BRIDGE_ABI_VERSION_V1,
         PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1, PrivacyCapabilitySnapshotV1, PrivacyChallengeV1,
         PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1, PrivacyCredentialDocumentTypeV1,
         PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyP256PointV1, PrivacyPolicyDigestV1,
@@ -147,8 +147,9 @@ use iroha_data_model::{
         PrivacyTransactionIntentDigestV1, PrivacyVeRangeBitLengthV1,
         PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordDigestV1,
         PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsActionV1,
-        PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
+        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyX509ExtendedKeyUsageV1,
+        PrivacyZkAcePolicyRecordV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
+        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
         PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
         PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
         PrivacyZkAmsRegistryIdV1, PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
@@ -157,7 +158,10 @@ use iroha_data_model::{
         validate_privacy_capability_archive_v1, zk_ams_issuer_policy_record_digest_v1,
         zk_ams_registry_record_digest_v1,
     },
-    proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+    proof::{
+        ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId,
+        proof_box_max_proof_bytes_v1, verifying_key_id_field_is_portable,
+    },
     query::{
         CommittedTransaction, ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest,
         QueryResponse, QueryWithParams, SingularQueryBox,
@@ -211,7 +215,7 @@ use pyo3::{
     Bound, FromPyObject, create_exception,
     exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
+    types::{PyAny, PyBool, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
     wrap_pyfunction,
 };
 use rand_core_06::OsRng as OsRng06;
@@ -1138,14 +1142,6 @@ fn parse_verifying_key_id_py(
     Ok(Some(VerifyingKeyId::new(backend, name_text)))
 }
 
-fn parse_required_verifying_key_id_py(
-    value: Option<&Bound<'_, PyAny>>,
-    context: &str,
-) -> PyResult<VerifyingKeyId> {
-    parse_verifying_key_id_py(value, context)?
-        .ok_or_else(|| PyValueError::new_err(format!("{context} is required")))
-}
-
 fn parse_optional_root_hint(
     value: Option<&Bound<'_, PyAny>>,
     context: &str,
@@ -1159,75 +1155,278 @@ fn parse_optional_root_hint(
     py_fixed_array::<32>(value, context).map(Some)
 }
 
-fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResult<ProofAttachment> {
+fn py_exact_dict<'value, 'py>(
+    value: &'value Bound<'py, PyAny>,
+    context: &str,
+    allowed_fields: &[&str],
+) -> PyResult<&'value Bound<'py, PyDict>> {
     let dict = value
         .cast::<PyDict>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be a mapping")))?;
-    let backend_value = dict_get_alias(dict, &["backend", "proof_backend", "proofBackend"])?
-        .ok_or_else(|| PyValueError::new_err(format!("{context}.backend is required")))?;
-    let backend_text = py_text(&backend_value, &format!("{context}.backend"))?;
+    for (key, _) in dict.iter() {
+        let key = key
+            .extract::<String>()
+            .map_err(|_| PyTypeError::new_err(format!("{context} field names must be strings")))?;
+        if !allowed_fields.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "{context} contains unknown first-release field `{key}`"
+            )));
+        }
+    }
+    Ok(dict)
+}
+
+fn py_required_dict_field<'py>(
+    dict: &Bound<'py, PyDict>,
+    field: &str,
+    context: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    dict.get_item(field)?
+        .ok_or_else(|| PyValueError::new_err(format!("{context}.{field} is required")))
+}
+
+fn py_exact_bytes(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>> {
+    let bytes = value
+        .cast::<PyBytes>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be bytes")))?;
+    Ok(bytes.as_bytes().to_vec())
+}
+
+fn py_exact_fixed_bytes<const N: usize>(
+    value: &Bound<'_, PyAny>,
+    context: &str,
+) -> PyResult<[u8; N]> {
+    fixed_array::<N>(&py_exact_bytes(value, context)?, context)
+}
+
+fn py_portable_verifier_id_field(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
+    let text = value
+        .extract::<String>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be a string")))?;
+    if !verifying_key_id_field_is_portable(&text) {
+        return Err(PyValueError::new_err(format!(
+            "{context} must use the bounded portable verifier-key registry grammar"
+        )));
+    }
+    Ok(text)
+}
+
+fn py_exact_u16(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u16> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{context} must be an unsigned 16-bit integer"
+        )));
+    }
+    value
+        .extract::<u16>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be an unsigned 16-bit integer")))
+}
+
+fn py_exact_u32(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u32> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{context} must be an unsigned 32-bit integer"
+        )));
+    }
+    value
+        .extract::<u32>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be an unsigned 32-bit integer")))
+}
+
+fn parse_lane_privacy_proof_py(
+    value: &Bound<'_, PyAny>,
+    context: &str,
+) -> PyResult<LanePrivacyProof> {
+    let lane = py_exact_dict(value, context, &["commitment_id", "witness"])?;
+    let commitment_id = py_exact_u16(
+        &py_required_dict_field(lane, "commitment_id", context)?,
+        &format!("{context}.commitment_id"),
+    )?;
+    let witness_value = py_required_dict_field(lane, "witness", context)?;
+    let witness = py_exact_dict(
+        &witness_value,
+        &format!("{context}.witness"),
+        &["kind", "payload"],
+    )?;
+    let kind = py_required_dict_field(witness, "kind", &format!("{context}.witness"))?
+        .extract::<String>()
+        .map_err(|_| PyTypeError::new_err(format!("{context}.witness.kind must be a string")))?;
+    if kind != "merkle" {
+        return Err(PyValueError::new_err(format!(
+            "{context}.witness.kind must be exactly `merkle`"
+        )));
+    }
+    let payload_value = py_required_dict_field(witness, "payload", &format!("{context}.witness"))?;
+    let payload = py_exact_dict(
+        &payload_value,
+        &format!("{context}.witness.payload"),
+        &["leaf", "proof"],
+    )?;
+    let leaf = py_exact_fixed_bytes::<32>(
+        &py_required_dict_field(payload, "leaf", &format!("{context}.witness.payload"))?,
+        &format!("{context}.witness.payload.leaf"),
+    )?;
+    let merkle_value =
+        py_required_dict_field(payload, "proof", &format!("{context}.witness.payload"))?;
+    let merkle = py_exact_dict(
+        &merkle_value,
+        &format!("{context}.witness.payload.proof"),
+        &["leaf_index", "audit_path"],
+    )?;
+    let leaf_index = py_exact_u32(
+        &py_required_dict_field(
+            merkle,
+            "leaf_index",
+            &format!("{context}.witness.payload.proof"),
+        )?,
+        &format!("{context}.witness.payload.proof.leaf_index"),
+    )?;
+    let path_value = py_required_dict_field(
+        merkle,
+        "audit_path",
+        &format!("{context}.witness.payload.proof"),
+    )?;
+    let path = path_value.cast::<PyList>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "{context}.witness.payload.proof.audit_path must be a list"
+        ))
+    })?;
+    if path.is_empty() || path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
+        return Err(PyValueError::new_err(format!(
+            "{context}.witness.payload.proof.audit_path must contain between 1 and {LANE_PRIVACY_MAX_MERKLE_DEPTH_V1} siblings"
+        )));
+    }
+    let mut audit_path = Vec::with_capacity(path.len());
+    for (index, sibling) in path.iter().enumerate() {
+        if sibling.is_none() {
+            return Err(PyValueError::new_err(format!(
+                "{context}.witness.payload.proof.audit_path[{index}] must contain a sibling"
+            )));
+        }
+        audit_path.push(Some(py_exact_fixed_bytes::<32>(
+            &sibling,
+            &format!("{context}.witness.payload.proof.audit_path[{index}]"),
+        )?));
+    }
+    LanePrivacyProof::merkle_from_raw_path(
+        LaneCommitmentId::new(commitment_id),
+        leaf,
+        leaf_index,
+        audit_path,
+    )
+    .map_err(|error| PyValueError::new_err(format!("{context} {error}")))
+}
+
+fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResult<ProofAttachment> {
+    let dict = py_exact_dict(
+        value,
+        context,
+        &[
+            "backend",
+            "proof",
+            "vk_ref",
+            "vk_commitment",
+            "envelope_hash",
+            "lane_privacy",
+        ],
+    )?;
+    let backend_text = py_portable_verifier_id_field(
+        &py_required_dict_field(dict, "backend", context)?,
+        &format!("{context}.backend"),
+    )?;
     let backend = Ident::from_str(&backend_text).map_err(|err| {
         PyValueError::new_err(format!("invalid {context} backend identifier: {err}"))
     })?;
-    let proof_value = dict_get_alias(
-        dict,
-        &[
-            "proof_bytes",
-            "proofBytes",
-            "proof_b64",
-            "proofB64",
-            "proofBase64",
-            "proof",
-        ],
-    )?
-    .ok_or_else(|| PyValueError::new_err(format!("{context}.proof_bytes is required")))?;
-    let proof_bytes = py_bytes_or_base64(&proof_value, &format!("{context}.proof_bytes"))?;
-    if proof_bytes.is_empty() {
+
+    let proof_value = py_required_dict_field(dict, "proof", context)?;
+    let proof = py_exact_dict(
+        &proof_value,
+        &format!("{context}.proof"),
+        &["backend", "bytes"],
+    )?;
+    let proof_backend_text = py_portable_verifier_id_field(
+        &py_required_dict_field(proof, "backend", &format!("{context}.proof"))?,
+        &format!("{context}.proof.backend"),
+    )?;
+    if proof_backend_text != backend_text {
         return Err(PyValueError::new_err(format!(
-            "{context}.proof_bytes must be non-empty"
+            "{context}.proof.backend must match {context}.backend"
         )));
     }
-    let vk_value = dict_get_alias(
-        dict,
-        &[
-            "verifying_key_ref",
-            "verifyingKeyRef",
-            "vk_ref",
-            "vkRef",
-            "verifying_key",
-        ],
+    let proof_bytes_value = py_required_dict_field(proof, "bytes", &format!("{context}.proof"))?;
+    let proof_bytes = proof_bytes_value
+        .cast::<PyBytes>()
+        .map_err(|_| PyTypeError::new_err(format!("{context}.proof.bytes must be bytes")))?;
+    let proof_bytes = proof_bytes.as_bytes();
+    if proof_bytes.is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "{context}.proof.bytes must be non-empty"
+        )));
+    }
+    let maximum_proof_bytes = proof_box_max_proof_bytes_v1(&backend_text).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "{context}.proof backend and canonical framing exceed the 64 MiB ProofBox limit"
+        ))
+    })?;
+    if proof_bytes.len() > maximum_proof_bytes {
+        return Err(PyValueError::new_err(format!(
+            "{context}.proof.bytes exceeds the {maximum_proof_bytes}-byte limit for this backend"
+        )));
+    }
+    let proof_bytes = proof_bytes.to_vec();
+
+    let vk_value = py_required_dict_field(dict, "vk_ref", context)?;
+    let vk = py_exact_dict(
+        &vk_value,
+        &format!("{context}.vk_ref"),
+        &["backend", "name"],
     )?;
-    let vk_ref =
-        parse_required_verifying_key_id_py(vk_value.as_ref(), &format!("{context}.vk_ref"))?;
-    if vk_ref.backend != backend {
+    let vk_backend_text = py_portable_verifier_id_field(
+        &py_required_dict_field(vk, "backend", &format!("{context}.vk_ref"))?,
+        &format!("{context}.vk_ref.backend"),
+    )?;
+    if vk_backend_text != backend_text {
         return Err(PyValueError::new_err(format!(
             "{context}.vk_ref.backend must match {context}.backend"
         )));
     }
-    let mut attachment =
-        ProofAttachment::new_ref(backend.clone(), ProofBox::new(backend, proof_bytes), vk_ref);
-    if let Some(commitment) = dict_get_alias(
-        dict,
-        &[
-            "verifying_key_commitment",
-            "verifyingKeyCommitment",
-            "vk_commitment",
-            "vkCommitment",
-        ],
-    )? && !commitment.is_none()
+    let vk_name = py_portable_verifier_id_field(
+        &py_required_dict_field(vk, "name", &format!("{context}.vk_ref"))?,
+        &format!("{context}.vk_ref.name"),
+    )?;
+    let mut attachment = ProofAttachment::new_ref(
+        backend.clone(),
+        ProofBox::new(backend.clone(), proof_bytes),
+        VerifyingKeyId::new(backend, vk_name),
+    );
+    if let Some(commitment) = dict.get_item("vk_commitment")?
+        && !commitment.is_none()
     {
-        attachment.vk_commitment = Some(py_fixed_array::<32>(
+        attachment.vk_commitment = Some(py_exact_fixed_bytes::<32>(
             &commitment,
-            &format!("{context}.verifying_key_commitment"),
+            &format!("{context}.vk_commitment"),
         )?);
     }
-    if let Some(envelope_hash) = dict_get_alias(dict, &["envelope_hash", "envelopeHash"])?
+    if let Some(envelope_hash) = dict.get_item("envelope_hash")?
         && !envelope_hash.is_none()
     {
-        attachment.envelope_hash = Some(py_fixed_array::<32>(
+        attachment.envelope_hash = Some(py_exact_fixed_bytes::<32>(
             &envelope_hash,
             &format!("{context}.envelope_hash"),
         )?);
+    }
+    if let Some(lane_privacy) = dict.get_item("lane_privacy")?
+        && !lane_privacy.is_none()
+    {
+        attachment.lane_privacy = Some(parse_lane_privacy_proof_py(
+            &lane_privacy,
+            &format!("{context}.lane_privacy"),
+        )?);
+    }
+    if let Some((field, message)) = attachment.structural_error() {
+        return Err(PyValueError::new_err(format!(
+            "{context}.{field} {message}"
+        )));
     }
     Ok(attachment)
 }
@@ -5596,28 +5795,6 @@ fn confidential_unshield_proof_v3_py_dict(
     Ok(result.unbind())
 }
 
-fn asset_hidden_transfer_proof_v1_py_dict(
-    py: Python<'_>,
-    proof: iroha_core::zk::confidential_v2::AssetHiddenTransferProofV1,
-) -> PyResult<Py<PyDict>> {
-    let result = PyDict::new(py);
-    result.set_item(
-        "input_commitments",
-        confidential_bytes_list_py(py, &proof.input_commitments)?,
-    )?;
-    result.set_item(
-        "nullifiers",
-        confidential_bytes_list_py(py, &proof.nullifiers)?,
-    )?;
-    result.set_item(
-        "output_commitments",
-        confidential_bytes_list_py(py, &proof.output_commitments)?,
-    )?;
-    result.set_item("root", PyBytes::new(py, &proof.root))?;
-    result.set_item("proof", PyBytes::new(py, &proof.proof.bytes))?;
-    Ok(result.unbind())
-}
-
 #[pyfunction]
 #[pyo3(name = "build_confidential_transfer_proof_v2", signature = (
     chain_id,
@@ -5989,64 +6166,6 @@ fn build_confidential_unshield_proof_v3_with_paths_py(
     )
     .map_err(PyValueError::new_err)?;
     confidential_unshield_proof_v3_py_dict(py, proof)
-}
-
-#[pyfunction]
-#[pyo3(name = "build_confidential_asset_hidden_transfer_proof_v1", signature = (
-    chain_id,
-    pool_id,
-    asset_set_root,
-    input_commitments,
-    nullifiers,
-    output_commitments,
-    root_hint,
-    vk_backend,
-    vk_circuit_id,
-    vk_bytes
-))]
-#[allow(clippy::too_many_arguments)]
-fn build_confidential_asset_hidden_transfer_proof_v1_py(
-    py: Python<'_>,
-    chain_id: &str,
-    pool_id: &str,
-    asset_set_root: &Bound<'_, PyAny>,
-    input_commitments: &Bound<'_, PyAny>,
-    nullifiers: &Bound<'_, PyAny>,
-    output_commitments: &Bound<'_, PyAny>,
-    root_hint: &Bound<'_, PyAny>,
-    vk_backend: &str,
-    vk_circuit_id: &str,
-    vk_bytes: &Bound<'_, PyAny>,
-) -> PyResult<Py<PyDict>> {
-    let chain_id = parse_chain_id(chain_id)?;
-    let asset_set_root = py_fixed_array::<32>(asset_set_root, "asset_set_root")?;
-    let input_commitments = py_fixed_array_list(input_commitments, "input_commitments")?;
-    let nullifiers = py_fixed_array_list(nullifiers, "nullifiers")?;
-    let output_commitments = py_fixed_array_list(output_commitments, "output_commitments")?;
-    let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
-    let vk_backend = vk_backend.trim();
-    if vk_backend.is_empty() {
-        return Err(PyValueError::new_err("vk_backend must be non-empty"));
-    }
-    let vk_circuit_id = vk_circuit_id.trim();
-    if vk_circuit_id.is_empty() {
-        return Err(PyValueError::new_err("vk_circuit_id must be non-empty"));
-    }
-    let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
-    let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
-    let proof = iroha_core::zk::confidential_v2::build_asset_hidden_transfer_proof_v1(
-        &chain_id,
-        pool_id,
-        asset_set_root,
-        &input_commitments,
-        &nullifiers,
-        &output_commitments,
-        root_hint,
-        vk_circuit_id,
-        &vk_box,
-    )
-    .map_err(PyValueError::new_err)?;
-    asset_hidden_transfer_proof_v1_py_dict(py, proof)
 }
 
 #[pyfunction]
@@ -7675,6 +7794,14 @@ mod tests {
                 assert!(inspect_signed_privacy_verange_action_v1_py(py, malformed).is_err());
                 assert!(inspect_signed_privacy_vega_action_v1_py(py, malformed).is_err());
                 assert!(
+                    inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py(
+                        py,
+                        malformed,
+                        &[0xA5; 32],
+                    )
+                    .is_err()
+                );
+                assert!(
                     inspect_signed_privacy_zk_ams_batch_admission_action_v1_py(py, malformed)
                         .is_err()
                 );
@@ -7688,6 +7815,20 @@ mod tests {
                 );
             }
         });
+    }
+
+    #[test]
+    fn x509_statement_archive_boundary_is_nonempty_fixed_capacity_and_canonical() {
+        assert!(python_zk_x509_statement_archive_v1(&[]).is_err());
+        assert!(python_zk_x509_statement_archive_v1(&[0xA5]).is_err());
+        assert!(
+            python_zk_x509_statement_archive_v1(&vec![
+                0xA5;
+                crate::privacy_native_actions::PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1
+                    + 1
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -7708,6 +7849,11 @@ mod tests {
             BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1,
             "presentation_action"
         );
+        assert_eq!(
+            ZK_X509_ACTION_EXECUTION_CLASSIFICATION_V1,
+            "presentation_action"
+        );
+        assert_eq!(ZK_X509_LEDGER_EFFECT_V1, "zk_x509_certificate_nullifier");
     }
 
     #[test]
@@ -7868,15 +8014,16 @@ mod tests {
             assert_eq!(
                 canonical_signed_transaction_hash_v1(&submitted_versioned)
                     .expect("submitted encoding authenticates"),
-                result
-                    .envelope
-                    .bind(py)
-                    .getattr("hash")
-                    .expect("hash getter")
-                    .extract::<Vec<u8>>()
-                    .expect("hash bytes")
-                    .try_into()
-                    .expect("hash is exactly 32 bytes")
+                <[u8; 32]>::try_from(
+                    result
+                        .envelope
+                        .bind(py)
+                        .getattr("hash")
+                        .expect("hash getter")
+                        .extract::<Vec<u8>>()
+                        .expect("hash bytes"),
+                )
+                .expect("hash is exactly 32 bytes")
             );
             assert!(result.statement_bytes > 0);
             assert!(result.proof_bytes > 0);
@@ -7935,7 +8082,9 @@ mod tests {
     #[test]
     fn signed_transaction_python_boundaries_use_the_canonical_transaction_limit() {
         let maximum = usize::try_from(
-            iroha_data_model::parameter::system::defaults::transaction::max_tx_bytes().get(),
+            iroha_data_model::parameter::system::TransactionParameters::default()
+                .max_tx_bytes()
+                .get(),
         )
         .expect("canonical transaction limit fits the test platform");
         let adversarial = vec![0_u8; maximum + 1];
@@ -8362,85 +8511,33 @@ mod tests {
     }
 
     #[test]
-    fn asset_hidden_instruction_classmethods_serialize_payloads() {
+    fn python_proof_attachment_instruction_classmethod_serializes_payload() {
         ensure_python();
         Python::attach(|py| {
             let instruction_type = py.get_type::<Instruction>();
-            let json_module = py.import("json").expect("json module");
-            let verifier = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"halo2/ipa","name":"asset_hidden_transfer_v1"}"#,),
-                )
-                .expect("verifier loads");
-            let proof = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"asset_hidden_transfer_v1"}}"#,),
-                )
-                .expect("proof loads");
-            let asset_set_root = PyBytes::new(py, &[0x10; 32]);
-            let root_hint = PyBytes::new(py, &[0x11; 32]);
-            let inputs = PyList::empty(py);
-            inputs.append("22".repeat(32)).expect("input append");
-            let outputs = PyList::empty(py);
-            outputs.append("33".repeat(32)).expect("output append");
-
-            let register = Instruction::register_asset_hidden_zk_pool(
-                &instruction_type,
-                "boi-masp-pool-v1",
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                asset_set_root.as_any(),
-                verifier.as_any(),
-            )
-            .expect("asset-hidden pool registration builds");
-            let decoded = json::from_str::<InstructionBox>(&register.to_json().expect("json"))
-                .expect("instruction json decodes");
-            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
-            let register = instruction_ref
-                .as_any()
-                .downcast_ref::<RegisterAssetHiddenZkPool>()
-                .expect("expected RegisterAssetHiddenZkPool");
-            assert_eq!(register.pool_id, "boi-masp-pool-v1");
-            assert_eq!(register.asset_set_root, [0x10; 32]);
-            assert_eq!(register.vk_transfer.name, "asset_hidden_transfer_v1");
-
-            let transfer = Instruction::asset_hidden_zk_transfer_prepared(
-                &instruction_type,
-                "boi-masp-pool-v1",
-                inputs.as_any(),
-                outputs.as_any(),
-                proof.as_any(),
-                Some(root_hint.as_any()),
-            )
-            .expect("asset-hidden transfer builds");
-            let decoded = json::from_str::<InstructionBox>(&transfer.to_json().expect("json"))
-                .expect("instruction json decodes");
-            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
-            let transfer = instruction_ref
-                .as_any()
-                .downcast_ref::<AssetHiddenZkTransfer>()
-                .expect("expected AssetHiddenZkTransfer");
-            assert_eq!(transfer.pool_id, "boi-masp-pool-v1");
-            assert_eq!(transfer.inputs, vec![[0x22; 32]]);
-            assert_eq!(transfer.outputs, vec![[0x33; 32]]);
-            assert_eq!(transfer.root_hint, Some([0x11; 32]));
-            assert_eq!(transfer.proof.backend.to_string(), "halo2/ipa");
-        });
-    }
-
-    #[test]
-    fn verify_proof_instruction_classmethod_serializes_payload() {
-        ensure_python();
-        Python::attach(|py| {
-            let instruction_type = py.get_type::<Instruction>();
-            let json_module = py.import("json").expect("json module");
-            let proof = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"component_verify_v1"},"verifying_key_commitment":"4444444444444444444444444444444444444444444444444444444444444444","envelope_hash":"5555555555555555555555555555555555555555555555555555555555555555"}"#,),
-                )
-                .expect("proof loads");
+            let proof = PyDict::new(py);
+            proof.set_item("backend", "halo2/ipa").expect("backend");
+            let proof_box = PyDict::new(py);
+            proof_box
+                .set_item("backend", "halo2/ipa")
+                .expect("proof backend");
+            proof_box
+                .set_item("bytes", PyBytes::new(py, b"proof"))
+                .expect("proof bytes");
+            proof.set_item("proof", proof_box).expect("proof box");
+            let vk_ref = PyDict::new(py);
+            vk_ref.set_item("backend", "halo2/ipa").expect("vk backend");
+            vk_ref
+                .set_item("name", "component_verify_v1")
+                .expect("vk name");
+            proof.set_item("vk_ref", vk_ref).expect("vk ref");
+            proof
+                .set_item("vk_commitment", PyBytes::new(py, &[0x44; 32]))
+                .expect("vk commitment");
+            let expected_envelope_hash: [u8; 32] = Hash::new(b"proof").into();
+            proof
+                .set_item("envelope_hash", PyBytes::new(py, &expected_envelope_hash))
+                .expect("envelope hash");
 
             let instruction = Instruction::verify_proof(&instruction_type, proof.as_any())
                 .expect("VerifyProof instruction builds");
@@ -8453,119 +8550,174 @@ mod tests {
             assert_eq!(verify.attachment.proof.bytes, b"proof");
             assert_eq!(verify.attachment.vk_ref.name, "component_verify_v1");
             assert_eq!(verify.attachment.vk_commitment, Some([0x44; 32]));
-            assert_eq!(verify.attachment.envelope_hash, Some([0x55; 32]));
+            assert_eq!(
+                verify.attachment.envelope_hash,
+                Some(expected_envelope_hash)
+            );
         });
     }
 
     #[test]
-    fn asset_hidden_instruction_classmethods_reject_adversarial_inputs() {
+    fn python_proof_attachment_parser_rejects_noncanonical_boundaries() {
         ensure_python();
         Python::attach(|py| {
-            let instruction_type = py.get_type::<Instruction>();
-            let json_module = py.import("json").expect("json module");
-            let verifier = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"halo2/ipa","name":"asset_hidden_transfer_v1"}"#,),
-                )
-                .expect("verifier loads");
-            let proof = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"asset_hidden_transfer_v1"}}"#,),
-                )
-                .expect("proof loads");
-            let zero_root = PyBytes::new(py, &[0x00; 32]);
-            let root = PyBytes::new(py, &[0x10; 32]);
-            let duplicate_inputs = PyList::empty(py);
-            duplicate_inputs
-                .append("22".repeat(32))
-                .expect("first input append");
-            duplicate_inputs
-                .append("22".repeat(32))
-                .expect("duplicate input append");
-            let outputs = PyList::empty(py);
-            outputs.append("33".repeat(32)).expect("output append");
-            let missing_backend_proof = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"asset_hidden_transfer_v1"}}"#,),
-                )
-                .expect("bad proof loads");
-            let wrong_backend_proof = json_module
-                .call_method1(
-                    "loads",
-                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"stark/fri","name":"component_verify_v1"}}"#,),
-                )
-                .expect("wrong backend proof loads");
-
-            let err = match Instruction::register_asset_hidden_zk_pool(
-                &instruction_type,
-                "",
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                root.as_any(),
-                verifier.as_any(),
-            ) {
-                Ok(_) => panic!("blank pool id must fail"),
-                Err(err) => err.to_string(),
+            let canonical = |proof_bytes: &[u8]| {
+                let attachment = PyDict::new(py);
+                attachment
+                    .set_item("backend", "halo2/ipa")
+                    .expect("backend");
+                let proof = PyDict::new(py);
+                proof
+                    .set_item("backend", "halo2/ipa")
+                    .expect("proof backend");
+                proof
+                    .set_item("bytes", PyBytes::new(py, proof_bytes))
+                    .expect("proof bytes");
+                attachment.set_item("proof", proof).expect("proof");
+                let vk_ref = PyDict::new(py);
+                vk_ref.set_item("backend", "halo2/ipa").expect("vk backend");
+                vk_ref.set_item("name", "vk_transfer").expect("vk name");
+                attachment.set_item("vk_ref", vk_ref).expect("vk ref");
+                attachment
             };
-            assert!(err.contains("pool_id"));
 
-            let err = match Instruction::register_asset_hidden_zk_pool(
-                &instruction_type,
-                "boi-masp-pool-v1",
-                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                zero_root.as_any(),
-                verifier.as_any(),
-            ) {
-                Ok(_) => panic!("zero asset set root must fail"),
-                Err(err) => err.to_string(),
-            };
-            assert!(err.contains("asset_set_root"));
+            let valid = canonical(b"proof");
+            parse_zk_proof_attachment(valid.as_any(), "proof")
+                .expect("exact first-release attachment must parse");
 
-            let err = match Instruction::asset_hidden_zk_transfer_prepared(
-                &instruction_type,
-                "boi-masp-pool-v1",
-                duplicate_inputs.as_any(),
-                outputs.as_any(),
-                proof.as_any(),
-                None,
-            ) {
-                Ok(_) => panic!("duplicate input nullifier must fail"),
-                Err(err) => err.to_string(),
-            };
-            assert!(err.contains("duplicates"));
+            for alias in [
+                "proof_bytes",
+                "proof_b64",
+                "verifying_key_ref",
+                "verifying_key_commitment",
+                "envelopeHash",
+                "vk_inline",
+            ] {
+                let invalid = canonical(b"proof");
+                invalid.set_item(alias, b"retired").expect("retired alias");
+                let error = parse_zk_proof_attachment(invalid.as_any(), "proof")
+                    .expect_err("retired aliases must reject");
+                assert!(error.to_string().contains("unknown first-release field"));
+            }
 
-            let err = match Instruction::asset_hidden_zk_transfer_prepared(
-                &instruction_type,
-                "boi-masp-pool-v1",
-                outputs.as_any(),
-                outputs.as_any(),
-                missing_backend_proof.as_any(),
-                None,
-            ) {
-                Ok(_) => panic!("missing proof backend must fail"),
-                Err(err) => err.to_string(),
-            };
-            assert!(err.contains("proof.backend"));
+            let nested_alias = canonical(b"proof");
+            nested_alias
+                .get_item("proof")
+                .expect("proof lookup")
+                .expect("proof exists")
+                .cast::<PyDict>()
+                .expect("proof mapping")
+                .set_item("bytes_b64", "cHJvb2Y=")
+                .expect("retired nested alias");
+            let error = parse_zk_proof_attachment(nested_alias.as_any(), "proof")
+                .expect_err("nested aliases must reject");
+            assert!(error.to_string().contains("unknown first-release field"));
 
-            let err = match Instruction::verify_proof(
-                &instruction_type,
-                missing_backend_proof.as_any(),
-            ) {
-                Ok(_) => panic!("VerifyProof missing proof backend must fail"),
-                Err(err) => err.to_string(),
-            };
-            assert!(err.contains("proof.backend"));
+            for (field, value) in [("backend", " Halo2/ipa"), ("backend", "halo2/ipa/../vk")] {
+                let invalid = canonical(b"proof");
+                invalid.set_item(field, value).expect("invalid selector");
+                let error = parse_zk_proof_attachment(invalid.as_any(), "proof")
+                    .expect_err("nonportable selectors must reject");
+                assert!(error.to_string().contains("portable"));
+            }
 
-            let err =
-                match Instruction::verify_proof(&instruction_type, wrong_backend_proof.as_any()) {
-                    Ok(_) => panic!("VerifyProof verifier key backend mismatch must fail"),
-                    Err(err) => err.to_string(),
-                };
-            assert!(err.contains("proof.vk_ref.backend"));
+            let invalid_name = canonical(b"proof");
+            invalid_name
+                .get_item("vk_ref")
+                .expect("vk lookup")
+                .expect("vk exists")
+                .cast::<PyDict>()
+                .expect("vk mapping")
+                .set_item("name", "vk_transfer_")
+                .expect("invalid name");
+            let error = parse_zk_proof_attachment(invalid_name.as_any(), "proof")
+                .expect_err("nonportable VK name must reject");
+            assert!(error.to_string().contains("portable"));
+
+            let empty = canonical(b"");
+            let error = parse_zk_proof_attachment(empty.as_any(), "proof")
+                .expect_err("empty proof must reject");
+            assert!(error.to_string().contains("proof.bytes must be non-empty"));
+
+            let zero_commitment = canonical(b"proof");
+            zero_commitment
+                .set_item("vk_commitment", PyBytes::new(py, &[0; 32]))
+                .expect("zero commitment");
+            let error = parse_zk_proof_attachment(zero_commitment.as_any(), "proof")
+                .expect_err("zero VK commitment must reject");
+            assert!(error.to_string().contains("vk_commitment must be non-zero"));
+
+            let forged_hash = canonical(b"proof");
+            forged_hash
+                .set_item("envelope_hash", PyBytes::new(py, &[0x55; 32]))
+                .expect("forged envelope hash");
+            let error = parse_zk_proof_attachment(forged_hash.as_any(), "proof")
+                .expect_err("forged envelope hash must reject");
+            assert!(error.to_string().contains("must match proof bytes"));
+
+            let lane_attachment = canonical(b"proof");
+            let lane = PyDict::new(py);
+            lane.set_item("commitment_id", 7_u16)
+                .expect("commitment id");
+            let witness = PyDict::new(py);
+            witness.set_item("kind", "merkle").expect("witness kind");
+            let payload = PyDict::new(py);
+            payload
+                .set_item("leaf", PyBytes::new(py, &[0xAA; 32]))
+                .expect("lane leaf");
+            let merkle = PyDict::new(py);
+            merkle.set_item("leaf_index", 1_u32).expect("leaf index");
+            let path = PyList::new(py, [PyBytes::new(py, &[0x22; 32])]).expect("lane audit path");
+            merkle.set_item("audit_path", path).expect("audit path");
+            payload.set_item("proof", merkle).expect("merkle proof");
+            witness
+                .set_item("payload", payload)
+                .expect("witness payload");
+            lane.set_item("witness", witness).expect("lane witness");
+            lane_attachment
+                .set_item("lane_privacy", lane)
+                .expect("lane privacy");
+            parse_zk_proof_attachment(lane_attachment.as_any(), "proof")
+                .expect("complete lane witness must parse");
+
+            let sparse_lane_attachment = canonical(b"proof");
+            let sparse_lane = PyDict::new(py);
+            sparse_lane
+                .set_item("commitment_id", 7_u16)
+                .expect("commitment id");
+            let sparse_witness = PyDict::new(py);
+            sparse_witness
+                .set_item("kind", "merkle")
+                .expect("witness kind");
+            let sparse_payload = PyDict::new(py);
+            sparse_payload
+                .set_item("leaf", PyBytes::new(py, &[0xAA; 32]))
+                .expect("lane leaf");
+            let sparse_merkle = PyDict::new(py);
+            sparse_merkle
+                .set_item("leaf_index", 0_u32)
+                .expect("leaf index");
+            sparse_merkle
+                .set_item("audit_path", PyList::empty(py))
+                .expect("empty audit path");
+            sparse_payload
+                .set_item("proof", sparse_merkle)
+                .expect("merkle proof");
+            sparse_witness
+                .set_item("payload", sparse_payload)
+                .expect("witness payload");
+            sparse_lane
+                .set_item("witness", sparse_witness)
+                .expect("lane witness");
+            sparse_lane_attachment
+                .set_item("lane_privacy", sparse_lane)
+                .expect("lane privacy");
+            let error = parse_zk_proof_attachment(sparse_lane_attachment.as_any(), "proof")
+                .expect_err("empty lane path must reject");
+            assert!(error.to_string().contains("between 1 and 255"));
         });
     }
+
     fn merge_rwas_and_set_rwa_controls_classmethods_roundtrip_payloads() {
         ensure_python();
         Python::attach(|py| {
@@ -9202,7 +9354,7 @@ mod tests {
             "NotPermitted"
         );
         let contract = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
-            ContractRejection {
+            iroha_data_model::executor::ContractRejection {
                 contract: "BoiFiLiquidity".into(),
                 namespace: "FiLiquidityError".into(),
                 name: "BelowMinimum".into(),
@@ -11724,33 +11876,6 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (pool_id, storage_asset, asset_set_root, vk_transfer))]
-    fn register_asset_hidden_zk_pool<'py>(
-        _cls: &Bound<'py, PyType>,
-        pool_id: &str,
-        storage_asset: &str,
-        asset_set_root: &Bound<'py, PyAny>,
-        vk_transfer: &Bound<'py, PyAny>,
-    ) -> PyResult<Self> {
-        let pool_id = pool_id.trim();
-        if pool_id.is_empty() {
-            return Err(PyValueError::new_err("pool_id must be non-empty"));
-        }
-        let storage_asset: AssetDefinitionId = storage_asset.parse().map_err(|err| {
-            PyValueError::new_err(format!(
-                "invalid storage asset definition id `{storage_asset}`: {err}"
-            ))
-        })?;
-        let instruction = RegisterAssetHiddenZkPool::new(
-            pool_id.to_owned(),
-            storage_asset,
-            py_non_zero_fixed_array::<32>(asset_set_root, "asset_set_root")?,
-            parse_required_verifying_key_id_py(Some(vk_transfer), "vk_transfer")?,
-        );
-        Ok(Instruction::new(instruction.into()))
-    }
-
-    #[classmethod]
     #[pyo3(signature = (asset_definition_id, from_account_id, amount, note_commitment, ephemeral_public_key, nonce, ciphertext))]
     #[allow(clippy::too_many_arguments)]
     fn shield_asset<'py>(
@@ -11857,41 +11982,6 @@ impl Instruction {
         let root_hint = parse_optional_root_hint(root_hint, "root_hint")?;
         let instruction =
             Unshield::new_with_outputs(asset, to, public_amount, inputs, outputs, proof, root_hint);
-        Ok(Instruction::new(instruction.into()))
-    }
-
-    #[classmethod]
-    #[pyo3(signature = (pool_id, inputs, outputs, proof, *, root_hint=None))]
-    fn asset_hidden_zk_transfer_prepared<'py>(
-        _cls: &Bound<'py, PyType>,
-        pool_id: &str,
-        inputs: &Bound<'py, PyAny>,
-        outputs: &Bound<'py, PyAny>,
-        proof: &Bound<'py, PyAny>,
-        root_hint: Option<&Bound<'py, PyAny>>,
-    ) -> PyResult<Self> {
-        let pool_id = pool_id.trim();
-        if pool_id.is_empty() {
-            return Err(PyValueError::new_err("pool_id must be non-empty"));
-        }
-        let inputs = py_fixed_array_list(inputs, "inputs")?;
-        if inputs.is_empty() {
-            return Err(PyValueError::new_err(
-                "inputs must contain at least one nullifier",
-            ));
-        }
-        ensure_unique_fixed_arrays(&inputs, "inputs")?;
-        let outputs = py_fixed_array_list(outputs, "outputs")?;
-        if outputs.is_empty() {
-            return Err(PyValueError::new_err(
-                "outputs must contain at least one commitment",
-            ));
-        }
-        ensure_unique_fixed_arrays(&outputs, "outputs")?;
-        let proof = parse_zk_proof_attachment(proof, "proof")?;
-        let root_hint = parse_optional_root_hint(root_hint, "root_hint")?;
-        let instruction =
-            AssetHiddenZkTransfer::new(pool_id.to_owned(), inputs, outputs, proof, root_hint);
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -13120,6 +13210,23 @@ fn python_zk_ace_policy_v1(
     Ok(policy)
 }
 
+fn python_zk_x509_statement_archive_v1(
+    canonical_statement_archive: &[u8],
+) -> PyResult<IrohaZkX509StarkP256StatementV1> {
+    let maximum = crate::privacy_native_actions::PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1;
+    if canonical_statement_archive.is_empty() || canonical_statement_archive.len() > maximum {
+        return Err(PyValueError::new_err(format!(
+            "canonical_statement_archive must contain between 1 and {maximum} bytes"
+        )));
+    }
+    norito::decode_canonical::<IrohaZkX509StarkP256StatementV1>(canonical_statement_archive)
+        .map_err(|_| {
+            PyValueError::new_err(
+                "canonical_statement_archive is not the exact canonical ZK-X509 statement wire",
+            )
+        })
+}
+
 fn python_bootle_lantern_polynomials_v1<const N: usize>(
     rows: &mut [Vec<u16>],
     label: &str,
@@ -13593,6 +13700,21 @@ impl TransactionBuilder {
         }
     }
 
+    fn privacy_native_action_transaction_context_v1(
+        &self,
+    ) -> crate::privacy_native_actions::PrivacyActionTransactionContextV1 {
+        let context = self.privacy_action_transaction_context_v1();
+        crate::privacy_native_actions::PrivacyActionTransactionContextV1 {
+            chain_id: context.chain_id,
+            authority: context.authority,
+            creation_time: context.creation_time,
+            time_to_live: context.time_to_live,
+            nonce: context.nonce,
+            fee_payment: context.fee_payment,
+            metadata: context.metadata,
+        }
+    }
+
     fn validate_privacy_action_signing_authority_v1(
         &self,
         private_key: &PrivateKey,
@@ -13609,6 +13731,86 @@ impl TransactionBuilder {
             ));
         }
         Ok(())
+    }
+
+    fn privacy_native_action_build_result_v1(
+        &self,
+        py: Python<'_>,
+        signed: &crate::privacy_native_actions::SignedPrivacyActionV1,
+    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
+        let envelope = signed_transaction_envelope_from_model_v1(signed.signed_transaction())?;
+        Ok(PrivacyNativeActionBuildResultV1 {
+            envelope: Py::new(py, envelope)?,
+            protocol_id: signed.protocol_id().canonical_label().to_owned(),
+            operation_schema:
+                crate::privacy_native_actions::privacy_native_action_capability_for_protocol_v1(
+                    signed.protocol_id(),
+                )
+                .expect("dispatcher result has a retained capability")
+                .operation_schema,
+            transaction_hash: signed.transaction_hash(),
+            transaction_intent_digest: signed.transaction_intent_digest(),
+            statement_digest: signed.statement_digest(),
+            proof_envelope_hash: signed.proof_envelope_hash(),
+            statement_bytes: signed.statement_bytes(),
+            proof_bytes: signed.proof_bytes(),
+            encoded_proof_envelope_bytes: signed.encoded_proof_envelope_bytes(),
+            adaptive_signed_transaction_bytes: signed.adaptive_signed_transaction_bytes(),
+            versioned_signed_transaction_bytes: signed.versioned_signed_transaction_bytes(),
+        })
+    }
+
+    fn sign_privacy_wallet_bundle_action_v1(
+        &mut self,
+        py: Python<'_>,
+        execution_bundle: Vec<u8>,
+        public_action_json: &[u8],
+        canonical_genesis_hash: &[u8],
+        expected_protocol: PrivacyProtocolIdV1,
+        protocol_label: &'static str,
+    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
+        self.require_empty_privacy_action_builder_v1(protocol_label)?;
+        let canonical_genesis_hash =
+            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+        let mut execution_bundle = zeroize::Zeroizing::new(execution_bundle);
+        let decoded = crate::privacy_wallet_bundle::decode_privacy_wallet_execution_bundle_v1(
+            execution_bundle.as_mut_slice(),
+            public_action_json,
+        )
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid {protocol_label} wallet execution bundle at {}",
+                error.stage()
+            ))
+        })?;
+        if decoded.manifest.protocol_id != expected_protocol
+            || decoded.request.protocol_id() != expected_protocol
+        {
+            return Err(PyValueError::new_err(format!(
+                "wallet execution bundle is not an exact {protocol_label} request"
+            )));
+        }
+        if decoded.manifest.authority != self.authority {
+            return Err(PyValueError::new_err(
+                "wallet execution bundle authority does not match the transaction builder",
+            ));
+        }
+        let context = self.privacy_native_action_transaction_context_v1();
+        let signed = crate::privacy_native_actions::build_signed_privacy_native_action_v1(
+            context,
+            decoded.request,
+            canonical_genesis_hash,
+            &decoded.signer_private_key,
+        )
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "native {protocol_label} action failed at {}",
+                error.stage()
+            ))
+        })?;
+        let result = self.privacy_native_action_build_result_v1(py, &signed)?;
+        self.clear_transaction_state();
+        Ok(result)
     }
 
     fn validate_executable(&self) -> PyResult<()> {
@@ -13785,27 +13987,47 @@ impl TransactionBuilder {
     /// Add a Merkle-based lane privacy proof attachment for Nexus private lanes.
     ///
     /// `leaf` and `audit_path` entries are treated as pre-hashed 32-byte digests.
-    /// `audit_path` entries may be `None` to represent missing siblings.
+    /// The first-release witness is complete: every path level must carry a sibling.
     #[allow(clippy::too_many_arguments)]
     fn add_lane_privacy_merkle_attachment(
         &mut self,
-        commitment_id: u16,
+        commitment_id: &Bound<'_, PyAny>,
         leaf: &[u8],
-        leaf_index: u32,
-        audit_path: Vec<Option<Vec<u8>>>,
+        leaf_index: &Bound<'_, PyAny>,
+        audit_path: &Bound<'_, PyAny>,
         proof_backend: &str,
         proof_bytes: &[u8],
         verifying_key_name: &str,
     ) -> PyResult<()> {
+        let commitment_id = py_exact_u16(commitment_id, "commitment_id")?;
+        let leaf_index = py_exact_u32(leaf_index, "leaf_index")?;
         if leaf.len() != 32 {
             return Err(PyValueError::new_err(
                 "leaf must be a 32-byte hash (pre-hashed commitment leaf)",
             ));
         }
-        if verifying_key_name.trim().is_empty() {
+        if !verifying_key_id_field_is_portable(proof_backend) {
             return Err(PyValueError::new_err(
-                "verifying_key_name must not be empty",
+                "proof_backend must use the bounded portable verifier-key registry grammar",
             ));
+        }
+        if !verifying_key_id_field_is_portable(verifying_key_name) {
+            return Err(PyValueError::new_err(
+                "verifying_key_name must use the bounded portable verifier-key registry grammar",
+            ));
+        }
+        if proof_bytes.is_empty() {
+            return Err(PyValueError::new_err("proof_bytes must be non-empty"));
+        }
+        let maximum_proof_bytes = proof_box_max_proof_bytes_v1(proof_backend).ok_or_else(|| {
+            PyValueError::new_err(
+                "proof_backend and canonical framing exceed the 64 MiB ProofBox limit",
+            )
+        })?;
+        if proof_bytes.len() > maximum_proof_bytes {
+            return Err(PyValueError::new_err(format!(
+                "proof_bytes exceeds the {maximum_proof_bytes}-byte limit for this backend"
+            )));
         }
         let backend = Ident::from_str(proof_backend).map_err(|err| {
             PyValueError::new_err(format!("invalid proof backend identifier: {err}"))
@@ -13814,20 +14036,23 @@ impl TransactionBuilder {
             .try_into()
             .map_err(|_| PyValueError::new_err("leaf must be exactly 32 bytes"))?;
 
+        let audit_path = audit_path.cast::<PyList>().map_err(|_| {
+            PyTypeError::new_err("audit_path must be a list of complete 32-byte siblings")
+        })?;
+        if audit_path.is_empty() || audit_path.len() > LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 {
+            return Err(PyValueError::new_err(format!(
+                "audit_path must contain between 1 and {LANE_PRIVACY_MAX_MERKLE_DEPTH_V1} siblings"
+            )));
+        }
         let mut audit_bytes = Vec::with_capacity(audit_path.len());
-        for (index, entry) in audit_path.into_iter().enumerate() {
-            let converted = match entry {
-                Some(bytes) => {
-                    let arr: [u8; 32] = bytes.try_into().map_err(|_| {
-                        PyValueError::new_err(format!(
-                            "audit_path[{index}] must be 32 bytes when provided"
-                        ))
-                    })?;
-                    Some(arr)
-                }
-                None => None,
-            };
-            audit_bytes.push(converted);
+        for (index, bytes) in audit_path.iter().enumerate() {
+            if bytes.is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "audit_path[{index}] must contain a sibling"
+                )));
+            }
+            let arr = py_exact_fixed_bytes::<32>(&bytes, &format!("audit_path[{index}]"))?;
+            audit_bytes.push(Some(arr));
         }
 
         let privacy_proof = LanePrivacyProof::merkle_from_raw_path(
@@ -13841,9 +14066,14 @@ impl TransactionBuilder {
         let mut attachment = ProofAttachment::new_ref(
             backend.clone(),
             ProofBox::new(backend.clone(), proof_bytes.to_vec()),
-            VerifyingKeyId::new(backend, verifying_key_name.trim()),
+            VerifyingKeyId::new(backend, verifying_key_name),
         );
         attachment.lane_privacy = Some(privacy_proof);
+        if let Some((field, message)) = attachment.structural_error() {
+            return Err(PyValueError::new_err(format!(
+                "lane privacy attachment {field} {message}"
+            )));
+        }
         self.attachments.push(attachment);
         Ok(())
     }
@@ -13994,6 +14224,179 @@ impl TransactionBuilder {
         Ok(envelope)
     }
 
+    /// Build and sign one canonical Anonymous-PGC payment from an owner-only bundle.
+    ///
+    /// The supported SDK surface is deliberately bundle-backed: signer and
+    /// witness material are decoded by the same strict Rust boundary used by
+    /// the isolated worker and never reconstructed in this binding.
+    fn sign_privacy_anonymous_pgc_payment_action_v1(
+        &mut self,
+        py: Python<'_>,
+        execution_bundle: Vec<u8>,
+        public_action_json: &[u8],
+        canonical_genesis_hash: &[u8],
+    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
+        self.sign_privacy_wallet_bundle_action_v1(
+            py,
+            execution_bundle,
+            public_action_json,
+            canonical_genesis_hash,
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            "Anonymous-PGC",
+        )
+    }
+
+    /// Build and sign one canonical Orchard note action from an owner-only bundle.
+    fn sign_privacy_orchard_note_action_v1(
+        &mut self,
+        py: Python<'_>,
+        execution_bundle: Vec<u8>,
+        public_action_json: &[u8],
+        canonical_genesis_hash: &[u8],
+    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
+        self.sign_privacy_wallet_bundle_action_v1(
+            py,
+            execution_bundle,
+            public_action_json,
+            canonical_genesis_hash,
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            "Orchard",
+        )
+    }
+
+    /// Build and sign one canonical FCMP++ payment from an owner-only bundle.
+    fn sign_privacy_fcmp_membership_payment_action_v1(
+        &mut self,
+        py: Python<'_>,
+        execution_bundle: Vec<u8>,
+        public_action_json: &[u8],
+        canonical_genesis_hash: &[u8],
+    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
+        self.sign_privacy_wallet_bundle_action_v1(
+            py,
+            execution_bundle,
+            public_action_json,
+            canonical_genesis_hash,
+            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            "FCMP++",
+        )
+    }
+
+    /// Build and sign one canonical private-IVM note action from an owner-only bundle.
+    fn sign_privacy_ivm_private_note_action_v1(
+        &mut self,
+        py: Python<'_>,
+        execution_bundle: Vec<u8>,
+        public_action_json: &[u8],
+        canonical_genesis_hash: &[u8],
+    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
+        self.sign_privacy_wallet_bundle_action_v1(
+            py,
+            execution_bundle,
+            public_action_json,
+            canonical_genesis_hash,
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            "private-IVM note",
+        )
+    }
+
+    /// Build and sign one canonical PQ-MASP note action from an owner-only bundle.
+    fn sign_privacy_pq_masp_note_action_v1(
+        &mut self,
+        py: Python<'_>,
+        execution_bundle: Vec<u8>,
+        public_action_json: &[u8],
+        canonical_genesis_hash: &[u8],
+    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
+        self.sign_privacy_wallet_bundle_action_v1(
+            py,
+            execution_bundle,
+            public_action_json,
+            canonical_genesis_hash,
+            PrivacyProtocolIdV1::PqMaspStarkV0,
+            "PQ-MASP",
+        )
+    }
+
+    /// Derive the sole transaction intent that an isolated ZK-X509 prover worker must bind.
+    ///
+    /// The canonical statement archive must contain the exact public action
+    /// with an all-zero transaction intent. This method performs no proving or
+    /// signing and leaves the builder unchanged.
+    fn prepare_privacy_zk_x509_identity_presentation_action_v1<'py>(
+        &self,
+        py: Python<'py>,
+        canonical_statement_archive: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.require_empty_privacy_action_builder_v1("ZK-X509")?;
+        let statement = python_zk_x509_statement_archive_v1(canonical_statement_archive)?;
+        let context = self.privacy_native_action_transaction_context_v1();
+        let intent =
+            crate::privacy_native_actions::prepare_zk_x509_identity_presentation_action_intent_v1(
+                &context, &statement,
+            )
+            .map_err(|error| {
+                PyValueError::new_err(format!(
+                    "native ZK-X509 action preparation failed at {}",
+                    error.stage()
+                ))
+            })?;
+        Ok(PyBytes::new(py, intent.as_bytes()))
+    }
+
+    /// Validate and sign one canonical, intent-bound ZK-X509 identity presentation.
+    ///
+    /// The profile-owned worker returns only a typed public statement and its
+    /// fixed-capacity `X5S1` proof. Native code authenticates their exact
+    /// transaction/genesis binding before the transaction is signed. Signing
+    /// remains unavailable until the production compiled profile passes every
+    /// release-readiness gate; unsigned release-candidate material is never
+    /// accepted here.
+    fn sign_privacy_zk_x509_identity_presentation_action_v1(
+        &mut self,
+        py: Python<'_>,
+        private_key: &[u8],
+        canonical_genesis_hash: &[u8],
+        canonical_statement_archive: &[u8],
+        credential_proof: &[u8],
+    ) -> PyResult<PrivacyNativeActionBuildResultV1> {
+        self.require_empty_privacy_action_builder_v1("ZK-X509")?;
+        let maximum = crate::privacy_native_actions::PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1;
+        if credential_proof.is_empty() || credential_proof.len() > maximum {
+            return Err(PyValueError::new_err(format!(
+                "credential_proof must contain between 1 and {maximum} bytes"
+            )));
+        }
+        let canonical_genesis_hash =
+            python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+        let statement = python_zk_x509_statement_archive_v1(canonical_statement_archive)?;
+        let private_key = parse_private_key(private_key)?;
+        self.validate_privacy_action_signing_authority_v1(&private_key)?;
+        let proof = crate::privacy_native_actions::ZkX509CredentialProofBytesV1::try_new(
+            credential_proof.to_vec(),
+        )
+        .map_err(|error| {
+            PyValueError::new_err(format!("native ZK-X509 action failed at {}", error.stage()))
+        })?;
+        let context = self.privacy_native_action_transaction_context_v1();
+        let signed =
+            crate::privacy_native_actions::build_signed_zk_x509_identity_presentation_action_v1(
+                context,
+                crate::privacy_native_actions::ZkX509IdentityPresentationActionRequestV1 {
+                    statement,
+                    proof,
+                },
+                canonical_genesis_hash,
+                &private_key,
+            )
+            .map_err(|error| {
+                PyValueError::new_err(format!("native ZK-X509 action failed at {}", error.stage()))
+            })?;
+        let result = self.privacy_native_action_build_result_v1(py, &signed)?;
+        self.clear_transaction_state();
+        Ok(result)
+    }
+
     /// Build and sign one canonical, intent-bound ZK-ACE transparent transfer.
     ///
     /// The governed policy is accepted only as its canonical typed archive.
@@ -14033,18 +14436,9 @@ impl TransactionBuilder {
         let canonical_genesis_hash =
             python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
         let policy = python_zk_ace_policy_v1(canonical_policy_archive)?;
-        require_non_blank_unpadded(source_account_id, "source_account_id")?;
-        require_non_blank_unpadded(destination_account_id, "destination_account_id")?;
-        let source = AccountId::from_str(source_account_id).map_err(|error| {
-            PyValueError::new_err(format!(
-                "invalid ZK-ACE source_account_id `{source_account_id}`: {error}"
-            ))
-        })?;
-        let destination = AccountId::from_str(destination_account_id).map_err(|error| {
-            PyValueError::new_err(format!(
-                "invalid ZK-ACE destination_account_id `{destination_account_id}`: {error}"
-            ))
-        })?;
+        let source = parse_exact_i105_account_id(source_account_id, "source_account_id")?;
+        let destination =
+            parse_exact_i105_account_id(destination_account_id, "destination_account_id")?;
         let amount = parse_canonical_u128_text(amount, "amount")?;
         if amount == 0 {
             return Err(PyValueError::new_err(
@@ -14823,10 +15217,7 @@ impl TransactionBuilder {
                 "admitted_seed_key_ring must be strictly increasing and duplicate-free",
             ));
         }
-        require_non_blank_unpadded(account_id, "account_id")?;
-        let account_id = AccountId::from_str(account_id).map_err(|error| {
-            PyValueError::new_err(format!("invalid ZK-AMS account_id `{account_id}`: {error}"))
-        })?;
+        let account_id = parse_exact_i105_account_id(account_id, "account_id")?;
         if seed_secret_bytes.0.len() != 32 {
             return Err(PyValueError::new_err(
                 "seed_secret must be exactly 32 bytes",
@@ -15343,6 +15734,102 @@ impl TransactionBuilder {
 
 const ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "authorization_action";
 const ZK_ACE_TRANSFER_LEDGER_EFFECT_V1: &str = "zk_ace_transparent_transfer";
+const ANONYMOUS_PGC_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "payment_action";
+const ANONYMOUS_PGC_LEDGER_EFFECT_V1: &str = "anonymous_pgc_account_state_transition";
+const ORCHARD_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "note_action";
+const ORCHARD_LEDGER_EFFECT_V1: &str = "orchard_note_state_transition";
+const FCMP_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "payment_action";
+const FCMP_LEDGER_EFFECT_V1: &str = "fcmp_membership_payment";
+const IVM_PRIVATE_NOTE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "note_action";
+const IVM_PRIVATE_NOTE_LEDGER_EFFECT_V1: &str = "ivm_private_note_state_transition";
+const PQ_MASP_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "note_action";
+const PQ_MASP_LEDGER_EFFECT_V1: &str = "pq_masp_note_state_transition";
+const ZK_X509_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "presentation_action";
+const ZK_X509_LEDGER_EFFECT_V1: &str = "zk_x509_certificate_nullifier";
+
+/// Common signed result for typed native privacy action bindings.
+///
+/// Secret-bearing bundle buffers are held in zeroizing storage around their
+/// decoder boundary. The result exposes only the authenticated public
+/// envelope, digests, and byte counts; witness material is never returned.
+#[pyclass(frozen, module = "iroha_python._crypto")]
+struct PrivacyNativeActionBuildResultV1 {
+    envelope: Py<SignedTransactionEnvelope>,
+    protocol_id: String,
+    operation_schema: &'static str,
+    transaction_hash: [u8; 32],
+    transaction_intent_digest: [u8; 32],
+    statement_digest: [u8; 32],
+    proof_envelope_hash: [u8; 32],
+    statement_bytes: u32,
+    proof_bytes: u32,
+    encoded_proof_envelope_bytes: u32,
+    adaptive_signed_transaction_bytes: u32,
+    versioned_signed_transaction_bytes: u32,
+}
+
+#[pymethods]
+impl PrivacyNativeActionBuildResultV1 {
+    #[getter]
+    fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
+        self.envelope.clone_ref(py)
+    }
+
+    #[getter]
+    fn protocol_id(&self) -> &str {
+        &self.protocol_id
+    }
+
+    #[getter]
+    const fn operation_schema(&self) -> &'static str {
+        self.operation_schema
+    }
+
+    #[getter]
+    fn transaction_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.transaction_hash)
+    }
+
+    #[getter]
+    fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.transaction_intent_digest)
+    }
+
+    #[getter]
+    fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.statement_digest)
+    }
+
+    #[getter]
+    fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.proof_envelope_hash)
+    }
+
+    #[getter]
+    const fn statement_bytes(&self) -> u32 {
+        self.statement_bytes
+    }
+
+    #[getter]
+    const fn proof_bytes(&self) -> u32 {
+        self.proof_bytes
+    }
+
+    #[getter]
+    const fn encoded_proof_envelope_bytes(&self) -> u32 {
+        self.encoded_proof_envelope_bytes
+    }
+
+    #[getter]
+    const fn adaptive_signed_transaction_bytes(&self) -> u32 {
+        self.adaptive_signed_transaction_bytes
+    }
+
+    #[getter]
+    const fn versioned_signed_transaction_bytes(&self) -> u32 {
+        self.versioned_signed_transaction_bytes
+    }
+}
 
 /// Public metadata for one canonical signed ZK-ACE transparent transfer.
 ///
@@ -17794,7 +18281,9 @@ fn hash_blake2b_32_py(py: Python<'_>, payload: &[u8]) -> PyResult<Py<PyBytes>> {
 
 fn require_canonical_signed_transaction_wire_size_v1(bytes: &[u8]) -> PyResult<()> {
     let maximum = usize::try_from(
-        iroha_data_model::parameter::system::defaults::transaction::max_tx_bytes().get(),
+        iroha_data_model::parameter::system::TransactionParameters::default()
+            .max_tx_bytes()
+            .get(),
     )
     .map_err(|_| {
         PyRuntimeError::new_err("canonical transaction byte limit does not fit this platform")
@@ -17820,6 +18309,37 @@ fn decode_canonical_signed_transaction_v1(bytes: &[u8]) -> PyResult<SignedTransa
         ));
     }
     Ok(signed)
+}
+
+fn signed_transaction_envelope_from_model_v1(
+    signed: &SignedTransaction,
+) -> PyResult<SignedTransactionEnvelope> {
+    signed.verify_signature().map_err(|_| {
+        PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
+    })?;
+    let signature: Signature = signed.signature().payload().clone();
+    let hash: HashOf<SignedTransaction> = signed.hash();
+    let signatory = require_single_signatory(signed.authority(), "transaction authority")?;
+    let (_, public_key_bytes) = public_key_to_bytes(signatory, "authority public key")?;
+    Ok(SignedTransactionEnvelope {
+        chain_id: signed.chain().to_string(),
+        authority: signed.authority().to_string(),
+        signed_transaction: codec::encode_adaptive(signed),
+        signed_transaction_versioned: signed.encode_versioned(),
+        hash: *hash.as_ref(),
+        signature: signature.payload().to_vec(),
+        public_key: public_key_bytes.to_vec(),
+    })
+}
+
+#[pyfunction]
+#[pyo3(name = "signed_transaction_envelope_from_versioned_v1")]
+/// Decode one exact current signed wire and reconstruct its authenticated public envelope.
+fn signed_transaction_envelope_from_versioned_v1_py(
+    signed_transaction_versioned: &[u8],
+) -> PyResult<SignedTransactionEnvelope> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    signed_transaction_envelope_from_model_v1(&signed)
 }
 
 fn canonical_signed_transaction_hash_v1(bytes: &[u8]) -> PyResult<[u8; Hash::LENGTH]> {
@@ -18276,6 +18796,147 @@ fn inspect_signed_privacy_vega_action_v1_py(
     Ok(result.unbind())
 }
 
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_zk_x509_identity_presentation_action_v1")]
+/// Authenticate and inspect one exact ZK-X509 identity presentation.
+fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+    canonical_genesis_hash: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let canonical_genesis_hash =
+        python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    crate::privacy_native_actions::inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
+        &signed,
+        canonical_genesis_hash,
+    )
+    .map_err(|error| {
+        PyValueError::new_err(format!(
+            "invalid ZK-X509 signed action at {}",
+            error.stage()
+        ))
+    })?;
+    let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        "ZK-X509",
+    )?;
+    let PrivacyStatementV1::IrohaZkX509StarkP256V0(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched ZK-X509 statement",
+        ));
+    };
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        intent,
+        envelope,
+        ZK_X509_ACTION_EXECUTION_CLASSIFICATION_V1,
+        Some(ZK_X509_LEDGER_EFFECT_V1),
+    )?;
+    result.set_item("action_kind", "identity_presentation")?;
+    result.set_item(
+        "trust_anchor_id",
+        PyBytes::new(py, statement.trust_anchor_id.as_bytes()),
+    )?;
+    result.set_item(
+        "certificate_policy_id",
+        PyBytes::new(py, statement.certificate_policy_id.as_bytes()),
+    )?;
+    result.set_item(
+        "trust_anchor_record_digest",
+        PyBytes::new(py, statement.trust_anchor_record_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "trust_anchor_record_epoch",
+        statement.trust_anchor_record_epoch,
+    )?;
+    result.set_item(
+        "certificate_policy_record_digest",
+        PyBytes::new(py, statement.certificate_policy_record_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "certificate_policy_record_epoch",
+        statement.certificate_policy_record_epoch,
+    )?;
+    result.set_item(
+        "crl_record_digest",
+        PyBytes::new(py, statement.crl_record_digest.as_bytes()),
+    )?;
+    result.set_item("crl_record_epoch", statement.crl_record_epoch)?;
+    result.set_item(
+        "subject_public_key_digest",
+        PyBytes::new(py, statement.subject_public_key_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "ca_membership_root",
+        PyBytes::new(py, statement.ca_membership_root.as_bytes()),
+    )?;
+    result.set_item(
+        "ca_membership_root_epoch",
+        statement.ca_membership_root_epoch,
+    )?;
+    let key_usage = PyDict::new(py);
+    key_usage.set_item(
+        "digital_signature",
+        statement.key_usage.digital_signature.is_required(),
+    )?;
+    key_usage.set_item(
+        "content_commitment",
+        statement.key_usage.content_commitment.is_required(),
+    )?;
+    key_usage.set_item(
+        "key_encipherment",
+        statement.key_usage.key_encipherment.is_required(),
+    )?;
+    key_usage.set_item(
+        "key_agreement",
+        statement.key_usage.key_agreement.is_required(),
+    )?;
+    result.set_item("key_usage", key_usage)?;
+    let extended_key_usages = PyList::empty(py);
+    for usage in &statement.extended_key_usages {
+        let label = match usage {
+            PrivacyX509ExtendedKeyUsageV1::ClientAuthentication => "client_authentication",
+            PrivacyX509ExtendedKeyUsageV1::DocumentSigning => "document_signing",
+            PrivacyX509ExtendedKeyUsageV1::WalletIdentity => "wallet_identity",
+        };
+        extended_key_usages.append(label)?;
+    }
+    result.set_item("extended_key_usages", extended_key_usages)?;
+    let disclosed_attributes = PyList::empty(py);
+    for disclosed in &statement.disclosed_attributes {
+        let item = PyDict::new(py);
+        item.set_item("index", disclosed.index)?;
+        item.set_item(
+            "attribute_digest",
+            PyBytes::new(py, disclosed.attribute_digest.as_bytes()),
+        )?;
+        disclosed_attributes.append(item)?;
+    }
+    result.set_item("disclosed_attributes", disclosed_attributes)?;
+    result.set_item(
+        "presentation_not_before_unix_seconds",
+        statement.presentation_not_before_unix_seconds,
+    )?;
+    result.set_item(
+        "presentation_not_after_unix_seconds",
+        statement.presentation_not_after_unix_seconds,
+    )?;
+    result.set_item("wallet_account", statement.wallet_account.to_string())?;
+    result.set_item(
+        "wallet_challenge",
+        PyBytes::new(py, statement.wallet_challenge.as_bytes()),
+    )?;
+    result.set_item(
+        "certificate_nullifier",
+        PyBytes::new(py, statement.certificate_nullifier.as_bytes()),
+    )?;
+    Ok(result.unbind())
+}
+
 fn python_zk_ams_action_inspection_result_v1<'py>(
     py: Python<'py>,
     signed: &SignedTransaction,
@@ -18535,6 +19196,308 @@ fn inspect_signed_privacy_bootle_lantern_presentation_action_v1_py(
         disclosed_values.append(PyBytes::new(py, disclosure.value.as_bytes()))?;
     }
     result.set_item("disclosed_attribute_values", disclosed_values)?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_anonymous_pgc_payment_action_v1")]
+/// Authenticate and inspect exactly one Anonymous-PGC payment action.
+fn inspect_signed_privacy_anonymous_pgc_payment_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    crate::privacy_native_actions::inspect_signed_privacy_anonymous_pgc_payment_action_v1(&signed)
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid Anonymous-PGC signed action at {}",
+                error.stage()
+            ))
+        })?;
+    let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        "Anonymous-PGC",
+    )?;
+    let PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched Anonymous-PGC statement",
+        ));
+    };
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        intent,
+        envelope,
+        ANONYMOUS_PGC_ACTION_EXECUTION_CLASSIFICATION_V1,
+        Some(ANONYMOUS_PGC_LEDGER_EFFECT_V1),
+    )?;
+    result.set_item("action_kind", "payment")?;
+    result.set_item(
+        "asset_definition_id",
+        statement.asset_definition_id.to_string(),
+    )?;
+    result.set_item("pool_id", PyBytes::new(py, statement.pool_id.as_bytes()))?;
+    result.set_item(
+        "account_state_root",
+        PyBytes::new(py, statement.account_state_root.as_bytes()),
+    )?;
+    result.set_item(
+        "account_state_root_epoch",
+        statement.account_state_root_epoch,
+    )?;
+    result.set_item(
+        "next_account_state_root",
+        PyBytes::new(py, statement.next_account_state_root.as_bytes()),
+    )?;
+    result.set_item(
+        "next_account_state_root_epoch",
+        statement.next_account_state_root_epoch,
+    )?;
+    result.set_item("recipient_count", statement.recipient_count)?;
+    result.set_item(
+        "anonymity_set_size",
+        u32::try_from(statement.anonymity_set_public_keys.len())
+            .map_err(|_| PyValueError::new_err("Anonymous-PGC account count overflowed"))?,
+    )?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_orchard_note_action_v1")]
+/// Authenticate and inspect exactly one Orchard note action.
+fn inspect_signed_privacy_orchard_note_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    crate::privacy_native_actions::inspect_signed_privacy_orchard_note_action_v1(&signed).map_err(
+        |error| {
+            PyValueError::new_err(format!(
+                "invalid Orchard signed action at {}",
+                error.stage()
+            ))
+        },
+    )?;
+    let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        "Orchard",
+    )?;
+    let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched Orchard statement",
+        ));
+    };
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        intent,
+        envelope,
+        ORCHARD_ACTION_EXECUTION_CLASSIFICATION_V1,
+        Some(ORCHARD_LEDGER_EFFECT_V1),
+    )?;
+    result.set_item("action_kind", "note_action")?;
+    result.set_item(
+        "asset_definition_id",
+        statement.asset_definition_id.to_string(),
+    )?;
+    result.set_item("pool_id", PyBytes::new(py, statement.pool_id.as_bytes()))?;
+    result.set_item("anchor", PyBytes::new(py, statement.anchor.as_bytes()))?;
+    result.set_item("anchor_epoch", statement.anchor_epoch)?;
+    result.set_item("expiry_height", statement.expiry_height)?;
+    result.set_item(
+        "action_count",
+        u32::try_from(statement.actions.len())
+            .map_err(|_| PyValueError::new_err("Orchard action count overflowed"))?,
+    )?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_fcmp_membership_payment_action_v1")]
+/// Authenticate and inspect exactly one FCMP++ membership payment.
+fn inspect_signed_privacy_fcmp_membership_payment_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    crate::privacy_native_actions::inspect_signed_privacy_fcmp_membership_payment_action_v1(
+        &signed,
+    )
+    .map_err(|error| {
+        PyValueError::new_err(format!("invalid FCMP++ signed action at {}", error.stage()))
+    })?;
+    let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+        "FCMP++",
+    )?;
+    let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched FCMP++ statement",
+        ));
+    };
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        intent,
+        envelope,
+        FCMP_ACTION_EXECUTION_CLASSIFICATION_V1,
+        Some(FCMP_LEDGER_EFFECT_V1),
+    )?;
+    result.set_item("action_kind", "membership_payment")?;
+    result.set_item(
+        "asset_definition_id",
+        statement.asset_definition_id.to_string(),
+    )?;
+    result.set_item("pool_id", PyBytes::new(py, statement.pool_id.as_bytes()))?;
+    result.set_item("root_epoch", statement.root_epoch)?;
+    result.set_item(
+        "input_count",
+        u32::try_from(statement.inputs.len())
+            .map_err(|_| PyValueError::new_err("FCMP++ input count overflowed"))?,
+    )?;
+    result.set_item(
+        "output_count",
+        u32::try_from(statement.outputs.len())
+            .map_err(|_| PyValueError::new_err("FCMP++ output count overflowed"))?,
+    )?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_ivm_private_note_action_v1")]
+/// Authenticate and inspect exactly one native private-IVM note action.
+fn inspect_signed_privacy_ivm_private_note_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    crate::privacy_native_actions::inspect_signed_privacy_ivm_private_note_action_v1(&signed)
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid private-IVM signed action at {}",
+                error.stage()
+            ))
+        })?;
+    let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        "private-IVM note",
+    )?;
+    let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched private-IVM statement",
+        ));
+    };
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        intent,
+        envelope,
+        IVM_PRIVATE_NOTE_ACTION_EXECUTION_CLASSIFICATION_V1,
+        Some(IVM_PRIVATE_NOTE_LEDGER_EFFECT_V1),
+    )?;
+    result.set_item("action_kind", "note_action")?;
+    result.set_item(
+        "asset_definition_id",
+        statement.asset_definition_id.to_string(),
+    )?;
+    result.set_item("pool_id", PyBytes::new(py, statement.pool_id.as_bytes()))?;
+    result.set_item(
+        "program_id",
+        PyBytes::new(py, statement.program_id.as_bytes()),
+    )?;
+    result.set_item(
+        "action_digest",
+        PyBytes::new(py, statement.action_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "state_root",
+        PyBytes::new(py, statement.state_root.as_bytes()),
+    )?;
+    result.set_item("root_epoch", statement.root_epoch)?;
+    result.set_item("execution_epoch", statement.execution_epoch)?;
+    result.set_item(
+        "nullifier_count",
+        u32::try_from(statement.nullifiers.len())
+            .map_err(|_| PyValueError::new_err("private-IVM nullifier count overflowed"))?,
+    )?;
+    result.set_item(
+        "output_count",
+        u32::try_from(statement.output_commitments.len())
+            .map_err(|_| PyValueError::new_err("private-IVM output count overflowed"))?,
+    )?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "inspect_signed_privacy_pq_masp_note_action_v1")]
+/// Authenticate and inspect exactly one PQ-MASP note action.
+fn inspect_signed_privacy_pq_masp_note_action_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    crate::privacy_native_actions::inspect_signed_privacy_pq_masp_note_action_v1(&signed).map_err(
+        |error| {
+            PyValueError::new_err(format!(
+                "invalid PQ-MASP signed action at {}",
+                error.stage()
+            ))
+        },
+    )?;
+    let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
+        &signed,
+        PrivacyProtocolIdV1::PqMaspStarkV0,
+        "PQ-MASP",
+    )?;
+    let PrivacyStatementV1::PqMaspStarkV0(statement) = &envelope.statement else {
+        return Err(PyValueError::new_err(
+            "signed_transaction_versioned has a mismatched PQ-MASP statement",
+        ));
+    };
+    let result = python_privacy_action_inspection_result_v1(
+        py,
+        &signed,
+        signed_transaction_versioned,
+        intent,
+        envelope,
+        PQ_MASP_ACTION_EXECUTION_CLASSIFICATION_V1,
+        Some(PQ_MASP_LEDGER_EFFECT_V1),
+    )?;
+    result.set_item("action_kind", "note_action")?;
+    result.set_item(
+        "asset_definition_id",
+        statement.asset_definition_id.to_string(),
+    )?;
+    result.set_item("pool_id", PyBytes::new(py, statement.pool_id.as_bytes()))?;
+    result.set_item("anchor", PyBytes::new(py, statement.anchor.as_bytes()))?;
+    result.set_item("anchor_epoch", statement.anchor_epoch)?;
+    result.set_item("authorization_epoch", statement.authorization_epoch)?;
+    result.set_item(
+        "authorization_key_digest",
+        PyBytes::new(py, statement.authorization_key_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "note_encryption_key_digest",
+        PyBytes::new(py, statement.note_encryption_key_digest.as_bytes()),
+    )?;
+    result.set_item(
+        "nullifier_count",
+        u32::try_from(statement.nullifiers.len())
+            .map_err(|_| PyValueError::new_err("PQ-MASP nullifier count overflowed"))?,
+    )?;
+    result.set_item(
+        "output_count",
+        u32::try_from(statement.output_commitments.len())
+            .map_err(|_| PyValueError::new_err("PQ-MASP output count overflowed"))?,
+    )?;
     Ok(result.unbind())
 }
 
@@ -18962,6 +19925,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyAssetId>()?;
     module.add_class::<Instruction>()?;
     module.add_class::<TransactionBuilder>()?;
+    module.add_class::<PrivacyNativeActionBuildResultV1>()?;
     module.add_class::<PrivacyZkAceTransferActionBuildResultV1>()?;
     module.add_class::<PrivacyJindoActionBuildResultV1>()?;
     module.add_class::<PrivacyVeRangeActionBuildResultV1>()?;
@@ -18972,6 +19936,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PrivacyBootleLanternPresentationActionBuildResultV1>()?;
     module.add_class::<SignedTransactionEnvelope>()?;
     module.add_function(wrap_pyfunction!(supported_crypto_algorithms_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        zk_vk_draft::decode_zk_vk_transaction_payload_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(normalize_crypto_algorithm_py, module)?)?;
     module.add_function(wrap_pyfunction!(generate_keypair_py, module)?)?;
     module.add_function(wrap_pyfunction!(derive_keypair_from_seed_py, module)?)?;
@@ -19026,6 +19994,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        signed_transaction_envelope_from_versioned_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         privacy_vega_device_authentication_digest_v1_py,
         module
     )?)?;
@@ -19046,6 +20018,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         inspect_signed_privacy_zk_ams_batch_admission_action_v1_py,
         module
     )?)?;
@@ -19055,6 +20031,26 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         inspect_signed_privacy_bootle_lantern_presentation_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_anonymous_pgc_payment_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_orchard_note_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_fcmp_membership_payment_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_ivm_private_note_action_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        inspect_signed_privacy_pq_masp_note_action_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
@@ -19194,10 +20190,6 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         build_confidential_unshield_proof_v3_with_paths_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        build_confidential_asset_hidden_transfer_proof_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(privacy_bridge_abi_version_py, module)?)?;

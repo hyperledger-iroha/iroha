@@ -1,0 +1,10 @@
+openapi-server-url-templating
+Copyright 2024, Vladimír Gorej
+openapi-server-url-templating is licensed under Apache 2.0 license.
+Copy of the Apache 2.0 license can be found in `LICENSE` file.
+
+OpenAPI Specification 3.1.x
+Copyright The Linux Foundation
+Fragments of the specification text are embedded in `README.md`.
+Definition of `server-variable-name` ABNF non-terminal is based on the OpenAPI Specification ABNF.
+Copy of the Apache 2.0 license can be found in `LICENSE` file.

@@ -282,7 +282,7 @@ class TransactionFixtureParityTest {
             chain = "00000001",
             authority = "authority",
             creationTimeMs = 1,
-            timeToLiveMs = null,
+            timeToLiveMs = 100_000L,
             nonce = null,
             payloadBase64 = "AA==",
             payloadHash = "payload-hash",
@@ -302,6 +302,92 @@ class TransactionFixtureParityTest {
             assertFailsWith<IllegalStateException>("must reject $malformed") {
                 AndroidFixtureSupport.decodeCanonicalBase64(malformed, "adversarial.fixture")
             }
+        }
+    }
+
+    @Test
+    fun `fixture loaders require explicit matching positive integer TTL`() {
+        fun payloadDescriptor(): MutableMap<String, Any?> = mutableMapOf(
+            "name" to "ttl-payload",
+            "chain" to "00000001",
+            "authority" to "authority",
+            "creation_time_ms" to 1L,
+            "time_to_live_ms" to 100_000L,
+            "payload" to mutableMapOf<String, Any?>("time_to_live_ms" to 100_000L),
+        )
+
+        fun manifestDescriptor(): MutableMap<String, Any?> = mutableMapOf(
+            "name" to "ttl-manifest",
+            "chain" to "00000001",
+            "authority" to "authority",
+            "creation_time_ms" to 1L,
+            "time_to_live_ms" to 100_000L,
+            "payload_base64" to "AA==",
+            "payload_hash" to "payload-hash",
+            "encoded_file" to "ttl.norito",
+            "encoded_len" to 1L,
+            "signed_base64" to "AQ==",
+            "signed_hash" to "signed-hash",
+            "signed_len" to 1L,
+        )
+
+        fun assertRejected(expected: String, block: () -> Unit) {
+            val error = assertFailsWith<IllegalStateException>(block = block)
+            assertEquals(true, error.message?.contains(expected), error.message)
+        }
+
+        assertEquals(
+            100_000L,
+            AndroidFixtureSupport.payloadFixtureFromValue(payloadDescriptor()).timeToLiveMs,
+        )
+        assertEquals(
+            100_000L,
+            AndroidFixtureSupport.manifestFixtureFromValue(manifestDescriptor()).timeToLiveMs,
+        )
+
+        for ((invalid, diagnostic) in listOf(null to "must be an integer", 0L to "must be positive")) {
+            assertRejected(diagnostic) {
+                AndroidFixtureSupport.payloadFixtureFromValue(
+                    payloadDescriptor().apply { this["time_to_live_ms"] = invalid },
+                )
+            }
+            assertRejected(diagnostic) {
+                AndroidFixtureSupport.manifestFixtureFromValue(
+                    manifestDescriptor().apply { this["time_to_live_ms"] = invalid },
+                )
+            }
+            assertRejected(diagnostic) {
+                val descriptor = payloadDescriptor()
+                @Suppress("UNCHECKED_CAST")
+                val payload = descriptor["payload"] as MutableMap<String, Any?>
+                payload["time_to_live_ms"] = invalid
+                AndroidFixtureSupport.payloadFixtureFromValue(descriptor)
+            }
+        }
+
+        assertRejected("is required") {
+            AndroidFixtureSupport.payloadFixtureFromValue(
+                payloadDescriptor().apply { remove("time_to_live_ms") },
+            )
+        }
+        assertRejected("is required") {
+            AndroidFixtureSupport.manifestFixtureFromValue(
+                manifestDescriptor().apply { remove("time_to_live_ms") },
+            )
+        }
+        assertRejected("is required") {
+            val descriptor = payloadDescriptor()
+            @Suppress("UNCHECKED_CAST")
+            val payload = descriptor["payload"] as MutableMap<String, Any?>
+            payload.remove("time_to_live_ms")
+            AndroidFixtureSupport.payloadFixtureFromValue(descriptor)
+        }
+        assertRejected("values must match") {
+            val descriptor = payloadDescriptor()
+            @Suppress("UNCHECKED_CAST")
+            val payload = descriptor["payload"] as MutableMap<String, Any?>
+            payload["time_to_live_ms"] = 99_999L
+            AndroidFixtureSupport.payloadFixtureFromValue(descriptor)
         }
     }
 
@@ -373,6 +459,7 @@ class TransactionFixtureParityTest {
                 "chain" to "00000001",
                 "authority" to sampleAuthority(0x51),
                 "creation_time_ms" to 0L,
+                "time_to_live_ms" to 100_000L,
                 "payload" to mapOf(
                     "chain" to "00000001",
                     "authority" to sampleAuthority(0x51),
@@ -418,10 +505,12 @@ class TransactionFixtureParityTest {
                 "chain" to "00000001",
                 "authority" to sampleAuthority(0x52),
                 "creation_time_ms" to 0L,
+                "time_to_live_ms" to 100_000L,
                 "payload" to mapOf(
                     "chain" to "00000001",
                     "authority" to sampleAuthority(0x52),
                     "creation_time_ms" to 0L,
+                    "time_to_live_ms" to 100_000L,
                     "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(
@@ -450,12 +539,13 @@ class TransactionFixtureParityTest {
                 "chain" to "00000002",
                 "authority" to sampleAuthority(0x53),
                 "creation_time_ms" to 1_735_000_000_000L,
-                "time_to_live_ms" to null,
+                "time_to_live_ms" to 100_000L,
                 "nonce" to null,
                 "payload" to mapOf(
                     "chain" to "00000002",
                     "authority" to sampleAuthority(0x53),
                     "creation_time_ms" to 1_735_000_000_000L,
+                    "time_to_live_ms" to 100_000L,
                     "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(

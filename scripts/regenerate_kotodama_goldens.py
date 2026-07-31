@@ -2,10 +2,11 @@
 """Build, validate, and atomically publish the canonical Kotodama V1 goldens.
 
 Prerequisites are freshly built ``koto`` and ``iroha`` binaries. The script
-never invokes Cargo, accepts no signing material, and writes only below
-``target/kotodama`` unless ``--write`` is explicitly selected. The checked-in
-``ivm_artifacts.tsv`` file is the authoritative ownership and
-source-to-artifact map for every IVM program in the repository.
+never invokes Cargo or accepts signing material. Scratch files are confined to
+the selected staging root, and publication is confined to the selected output
+root when ``--write`` is explicit. The checked-in ``ivm_artifacts.tsv`` file is
+the authoritative ownership and source-to-artifact map for every IVM program
+in the repository.
 
 ``--check`` is the safe default: compile everything in a temporary staging
 tree and fail if any checked-in artifact or compiler manifest differs.
@@ -21,6 +22,7 @@ import argparse
 import json
 import math
 import os
+import stat
 import struct
 import subprocess
 import sys
@@ -74,7 +76,6 @@ RETIRED_OUTPUTS = (
     Path("crates/ivm/tests/data/dai.to"),
     Path("crates/kotodama_lang/src/samples/kotodama_jp.to"),
     Path("crates/kotodama_lang/src/samples/trigger_cat_and_mouse.to"),
-    Path("docs/portal/static/norito-snippets/init-entrypoint.to"),
     Path("integration_tests/fixtures/ivm/trigger_cat_and_mouse.to"),
 )
 
@@ -526,11 +527,15 @@ def atomic_publish(source: Path, destination: Path) -> bool:
 
     payload = source.read_bytes()
     try:
+        metadata = destination.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise GoldenError(
+                f"generated destination must be a regular non-symlink file: {destination}"
+            )
         if destination.read_bytes() == payload:
             return False
     except FileNotFoundError:
         pass
-    destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", dir=destination.parent
     )
@@ -550,6 +555,11 @@ def compare_file(source: Path, destination: Path) -> None:
     """Require a checked-in destination to exactly match its staged source."""
 
     try:
+        metadata = destination.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise GoldenError(
+                f"generated destination must be a regular non-symlink file: {destination}"
+            )
         expected = source.read_bytes()
         actual = destination.read_bytes()
     except OSError as error:
@@ -861,36 +871,91 @@ def build_and_validate(
 
 
 def publish_or_check(
-    root: Path,
+    output_root: Path,
     stage: Path,
     rows: Sequence[Golden],
     write: bool,
 ) -> int:
     """Publish or compare every mapped artifact and selected compiler manifest."""
 
+    output_root = _prepare_real_directory(
+        output_root,
+        context="Kotodama golden output root",
+        create=False,
+    )
     changed = 0
     for row in rows:
         staged = stage / "release" / f"{row.source.stem}.to"
-        destination = root / row.destination
+        destination = _confined_destination(
+            output_root,
+            row.destination,
+            create_parent=write,
+            missing_parent_ok=False,
+        )
         if write:
             changed += int(atomic_publish(staged, destination))
         else:
             compare_file(staged, destination)
     for source, relative_destination in COMPILER_MANIFESTS.items():
         staged = stage / "release" / f"{source.stem}.manifest.json"
-        destination = root / relative_destination
+        destination = _confined_destination(
+            output_root,
+            relative_destination,
+            create_parent=write,
+            missing_parent_ok=False,
+        )
         if write:
             changed += int(atomic_publish(staged, destination))
         else:
             compare_file(staged, destination)
     for retired in RETIRED_OUTPUTS:
-        path = root / retired
-        if path.exists():
-            if not write:
-                raise GoldenError(f"retired Kotodama artifact still exists: {retired}")
-            path.unlink()
-            changed += 1
+        path = _confined_destination(
+            output_root,
+            retired,
+            create_parent=False,
+            missing_parent_ok=True,
+        )
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise GoldenError(
+                f"retired Kotodama destination must be a regular non-symlink file: {path}"
+            )
+        if not write:
+            raise GoldenError(f"retired Kotodama artifact still exists: {retired}")
+        path.unlink()
+        changed += 1
     return changed
+
+
+class _UniquePathAction(argparse.Action):
+    """Reject repeated path options instead of silently accepting the last."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Path,
+        option_string: str | None = None,
+    ) -> None:
+        if getattr(namespace, self.dest) is not None:
+            parser.error(f"{option_string or self.dest} was supplied more than once")
+        setattr(namespace, self.dest, values)
+
+
+def _explicit_root_path(value: str) -> Path:
+    """Parse a deliberate non-broad root without normalizing symlinks."""
+
+    if not value:
+        raise argparse.ArgumentTypeError("root path must not be empty")
+    path = Path(value)
+    if path in {Path("."), Path(path.anchor)} or ".." in path.parts:
+        raise argparse.ArgumentTypeError(
+            "explicit root must not be '.', a filesystem root, or contain '..'"
+        )
+    return path
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -903,6 +968,18 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--koto", type=Path, default=Path("target/debug/koto"))
     parser.add_argument("--iroha", type=Path, default=Path("target/debug/iroha"))
     parser.add_argument(
+        "--output-root",
+        type=_explicit_root_path,
+        action=_UniquePathAction,
+        help="publish or compare generated artifacts below this root",
+    )
+    parser.add_argument(
+        "--staging-root",
+        type=_explicit_root_path,
+        action=_UniquePathAction,
+        help="create the temporary compiler tree below this root",
+    )
+    parser.add_argument(
         "--skip-runtime-manifest-check",
         action="store_true",
         help="skip independent iroha manifest verification for local iteration",
@@ -912,7 +989,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="skip the canonical koto test JSON/JUnit run for local iteration",
     )
-    return parser.parse_args(argv)
+    arguments = list(argv)
+    if sum(argument in {"--check", "--write"} for argument in arguments) > 1:
+        parser.error("select --check or --write at most once")
+    return parser.parse_args(arguments)
 
 
 def _resolve_tool(root: Path, path: Path, name: str) -> Path:
@@ -922,12 +1002,90 @@ def _resolve_tool(root: Path, path: Path, name: str) -> Path:
     return tool
 
 
+def _rooted_path(root: Path, path: Path | None, default: Path) -> Path:
+    """Resolve an optional CLI path relative to the live repository root."""
+
+    selected = default if path is None else path
+    return selected if selected.is_absolute() else root / selected
+
+
+def _prepare_real_directory(
+    path: Path,
+    *,
+    context: str,
+    create: bool,
+) -> Path:
+    """Return the canonical boundary for a real, non-symlink directory."""
+
+    if not path.is_absolute():
+        raise GoldenError(f"{context} must be absolute: {path}")
+
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        if not create:
+            raise GoldenError(f"{context} does not exist: {path}") from None
+        path.mkdir(parents=True, exist_ok=True)
+        metadata = path.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise GoldenError(f"{context} must be a real directory: {path}")
+    return path.resolve(strict=True)
+
+
+def _confined_destination(
+    root: Path,
+    relative: Path,
+    *,
+    create_parent: bool,
+    missing_parent_ok: bool,
+) -> Path:
+    """Return one destination after a no-symlink walk beneath ``root``."""
+
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise GoldenError(f"invalid generated destination below {root}: {relative}")
+    parent = root
+    for part in relative.parent.parts:
+        if part == ".":
+            continue
+        parent /= part
+        try:
+            metadata = parent.lstat()
+        except FileNotFoundError:
+            if missing_parent_ok:
+                return root / relative
+            if not create_parent:
+                raise GoldenError(f"generated output parent does not exist: {parent}") from None
+            parent.mkdir()
+            metadata = parent.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise GoldenError(
+                f"generated output parent must be a real directory: {parent}"
+            )
+    return root / relative
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the complete fail-closed golden pipeline."""
 
     args = parse_args(sys.argv[1:] if argv is None else argv)
     root = repository_root()
     try:
+        output_root = _rooted_path(root, args.output_root, root)
+        staging_root = _rooted_path(
+            root,
+            args.staging_root,
+            root / "target" / "kotodama",
+        )
+        output_root = _prepare_real_directory(
+            output_root,
+            context="Kotodama golden output root",
+            create=args.write,
+        )
+        staging_root = _prepare_real_directory(
+            staging_root,
+            context="Kotodama golden staging root",
+            create=True,
+        )
         rows = read_map(root / MAP_PATH)
         sources = tracked_sources(root)
         validate_output_inventory(rows, sources, tracked_outputs(root))
@@ -938,9 +1096,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             else _resolve_tool(root, args.iroha, "iroha")
         )
         validate_sources(koto, root, sources)
-        target = root / "target" / "kotodama"
-        target.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="v1-goldens.", dir=target) as raw_stage:
+        with tempfile.TemporaryDirectory(
+            prefix="v1-goldens.",
+            dir=staging_root,
+        ) as raw_stage:
             stage = Path(raw_stage)
             build_and_validate(
                 koto,
@@ -950,7 +1109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rows,
                 not args.skip_contract_tests,
             )
-            changed = publish_or_check(root, stage, rows, args.write)
+            changed = publish_or_check(output_root, stage, rows, args.write)
     except (GoldenError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

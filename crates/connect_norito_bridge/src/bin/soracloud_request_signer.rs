@@ -1,4 +1,6 @@
 //! Build exact Soracloud uploaded-model and private-runtime request payloads for desktop clients.
+//! Private signing material is consumed only by this local helper; generated
+//! Torii request JSON contains signed provenance and never embeds the key.
 
 use std::{
     env, fs,
@@ -135,8 +137,6 @@ struct UploadedModelBundleInitPayload {
 struct SignedUploadedModelBundleInitRequest {
     payload: UploadedModelBundleInitPayload,
     provenance: ManifestProvenance,
-    authority: Option<AccountId>,
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Debug, norito::json::JsonSerialize)]
@@ -158,8 +158,6 @@ struct UploadedModelFinalizePayload {
 struct SignedUploadedModelFinalizeRequest {
     payload: UploadedModelFinalizePayload,
     provenance: ManifestProvenance,
-    authority: Option<AccountId>,
-    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Debug, norito::json::JsonSerialize)]
@@ -185,7 +183,6 @@ struct UploadFinalizeOutput {
 }
 
 struct MutationSigner {
-    authority: AccountId,
     private_key: ExposedPrivateKey,
     public_key: PublicKey,
 }
@@ -328,8 +325,6 @@ fn run() -> Result<(), String> {
                     bundle: derived.bundle.clone(),
                 },
                 provenance: signer.provenance(&payload_bytes)?,
-                authority: Some(signer.authority),
-                private_key: Some(signer.private_key),
             };
             write_stdout_json(&UploadInitOutput {
                 bundle_root: derived.bundle_root,
@@ -377,8 +372,6 @@ fn run() -> Result<(), String> {
             let finalize_request = SignedUploadedModelFinalizeRequest {
                 payload: finalize_payload,
                 provenance: signer.provenance(&finalize_bytes)?,
-                authority: Some(signer.authority.clone()),
-                private_key: Some(signer.private_key.clone()),
             };
 
             write_stdout_json(&UploadFinalizeOutput {
@@ -429,8 +422,10 @@ fn parse_signer(authority: &str, private_key: &str) -> Result<MutationSigner, St
         .parse::<ExposedPrivateKey>()
         .map_err(|err| format!("invalid private key: {err}"))?;
     let public_key: PublicKey = private_key.0.clone().into();
+    if authority != AccountId::new(public_key.clone()) {
+        return Err("authority account id does not match the private key".to_owned());
+    }
     Ok(MutationSigner {
-        authority,
         private_key,
         public_key,
     })
@@ -806,18 +801,35 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    #[test]
-    fn mutation_signer_provenance_signature_verifies() {
+    fn test_mutation_signer() -> MutationSigner {
         let private_key = ExposedPrivateKey(
             iroha_crypto::PrivateKey::from_bytes(iroha_crypto::Algorithm::Ed25519, &[0x42; 32])
                 .expect("private key"),
         );
         let public_key = PublicKey::from(private_key.0.clone());
-        let signer = MutationSigner {
-            authority: AccountId::new(public_key.clone()),
+        MutationSigner {
             private_key,
             public_key,
+        }
+    }
+
+    fn assert_no_inline_signing_fields(request: &impl norito::json::JsonSerialize) {
+        let norito::json::Value::Object(body) =
+            json::to_value(request).expect("serialize signed upload request")
+        else {
+            panic!("signed upload request must serialize as an object");
         };
+        for field in ["authority", "private_key"] {
+            assert!(
+                !body.contains_key(field),
+                "signed upload request serialized retired field `{field}`"
+            );
+        }
+    }
+
+    #[test]
+    fn mutation_signer_provenance_signature_verifies() {
+        let signer = test_mutation_signer();
         let payload = b"soracloud-upload-provenance";
 
         let provenance = signer.provenance(payload).expect("sign provenance");
@@ -826,6 +838,35 @@ mod tests {
             .signature
             .verify(&provenance.signer, payload)
             .expect("provenance signature verifies");
+    }
+
+    #[test]
+    fn parse_signer_accepts_matching_authority_and_key() {
+        let expected = test_mutation_signer();
+        let authority = AccountId::new(expected.public_key.clone());
+
+        let parsed = parse_signer(&authority.to_string(), &expected.private_key.to_string())
+            .expect("matching authority and key");
+
+        assert_eq!(parsed.public_key, expected.public_key);
+        assert_eq!(parsed.private_key, expected.private_key);
+    }
+
+    #[test]
+    fn parse_signer_rejects_authority_key_mismatch() {
+        let signer = test_mutation_signer();
+        let authority = AccountId::new(signer.public_key.clone());
+        let other_private_key = ExposedPrivateKey(
+            iroha_crypto::PrivateKey::from_bytes(iroha_crypto::Algorithm::Ed25519, &[0x24; 32])
+                .expect("private key"),
+        );
+
+        let error = match parse_signer(&authority.to_string(), &other_private_key.to_string()) {
+            Ok(_) => panic!("mismatched authority and key must be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "authority account id does not match the private key");
     }
 
     #[test]
@@ -920,5 +961,34 @@ mod tests {
             "0.000000011"
         );
         derived.bundle.validate().expect("bundle validates");
+
+        let signer = test_mutation_signer();
+        let init_request = SignedUploadedModelBundleInitRequest {
+            payload: UploadedModelBundleInitPayload {
+                bundle: derived.bundle.clone(),
+            },
+            provenance: signer.provenance(b"init").expect("sign init provenance"),
+        };
+        assert_no_inline_signing_fields(&init_request);
+
+        let finalize_request = SignedUploadedModelFinalizeRequest {
+            payload: UploadedModelFinalizePayload {
+                service_name: manifest.service_name,
+                model_name: manifest.model_name,
+                model_id: manifest.model_id,
+                artifact_id: manifest.artifact_id,
+                weight_version: manifest.weight_version,
+                bundle_root: derived.bundle_root,
+                weight_artifact_hash: derived.weight_artifact_hash,
+                dataset_ref: manifest.finalize.dataset_ref,
+                training_config_hash: derived.training_config_hash,
+                reproducibility_hash: derived.reproducibility_hash,
+                provenance_attestation_hash: derived.provenance_attestation_hash,
+            },
+            provenance: signer
+                .provenance(b"finalize")
+                .expect("sign finalize provenance"),
+        };
+        assert_no_inline_signing_fields(&finalize_request);
     }
 }

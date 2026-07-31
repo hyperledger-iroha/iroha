@@ -1,8 +1,8 @@
 //! Lane privacy commitment registry bridging manifest data to runtime users.
 //!
-//! This module wires the NX-10 privacy descriptors (Merkle roots and zk-SNARK
-//! hashes) into a deterministic registry so admission/compliance logic can look
-//! up the commitments advertised by each lane.
+//! This module wires the NX-10 domain-separated Merkle descriptors into a
+//! deterministic registry so admission/compliance logic can look up the
+//! commitments advertised by each lane.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -77,7 +77,7 @@ impl LanePrivacyRegistry {
         &self,
         lane_id: LaneId,
         commitment_id: LaneCommitmentId,
-        witness: PrivacyWitness<'_>,
+        witness: PrivacyWitness,
     ) -> Result<(), LanePrivacyRegistryError> {
         let entry = self
             .entries
@@ -203,7 +203,7 @@ pub enum LanePrivacyRegistryError {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{
-        HashOf, MerkleTree,
+        MerkleProof,
         privacy::{
             LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness,
             PrivacyWitness,
@@ -239,15 +239,13 @@ mod tests {
         dataspace: DataSpaceId,
         id: LaneCommitmentId,
     ) -> (LaneManifestStatus, MerkleWitness) {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&[0_u8; 32]);
-        bytes.extend_from_slice(&[1_u8; 32]);
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&bytes, 32).expect("valid chunk");
-        let root = tree.root().expect("merkle root");
-        let proof = tree.get_proof(0).expect("merkle proof");
-        let first_leaf_raw = *tree.leaves().next().expect("leaf iterator");
-        let first_leaf_hash = HashOf::<[u8; 32]>::from_untyped_unchecked(first_leaf_raw);
-        let witness = MerkleWitness::new(first_leaf_hash, proof);
+        let witness = MerkleWitness::new(
+            [0_u8; 32],
+            MerkleProof::from_audit_path_bytes(0, vec![[1_u8; 32]]),
+        );
+        let root = witness
+            .implied_root(8)
+            .expect("valid lane proof must produce a root");
         let status = status_with_commitments(
             lane,
             dataspace,
@@ -299,10 +297,7 @@ mod tests {
                 LaneCommitmentId::new(9),
                 PrivacyWitness::Merkle(MerkleWitness::from_leaf_bytes(
                     [2_u8; 32],
-                    MerkleTree::<[u8; 32]>::from_byte_chunks(&[2_u8; 32], 32)
-                        .expect("valid chunk")
-                        .get_proof(0)
-                        .unwrap(),
+                    MerkleProof::from_audit_path_bytes(0, vec![[3_u8; 32]]),
                 )),
             )
             .expect_err("unknown commitment");
@@ -316,10 +311,7 @@ mod tests {
                 commitment_id,
                 PrivacyWitness::Merkle(MerkleWitness::from_leaf_bytes(
                     [0_u8; 32],
-                    MerkleTree::<[u8; 32]>::from_byte_chunks(&[0_u8; 32], 32)
-                        .expect("valid chunk")
-                        .get_proof(0)
-                        .unwrap(),
+                    MerkleProof::from_audit_path_bytes(0, vec![[1_u8; 32]]),
                 )),
             )
             .expect_err("missing lane");
@@ -336,12 +328,10 @@ mod tests {
         let (status, witness) =
             merkle_status_with_witness(lane_id, DataSpaceId::new(99), commitment_id);
         let registry = LanePrivacyRegistry::from_statuses(&[status]);
-        let mut leaf_bytes = [0u8; 32];
-        leaf_bytes.copy_from_slice(witness.leaf_hash().as_ref().as_ref());
         let proof = LanePrivacyProof {
             commitment_id,
             witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
-                leaf: leaf_bytes,
+                leaf: *witness.leaf(),
                 proof: witness.proof().clone(),
             }),
         };

@@ -19,6 +19,12 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 
+fn state_path_tlv(path: &str) -> Vec<u8> {
+    let path: iroha_data_model::state_path::StatePath = path.parse().expect("canonical state path");
+    let payload = norito::to_bytes(&path).expect("encode state path");
+    make_tlv(PointerType::NoritoBytes, &payload)
+}
+
 fn saturate_input(vm: &mut IVM) {
     let filler = make_tlv(PointerType::Blob, b"");
     while vm.alloc_input_tlv(&filler).is_ok() {}
@@ -95,7 +101,7 @@ fn core_host_state_set_get_del_roundtrip() {
     vm.set_host(CoreHost::new());
 
     // Allocate TLVs for path and value in INPUT
-    let path_tlv = make_tlv(PointerType::Name, b"foo");
+    let path_tlv = state_path_tlv("foo");
     let val1 = bytes_state_value(&[1u8, 2, 3, 4]);
     let val1_tlv = make_tlv(PointerType::NoritoBytes, &val1);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
@@ -143,7 +149,7 @@ fn core_host_state_syscalls_require_pointers() {
     let err = vm.run().expect_err("state get without path should fail");
     assert!(matches!(err, VMError::NoritoInvalid));
 
-    let path_tlv = make_tlv(PointerType::Name, b"foo");
+    let path_tlv = state_path_tlv("foo");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let set_prog = state_program(syscalls::SYSCALL_STATE_SET, "foo", true);
     vm.set_register(10, p_path);
@@ -164,7 +170,7 @@ fn core_host_state_get_spills_to_heap_when_input_bump_is_full() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
 
-    let path_tlv = make_tlv(PointerType::Name, b"spill");
+    let path_tlv = state_path_tlv("spill");
     let expected = bytes_state_value(&[0xAB; 64]);
     let val_tlv = make_tlv(PointerType::NoritoBytes, &expected);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");

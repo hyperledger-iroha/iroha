@@ -632,6 +632,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             quorum,
             roster,
             nexus_amx_context_hash: Hash::new(b"exact SCCP fixture Nexus/AMX context"),
+            execution_policy_hash: Hash::new(b"exact SCCP fixture execution policy"),
             da_layout,
             leader_seed: [0x5a; 32],
         },
@@ -663,6 +664,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
                 quorum: parent_context.quorum,
                 roster: parent_context.roster.clone(),
                 nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
+                execution_policy_hash: parent_context.execution_policy_hash,
                 da_layout: parent_context.da_layout,
                 leader_seed: parent_context.leader_seed,
             }

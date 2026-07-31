@@ -69,7 +69,7 @@ pub const DECODED_STATE_VALUE_TABLE_OFFSET: i16 = 8;
 pub const DECODED_STATE_VALUE_WORD_BYTES: i16 = 8;
 
 fn state_value_complete_frame_len<T>(payload_len: usize) -> Result<usize, NoritoError> {
-    let alignment = std::mem::align_of::<Archived<T>>();
+    let alignment = norito::core::archived_payload_align::<T>();
     let remainder = norito::core::Header::SIZE % alignment;
     let padding = if remainder == 0 {
         0

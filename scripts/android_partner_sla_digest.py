@@ -10,14 +10,14 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-DEFAULT_SESSIONS_ROOT = Path("docs/source/sdk/android/partner_sla_sessions")
+DEFAULT_SESSIONS_ROOT = Path("specs/sdk/android/partner_sla_sessions")
 DEFAULT_RELEASE_CALENDAR = os.environ.get(
     "ANDROID_RELEASE_CALENDAR_PATH",
-    "docs/source/sdk/android/readiness/archive/ga-2027-10/release_calendar_ga-2027-10.md",
+    "specs/sdk/android/readiness/archive/ga-2027-10/release_calendar_ga-2027-10.md",
 )
 DEFAULT_RELEASE_ACK_LOG = os.environ.get(
     "ANDROID_RELEASE_ACK_LOG_PATH",
-    "docs/source/sdk/android/readiness/archive/ga-2027-10/ack_log_ga-2027-10.md",
+    "specs/sdk/android/readiness/archive/ga-2027-10/ack_log_ga-2027-10.md",
 )
 
 

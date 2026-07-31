@@ -3084,17 +3084,17 @@ fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixIn
     length.copy_from_slice(len_bytes);
     let payload_len =
         usize::try_from(u64::from_le_bytes(length)).map_err(|_| ncore::Error::LengthMismatch)?;
-    let _padding = if core::mem::align_of::<ncore::Archived<T>>() <= 1 {
+    let _padding = if ncore::archived_payload_align::<T>() <= 1 {
         0
     } else {
-        let rem = ncore::Header::SIZE % core::mem::align_of::<ncore::Archived<T>>();
+        let rem = ncore::Header::SIZE % ncore::archived_payload_align::<T>();
         if rem == 0 {
             0
         } else {
-            core::mem::align_of::<ncore::Archived<T>>() - rem
+            ncore::archived_payload_align::<T>() - rem
         }
     };
-    let consumed = framed_payload_len(payload_len, core::mem::align_of::<ncore::Archived<T>>())
+    let consumed = framed_payload_len(payload_len, ncore::archived_payload_align::<T>())
         .filter(|size| *size <= bytes.len())
         .ok_or(ncore::Error::LengthMismatch)?;
     let _flags = *bytes
@@ -3104,7 +3104,7 @@ fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixIn
 }
 
 fn encode_transaction_entrypoint(entrypoint: &TransactionEntrypoint) -> Vec<u8> {
-    ncore::to_bytes(entrypoint).expect("encode transaction entrypoint")
+    norito::encode_canonical(entrypoint).expect("encode canonical transaction entrypoint")
 }
 
 fn signed_hash_from_entrypoint_hash(
@@ -3116,7 +3116,7 @@ fn signed_hash_from_entrypoint_hash(
 fn decode_framed_transaction_entrypoint(
     framed: &[u8],
 ) -> Result<TransactionEntrypoint, ncore::Error> {
-    norito::decode_from_bytes::<TransactionEntrypoint>(framed)
+    norito::decode_canonical::<TransactionEntrypoint>(framed)
 }
 
 fn decode_gossip_transaction_payload(
@@ -3177,6 +3177,12 @@ impl GossipTransaction {
         encoded: Arc<Vec<u8>>,
     ) -> Self {
         let entrypoint = entrypoint.into();
+        let canonical = Arc::new(encode_transaction_entrypoint(&entrypoint));
+        let encoded = if encoded.as_slice() == canonical.as_slice() {
+            encoded
+        } else {
+            canonical
+        };
         let tx_hash = signed_hash_from_entrypoint_hash(entrypoint.hash());
         let entrypoint_cache = OnceLock::new();
         let _ = entrypoint_cache.set(Arc::new(entrypoint));
@@ -3713,6 +3719,31 @@ mod tests {
         assert!(matches!(
             crate::tx::entrypoint_hash_from_framed_bytes(&reframed),
             Err(ncore::Error::LengthMismatch)
+        ));
+    }
+
+    #[test]
+    fn gossip_transaction_rejects_alternate_layout_frame() {
+        let (signed, _accepted) = build_transaction("framed-entrypoint-alternate-layout");
+        let entrypoint = TransactionEntrypoint::External(signed);
+        let canonical = encode_transaction_entrypoint(&entrypoint);
+        let alternate_flags =
+            ncore::default_encode_flags() ^ ncore::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = ncore::DecodeFlagsGuard::enter(alternate_flags);
+            ncore::to_bytes(&entrypoint).expect("encode alternate-layout entrypoint")
+        };
+
+        assert_ne!(alternate, canonical);
+        norito::decode_from_bytes::<TransactionEntrypoint>(&alternate)
+            .expect("ordinary Norito accepts the advertised alternate layout");
+        assert!(matches!(
+            crate::tx::entrypoint_hash_from_framed_bytes(&alternate),
+            Err(ncore::Error::NonCanonicalEncoding)
+        ));
+        assert!(matches!(
+            decode_framed_transaction_entrypoint(&alternate),
+            Err(ncore::Error::NonCanonicalEncoding)
         ));
     }
 

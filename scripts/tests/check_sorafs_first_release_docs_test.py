@@ -6,8 +6,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ARCHITECTURE = REPO_ROOT / "docs/source/sorafs_architecture_rfc.md"
-ROLLOUT = REPO_ROOT / "docs/source/sorafs/migration_roadmap.md"
+ARCHITECTURE = REPO_ROOT / "specs/sorafs_architecture_rfc.md"
+ROLLOUT = REPO_ROOT / "specs/sorafs/migration_roadmap.md"
 MANIFEST = REPO_ROOT / "crates/sorafs_manifest/src/lib.rs"
 
 

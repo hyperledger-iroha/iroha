@@ -24,6 +24,14 @@ import {
 import { getNativeBinding } from "./native.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
+import {
+  LANE_PRIVACY_MERKLE_MAX_DEPTH,
+  PROOF_BOX_MAX_ENCODED_BYTES,
+  isPortableVerifyingKeyIdField,
+  laneMerkleLeafIndexFitsDepth,
+  proofBoxFitsEncodedBudget,
+  proofBoxMaxProofBytes,
+} from "./proofAttachment.js";
 
 const ALIGNMENT = 16;
 const COMPACT_LEN_FLAG = 0x02;
@@ -111,6 +119,94 @@ const OPEN_VERIFY_ENVELOPE_SCHEMA_HASH = schemaHashForTypeName(
 const EVENT_FILTER_BOX_SCHEMA_HASH = schemaHashForTypeName(
   "iroha_data_model::events::model::EventFilterBox",
 );
+export const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1 =
+  "iroha.privacy.exact12-typed-fixture-bundle.v1";
+export const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 = 2 * 1024 * 1024;
+export const PRIVACY_EXACT12_PROTOCOL_IDS_V1 = Object.freeze([
+  "zk-ace-pq-authorization-v0",
+  "anonymous-pgc-k-out-of-n-v1",
+  "verange-transparent-range-v1",
+  "iroha-zk-ams-v1",
+  "vega-existing-credential-zk-v0",
+  "iroha-zk-x509-stark-p256-v0",
+  "iroha-jindo-polynomial-commitment-v0",
+  "iroha-bootle-lantern-anoncred-v1",
+  "orchard-halo2-actions-v1",
+  "monero-fcmp-plus-plus-v1",
+  "iroha-ivm-private-note-stark-v1",
+  "pq-masp-stark-v0",
+]);
+const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_HASH_V1 = schemaHashForTypeName(
+  PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1,
+);
+const PRIVACY_EXACT12_STATEMENT_SCHEMA_HASH_V1 = schemaHashForTypeName(
+  "iroha.privacy.statement.v1",
+);
+const PRIVACY_EXACT12_ENVELOPE_SCHEMA_HASH_V1 = schemaHashForTypeName(
+  "iroha.privacy.proof-envelope.v1",
+);
+const PRIVACY_EXACT12_SUBMIT_PROOF_SCHEMA_HASH_V1 = schemaHashForTypeName(
+  "iroha_data_model::isi::privacy::SubmitPrivacyProofV1",
+);
+const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_SCHEMA_HASH_V1 = schemaHashForTypeName(
+  "iroha_data_model::transaction::signed::model::TransactionPayload",
+);
+const PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1 =
+  "iroha.privacy.submit_proof.v1";
+const PRIVACY_EXACT12_INTENT_DIGEST_DOMAIN_V1 = Buffer.from(
+  "iroha.privacy.transaction-intent-digest.v1",
+  "ascii",
+);
+const PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1 = 8;
+const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FRAME_PADDING_V1 = 0;
+const PRIVACY_EXACT12_ROW_FIELD_NAMES_V1 = Object.freeze([
+  "protocol_id",
+  "statement_norito",
+  "envelope_norito",
+  "submit_proof_wire_id",
+  "submit_proof_instruction_norito",
+  "transaction_intent_projection_norito",
+  "transaction_intent_digest",
+  "unsigned_transaction_payload_norito",
+  "signed_transaction_versioned_norito",
+  "signed_transaction_hash",
+]);
+const PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1 = Object.freeze([
+  "protocolId",
+  "statementNorito",
+  "envelopeNorito",
+  "submitProofWireId",
+  "submitProofInstructionNorito",
+  "transactionIntentProjectionNorito",
+  "transactionIntentDigest",
+  "unsignedTransactionPayloadNorito",
+  "signedTransactionVersionedNorito",
+  "signedTransactionHash",
+]);
+const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1 = Object.freeze([
+  "chain",
+  "authority",
+  "creation_time_ms",
+  "instructions",
+  "time_to_live_ms",
+  "nonce",
+  "fee_payment",
+  "metadata",
+  "attachments",
+]);
+const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = Object.freeze([
+  "protocol_id",
+  "proof_system_id",
+  "engine_id",
+  "parameter_id",
+  "parameter_digest",
+  "verifier_digest",
+  "statement_schema_digest",
+  "engine_manifest_digest",
+  "statement_digest",
+  "statement",
+  "proof",
+]);
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
 );
@@ -196,8 +292,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes",
   "iroha_data_model::isi::zk::RegisterZkAsset":
     "iroha_data_model::isi::zk::RegisterZkAsset",
-  "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool":
-    "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool",
   "zk::ScheduleConfidentialPolicyTransition":
     "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
   "zk::CancelConfidentialPolicyTransition":
@@ -206,8 +300,6 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::zk::Shield",
   "iroha_data_model::isi::zk::ZkTransfer":
     "iroha_data_model::isi::zk::ZkTransfer",
-  "iroha_data_model::isi::zk::AssetHiddenZkTransfer":
-    "iroha_data_model::isi::zk::AssetHiddenZkTransfer",
   "iroha_data_model::isi::zk::Unshield":
     "iroha_data_model::isi::zk::Unshield",
   "iroha_data_model::isi::zk::CreateElection":
@@ -813,6 +905,30 @@ function encodeFeePaymentIntentValue(intent, context) {
   );
 }
 
+const INLINE_PRIVATE_KEY_FIELDS = new Set([
+  "private_key",
+  "privateKey",
+  "private_key_hex",
+  "privateKeyHex",
+  "private_key_bytes",
+  "privateKeyBytes",
+  "private_key_multihash",
+  "privateKeyMultihash",
+  "private_key_algorithm",
+  "privateKeyAlgorithm",
+]);
+
+function rejectInlinePrivateKeyFields(request, context) {
+  const fields = Object.keys(request).filter((key) =>
+    INLINE_PRIVATE_KEY_FIELDS.has(key),
+  );
+  if (fields.length !== 0) {
+    throw new TypeError(
+      `${context} does not accept private-key fields (${fields.join(", ")}); sign the returned transaction draft locally`,
+    );
+  }
+}
+
 /**
  * Encode a `/v1/multisig/propose` request DTO as a native Norito body.
  *
@@ -830,6 +946,7 @@ export function noritoEncodeMultisigProposeRequest(request) {
   if (!Array.isArray(request.instructions)) {
     throw new TypeError("MultisigProposeDto.instructions must be an array");
   }
+  rejectInlinePrivateKeyFields(request, "MultisigProposeDto");
   const validationFeeMetadata = normalizeMultisigProposeValidationFeeMetadata(request);
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
@@ -838,13 +955,6 @@ export function noritoEncodeMultisigProposeRequest(request) {
         encodeAccountIdValue(
           request.signer_account_id ?? request.signerAccountId,
           "MultisigProposeDto.signer_account_id",
-        ),
-      ],
-      [
-        encodeOptionValue(
-          request.private_key ?? request.privateKey ?? null,
-          encodeNoritoStringValue,
-          "MultisigProposeDto.private_key",
         ),
       ],
       [
@@ -1019,6 +1129,7 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
   if (!isPlainObject(request)) {
     throw new TypeError("MultisigContractCallProposeDto request must be an object");
   }
+  rejectInlinePrivateKeyFields(request, "MultisigContractCallProposeDto");
   const contractAddress = request.contract_address ?? request.contractAddress ?? null;
   const contractAlias = request.contract_alias ?? request.contractAlias ?? null;
   if ((contractAddress == null) === (contractAlias == null)) {
@@ -1037,13 +1148,6 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
         encodeAccountIdValue(
           request.signer_account_id ?? request.signerAccountId,
           "MultisigContractCallProposeDto.signer_account_id",
-        ),
-      ],
-      [
-        encodeOptionValue(
-          request.private_key ?? request.privateKey ?? null,
-          encodeNoritoStringValue,
-          "MultisigContractCallProposeDto.private_key",
         ),
       ],
       [
@@ -1121,6 +1225,7 @@ export function noritoEncodeMultisigContractCallApproveRequest(request) {
   if (!isPlainObject(request)) {
     throw new TypeError("MultisigContractCallApproveDto request must be an object");
   }
+  rejectInlinePrivateKeyFields(request, "MultisigContractCallApproveDto");
   const proposalId = request.proposal_id ?? request.proposalId ?? null;
   const instructionsHash = request.instructions_hash ?? request.instructionsHash ?? null;
   if (proposalId == null && instructionsHash == null) {
@@ -1138,13 +1243,6 @@ export function noritoEncodeMultisigContractCallApproveRequest(request) {
         encodeAccountIdValue(
           request.signer_account_id ?? request.signerAccountId,
           "MultisigContractCallApproveDto.signer_account_id",
-        ),
-      ],
-      [
-        encodeOptionValue(
-          request.private_key ?? request.privateKey ?? null,
-          encodeNoritoStringValue,
-          "MultisigContractCallApproveDto.private_key",
         ),
       ],
       [
@@ -1251,6 +1349,62 @@ export function noritoEncodeInstructionBoxArchive(instruction) {
 }
 
 /**
+ * Decode one exact canonical `InstructionBox` archive embedded in a compact
+ * transaction payload.
+ *
+ * Unlike {@link noritoDecodeInstruction}, this accepts the bare archive used
+ * inside `TransactionPayload::instructions`, not a framed public instruction.
+ * The decoded value is re-encoded and compared byte-for-byte so alternate
+ * length encodings, frame flags, padding, or payload layouts are rejected at
+ * signing boundaries.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @returns {unknown}
+ */
+export function noritoDecodeInstructionBoxArchive(bytes) {
+  const archive = toBuffer(bytes);
+  const outerFlags = COMPACT_LEN_FLAG;
+  const outerReader = new BufferReader(
+    archive,
+    "instruction archive",
+    outerFlags,
+  );
+  const wireId = decodeStringValue(
+    readNoritoField(outerReader, "wire"),
+    "instruction archive.wire",
+    outerFlags,
+  );
+  const innerField = readNoritoField(outerReader, "inner");
+  outerReader.assertEof();
+
+  const innerReader = new BufferReader(
+    innerField,
+    "instruction archive.inner",
+    0,
+  );
+  const innerFrame = readNoritoField(innerReader, "frame");
+  innerReader.assertEof();
+  const inner = decodeNoritoFrame(
+    innerFrame,
+    "instruction archive.frame",
+    INNER_SCHEMA_HASH_BY_WIRE_ID[wireId] ?? null,
+  );
+  const decoded = withNoritoLengthFlags(inner.flags, () =>
+    decodePureJsInstructionPayload(
+      wireId,
+      inner.payload,
+      inner.flags,
+      innerFrame,
+    ),
+  );
+  const canonical = noritoEncodeInstructionBoxArchive(decoded);
+  if (!archive.equals(canonical)) {
+    throw new Error("instruction archive is not canonical Norito");
+  }
+  return decoded;
+}
+
+/**
  * Decode canonical Norito instruction bytes back to JSON.
  *
  * When `options.parseJson !== false`, the result is the parsed JSON payload.
@@ -1285,6 +1439,7 @@ export function noritoDecodeInstruction(bytes, options = {}) {
     }
     try {
       const decoded = decodePureJsInstruction(buffer);
+      validateDecodedInstructionProofAttachments(decoded);
       return options.parseJson === false ? JSON.stringify(decoded) : decoded;
     } catch (fallbackError) {
       if (!isPureJsUnsupportedInstructionError(fallbackError)) {
@@ -1293,10 +1448,33 @@ export function noritoDecodeInstruction(bytes, options = {}) {
       throw error;
     }
   }
-  if (options.parseJson === false) {
-    return json;
+  const decoded = JSON.parse(json);
+  validateDecodedInstructionProofAttachments(decoded);
+  return options.parseJson === false ? json : decoded;
+}
+
+function validateDecodedInstructionProofAttachments(instruction) {
+  if (!isPlainObject(instruction) || !isPlainObject(instruction.zk)) {
+    return;
   }
-  return JSON.parse(json);
+  for (const [variant, field] of [
+    ["ZkTransfer", "proof"],
+    ["Unshield", "proof"],
+    ["SubmitBallot", "ballot_proof"],
+    ["FinalizeElection", "tally_proof"],
+  ]) {
+    const payload = instruction.zk[variant];
+    if (!isPlainObject(payload)) {
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(payload, field)) {
+      throw new TypeError(`zk.${variant}.${field} is required`);
+    }
+    normalizeCanonicalProofAttachmentValue(
+      payload[field],
+      `zk.${variant}.${field}`,
+    );
+  }
 }
 
 /**
@@ -1703,6 +1881,733 @@ export function noritoDecodeOpenVerifyEnvelope(bytes) {
   );
 }
 
+/**
+ * Decode the exact canonical-standard-base64 form of the checked Rust Exact12
+ * fixture archive without consulting the native binding.
+ *
+ * @param {string} value
+ * @returns {object}
+ */
+export function noritoDecodePrivacyExact12FixtureBundleBase64V1(value) {
+  const maximumBase64Length =
+    Math.ceil(PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 / 3) * 4;
+  if (typeof value !== "string" || value.length > maximumBase64Length) {
+    throw new RangeError(
+      `PrivacyExact12FixtureBundleV1 base64 exceeds the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`,
+    );
+  }
+  const archive = decodeExactStandardBase64(
+    value,
+    "PrivacyExact12FixtureBundleV1 base64",
+  );
+  return noritoDecodePrivacyExact12FixtureBundleV1(archive);
+}
+
+/**
+ * Decode one canonical outer `PrivacyExact12FixtureBundleV1` archive.
+ * Every nested byte-complete field remains byte-exact and is returned as a
+ * copied `Uint8Array`.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @returns {object}
+ */
+export function noritoDecodePrivacyExact12FixtureBundleV1(bytes) {
+  const view = toBuffer(bytes);
+  if (view.length === 0) {
+    throw new TypeError("PrivacyExact12FixtureBundleV1 archive must not be empty");
+  }
+  if (view.length > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
+    throw new RangeError(
+      `PrivacyExact12FixtureBundleV1 archive exceeds ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1} bytes`,
+    );
+  }
+  const archive = Buffer.from(view);
+  const frame = validateNoritoFrame(archive, {
+    context: "PrivacyExact12FixtureBundleV1",
+    expectedSchemaHash: PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_HASH_V1,
+    expectedPaddingLength: 0,
+    requireNonEmptyPayload: true,
+  });
+  if (frame.flags !== COMPACT_LEN_FLAG) {
+    throw new Error(
+      `PrivacyExact12FixtureBundleV1 must use canonical layout flags 0x${COMPACT_LEN_FLAG.toString(16)}`,
+    );
+  }
+  const bundle = withNoritoCompactLengths(() =>
+    decodePrivacyExact12FixtureBundlePayloadV1(frame.payload),
+  );
+  const canonical = encodePrivacyExact12FixtureBundleCanonicalV1(bundle);
+  if (!canonical.equals(archive)) {
+    throw new Error(
+      "PrivacyExact12FixtureBundleV1 archive is not canonical or contains trailing data",
+    );
+  }
+  return externalizePrivacyExact12FixtureBundleV1(bundle);
+}
+
+/**
+ * Encode a fully byte-complete Exact12 bundle using the canonical Rust outer
+ * archive layout. Inputs must retain all twelve protocol rows and cross-field
+ * bindings.
+ *
+ * @param {object} value
+ * @returns {Uint8Array}
+ */
+export function noritoEncodePrivacyExact12FixtureBundleV1(value) {
+  const bundle = normalizePrivacyExact12FixtureBundleInputV1(value);
+  return Uint8Array.from(encodePrivacyExact12FixtureBundleCanonicalV1(bundle));
+}
+
+function decodePrivacyExact12FixtureBundlePayloadV1(payload) {
+  const fields = decodeStructFields(payload, "PrivacyExact12FixtureBundleV1", [
+    "version",
+    "rows",
+  ]);
+  const version = decodeU32Value(
+    fields.version,
+    "PrivacyExact12FixtureBundleV1.version",
+  );
+  if (version !== 1) {
+    throw new RangeError("PrivacyExact12FixtureBundleV1.version must be exactly 1");
+  }
+  const reader = new BufferReader(
+    fields.rows,
+    "PrivacyExact12FixtureBundleV1.rows",
+    COMPACT_LEN_FLAG,
+  );
+  const count = bigintToSafeNumber(
+    reader.readU64LE("count"),
+    "PrivacyExact12FixtureBundleV1.rows.count",
+  );
+  if (count !== PRIVACY_EXACT12_PROTOCOL_IDS_V1.length) {
+    throw new RangeError(
+      `PrivacyExact12FixtureBundleV1.rows must contain exactly ${PRIVACY_EXACT12_PROTOCOL_IDS_V1.length} rows`,
+    );
+  }
+  const rows = [];
+  for (let index = 0; index < count; index += 1) {
+    rows.push(
+      decodePrivacyExact12FixtureRowV1(
+        readNoritoField(reader, `row${index}`),
+        index,
+      ),
+    );
+  }
+  reader.assertEof();
+  return { version, rows };
+}
+
+function decodePrivacyExact12FixtureRowV1(payload, rowIndex) {
+  const context = `PrivacyExact12FixtureBundleV1.rows[${rowIndex}]`;
+  const fields = decodeStructFields(
+    payload,
+    context,
+    PRIVACY_EXACT12_ROW_FIELD_NAMES_V1,
+  );
+  const protocolDiscriminant = decodeU32Value(
+    fields.protocol_id,
+    `${context}.protocol_id`,
+  );
+  if (protocolDiscriminant !== rowIndex) {
+    const description =
+      protocolDiscriminant < PRIVACY_EXACT12_PROTOCOL_IDS_V1.length
+        ? `duplicate, substituted, or reordered protocol ${PRIVACY_EXACT12_PROTOCOL_IDS_V1[protocolDiscriminant]}`
+        : `unknown protocol discriminant ${protocolDiscriminant}`;
+    throw new TypeError(`${context}.protocol_id contains ${description}`);
+  }
+  const row = {
+    protocolId: PRIVACY_EXACT12_PROTOCOL_IDS_V1[rowIndex],
+    statementNorito: decodePrivacyExact12NonEmptyByteVectorV1(
+      fields.statement_norito,
+      `${context}.statement_norito`,
+    ),
+    envelopeNorito: decodePrivacyExact12NonEmptyByteVectorV1(
+      fields.envelope_norito,
+      `${context}.envelope_norito`,
+    ),
+    submitProofWireId: decodeStringValue(
+      fields.submit_proof_wire_id,
+      `${context}.submit_proof_wire_id`,
+    ),
+    submitProofInstructionNorito: decodePrivacyExact12NonEmptyByteVectorV1(
+      fields.submit_proof_instruction_norito,
+      `${context}.submit_proof_instruction_norito`,
+    ),
+    transactionIntentProjectionNorito:
+      decodePrivacyExact12NonEmptyByteVectorV1(
+        fields.transaction_intent_projection_norito,
+        `${context}.transaction_intent_projection_norito`,
+      ),
+    transactionIntentDigest: decodeFixedBytesValue(
+      fields.transaction_intent_digest,
+      32,
+      `${context}.transaction_intent_digest`,
+    ),
+    unsignedTransactionPayloadNorito:
+      decodePrivacyExact12NonEmptyByteVectorV1(
+        fields.unsigned_transaction_payload_norito,
+        `${context}.unsigned_transaction_payload_norito`,
+      ),
+    signedTransactionVersionedNorito:
+      decodePrivacyExact12NonEmptyByteVectorV1(
+        fields.signed_transaction_versioned_norito,
+        `${context}.signed_transaction_versioned_norito`,
+      ),
+    signedTransactionHash: decodeFixedBytesValue(
+      fields.signed_transaction_hash,
+      32,
+      `${context}.signed_transaction_hash`,
+    ),
+  };
+  validatePrivacyExact12FixtureRowBindingsV1(row, rowIndex, context);
+  return row;
+}
+
+function decodePrivacyExact12NonEmptyByteVectorV1(payload, context) {
+  const bytes = decodeByteVecValue(
+    payload,
+    context,
+    PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
+  );
+  if (bytes.length === 0) {
+    throw new TypeError(`${context} must not be empty`);
+  }
+  return bytes;
+}
+
+function validatePrivacyExact12FixtureRowBindingsV1(row, rowIndex, context) {
+  return withNoritoCompactLengths(() =>
+    validatePrivacyExact12FixtureRowBindingsCompactV1(row, rowIndex, context),
+  );
+}
+
+function validatePrivacyExact12FixtureRowBindingsCompactV1(
+  row,
+  rowIndex,
+  context,
+) {
+  if (row.protocolId !== PRIVACY_EXACT12_PROTOCOL_IDS_V1[rowIndex]) {
+    throw new TypeError(`${context}.protocolId is unknown, duplicated, or out of order`);
+  }
+  if (row.submitProofWireId !== PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1) {
+    throw new TypeError(
+      `${context}.submitProofWireId must be exactly ${PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1}`,
+    );
+  }
+
+  const statementFrame = validatePrivacyExact12NestedFrameV1(
+    row.statementNorito,
+    PRIVACY_EXACT12_STATEMENT_SCHEMA_HASH_V1,
+    PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1,
+    `${context}.statementNorito`,
+  );
+  const statement = decodePrivacyExact12TaggedPayloadV1(
+    statementFrame.payload,
+    `${context}.statementNorito.payload`,
+  );
+  if (statement.tag !== rowIndex) {
+    throw new TypeError(`${context}.statementNorito carries a substituted protocol`);
+  }
+
+  const envelopeFrame = validatePrivacyExact12NestedFrameV1(
+    row.envelopeNorito,
+    PRIVACY_EXACT12_ENVELOPE_SCHEMA_HASH_V1,
+    PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1,
+    `${context}.envelopeNorito`,
+  );
+  const envelopeFields = withNoritoCompactLengths(() =>
+    decodeStructFields(
+      envelopeFrame.payload,
+      `${context}.envelopeNorito.payload`,
+      PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1,
+    ),
+  );
+  assertPrivacyExact12CanonicalStructPayloadV1(
+    envelopeFrame.payload,
+    envelopeFields,
+    PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1,
+    `${context}.envelopeNorito.payload`,
+  );
+  if (
+    decodeU32Value(
+      envelopeFields.protocol_id,
+      `${context}.envelopeNorito.protocol_id`,
+    ) !== rowIndex
+  ) {
+    throw new TypeError(`${context}.envelopeNorito carries a substituted protocol`);
+  }
+  if (!envelopeFields.statement.equals(statementFrame.payload)) {
+    throw new TypeError(`${context}.envelopeNorito does not contain statementNorito`);
+  }
+  const proof = decodePrivacyExact12TaggedPayloadV1(
+    envelopeFields.proof,
+    `${context}.envelopeNorito.proof`,
+  );
+  if (proof.tag !== rowIndex) {
+    throw new TypeError(`${context}.envelopeNorito proof carries a substituted protocol`);
+  }
+
+  const instructionFrame = validatePrivacyExact12NestedFrameV1(
+    row.submitProofInstructionNorito,
+    PRIVACY_EXACT12_SUBMIT_PROOF_SCHEMA_HASH_V1,
+    PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1,
+    `${context}.submitProofInstructionNorito`,
+  );
+  const instructionFields = withNoritoCompactLengths(() =>
+    decodeStructFields(
+      instructionFrame.payload,
+      `${context}.submitProofInstructionNorito.payload`,
+      ["envelope"],
+    ),
+  );
+  assertPrivacyExact12CanonicalStructPayloadV1(
+    instructionFrame.payload,
+    instructionFields,
+    ["envelope"],
+    `${context}.submitProofInstructionNorito.payload`,
+  );
+  if (!instructionFields.envelope.equals(envelopeFrame.payload)) {
+    throw new TypeError(
+      `${context}.submitProofInstructionNorito does not contain envelopeNorito`,
+    );
+  }
+
+  const projectionFrame = validatePrivacyExact12NestedFrameV1(
+    row.transactionIntentProjectionNorito,
+    PRIVACY_EXACT12_TRANSACTION_PAYLOAD_SCHEMA_HASH_V1,
+    PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FRAME_PADDING_V1,
+    `${context}.transactionIntentProjectionNorito`,
+  );
+  const projectionFields = decodePrivacyExact12TransactionPayloadV1(
+    projectionFrame.payload,
+    `${context}.transactionIntentProjectionNorito.payload`,
+  );
+  const unsignedFields = decodePrivacyExact12TransactionPayloadV1(
+    row.unsignedTransactionPayloadNorito,
+    `${context}.unsignedTransactionPayloadNorito`,
+  );
+  for (const field of PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1) {
+    if (field !== "instructions" && !projectionFields[field].equals(unsignedFields[field])) {
+      throw new TypeError(
+        `${context}.transaction intent projection changed independent field ${field}`,
+      );
+    }
+  }
+  const expectedCreationTime = 1_700_000_000_000n + BigInt(rowIndex);
+  if (
+    decodeU64Value(
+      unsignedFields.creation_time_ms,
+      `${context}.unsignedTransactionPayloadNorito.creation_time_ms`,
+    ) !== expectedCreationTime.toString()
+  ) {
+    throw new TypeError(`${context} carries a substituted transaction creation time`);
+  }
+  const nonce = decodeOptionValue(
+    unsignedFields.nonce,
+    decodeU32Value,
+    `${context}.unsignedTransactionPayloadNorito.nonce`,
+  );
+  if (nonce !== rowIndex + 1) {
+    throw new TypeError(`${context} carries a substituted transaction nonce`);
+  }
+  const attachments = decodeOptionValue(
+    unsignedFields.attachments,
+    (payload) => payload,
+    `${context}.unsignedTransactionPayloadNorito.attachments`,
+  );
+  if (attachments !== null) {
+    throw new TypeError(`${context} must not carry transaction attachments`);
+  }
+
+  const instructionOffset = row.unsignedTransactionPayloadNorito.indexOf(
+    row.submitProofInstructionNorito,
+  );
+  if (instructionOffset < 0) {
+    throw new TypeError(
+      `${context}.unsignedTransactionPayloadNorito does not contain the byte-complete instruction`,
+    );
+  }
+  if (
+    row.unsignedTransactionPayloadNorito.indexOf(
+      Buffer.from(PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1, "utf8"),
+    ) < 0
+  ) {
+    throw new TypeError(
+      `${context}.unsignedTransactionPayloadNorito does not contain the exact submission wire id`,
+    );
+  }
+
+  const expectedIntentDigest = Buffer.from(
+    blake3(
+      Buffer.concat([
+        PRIVACY_EXACT12_INTENT_DIGEST_DOMAIN_V1,
+        u64ToLittleEndianBuffer(row.transactionIntentProjectionNorito.length),
+        row.transactionIntentProjectionNorito,
+      ]),
+    ),
+  );
+  if (!expectedIntentDigest.equals(row.transactionIntentDigest)) {
+    throw new TypeError(`${context}.transactionIntentDigest does not match its projection`);
+  }
+
+  validatePrivacyExact12SignedTransactionV1(row, context);
+
+  const transactionHashPreimage = Buffer.concat([
+    u32ToLittleEndianBuffer(0),
+    encodeCompactLength(row.unsignedTransactionPayloadNorito.length),
+    row.unsignedTransactionPayloadNorito,
+  ]);
+  const expectedTransactionHash = Buffer.from(
+    blake2b(transactionHashPreimage, { dkLen: 32 }),
+  );
+  expectedTransactionHash[31] |= 1;
+  if (!expectedTransactionHash.equals(row.signedTransactionHash)) {
+    throw new TypeError(
+      `${context}.signedTransactionHash does not match the unsigned transaction intent`,
+    );
+  }
+}
+
+function validatePrivacyExact12NestedFrameV1(
+  bytes,
+  schemaHash,
+  expectedPaddingLength,
+  context,
+) {
+  const frame = validateNoritoFrame(bytes, {
+    context,
+    expectedSchemaHash: schemaHash,
+    expectedPaddingLength,
+    requireNonEmptyPayload: true,
+  });
+  if (frame.flags !== COMPACT_LEN_FLAG) {
+    throw new Error(`${context} must use canonical compact-length layout flags`);
+  }
+  const canonical = frameNoritoPayload(
+    frame.payload,
+    schemaHash,
+    COMPACT_LEN_FLAG,
+    expectedPaddingLength,
+  );
+  if (!canonical.equals(bytes)) {
+    throw new Error(`${context} is not a canonical uncompressed Norito frame`);
+  }
+  return frame;
+}
+
+function decodePrivacyExact12TaggedPayloadV1(payload, context) {
+  const reader = new BufferReader(payload, context, COMPACT_LEN_FLAG);
+  const tag = reader.readU32LE("tag");
+  const content = readNoritoField(reader, "content");
+  reader.assertEof();
+  const canonical = Buffer.concat([
+    u32ToLittleEndianBuffer(tag),
+    encodeCompactLength(content.length),
+    content,
+  ]);
+  if (!canonical.equals(payload)) {
+    throw new Error(`${context} is not a canonical tagged payload`);
+  }
+  return { tag, content };
+}
+
+function decodePrivacyExact12TransactionPayloadV1(payload, context) {
+  const fields = withNoritoCompactLengths(() =>
+    decodeStructFields(
+      payload,
+      context,
+      PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1,
+    ),
+  );
+  assertPrivacyExact12CanonicalStructPayloadV1(
+    payload,
+    fields,
+    PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1,
+    context,
+  );
+  return fields;
+}
+
+function assertPrivacyExact12CanonicalStructPayloadV1(
+  payload,
+  fields,
+  fieldNames,
+  context,
+) {
+  const canonical = withNoritoCompactLengths(() =>
+    encodeStructValue(fieldNames.map((field) => [fields[field]])),
+  );
+  if (!canonical.equals(payload)) {
+    throw new Error(`${context} contains a non-canonical field layout`);
+  }
+}
+
+function validatePrivacyExact12SignedTransactionV1(row, context) {
+  const signed = row.signedTransactionVersionedNorito;
+  if (signed[0] !== 1) {
+    throw new TypeError(
+      `${context}.signedTransactionVersionedNorito must use version 1`,
+    );
+  }
+  const payload = signed.subarray(1);
+  const fields = withNoritoCompactLengths(() =>
+    decodeStructFields(
+      payload,
+      `${context}.signedTransactionVersionedNorito.payload`,
+      ["signature", "payload", "multisig_signatures"],
+    ),
+  );
+  assertPrivacyExact12CanonicalStructPayloadV1(
+    payload,
+    fields,
+    ["signature", "payload", "multisig_signatures"],
+    `${context}.signedTransactionVersionedNorito.payload`,
+  );
+  if (fields.signature.length === 0) {
+    throw new TypeError(`${context}.signedTransactionVersionedNorito has no signature`);
+  }
+  if (!fields.payload.equals(row.unsignedTransactionPayloadNorito)) {
+    throw new TypeError(
+      `${context}.signedTransactionVersionedNorito does not contain the unsigned payload`,
+    );
+  }
+  const multisig = decodeOptionValue(
+    fields.multisig_signatures,
+    (entry) => entry,
+    `${context}.signedTransactionVersionedNorito.multisig_signatures`,
+  );
+  if (multisig !== null) {
+    throw new TypeError(
+      `${context}.signedTransactionVersionedNorito must not carry multisig signatures`,
+    );
+  }
+}
+
+function normalizePrivacyExact12FixtureBundleInputV1(value) {
+  assertExactObjectKeys(value, ["version", "rows"], "PrivacyExact12FixtureBundleV1");
+  if (value.version !== 1) {
+    throw new TypeError("PrivacyExact12FixtureBundleV1.version must be exactly 1");
+  }
+  if (
+    !Array.isArray(value.rows) ||
+    value.rows.length !== PRIVACY_EXACT12_PROTOCOL_IDS_V1.length
+  ) {
+    throw new TypeError(
+      `PrivacyExact12FixtureBundleV1.rows must contain exactly ${PRIVACY_EXACT12_PROTOCOL_IDS_V1.length} rows`,
+    );
+  }
+  preflightPrivacyExact12FixtureBundleInputV1(value.rows);
+  const rows = value.rows.map((row, rowIndex) => {
+    const context = `PrivacyExact12FixtureBundleV1.rows[${rowIndex}]`;
+    const normalized = {
+      protocolId: row.protocolId,
+      statementNorito: normalizePrivacyExact12InputBytesV1(
+        row.statementNorito,
+        `${context}.statementNorito`,
+      ),
+      envelopeNorito: normalizePrivacyExact12InputBytesV1(
+        row.envelopeNorito,
+        `${context}.envelopeNorito`,
+      ),
+      submitProofWireId: row.submitProofWireId,
+      submitProofInstructionNorito: normalizePrivacyExact12InputBytesV1(
+        row.submitProofInstructionNorito,
+        `${context}.submitProofInstructionNorito`,
+      ),
+      transactionIntentProjectionNorito: normalizePrivacyExact12InputBytesV1(
+        row.transactionIntentProjectionNorito,
+        `${context}.transactionIntentProjectionNorito`,
+      ),
+      transactionIntentDigest: normalizePrivacyExact12InputBytesV1(
+        row.transactionIntentDigest,
+        `${context}.transactionIntentDigest`,
+        32,
+      ),
+      unsignedTransactionPayloadNorito: normalizePrivacyExact12InputBytesV1(
+        row.unsignedTransactionPayloadNorito,
+        `${context}.unsignedTransactionPayloadNorito`,
+      ),
+      signedTransactionVersionedNorito: normalizePrivacyExact12InputBytesV1(
+        row.signedTransactionVersionedNorito,
+        `${context}.signedTransactionVersionedNorito`,
+      ),
+      signedTransactionHash: normalizePrivacyExact12InputBytesV1(
+        row.signedTransactionHash,
+        `${context}.signedTransactionHash`,
+        32,
+      ),
+    };
+    if (typeof normalized.submitProofWireId !== "string") {
+      throw new TypeError(`${context}.submitProofWireId must be a string`);
+    }
+    validatePrivacyExact12FixtureRowBindingsV1(normalized, rowIndex, context);
+    return normalized;
+  });
+  return { version: 1, rows };
+}
+
+function preflightPrivacyExact12FixtureBundleInputV1(rows) {
+  let declaredBytes = 0;
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    const context = `PrivacyExact12FixtureBundleV1.rows[${rowIndex}]`;
+    assertExactObjectKeys(row, PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1, context);
+    for (const field of PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1) {
+      if (field === "protocolId" || field === "submitProofWireId") {
+        continue;
+      }
+      const length = binaryByteLength(row[field]);
+      if (length === null) {
+        throw new TypeError(`${context}.${field} must be an exact byte sequence`);
+      }
+      declaredBytes += length;
+      if (declaredBytes > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
+        throw new RangeError(
+          `PrivacyExact12FixtureBundleV1 fields exceed the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`,
+        );
+      }
+    }
+    if (typeof row.submitProofWireId !== "string") {
+      throw new TypeError(`${context}.submitProofWireId must be a string`);
+    }
+    declaredBytes += Buffer.byteLength(row.submitProofWireId, "utf8");
+    if (declaredBytes > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
+      throw new RangeError(
+        `PrivacyExact12FixtureBundleV1 fields exceed the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`,
+      );
+    }
+  }
+}
+
+function normalizePrivacyExact12InputBytesV1(value, context, exactLength = null) {
+  let bytes;
+  if (Buffer.isBuffer(value)) {
+    bytes = Buffer.from(value);
+  } else if (ArrayBuffer.isView(value)) {
+    bytes = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+    bytes = Buffer.from(bytes);
+  } else if (value instanceof ArrayBuffer) {
+    bytes = Buffer.from(value.slice(0));
+  } else if (Array.isArray(value)) {
+    bytes = Buffer.allocUnsafe(value.length);
+    for (let index = 0; index < value.length; index += 1) {
+      const byte = value[index];
+      if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
+        throw new TypeError(`${context}[${index}] must be an unsigned byte`);
+      }
+      bytes[index] = byte;
+    }
+  } else {
+    throw new TypeError(`${context} must be an exact byte sequence`);
+  }
+  if (exactLength === null && bytes.length === 0) {
+    throw new TypeError(`${context} must not be empty`);
+  }
+  if (exactLength !== null && bytes.length !== exactLength) {
+    throw new TypeError(`${context} must contain exactly ${exactLength} bytes`);
+  }
+  return bytes;
+}
+
+function encodePrivacyExact12FixtureBundleCanonicalV1(bundle) {
+  const payload = withNoritoCompactLengths(() =>
+    encodeStructValue([
+      [encodeU32Value(bundle.version, "PrivacyExact12FixtureBundleV1.version")],
+      [
+        encodeNoritoVec(bundle.rows, (row, rowIndex) =>
+          encodePrivacyExact12FixtureRowV1(row, rowIndex),
+        ),
+      ],
+    ]),
+  );
+  const archive = frameNoritoPayload(
+    payload,
+    PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_HASH_V1,
+    COMPACT_LEN_FLAG,
+    0,
+  );
+  if (archive.length > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
+    throw new RangeError(
+      `PrivacyExact12FixtureBundleV1 archive exceeds ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1} bytes`,
+    );
+  }
+  return archive;
+}
+
+function encodePrivacyExact12FixtureRowV1(row, rowIndex) {
+  const context = `PrivacyExact12FixtureBundleV1.rows[${rowIndex}]`;
+  return encodeStructValue([
+    [encodeU32Value(rowIndex, `${context}.protocol_id`)],
+    [encodeByteVecValue(row.statementNorito, `${context}.statement_norito`)],
+    [encodeByteVecValue(row.envelopeNorito, `${context}.envelope_norito`)],
+    [encodeNoritoStringValue(row.submitProofWireId)],
+    [
+      encodeByteVecValue(
+        row.submitProofInstructionNorito,
+        `${context}.submit_proof_instruction_norito`,
+      ),
+    ],
+    [
+      encodeByteVecValue(
+        row.transactionIntentProjectionNorito,
+        `${context}.transaction_intent_projection_norito`,
+      ),
+    ],
+    [
+      encodeFixedBytesValue(
+        row.transactionIntentDigest,
+        32,
+        `${context}.transaction_intent_digest`,
+      ),
+    ],
+    [
+      encodeByteVecValue(
+        row.unsignedTransactionPayloadNorito,
+        `${context}.unsigned_transaction_payload_norito`,
+      ),
+    ],
+    [
+      encodeByteVecValue(
+        row.signedTransactionVersionedNorito,
+        `${context}.signed_transaction_versioned_norito`,
+      ),
+    ],
+    [
+      encodeFixedBytesValue(
+        row.signedTransactionHash,
+        32,
+        `${context}.signed_transaction_hash`,
+      ),
+    ],
+  ]);
+}
+
+function externalizePrivacyExact12FixtureBundleV1(bundle) {
+  return {
+    version: bundle.version,
+    rows: bundle.rows.map((row) => ({
+      protocolId: row.protocolId,
+      statementNorito: Uint8Array.from(row.statementNorito),
+      envelopeNorito: Uint8Array.from(row.envelopeNorito),
+      submitProofWireId: row.submitProofWireId,
+      submitProofInstructionNorito: Uint8Array.from(
+        row.submitProofInstructionNorito,
+      ),
+      transactionIntentProjectionNorito: Uint8Array.from(
+        row.transactionIntentProjectionNorito,
+      ),
+      transactionIntentDigest: Uint8Array.from(row.transactionIntentDigest),
+      unsignedTransactionPayloadNorito: Uint8Array.from(
+        row.unsignedTransactionPayloadNorito,
+      ),
+      signedTransactionVersionedNorito: Uint8Array.from(
+        row.signedTransactionVersionedNorito,
+      ),
+      signedTransactionHash: Uint8Array.from(row.signedTransactionHash),
+    })),
+  };
+}
+
 function isBinaryLike(value) {
   return (
     Buffer.isBuffer(value) ||
@@ -2038,12 +2943,10 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case "iroha_data_model::isi::kaigi::RegisterKaigiRelay":
       return decodeKaigiInstructionPayload(wireId, payload);
     case "iroha_data_model::isi::zk::RegisterZkAsset":
-    case "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool":
     case "zk::ScheduleConfidentialPolicyTransition":
     case "zk::CancelConfidentialPolicyTransition":
     case "iroha_data_model::isi::zk::Shield":
     case "iroha_data_model::isi::zk::ZkTransfer":
-    case "iroha_data_model::isi::zk::AssetHiddenZkTransfer":
     case "iroha_data_model::isi::zk::Unshield":
     case "iroha_data_model::isi::zk::CreateElection":
     case "iroha_data_model::isi::zk::SubmitBallot":
@@ -3298,39 +4201,6 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool": {
-      const fields = decodeStructFields(payload, "zk.RegisterAssetHiddenZkPool", [
-        "pool_id",
-        "storage_asset",
-        "asset_set_root",
-        "vk_transfer",
-      ]);
-      return {
-        zk: {
-          RegisterAssetHiddenZkPool: {
-            pool_id: decodeStringValue(
-              fields.pool_id,
-              "zk.RegisterAssetHiddenZkPool.pool_id",
-            ),
-            storage_asset: decodeAssetDefinitionIdValue(
-              fields.storage_asset,
-              "zk.RegisterAssetHiddenZkPool.storage_asset",
-            ),
-            asset_set_root: Array.from(
-              decodeFixedBytesValue(
-                fields.asset_set_root,
-                32,
-                "zk.RegisterAssetHiddenZkPool.asset_set_root",
-              ),
-            ),
-            vk_transfer: decodeVerifyingKeyIdValue(
-              fields.vk_transfer,
-              "zk.RegisterAssetHiddenZkPool.vk_transfer",
-            ),
-          },
-        },
-      };
-    }
     case "zk::ScheduleConfidentialPolicyTransition": {
       const fields = decodeStructFields(payload, "zk.ScheduleConfidentialPolicyTransition", [
         "asset",
@@ -3454,59 +4324,6 @@ function decodeZkInstructionPayload(wireId, payload) {
               (entry, context) =>
                 Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
               "zk.ZkTransfer.root_hint",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::AssetHiddenZkTransfer": {
-      const fields = decodeStructFields(payload, "zk.AssetHiddenZkTransfer", [
-        "pool_id",
-        "inputs",
-        "outputs",
-        "proof",
-        "root_hint",
-      ]);
-      return {
-        zk: {
-          AssetHiddenZkTransfer: {
-            pool_id: decodeStringValue(
-              fields.pool_id,
-              "zk.AssetHiddenZkTransfer.pool_id",
-            ),
-            inputs: decodeNoritoVec(
-              fields.inputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.AssetHiddenZkTransfer.inputs[${index}]`,
-                  ),
-                ),
-              "zk.AssetHiddenZkTransfer.inputs",
-            ),
-            outputs: decodeNoritoVec(
-              fields.outputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.AssetHiddenZkTransfer.outputs[${index}]`,
-                  ),
-                ),
-              "zk.AssetHiddenZkTransfer.outputs",
-            ),
-            proof: decodeProofAttachmentValue(
-              fields.proof,
-              "zk.AssetHiddenZkTransfer.proof",
-            ),
-            root_hint: decodeOptionValue(
-              fields.root_hint,
-              (entry, context) =>
-                Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
-              "zk.AssetHiddenZkTransfer.root_hint",
             ),
           },
         },
@@ -3935,9 +4752,14 @@ function encodeByteVecValue(value, context) {
   return Buffer.concat([u64ToLittleEndianBuffer(bytes.length), bytes]);
 }
 
-function decodeByteVecValue(payload, context) {
+function decodeByteVecValue(payload, context, maxLength = null) {
   const reader = new BufferReader(payload, context);
   const length = bigintToSafeNumber(reader.readU64LE("length"), `${context}.length`);
+  if (maxLength !== null && length > maxLength) {
+    throw new RangeError(
+      `${context} exceeds its ${maxLength}-byte decoding limit`,
+    );
+  }
   const bytes = reader.readBytes(length, "payload");
   reader.assertEof();
   return Buffer.from(bytes);
@@ -5419,12 +6241,10 @@ function decodeVerifyingKeyInstructionPayload(wireId, payload) {
 function encodeZkInstruction(instruction) {
   const entries = [
     ["RegisterZkAsset", "iroha_data_model::isi::zk::RegisterZkAsset", encodeRegisterZkAssetPayload],
-    ["RegisterAssetHiddenZkPool", "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool", encodeRegisterAssetHiddenZkPoolPayload],
     ["ScheduleConfidentialPolicyTransition", "zk::ScheduleConfidentialPolicyTransition", encodeScheduleConfidentialPolicyTransitionPayload],
     ["CancelConfidentialPolicyTransition", "zk::CancelConfidentialPolicyTransition", encodeCancelConfidentialPolicyTransitionPayload],
     ["Shield", "iroha_data_model::isi::zk::Shield", encodeShieldPayload],
     ["ZkTransfer", "iroha_data_model::isi::zk::ZkTransfer", encodeZkTransferPayload],
-    ["AssetHiddenZkTransfer", "iroha_data_model::isi::zk::AssetHiddenZkTransfer", encodeAssetHiddenZkTransferPayload],
     ["Unshield", "iroha_data_model::isi::zk::Unshield", encodeUnshieldPayload],
     ["CreateElection", "iroha_data_model::isi::zk::CreateElection", encodeCreateElectionPayload],
     ["SubmitBallot", "iroha_data_model::isi::zk::SubmitBallot", encodeSubmitBallotPayload],
@@ -5449,15 +6269,6 @@ function encodeRegisterZkAssetPayload(value) {
     [encodeOptionValue(value.vk_transfer, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_transfer")],
     [encodeOptionValue(value.vk_unshield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_unshield")],
     [encodeOptionValue(value.vk_shield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_shield")],
-  ]);
-}
-
-function encodeRegisterAssetHiddenZkPoolPayload(value) {
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.pool_id, "zk.RegisterAssetHiddenZkPool.pool_id"))],
-    [encodeAssetDefinitionIdValue(value.storage_asset, "zk.RegisterAssetHiddenZkPool.storage_asset")],
-    [encodeFixedBytesValue(value.asset_set_root, 32, "zk.RegisterAssetHiddenZkPool.asset_set_root")],
-    [encodeVerifyingKeyIdValue(value.vk_transfer, "zk.RegisterAssetHiddenZkPool.vk_transfer")],
   ]);
 }
 
@@ -5503,26 +6314,6 @@ function encodeZkTransferPayload(value) {
         value.root_hint,
         (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
         "zk.ZkTransfer.root_hint",
-      ),
-    ],
-  ]);
-}
-
-function encodeAssetHiddenZkTransferPayload(value) {
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.pool_id, "zk.AssetHiddenZkTransfer.pool_id"))],
-    [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.AssetHiddenZkTransfer.inputs[${index}]`),
-    )],
-    [encodeNoritoVec(value.outputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.AssetHiddenZkTransfer.outputs[${index}]`),
-    )],
-    [encodeProofAttachmentValue(value.proof, "zk.AssetHiddenZkTransfer.proof")],
-    [
-      encodeOptionValue(
-        value.root_hint,
-        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
-        "zk.AssetHiddenZkTransfer.root_hint",
       ),
     ],
   ]);
@@ -6897,9 +7688,16 @@ function encodeProofBoxValue(value, context) {
 
 function decodeProofBoxValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["backend", "bytes"]);
+  const backend = decodeStringValue(fields.backend, `${context}.backend`);
   return {
-    backend: decodeStringValue(fields.backend, `${context}.backend`),
-    bytes: Array.from(decodeByteVecValue(fields.bytes, `${context}.bytes`)),
+    backend,
+    bytes: Array.from(
+      decodeByteVecValue(
+        fields.bytes,
+        `${context}.bytes`,
+        proofBoxMaxProofBytes(backend),
+      ),
+    ),
   };
 }
 
@@ -7134,22 +7932,20 @@ function decodeOpenVerifyEnvelopePayload(payload, context, flags = 0) {
 }
 
 function encodeProofAttachmentValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
+  const attachment = normalizeCanonicalProofAttachmentValue(value, context);
   const parts = [
-    encodeNoritoField(encodeNoritoStringValue(assertNonEmptyString(value.backend, `${context}.backend`))),
-    encodeNoritoField(encodeProofBoxValue(value.proof, `${context}.proof`)),
-    encodeNoritoField(encodeVerifyingKeyIdValue(value.vk_ref, `${context}.vk_ref`)),
+    encodeNoritoField(encodeNoritoStringValue(attachment.backend)),
+    encodeNoritoField(encodeProofBoxValue(attachment.proof, `${context}.proof`)),
+    encodeNoritoField(encodeVerifyingKeyIdValue(attachment.vk_ref, `${context}.vk_ref`)),
   ];
-  const hasLanePrivacy = value.lane_privacy !== undefined && value.lane_privacy !== null;
-  const hasEnvelopeHash = hasLanePrivacy || (value.envelope_hash !== undefined && value.envelope_hash !== null);
-  const hasVkCommitment = hasEnvelopeHash || (value.vk_commitment !== undefined && value.vk_commitment !== null);
+  const hasLanePrivacy = attachment.lane_privacy !== undefined && attachment.lane_privacy !== null;
+  const hasEnvelopeHash = hasLanePrivacy || (attachment.envelope_hash !== undefined && attachment.envelope_hash !== null);
+  const hasVkCommitment = hasEnvelopeHash || (attachment.vk_commitment !== undefined && attachment.vk_commitment !== null);
   if (hasVkCommitment) {
     parts.push(
       encodeNoritoField(
         encodeOptionValue(
-          value.vk_commitment,
+          attachment.vk_commitment,
           (entry, innerContext) =>
             encodeFixedByteArrayArchiveValue(entry, 32, innerContext),
           `${context}.vk_commitment`,
@@ -7161,7 +7957,7 @@ function encodeProofAttachmentValue(value, context) {
     parts.push(
       encodeNoritoField(
         encodeOptionValue(
-          value.envelope_hash,
+          attachment.envelope_hash,
           (entry, innerContext) =>
             encodeFixedByteArrayArchiveValue(entry, 32, innerContext),
           `${context}.envelope_hash`,
@@ -7172,7 +7968,7 @@ function encodeProofAttachmentValue(value, context) {
   if (hasLanePrivacy) {
     parts.push(
       encodeNoritoField(
-        encodeOptionValue(value.lane_privacy, encodeLanePrivacyProofValue, `${context}.lane_privacy`),
+        encodeOptionValue(attachment.lane_privacy, encodeLanePrivacyProofValue, `${context}.lane_privacy`),
       ),
     );
   }
@@ -7211,14 +8007,224 @@ function decodeProofAttachmentValue(payload, context) {
         )
       : null;
   reader.assertEof();
-  return {
+  return normalizeCanonicalProofAttachmentValue({
     backend,
     proof,
     vk_ref,
     vk_commitment,
     envelope_hash,
     lane_privacy,
+  }, context);
+}
+
+function normalizeCanonicalProofAttachmentValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(
+    value,
+    ["backend", "proof", "vk_ref", "vk_commitment", "envelope_hash", "lane_privacy"],
+    context,
+  );
+  for (const field of ["backend", "proof", "vk_ref"]) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`${context}.${field} is required`);
+    }
+  }
+  const backend = assertPortableProofIdField(value.backend, `${context}.backend`);
+  const proof = normalizeCanonicalProofBoxValue(value.proof, backend, `${context}.proof`);
+  const vkRef = normalizeCanonicalProofVerifyingKeyId(
+    value.vk_ref,
+    `${context}.vk_ref`,
+  );
+  if (vkRef.backend !== backend) {
+    throw new TypeError(`${context}.vk_ref.backend must match ${context}.backend`);
+  }
+
+  const normalized = { backend, proof, vk_ref: vkRef };
+  if (value.vk_commitment !== undefined && value.vk_commitment !== null) {
+    normalized.vk_commitment = normalizeNonZeroProofDigest(
+      value.vk_commitment,
+      `${context}.vk_commitment`,
+    );
+  }
+  if (value.envelope_hash !== undefined && value.envelope_hash !== null) {
+    const envelopeHash = normalizeNonZeroProofDigest(
+      value.envelope_hash,
+      `${context}.envelope_hash`,
+    );
+    const expected = Array.from(blake2b(Buffer.from(proof.bytes), { dkLen: 32 }));
+    expected[31] |= 1;
+    if (!envelopeHash.every((byte, index) => byte === expected[index])) {
+      throw new TypeError(`${context}.envelope_hash must match proof bytes`);
+    }
+    normalized.envelope_hash = envelopeHash;
+  }
+  if (value.lane_privacy !== undefined && value.lane_privacy !== null) {
+    normalized.lane_privacy = normalizeCanonicalLanePrivacyProofValue(
+      value.lane_privacy,
+      `${context}.lane_privacy`,
+    );
+  }
+  return normalized;
+}
+
+function normalizeCanonicalProofBoxValue(value, backend, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertExactObjectKeys(value, ["backend", "bytes"], context);
+  const proofBackend = assertPortableProofIdField(value.backend, `${context}.backend`);
+  if (proofBackend !== backend) {
+    throw new TypeError(`${context}.backend must match the attachment backend`);
+  }
+  if (typeof value.bytes === "string") {
+    throw new TypeError(`${context}.bytes must be an exact non-empty byte sequence`);
+  }
+  const declaredLength = binaryByteLength(value.bytes);
+  if (declaredLength !== null && declaredLength > proofBoxMaxProofBytes(backend)) {
+    throw new RangeError(
+      `${context} exceeds the complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`,
+    );
+  }
+  const bytes = Array.from(normalizeBytes(value.bytes));
+  if (bytes.length === 0) {
+    throw new TypeError(`${context}.bytes must not be empty`);
+  }
+  if (!proofBoxFitsEncodedBudget(backend, bytes.length)) {
+    throw new RangeError(
+      `${context} exceeds the complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`,
+    );
+  }
+  return { backend: proofBackend, bytes };
+}
+
+function normalizeCanonicalProofVerifyingKeyId(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertExactObjectKeys(value, ["backend", "name"], context);
+  return {
+    backend: assertPortableProofIdField(value.backend, `${context}.backend`),
+    name: assertPortableProofIdField(value.name, `${context}.name`),
   };
+}
+
+function assertPortableProofIdField(value, context) {
+  if (!isPortableVerifyingKeyIdField(value)) {
+    throw new TypeError(`${context} must use portable verifier-key registry syntax`);
+  }
+  return value;
+}
+
+function normalizeNonZeroProofDigest(value, context) {
+  const bytes = Array.from(encodeFixedBytesValue(value, 32, context));
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${context} must be non-zero`);
+  }
+  return bytes;
+}
+
+function normalizeCanonicalLanePrivacyProofValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertExactObjectKeys(value, ["commitment_id", "witness"], context);
+  if (
+    !Number.isInteger(value.commitment_id) ||
+    value.commitment_id < 0 ||
+    value.commitment_id > 0xffff
+  ) {
+    throw new RangeError(`${context}.commitment_id must fit within a u16`);
+  }
+  return {
+    commitment_id: value.commitment_id,
+    witness: normalizeCanonicalLanePrivacyWitnessValue(
+      value.witness,
+      `${context}.witness`,
+    ),
+  };
+}
+
+function normalizeCanonicalLanePrivacyWitnessValue(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertExactObjectKeys(value, ["kind", "payload"], context);
+  if (value.kind !== "merkle") {
+    throw new TypeError(`${context}.kind must be exactly merkle`);
+  }
+  if (!isPlainObject(value.payload)) {
+    throw new TypeError(`${context}.payload must be an object`);
+  }
+  assertExactObjectKeys(value.payload, ["leaf", "proof"], `${context}.payload`);
+  const leaf = Array.from(
+    encodeFixedBytesValue(value.payload.leaf, 32, `${context}.payload.leaf`),
+  );
+  if (!isPlainObject(value.payload.proof)) {
+    throw new TypeError(`${context}.payload.proof must be an object`);
+  }
+  assertExactObjectKeys(
+    value.payload.proof,
+    ["leaf_index", "audit_path"],
+    `${context}.payload.proof`,
+  );
+  const leafIndex = value.payload.proof.leaf_index;
+  const auditPath = value.payload.proof.audit_path;
+  if (
+    !Array.isArray(auditPath) ||
+    auditPath.length < 1 ||
+    auditPath.length > LANE_PRIVACY_MERKLE_MAX_DEPTH
+  ) {
+    throw new RangeError(
+      `${context}.payload.proof.audit_path must contain 1..=${LANE_PRIVACY_MERKLE_MAX_DEPTH} siblings`,
+    );
+  }
+  if (!laneMerkleLeafIndexFitsDepth(leafIndex, auditPath.length)) {
+    throw new RangeError(
+      `${context}.payload.proof.leaf_index is impossible for the Merkle path depth`,
+    );
+  }
+  const canonicalPath = auditPath.map((entry, index) => {
+    if (entry === null || entry === undefined) {
+      throw new TypeError(
+        `${context}.payload.proof.audit_path[${index}] must contain a sibling`,
+      );
+    }
+    const siblingContext = `${context}.payload.proof.audit_path[${index}]`;
+    const siblingBytes = encodeHashLiteralBytes(entry, siblingContext);
+    if (typeof entry === "string") {
+      const canonical = decodeHashLiteral(siblingBytes, siblingContext);
+      if (entry !== canonical) {
+        throw new TypeError(`${siblingContext} must be a canonical HashOf literal`);
+      }
+      return canonical;
+    }
+    const sibling = Array.from(siblingBytes);
+    if ((sibling[31] & 1) === 0) {
+      throw new TypeError(
+        `${siblingContext} is not a canonical prehashed HashOf`,
+      );
+    }
+    return sibling;
+  });
+  return {
+    kind: "merkle",
+    payload: {
+      leaf,
+      proof: { leaf_index: leafIndex, audit_path: canonicalPath },
+    },
+  };
+}
+
+function binaryByteLength(value) {
+  if (Array.isArray(value) || Buffer.isBuffer(value)) {
+    return value.length;
+  }
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return value.byteLength;
+  }
+  return null;
 }
 
 function encodeLanePrivacyProofValue(value, context) {
@@ -7242,6 +8248,16 @@ function encodeLanePrivacyWitnessValue(value, context) {
   }
   const kind = assertNonEmptyString(value.kind, `${context}.kind`).toLowerCase();
   if (kind === "merkle") {
+    const auditPath =
+      value.payload?.proof?.audit_path ?? value.payload?.proof?.auditPath;
+    if (!Array.isArray(auditPath) || auditPath.length === 0) {
+      throw new Error(
+        `${context}.payload.proof.audit_path must contain at least one sibling`,
+      );
+    }
+    if (auditPath.some((entry) => entry === null || entry === undefined)) {
+      throw new Error(`${context}.payload.proof.audit_path must not omit siblings`);
+    }
     return encodeEnumTagValue(0, () =>
       encodeStructValue([
         [encodeFixedBytesValue(value.payload.leaf, 32, `${context}.payload.leaf`)],
@@ -7249,15 +8265,7 @@ function encodeLanePrivacyWitnessValue(value, context) {
       ]),
     );
   }
-  if (kind === "snark") {
-    return encodeEnumTagValue(1, () =>
-      encodeStructValue([
-        [encodeByteVecValue(value.payload.public_inputs, `${context}.payload.public_inputs`)],
-        [encodeByteVecValue(value.payload.proof, `${context}.payload.proof`)],
-      ]),
-    );
-  }
-  throw new Error(`${context}.kind must be merkle or snark`);
+  throw new Error(`${context}.kind must be merkle`);
 }
 
 function decodeLanePrivacyWitnessValue(payload, context) {
@@ -7271,26 +8279,20 @@ function decodeLanePrivacyWitnessValue(payload, context) {
         "leaf",
         "proof",
       ]);
+      const proof = decodeMerkleProofValue(fields.proof, `${context}.payload.proof`);
+      if (proof.audit_path.length === 0) {
+        throw new Error(
+          `${context}.payload.proof.audit_path must contain at least one sibling`,
+        );
+      }
+      if (proof.audit_path.some((entry) => entry === null)) {
+        throw new Error(`${context}.payload.proof.audit_path must not omit siblings`);
+      }
       return {
         kind: "merkle",
         payload: {
           leaf: Array.from(decodeFixedBytesValue(fields.leaf, 32, `${context}.payload.leaf`)),
-          proof: decodeMerkleProofValue(fields.proof, `${context}.payload.proof`),
-        },
-      };
-    }
-    case 1: {
-      const fields = decodeStructFields(body ?? Buffer.alloc(0), `${context}.snark`, [
-        "public_inputs",
-        "proof",
-      ]);
-      return {
-        kind: "snark",
-        payload: {
-          public_inputs: Array.from(
-            decodeByteVecValue(fields.public_inputs, `${context}.payload.public_inputs`),
-          ),
-          proof: Array.from(decodeByteVecValue(fields.proof, `${context}.payload.proof`)),
+          proof,
         },
       };
     }
@@ -7305,7 +8307,7 @@ function encodeMerkleProofValue(value, context) {
     encodeNoritoVec(value.audit_path ?? value.auditPath ?? [], (entry, index) =>
       encodeOptionValue(
         entry,
-        (item, innerContext) => encodeFixedBytesValue(item, 32, innerContext),
+        encodeHashLiteralBytes,
         `${context}.audit_path[${index}]`,
       ),
     ),
@@ -7321,10 +8323,11 @@ function decodeMerkleProofValue(payload, context) {
       (entry, index) =>
         decodeOptionValue(
           entry,
-          (item, innerContext) => Array.from(decodeFixedBytesValue(item, 32, innerContext)),
+          decodeHashValue,
           `${context}.audit_path[${index}]`,
         ),
       `${context}.audit_path`,
+      LANE_PRIVACY_MERKLE_MAX_DEPTH,
     ),
   };
 }
@@ -8676,9 +9679,12 @@ function encodeNoritoLength(value) {
   return u64ToLittleEndianBuffer(value);
 }
 
-function decodeNoritoVec(payload, decode, context) {
+function decodeNoritoVec(payload, decode, context, maxCount = null) {
   const reader = new BufferReader(payload, context, noritoLengthFlags);
   const count = bigintToSafeNumber(reader.readU64LE("count"), `${context}.count`);
+  if (maxCount !== null && count > maxCount) {
+    throw new RangeError(`${context} exceeds the ${maxCount}-item limit`);
+  }
   const values = [];
   for (let index = 0; index < count; index += 1) {
     const itemPayload = readNoritoField(reader, `item${index}`);
@@ -9042,16 +10048,28 @@ function decodeUnsignedLeb128(buffer, offset, context) {
   let value = 0n;
   let shift = 0n;
   let cursor = offset;
-  while (cursor < buffer.length) {
+  for (let used = 0; used < 10 && cursor < buffer.length; used += 1) {
     const byte = BigInt(buffer[cursor]);
     cursor += 1;
+    if (used === 9 && (byte & 0xfen) !== 0n) {
+      throw new RangeError(`${context} varint exceeds an unsigned 64-bit integer`);
+    }
     value |= (byte & 0x7fn) << shift;
     if ((byte & 0x80n) === 0n) {
+      if (used > 0 && byte === 0n) {
+        throw new Error(`${context} varint is not minimally encoded`);
+      }
+      if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new RangeError(`${context} exceeds JavaScript's safe integer range`);
+      }
       return [Number(value), cursor - offset];
     }
     shift += 7n;
   }
-  throw new Error(`${context} varint is truncated`);
+  if (cursor >= buffer.length) {
+    throw new Error(`${context} varint is truncated`);
+  }
+  throw new RangeError(`${context} varint exceeds an unsigned 64-bit integer`);
 }
 
 function curveIdForMulticodec(multicodec, context) {

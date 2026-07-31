@@ -248,7 +248,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--metadata",
         type=Path,
-        default=Path("docs/source/sdk/android/generated/codegen_manifest_metadata.json"),
+        default=Path("specs/sdk/android/generated/codegen_manifest_metadata.json"),
         help="Recorded metadata JSON (default: %(default)s)",
     )
     parser.add_argument(

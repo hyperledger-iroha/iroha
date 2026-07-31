@@ -2,32 +2,18 @@
 //! Usage:
 //!   cargo run -p ivm --bin gen_pointer_types_doc -- --write
 //!   cargo run -p ivm --bin gen_pointer_types_doc -- --check
+//!   cargo run -p ivm --bin gen_pointer_types_doc -- --write --root /tmp/ivm-doc-stage
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod support;
 
-use support::{
-    EXPECTED_DOC_LOCALES, GeneratedOutput, exact_locale_child_paths, parse_generation_mode,
-    sync_generated_outputs,
-};
+use support::{GeneratedOutput, parse_generation_options, sync_generated_outputs};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED POINTER TYPES -->";
 const END: &str = "<!-- END GENERATED POINTER TYPES -->";
 const POINTER_TYPE_GOLDEN_BEGIN: &str = "    // BEGIN GENERATED ABI V1 POINTER TYPE IDS";
 const POINTER_TYPE_GOLDEN_END: &str = "    // END GENERATED ABI V1 POINTER TYPE IDS";
-
-fn localized_pointer_doc_paths(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
-    localized_pointer_doc_paths_for(workspace_root, EXPECTED_DOC_LOCALES)
-}
-
-fn localized_pointer_doc_paths_for(
-    workspace_root: &Path,
-    expected_locales: &[&str],
-) -> Result<Vec<PathBuf>, String> {
-    let localized_root = workspace_root.join("docs/i18n/root");
-    exact_locale_child_paths(&localized_root, "ivm.md", expected_locales)
-}
 
 fn render_generated_block(
     text: &str,
@@ -111,24 +97,26 @@ fn prepare_generated_block_outputs(
         .collect()
 }
 
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("workspace root")
+        .to_path_buf()
+}
+
 fn main() {
-    let mode = match parse_generation_mode(std::env::args().skip(1)) {
-        Ok(mode) => mode,
+    let options = match parse_generation_options(std::env::args().skip(1), workspace_root()) {
+        Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(2);
         }
     };
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let path_pointer = PathBuf::from(manifest_dir).join("docs/pointer_abi.md");
-    let workspace_root = PathBuf::from(manifest_dir)
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("workspace root")
-        .to_path_buf();
-    let path_ivm_md = workspace_root.join("ivm.md");
-    let path_pointer_type_golden =
-        PathBuf::from(manifest_dir).join("tests/pointer_type_ids_golden.rs");
+    let manifest_dir = options.root.join("crates/ivm");
+    let path_pointer = manifest_dir.join("docs/pointer_abi.md");
+    let path_ivm_md = options.root.join("ivm.md");
+    let path_pointer_type_golden = manifest_dir.join("tests/pointer_type_ids_golden.rs");
 
     // Render expected table
     let table = ivm::render_pointer_types_markdown_table();
@@ -136,10 +124,7 @@ fn main() {
     let expected_pointer_type_golden = render_pointer_type_golden_block(ivm::PointerType::all())
         .unwrap_or_else(|error| panic!("render pointer type golden: {error}"));
 
-    let localized_paths = localized_pointer_doc_paths(&workspace_root)
-        .unwrap_or_else(|error| panic!("discover localized pointer documents: {error}"));
-    let mut document_paths = vec![path_pointer, path_ivm_md];
-    document_paths.extend(localized_paths);
+    let document_paths = vec![path_pointer, path_ivm_md];
     let mut outputs = prepare_generated_block_outputs(&document_paths, BEGIN, END, &expected_block)
         .unwrap_or_else(|error| panic!("render pointer documents: {error}"));
     outputs.extend(
@@ -152,7 +137,7 @@ fn main() {
         .unwrap_or_else(|error| panic!("render pointer type golden: {error}")),
     );
     let regenerate_command = "cargo run --locked -p ivm --bin gen_pointer_types_doc -- --write";
-    let updated = sync_generated_outputs(&outputs, mode, regenerate_command)
+    let updated = sync_generated_outputs(&outputs, options.mode, regenerate_command)
         .unwrap_or_else(|error| panic!("{error}"));
     for path in updated {
         eprintln!("updated: {}", path.display());
@@ -168,16 +153,15 @@ mod tests {
 
     use super::{
         BEGIN, END, POINTER_TYPE_GOLDEN_BEGIN, POINTER_TYPE_GOLDEN_END,
-        localized_pointer_doc_paths_for, prepare_generated_block_outputs, render_generated_block,
-        render_pointer_type_golden_block,
+        prepare_generated_block_outputs, render_generated_block, render_pointer_type_golden_block,
     };
 
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     #[test]
-    fn generated_block_replacement_preserves_localized_surroundings() {
-        let prefix = "---\nlang: ar\ndirection: rtl\n---\n\n<div dir=\"rtl\">\n\nمقدمة\n\n";
-        let suffix = "\n\nخاتمة\n\n</div>\n";
+    fn generated_block_replacement_preserves_surrounding_prose() {
+        let prefix = "# Pointer ABI\n\nIntroduction.\n\n";
+        let suffix = "\n\nAdditional notes.\n";
         let current = format!("{prefix}{BEGIN}\nstale\n{END}{suffix}");
         let expected_block = format!("{BEGIN}\ncanonical\n{END}");
         let expected = format!("{prefix}{expected_block}{suffix}");
@@ -241,33 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn localized_pointer_document_discovery_is_sorted() {
-        let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "ivm-pointer-doc-generator-{}-{unique}",
-            std::process::id()
-        ));
-        let localized_root = root.join("docs/i18n/root");
-        for locale in ["zh-hant", "am"] {
-            let locale_root = localized_root.join(locale);
-            fs::create_dir_all(&locale_root).expect("create locale directory");
-            fs::write(locale_root.join("ivm.md"), "test").expect("write localized document");
-        }
-        let paths = localized_pointer_doc_paths_for(&root, &["am", "zh-hant"])
-            .expect("discover localized documents");
-        assert_eq!(
-            paths,
-            [
-                localized_root.join("am/ivm.md"),
-                localized_root.join("zh-hant/ivm.md"),
-            ]
-        );
-
-        fs::remove_dir_all(root).expect("remove temporary directory");
-    }
-
-    #[test]
-    fn late_localized_marker_failure_does_not_publish_earlier_document() {
+    fn late_marker_failure_does_not_publish_earlier_document() {
         let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "ivm-pointer-doc-late-failure-{}-{unique}",

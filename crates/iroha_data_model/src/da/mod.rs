@@ -2,7 +2,7 @@
 //!
 //! This module hosts forward-looking types for the DA ingest pipeline (Torii
 //! blob submission, manifest generation, replication metadata) described in
-//! `docs/source/da/ingest_plan.md`. The actual networking/storage plumbing
+//! `specs/da/ingest_plan.md`. The actual networking/storage plumbing
 //! lives outside the data model; these structures exist purely for Norito
 //! encoding, schema documentation, and cross-crate integration.
 
@@ -25,7 +25,7 @@ pub mod prelude {
         commitment::{
             DaCommitmentBundle, DaCommitmentKey, DaCommitmentLocation, DaCommitmentProof,
             DaCommitmentRecord, DaCommitmentWithLocation, DaProofPolicy, DaProofPolicyBundle,
-            DaProofScheme, KzgCommitment, MerkleDirection, MerklePathItem, RetentionClass,
+            DaProofScheme, MerkleDirection, MerklePathItem, RetentionClass,
         },
         confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
         ingest::{

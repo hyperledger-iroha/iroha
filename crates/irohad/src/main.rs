@@ -22,6 +22,8 @@ mod nexus_fee_relay_worker;
 mod runtime_provider_broker;
 /// Deployment-owned runtime-provider registry boundary for the standard launcher.
 pub mod runtime_provider_registry;
+/// Exact external credential boundary for authenticated Hugging Face inference.
+pub mod soracloud_hf_credential;
 /// Embedded Soracloud runtime-manager reconciliation.
 #[cfg(feature = "embedded-soracloud-runtime")]
 #[path = "soracloud_runtime.rs"]
@@ -36,7 +38,7 @@ pub mod soracloud_runtime_signer;
 pub mod sorafs_hedging_billing_runtime;
 /// Fail-closed config-bound `SoraFS` `PoP` runtime construction.
 pub mod sorafs_pop_runtime;
-/// Supervised finalized-PoR reputation reconciliation and archive compaction.
+/// Supervised finalized-PoR reputation reconciliation and optional archive compaction.
 pub mod sorafs_por_replay_archive_runtime;
 /// Immutable finalized-ledger query adapter for provider ingest.
 pub mod sorafs_provider_ingest_finalized_query;
@@ -49,8 +51,8 @@ pub mod sorafs_reputation_runtime;
 
 pub use runtime_provider_broker::{
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
-    RuntimeProviderBrokerServerErrorV1, serve_runtime_provider_broker_v1,
-    serve_runtime_provider_broker_with_lifecycle_v1,
+    RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
+    serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_lifecycle_v1,
 };
 pub use runtime_provider_registry::{
     IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
@@ -91,6 +93,7 @@ use iroha_config::{
         },
         user::Root as UserConfig,
     },
+    snapshot::Mode as SnapshotMode,
 };
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::{StateTelemetry, StreamingTelemetry};
@@ -172,21 +175,36 @@ fn log_startup_trace(stage: &'static str, started_at: Instant) {
     }
 }
 
-fn torii_receipt_signer_or_ephemeral(
+fn torii_receipt_signer_or_derived(
     receipt_signer: Option<KeyPair>,
+    node_key_pair: &KeyPair,
 ) -> Result<KeyPair, iroha_crypto::Error> {
     if let Some(receipt_signer) = receipt_signer {
         return Ok(receipt_signer);
     }
 
-    let key = iroha_crypto::KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)?;
+    // A receipt key must survive process restarts because the durable DA log verifies historical
+    // receipts during startup. Derive a separate key from the node identity instead of generating
+    // an ephemeral key; the BLAKE3 KDF context prevents the derived key from being reused as the
+    // node key or by another protocol.
+    let (node_algorithm, mut node_secret) = node_key_pair.private_key().try_to_bytes()?;
+    let mut key_deriver = blake3::Hasher::new_derive_key("iroha:torii:receipt-signer:secp256k1:v1");
+    key_deriver.update(node_algorithm.as_static_str().as_bytes());
+    key_deriver.update(&[0]);
+    key_deriver.update(&node_secret);
+    let mut seed = [0_u8; 32];
+    key_deriver.finalize_xof().fill(&mut seed);
+    node_secret.fill(0);
+    let key = iroha_crypto::KeyPair::try_from_seed(seed.to_vec(), Algorithm::Secp256k1);
+    seed.fill(0);
+    let key = key?;
     let algorithm = key
         .public_key()
         .try_algorithm()
         .map_or("malformed", |algorithm| algorithm.as_static_str());
     iroha_logger::info!(
         algorithm,
-        "torii receipt signer not configured; generated ephemeral secp256k1 key"
+        "torii receipt signer not configured; derived a stable domain-separated key from the node identity"
     );
     Ok(key)
 }
@@ -1343,7 +1361,8 @@ pub struct Iroha {
 /// signers, immutable publication, acknowledgement, sealed witness storage,
 /// authenticated Governance DAG publication/readback/head updates, sealed
 /// monotonic Governance DAG checkpoints, externally sealed reputation journal
-/// checkpoints, and the Soracloud mutation/provenance signer are the
+/// checkpoints, the Soracloud mutation/provenance signer, and the authenticated
+/// Hugging Face credential provider are the
 /// reference-node boundaries for
 /// ledger access, PKCS#11, managed-KMS, and threshold services. Provider
 /// credentials, unwrapped keys, PRF shares, seeds, and outputs must stay inside
@@ -1392,6 +1411,8 @@ pub struct IrohaRuntimeDeps {
             dyn iroha_torii::sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1,
         >,
     >,
+    sorafs_moderation_checkpoint_store:
+        Option<Arc<dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1>>,
     sorafs_evidence_viewer_webauthn:
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>>,
     sorafs_evidence_viewer_grants:
@@ -1404,6 +1425,12 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreV1>>,
     sorafs_evidence_viewer_compaction_archive:
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>>,
+    sorafs_evidence_viewer_transparency_publisher: Option<
+        Arc<
+            dyn sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyPublisherV1,
+        >,
+    >,
     sorafs_pop_credential_provider_registry:
         Option<Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>>,
     sorafs_potr_runtime_signer_roles: Option<Arc<iroha_torii::sorafs::PotrRuntimeSignerRolesV1>>,
@@ -1453,6 +1480,8 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1>>,
     soracloud_runtime_mutation_signer:
         Option<Arc<dyn soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>>,
+    soracloud_hf_inference_credential_provider:
+        Option<Arc<dyn soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>>,
 }
 
 impl IrohaRuntimeDeps {
@@ -1483,12 +1512,14 @@ impl IrohaRuntimeDeps {
             && self.sorafs_moderation_settlement_handoff.is_none()
             && self.sorafs_moderation_publication_handoff.is_none()
             && self.sorafs_moderation_panel_notification.is_none()
+            && self.sorafs_moderation_checkpoint_store.is_none()
             && self.sorafs_evidence_viewer_webauthn.is_none()
             && self.sorafs_evidence_viewer_grants.is_none()
             && self.sorafs_evidence_viewer_receipt_signer.is_none()
             && self.sorafs_evidence_viewer_erasure.is_none()
             && self.sorafs_evidence_viewer_checkpoint_store.is_none()
             && self.sorafs_evidence_viewer_compaction_archive.is_none()
+            && self.sorafs_evidence_viewer_transparency_publisher.is_none()
             && self.sorafs_pop_credential_provider_registry.is_none()
             && self.sorafs_potr_runtime_signer_roles.is_none()
             && self.sorafs_gateway_acme_client.is_none()
@@ -1512,6 +1543,7 @@ impl IrohaRuntimeDeps {
             && self.sorafs_provider_ingest_retention_authority.is_none()
             && self.sorafs_por_finalized_replay_archive.is_none()
             && self.soracloud_runtime_mutation_signer.is_none()
+            && self.soracloud_hf_inference_credential_provider.is_none()
     }
 
     /// Attach the production PKCS#11/KMS wrapper for moderation quarantine
@@ -1734,6 +1766,21 @@ impl IrohaRuntimeDeps {
         self
     }
 
+    /// Attach the raw deployment-owned authenticated HF credential provider.
+    ///
+    /// The registry resolver replaces this provider with an immutable facade
+    /// qualified against the exact configured handle, revision, policy digest,
+    /// active posture, and non-test posture. Bearer credentials remain inside
+    /// the provider.
+    #[must_use]
+    pub fn with_soracloud_hf_inference_credential_provider(
+        mut self,
+        provider: Arc<dyn soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>,
+    ) -> Self {
+        self.soracloud_hf_inference_credential_provider = Some(provider);
+        self
+    }
+
     /// Attach the runtime-only HSM/KMS signer for exact moderation native
     /// transaction envelopes.
     #[must_use]
@@ -1782,6 +1829,18 @@ impl IrohaRuntimeDeps {
         >,
     ) -> Self {
         self.sorafs_moderation_panel_notification = Some(boundary);
+        self
+    }
+
+    /// Attach the deployment-owned sealed monotonic moderation checkpoint authority.
+    #[must_use]
+    pub fn with_sorafs_moderation_checkpoint_store(
+        mut self,
+        checkpoint_store: Arc<
+            dyn sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1,
+        >,
+    ) -> Self {
+        self.sorafs_moderation_checkpoint_store = Some(checkpoint_store);
         self
     }
 
@@ -1849,6 +1908,22 @@ impl IrohaRuntimeDeps {
         archive: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>,
     ) -> Self {
         self.sorafs_evidence_viewer_compaction_archive = Some(archive);
+        self
+    }
+
+    /// Attach the deployment-owned signed monotonic evidence transparency publisher.
+    ///
+    /// Publisher credentials and the Ed25519 private signing key remain inside
+    /// the deployment-owned implementation.
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_transparency_publisher(
+        mut self,
+        publisher: Arc<
+            dyn sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyPublisherV1,
+        >,
+    ) -> Self {
+        self.sorafs_evidence_viewer_transparency_publisher = Some(publisher);
         self
     }
 
@@ -7859,11 +7934,33 @@ fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
     snapshot_read_error_is_recoverable_for_bootstrap(error, false)
 }
 
+fn snapshot_mode_allows_restore(mode: SnapshotMode) -> bool {
+    !matches!(mode, SnapshotMode::Disabled)
+}
+
 fn snapshot_failure_allows_empty_state_fallback(
     error: &TryReadSnapshotError,
     provisional_imported_prefix: bool,
 ) -> bool {
     !provisional_imported_prefix && snapshot_read_error_is_recoverable(error)
+}
+
+fn preflight_empty_state_snapshot_fallback(
+    kura: &Kura,
+    chain_id: &ChainId,
+    configured_lane_catalog: &iroha_data_model::nexus::LaneCatalog,
+) -> ReportResult<(), StartError> {
+    State::preflight_configured_primary_geometry_replay(
+        kura,
+        chain_id,
+        configured_lane_catalog,
+    )
+    .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+    .map_err(|report| {
+        report.attach(
+            "cannot rebuild from an empty state because retained Kura geometry no longer reaches the configured-primary replay floor",
+        )
+    })
 }
 
 fn snapshot_read_error_is_recoverable_for_bootstrap(
@@ -7938,6 +8035,10 @@ fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &C
     // offline transitions under the wrong policy.
     state.set_crypto(config.crypto.clone());
     state.set_pipeline(config.pipeline.clone());
+    state.set_oracle(config.oracle.clone());
+    state.set_fraud_monitoring(config.fraud_monitoring.clone());
+    state.set_gov(config.gov.clone());
+    state.content = config.content.clone();
     state.set_settlement(config.settlement.clone());
 }
 
@@ -8235,6 +8336,41 @@ mod snapshot_read_error_tests {
             &TryReadSnapshotError::SignatureInvalid("ordinary corrupt snapshot".to_owned()),
             false,
         ));
+    }
+
+    #[test]
+    fn empty_state_fallback_preflight_propagates_geometry_failure_as_kura_start_error() {
+        let kura = Kura::blank_kura_for_testing();
+        let error = preflight_empty_state_snapshot_fallback(
+            kura.as_ref(),
+            &ChainId::from("fallback-preflight-test"),
+            &iroha_data_model::nexus::LaneCatalog::default(),
+        )
+        .expect_err("missing authenticated geometry baseline must reject empty-state fallback");
+
+        assert!(matches!(error.current_context(), StartError::InitKura));
+        const FALLBACK_CONTEXT: &str = "cannot rebuild from an empty state because retained Kura \
+            geometry no longer reaches the configured-primary replay floor";
+        assert!(
+            error.frames().any(|frame| {
+                frame
+                    .downcast_ref::<&str>()
+                    .is_some_and(|context| *context == FALLBACK_CONTEXT)
+            }),
+            "fallback rejection must retain its startup-boundary attachment: {error:?}"
+        );
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("no authenticated Kura catalog baseline"),
+            "fallback rejection must retain the exact geometry cause: {rendered}"
+        );
+    }
+
+    #[test]
+    fn disabled_snapshot_mode_skips_restore() {
+        assert!(snapshot_mode_allows_restore(SnapshotMode::ReadWrite));
+        assert!(snapshot_mode_allows_restore(SnapshotMode::Readonly));
+        assert!(!snapshot_mode_allows_restore(SnapshotMode::Disabled));
     }
 
     #[test]
@@ -9030,9 +9166,9 @@ impl Iroha {
             |key| iroha_crypto::KeyPair::from(key.0.clone()),
         );
 
+        let genesis_trust_anchor = ConfiguredGenesisTrustAnchor::from(&config.genesis);
         let stored_genesis_block =
             read_stored_genesis_block(kura.as_ref(), block_count, provisional_imported_prefix)?;
-        let stored_genesis_hash = stored_genesis_block.as_ref().map(|block| block.0.hash());
         if !provisional_imported_prefix
             && block_count.0 == 0
             && stored_genesis_block.is_none()
@@ -9048,6 +9184,14 @@ impl Iroha {
                 "Sumeragi v2 requires signed genesis metadata unless an imported snapshot prefix is awaiting signed-lineage authentication",
             ));
         }
+        if !provisional_imported_prefix {
+            let genesis_to_verify = effective_genesis.ok_or_else(|| {
+                Report::new(StartError::InitKura).attach(
+                    "signed genesis is unavailable for configured trust-anchor verification",
+                )
+            })?;
+            genesis_trust_anchor.verify(genesis_to_verify)?;
+        }
         let signed_genesis_context = if provisional_imported_prefix {
             None
         } else {
@@ -9057,48 +9201,29 @@ impl Iroha {
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?
         };
 
-        let effective_genesis_public_key = if let Some(stored_genesis) =
-            stored_genesis_block.as_ref()
-        {
-            let stored_key = genesis_public_key_from_genesis_block(stored_genesis)?;
-            if stored_key != config.genesis.public_key {
-                iroha_logger::warn!(
-                    configured = %config.genesis.public_key,
-                    stored = %stored_key,
-                    "genesis.public_key does not match stored genesis; using stored key for restart"
-                );
-            }
-            if let (Some(config_hash), Some(stored_hash)) = (
-                config.genesis.expected_hash.as_ref(),
-                stored_genesis_hash.as_ref(),
-            ) && config_hash != stored_hash
-            {
-                iroha_logger::warn!(
-                    configured = ?config_hash,
-                    stored = ?stored_hash,
-                    "genesis.expected_hash does not match stored genesis; ignoring for restart"
-                );
-            }
-            stored_key
-        } else {
-            config.genesis.public_key.clone()
-        };
+        let effective_genesis_public_key = genesis_trust_anchor.public_key().clone();
 
         let mut loaded_state_from_snapshot = false;
-        let mut state = match try_read_snapshot_with_bootstrap_policy(
-            config.snapshot.store_dir.resolve_relative_path(),
-            &kura,
-            || live_query_store.clone(),
-            block_count,
-            config.snapshot.merkle_chunk_size_bytes,
-            config.snapshot.max_payload_bytes,
-            verification_key,
-            &config.common.chain,
-            &config.zk,
-            &config.snapshot.bootstrap,
-            #[cfg(feature = "telemetry")]
-            state_telemetry.clone(),
-        ) {
+        let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
+            try_read_snapshot_with_bootstrap_policy(
+                config.snapshot.store_dir.resolve_relative_path(),
+                &kura,
+                || live_query_store.clone(),
+                block_count,
+                config.snapshot.merkle_chunk_size_bytes,
+                config.snapshot.max_payload_bytes,
+                verification_key,
+                &config.common.chain,
+                &config.zk,
+                &config.snapshot.bootstrap,
+                #[cfg(feature = "telemetry")]
+                state_telemetry.clone(),
+            )
+        } else {
+            iroha_logger::info!("Snapshot restore is disabled by configuration");
+            Err(TryReadSnapshotError::NotFound)
+        };
+        let mut state = match snapshot_result {
             Ok(state) => {
                 iroha_logger::info!(
                     at_height = state.committed_height(),
@@ -9114,6 +9239,11 @@ impl Iroha {
                 state
             }
             Err(TryReadSnapshotError::NotFound) if !provisional_imported_prefix => {
+                preflight_empty_state_snapshot_fallback(
+                    kura.as_ref(),
+                    &config.common.chain,
+                    &config.nexus.configured_lane_catalog,
+                )?;
                 iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
                 let genesis_public_key = effective_genesis_public_key.clone();
                 let mut world = World::with(
@@ -9146,7 +9276,15 @@ impl Iroha {
             {
                 iroha_logger::warn!(
                     ?error,
-                    "Failed to load state snapshot; rebuilding state by replaying Kura blocks"
+                    "Failed to load state snapshot; checking whether Kura can rebuild from an empty state"
+                );
+                preflight_empty_state_snapshot_fallback(
+                    kura.as_ref(),
+                    &config.common.chain,
+                    &config.nexus.configured_lane_catalog,
+                )?;
+                iroha_logger::warn!(
+                    "Kura retains the configured-primary replay floor; rebuilding state from blocks"
                 );
                 let genesis_public_key = effective_genesis_public_key.clone();
                 let mut world = World::with(
@@ -9242,6 +9380,7 @@ impl Iroha {
                 iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters {
                     da_layout: bootstrap.context.da_layout,
                     nexus_amx_context_hash: *bootstrap.context.nexus_amx_context_hash.as_ref(),
+                    execution_policy_hash: *bootstrap.context.execution_policy_hash.as_ref(),
                 },
             ),
             (Some(_), Some(_)) => {
@@ -9298,6 +9437,10 @@ impl Iroha {
                         || context.nexus_amx_context_hash
                             != iroha_crypto::Hash::prehashed(
                                 signed_v2_genesis_context.nexus_amx_context_hash,
+                            )
+                        || context.execution_policy_hash
+                            != iroha_crypto::Hash::prehashed(
+                                signed_v2_genesis_context.execution_policy_hash,
                             )
                     {
                         return Err(Report::new(StartError::InitKura).attach(
@@ -9588,6 +9731,14 @@ impl Iroha {
                 journal_path.display()
             ))
         })?;
+        queue
+            .finalize_plan_journal_startup_recovery()
+            .map_err(|err| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "failed to finalize lane reservation recovery after queue plan replay {}: {err}",
+                    journal_path.display()
+                ))
+            })?;
         iroha_logger::info!(
             path = %journal_path.display(),
             replayable,
@@ -9680,7 +9831,7 @@ impl Iroha {
             )));
         }
         iroha_logger::info!(
-            mode=%consensus_caps.mode_tag,
+            mode=%consensus_caps.mode.tag(),
             proto=%consensus_caps.proto_version,
             fingerprint=%format!("0x{}", hex::encode(consensus_caps.consensus_fingerprint)),
             "Consensus handshake caps"
@@ -9780,8 +9931,7 @@ impl Iroha {
         let (network, child) = IrohaNetwork::start_with_crypto(
             config.common.key_pair.clone(),
             config.network.clone(),
-            // Bind handshake to chain id when supported by the p2p layer
-            Some(config.common.chain.clone()),
+            config.common.chain.clone(),
             Some(consensus_caps.clone()),
             Some(confidential_caps),
             Some(crypto_caps),
@@ -9812,7 +9962,11 @@ impl Iroha {
             .map(|peer| (peer.id().clone(), peer.address.clone()))
             .collect();
         bootstrapper.seed_topology(&peer_seed);
-        bootstrapper.spawn_listener().await;
+        let genesis_listener = bootstrapper
+            .spawn_listener()
+            .await
+            .expect("a fresh genesis bootstrapper has no active listener");
+        supervisor.monitor(genesis_listener);
 
         // Audited snapshot bootstrap is a complete alternative trust root and must not advertise
         // an unrelated local legacy genesis file as if it authenticated the imported history.
@@ -9954,7 +10108,7 @@ impl Iroha {
                 )
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
                 if fresh_caps.consensus_fingerprint != consensus_caps.consensus_fingerprint
-                    || fresh_caps.mode_tag != consensus_caps.mode_tag
+                    || fresh_caps.mode != consensus_caps.mode
                     || fresh_caps.proto_version != consensus_caps.proto_version
                 {
                     return Err(Report::new(StartError::InitKura).attach(
@@ -10694,6 +10848,9 @@ impl Iroha {
             runtime_deps.sorafs_orderbook_transaction_signer.clone();
         let soracloud_runtime_mutation_signer =
             runtime_deps.soracloud_runtime_mutation_signer.clone();
+        let soracloud_hf_inference_credential_provider = runtime_deps
+            .soracloud_hf_inference_credential_provider
+            .clone();
         let sorafs_moderation_transaction_signer =
             runtime_deps.sorafs_moderation_transaction_signer.clone();
         let sorafs_moderation_settlement_handoff =
@@ -10702,6 +10859,8 @@ impl Iroha {
             runtime_deps.sorafs_moderation_publication_handoff.clone();
         let sorafs_moderation_panel_notification =
             runtime_deps.sorafs_moderation_panel_notification.clone();
+        let sorafs_moderation_checkpoint_store =
+            runtime_deps.sorafs_moderation_checkpoint_store.clone();
         let sorafs_evidence_viewer_webauthn = runtime_deps.sorafs_evidence_viewer_webauthn.clone();
         let sorafs_evidence_viewer_grants = runtime_deps.sorafs_evidence_viewer_grants.clone();
         let sorafs_evidence_viewer_receipt_signer =
@@ -10711,6 +10870,9 @@ impl Iroha {
             runtime_deps.sorafs_evidence_viewer_checkpoint_store.clone();
         let sorafs_evidence_viewer_compaction_archive = runtime_deps
             .sorafs_evidence_viewer_compaction_archive
+            .clone();
+        let sorafs_evidence_viewer_transparency_publisher = runtime_deps
+            .sorafs_evidence_viewer_transparency_publisher
             .clone();
         let sorafs_potr_runtime_signer_roles =
             runtime_deps.sorafs_potr_runtime_signer_roles.clone();
@@ -10967,7 +11129,9 @@ impl Iroha {
         } else {
             None
         };
-        let sorafs_reputation_runtime = if let Some(reputation_config) = sorafs_reputation_config {
+        let sorafs_reputation_runtime = if let Some(reputation_config) =
+            sorafs_reputation_config.as_ref()
+        {
             let trust_policy = sorafs_node.reputation_trust_policy().ok_or_else(|| {
                 Report::new(StartError::StartTorii).attach(
                     "enabled committed SoraFS reputation runtime requires the configured canonical reputation trust policy",
@@ -10988,7 +11152,7 @@ impl Iroha {
                 })?;
             let query_qualification =
                 sorafs_reputation_runtime::finalized_query_qualification_v1(
-                    &reputation_config,
+                    reputation_config,
                     &config.common.chain,
                     trust_policy.as_ref(),
                 )
@@ -11043,7 +11207,7 @@ impl Iroha {
             })?;
             let (handle, child) = if reputation_archive_active {
                 sorafs_reputation_runtime::start(
-                    &reputation_config,
+                    reputation_config,
                     &config.common.chain,
                     trust_policy.as_ref(),
                     dependencies,
@@ -11057,7 +11221,7 @@ impl Iroha {
                             .map_err(eyre::Report::new)
                     });
                 sorafs_reputation_runtime::start_deferred(
-                    &reputation_config,
+                    reputation_config,
                     &config.common.chain,
                     trust_policy.as_ref(),
                     dependencies,
@@ -11075,26 +11239,41 @@ impl Iroha {
         } else {
             None
         };
-        if sorafs_node.config().por_replay_archive_policy().is_some() {
-            let reputation_runtime = sorafs_reputation_runtime.as_ref().ok_or_else(|| {
-                Report::new(StartError::StartTorii).attach(
-                    "enabled finalized PoR replay archival requires the committed reputation runtime",
-                )
-            })?;
+        if let (Some(reputation_runtime), Some(reputation_config)) = (
+            sorafs_reputation_runtime.as_ref(),
+            sorafs_reputation_config.as_ref(),
+        ) {
             let admission: Arc<
                 dyn sorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1,
             > = Arc::new(reputation_runtime.clone());
-            let child = sorafs_por_replay_archive_runtime::start(
-                sorafs_node.clone(),
-                admission,
-                supervisor.shutdown_signal(),
-            )
+            let child = if sorafs_node.config().por_replay_archive_policy().is_some() {
+                sorafs_por_replay_archive_runtime::start(
+                    sorafs_node.clone(),
+                    admission,
+                    supervisor.shutdown_signal(),
+                )
+            } else {
+                // Reuse the validated native page-item bound as the maximum
+                // number of retained PoR terminals admitted by one reputation
+                // worker tick. Replay archival is independent and optional.
+                sorafs_por_replay_archive_runtime::start_reputation_reconciliation(
+                    sorafs_node.clone(),
+                    admission,
+                    reputation_config.poll_interval,
+                    reputation_config.page_items,
+                    supervisor.shutdown_signal(),
+                )
+            }
             .map_err(|error| {
                 Report::new(StartError::StartTorii).attach(format!(
-                    "failed to initialise finalized PoR replay-archive worker: {error}"
+                    "failed to initialise finalized PoR reputation worker: {error}"
                 ))
             })?;
             supervisor.monitor(child);
+        } else if sorafs_node.config().por_replay_archive_policy().is_some() {
+            return Err(Report::new(StartError::StartTorii).attach(
+                "enabled finalized PoR replay archival requires the committed reputation runtime",
+            ));
         }
         let sorafs_hedging_billing_runtime = if let Some(hedging_billing_config) =
             sorafs_hedging_billing_config
@@ -11205,6 +11384,11 @@ impl Iroha {
             Arc::clone(&state),
         )
         .with_sorafs_node(sorafs_node.clone());
+        let runtime_manager = if let Some(provider) = soracloud_hf_inference_credential_provider {
+            runtime_manager.with_hf_inference_credential_provider(provider)
+        } else {
+            runtime_manager
+        };
         let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
             let runtime_mutation_sink = Arc::new(
                 QueuedSoracloudRuntimeMutationSink::new(
@@ -11243,12 +11427,14 @@ impl Iroha {
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
 
-        let receipt_signer = torii_receipt_signer_or_ephemeral(config.torii.receipt_signer.clone())
-            .map_err(|err| {
-                Report::new(StartError::StartTorii).attach(format!(
-                    "failed to generate ephemeral Torii receipt signer: {err}"
-                ))
-            })?;
+        let receipt_signer = torii_receipt_signer_or_derived(
+            config.torii.receipt_signer.clone(),
+            &config.common.key_pair,
+        )
+        .map_err(|err| {
+            Report::new(StartError::StartTorii)
+                .attach(format!("failed to derive Torii receipt signer: {err}"))
+        })?;
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
@@ -11309,6 +11495,11 @@ impl Iroha {
         } else {
             runtime_deps
         };
+        let runtime_deps = if let Some(checkpoint_store) = sorafs_moderation_checkpoint_store {
+            runtime_deps.with_sorafs_moderation_checkpoint_store(checkpoint_store)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(runtime) = sorafs_appeal_finance_checkpoint_runtime {
             runtime_deps.with_sorafs_appeal_finance_checkpoint_runtime(runtime)
         } else {
@@ -11345,6 +11536,11 @@ impl Iroha {
             } else {
                 runtime_deps
             };
+        let runtime_deps = if let Some(publisher) = sorafs_evidence_viewer_transparency_publisher {
+            runtime_deps.with_sorafs_evidence_viewer_transparency_publisher(publisher)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(runtime) = sorafs_pop_credentials {
             runtime_deps.with_sorafs_pop_credentials(runtime)
         } else {
@@ -11811,6 +12007,67 @@ async fn config_updates_relay(
     Ok(())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ConfiguredGenesisTrustAnchor {
+    public_key: PublicKey,
+    expected_hash: Option<HashOf<BlockHeader>>,
+}
+
+impl From<&iroha_config::parameters::actual::Genesis> for ConfiguredGenesisTrustAnchor {
+    fn from(config: &iroha_config::parameters::actual::Genesis) -> Self {
+        Self {
+            public_key: config.public_key.clone(),
+            expected_hash: config.expected_hash,
+        }
+    }
+}
+
+impl ConfiguredGenesisTrustAnchor {
+    fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+
+    fn verify(&self, block: &GenesisBlock) -> ReportResult<(), StartError> {
+        let embedded_key = genesis_public_key_from_genesis_block(block)?;
+        if embedded_key != self.public_key {
+            return Err(Report::new(StartError::InitKura).attach(format!(
+                "genesis authority `{embedded_key}` does not match configured genesis.public_key `{}`",
+                self.public_key
+            )));
+        }
+
+        let block_hash = block.0.hash();
+        if let Some(expected_hash) = self.expected_hash
+            && block_hash != expected_hash
+        {
+            return Err(Report::new(StartError::InitKura).attach(format!(
+                "genesis hash {block_hash} does not match configured genesis.expected_hash {expected_hash}"
+            )));
+        }
+
+        let mut signatures = block.0.signatures();
+        let signature = signatures.next().ok_or_else(|| {
+            Report::new(StartError::InitKura)
+                .attach("genesis block has no configured-authority signature")
+        })?;
+        if signature.index() != 0 || signatures.next().is_some() {
+            return Err(Report::new(StartError::InitKura)
+                .attach("genesis block must have exactly one signature at index 0"));
+        }
+        signature
+            .signature()
+            .verify_hash(&self.public_key, block_hash)
+            .map_err(|error| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "genesis block signature does not verify against configured genesis.public_key `{}`: {error}",
+                    self.public_key
+                ))
+            })?;
+
+        Ok(())
+    }
+}
+
 fn read_stored_genesis_block(
     kura: &Kura,
     block_count: iroha_core::kura::BlockCount,
@@ -11860,8 +12117,19 @@ fn genesis_domain(public_key: PublicKey) -> Domain {
 #[cfg(test)]
 mod genesis_key_tests {
     use super::*;
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_genesis::GenesisBuilder;
     use std::path::PathBuf;
+
+    fn signed_genesis(keypair: &KeyPair) -> GenesisBlock {
+        GenesisBuilder::new_without_executor(
+            ChainId::from("configured-genesis-trust-anchor-test"),
+            PathBuf::from("."),
+        )
+        .build_raw()
+        .build_and_sign(keypair)
+        .expect("build signed genesis")
+    }
 
     #[test]
     fn derives_genesis_pubkey_from_block_authority() {
@@ -11883,6 +12151,60 @@ mod genesis_key_tests {
         let domain = genesis_domain(keypair.public_key().clone());
 
         assert_eq!(domain.owned_by(), &expected_owner);
+    }
+
+    #[test]
+    fn configured_genesis_trust_anchor_accepts_matching_block() {
+        let keypair = KeyPair::random();
+        let genesis = signed_genesis(&keypair);
+        let anchor = ConfiguredGenesisTrustAnchor {
+            public_key: keypair.public_key().clone(),
+            expected_hash: Some(genesis.0.hash()),
+        };
+
+        anchor
+            .verify(&genesis)
+            .expect("matching configured genesis trust anchor should verify");
+    }
+
+    #[test]
+    fn configured_genesis_trust_anchor_rejects_wrong_public_key() {
+        let signer = KeyPair::random();
+        let genesis = signed_genesis(&signer);
+        let anchor = ConfiguredGenesisTrustAnchor {
+            public_key: KeyPair::random().public_key().clone(),
+            expected_hash: Some(genesis.0.hash()),
+        };
+
+        let error = anchor
+            .verify(&genesis)
+            .expect_err("configured public-key mismatch must reject genesis");
+        assert!(matches!(error.current_context(), StartError::InitKura));
+        assert!(
+            format!("{error:?}").contains("does not match configured genesis.public_key"),
+            "unexpected mismatch diagnostic: {error:?}"
+        );
+    }
+
+    #[test]
+    fn configured_genesis_trust_anchor_rejects_wrong_expected_hash() {
+        let keypair = KeyPair::random();
+        let genesis = signed_genesis(&keypair);
+        let wrong_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
+        assert_ne!(genesis.0.hash(), wrong_hash);
+        let anchor = ConfiguredGenesisTrustAnchor {
+            public_key: keypair.public_key().clone(),
+            expected_hash: Some(wrong_hash),
+        };
+
+        let error = anchor
+            .verify(&genesis)
+            .expect_err("configured genesis hash mismatch must reject genesis");
+        assert!(matches!(error.current_context(), StartError::InitKura));
+        assert!(
+            format!("{error:?}").contains("does not match configured genesis.expected_hash"),
+            "unexpected mismatch diagnostic: {error:?}"
+        );
     }
 }
 
@@ -15513,60 +15835,20 @@ fn validate_config_for_check(
 fn load_configured_kagemusha_release_catalog(
     config: &Config,
 ) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
-    if !config.settlement.offline.enabled {
-        return Ok(iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty());
-    }
-    match (
-        config
-            .settlement
-            .offline
-            .kagemusha_release_policy_path
-            .as_deref(),
-        config
-            .settlement
-            .offline
-            .kagemusha_artifact_dir
-            .as_deref(),
-    ) {
-        (None, None) => Err(
+    let offline = &config.settlement.offline;
+    if offline.enabled
+        && offline.kagemusha_release_policy_path.is_none()
+        && offline.kagemusha_artifact_dir.is_none()
+    {
+        return Err(
             "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory"
                 .to_owned(),
-        ),
-        (Some(policy_path), Some(artifact_dir)) => {
-            let budget = config.settlement.offline.kagemusha_max_decoded_bytes;
-            if let Some(seal_path) = config
-                .settlement
-                .offline
-                .kagemusha_catalog_qualification_seal_path
-                .as_deref()
-            {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget_and_qualification_seal(
-                    policy_path,
-                    artifact_dir,
-                    budget,
-                    seal_path,
-                )
-                .map_err(|error| {
-                    format!(
-                        "failed to load sealed Kagemusha V4 release catalog without fallback: {error}"
-                    )
-                })
-            } else {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
-                    policy_path,
-                    artifact_dir,
-                    budget,
-                )
-                .map_err(|error| {
-                    format!("failed to authenticate Kagemusha V4 release catalog: {error}")
-                })
-            }
-        }
-        _ => Err(
-            "Kagemusha V4 release policy and artifact directory must be configured together"
-                .to_owned(),
-        ),
+        );
     }
+    iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
+        offline,
+    )
+    .map_err(|error| format!("failed to authenticate Kagemusha V4 release catalog: {error}"))
 }
 
 fn load_and_build_configured_kagemusha_catalog_qualification_seal(
@@ -15928,6 +16210,7 @@ fn build_consensus_config_caps(
         // The signed genesis/world projection replaces this bootstrap value
         // before the handshake is exposed to peers.
         v2_config_fingerprint: [0; 32],
+        execution_policy_hash: [0; 32],
         nexus_policy_digest,
         ivm_gas_schedule_hash: ivm::gas::schedule_hash().into(),
     })
@@ -15985,6 +16268,7 @@ fn consensus_caps_from_genesis(
         return None;
     }
     let mut config_caps = *config_caps;
+    config_caps.execution_policy_hash = entry.sumeragi_v2.execution_policy_hash;
     config_caps.v2_config_fingerprint = sumeragi
         .v2_config(
             Duration::from_millis(consensus_params.block_cadence_ms.get()),
@@ -15998,7 +16282,7 @@ fn consensus_caps_from_genesis(
         mode_tag.clone(),
         expected_domain.to_owned(),
         iroha_p2p::ConsensusHandshakeCaps {
-            mode_tag,
+            mode: expected_mode,
             proto_version: iroha_core::sumeragi::consensus::PROTO_VERSION,
             consensus_fingerprint: computed_fingerprint,
             config: config_caps,
@@ -17336,6 +17620,10 @@ mod tests {
                 "with_sorafs_evidence_viewer_compaction_archive",
             ),
             (
+                "sorafs_evidence_viewer_transparency_publisher",
+                "with_sorafs_evidence_viewer_transparency_publisher",
+            ),
+            (
                 "sorafs_gateway_acme_client",
                 "with_sorafs_gateway_acme_client",
             ),
@@ -17418,14 +17706,25 @@ mod tests {
         let worker = compact_source
             .find("sorafs_por_replay_archive_runtime::start(")
             .expect("launcher starts the supervised reconciliation/compaction worker");
+        let reputation_only_worker = compact_source
+            .find("sorafs_por_replay_archive_runtime::start_reputation_reconciliation(")
+            .expect("launcher starts PoR reputation reconciliation without optional archival");
 
         assert!(
-            clone < inject && inject < node && node < reputation && reputation < worker,
+            clone < inject
+                && inject < node
+                && node < reputation
+                && reputation < worker
+                && reputation < reputation_only_worker,
             "the exact archive must enter the node before routes are built, and bounded compaction must start only after durable reputation admission"
         );
         assert!(compact_source.contains(
             "dynsorafs_node::reputation::runtime::ReputationNativeOutcomeAdmissionApiV1"
         ));
+        assert!(
+            compact_source.contains("reputation_config.poll_interval,reputation_config.page_items"),
+            "the reputation-only callback worker must use validated bounded runtime policy"
+        );
     }
 
     #[test]
@@ -17741,17 +18040,34 @@ mod tests {
         use super::*;
 
         #[test]
-        fn defaults_to_ephemeral_secp256k1() {
-            let signer = torii_receipt_signer_or_ephemeral(None)
-                .expect("checked ephemeral receipt signer generation should succeed");
-            assert_eq!(signer.algorithm(), Algorithm::Secp256k1);
+        fn default_is_stable_and_domain_separated_from_node_identity() {
+            let node = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let first = torii_receipt_signer_or_derived(None, &node)
+                .expect("checked receipt signer derivation should succeed");
+            let second = torii_receipt_signer_or_derived(None, &node)
+                .expect("checked receipt signer derivation should be repeatable");
+            assert_eq!(first.algorithm(), Algorithm::Secp256k1);
+            assert_eq!(first.public_key(), second.public_key());
+            assert_ne!(first.public_key(), node.public_key());
+        }
+
+        #[test]
+        fn different_node_identities_derive_different_receipt_signers() {
+            let first_node = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let second_node = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let first = torii_receipt_signer_or_derived(None, &first_node)
+                .expect("first checked receipt signer derivation should succeed");
+            let second = torii_receipt_signer_or_derived(None, &second_node)
+                .expect("second checked receipt signer derivation should succeed");
+            assert_ne!(first.public_key(), second.public_key());
         }
 
         #[test]
         fn preserves_configured_receipt_signer() {
             let configured = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            let signer = torii_receipt_signer_or_ephemeral(Some(configured.clone()))
-                .expect("configured receipt signer should not require randomness");
+            let unrelated_node = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let signer = torii_receipt_signer_or_derived(Some(configured.clone()), &unrelated_node)
+                .expect("configured receipt signer should not require derivation");
             assert_eq!(signer.public_key(), configured.public_key());
             assert_eq!(signer.algorithm(), Algorithm::Ed25519);
         }
@@ -19753,6 +20069,20 @@ mod tests {
                 config.common.chain.clone(),
             );
             state.set_pipeline(config.pipeline.clone());
+            state.set_oracle(config.oracle.clone());
+            state.set_fraud_monitoring(config.fraud_monitoring.clone());
+            state.set_gov(config.gov.clone());
+            state.content = config.content.clone();
+            state.set_settlement(config.settlement.clone());
+            state.set_kagemusha_release_catalog(
+                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
+                    &config.settlement.offline,
+                )
+                .expect("test Kagemusha release policy must be valid"),
+            );
+            state
+                .set_zk(config.zk.clone())
+                .expect("test ZK config must be valid");
             state
                 .set_nexus(config.nexus.clone())
                 .expect("test Nexus config must be valid");
@@ -19765,11 +20095,11 @@ mod tests {
             (state, kura)
         }
 
-        fn staged_context_hash_for_test(
+        fn staged_context_hashes_for_test(
             genesis: &RawGenesisTransaction,
             genesis_authority: &KeyPair,
             config: &Config,
-        ) -> Hash {
+        ) -> (Hash, Hash) {
             let provisional = genesis
                 .clone()
                 .with_consensus_meta()
@@ -19807,7 +20137,11 @@ mod tests {
                     transaction_errors.join("; ")
                 );
             });
-            iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged)
+            (
+                iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged),
+                iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
+                    .expect("derive staged execution-policy identity"),
+            )
         }
 
         fn bind_staged_context_for_test(
@@ -19815,9 +20149,11 @@ mod tests {
             genesis_authority: &KeyPair,
             config: &Config,
         ) -> GenesisBlock {
-            let hash = staged_context_hash_for_test(&genesis, genesis_authority, config);
+            let (nexus_amx_hash, execution_policy_hash) =
+                staged_context_hashes_for_test(&genesis, genesis_authority, config);
             let mut parameters = genesis.sumeragi_v2_context_parameters();
-            parameters.nexus_amx_context_hash = hash.into();
+            parameters.nexus_amx_context_hash = nexus_amx_hash.into();
+            parameters.execution_policy_hash = execution_policy_hash.into();
             genesis
                 .with_sumeragi_v2_context_parameters(parameters)
                 .with_consensus_meta()
@@ -19911,20 +20247,22 @@ mod tests {
                     }
                 })
                 .expect("handshake meta should be present in genesis");
-            let mode_tag = match handshake_meta.mode {
-                iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => {
-                    iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_string()
-                }
-                iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => {
-                    iroha_core::sumeragi::consensus::NPOS_TAG.to_string()
-                }
+            let (mode, mode_tag) = match handshake_meta.mode {
+                iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => (
+                    iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                    iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+                ),
+                iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => (
+                    iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+                    iroha_core::sumeragi::consensus::NPOS_TAG.to_string(),
+                ),
             };
             let proto = handshake_meta.wire_protocol_version;
             let consensus_fingerprint = handshake_meta.consensus_fingerprint.into_bytes();
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let consensus_caps = iroha_p2p::ConsensusHandshakeCaps {
-                mode_tag: mode_tag.clone(),
+                mode,
                 proto_version: proto,
                 consensus_fingerprint,
                 config: config_caps,
@@ -20183,9 +20521,11 @@ mod tests {
             let base_genesis =
                 GenesisBuilder::new_without_executor(chain_id, ".").set_topology(topology);
             let base_raw = base_genesis.build_raw();
-            let context_hash = staged_context_hash_for_test(&base_raw, &genesis_authority, &config);
+            let (context_hash, execution_policy_hash) =
+                staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_v2_context_parameters();
             parameters.nexus_amx_context_hash = context_hash.into();
+            parameters.execution_policy_hash = execution_policy_hash.into();
             let mut builder = base_raw
                 .into_builder()
                 .with_sumeragi_v2_context_parameters(parameters);
@@ -21553,328 +21893,7 @@ mod tests {
         }
     }
 
-    #[test]
-    #[allow(clippy::bool_assert_comparison)] // for expressiveness
-    fn default_args() {
-        let args = Args::try_parse_from(["test"]).unwrap();
-
-        assert_eq!(args.terminal_colors, is_coloring_supported());
-        assert!(!args.startup.check_config);
-        assert!(
-            args.startup
-                .write_kagemusha_catalog_qualification_seal
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn check_config_flag_is_opt_in() {
-        let args = Args::try_parse_from(["test", "--check-config"]).unwrap();
-
-        assert!(args.startup.check_config);
-    }
-
-    #[test]
-    fn qualification_seal_writer_requires_check_config() {
-        assert!(
-            Args::try_parse_from([
-                "test",
-                "--write-kagemusha-catalog-qualification-seal",
-                "/Library/SORA/Taira/seals/catalog.norito",
-            ])
-            .is_err()
-        );
-
-        let args = Args::try_parse_from([
-            "test",
-            "--check-config",
-            "--write-kagemusha-catalog-qualification-seal",
-            "/Library/SORA/Taira/seals/catalog.norito",
-        ])
-        .expect("the explicit writer is valid only with check-config");
-        assert!(args.startup.check_config);
-        assert_eq!(
-            args.startup.write_kagemusha_catalog_qualification_seal,
-            Some(PathBuf::from("/Library/SORA/Taira/seals/catalog.norito"))
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn qualification_seal_path_must_be_canonical_and_source_separate() {
-        assert!(validate_canonical_absolute_path(Path::new("seal.norito"), "test seal").is_err());
-        assert!(
-            validate_canonical_absolute_path(Path::new("/trusted/../seal.norito"), "test seal")
-                .is_err()
-        );
-        assert!(
-            validate_canonical_absolute_path(Path::new("/trusted/seal.norito"), "test seal")
-                .is_ok()
-        );
-
-        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
-            .expect("resolve repository default config");
-        config.settlement.offline.kagemusha_release_policy_path =
-            Some(PathBuf::from("/qualified/policy/release-policy.norito"));
-        config.settlement.offline.kagemusha_artifact_dir =
-            Some(PathBuf::from("/qualified/artifacts"));
-        let error = validate_qualification_seal_directory_separation(
-            &config,
-            Path::new("/qualified/policy/catalog-seal.norito"),
-        )
-        .expect_err("seal publication must not mutate the policy parent");
-        assert!(error.contains("must be separate"));
-        let error = validate_qualification_seal_directory_separation(
-            &config,
-            Path::new("/qualified/artifacts/seals/catalog-seal.norito"),
-        )
-        .expect_err("seal publication must not mutate the artifact tree");
-        assert!(error.contains("must be separate"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn qualification_seal_publication_is_immutable_and_exclusive() {
-        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-        let temp = tempfile::tempdir().expect("private test root");
-        let canonical_temp = fs::canonicalize(temp.path()).expect("canonical private test root");
-        let seal_dir = canonical_temp.join("seals");
-        fs::create_dir(&seal_dir).expect("seal directory");
-        fs::set_permissions(&seal_dir, fs::Permissions::from_mode(0o700))
-            .expect("private seal directory");
-        let path = seal_dir.join("catalog.norito");
-        let expected_uid = rustix::process::geteuid().as_raw();
-        let target = QualificationSealPublicationTarget::prepare_for_owner(&path, expected_uid)
-            .expect("trusted absent destination");
-        target
-            .publish_bytes_and_verify(b"canonical-seal-v1", |published| {
-                let bytes = fs::read(published)
-                    .map_err(|error| format!("failed to read published test seal: {error}"))?;
-                if bytes != b"canonical-seal-v1" {
-                    return Err("published test seal bytes differ".to_owned());
-                }
-                Ok(())
-            })
-            .expect("exclusive immutable publication");
-
-        let metadata = fs::symlink_metadata(&path).expect("published seal metadata");
-        assert!(metadata.is_file());
-        assert_eq!(metadata.uid(), expected_uid);
-        assert_eq!(metadata.nlink(), 1);
-        assert_eq!(metadata.mode() & 0o7777, 0o444);
-        #[cfg(target_os = "macos")]
-        require_no_macos_extended_acl(&path, "published qualification seal")
-            .expect("published seal is ACL-free");
-        let error = QualificationSealPublicationTarget::prepare_for_owner(&path, expected_uid)
-            .err()
-            .expect("an existing seal is never replaced");
-        assert!(error.contains("already exists"));
-
-        let rejected_path = seal_dir.join("rejected.norito");
-        let rejected_target =
-            QualificationSealPublicationTarget::prepare_for_owner(&rejected_path, expected_uid)
-                .expect("second trusted absent destination");
-        let error = rejected_target
-            .publish_bytes_and_verify(b"canonical-seal-v1", |_| {
-                Err("injected final verification failure".to_owned())
-            })
-            .expect_err("failed final verification must roll back the new inode");
-        assert!(error.contains("removed the newly published seal"));
-        assert!(!rejected_path.exists());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn qualification_seal_publication_rejects_acl_writable_parent() {
-        let temp = tempfile::tempdir().expect("private ACL test root");
-        let canonical_temp = fs::canonicalize(temp.path()).expect("canonical ACL test root");
-        let seal_dir = canonical_temp.join("seals");
-        fs::create_dir(&seal_dir).expect("seal directory");
-        let expected_uid = rustix::process::geteuid().as_raw();
-        let error = {
-            let _acl = add_macos_acl(&seal_dir, "everyone allow write");
-            QualificationSealPublicationTarget::prepare_for_owner(
-                &seal_dir.join("catalog.norito"),
-                expected_uid,
-            )
-            .err()
-            .expect("ACL-writable publication parent must fail closed")
-        };
-        assert!(error.contains("extended ACL"));
-    }
-
-    #[test]
-    #[allow(clippy::bool_assert_comparison)] // for expressiveness
-    fn terminal_colors_works_as_expected() -> eyre::Result<()> {
-        fn try_with(arg: &str) -> eyre::Result<bool> {
-            Ok(Args::try_parse_from(["test", arg])?.terminal_colors)
-        }
-
-        assert_eq!(
-            Args::try_parse_from(["test"])?.terminal_colors,
-            is_coloring_supported()
-        );
-        assert_eq!(try_with("--terminal-colors")?, true);
-        assert_eq!(try_with("--terminal-colors=false")?, false);
-        assert_eq!(try_with("--terminal-colors=true")?, true);
-        assert!(try_with("--terminal-colors=random").is_err());
-
-        Ok(())
-    }
-
-    #[test]
-    fn user_provided_config_path_works() {
-        let args = Args::try_parse_from(["test", "--config", "/home/custom/file.json"]).unwrap();
-
-        assert_eq!(args.config, Some(PathBuf::from("/home/custom/file.json")));
-    }
-
-    #[test]
-    fn user_can_provide_any_extension() {
-        let _args = Args::try_parse_from(["test", "--config", "file.toml.but.not"])
-            .expect("should allow doing this as well");
-    }
-
-    #[test]
-    fn config_router_disabled_for_single_lane_defaults() {
-        let nexus = iroha_config::parameters::actual::Nexus::default();
-        assert!(!should_use_config_router(&nexus));
-    }
-
-    #[test]
-    fn config_router_enabled_when_lane_catalog_expands() {
-        use iroha_data_model::nexus::{LaneCatalog, LaneConfig};
-        use std::num::NonZeroU32;
-
-        let lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("nonzero lane count"),
-            vec![
-                LaneConfig::default(),
-                LaneConfig {
-                    id: LaneId::new(1),
-                    alias: "lane-1".to_owned(),
-                    description: None,
-                    ..LaneConfig::default()
-                },
-            ],
-        )
-        .expect("lane catalog");
-        let nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
-            lane_catalog,
-            ..Default::default()
-        };
-
-        assert!(should_use_config_router(&nexus));
-    }
-
-    #[test]
-    fn multilane_config_requires_nexus_enabled_flag() {
-        let err = Config::from_toml_source(TomlSource::inline(multilane_config_table(false)))
-            .expect_err("multi-lane catalog must require nexus.enabled");
-        let rendered = format!("{err:?}");
-        assert!(
-            rendered.contains("nexus.enabled"),
-            "error should mention nexus.enabled, got: {rendered}"
-        );
-    }
-
-    #[test]
-    fn multilane_config_parses_when_enabled_flag_set() {
-        let config = Config::from_toml_source(TomlSource::inline(multilane_config_table(true)))
-            .expect("multi-lane config with nexus enabled should parse");
-        assert!(config.nexus.enabled);
-        assert_eq!(config.nexus.lane_catalog.lane_count().get(), 2);
-        assert_eq!(config.nexus.lane_config.entries().len(), 2);
-    }
-
-    #[test]
-    fn read_genesis_handles_decode_failure() {
-        // Create a bogus genesis file and ensure we return an error instead of panicking.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bad.genesis.signed.nrt");
-        std::fs::write(&path, [0u8, 1u8, 2u8, 3u8]).unwrap();
-
-        let res = read_genesis(&path);
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn read_genesis_initializes_instruction_registry() {
-        use iroha_data_model::isi::{InstructionRegistry, set_instruction_registry};
-
-        let _registry_guard = instruction_registry_test_guard();
-
-        // Start with an empty registry to simulate uninitialized state.
-        set_instruction_registry(InstructionRegistry::new());
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bad.genesis.signed.nrt");
-        std::fs::write(&path, [0u8, 1u8, 2u8, 3u8]).unwrap();
-
-        // `read_genesis` should initialize the registry internally and simply
-        // return a decode error for the bogus file instead of panicking.
-        let res = read_genesis_unlocked(&path);
-        assert!(res.is_err());
-    }
-
-    #[cfg(feature = "beep")]
-    #[test]
-    fn startup_beep_respects_config_flag() {
-        assert!(
-            !startup_beep(false),
-            "beep disabled by config flag should no-op"
-        );
-        assert!(
-            startup_beep(true),
-            "beep enabled by config flag should play once"
-        );
-    }
-
-    mod soranet_transport {
-        use iroha_config::parameters::actual;
-        use tempfile::tempdir;
-
-        #[test]
-        fn configure_soranet_transport_creates_spool_directory() {
-            let temp = tempdir().expect("create temp dir");
-            let spool_dir = temp.path().join("spool");
-
-            let mut soranet = actual::StreamingSoranet::from_defaults();
-            soranet.enabled = true;
-            soranet.provision_spool_dir = spool_dir.clone();
-
-            let mut handle = iroha_core::streaming::StreamingHandle::new();
-            super::super::configure_soranet_transport(&mut handle, &soranet)
-                .expect("soranet transport configuration should succeed");
-
-            assert!(
-                spool_dir.is_dir(),
-                "expected configure_soranet_transport to create the spool directory"
-            );
-        }
-
-        #[test]
-        fn configure_soranet_transport_noop_when_disabled() {
-            let temp = tempdir().expect("create temp dir");
-            let spool_dir = temp.path().join("disabled");
-
-            let mut soranet = actual::StreamingSoranet::from_defaults();
-            soranet.enabled = false;
-            soranet.provision_spool_dir = spool_dir.clone();
-
-            let mut handle = iroha_core::streaming::StreamingHandle::new();
-            super::super::configure_soranet_transport(&mut handle, &soranet)
-                .expect("disabled soranet transport should not fail");
-
-            assert!(
-                !spool_dir.exists(),
-                "disabled configuration must not create the spool directory"
-            );
-        }
-    }
+    include!("main/startup_tail_tests.rs");
 }
 
 /// Result type returned by daemon launcher and startup operations.

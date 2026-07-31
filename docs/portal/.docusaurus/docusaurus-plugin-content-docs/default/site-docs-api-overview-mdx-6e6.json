@@ -1,0 +1,15 @@
+{
+  "id": "api/overview",
+  "title": "Torii API Overview",
+  "description": "The Torii gateway exposes a REST + WebSocket surface for interacting with Iroha",
+  "source": "@site/docs/api/overview.mdx",
+  "sourceDirName": "api",
+  "slug": "/api/overview",
+  "permalink": "/next/api/overview",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/api/overview.mdx",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

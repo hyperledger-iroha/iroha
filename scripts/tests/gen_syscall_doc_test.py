@@ -103,32 +103,57 @@ class PublicConstantParserTests(unittest.TestCase):
                 MODULE.build_rows(source, spec)
 
 
-class LocalizedTableStructureTests(unittest.TestCase):
-    def test_requires_exactly_one_nonempty_table_body(self) -> None:
-        rows = ["| SYSCALL_ONE | 0x1 |  |"]
-        valid = ["title", "| Name |", "|---|", "| stale |", "", "tail"]
-        self.assertEqual(
-            MODULE.replace_localized_table(valid, rows),
-            ["title", "| Name |", "|---|", *rows, "", "tail"],
-        )
-        for malformed in (
-            ["title"],
-            ["| Name |", "|---|"],
-            ["| Name |", "|---|", "| stale |", "", "| Other |", "|---|"],
-        ):
-            with self.subTest(lines=malformed):
-                with self.assertRaises(RuntimeError):
-                    MODULE.replace_localized_table(malformed, rows)
-
-
 class PublicationTests(unittest.TestCase):
-    def test_command_mode_is_exactly_one_known_argument(self) -> None:
-        self.assertFalse(MODULE.parse_mode(("--write",)))
-        self.assertTrue(MODULE.parse_mode(("--check",)))
-        for arguments in ((), ("--write", "--check"), ("--unknown",)):
+    def test_command_options_require_one_mode_and_at_most_one_output(self) -> None:
+        self.assertEqual(
+            MODULE.parse_args(("--write",)),
+            MODULE.GeneratorOptions(check=False, output=MODULE.DEFAULT_OUTPUT),
+        )
+        self.assertEqual(
+            MODULE.parse_args(("--output", "stage/generated.md", "--check")),
+            MODULE.GeneratorOptions(
+                check=True,
+                output=Path("stage/generated.md"),
+            ),
+        )
+        self.assertEqual(
+            MODULE.parse_args(("--write", "--output", "/tmp/generated.md")),
+            MODULE.GeneratorOptions(
+                check=False,
+                output=Path("/tmp/generated.md"),
+            ),
+        )
+        for arguments in (
+            (),
+            ("--output", "generated.md"),
+            ("--write", "--check"),
+            ("--write", "--write"),
+            ("--write", "--output"),
+            ("--write", "--output", ""),
+            ("--write", "--output", "--check"),
+            ("--write", "--output", "first.md", "--output", "second.md"),
+            ("--unknown",),
+        ):
             with self.subTest(arguments=arguments):
                 with self.assertRaises(ValueError):
-                    MODULE.parse_mode(arguments)
+                    MODULE.parse_args(arguments)
+
+    def test_command_writes_and_checks_only_the_explicit_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "generated.md"
+            self.assertEqual(
+                MODULE.main(("--write", "--output", str(output))),
+                0,
+            )
+            expected = output.read_bytes()
+            self.assertGreater(len(expected), 0)
+            self.assertEqual(
+                MODULE.main(("--check", "--output", str(output))),
+                0,
+            )
+            self.assertEqual(output.read_bytes(), expected)
+            self.assertEqual([entry.name for entry in root.iterdir()], ["generated.md"])
 
     def test_canonical_check_is_nonmutating_and_write_is_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -193,122 +218,5 @@ class PublicationTests(unittest.TestCase):
             self.assertFalse(
                 any(entry.name.endswith(".tmp") for entry in root.iterdir())
             )
-
-
-class LocaleInventoryTests(unittest.TestCase):
-    def test_release_locale_inventory_is_sorted_unique_and_complete(self) -> None:
-        self.assertEqual(len(MODULE.EXPECTED_LOCALES), 20)
-        self.assertEqual(
-            tuple(sorted(set(MODULE.EXPECTED_LOCALES))),
-            MODULE.EXPECTED_LOCALES,
-        )
-        rust_support = (
-            SCRIPT.parents[1] / "crates/ivm/src/bin/support/mod.rs"
-        ).read_text(encoding="utf-8")
-        block = MODULE.re.search(
-            r"EXPECTED_DOC_LOCALES: &\[&str\] = &\[(?P<body>.*?)\];",
-            rust_support,
-            flags=MODULE.re.DOTALL,
-        )
-        self.assertIsNotNone(block)
-        rust_locales = tuple(MODULE.re.findall(r'"([^"]+)"', block["body"]))
-        self.assertEqual(rust_locales, MODULE.EXPECTED_LOCALES)
-
-    def populate(self, root: Path) -> None:
-        for locale in MODULE.EXPECTED_LOCALES:
-            (root / f"ivm_syscalls_generated.{locale}.md").write_text(
-                "| Name |\n|---|\n| old |\n\n", encoding="utf-8"
-            )
-
-    def test_inventory_is_exact_and_rejects_missing_and_unexpected(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.populate(root)
-            self.assertEqual(
-                len(MODULE.localized_table_paths(root)),
-                len(MODULE.EXPECTED_LOCALES),
-            )
-
-            missing = root / "ivm_syscalls_generated.am.md"
-            missing.unlink()
-            with self.assertRaises(RuntimeError):
-                MODULE.localized_table_paths(root)
-            missing.write_text("| Name |\n|---|\n| old |\n\n", encoding="utf-8")
-
-            unexpected = root / "ivm_syscalls_generated.extra.md"
-            unexpected.write_text("| Name |\n|---|\n| old |\n\n", encoding="utf-8")
-            with self.assertRaises(RuntimeError):
-                MODULE.localized_table_paths(root)
-
-    def test_inventory_rejects_symlinked_tables(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.populate(root)
-            target = root / "target.md"
-            target.write_text("fixture\n", encoding="utf-8")
-            path = root / "ivm_syscalls_generated.am.md"
-            path.unlink()
-            try:
-                path.symlink_to(target)
-            except (NotImplementedError, OSError):
-                self.skipTest("symlinks are unavailable on this platform")
-            with self.assertRaises(RuntimeError):
-                MODULE.localized_table_paths(root)
-
-    def test_localized_check_detects_byte_drift_without_mutation(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.populate(root)
-            rows = ["| SYSCALL_ONE | 0x1 |  |"]
-            MODULE.sync_localized_tables(
-                rows, check=False, source_dir=root
-            )
-
-            path = root / "ivm_syscalls_generated.am.md"
-            path.write_bytes(path.read_bytes().rstrip(b"\n"))
-            before = path.read_bytes()
-            with self.assertRaises(RuntimeError):
-                MODULE.sync_localized_tables(
-                    rows, check=True, source_dir=root
-                )
-            self.assertEqual(path.read_bytes(), before)
-
-            MODULE.sync_localized_tables(
-                rows, check=False, source_dir=root
-            )
-            self.assertTrue(path.read_bytes().endswith(b"\n"))
-            self.assertFalse(
-                any(entry.name.endswith(".tmp") for entry in root.iterdir())
-            )
-
-    def test_late_malformed_locale_keeps_canonical_and_earlier_locale_unchanged(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.populate(root)
-            canonical = root / "ivm_syscalls_generated.md"
-            canonical.write_text("stale canonical\n", encoding="utf-8")
-            first = root / "ivm_syscalls_generated.am.md"
-            late = root / "ivm_syscalls_generated.zh-hant.md"
-            late.write_text("missing table separator\n", encoding="utf-8")
-            canonical_before = canonical.read_bytes()
-            first_before = first.read_bytes()
-            rows = ["| SYSCALL_ONE | 0x1 |  |"]
-
-            with self.assertRaises(RuntimeError):
-                MODULE.sync_all_tables(
-                    rows,
-                    check=False,
-                    canonical_path=canonical,
-                    source_dir=root,
-                )
-            self.assertEqual(canonical.read_bytes(), canonical_before)
-            self.assertEqual(first.read_bytes(), first_before)
-            self.assertFalse(
-                any(entry.name.endswith(".tmp") for entry in root.iterdir())
-            )
-
-
 if __name__ == "__main__":
     unittest.main()

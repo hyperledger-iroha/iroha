@@ -25,6 +25,9 @@ import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.MAX_CONTRACT_ARGUMENT_RECORD_BYTES
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.core.model.instructions.LanePrivacyMerkleWitness
+import org.hyperledger.iroha.sdk.core.model.instructions.LanePrivacyProof
+import org.hyperledger.iroha.sdk.core.model.instructions.LanePrivacyWitness
 import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
 import org.hyperledger.iroha.sdk.core.model.instructions.ProofVerifierKeyRef
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
@@ -106,7 +109,12 @@ internal class TransactionPayloadAdapter private constructor(
 
         override fun decode(decoder: NoritoDecoder): ProofBoxValue =
             ProofBoxValue(
-                decodeSizedField(decoder, STRING_ADAPTER),
+                decodeBoundedSizedField(
+                    decoder,
+                    STRING_ADAPTER,
+                    PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES,
+                    "ProofBox backend",
+                ),
                 decodeSizedField(decoder, RAW_BYTE_VEC_ADAPTER),
             )
     }
@@ -119,8 +127,170 @@ internal class TransactionPayloadAdapter private constructor(
 
         override fun decode(decoder: NoritoDecoder): ProofVerifierKeyRef =
             ProofVerifierKeyRef(
-                decodeSizedField(decoder, STRING_ADAPTER),
-                decodeSizedField(decoder, STRING_ADAPTER),
+                decodeBoundedSizedField(
+                    decoder,
+                    STRING_ADAPTER,
+                    PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES,
+                    "verifier-key backend",
+                ),
+                decodeBoundedSizedField(
+                    decoder,
+                    STRING_ADAPTER,
+                    PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES,
+                    "verifier-key name",
+                ),
+            )
+    }
+
+    private object LanePrivacyAuditPathAdapter : TypeAdapter<List<ByteArray>> {
+        private val delegate = NoritoAdapters.sequence(OPTIONAL_LANE_PRIVACY_HASH_ADAPTER)
+
+        override fun encode(encoder: NoritoEncoder, value: List<ByteArray>) {
+            require(value.size in 1..LanePrivacyMerkleWitness.MAX_DEPTH) {
+                "lane privacy audit path depth must be between 1 and ${LanePrivacyMerkleWitness.MAX_DEPTH}"
+            }
+            delegate.encode(encoder, value.map { Optional.of(it.copyOf()) })
+        }
+
+        override fun decode(decoder: NoritoDecoder): List<ByteArray> {
+            val countValue = decoder.readLength(false)
+            require(countValue in 1L..LanePrivacyMerkleWitness.MAX_DEPTH.toLong()) {
+                "lane privacy audit path depth must be between 1 and ${LanePrivacyMerkleWitness.MAX_DEPTH}"
+            }
+            val count = countValue.toInt()
+            return if ((decoder.flags and NoritoHeader.PACKED_SEQ) != 0) {
+                decodePacked(decoder, count)
+            } else {
+                decodeDelimited(decoder, count)
+            }
+        }
+
+        override fun isSelfDelimiting(): Boolean = true
+
+        private fun decodeDelimited(decoder: NoritoDecoder, count: Int): List<ByteArray> {
+            val siblings = ArrayList<ByteArray>(count)
+            repeat(count) { index ->
+                val length = decoder.readLength(decoder.compactLenActive())
+                require(length in 1L..LANE_PRIVACY_MAX_SIBLING_OPTION_ENCODED_BYTES) {
+                    "lane privacy sibling $index payload is oversized"
+                }
+                siblings.add(decodeSibling(decoder.readBytes(length.toInt()), decoder, index))
+            }
+            return siblings
+        }
+
+        private fun decodePacked(decoder: NoritoDecoder, count: Int): List<ByteArray> {
+            var previous = decoder.readUInt(64)
+            require(previous == 0L) { "packed lane privacy offsets must start at zero" }
+            val sizes = ArrayList<Int>(count)
+            repeat(count) { index ->
+                val current = decoder.readUInt(64)
+                require(current >= previous) { "packed lane privacy offsets must be monotonic" }
+                val size = current - previous
+                require(size in 1L..LANE_PRIVACY_MAX_SIBLING_OPTION_ENCODED_BYTES) {
+                    "lane privacy sibling $index payload is oversized"
+                }
+                sizes.add(size.toInt())
+                previous = current
+            }
+            require(previous == decoder.remaining().toLong()) {
+                "packed lane privacy offsets must cover the complete path payload"
+            }
+            return sizes.mapIndexedTo(ArrayList(count)) { index, size ->
+                decodeSibling(decoder.readBytes(size), decoder, index)
+            }
+        }
+
+        private fun decodeSibling(
+            payload: ByteArray,
+            parent: NoritoDecoder,
+            index: Int,
+        ): ByteArray {
+            val child = NoritoDecoder(payload, parent.flags, parent.flagsHint)
+            val sibling = OPTIONAL_LANE_PRIVACY_HASH_ADAPTER.decode(child)
+            require(child.remaining() == 0) {
+                "lane privacy sibling $index has trailing bytes"
+            }
+            require(sibling.isPresent) {
+                "lane privacy sibling $index must be present"
+            }
+            val bytes = sibling.get()
+            require(bytes.last().toInt() and 1 == 1) {
+                "lane privacy sibling $index is missing the Iroha prehashed marker"
+            }
+            return bytes
+        }
+    }
+
+    private class LanePrivacyMerkleProofValue(
+        val leafIndex: Long,
+        val auditPath: List<ByteArray>,
+    )
+
+    private class LanePrivacyMerkleProofAdapter : TypeAdapter<LanePrivacyMerkleProofValue> {
+        override fun encode(encoder: NoritoEncoder, value: LanePrivacyMerkleProofValue) {
+            encodeSizedField(encoder, UINT32_ADAPTER, value.leafIndex)
+            encodeSizedField(encoder, LANE_PRIVACY_AUDIT_PATH_ADAPTER, value.auditPath)
+        }
+
+        override fun decode(decoder: NoritoDecoder): LanePrivacyMerkleProofValue {
+            val leafIndex = decodeSizedField(decoder, UINT32_ADAPTER)
+            val auditPath = decodeBoundedSizedField(
+                decoder,
+                LANE_PRIVACY_AUDIT_PATH_ADAPTER,
+                LANE_PRIVACY_MAX_AUDIT_PATH_ENCODED_BYTES,
+                "lane privacy audit path",
+            )
+            return LanePrivacyMerkleProofValue(leafIndex, auditPath)
+        }
+    }
+
+    private class LanePrivacyMerkleWitnessAdapter : TypeAdapter<LanePrivacyMerkleWitness> {
+        override fun encode(encoder: NoritoEncoder, value: LanePrivacyMerkleWitness) {
+            encodeSizedField(encoder, HASH_ARRAY_ADAPTER, value.leafBytes())
+            encodeSizedField(
+                encoder,
+                LANE_PRIVACY_MERKLE_PROOF_ADAPTER,
+                LanePrivacyMerkleProofValue(value.leafIndex, value.auditPathBytes()),
+            )
+        }
+
+        override fun decode(decoder: NoritoDecoder): LanePrivacyMerkleWitness {
+            val leaf = decodeSizedField(decoder, HASH_ARRAY_ADAPTER)
+            val proof = decodeSizedField(decoder, LANE_PRIVACY_MERKLE_PROOF_ADAPTER)
+            return LanePrivacyMerkleWitness(leaf, proof.leafIndex, proof.auditPath)
+        }
+    }
+
+    private class LanePrivacyWitnessAdapter : TypeAdapter<LanePrivacyWitness> {
+        override fun encode(encoder: NoritoEncoder, value: LanePrivacyWitness) {
+            when (value) {
+                is LanePrivacyWitness.Merkle -> {
+                    ENUM_TAG_ADAPTER.encode(encoder, LANE_PRIVACY_MERKLE_TAG)
+                    encodeSizedField(encoder, LANE_PRIVACY_MERKLE_WITNESS_ADAPTER, value.value)
+                }
+            }
+        }
+
+        override fun decode(decoder: NoritoDecoder): LanePrivacyWitness =
+            when (val tag = ENUM_TAG_ADAPTER.decode(decoder)) {
+                LANE_PRIVACY_MERKLE_TAG -> LanePrivacyWitness.Merkle(
+                    decodeSizedField(decoder, LANE_PRIVACY_MERKLE_WITNESS_ADAPTER),
+                )
+                else -> throw IllegalArgumentException("unknown lane privacy witness tag: $tag")
+            }
+    }
+
+    private class LanePrivacyProofAdapter : TypeAdapter<LanePrivacyProof> {
+        override fun encode(encoder: NoritoEncoder, value: LanePrivacyProof) {
+            encodeSizedField(encoder, UINT16_ADAPTER, value.commitmentId.toLong())
+            encodeSizedField(encoder, LANE_PRIVACY_WITNESS_ADAPTER, value.witness)
+        }
+
+        override fun decode(decoder: NoritoDecoder): LanePrivacyProof =
+            LanePrivacyProof(
+                decodeSizedField(decoder, UINT16_ADAPTER).toInt(),
+                decodeSizedField(decoder, LANE_PRIVACY_WITNESS_ADAPTER),
             )
     }
 
@@ -136,30 +306,52 @@ internal class TransactionPayloadAdapter private constructor(
 
             val commitment = value.verifyingKeyCommitmentBytes()
             val envelopeHash = value.envelopeHashBytes()
-            if (commitment != null || envelopeHash != null) {
+            val lanePrivacy = value.lanePrivacy
+            if (commitment != null || envelopeHash != null || lanePrivacy != null) {
                 encodeSizedField(
                     encoder,
                     OPTIONAL_HASH_ADAPTER,
                     Optional.ofNullable(commitment),
                 )
             }
-            if (envelopeHash != null) {
+            if (envelopeHash != null || lanePrivacy != null) {
                 encodeSizedField(
                     encoder,
                     OPTIONAL_HASH_ADAPTER,
-                    Optional.of(envelopeHash),
+                    Optional.ofNullable(envelopeHash),
+                )
+            }
+            if (lanePrivacy != null) {
+                encodeSizedField(
+                    encoder,
+                    OPTIONAL_LANE_PRIVACY_ADAPTER,
+                    Optional.of(lanePrivacy),
                 )
             }
         }
 
         override fun decode(decoder: NoritoDecoder): ProofAttachment {
-            val backend = decodeSizedField(decoder, STRING_ADAPTER)
-            val proof = decodeSizedField(decoder, PROOF_BOX_ADAPTER)
+            val backend = decodeBoundedSizedField(
+                decoder,
+                STRING_ADAPTER,
+                PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES,
+                "ProofAttachment backend",
+            )
+            val proof = decodeBoundedSizedField(
+                decoder,
+                PROOF_BOX_ADAPTER,
+                PROOF_BOX_MAX_ENCODED_BYTES,
+                "ProofBox",
+            )
             require(proof.backend == backend) {
                 "proof.backend must match attachment backend"
             }
-            val verifyingKeyRef =
-                decodeSizedField(decoder, PROOF_VERIFIER_KEY_REF_ADAPTER)
+            val verifyingKeyRef = decodeBoundedSizedField(
+                decoder,
+                PROOF_VERIFIER_KEY_REF_ADAPTER,
+                VERIFYING_KEY_REF_MAX_ENCODED_BYTES,
+                "verifier-key reference",
+            )
             require(verifyingKeyRef.backend == backend) {
                 "vk_ref.backend must match attachment backend"
             }
@@ -167,16 +359,34 @@ internal class TransactionPayloadAdapter private constructor(
             val commitment = if (decoder.remaining() == 0) {
                 null
             } else {
-                decodeSizedField(decoder, OPTIONAL_HASH_ADAPTER).orElse(null)
+                decodeBoundedSizedField(
+                    decoder,
+                    OPTIONAL_HASH_ADAPTER,
+                    OPTIONAL_FIXED_ARRAY_HASH_MAX_ENCODED_BYTES,
+                    "verifier-key commitment",
+                ).orElse(null)
             }
             val envelopeHash = if (decoder.remaining() == 0) {
                 null
             } else {
-                decodeSizedField(decoder, OPTIONAL_HASH_ADAPTER).orElse(null)
+                decodeBoundedSizedField(
+                    decoder,
+                    OPTIONAL_HASH_ADAPTER,
+                    OPTIONAL_FIXED_ARRAY_HASH_MAX_ENCODED_BYTES,
+                    "envelope hash",
+                ).orElse(null)
             }
-            require(decoder.remaining() == 0) {
-                "lane privacy proof attachments are not supported by this SDK"
+            val lanePrivacy = if (decoder.remaining() == 0) {
+                null
+            } else {
+                decodeBoundedSizedField(
+                    decoder,
+                    OPTIONAL_LANE_PRIVACY_ADAPTER,
+                    LANE_PRIVACY_MAX_OPTION_ENCODED_BYTES,
+                    "lane privacy proof",
+                ).orElse(null)
             }
+            require(decoder.remaining() == 0) { "trailing ProofAttachment fields" }
 
             return ProofAttachment(
                 backend,
@@ -184,6 +394,7 @@ internal class TransactionPayloadAdapter private constructor(
                 verifyingKeyRef,
                 commitment,
                 envelopeHash,
+                lanePrivacy,
             )
         }
     }
@@ -703,6 +914,17 @@ internal class TransactionPayloadAdapter private constructor(
         // Validation never exposes rendered account text. Controller bytes are independent of the
         // I105 display prefix, so this private synthetic context does not become a network default.
         private const val CANONICAL_VALIDATION_DISCRIMINANT = 0
+        private const val PROOF_BOX_MAX_ENCODED_BYTES = 64L * 1024L * 1024L
+        private const val PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES = 8L + 256L
+        private const val VERIFYING_KEY_REF_MAX_ENCODED_BYTES =
+            2L * (8L + PORTABLE_IDENTIFIER_MAX_ENCODED_BYTES)
+        private const val OPTIONAL_FIXED_ARRAY_HASH_MAX_ENCODED_BYTES = 1L + 8L + 32L * 9L
+        private const val LANE_PRIVACY_MAX_SIBLING_OPTION_ENCODED_BYTES = 1L + 8L + 32L
+        private const val LANE_PRIVACY_MAX_AUDIT_PATH_ENCODED_BYTES =
+            8L + (LanePrivacyMerkleWitness.MAX_DEPTH + 1L) * 8L +
+                LanePrivacyMerkleWitness.MAX_DEPTH * LANE_PRIVACY_MAX_SIBLING_OPTION_ENCODED_BYTES
+        private const val LANE_PRIVACY_MAX_OPTION_ENCODED_BYTES = 16L * 1024L
+        private const val LANE_PRIVACY_MERKLE_TAG = 0L
         private val CHAIN_DISCRIMINANT = ThreadLocal<Int?>()
 
         fun forChain(chainDiscriminant: Int): TransactionPayloadAdapter {
@@ -760,6 +982,20 @@ internal class TransactionPayloadAdapter private constructor(
         private val HASH_ARRAY_ADAPTER: TypeAdapter<ByteArray> = FixedHashArrayAdapter
         private val OPTIONAL_HASH_ADAPTER: TypeAdapter<Optional<ByteArray>> =
             NoritoAdapters.option(HASH_ARRAY_ADAPTER)
+        private val OPTIONAL_LANE_PRIVACY_HASH_ADAPTER: TypeAdapter<Optional<ByteArray>> =
+            NoritoAdapters.option(HASH_ADAPTER)
+        private val LANE_PRIVACY_AUDIT_PATH_ADAPTER: TypeAdapter<List<ByteArray>> =
+            LanePrivacyAuditPathAdapter
+        private val LANE_PRIVACY_MERKLE_PROOF_ADAPTER: TypeAdapter<LanePrivacyMerkleProofValue> =
+            LanePrivacyMerkleProofAdapter()
+        private val LANE_PRIVACY_MERKLE_WITNESS_ADAPTER: TypeAdapter<LanePrivacyMerkleWitness> =
+            LanePrivacyMerkleWitnessAdapter()
+        private val LANE_PRIVACY_WITNESS_ADAPTER: TypeAdapter<LanePrivacyWitness> =
+            LanePrivacyWitnessAdapter()
+        private val LANE_PRIVACY_PROOF_ADAPTER: TypeAdapter<LanePrivacyProof> =
+            LanePrivacyProofAdapter()
+        private val OPTIONAL_LANE_PRIVACY_ADAPTER: TypeAdapter<Optional<LanePrivacyProof>> =
+            NoritoAdapters.option(LANE_PRIVACY_PROOF_ADAPTER)
         private val IVM_BYTECODE_ADAPTER: TypeAdapter<ByteArray> = IvmBytecodeAdapter()
         private val INSTRUCTION_ADAPTER: TypeAdapter<InstructionBox> = InstructionAdapter()
         private val INSTRUCTION_LIST_ADAPTER: TypeAdapter<List<InstructionBox>> =
@@ -818,6 +1054,19 @@ internal class TransactionPayloadAdapter private constructor(
 
         internal fun encodeInstructionBox(value: InstructionBox): ByteArray =
             NoritoCodec.encode(value, INSTRUCTION_BOX_SCHEMA, InstructionAdapter())
+
+        internal fun encodeProofAttachmentPayload(value: ProofAttachment, flags: Int = 0): ByteArray {
+            val encoder = NoritoEncoder(flags)
+            PROOF_ATTACHMENT_ADAPTER.encode(encoder, value)
+            return encoder.toByteArray()
+        }
+
+        internal fun decodeProofAttachmentPayload(encoded: ByteArray, flags: Int = 0): ProofAttachment {
+            val decoder = NoritoDecoder(encoded, flags, NoritoHeader.MINOR_VERSION)
+            val value = PROOF_ATTACHMENT_ADAPTER.decode(decoder)
+            require(decoder.remaining() == 0) { "trailing ProofAttachment payload bytes" }
+            return value
+        }
 
         private fun <T> encodeSizedField(encoder: NoritoEncoder, adapter: TypeAdapter<T>, value: T) {
             val child = encoder.childEncoder()

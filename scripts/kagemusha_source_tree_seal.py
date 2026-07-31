@@ -5,7 +5,9 @@ Candidate generation is allowed from a dirty checkout only when the complete
 tracked diff, untracked regular files, ignored root ``Cargo.lock``, and full
 source-tree identity match one canonical descriptor whose raw SHA-256 is pinned
 independently.  ``descriptor`` emits the observation that must be reviewed and
-pinned.  ``identity`` and ``fingerprint`` never accept an unpinned observation.
+pinned.  Gitlinks bind their exact index commit and may only be absent or an
+empty, non-symlink directory.  ``identity`` and ``fingerprint`` never accept an
+unpinned observation.
 """
 
 from __future__ import annotations
@@ -24,13 +26,13 @@ from dataclasses import dataclass
 from typing import Any
 
 
-SOURCE_TREE_DOMAIN = b"iroha.kagemusha.full-source-tree-sha256.v3\0"
+SOURCE_TREE_DOMAIN = b"iroha.kagemusha.full-source-tree-sha256.v4\0"
 SOURCE_DIFF_DOMAIN = b"iroha-source-diff-v1\0"
 TRACKED_DIFF_DOMAIN = b"tracked-binary-diff-sha256\0"
 UNTRACKED_MANIFEST_DOMAIN = b"untracked-path-blob-manifest-sha256\0"
 REVIEWED_SOURCE_CLOSURE_SCHEMA = "iroha.reviewed-source-closure.v1"
 SOURCE_IDENTITY_SCHEMA = "iroha.kagemusha.reviewed_source_tree_identity.v1"
-ALLOWED_INDEX_MODES = {b"100644", b"100755", b"120000"}
+ALLOWED_INDEX_MODES = {b"100644", b"100755", b"120000", b"160000"}
 ALLOWED_UNTRACKED_MODES = {"100644", "100755"}
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 MAX_DESCRIPTOR_BYTES = 16 * 1024 * 1024
@@ -306,6 +308,48 @@ def _stable_symlink_bytes(path: bytes) -> bytes:
     return payload
 
 
+def _require_empty_gitlink_directory(
+    path: bytes, observed: os.stat_result
+) -> None:
+    if not stat.S_ISDIR(observed.st_mode):
+        raise SourceSealError(
+            f"tracked gitlink must be absent or an empty directory: {os.fsdecode(path)}"
+        )
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(path, flags)
+    try:
+        opened_before = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened_before.st_mode)
+            or _stable_identity(observed) != _stable_identity(opened_before)
+        ):
+            raise SourceSealError(
+                f"tracked gitlink changed while inspected: {os.fsdecode(path)}"
+            )
+        if os.listdir(descriptor):
+            raise SourceSealError(
+                f"tracked gitlink directory must be empty: {os.fsdecode(path)}"
+            )
+        opened_after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    after = os.lstat(path)
+    if not (
+        _stable_identity(observed)
+        == _stable_identity(opened_before)
+        == _stable_identity(opened_after)
+        == _stable_identity(after)
+    ):
+        raise SourceSealError(
+            f"tracked gitlink changed while inspected: {os.fsdecode(path)}"
+        )
+
+
 def _untracked_paths(root: pathlib.Path) -> list[bytes]:
     records = _git(
         root,
@@ -379,6 +423,15 @@ def _capture_observed_descriptor(root: pathlib.Path) -> dict[str, Any]:
         absolute = os.path.join(root_bytes, entry.path)
         _field(source_hasher, b"tracked-source-v1")
         _field(source_hasher, entry.path)
+        if entry.mode == b"160000":
+            _field(source_hasher, b"gitlink-index-v1")
+            _field(source_hasher, entry.object_id)
+            try:
+                metadata = os.lstat(absolute)
+            except FileNotFoundError:
+                continue
+            _require_empty_gitlink_directory(absolute, metadata)
+            continue
         try:
             metadata = os.lstat(absolute)
         except FileNotFoundError:

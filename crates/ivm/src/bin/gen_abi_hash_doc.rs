@@ -2,14 +2,14 @@
 //! Usage:
 //!   cargo run -p ivm --bin gen_abi_hash_doc -- --write
 //!   cargo run -p ivm --bin gen_abi_hash_doc -- --check
+//!   cargo run -p ivm --bin gen_abi_hash_doc -- --write --root /tmp/ivm-doc-stage
 
 use std::path::{Path, PathBuf};
 
 mod support;
 
 use support::{
-    EXPECTED_DOC_LOCALES, GeneratedOutput, GenerationMode, exact_localized_markdown_paths,
-    parse_generation_mode, sync_generated_outputs,
+    GeneratedOutput, GenerationOptions, parse_generation_options, sync_generated_outputs,
 };
 
 const BEGIN: &str = "<!-- BEGIN GENERATED ABI HASHES -->";
@@ -27,26 +27,24 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn source_dir() -> PathBuf {
-    workspace_root().join("docs/source")
+fn source_dir(root: &Path) -> PathBuf {
+    root.join("specs")
 }
 
-fn abi_hash_golden_path() -> PathBuf {
-    workspace_root().join("crates/ivm/tests/abi_hash_versions.rs")
+fn abi_hash_golden_path(root: &Path) -> PathBuf {
+    root.join("crates/ivm/tests/abi_hash_versions.rs")
 }
 
-fn gas_schedule_golden_path() -> PathBuf {
-    workspace_root().join("crates/ivm/tests/gas_schedule_hash.rs")
+fn gas_schedule_golden_path(root: &Path) -> PathBuf {
+    root.join("crates/ivm/tests/gas_schedule_hash.rs")
 }
 
-fn header_paths() -> Result<Vec<PathBuf>, String> {
-    let source_dir = source_dir();
-    exact_localized_markdown_paths(&source_dir, "ivm_header", true, EXPECTED_DOC_LOCALES)
+fn header_paths(root: &Path) -> Vec<PathBuf> {
+    vec![source_dir(root).join("ivm_header.md")]
 }
 
-fn runtime_sample_paths() -> Result<Vec<PathBuf>, String> {
-    let sample_dir = source_dir().join("samples");
-    exact_localized_markdown_paths(&sample_dir, "runtime_abi_hash", true, EXPECTED_DOC_LOCALES)
+fn runtime_sample_paths(root: &Path) -> Vec<PathBuf> {
+    vec![source_dir(root).join("samples/runtime_abi_hash.md")]
 }
 
 fn render_generated_hash_section(text: &str, expected: &str) -> Result<String, String> {
@@ -77,9 +75,9 @@ fn render_generated_hash_section(text: &str, expected: &str) -> Result<String, S
     Ok(rendered)
 }
 
-fn mode_or_exit() -> GenerationMode {
-    match parse_generation_mode(std::env::args().skip(1)) {
-        Ok(mode) => mode,
+fn options_or_exit() -> GenerationOptions {
+    match parse_generation_options(std::env::args().skip(1), workspace_root()) {
+        Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(2);
@@ -117,29 +115,27 @@ fn prepare_outputs(
 }
 
 fn main() {
-    let mode = mode_or_exit();
+    let options = options_or_exit();
 
     let table = ivm::syscalls::render_abi_hashes_markdown_table();
     let expected = format!("{BEGIN}\n{table}{END}");
 
-    let header_paths =
-        header_paths().unwrap_or_else(|error| panic!("discover IVM header documents: {error}"));
+    let header_paths = header_paths(&options.root);
     let runtime_hash = hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
-    let runtime_sample_paths = runtime_sample_paths()
-        .unwrap_or_else(|error| panic!("discover runtime ABI hash samples: {error}"));
+    let runtime_sample_paths = runtime_sample_paths(&options.root);
     let gas_hash = hex::encode(ivm::gas::schedule_hash().as_ref());
     let outputs = prepare_outputs(
         &header_paths,
         &runtime_sample_paths,
-        &abi_hash_golden_path(),
-        &gas_schedule_golden_path(),
+        &abi_hash_golden_path(&options.root),
+        &gas_schedule_golden_path(&options.root),
         &expected,
         &runtime_hash,
         &gas_hash,
     )
     .unwrap_or_else(|error| panic!("render ABI/gas hash outputs: {error}"));
     let regenerate_command = "cargo run --locked -p ivm --bin gen_abi_hash_doc -- --write";
-    let updated = sync_generated_outputs(&outputs, mode, regenerate_command)
+    let updated = sync_generated_outputs(&outputs, options.mode, regenerate_command)
         .unwrap_or_else(|error| panic!("{error}"));
     for path in updated {
         eprintln!("updated: {}", path.display());

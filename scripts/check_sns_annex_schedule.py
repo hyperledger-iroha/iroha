@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ensure SNS KPI annex jobs stay aligned with regulatory memos and report stubs.
+Ensure SNS KPI annex jobs stay aligned with regulatory memos and annex reports.
 """
 
 from __future__ import annotations
@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 
-DEFAULT_JOBS = "docs/source/sns/regulatory/annex_jobs.json"
-DEFAULT_REGULATORY_ROOT = "docs/source/sns/regulatory"
-DEFAULT_REPORT_ROOT = "docs/source/sns/reports"
+DEFAULT_JOBS = "specs/sns/regulatory/annex_jobs.json"
+DEFAULT_REGULATORY_ROOT = "specs/sns/regulatory"
+DEFAULT_REPORT_ROOT = "specs/sns/reports"
 
 MARKER_RE = re.compile(
     r"<!--\s*sns-annex:([a-z0-9\.\-]+?)-(\d{4}-\d{2}):start\s*-->",
@@ -79,16 +79,10 @@ def annex_report_path(report_root: Path, suffix: str, cycle: str) -> Path:
     return report_root / suffix / f"{cycle}.md"
 
 
-def is_translation_stub(path: Path) -> bool:
-    return bool(re.fullmatch(r"\d{4}-\d{2}\.[a-z]{2}\.md", path.name))
-
-
 def collect_annex_markers(regulatory_root: Path) -> Dict[Tuple[str, str], List[Path]]:
     markers: Dict[Tuple[str, str], List[Path]] = {}
     for path in regulatory_root.rglob("*.md"):
         if not re.fullmatch(r"\d{4}-\d{2}\.md", path.name):
-            continue
-        if is_translation_stub(path):
             continue
         text = path.read_text(encoding="utf-8")
         for suffix_raw, cycle in MARKER_RE.findall(text):
@@ -185,7 +179,7 @@ def has_issues(summary: Mapping[str, object]) -> bool:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate SNS annex job scheduling and localization coverage."
+        description="Validate SNS annex job scheduling and report coverage."
     )
     parser.add_argument(
         "--jobs",
@@ -200,7 +194,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--report-root",
         default=DEFAULT_REPORT_ROOT,
-        help="Root directory containing annex report stubs.",
+        help="Root directory containing canonical annex reports.",
     )
     parser.add_argument(
         "--base-dir",

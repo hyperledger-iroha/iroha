@@ -15,6 +15,7 @@ import {
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 const DEFAULT_SUCCESS_STATUSES = [200];
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
@@ -1558,6 +1559,10 @@ export class ToriiBrowserClient {
       signal: signalFrom(opts),
       successStatuses: opts.successStatuses ?? [200],
       maximumBodyBytes: PRIVACY_CAPABILITIES_JSON_MAX_BYTES,
+      jsonParser: (text) => parseStrictLosslessIntegerJson(
+        text,
+        "privacy capabilities response",
+      ),
       responseObserver: (response) => requireExactJsonContentType(
         response.headers?.get?.("content-type"),
         "privacy capabilities response",

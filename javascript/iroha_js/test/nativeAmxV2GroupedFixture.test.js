@@ -1,15 +1,22 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 
-import {
-  ToriiClient as DistToriiClient,
-  __sumeragiNativeAmxTestHelpers as distNativeAmxTestHelpers,
-} from "../dist/toriiClient.js";
 import {
   ToriiClient as SourceToriiClient,
   __sumeragiNativeAmxTestHelpers as sourceNativeAmxTestHelpers,
 } from "../src/toriiClient.js";
+
+const distToriiClientPath =
+  process.env.IROHA_JS_NATIVE_AMX_V2_PARITY_DIST_TORII_CLIENT;
+const distToriiClientUrl = distToriiClientPath
+  ? pathToFileURL(distToriiClientPath)
+  : new URL("../dist/toriiClient.js", import.meta.url);
+const {
+  ToriiClient: DistToriiClient,
+  __sumeragiNativeAmxTestHelpers: distNativeAmxTestHelpers,
+} = await import(distToriiClientUrl);
 
 const fixtureUrl = new URL(
   "../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json",
@@ -252,6 +259,37 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
     fixtureDocument.rust_owner,
     "iroha_data_model::block::consensus",
   );
+  const expectedSettlementHashes = new Map([
+    [
+      "7/11",
+      "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
+    ],
+    [
+      "8/12",
+      "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+    ],
+  ]);
+  const vectorLegs =
+    fixtureDocument.golden.receipt_group.native_amx_receipts[0].legs;
+  for (const leg of vectorLegs) {
+    const expected = expectedSettlementHashes.get(
+      `${leg.lane_id}/${leg.dataspace_id}`,
+    );
+    assert.ok(expected);
+    assert.equal(leg.participant_settlement_hash, expected);
+    assert.equal(
+      sourceNativeAmxTestHelpers.computeParticipantSettlementHash(
+        leg.participant_settlement,
+      ),
+      expected,
+    );
+    assert.equal(
+      distNativeAmxTestHelpers.computeParticipantSettlementHash(
+        leg.participant_settlement,
+      ),
+      expected,
+    );
+  }
 
   for (const [implementation, Client] of clientImplementations) {
     const diagnostics = await diagnosticsClient(

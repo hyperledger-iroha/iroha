@@ -2,15 +2,22 @@
 //! Integration (ignored) test: start a WS endpoint, subscribe, and assert Proof JSON frames.
 #![cfg(feature = "app_api")]
 
+#[cfg(feature = "ws_integration_tests")]
 #[path = "common/proof_events.rs"]
 mod proof_events;
 
+#[cfg(feature = "ws_integration_tests")]
 use std::io::ErrorKind;
 
+#[cfg(feature = "ws_integration_tests")]
 use axum::{Router, routing::get};
+#[cfg(feature = "ws_integration_tests")]
 use futures_util::{SinkExt as _, StreamExt as _};
+#[cfg(feature = "ws_integration_tests")]
 use proof_events::ProofEventFixture;
+#[cfg(feature = "ws_integration_tests")]
 use tokio::net::TcpListener;
+#[cfg(feature = "ws_integration_tests")]
 use tokio_tungstenite::tungstenite::Message;
 
 #[cfg(feature = "ws_integration_tests")]

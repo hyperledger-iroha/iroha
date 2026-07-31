@@ -3254,17 +3254,11 @@ fn decode_snapshot_plaintext(
     if plaintext.len() < norito_core::Header::SIZE || !plaintext.starts_with(&norito_core::MAGIC) {
         return Err(StreamingSnapshotError::Codec(NoritoError::LengthMismatch));
     }
-    let align = std::mem::align_of::<norito_core::Archived<StreamingSnapshotFile>>();
+    let align = norito_core::archived_payload_align::<StreamingSnapshotFile>();
     let aligned = align_slice(plaintext, align, norito_core::Header::SIZE)?;
     norito_core::from_bytes_view(aligned.as_slice())
         .and_then(|view| {
-            let bytes = view.as_bytes();
-            let (value, used) =
-                norito_core::decode_field_canonical::<StreamingSnapshotFile>(bytes)?;
-            if used != bytes.len() {
-                return Err(NoritoError::LengthMismatch);
-            }
-            Ok(value)
+            view.decode_exact_with(norito_core::decode_field_canonical::<StreamingSnapshotFile>)
         })
         .map_err(StreamingSnapshotError::Codec)
 }
@@ -5900,7 +5894,6 @@ mod tests {
     ) {
         use norito::streaming::TransportCapabilities;
         use tokio::time::{Duration as TokioDuration, sleep};
-
         let mut conn = server.accept().await.expect("accept");
         let mut publisher_caps = TransportCapabilities::kyber768_default();
         publisher_caps.max_segment_datagram_size = 1_100;
@@ -5976,7 +5969,6 @@ mod tests {
 
         use iroha_p2p::streaming::{StreamingServer, quic::TransportConfigSettings};
         use norito::streaming::CapabilityFlags;
-
         let settings = TransportConfigSettings::default();
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
         let server = StreamingServer::bind(server_addr, settings)
@@ -6043,7 +6035,6 @@ mod tests {
     #[test]
     fn privacy_requirement_without_provider_rejected() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
         let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0));
         let report = CapabilityReport {
             stream_id: hash_with(0xCA),
@@ -6338,7 +6329,6 @@ mod tests {
     #[test]
     fn bundled_entropy_requires_viewer_support() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
         let mut handle =
             StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
         let mut codec = actual::StreamingCodec::from_defaults();
@@ -6495,7 +6485,6 @@ mod tests {
     #[test]
     fn unsupported_feature_bits_rejected() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
         let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0));
         // Request a feature bit outside the allowed mask (bit 14).
         let report = CapabilityReport {
@@ -6529,7 +6518,6 @@ mod tests {
     #[test]
     fn zero_capability_report_protocol_version_rejected() {
         use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
         let handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b101));
         let report = CapabilityReport {
             stream_id: hash_with(0xDE),
@@ -6676,7 +6664,7 @@ mod tests {
             super::decode_snapshot_plaintext(&plaintext).expect("aligned decode succeeds");
         assert_eq!(decoded, file);
 
-        let align = std::mem::align_of::<norito_core::Archived<StreamingSnapshotFile>>();
+        let align = norito_core::archived_payload_align::<StreamingSnapshotFile>();
         assert!(align > 1, "expected archived snapshot alignment > 1");
         let mut envelope = vec![0u8; align - 1 + plaintext.len()];
         envelope[align - 1..align - 1 + plaintext.len()].copy_from_slice(&plaintext);

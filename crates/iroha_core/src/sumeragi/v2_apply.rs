@@ -1521,6 +1521,51 @@ impl V2ApplyService {
         } else {
             None
         };
+        let native_amx_prepublication = if store_block {
+            Some(
+                self.kura
+                    .prepublish_native_amx_participant_application_evidence(
+                        committed_block.as_ref(),
+                    )
+                    .map_err(|error| {
+                        V2ApplyError::committed_recovery_required(
+                            "pre-WSV Native AMX participant evidence publication",
+                            &error,
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+        let native_amx_frontiers = State::native_amx_participant_frontier_markers(
+            committed_block.as_ref(),
+        )
+        .map_err(|error| {
+            V2ApplyError::committed_recovery_required(
+                "pre-WSV Native AMX participant frontier projection",
+                &error,
+            )
+        })?;
+        let native_amx_prepublication_matches_state = match native_amx_prepublication.as_ref() {
+            Some(token) => token.authenticates_state_frontiers(
+                committed_block.as_ref(),
+                &native_amx_manifest,
+                artifact,
+                &native_amx_frontiers,
+            ),
+            None => native_amx_frontiers.is_empty(),
+        };
+        if !native_amx_prepublication_matches_state {
+            return Err(V2ApplyError::committed_recovery_required(
+                "pre-WSV Native AMX participant evidence publication",
+                &"read-back token differs from the exact State frontier projection",
+            ));
+        }
+
+        // `apply_without_execution_with_verified_v2_finality` stages the
+        // Native participant frontiers in the State overlay. Do not construct
+        // that overlay until every canonical manifest leaf has a durable,
+        // read-back-authenticated manifest/receipt/latest-index triple.
         let commit_topology = context
             .roster
             .iter()
@@ -1847,14 +1892,40 @@ fn snapshot_mismatch_context(staged: &[u8], committed: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        borrow::Cow,
-        collections::BTreeMap,
-        num::{NonZeroU64, NonZeroUsize},
-        sync::{Arc, Mutex},
-    };
-
+    use super::*;
     use crate::sumeragi::v2_core::{EventTag, Generation};
+    use crate::{
+        block::BlockBuilder,
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+        },
+        lane_consensus::LaneExecutablePayloadV1,
+        query::{
+            provider_ingest_finalized::{
+                ProviderIngestFinalizedArchiveBoundsV1,
+                ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveV1,
+            },
+            reputation_finalized::{
+                ReputationFinalizedArchive, ReputationFinalizedArchiveBounds,
+                ReputationFinalizedArchiveError, ReputationFinalizedArchiveInsertOutcome,
+                ReputationFinalizedArchiveRetentionApprovalRecordV1,
+                ReputationFinalizedArchiveRetentionAuthorityBindingV1,
+                ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
+                ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
+                ReputationFinalizedArchiveRetentionAuthorityV1,
+            },
+            store::LiveQueryStore,
+        },
+        queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
+        state::{World, WorldReadOnly},
+        sumeragi::{
+            v2_body_store::{
+                BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore, ValidatedBodyReceipt,
+            },
+            v2_effects::ApplyTask,
+        },
+        tx::AcceptedTransaction,
+    };
     use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
@@ -1908,41 +1979,12 @@ mod tests {
     use mv::storage::StorageReadOnly;
     use norito::codec::Encode as _;
     use sorafs_manifest::XorQuantity;
-
-    use super::*;
-    use crate::{
-        block::BlockBuilder,
-        governance::manifest::{
-            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
-        },
-        lane_consensus::LaneExecutablePayloadV1,
-        query::{
-            provider_ingest_finalized::{
-                ProviderIngestFinalizedArchiveBoundsV1,
-                ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveV1,
-            },
-            reputation_finalized::{
-                ReputationFinalizedArchive, ReputationFinalizedArchiveBounds,
-                ReputationFinalizedArchiveError, ReputationFinalizedArchiveInsertOutcome,
-                ReputationFinalizedArchiveRetentionApprovalRecordV1,
-                ReputationFinalizedArchiveRetentionAuthorityBindingV1,
-                ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
-                ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
-                ReputationFinalizedArchiveRetentionAuthorityV1,
-            },
-            store::LiveQueryStore,
-        },
-        queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
-        state::{World, WorldReadOnly},
-        sumeragi::{
-            v2_body_store::{
-                BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore, ValidatedBodyReceipt,
-            },
-            v2_effects::ApplyTask,
-        },
-        tx::AcceptedTransaction,
+    use std::{
+        borrow::Cow,
+        collections::BTreeMap,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::{Arc, Mutex},
     };
-
     #[derive(Debug)]
     struct ReputationRetentionAuthorityForTest {
         qualification: ReputationFinalizedArchiveRetentionAuthorityQualificationV1,
@@ -2344,6 +2386,7 @@ mod tests {
                 quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"apply crash fixture Nexus/AMX"),
+                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::Plain,
                     chunk_size_bytes: 2 * 1024 * 1024,
@@ -4853,6 +4896,59 @@ mod tests {
             durable_wire,
             "an exact retry must preserve the complete canonical Kura wire"
         );
+    });
+
+    v2_apply_test!(native_amx_prepublication_failure_leaves_wsv_unchanged, {
+        let fixture = ApplyFixture::new();
+        let baseline_state_hash =
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        fixture.kura.fail_next_native_amx_prepublication_for_tests();
+        let mut store = fixture.reopen_body_store();
+        let error = fixture
+            .execute(&mut store)
+            .expect_err("inject Native evidence publication failure before WSV staging");
+        assert!(matches!(
+            &error,
+            V2ApplyError::CommittedRecoveryRequired {
+                stage: "pre-WSV Native AMX participant evidence publication",
+                ..
+            }
+        ));
+        assert!(error.requires_restart_recovery());
+        assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            baseline_state_hash,
+            "prepublication failure must not leak the validated State overlay"
+        );
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
+        assert!(
+            fixture
+                .kura
+                .v2_finality_artifact(fixture.context.height)
+                .expect("read pre-WSV finality")
+                .is_some(),
+            "durable finality must precede Native evidence prepublication"
+        );
+        assert!(
+            fixture
+                .kura
+                .wsv_checkpoint(fixture.context.height)
+                .expect("read absent pre-WSV checkpoint")
+                .is_none()
+        );
+        assert!(
+            fixture
+                .kura
+                .commit_manifest(fixture.context.height)
+                .expect("read absent pre-WSV commit manifest")
+                .is_none()
+        );
+
+        fixture
+            .execute(&mut store)
+            .expect("retry exact carrier after prepublication failure");
+        fixture.assert_complete();
     });
 
     v2_apply_test!(restart_recovers_kura_lane_body_written_before_wsv_commit, {

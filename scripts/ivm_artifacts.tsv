@@ -46,12 +46,6 @@ kotodama-standard	crates/kotodama_lang/src/samples/irohaswap.ko	demo/irohaswap.t
 kotodama-standard	demo/ivm_smoke.ko	demo/ivm_smoke.to
 kotodama-standard	demo/prediction_market.ko	demo/prediction_market.to
 kotodama-standard	examples/transfer/transfer.ko	demo/transfer.to
-kotodama-standard	docs/portal/static/norito-snippets/call-transfer-asset.ko	docs/portal/static/norito-snippets/call-transfer-asset.to
-kotodama-standard	docs/portal/static/norito-snippets/hajimari-entrypoint.ko	docs/portal/static/norito-snippets/hajimari-entrypoint.to
-kotodama-standard	docs/portal/static/norito-snippets/nft-flow.ko	docs/portal/static/norito-snippets/nft-flow.to
-kotodama-standard	docs/portal/static/norito-snippets/register-and-mint.ko	docs/portal/static/norito-snippets/register-and-mint.to
-kotodama-standard	docs/portal/static/norito-snippets/threshold-escrow.ko	docs/portal/static/norito-snippets/threshold-escrow.to
-kotodama-standard	docs/portal/static/norito-snippets/transfer-asset.ko	docs/portal/static/norito-snippets/transfer-asset.to
 kotodama-standard	examples/hello/hello.ko	examples/hello/hello.to
 kotodama-standard	examples/map/map.ko	examples/map/map.to
 kotodama-standard	examples/nft/nft.ko	examples/nft/nft.to
@@ -65,12 +59,4 @@ kotodama-standard	crates/kotodama_lang/src/samples/smart_contract_can_filter_que
 kotodama-standard	crates/kotodama_lang/src/samples/threshold_escrow.ko	integration_tests/fixtures/ivm/threshold_escrow.to
 predecoder	0	crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode00_vlen0_cycles0_abi1.to
 predecoder	1	crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_1_mode03_vlen8_cycles1000_abi1.to
-synthetic	0	integration_tests/fixtures/ivm/executor_with_admin.to
-synthetic	1	integration_tests/fixtures/ivm/executor_with_custom_permission.to
-synthetic	2	integration_tests/fixtures/ivm/executor_remove_permission.to
-synthetic	3	integration_tests/fixtures/ivm/executor_custom_instructions_simple.to
-synthetic	4	integration_tests/fixtures/ivm/executor_custom_instructions_complex.to
-synthetic	5	integration_tests/fixtures/ivm/executor_with_migration_fail.to
-synthetic	6	integration_tests/fixtures/ivm/executor_with_fuel.to
-synthetic	7	integration_tests/fixtures/ivm/executor_with_custom_parameter.to
 default	v1	defaults/executor.to

@@ -1,0 +1,28 @@
+{
+  "id": "norito/ledger-walkthrough",
+  "title": "Ledger Walkthrough",
+  "description": "Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.",
+  "source": "@site/docs/norito/ledger-walkthrough.md",
+  "sourceDirName": "norito",
+  "slug": "/norito/ledger-walkthrough",
+  "permalink": "/next/norito/ledger-walkthrough",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/norito/ledger-walkthrough.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Ledger Walkthrough",
+    "description": "Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.",
+    "slug": "/norito/ledger-walkthrough"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Norito Quickstart",
+    "permalink": "/next/norito/quickstart"
+  },
+  "next": {
+    "title": "Norito Getting Started",
+    "permalink": "/next/norito/getting-started"
+  }
+}

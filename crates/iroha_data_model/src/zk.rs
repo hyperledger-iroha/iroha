@@ -31,11 +31,8 @@ pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
     "halo2/ipa",
     "halo2/pasta/kaigi-roster-v1",
     "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/ivm-overlay-bind",
     "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -143,11 +140,8 @@ pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
         "halo2/ipa"
         | "halo2/pasta/kaigi-roster-v1"
         | "halo2/pasta/kaigi-usage-v1"
-        | "halo2/pasta/ivm-overlay-bind"
         | "halo2/pasta/ivm-execution-v1"
         | "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
-        | "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"
-        | "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2"
         | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" => {
@@ -957,7 +951,7 @@ mod tests {
 
     #[test]
     fn verifier_backend_registry_is_closed_exact_and_engine_typed() {
-        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 15);
+        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 12);
         let mut unique = std::collections::BTreeSet::new();
         for &label in ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
             assert!(unique.insert(label), "duplicate registry label: {label}");
@@ -987,6 +981,9 @@ mod tests {
             "halo2/pasta/ivm-execution-v1/",
             "halo2/pasta/ivm-execution-v1\0",
             "halo2/pasta/ipa-pasta-cycle-v1",
+            "halo2/pasta/ivm-overlay-bind",
+            "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+            "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             "halo2/pasta/tiny-add",
             "stark",
             "STARK/FRI",
@@ -1443,11 +1440,11 @@ mod tests {
         );
         assert_eq!(
             hex::encode(tx_digest),
-            "f5e3f7120d12b98f65f088b419db9607d40eedfd412f767062cc4f1e18527036"
+            "f706a07a53999b6fe50baa1c970948d06cf558f9dfea83e90cf2f7fe6649b4d1"
         );
         assert_eq!(
             hex::encode(replay_nullifier),
-            "1ddaf81b2865d10fdc5b597f0283c675a76928bfd171eadb6410aacb971cefc1"
+            "4cab0d306af008a3069e2c3656c1b17f29c4da7b931c46b032f442ccfbb635e3"
         );
     }
 

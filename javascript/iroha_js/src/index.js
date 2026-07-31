@@ -1,5 +1,5 @@
 /**
- * Entry point for the experimental Iroha JS SDK.
+ * Entry point for the Iroha JavaScript SDK.
  *
  * Native bindings (Norito + crypto) are provided via the required `iroha_js_host`
  * module.
@@ -64,6 +64,7 @@ export {
 } from "./validationFeeProposal.js";
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {
+  LocalSigningContext,
   ToriiClient,
   TransactionStatusError,
   TransactionTimeoutError,
@@ -181,11 +182,16 @@ export {
   encodeQuantityNoritoValue,
   decodeCancelAssetLockV1,
   noritoDecodeBlockProofs,
+  noritoDecodeInstructionBoxArchive,
+  noritoEncodeInstructionBoxArchive,
   noritoEncodeInstruction,
   noritoDecodeInstruction,
   inspectSubscriptionTriggerAction,
   noritoEncodeOpenVerifyEnvelope,
   noritoDecodeOpenVerifyEnvelope,
+  noritoDecodePrivacyExact12FixtureBundleBase64V1,
+  noritoDecodePrivacyExact12FixtureBundleV1,
+  noritoEncodePrivacyExact12FixtureBundleV1,
   noritoEncodeContractManifestSignaturePayload,
   noritoEncodeTransactionPayloadBatch,
   noritoEncodeSorafsBillingAcknowledgementProofV1,
@@ -194,6 +200,9 @@ export {
   noritoEncodeMultisigContractCallApproveRequest,
   SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1,
   SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
+  PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
+  PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1,
+  PRIVACY_EXACT12_PROTOCOL_IDS_V1,
   verifyBlockMerkleProof,
   verifyBlockProofs,
   validateNoritoFrame,
@@ -272,7 +281,6 @@ export {
   buildCreateKaigiTransaction,
   buildPrivateKaigiFeeSpend,
   buildConfidentialTransferProofV2,
-  buildConfidentialAssetHiddenTransferProofV1,
   buildConfidentialUnshieldProofV2,
   buildConfidentialUnshieldProofV3,
   buildPrivateCreateKaigiTransaction,
@@ -315,7 +323,9 @@ export {
   browserTransactionPayloadHashHex,
   buildBrowserExecutableBatchPayload,
   buildBrowserInstructionTransactionPayload,
+  buildBrowserVerifyingKeyTransactionPayload,
   buildBrowserTransferPayload,
+  decodeCanonicalVerifyingKeyTransactionPayload,
   finalizeBrowserExecutableBatchTransaction,
   finalizeBrowserInstructionTransaction,
   finalizeBrowserSignedTransaction,
@@ -407,13 +417,11 @@ export {
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
-  buildRegisterAssetHiddenZkPoolInstruction,
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
   buildShieldInstruction,
   buildZkTransferInstruction,
-  buildAssetHiddenZkTransferInstruction,
   buildUnshieldInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,

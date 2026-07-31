@@ -30,7 +30,6 @@ pub enum PrivacyActivationStatementLimitsError {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct PrivacyProofBytesV1 {
     /// Exact native proof encoding.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
@@ -1412,12 +1411,26 @@ pub enum PrivacyProofEnvelopeValidationError {
 
 #[cfg(any(test, feature = "privacy-exact12-conformance"))]
 mod exact12_fixture {
-    use std::{fmt::Write as _, str::FromStr as _};
+    use std::{
+        fmt::Write as _,
+        num::{NonZeroU32, NonZeroU64},
+        str::FromStr as _,
+    };
 
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_version::codec::EncodeVersioned as _;
 
     use super::*;
-    use crate::{domain::DomainId, name::Name};
+    use crate::{
+        domain::DomainId,
+        isi::{InstructionBox, privacy::SubmitPrivacyProofV1},
+        metadata::Metadata,
+        name::Name,
+        transaction::{
+            Executable, FeePaymentIntent, TransactionBuilder, TransactionPayload,
+            signed::PrivacyTransactionIntentErrorV1,
+        },
+    };
 
     const _: [(); 12] = [(); PrivacyProtocolIdV1::COUNT];
     const EXACT12_CANONICAL_HEADER_V1: [&str; 4] = [
@@ -1606,7 +1619,6 @@ mod exact12_fixture {
         epoch: u64,
         crl_der_seed: u8,
         this_update_unix_seconds: u64,
-        _revoked_root_seed: u8,
         previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
         lifecycle: PrivacyZkX509RecordLifecycleV1,
     ) -> PrivacyZkX509CrlRecordV1 {
@@ -2165,10 +2177,10 @@ mod exact12_fixture {
     /// One complete byte-level KAT row derived from the canonical typed Rust
     /// fixture.
     ///
-    /// Both byte strings use canonical uncompressed Norito. Keeping the
-    /// protocol discriminant next to the bytes lets downstream SDKs reject
-    /// cross-protocol substitution before they attempt to decode a statement
-    /// or envelope.
+    /// Every archive uses canonical uncompressed Norito. Keeping the protocol
+    /// discriminant next to the complete statement, envelope, instruction,
+    /// intent, unsigned-payload, and signed-transaction bytes lets downstream
+    /// SDKs reject cross-protocol substitution at every transaction layer.
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-row.v1")]
     pub struct PrivacyExact12TypedFixtureRowV1 {
@@ -2178,6 +2190,20 @@ mod exact12_fixture {
         pub statement_norito: Vec<u8>,
         /// Complete canonical [`PrivacyProofEnvelopeV1`] bytes.
         pub envelope_norito: Vec<u8>,
+        /// Exact first-release instruction wire identifier.
+        pub submit_proof_wire_id: String,
+        /// Complete canonical [`SubmitPrivacyProofV1`] instruction archive.
+        pub submit_proof_instruction_norito: Vec<u8>,
+        /// Canonical normalized unsigned-payload preimage for the privacy intent.
+        pub transaction_intent_projection_norito: Vec<u8>,
+        /// BLAKE3 domain-separated digest of the normalized intent projection.
+        pub transaction_intent_digest: [u8; 32],
+        /// Canonical adaptive unsigned [`TransactionPayload`] bytes presented to signers.
+        pub unsigned_transaction_payload_norito: Vec<u8>,
+        /// Canonical versioned [`crate::transaction::SignedTransaction`] bytes submitted to Torii.
+        pub signed_transaction_versioned_norito: Vec<u8>,
+        /// Canonical pipeline transaction hash, which excludes authorization malleability.
+        pub signed_transaction_hash: [u8; 32],
     }
 
     /// Signed byte-level KAT material for all first-release privacy protocols.
@@ -2192,14 +2218,6 @@ mod exact12_fixture {
 
     /// Maximum accepted encoded size of the complete exact-12 fixture bundle.
     pub const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
-    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_SEQUENCE_ELEMENTS_V1: usize =
-        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
-    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_FIELD_BYTES_V1: usize =
-        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
-    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ELEMENTS_V1: usize =
-        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
-    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ALLOCATION_BYTES_V1: usize =
-        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
     const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_NESTING_DEPTH_V1: usize = 64;
 
     /// Stable result of validating one untrusted exact-12 fixture bundle.
@@ -2253,6 +2271,143 @@ mod exact12_fixture {
             /// Number of rows constructed from the current typed fixtures.
             actual: usize,
         },
+        /// Canonical transaction-intent projection or binding failed.
+        #[error("exact12 transaction-intent fixture failed: {0}")]
+        TransactionIntent(#[from] PrivacyTransactionIntentErrorV1),
+        /// Deterministic transaction construction or signature validation failed.
+        #[error("exact12 deterministic transaction fixture failed: {0}")]
+        Transaction(String),
+    }
+
+    struct PrivacyExact12CompleteRowV1 {
+        statement: PrivacyStatementV1,
+        envelope: PrivacyProofEnvelopeV1,
+        submit_proof_instruction_norito: Vec<u8>,
+        transaction_intent_projection_norito: Vec<u8>,
+        transaction_intent_digest: [u8; 32],
+        unsigned_transaction_payload_norito: Vec<u8>,
+        signed_transaction_versioned_norito: Vec<u8>,
+        signed_transaction_hash: [u8; 32],
+    }
+
+    fn exact12_signing_key_pair_v1() -> KeyPair {
+        KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519)
+            .expect("fixed exact12 Ed25519 signing seed is valid")
+    }
+
+    fn replace_exact12_submission_v1(
+        payload: &mut TransactionPayload,
+        intent: PrivacyTransactionIntentDigestV1,
+    ) -> Result<SubmitPrivacyProofV1, PrivacyExact12FixtureErrorV1> {
+        let Executable::Instructions(instructions) = &payload.instructions else {
+            return Err(PrivacyExact12FixtureErrorV1::Transaction(
+                "fixture executable is not a direct instruction list".to_owned(),
+            ));
+        };
+        if instructions.len() != 1 {
+            return Err(PrivacyExact12FixtureErrorV1::Transaction(format!(
+                "fixture executable contains {} instructions instead of one",
+                instructions.len()
+            )));
+        }
+        let mut submission = instructions[0]
+            .as_any()
+            .downcast_ref::<SubmitPrivacyProofV1>()
+            .ok_or_else(|| {
+                PrivacyExact12FixtureErrorV1::Transaction(
+                    "fixture instruction is not SubmitPrivacyProofV1".to_owned(),
+                )
+            })?
+            .clone();
+        submission
+            .envelope
+            .statement
+            .context_mut()
+            .transaction_intent_digest = intent;
+        if let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) =
+            &mut submission.envelope.statement
+        {
+            statement.action_digest = statement.computed_action_digest()?;
+        }
+        submission.envelope.statement_digest = submission.envelope.statement.digest()?;
+        payload.instructions =
+            Executable::Instructions(vec![InstructionBox::from(submission.clone())].into());
+        Ok(submission)
+    }
+
+    fn exact12_complete_row_v1(
+        statement: PrivacyStatementV1,
+        row_index: usize,
+    ) -> Result<PrivacyExact12CompleteRowV1, PrivacyExact12FixtureErrorV1> {
+        let envelope = try_envelope(statement)?;
+        let chain = envelope.statement.context().chain_id.clone();
+        let signing_key = exact12_signing_key_pair_v1();
+        let authority = AccountId::new(signing_key.public_key().clone());
+        let row_offset = u64::try_from(row_index).map_err(|_| {
+            PrivacyExact12FixtureErrorV1::Transaction("row index does not fit u64".to_owned())
+        })?;
+        let nonce = u32::try_from(row_index + 1)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| {
+                PrivacyExact12FixtureErrorV1::Transaction(
+                    "row nonce does not fit NonZeroU32".to_owned(),
+                )
+            })?;
+        let mut payload = TransactionPayload {
+            chain,
+            authority,
+            creation_time_ms: 1_700_000_000_000_u64
+                .checked_add(row_offset)
+                .ok_or_else(|| {
+                    PrivacyExact12FixtureErrorV1::Transaction(
+                        "fixture creation time overflow".to_owned(),
+                    )
+                })?,
+            instructions: Executable::Instructions(
+                vec![InstructionBox::from(SubmitPrivacyProofV1::new(envelope))].into(),
+            ),
+            time_to_live_ms: NonZeroU64::new(60_000),
+            nonce: Some(nonce),
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+            metadata: Metadata::default(),
+            attachments: None,
+        };
+
+        let intent = payload.privacy_transaction_intent_digest_v1()?;
+        let submission = replace_exact12_submission_v1(&mut payload, intent)?;
+        let observed = payload.validate_privacy_transaction_intent_binding_v1()?;
+        if observed != intent {
+            return Err(PrivacyExact12FixtureErrorV1::Transaction(
+                "validated intent differs from the derived fixture intent".to_owned(),
+            ));
+        }
+        let transaction_intent_projection_norito =
+            payload.privacy_transaction_intent_projection_bytes_v1()?;
+        let submit_proof_instruction_norito = norito::encode_canonical(&submission)?;
+        let unsigned_transaction_payload_norito = TransactionBuilder::from_payload(payload.clone())
+            .map_err(|error| PrivacyExact12FixtureErrorV1::Transaction(error.to_string()))?
+            .encode_payload();
+        let signed = TransactionBuilder::from_payload(payload)
+            .map_err(|error| PrivacyExact12FixtureErrorV1::Transaction(error.to_string()))?
+            .try_sign(signing_key.private_key())
+            .map_err(|error| PrivacyExact12FixtureErrorV1::Transaction(error.to_string()))?;
+        signed
+            .verify_signature()
+            .map_err(|error| PrivacyExact12FixtureErrorV1::Transaction(error.to_string()))?;
+        let signed_transaction_hash = *signed.hash().as_ref();
+        let signed_transaction_versioned_norito = signed.encode_versioned();
+
+        Ok(PrivacyExact12CompleteRowV1 {
+            statement: submission.envelope.statement.clone(),
+            envelope: submission.envelope,
+            submit_proof_instruction_norito,
+            transaction_intent_projection_norito,
+            transaction_intent_digest: *intent.as_bytes(),
+            unsigned_transaction_payload_norito,
+            signed_transaction_versioned_norito,
+            signed_transaction_hash,
+        })
     }
 
     /// Recompute all 12 canonical cross-SDK semantic rows from current Rust
@@ -2272,9 +2427,11 @@ mod exact12_fixture {
     -> Result<[PrivacyExact12TypedEnvelopeRowV1; 12], PrivacyExact12FixtureErrorV1> {
         let rows = sample_statements()
             .into_iter()
-            .map(|statement| {
-                let protocol_id = statement.protocol_id();
-                let proof_envelope = try_envelope(statement)?;
+            .enumerate()
+            .map(|(row_index, statement)| {
+                let complete = exact12_complete_row_v1(statement, row_index)?;
+                let protocol_id = complete.statement.protocol_id();
+                let proof_envelope = complete.envelope;
                 let canonical_envelope = norito::encode_canonical(&proof_envelope)?;
                 Ok(PrivacyExact12TypedEnvelopeRowV1 {
                     protocol_id,
@@ -2284,7 +2441,7 @@ mod exact12_fixture {
                     envelope_sha256: Sha256::digest(canonical_envelope).into(),
                 })
             })
-            .collect::<Result<Vec<_>, norito::Error>>()?;
+            .collect::<Result<Vec<_>, PrivacyExact12FixtureErrorV1>>()?;
         rows.try_into()
             .map_err(|rows: Vec<PrivacyExact12TypedEnvelopeRowV1>| {
                 PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() }
@@ -2302,18 +2459,29 @@ mod exact12_fixture {
     -> Result<PrivacyExact12FixtureBundleV1, PrivacyExact12FixtureErrorV1> {
         let rows = sample_statements()
             .into_iter()
-            .map(|statement| {
-                let protocol_id = statement.protocol_id();
-                let statement_norito = norito::encode_canonical(&statement)?;
-                let envelope = try_envelope(statement)?;
-                let envelope_norito = norito::encode_canonical(&envelope)?;
+            .enumerate()
+            .map(|(row_index, statement)| {
+                let complete = exact12_complete_row_v1(statement, row_index)?;
+                let protocol_id = complete.statement.protocol_id();
+                let statement_norito = norito::encode_canonical(&complete.statement)?;
+                let envelope_norito = norito::encode_canonical(&complete.envelope)?;
                 Ok(PrivacyExact12TypedFixtureRowV1 {
                     protocol_id,
                     statement_norito,
                     envelope_norito,
+                    submit_proof_wire_id: SubmitPrivacyProofV1::WIRE_ID.to_owned(),
+                    submit_proof_instruction_norito: complete.submit_proof_instruction_norito,
+                    transaction_intent_projection_norito: complete
+                        .transaction_intent_projection_norito,
+                    transaction_intent_digest: complete.transaction_intent_digest,
+                    unsigned_transaction_payload_norito: complete
+                        .unsigned_transaction_payload_norito,
+                    signed_transaction_versioned_norito: complete
+                        .signed_transaction_versioned_norito,
+                    signed_transaction_hash: complete.signed_transaction_hash,
                 })
             })
-            .collect::<Result<Vec<_>, norito::Error>>()?;
+            .collect::<Result<Vec<_>, PrivacyExact12FixtureErrorV1>>()?;
         if rows.len() != PrivacyProtocolIdV1::COUNT {
             return Err(PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() });
         }
@@ -2337,7 +2505,7 @@ mod exact12_fixture {
     /// The decoder is resource-bounded, requires canonical uncompressed
     /// Norito, and finally requires byte-for-byte semantic equality with the
     /// compiled bundle. It therefore rejects reordered rows, wrong variants,
-    /// cross-protocol substitution, stale statement/envelope bytes, and
+    /// cross-protocol substitution, stale bytes at any transaction layer, and
     /// unknown extensions.
     #[must_use]
     pub fn validate_privacy_exact12_fixture_bundle_v1(
@@ -2351,11 +2519,19 @@ mod exact12_fixture {
         if archive.len() > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
             return Status::ArchiveTooLarge;
         }
+        // Wire bytes and decoded heap use different units: every byte vector
+        // has container bookkeeping and some canonical layouts may represent
+        // several logical elements per byte. Derive those budgets from this
+        // already-capped frame instead of equating heap use with wire length.
+        // Keeping the derivation frame-local also prevents a tiny hostile
+        // archive from inheriting the full 2 MiB archive ceiling as an
+        // allocation grant.
+        let canonical_limits = norito::canonical_decode_limits(archive.len());
         let limits = norito::DecodeLimits::new(
-            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_SEQUENCE_ELEMENTS_V1,
-            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_FIELD_BYTES_V1,
-            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ELEMENTS_V1,
-            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ALLOCATION_BYTES_V1,
+            canonical_limits.max_sequence_elements(),
+            canonical_limits.max_field_bytes(),
+            canonical_limits.max_total_elements(),
+            canonical_limits.max_total_allocated_bytes(),
             PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_NESTING_DEPTH_V1,
         );
         let decoded = match norito::decode_canonical_with_limits::<PrivacyExact12FixtureBundleV1>(
@@ -2449,4 +2625,3 @@ mod exact12_fixture {
         Ok(output.into_bytes())
     }
 }
-

@@ -245,7 +245,7 @@ async fn wait_for_prove_attachment(client: &Client, job_id: &str) -> Result<Proo
 }
 
 #[tokio::test]
-#[ignore = "native STARK/FRI V1 proving fails closed until AIR openings are implemented"]
+#[ignore = "no audited semantic governance STARK AIR is registered; generic Binding role labels fail closed"]
 async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     require_test_network_feature(
         "zk-stark",

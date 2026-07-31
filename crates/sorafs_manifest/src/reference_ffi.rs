@@ -1369,7 +1369,7 @@ fn outcome_json_buffer(outcome: &ValidationOutcomeV1) -> SorafsReferenceFfiBuffe
             SorafsReferenceFfiBuffer::from_bytes(rendered.into_bytes())
         }
         Err(_) => SorafsReferenceFfiBuffer::from_bytes(
-            b"{\"status\":\"Error\",\"code\":\"SFS-FFI-002\",\"category\":\"internal\",\"message\":\"failed to render SoraFS reference FFI outcome JSON\",\"action\":\"Report the validator version and input payload.\",\"docs_url\":\"docs/portal/docs/sorafs/reference-sdk/errors.md\",\"telemetry_tags\":[\"sorafs.reference.ffi\",\"sorafs.reference.code.SFS-FFI-002\"],\"context\":[],\"inputs\":[],\"version\":1,\"generated_at\":0}\n".to_vec(),
+            b"{\"status\":\"Error\",\"code\":\"SFS-FFI-002\",\"category\":\"internal\",\"message\":\"failed to render SoraFS reference FFI outcome JSON\",\"action\":\"Report the validator version and input payload.\",\"docs_url\":\"https://docs.iroha.tech/\",\"telemetry_tags\":[\"sorafs.reference.ffi\",\"sorafs.reference.code.SFS-FFI-002\"],\"context\":[],\"inputs\":[],\"version\":1,\"generated_at\":0}\n".to_vec(),
         ),
     }
 }

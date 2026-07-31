@@ -78,10 +78,24 @@ function jsonResponse(payload) {
   });
 }
 
+function rawJsonResponse(text) {
+  return new Response(text, {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function rawSnapshotWithCommittedHeight(integerToken) {
+  const placeholder = "__COMMITTED_HEIGHT_INTEGER_TOKEN__";
+  const payload = snapshot();
+  payload.committed_height = placeholder;
+  return JSON.stringify(payload).replace(JSON.stringify(placeholder), integerToken);
+}
+
 test("parses the exact canonical privacy capability snapshot and freezes it", () => {
   const parsed = parsePrivacyCapabilitySnapshotV1(snapshot());
   assert.equal(parsed.version, 1);
-  assert.equal(parsed.committed_height, 42);
+  assert.equal(parsed.committed_height, 42n);
   assert.equal(
     parsed.consensus_policy.current_limits.max_proof_bytes_per_action,
     9 * 1024 * 1024,
@@ -126,6 +140,8 @@ test("rejects snapshot structure, aliases, non-canonical order, and unsafe integ
     }),
     (value) => { value.protocols[0].protocol_id.value = {}; },
     (value) => { value.committed_height = Number.MAX_SAFE_INTEGER + 1; },
+    (value) => { value.committed_height = 0x1_0000_0000_0000_0000n; },
+    (value) => { value.committed_height = -0; },
     (value) => { value.consensus_policy.current_limits.max_actions_per_transaction = 1.5; },
     (value) => { value.consensus_policy.current_limits.max_actions_per_transaction = 2; },
     (value) => { value.consensus_policy.current_limits.max_proof_bytes_per_action = (9 * 1024 * 1024) + 1; },
@@ -191,6 +207,26 @@ test("accepts a fully bound active profile only when all governed bindings match
   const parsed = parsePrivacyCapabilitySnapshotV1(valid);
   assert.equal(parsed.protocols[1].compiled_profile.status, "available");
   assert.equal(parsed.protocols[1].activation.lifecycle.state, "active");
+  assert.deepEqual(parsed.protocols[1].activation.lifecycle.record, {
+    proposed_at_height: 1n,
+    activated_at_height: 2n,
+    state_since_height: 2n,
+  });
+});
+
+test("normalizes every governed schedule height to bigint", () => {
+  const valid = snapshot();
+  const nextLimits = clone(valid.consensus_policy.current_limits);
+  nextLimits.max_actions_per_block = 1;
+  valid.consensus_policy.pending_tightening = {
+    scheduled_at_height: 42,
+    effective_at_height: 342,
+    next_limits: nextLimits,
+  };
+  const parsed = parsePrivacyCapabilitySnapshotV1(valid);
+  assert.equal(parsed.committed_height, 42n);
+  assert.equal(parsed.consensus_policy.pending_tightening.scheduled_at_height, 42n);
+  assert.equal(parsed.consensus_policy.pending_tightening.effective_at_height, 342n);
 });
 
 test("rejects forged governance activation and malformed delayed transitions", () => {
@@ -250,6 +286,56 @@ test("node and browser clients request and validate the authoritative route", as
       { url: `${BASE_URL}/v1/privacy/capabilities`, accept: "application/json" },
       { url: `${BASE_URL}/v1/privacy/capabilities`, accept: "application/json" },
     ], surface.label);
+  }
+});
+
+test("node and browser clients preserve 2^53 and u64::MAX committed heights", async () => {
+  const cases = [
+    ["9007199254740992", 9_007_199_254_740_992n],
+    ["18446744073709551615", 18_446_744_073_709_551_615n],
+  ];
+  for (const surface of CLIENT_SURFACES) {
+    for (const [token, expected] of cases) {
+      const text = rawSnapshotWithCommittedHeight(token);
+      for (const Client of [surface.NodeClient, surface.BrowserClient]) {
+        const client = new Client(BASE_URL, {
+          fetchImpl: async () => rawJsonResponse(text),
+        });
+        const parsed = await surface.get(client);
+        assert.equal(parsed.committed_height, expected, `${surface.label} ${Client.name}`);
+        assert.equal(typeof parsed.committed_height, "bigint");
+      }
+    }
+  }
+});
+
+test("node and browser clients reject ambiguous, non-canonical, and truncated JSON", async () => {
+  const canonical = rawSnapshotWithCommittedHeight("42");
+  const cases = [
+    ["duplicate root key", canonical.replace(/^\{/u, "{\"committed_height\":41,"), /duplicate object key "committed_height"/u],
+    [
+      "escaped duplicate root key",
+      canonical.replace(/^\{/u, "{\"committed\\u005fheight\":41,"),
+      /duplicate object key "committed_height"/u,
+    ],
+    ["truncated object", canonical.slice(0, -1), /contains invalid JSON/u],
+    ["trailing value", `${canonical} false`, /trailing input/u],
+    ["leading zero", rawSnapshotWithCommittedHeight("01"), /leading zeroes/u],
+    ["negative zero", rawSnapshotWithCommittedHeight("-0"), /negative zero/u],
+    ["fraction", rawSnapshotWithCommittedHeight("1.0"), /canonical integers/u],
+    ["exponent", rawSnapshotWithCommittedHeight("1e3"), /canonical integers/u],
+    ["quoted integer", rawSnapshotWithCommittedHeight("\"18446744073709551615\""), /canonical uint64/u],
+    ["u64 overflow", rawSnapshotWithCommittedHeight("18446744073709551616"), /uint64 range/u],
+  ];
+  for (const surface of CLIENT_SURFACES) {
+    for (const Client of [surface.NodeClient, surface.BrowserClient]) {
+      for (const [label, text, pattern] of cases) {
+        const client = new Client(BASE_URL, {
+          fetchImpl: async () => rawJsonResponse(text),
+        });
+        await assert.rejects(surface.get(client), pattern, `${surface.label} ${Client.name}: ${label}`);
+      }
+    }
   }
 });
 

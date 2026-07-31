@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
@@ -7,8 +8,11 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Http;
+using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Queries;
+using Hyperledger.Iroha.Sccp;
 using Hyperledger.Iroha.Transactions;
 using Hyperledger.Iroha.Zk;
 
@@ -18,37 +22,8 @@ public sealed partial class ToriiClient : IDisposable
 {
     public const string AccountOnboardingTokenHeaderName = "X-Iroha-Onboarding-Token";
 
-    private const int QueryProjectionArchiveVersion = 1;
-    private const int QueryProjectionSchemaVersion = 1;
-    private const int QueryProjectionBlobClassCustomId = 1001;
-    private const string QueryProjectionCodec = "application/x-iroha-query-shard+norito+zstd";
-    private const string QueryProjectionRowsetCodec = "application/x-iroha-query-shard-rowset+norito";
-    private const string QueryProjectionCompression = "zstd";
-    private const int QueryProjectionDefaultPartitionCount = 4096;
     private const int SoraFsAliasTextMaxChars = 128;
     private const string InvalidUtf8ResponseBody = "<response body is not valid UTF-8>";
-    private static readonly string[] QueryRowEnrichmentFields =
-    [
-        "primary_alias",
-        "primary_alias_name",
-        "primary_alias_dataspace",
-        "primary_alias_domain",
-        "has_primary_alias",
-    ];
-
-    private static readonly string[] QueryProjectionMetadataKeys =
-    [
-        "query_projection.locator",
-        "query_projection.resource",
-        "query_projection.partition_id",
-        "query_projection.asset_definition_id",
-        "query_projection.indexed_height",
-        "query_projection.indexed_block_hash_hex",
-        "query_projection.row_count",
-        "query_projection.rowset_codec",
-        "query_projection.rowset_hash_hex",
-        "query_projection.emitted_at_unix",
-    ];
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     private readonly bool ownsHttpClient;
@@ -1338,13 +1313,6 @@ public sealed partial class ToriiClient : IDisposable
         return await ReadStrictUtf8TextContentAsync(response.Content, "Torii metrics response body", cancellationToken);
     }
 
-    public async Task<ToriiNodeCapabilities> GetNodeCapabilitiesAsync(CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiNodeCapabilities>("/v1/node/capabilities", cancellationToken: cancellationToken);
-        ValidateNodeCapabilities(response, "node capabilities response");
-        return response;
-    }
-
     public async Task<ToriiRuntimeAbiActive> GetRuntimeAbiActiveAsync(CancellationToken cancellationToken = default)
     {
         var response = await GetAsync<ToriiRuntimeAbiActive>("/v1/runtime/abi/active", cancellationToken: cancellationToken);
@@ -1384,34 +1352,80 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<JsonDocument> RegisterVerifyingKeyAsync(
+    public async Task<ToriiVerifyingKeyTransactionDraft> RegisterVerifyingKeyAsync(
         ToriiVerifyingKeyRegisterRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var signingContext = Options.LocalSigningContext
+            ?? throw new InvalidOperationException(
+                "Verifying-key draft preparation requires an immutable ToriiLocalSigningContext.");
 
         var normalizedRequest = NormalizeVerifyingKeyRegisterRequest(request);
-        var response = await PostJsonDocumentAsync(
+        return await PrepareVerifyingKeyTransactionDraftAsync(
             "/v1/zk/vk/register",
             normalizedRequest,
-            cancellationToken: cancellationToken);
-        ValidateVerifyingKeyWriteDocument(response, "verifying key register response");
-        return response;
+            "verifying key register response",
+            signingContext.ChainId,
+            VerifyingKeyDraftOperation.Register,
+            cancellationToken);
     }
 
-    public async Task<JsonDocument> UpdateVerifyingKeyAsync(
+    public async Task<ToriiVerifyingKeyTransactionDraft> UpdateVerifyingKeyAsync(
         ToriiVerifyingKeyUpdateRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var signingContext = Options.LocalSigningContext
+            ?? throw new InvalidOperationException(
+                "Verifying-key draft preparation requires an immutable ToriiLocalSigningContext.");
 
         var normalizedRequest = NormalizeVerifyingKeyUpdateRequest(request);
-        var response = await PostJsonDocumentAsync(
+        return await PrepareVerifyingKeyTransactionDraftAsync(
             "/v1/zk/vk/update",
             normalizedRequest,
+            "verifying key update response",
+            signingContext.ChainId,
+            VerifyingKeyDraftOperation.Update,
+            cancellationToken);
+    }
+
+    private async Task<ToriiVerifyingKeyTransactionDraft> PrepareVerifyingKeyTransactionDraftAsync<TRequest>(
+        string path,
+        TRequest request,
+        string context,
+        string expectedChainId,
+        VerifyingKeyDraftOperation operation,
+        CancellationToken cancellationToken)
+    {
+        using var content = CreateJsonContent(request);
+        using var response = await SendExpectingStatusAsync(
+            HttpMethod.Post,
+            path,
+            query: null,
+            content: content,
+            expectedStatusCode: HttpStatusCode.OK,
+            allowedStatusCode: null,
             cancellationToken: cancellationToken);
-        ValidateVerifyingKeyWriteDocument(response, "verifying key update response");
-        return response;
+        if (!string.Equals(
+                response.Content.Headers.ContentType?.MediaType,
+                "application/json",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new JsonException($"{context} must use the application/json media type.");
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+            stream,
+            context,
+            cancellationToken);
+        return ParseVerifyingKeyTransactionDraft(
+            document,
+            context,
+            request!,
+            expectedChainId,
+            operation);
     }
 
     public async Task<ToriiSoraFsCidLookupResponse> GetSoraFsCidLookupAsync(
@@ -1736,6 +1750,7 @@ public sealed partial class ToriiClient : IDisposable
         CancellationToken cancellationToken = default)
     {
         var normalizedBytes = NormalizeNonEmptyBinaryPayload(noritoBytes, nameof(noritoBytes));
+        await EnsureTransactionSubmissionCompatibilityAsync(cancellationToken);
         using var content = CreateBinaryContent(normalizedBytes, "application/x-norito");
         using var response = await SendAsync(HttpMethod.Post, "/transaction", content: content, cancellationToken: cancellationToken);
     }
@@ -3129,302 +3144,6 @@ public sealed partial class ToriiClient : IDisposable
     private static void ValidateRuntimeAbiHash(ToriiRuntimeAbiHash response, string context)
     {
         ToriiRuntimeJson.ValidateRuntimeAbiHash(response, context);
-    }
-
-    private static void ValidateNodeCapabilities(ToriiNodeCapabilities response, string context)
-    {
-        ToriiNodeCapabilitiesJson.ValidateNodeCapabilities(response, context);
-    }
-
-    private static void ValidateNodeCryptoCapabilities(ToriiNodeCryptoCapabilities response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        if (response.Sm is null)
-        {
-            throw new JsonException($"{context}.sm must not be null.");
-        }
-        ValidateNodeSmCapabilities(response.Sm, $"{context}.sm");
-
-        if (response.Curves is null)
-        {
-            throw new JsonException($"{context}.curves must not be null.");
-        }
-        ValidateNodeCurveCapabilities(response.Curves, $"{context}.curves");
-    }
-
-    private static void ValidateNodeSmCapabilities(ToriiNodeSmCapabilities response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        ValidateExactTokenText(response.DefaultHash, $"{context}.default_hash");
-        ValidateExactNonEmptyText(
-            response.Sm2DistidDefault,
-            $"{context}.sm2_distid_default",
-            message => new JsonException(message));
-
-        if (response.AllowedSigning is null)
-        {
-            throw new JsonException($"{context}.allowed_signing must not be null.");
-        }
-
-        var hasSm2Signing = ValidateAllowedSigningLabels(response.AllowedSigning, $"{context}.allowed_signing");
-        ValidateSmDefaultHashConsistency(response.DefaultHash, hasSm2Signing, context);
-
-        if (response.Acceleration is null)
-        {
-            throw new JsonException($"{context}.acceleration must not be null.");
-        }
-        ValidateNodeSmAcceleration(response.Acceleration, $"{context}.acceleration");
-    }
-
-    private static void ValidateNodeSmAcceleration(ToriiNodeSmAcceleration response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        if (!response.Scalar)
-        {
-            throw new JsonException($"{context}.scalar must be true.");
-        }
-
-        ValidateExactTokenText(response.Policy, $"{context}.policy");
-        if (response.Policy is not ("auto" or "force-enable" or "force-disable" or "scalar-only"))
-        {
-            throw new JsonException($"{context}.policy must be one of auto, force-enable, force-disable, or scalar-only.");
-        }
-
-        if (response.NeonSm3 != response.NeonSm4)
-        {
-            throw new JsonException($"{context}.neon_sm3 and {context}.neon_sm4 must match.");
-        }
-
-        if ((response.Policy is "scalar-only" or "force-disable") && response.NeonSm3)
-        {
-            throw new JsonException($"{context}.policy must not advertise NEON acceleration when {context}.policy is {response.Policy}.");
-        }
-    }
-
-    private static bool ValidateAllowedSigningLabels(IReadOnlyList<string> allowedSigning, string context)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var hasEd25519 = false;
-        var hasSm2 = false;
-        for (var index = 0; index < allowedSigning.Count; index++)
-        {
-            var label = allowedSigning[index];
-            ValidateExactTokenText(label, $"{context}[{index}]");
-            if (!seen.Add(label))
-            {
-                throw new JsonException($"{context}[{index}] must not contain duplicate signing labels.");
-            }
-
-            if (string.Equals(label, "ed25519", StringComparison.Ordinal))
-            {
-                hasEd25519 = true;
-            }
-
-            if (string.Equals(label, "sm2", StringComparison.Ordinal))
-            {
-                hasSm2 = true;
-            }
-        }
-
-        if (!hasEd25519)
-        {
-            throw new JsonException($"{context} must include ed25519 for control-plane operations.");
-        }
-
-        return hasSm2;
-    }
-
-    private static void ValidateSmDefaultHashConsistency(string defaultHash, bool hasSm2Signing, string context)
-    {
-        var usesSm3Hash = string.Equals(defaultHash, "sm3-256", StringComparison.Ordinal);
-        if (hasSm2Signing && !usesSm3Hash)
-        {
-            throw new JsonException($"{context}.default_hash must be sm3-256 when allowed_signing includes sm2.");
-        }
-
-        if (!hasSm2Signing && usesSm3Hash)
-        {
-            throw new JsonException($"{context}.allowed_signing must include sm2 when default_hash is sm3-256.");
-        }
-    }
-
-    private static void ValidateNodeCurveCapabilities(ToriiNodeCurveCapabilities response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        ValidateNonNegativeInt32(response.RegistryVersion, $"{context}.registry_version");
-
-        if (response.AllowedCurveIds is null)
-        {
-            throw new JsonException($"{context}.allowed_curve_ids must not be null.");
-        }
-
-        for (var index = 0; index < response.AllowedCurveIds.Count; index++)
-        {
-            ValidateNonNegativeInt32(response.AllowedCurveIds[index], $"{context}.allowed_curve_ids[{index}]");
-        }
-
-        if (response.AllowedCurveBitmap is null)
-        {
-            throw new JsonException($"{context}.allowed_curve_bitmap must not be null.");
-        }
-
-        ValidateAllowedCurveBitmap(response.AllowedCurveIds, response.AllowedCurveBitmap, context);
-    }
-
-    private static void ValidateAllowedCurveBitmap(
-        IReadOnlyList<int> allowedCurveIds,
-        IReadOnlyList<ulong> allowedCurveBitmap,
-        string context)
-    {
-        var seen = new HashSet<int>();
-        for (var index = 0; index < allowedCurveIds.Count; index++)
-        {
-            var curveId = allowedCurveIds[index];
-            if (!seen.Add(curveId))
-            {
-                throw new JsonException($"{context}.allowed_curve_ids[{index}] must not contain duplicate curve ids.");
-            }
-
-            var wordIndex = curveId / 64;
-            var bitMask = 1UL << (curveId & 63);
-            if (wordIndex >= allowedCurveBitmap.Count || (allowedCurveBitmap[wordIndex] & bitMask) == 0)
-            {
-                throw new JsonException(
-                    $"{context}.allowed_curve_ids[{index}] must have a matching allowed_curve_bitmap bit.");
-            }
-        }
-
-        for (var wordIndex = 0; wordIndex < allowedCurveBitmap.Count; wordIndex++)
-        {
-            var word = allowedCurveBitmap[wordIndex];
-            if (word == 0)
-            {
-                continue;
-            }
-
-            for (var bit = 0; bit < 64; bit++)
-            {
-                var bitMask = 1UL << bit;
-                if ((word & bitMask) == 0)
-                {
-                    continue;
-                }
-
-                var curveId = ((long)wordIndex * 64L) + bit;
-                if (curveId > int.MaxValue || !seen.Contains((int)curveId))
-                {
-                    throw new JsonException(
-                        $"{context}.allowed_curve_bitmap[{wordIndex}] must not advertise curve ids missing from allowed_curve_ids.");
-                }
-            }
-        }
-    }
-
-    private static void ValidateNodeQueryCapabilities(ToriiNodeQueryCapabilities response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        if (response.Aggregate is null)
-        {
-            throw new JsonException($"{context}.aggregate must not be null.");
-        }
-        ValidateNodeAggregateQueryCapabilities(response.Aggregate, $"{context}.aggregate");
-
-        if (!response.IndexedSnapshotMarker)
-        {
-            throw new JsonException($"{context}.indexed_snapshot_marker must be true.");
-        }
-
-        ValidateExactTokenSequence(response.RowEnrichmentFields, QueryRowEnrichmentFields, $"{context}.row_enrichment_fields");
-
-        if (response.Projection is null)
-        {
-            throw new JsonException($"{context}.projection must not be null.");
-        }
-        ValidateNodeProjectionCapabilities(response.Projection, $"{context}.projection");
-    }
-
-    private static void ValidateNodeAggregateQueryCapabilities(
-        ToriiNodeAggregateQueryCapabilities response,
-        string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        if (!response.V1)
-        {
-            throw new JsonException($"{context}.v1 must be true.");
-        }
-
-        if (!response.ExactResults)
-        {
-            throw new JsonException($"{context}.exact_results must be true.");
-        }
-
-        ValidateExactUniqueTokenList(response.SupportedResources, $"{context}.supported_resources");
-    }
-
-    private static void ValidateNodeProjectionCapabilities(ToriiNodeProjectionCapabilities response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        if (!response.CheckpointContractV1)
-        {
-            throw new JsonException($"{context}.checkpoint_contract_v1 must be true.");
-        }
-
-        if (response.DaV1Enabled)
-        {
-            throw new JsonException($"{context}.da_v1_enabled must be false.");
-        }
-
-        ValidateProjectionFeatureFlags(response, context);
-        ValidateExactInt32(response.ArchiveVersion, QueryProjectionArchiveVersion, $"{context}.archive_version");
-        ValidateExactInt32(response.SchemaVersion, QueryProjectionSchemaVersion, $"{context}.schema_version");
-        ValidateExactInt32(response.BlobClassCustomId, QueryProjectionBlobClassCustomId, $"{context}.blob_class_custom_id");
-        ValidateExactTokenText(response.Codec, $"{context}.codec");
-        ValidateExactTokenValue(response.Codec, QueryProjectionCodec, $"{context}.codec");
-        ValidateExactTokenText(response.RowsetCodec, $"{context}.rowset_codec");
-        ValidateExactTokenValue(response.RowsetCodec, QueryProjectionRowsetCodec, $"{context}.rowset_codec");
-        ValidateExactTokenText(response.Compression, $"{context}.compression");
-        ValidateExactTokenValue(response.Compression, QueryProjectionCompression, $"{context}.compression");
-        ValidateExactInt32(
-            response.DefaultPartitionCount,
-            QueryProjectionDefaultPartitionCount,
-            $"{context}.default_partition_count");
-        ValidateExactTokenSequence(response.MetadataKeys, QueryProjectionMetadataKeys, $"{context}.metadata_keys");
-        ValidateExactUniqueTokenList(response.ExportSupportedResources, $"{context}.export_supported_resources");
-        if (!response.ArchiveExportV1 && response.ExportSupportedResources.Count != 0)
-        {
-            throw new JsonException($"{context}.export_supported_resources must be empty when archive_export_v1 is false.");
-        }
-
-        if (response.LatestCheckpointIndexedHeight is < 0)
-        {
-            throw new JsonException($"{context}.latest_checkpoint_indexed_height must be non-negative.");
-        }
-
-        ValidateOptionalExactSizedHex(response.LatestCheckpointBlockHashHex, $"{context}.latest_checkpoint_block_hash_hex", 32);
-        if (response.LatestCheckpointBlockHashHex is not null && response.LatestCheckpointIndexedHeight is null)
-        {
-            throw new JsonException(
-                $"{context}.latest_checkpoint_block_hash_hex requires latest_checkpoint_indexed_height.");
-        }
-    }
-
-    private static void ValidateProjectionFeatureFlags(ToriiNodeProjectionCapabilities response, string context)
-    {
-        var expected = response.CheckpointPlanV1;
-        if (response.CheckpointPublishV1 != expected ||
-            response.ShardCatalogV1 != expected ||
-            response.ArchiveExportV1 != expected)
-        {
-            throw new JsonException(
-                $"{context}.checkpoint_plan_v1, {context}.checkpoint_publish_v1, {context}.shard_catalog_v1, and {context}.archive_export_v1 must match.");
-        }
     }
 
     private static void ValidateRuntimeAbiActive(ToriiRuntimeAbiActive response, string context)
@@ -6179,7 +5898,6 @@ public sealed partial class ToriiClient : IDisposable
         return request with
         {
             Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
             Backend = normalizedBackend,
             Name = NormalizeVerifyingKeyName(request.Name, nameof(request.Name)),
             Version = RequirePositiveUInt32(request.Version, nameof(request.Version)),
@@ -6225,7 +5943,6 @@ public sealed partial class ToriiClient : IDisposable
         return request with
         {
             Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
             Backend = normalizedBackend,
             Name = NormalizeVerifyingKeyName(request.Name, nameof(request.Name)),
             Version = RequirePositiveUInt32(request.Version, nameof(request.Version)),
@@ -6317,19 +6034,865 @@ public sealed partial class ToriiClient : IDisposable
         }
     }
 
-    private static void ValidateVerifyingKeyWriteDocument(JsonDocument document, string context)
+    private enum VerifyingKeyDraftOperation
+    {
+        Register,
+        Update,
+    }
+
+    private sealed record VerifyingKeyDraftExpectedRecord(
+        uint Version,
+        string CircuitId,
+        uint BackendTag,
+        string Curve,
+        byte[] PublicInputsSchemaHash,
+        byte[] Commitment,
+        uint VerifyingKeyLength,
+        uint MaxProofBytes,
+        string? GasScheduleId,
+        string? MetadataUriCid,
+        string? VerifyingKeyBytesCid,
+        ulong? ActivationHeight,
+        ulong? WithdrawHeight,
+        string? KeyBackend,
+        byte[]? KeyBytes,
+        byte Status);
+
+    private static ToriiVerifyingKeyTransactionDraft ParseVerifyingKeyTransactionDraft(
+        JsonDocument document,
+        string context,
+        object request,
+        string expectedChainId,
+        VerifyingKeyDraftOperation operation)
     {
         ArgumentNullException.ThrowIfNull(document);
 
         var root = RequireJsonObject(document.RootElement, context);
-        if (!root.TryGetProperty("accepted", out var accepted) || accepted.ValueKind == JsonValueKind.Null)
+        var expectedFields = new HashSet<string>(
+            ["submitted", "transaction_payload_b64", "signing_message_b64"],
+            StringComparer.Ordinal);
+        var actualFields = root.EnumerateObject()
+            .Select(static property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!actualFields.SetEquals(expectedFields))
         {
-            throw new JsonException($"{context}.accepted must not be null.");
+            throw new JsonException(
+                $"{context} must contain exactly submitted, transaction_payload_b64, and signing_message_b64.");
         }
 
-        if (accepted.ValueKind != JsonValueKind.True)
+        if (!root.TryGetProperty("submitted", out var submitted)
+            || submitted.ValueKind != JsonValueKind.False)
         {
-            throw new JsonException($"{context}.accepted must be true.");
+            throw new JsonException($"{context}.submitted must be false.");
+        }
+
+        var transactionPayloadBase64 = RequireJsonStringProperty(
+            root,
+            "transaction_payload_b64",
+            $"{context}.transaction_payload_b64");
+        var signingMessageBase64 = RequireJsonStringProperty(
+            root,
+            "signing_message_b64",
+            $"{context}.signing_message_b64");
+        var transactionPayload = DecodeCanonicalVerifyingKeyDraftBase64(
+            transactionPayloadBase64,
+            $"{context}.transaction_payload_b64",
+            maximumBytes: 16 * 1024 * 1024);
+        ValidateCanonicalVerifyingKeyTransactionPayload(
+            transactionPayload,
+            $"{context}.transaction_payload_b64",
+            request,
+            expectedChainId,
+            operation);
+        var signingMessage = DecodeCanonicalVerifyingKeyDraftBase64(
+            signingMessageBase64,
+            $"{context}.signing_message_b64",
+            maximumBytes: IrohaHash.Length,
+            exactBytes: IrohaHash.Length);
+        var expectedSigningMessage = IrohaHash.Hash(transactionPayload);
+        if (!CryptographicOperations.FixedTimeEquals(signingMessage, expectedSigningMessage))
+        {
+            throw new JsonException(
+                $"{context}.signing_message_b64 must be the exact Iroha prehash of transaction_payload_b64.");
+        }
+
+        return new ToriiVerifyingKeyTransactionDraft(
+            transactionPayloadBase64,
+            signingMessageBase64,
+            transactionPayload,
+            signingMessage);
+    }
+
+    private static byte[] DecodeCanonicalVerifyingKeyDraftBase64(
+        string value,
+        string context,
+        int maximumBytes,
+        int? exactBytes = null)
+    {
+        var maximumEncodedBytes = checked(((maximumBytes + 2) / 3) * 4);
+        if (value.Length == 0
+            || value.Length > maximumEncodedBytes
+            || value.Length % 4 != 0
+            || value.Any(static character =>
+                character is not (>= 'A' and <= 'Z')
+                    and not (>= 'a' and <= 'z')
+                    and not (>= '0' and <= '9')
+                    and not ('+' or '/' or '=')))
+        {
+            throw new JsonException($"{context} must be bounded canonical non-empty padded base64.");
+        }
+
+        byte[] decoded;
+        try
+        {
+            decoded = Convert.FromBase64String(value);
+        }
+        catch (FormatException error)
+        {
+            throw new JsonException($"{context} must be canonical padded base64.", error);
+        }
+
+        if (decoded.Length == 0
+            || decoded.Length > maximumBytes
+            || !string.Equals(Convert.ToBase64String(decoded), value, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context} must be bounded canonical non-empty padded base64.");
+        }
+        if (exactBytes.HasValue && decoded.Length != exactBytes.Value)
+        {
+            throw new JsonException($"{context} must decode to exactly {exactBytes.Value} bytes.");
+        }
+
+        return decoded;
+    }
+
+    private static void ValidateCanonicalVerifyingKeyTransactionPayload(
+        ReadOnlySpan<byte> payload,
+        string context,
+        object request,
+        string expectedChainId,
+        VerifyingKeyDraftOperation operation)
+    {
+        try
+        {
+            var cursor = new VerifyingKeyDraftTransactionCursor(payload);
+            var chain = cursor.TakeField("chain");
+            var authority = cursor.TakeField("authority");
+            var creationTime = cursor.TakeField("creation_time_ms");
+            var executable = cursor.TakeField("executable");
+            var timeToLive = cursor.TakeField("time_to_live_ms");
+            var nonce = cursor.TakeField("nonce");
+            var feePayment = cursor.TakeField("fee_payment");
+            var metadata = cursor.TakeField("metadata");
+            var attachments = cursor.TakeField("attachments");
+            if (!cursor.IsFinished
+                || creationTime.Length != sizeof(ulong)
+                || feePayment.IsEmpty
+                || metadata.IsEmpty)
+            {
+                throw new JsonException(
+                    $"{context} must contain exactly one canonical nine-field Norito TransactionPayload.");
+            }
+
+            var (authorityAccountId, backend, name, expectedRecord) =
+                ExpectedVerifyingKeyDraft(request);
+            var decodedChain = DecodeVerifyingKeyDraftChainId(chain, $"{context}.chain");
+            if (!string.Equals(decodedChain, expectedChainId, StringComparison.Ordinal))
+            {
+                throw new JsonException($"{context} changed the configured chain.");
+            }
+
+            var decodedAuthority = SccpSubmitValidation.RequireCanonicalAuthority(authority);
+            var expectedAuthority = AccountAddress
+                .Parse(authorityAccountId, AccountAddress.DefaultChainDiscriminant)
+                .ControllerBytes();
+            if (!decodedAuthority.AsSpan().SequenceEqual(expectedAuthority))
+            {
+                throw new JsonException($"{context} changed the requested authority.");
+            }
+
+            RequireCanonicalVerifyingKeyDraftNonZeroOption(
+                timeToLive,
+                sizeof(ulong),
+                required: true,
+                context: $"{context}.time_to_live_ms");
+            RequireCanonicalVerifyingKeyDraftNonZeroOption(
+                nonce,
+                sizeof(uint),
+                required: false,
+                context: $"{context}.nonce");
+            SccpSubmitValidation.RequireCanonicalTransactionFeePayment(feePayment);
+            SccpSubmitValidation.RequireEmptyTransactionMetadata(metadata);
+            RequireAbsentVerifyingKeyDraftOption(attachments, $"{context}.attachments");
+            RequireRequestedVerifyingKeyInstruction(
+                executable,
+                operation,
+                backend,
+                name,
+                expectedRecord,
+                context);
+        }
+        catch (JsonException)
+        {
+            throw;
+        }
+        catch (Exception error) when (error is ArgumentException or OverflowException)
+        {
+            throw new JsonException(
+                $"{context} must contain exactly one canonical nine-field Norito TransactionPayload.",
+                error);
+        }
+    }
+
+    private static (
+        string Authority,
+        string Backend,
+        string Name,
+        VerifyingKeyDraftExpectedRecord Record)
+        ExpectedVerifyingKeyDraft(object request)
+    {
+        string authority;
+        string backend;
+        string name;
+        uint version;
+        string circuitId;
+        string schemaHashHex;
+        string? curve;
+        string? gasScheduleId;
+        uint? keyLength;
+        uint? maxProofBytes;
+        string? metadataUriCid;
+        string? keyBytesCid;
+        ulong? activationHeight;
+        ulong? withdrawHeight;
+        string? commitmentHex;
+        byte[]? keyBytes;
+        string? status;
+        switch (request)
+        {
+            case ToriiVerifyingKeyRegisterRequest register:
+                authority = register.Authority!;
+                backend = register.Backend!;
+                name = register.Name!;
+                version = register.Version!.Value;
+                circuitId = register.CircuitId!;
+                schemaHashHex = register.PublicInputsSchemaHashHex!;
+                curve = register.Curve;
+                gasScheduleId = register.GasScheduleId;
+                keyLength = register.VerifyingKeyLength;
+                maxProofBytes = register.MaxProofBytes;
+                metadataUriCid = register.MetadataUriCid;
+                keyBytesCid = register.VerifyingKeyBytesCid;
+                activationHeight = register.ActivationHeight;
+                withdrawHeight = register.WithdrawHeight;
+                commitmentHex = register.CommitmentHex;
+                keyBytes = register.VerifyingKeyBytes;
+                status = register.Status;
+                break;
+            case ToriiVerifyingKeyUpdateRequest update:
+                authority = update.Authority!;
+                backend = update.Backend!;
+                name = update.Name!;
+                version = update.Version!.Value;
+                circuitId = update.CircuitId!;
+                schemaHashHex = update.PublicInputsSchemaHashHex!;
+                curve = update.Curve;
+                gasScheduleId = update.GasScheduleId;
+                keyLength = update.VerifyingKeyLength;
+                maxProofBytes = update.MaxProofBytes;
+                metadataUriCid = update.MetadataUriCid;
+                keyBytesCid = update.VerifyingKeyBytesCid;
+                activationHeight = update.ActivationHeight;
+                withdrawHeight = update.WithdrawHeight;
+                commitmentHex = update.CommitmentHex;
+                keyBytes = update.VerifyingKeyBytes;
+                status = update.Status;
+                break;
+            default:
+                throw new JsonException("Verifying-key draft request type is unsupported.");
+        }
+
+        var schemaHash = Convert.FromHexString(schemaHashHex);
+        var commitment = keyBytes is null
+            ? Convert.FromHexString(commitmentHex!)
+            : Convert.FromHexString(ComputeVerifyingKeyCommitmentHex(backend, keyBytes));
+        var exactKeyLength = keyBytes is null
+            ? keyLength!.Value
+            : checked((uint)keyBytes.Length);
+        var backendTag = backend.StartsWith("stark/", StringComparison.Ordinal)
+            ? (uint)VerifyingKeyBackendTag.Stark
+            : (uint)VerifyingKeyBackendTag.Halo2IpaPasta;
+        var statusTag = status switch
+        {
+            null or "Active" => (byte)1,
+            "Proposed" => (byte)0,
+            "Withdrawn" => (byte)2,
+            _ => throw new JsonException("Verifying-key draft request status is invalid."),
+        };
+        return (
+            authority,
+            backend,
+            name,
+            new VerifyingKeyDraftExpectedRecord(
+                version,
+                circuitId,
+                backendTag,
+                curve ?? "unknown",
+                schemaHash,
+                commitment,
+                exactKeyLength,
+                maxProofBytes ?? 0,
+                gasScheduleId,
+                metadataUriCid,
+                keyBytesCid,
+                activationHeight,
+                withdrawHeight,
+                keyBytes is null ? null : backend,
+                keyBytes,
+                statusTag));
+    }
+
+    private static string DecodeVerifyingKeyDraftChainId(
+        ReadOnlySpan<byte> payload,
+        string context)
+    {
+        var chain = new VerifyingKeyDraftTransactionCursor(payload);
+        var encodedString = chain.TakeField($"{context}.value");
+        var value = DecodeVerifyingKeyDraftString(encodedString, $"{context}.value");
+        if (!chain.IsFinished
+            || value.Length is 0 or > 128
+            || !IsChainIdAsciiAlphanumeric(value[0])
+            || !IsChainIdAsciiAlphanumeric(value[^1])
+            || value.Any(static character =>
+                !IsChainIdAsciiAlphanumeric(character)
+                    && character is not ('.' or '_' or ':' or '-')))
+        {
+            throw new JsonException($"{context} is not a canonical ChainId.");
+        }
+
+        return value;
+    }
+
+    private static bool IsChainIdAsciiAlphanumeric(char value) =>
+        value is >= '0' and <= '9'
+            or >= 'A' and <= 'Z'
+            or >= 'a' and <= 'z';
+
+    private static void RequireRequestedVerifyingKeyInstruction(
+        ReadOnlySpan<byte> payload,
+        VerifyingKeyDraftOperation operation,
+        string expectedBackend,
+        string expectedName,
+        VerifyingKeyDraftExpectedRecord expectedRecord,
+        string context)
+    {
+        var executable = new VerifyingKeyDraftTransactionCursor(payload);
+        if (executable.TakeUInt32($"{context}.executable.kind") != 0)
+        {
+            throw new JsonException(
+                $"{context} executable must contain native instructions.");
+        }
+
+        var instructions = new VerifyingKeyDraftTransactionCursor(
+            executable.TakeField($"{context}.executable.instructions"));
+        if (!executable.IsFinished
+            || instructions.TakeUInt64($"{context}.executable.instructions.count") != 1)
+        {
+            throw new JsonException(
+                $"{context} must contain exactly one verifying-key instruction.");
+        }
+
+        var instruction = new VerifyingKeyDraftTransactionCursor(
+            instructions.TakeField($"{context}.executable.instruction"));
+        var wireName = DecodeVerifyingKeyDraftString(
+            instruction.TakeField($"{context}.executable.instruction.wire_name"),
+            $"{context}.executable.instruction.wire_name");
+        var archive = DecodeVerifyingKeyDraftByteVector(
+            instruction.TakeField($"{context}.executable.instruction.payload"),
+            $"{context}.executable.instruction.payload");
+        var expectedWireName = operation switch
+        {
+            VerifyingKeyDraftOperation.Register =>
+                "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+            VerifyingKeyDraftOperation.Update =>
+                "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+            _ => throw new JsonException("Verifying-key draft operation is unknown."),
+        };
+        if (!instructions.IsFinished
+            || !instruction.IsFinished
+            || !string.Equals(wireName, expectedWireName, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} does not contain the requested verifying-key registry operation.");
+        }
+
+        RequireCanonicalVerifyingKeyInstructionArchive(
+            archive,
+            expectedWireName,
+            expectedBackend,
+            expectedName,
+            expectedRecord,
+            context);
+    }
+
+    private static void RequireCanonicalVerifyingKeyInstructionArchive(
+        ReadOnlySpan<byte> archive,
+        string wireName,
+        string expectedBackend,
+        string expectedName,
+        VerifyingKeyDraftExpectedRecord expectedRecord,
+        string context)
+    {
+        if (archive.IsEmpty || archive.Length > 16 * 1024 * 1024)
+        {
+            throw new JsonException($"{context} verifying-key instruction archive is invalid.");
+        }
+
+        byte[] payload;
+        byte flags;
+        try
+        {
+            (payload, flags) = NoritoCodec.Decode(wireName, archive);
+        }
+        catch (ArgumentException error)
+        {
+            throw new JsonException(
+                $"{context} verifying-key instruction archive is invalid.",
+                error);
+        }
+        if (flags != 0x02
+            || !NoritoCodec.Encode(wireName, payload, flags).AsSpan().SequenceEqual(archive))
+        {
+            throw new JsonException(
+                $"{context} verifying-key instruction archive is not byte-canonical.");
+        }
+
+        var instruction = new VerifyingKeyDraftTransactionCursor(payload);
+        var id = instruction.TakeField($"{context}.instruction.id");
+        var record = instruction.TakeField($"{context}.instruction.record");
+        if (!instruction.IsFinished)
+        {
+            throw new JsonException(
+                $"{context} verifying-key instruction contains trailing fields.");
+        }
+
+        RequireVerifyingKeyDraftIdentifier(
+            id,
+            expectedBackend,
+            expectedName,
+            context);
+        RequireVerifyingKeyDraftRecord(record, expectedRecord, context);
+    }
+
+    private static void RequireVerifyingKeyDraftIdentifier(
+        ReadOnlySpan<byte> payload,
+        string expectedBackend,
+        string expectedName,
+        string context)
+    {
+        var id = new VerifyingKeyDraftTransactionCursor(payload);
+        var backend = DecodeVerifyingKeyDraftString(
+            id.TakeField($"{context}.id.backend"),
+            $"{context}.id.backend");
+        var name = DecodeVerifyingKeyDraftString(
+            id.TakeField($"{context}.id.name"),
+            $"{context}.id.name");
+        if (!id.IsFinished
+            || !string.Equals(backend, expectedBackend, StringComparison.Ordinal)
+            || !string.Equals(name, expectedName, StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{context} verifying-key instruction identifier does not match the request.");
+        }
+    }
+
+    private static void RequireVerifyingKeyDraftRecord(
+        ReadOnlySpan<byte> payload,
+        VerifyingKeyDraftExpectedRecord expected,
+        string context)
+    {
+        var record = new VerifyingKeyDraftTransactionCursor(payload);
+        var version = DecodeVerifyingKeyDraftUInt32(
+            record.TakeField($"{context}.record.version"),
+            $"{context}.record.version");
+        var circuitId = DecodeVerifyingKeyDraftString(
+            record.TakeField($"{context}.record.circuit_id"),
+            $"{context}.record.circuit_id");
+        var ownerManifestId = DecodeVerifyingKeyDraftOptionalString(
+            record.TakeField($"{context}.record.owner_manifest_id"),
+            $"{context}.record.owner_manifest_id");
+        var registryNamespace = DecodeVerifyingKeyDraftString(
+            record.TakeField($"{context}.record.namespace"),
+            $"{context}.record.namespace");
+        var backendTag = DecodeVerifyingKeyDraftUInt32(
+            record.TakeField($"{context}.record.backend"),
+            $"{context}.record.backend");
+        var curve = DecodeVerifyingKeyDraftString(
+            record.TakeField($"{context}.record.curve"),
+            $"{context}.record.curve");
+        var schemaHash = RequireVerifyingKeyDraftFixedBytes(
+            record.TakeField($"{context}.record.public_inputs_schema_hash"),
+            32,
+            $"{context}.record.public_inputs_schema_hash");
+        var commitment = RequireVerifyingKeyDraftFixedBytes(
+            record.TakeField($"{context}.record.commitment"),
+            32,
+            $"{context}.record.commitment");
+        var keyLength = DecodeVerifyingKeyDraftUInt32(
+            record.TakeField($"{context}.record.vk_len"),
+            $"{context}.record.vk_len");
+        var maxProofBytes = DecodeVerifyingKeyDraftUInt32(
+            record.TakeField($"{context}.record.max_proof_bytes"),
+            $"{context}.record.max_proof_bytes");
+        var gasScheduleId = DecodeVerifyingKeyDraftOptionalString(
+            record.TakeField($"{context}.record.gas_schedule_id"),
+            $"{context}.record.gas_schedule_id");
+        var metadataUriCid = DecodeVerifyingKeyDraftOptionalString(
+            record.TakeField($"{context}.record.metadata_uri_cid"),
+            $"{context}.record.metadata_uri_cid");
+        var keyBytesCid = DecodeVerifyingKeyDraftOptionalString(
+            record.TakeField($"{context}.record.vk_bytes_cid"),
+            $"{context}.record.vk_bytes_cid");
+        var activationHeight = DecodeVerifyingKeyDraftOptionalUInt64(
+            record.TakeField($"{context}.record.activation_height"),
+            $"{context}.record.activation_height");
+        var withdrawHeight = DecodeVerifyingKeyDraftOptionalUInt64(
+            record.TakeField($"{context}.record.withdraw_height"),
+            $"{context}.record.withdraw_height");
+        var key = DecodeVerifyingKeyDraftOptionalKey(
+            record.TakeField($"{context}.record.key"),
+            $"{context}.record.key");
+        var status = DecodeVerifyingKeyDraftByte(
+            record.TakeField($"{context}.record.status"),
+            $"{context}.record.status");
+        if (!record.IsFinished
+            || version != expected.Version
+            || !string.Equals(circuitId, expected.CircuitId, StringComparison.Ordinal)
+            || ownerManifestId is not null
+            || !string.Equals(registryNamespace, "core", StringComparison.Ordinal)
+            || backendTag != expected.BackendTag
+            || !string.Equals(curve, expected.Curve, StringComparison.Ordinal)
+            || !schemaHash.SequenceEqual(expected.PublicInputsSchemaHash)
+            || !commitment.SequenceEqual(expected.Commitment)
+            || keyLength != expected.VerifyingKeyLength
+            || maxProofBytes != expected.MaxProofBytes
+            || !string.Equals(gasScheduleId, expected.GasScheduleId, StringComparison.Ordinal)
+            || !string.Equals(metadataUriCid, expected.MetadataUriCid, StringComparison.Ordinal)
+            || !string.Equals(keyBytesCid, expected.VerifyingKeyBytesCid, StringComparison.Ordinal)
+            || activationHeight != expected.ActivationHeight
+            || withdrawHeight != expected.WithdrawHeight
+            || !string.Equals(key?.Backend, expected.KeyBackend, StringComparison.Ordinal)
+            || !OptionalBytesEqual(key?.Bytes, expected.KeyBytes)
+            || status != expected.Status)
+        {
+            throw new JsonException(
+                $"{context} verifying-key instruction record does not match the full requested record.");
+        }
+    }
+
+    private static bool OptionalBytesEqual(byte[]? left, byte[]? right) =>
+        left is null
+            ? right is null
+            : right is not null && left.AsSpan().SequenceEqual(right);
+
+    private static string DecodeVerifyingKeyDraftString(
+        ReadOnlySpan<byte> payload,
+        string context)
+    {
+        var value = new VerifyingKeyDraftTransactionCursor(payload);
+        var length = value.TakeLength($"{context}.length");
+        if (length > int.MaxValue)
+        {
+            throw new JsonException($"{context} exceeds the runtime bound.");
+        }
+        var bytes = value.TakeExact(checked((int)length), context);
+        if (!value.IsFinished)
+        {
+            throw new JsonException($"{context} contains trailing bytes.");
+        }
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException error)
+        {
+            throw new JsonException($"{context} is not canonical UTF-8.", error);
+        }
+    }
+
+    private static byte[] DecodeVerifyingKeyDraftByteVector(
+        ReadOnlySpan<byte> payload,
+        string context)
+    {
+        var value = new VerifyingKeyDraftTransactionCursor(payload);
+        var length = value.TakeUInt64($"{context}.length");
+        if (length == 0 || length > int.MaxValue)
+        {
+            throw new JsonException($"{context} length is invalid.");
+        }
+        var bytes = value.TakeExact(checked((int)length), context).ToArray();
+        if (!value.IsFinished)
+        {
+            throw new JsonException($"{context} contains trailing bytes.");
+        }
+        return bytes;
+    }
+
+    private static byte DecodeVerifyingKeyDraftByte(
+        ReadOnlySpan<byte> payload,
+        string context)
+    {
+        var value = new VerifyingKeyDraftTransactionCursor(payload);
+        var decoded = value.TakeByte(context);
+        if (!value.IsFinished)
+        {
+            throw new JsonException($"{context} contains trailing bytes.");
+        }
+        return decoded;
+    }
+
+    private static uint DecodeVerifyingKeyDraftUInt32(
+        ReadOnlySpan<byte> payload,
+        string context)
+    {
+        var value = new VerifyingKeyDraftTransactionCursor(payload);
+        var decoded = value.TakeUInt32(context);
+        if (!value.IsFinished)
+        {
+            throw new JsonException($"{context} contains trailing bytes.");
+        }
+        return decoded;
+    }
+
+    private static ulong DecodeVerifyingKeyDraftUInt64(
+        ReadOnlySpan<byte> payload,
+        string context)
+    {
+        var value = new VerifyingKeyDraftTransactionCursor(payload);
+        var decoded = value.TakeUInt64(context);
+        if (!value.IsFinished)
+        {
+            throw new JsonException($"{context} contains trailing bytes.");
+        }
+        return decoded;
+    }
+
+    private static byte[] RequireVerifyingKeyDraftFixedBytes(
+        ReadOnlySpan<byte> payload,
+        int length,
+        string context)
+    {
+        if (payload.Length != length)
+        {
+            throw new JsonException($"{context} must contain exactly {length} bytes.");
+        }
+        return payload.ToArray();
+    }
+
+    private static string? DecodeVerifyingKeyDraftOptionalString(
+        ReadOnlySpan<byte> payload,
+        string context)
+    {
+        var option = new VerifyingKeyDraftTransactionCursor(payload);
+        switch (option.TakeByte($"{context}.tag"))
+        {
+            case 0:
+                if (!option.IsFinished)
+                {
+                    throw new JsonException($"{context} None encoding contains trailing bytes.");
+                }
+                return null;
+            case 1:
+                var value = DecodeVerifyingKeyDraftString(
+                    option.TakeField($"{context}.value"),
+                    context);
+                if (!option.IsFinished)
+                {
+                    throw new JsonException($"{context} Some encoding contains trailing bytes.");
+                }
+                return value;
+            default:
+                throw new JsonException($"{context} has an invalid option tag.");
+        }
+    }
+
+    private static ulong? DecodeVerifyingKeyDraftOptionalUInt64(
+        ReadOnlySpan<byte> payload,
+        string context)
+    {
+        var option = new VerifyingKeyDraftTransactionCursor(payload);
+        switch (option.TakeByte($"{context}.tag"))
+        {
+            case 0:
+                if (!option.IsFinished)
+                {
+                    throw new JsonException($"{context} None encoding contains trailing bytes.");
+                }
+                return null;
+            case 1:
+                var value = DecodeVerifyingKeyDraftUInt64(
+                    option.TakeField($"{context}.value"),
+                    context);
+                if (!option.IsFinished)
+                {
+                    throw new JsonException($"{context} Some encoding contains trailing bytes.");
+                }
+                return value;
+            default:
+                throw new JsonException($"{context} has an invalid option tag.");
+        }
+    }
+
+    private static (string Backend, byte[] Bytes)? DecodeVerifyingKeyDraftOptionalKey(
+        ReadOnlySpan<byte> payload,
+        string context)
+    {
+        var option = new VerifyingKeyDraftTransactionCursor(payload);
+        switch (option.TakeByte($"{context}.tag"))
+        {
+            case 0:
+                if (!option.IsFinished)
+                {
+                    throw new JsonException($"{context} None encoding contains trailing bytes.");
+                }
+                return null;
+            case 1:
+                var key = new VerifyingKeyDraftTransactionCursor(
+                    option.TakeField($"{context}.value"));
+                var backend = DecodeVerifyingKeyDraftString(
+                    key.TakeField($"{context}.backend"),
+                    $"{context}.backend");
+                var bytes = DecodeVerifyingKeyDraftByteVector(
+                    key.TakeField($"{context}.bytes"),
+                    $"{context}.bytes");
+                if (!option.IsFinished)
+                {
+                    throw new JsonException($"{context} Some encoding contains trailing bytes.");
+                }
+                if (!key.IsFinished)
+                {
+                    throw new JsonException($"{context} contains trailing fields.");
+                }
+                return (backend, bytes);
+            default:
+                throw new JsonException($"{context} has an invalid option tag.");
+        }
+    }
+
+    private static void RequireCanonicalVerifyingKeyDraftNonZeroOption(
+        ReadOnlySpan<byte> payload,
+        int width,
+        bool required,
+        string context)
+    {
+        var option = new VerifyingKeyDraftTransactionCursor(payload);
+        switch (option.TakeByte($"{context}.tag"))
+        {
+            case 0:
+                if (required || !option.IsFinished)
+                {
+                    throw new JsonException(
+                        $"{context} must contain one canonical nonzero integer.");
+                }
+                return;
+            case 1:
+                var value = option.TakeField($"{context}.value");
+                if (!option.IsFinished
+                    || value.Length != width
+                    || value.IndexOfAnyExcept((byte)0) < 0)
+                {
+                    throw new JsonException(
+                        $"{context} Some value is not a canonical nonzero integer.");
+                }
+                return;
+            default:
+                throw new JsonException($"{context} has an invalid option tag.");
+        }
+    }
+
+    private static void RequireAbsentVerifyingKeyDraftOption(
+        ReadOnlySpan<byte> payload,
+        string context)
+    {
+        var option = new VerifyingKeyDraftTransactionCursor(payload);
+        if (option.TakeByte($"{context}.tag") != 0 || !option.IsFinished)
+        {
+            throw new JsonException($"{context} must use the exact None encoding.");
+        }
+    }
+
+    private ref struct VerifyingKeyDraftTransactionCursor
+    {
+        private readonly ReadOnlySpan<byte> payload;
+        private int offset;
+
+        internal VerifyingKeyDraftTransactionCursor(ReadOnlySpan<byte> payload)
+        {
+            this.payload = payload;
+            offset = 0;
+        }
+
+        internal readonly bool IsFinished => offset == payload.Length;
+
+        internal byte TakeByte(string field) => TakeExact(1, field)[0];
+
+        internal uint TakeUInt32(string field) =>
+            BinaryPrimitives.ReadUInt32LittleEndian(TakeExact(sizeof(uint), field));
+
+        internal ulong TakeUInt64(string field) =>
+            BinaryPrimitives.ReadUInt64LittleEndian(TakeExact(sizeof(ulong), field));
+
+        internal ReadOnlySpan<byte> TakeField(string field)
+        {
+            var length = TakeLength($"{field}.length");
+            if (length > int.MaxValue)
+            {
+                throw new ArgumentException($"{field} exceeds the runtime bound.");
+            }
+
+            return TakeExact(checked((int)length), field);
+        }
+
+        internal ReadOnlySpan<byte> TakeExact(int count, string field)
+        {
+            if (count < 0 || offset > payload.Length - count)
+            {
+                throw new ArgumentException($"{field} is truncated.");
+            }
+            var result = payload.Slice(offset, count);
+            offset += count;
+            return result;
+        }
+
+        internal ulong TakeLength(string field)
+        {
+            ulong value = 0;
+            var shift = 0;
+            for (var count = 1; count <= 10; count++)
+            {
+                if (offset >= payload.Length)
+                {
+                    throw new ArgumentException($"{field} compact length is truncated.");
+                }
+                var current = payload[offset++];
+                var chunk = (ulong)(current & 0x7f);
+                if (shift >= 64 || chunk > ulong.MaxValue >> shift)
+                {
+                    throw new ArgumentException($"{field} compact length overflows UInt64.");
+                }
+                value |= chunk << shift;
+                if ((current & 0x80) == 0)
+                {
+                    if (count > 1 && chunk == 0)
+                    {
+                        throw new ArgumentException($"{field} compact length is overlong.");
+                    }
+                    return value;
+                }
+                shift += 7;
+            }
+
+            throw new ArgumentException($"{field} compact length is overlong.");
         }
     }
 

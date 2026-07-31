@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 import type { BrowserFeePayment } from "./transaction-codec.js";
-
+import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 export * from "./kotodama-compiler.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
@@ -180,6 +180,7 @@ export type {
   PrivacyProtocolLimitsV1,
   PrivacyProtocolTagV1,
   PrivacyTaggedUnitV1,
+  PrivacyU64V1,
 } from "./privacy-capabilities.js";
 export interface CryptoKeyPair {
   algorithm: CryptoAlgorithm;
@@ -494,11 +495,6 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   validationFeePolicyHash?: string | null;
   validationFeeInstructionIndex?: number | string | bigint | null;
   validationFeeTransferEntryIndex?: number | string | bigint | null;
-  privateKey?: string | BinaryLike | null;
-  privateKeyHex?: string | null;
-  privateKeyMultihash?: string | null;
-  privateKeyBytes?: BinaryLike | number[] | null;
-  privateKeyAlgorithm?: string | null;
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id?: string;
@@ -506,11 +502,6 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
-  private_key?: string | BinaryLike | null;
-  private_key_hex?: string | null;
-  private_key_multihash?: string | null;
-  private_key_bytes?: BinaryLike | number[] | null;
-  private_key_algorithm?: string | null;
 }
 
 export interface MultisigProposePayload {
@@ -526,7 +517,6 @@ export interface MultisigProposePayload {
   validation_fee_policy_hash?: string;
   validation_fee_instruction_index?: string;
   validation_fee_transfer_entry_index?: string;
-  private_key?: string | BinaryLike;
 }
 
 export interface MultisigContractCallProposeRequest
@@ -540,11 +530,6 @@ export interface MultisigContractCallProposeRequest
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
-  privateKey?: string | BinaryLike | null;
-  privateKeyHex?: string | null;
-  privateKeyMultihash?: string | null;
-  privateKeyBytes?: BinaryLike | number[] | null;
-  privateKeyAlgorithm?: string | null;
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id?: string;
@@ -554,11 +539,6 @@ export interface MultisigContractCallProposeRequest
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
-  private_key?: string | BinaryLike | null;
-  private_key_hex?: string | null;
-  private_key_multihash?: string | null;
-  private_key_bytes?: BinaryLike | number[] | null;
-  private_key_algorithm?: string | null;
 }
 
 export interface MultisigContractCallProposePayload {
@@ -573,7 +553,6 @@ export interface MultisigContractCallProposePayload {
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
-  private_key?: string | BinaryLike;
 }
 
 export interface MultisigContractCallApproveRequest
@@ -585,11 +564,6 @@ export interface MultisigContractCallApproveRequest
   publicKeyHex?: string | null;
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
-  privateKey?: string | BinaryLike | null;
-  privateKeyHex?: string | null;
-  privateKeyMultihash?: string | null;
-  privateKeyBytes?: BinaryLike | number[] | null;
-  privateKeyAlgorithm?: string | null;
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id?: string;
@@ -599,11 +573,6 @@ export interface MultisigContractCallApproveRequest
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
-  private_key?: string | BinaryLike | null;
-  private_key_hex?: string | null;
-  private_key_multihash?: string | null;
-  private_key_bytes?: BinaryLike | number[] | null;
-  private_key_algorithm?: string | null;
 }
 
 export interface MultisigContractCallApprovePayload {
@@ -616,7 +585,6 @@ export interface MultisigContractCallApprovePayload {
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
-  private_key?: string | BinaryLike;
 }
 
 export interface MultisigContractCallResponse {
@@ -1282,14 +1250,15 @@ export interface ConfidentialEncryptedPayloadInput {
 export interface ProofAttachmentInput {
   backend: string;
   proof: BinaryLike;
-  verifyingKeyRef: VerifyingKeyIdLike;
+  verifyingKeyRef: { backend: string; name: string };
   verifyingKeyCommitment?: BinaryLike | null;
+  envelopeHash?: BinaryLike | null;
   lanePrivacy?: {
     commitmentId: number;
-    merkle?: {
+    merkle: {
       leaf: BinaryLike;
-      leafIndex?: number;
-      auditPath?: (BinaryLike | null)[];
+      leafIndex: number;
+      auditPath: BinaryLike[];
     };
   } | null;
 }
@@ -1649,22 +1618,18 @@ export interface RepoGovernanceDto {
   marginFrequencySecs: number;
 }
 
-export interface ToriiRepoAgreement {
+export interface ToriiRepoAgreement extends RepoAgreementLifecycleFields {
   id: string;
   initiator: string;
   counterparty: string;
   custodian: string | null;
   cashLeg: RepoLegDto;
-  cashSource: string;
   collateralLeg: RepoLegDto;
-  collateralCustodyAsset: string;
   rateBps: number;
   maturityTimestampMs: number;
   initiatedTimestampMs: number;
   lastMarginCheckTimestampMs: number;
   governance: RepoGovernanceDto;
-  settlementTimestampMs: number | null;
-  status: "active" | "settled";
 }
 
 export interface RepoAgreementListResponse {
@@ -2348,11 +2313,8 @@ export type ToriiVerifierBackendLabelV1 =
   | "halo2/ipa"
   | "halo2/pasta/kaigi-roster-v1"
   | "halo2/pasta/kaigi-usage-v1"
-  | "halo2/pasta/ivm-overlay-bind"
   | "halo2/pasta/ivm-execution-v1"
   | "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
-  | "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"
-  | "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2"
   | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
@@ -2410,18 +2372,25 @@ export interface ToriiVerifyingKeyListOptions {
   signal?: AbortSignal | null;
 }
 
+export interface ToriiVerifyingKeyTransactionDraft {
+  readonly submitted: false;
+  readonly transaction_payload_b64: string;
+  readonly signing_message_b64: string;
+}
+
+export interface AppApiTransactionDraft {
+  readonly submitted: false;
+  readonly transaction_payload_b64: string;
+  readonly signing_message_b64: string;
+}
+
 export interface ToriiVerifyingKeyRegisterPayload {
   authority: string;
-  private_key: string;
   backend: ToriiVerifierBackendLabelV1;
   name: string;
   version: NumericLike;
   circuit_id: string;
-  public_inputs_schema_hex?: string;
-  public_inputs_schema_hash_hex?: string;
-  public_inputs_schema_hash?: string;
-  publicInputsSchemaHashHex?: string;
-  publicInputsSchemaHash?: string;
+  public_inputs_schema_hash_hex: string;
   gas_schedule_id: string;
   curve?: string;
   max_proof_bytes?: NumericLike;
@@ -2437,16 +2406,11 @@ export interface ToriiVerifyingKeyRegisterPayload {
 
 export interface ToriiVerifyingKeyUpdatePayload {
   authority: string;
-  private_key: string;
   backend: ToriiVerifierBackendLabelV1;
   name: string;
   version: NumericLike;
   circuit_id: string;
-  public_inputs_schema_hex?: string;
-  public_inputs_schema_hash_hex?: string;
-  public_inputs_schema_hash?: string;
-  publicInputsSchemaHashHex?: string;
-  publicInputsSchemaHash?: string;
+  public_inputs_schema_hash_hex: string;
   gas_schedule_id?: string;
   curve?: string;
   max_proof_bytes?: NumericLike;
@@ -3345,7 +3309,7 @@ export type SorafsValidationCategory =
 export interface SorafsValidationOutcomeFields {
   code: string;
   message: string;
-  docs_url: "docs/portal/docs/sorafs/reference-sdk/errors.md";
+  docs_url: "https://docs.iroha.tech/";
   telemetry_tags: ReadonlyArray<string>;
   context: ReadonlyArray<SorafsValidationContextField>;
   inputs: ReadonlyArray<SorafsValidationInput>;
@@ -3923,6 +3887,7 @@ type IrohaJsRuntimeNamespace<Keys extends keyof IrohaJsPublicApi> = Readonly<
 
 type ToriiRuntimeNamespaceExport =
     "IsoMessageTimeoutError"
+  | "LocalSigningContext"
   | "ToriiClient"
   | "TransactionBatchAdmissionAmbiguousError"
   | "ToriiDataModelMismatchError"
@@ -3956,7 +3921,10 @@ type NoritoRuntimeNamespaceExport =
   | "inspectSubscriptionTriggerAction"
   | "noritoDecodeBlockProofs"
   | "noritoDecodeInstruction"
+  | "noritoDecodeInstructionBoxArchive"
   | "noritoDecodeOpenVerifyEnvelope"
+  | "noritoDecodePrivacyExact12FixtureBundleBase64V1"
+  | "noritoDecodePrivacyExact12FixtureBundleV1"
   | "noritoEncodeInstruction"
   | "noritoEncodeInstructionBoxArchive"
   | "noritoEncodeContractManifestSignaturePayload"
@@ -3965,7 +3933,11 @@ type NoritoRuntimeNamespaceExport =
   | "noritoEncodeMultisigProposeRequest"
   | "noritoEncodeSorafsBillingAcknowledgementProofV1"
   | "noritoEncodeOpenVerifyEnvelope"
+  | "noritoEncodePrivacyExact12FixtureBundleV1"
   | "noritoEncodeTransactionPayloadBatch"
+  | "PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1"
+  | "PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1"
+  | "PRIVACY_EXACT12_PROTOCOL_IDS_V1"
   | "SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1"
   | "SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1"
   | "validateNoritoFrame"
@@ -4074,7 +4046,6 @@ export interface SoranetAdmissionTokenResponse {
 
 export interface SoranetPuzzleMintOptions {
   ttlSecs?: number | bigint | null;
-  transcriptHashHex?: string | null;
   signed?: boolean | null;
   timeoutMs?: number | null;
   headers?: Record<string, string | null | undefined>;
@@ -4105,6 +4076,7 @@ export class SoranetPuzzleClient {
     options?: SoranetPuzzleMintOptions,
   ): Promise<SoranetPuzzleConfigSnapshot>;
   mintPuzzleTicket(
+    transcriptHashHex: string,
     options?: SoranetPuzzleMintOptions,
   ): Promise<SoranetPuzzleTicketResponse>;
   getTokenConfig(
@@ -4147,9 +4119,16 @@ export interface ResolvedToriiClientConfig {
 
 export type ToriiHealthStatus = { status: string } & Record<string, unknown>;
 
+/** Immutable chain context required by APIs that return local-signing drafts. */
+export class LocalSigningContext {
+  constructor(chainId: string);
+  readonly chainId: string;
+}
+
 export interface ToriiClientOptions extends ToriiClientRetryOptions {
   fetchImpl?: typeof fetch;
   config?: ToriiClientConfigSource;
+  localSigningContext?: LocalSigningContext;
   allowInsecure?: boolean;
   sorafsAliasPolicy?: SorafsAliasPolicyOptions;
   onSorafsAliasWarning?: (warning: SorafsAliasWarning) => void;
@@ -4199,6 +4178,7 @@ export interface IsoBridgeAliasEntry {
 export interface IsoBridgeCurrencyBinding {
   currency: string;
   assetDefinition: string;
+  maxAmount: string;
 }
 
 export interface IsoBridgeConfigSnapshot {
@@ -4878,18 +4858,10 @@ export interface ToriiLaneMerkleCommitmentSnapshot {
   max_depth: number;
 }
 
-export interface ToriiLaneSnarkCommitmentSnapshot {
-  circuit_id: number;
-  verifying_key_digest: string;
-  statement_hash: string;
-  proof_hash: string;
-}
-
 export interface ToriiLanePrivacyCommitmentSnapshot {
   id: number;
-  scheme: "merkle" | "snark";
-  merkle?: ToriiLaneMerkleCommitmentSnapshot | null;
-  snark?: ToriiLaneSnarkCommitmentSnapshot | null;
+  scheme: "merkle";
+  merkle: ToriiLaneMerkleCommitmentSnapshot;
 }
 
 export interface ToriiLaneGovernanceSnapshot {
@@ -5223,21 +5195,10 @@ export interface SubscriptionPlanCreateRequest {
   authority: string;
   planId: string;
   plan: SubscriptionPlan;
-  privateKey?:
-    | ArrayBufferView
-    | ArrayBuffer
-    | Buffer
-    | ReadonlyArray<number>
-    | string;
-  privateKeyHex?: string;
-  privateKeyMultihash?: string;
-  privateKeyAlgorithm?: string;
 }
 
-export interface SubscriptionPlanCreateResponse {
-  ok: boolean;
+export interface SubscriptionPlanCreateResponse extends AppApiTransactionDraft {
   plan_id: string;
-  tx_hash_hex: string;
 }
 
 export interface SubscriptionPlanListItem {
@@ -5317,15 +5278,10 @@ export interface SubscriptionUsageRequest {
   unitKey: string;
   delta: QuantityInput;
   usageTriggerId?: string | null;
-  privateKey?:
-    | ArrayBufferView
-    | ArrayBuffer
-    | Buffer
-    | ReadonlyArray<number>
-    | string;
-  privateKeyHex?: string;
-  privateKeyMultihash?: string;
-  privateKeyAlgorithm?: string;
+}
+
+export interface SubscriptionUsageDraft extends AppApiTransactionDraft {
+  subscription_id: string;
 }
 
 export interface SubscriptionActionResponse {
@@ -7684,21 +7640,6 @@ export interface ZkTransferInstructionInput {
   rootHint?: BinaryLike | null;
 }
 
-export interface AssetHiddenZkTransferInstructionInput {
-  poolId: string;
-  inputs: ReadonlyArray<BinaryLike>;
-  outputs: ReadonlyArray<BinaryLike>;
-  proof: ProofAttachmentInput;
-  rootHint?: BinaryLike | null;
-}
-
-export interface RegisterAssetHiddenZkPoolInstructionInput {
-  poolId: string;
-  storageAssetDefinitionId: string;
-  assetSetRoot: BinaryLike;
-  transferVerifyingKey: VerifyingKeyIdLike;
-}
-
 export interface UnshieldInstructionInput {
   assetDefinitionId: string;
   destinationAccountId: string;
@@ -8121,31 +8062,19 @@ export interface DeployContractResponse {
 
 export interface SetContractAliasRequest {
   authority: string;
-  privateKey: string;
   contractAddress: string;
   contractAlias?: string | null;
   leaseExpiryMs?: number | null;
 }
 
-export interface SetContractAliasResponse {
-  ok: boolean;
+export interface SetContractAliasResponse extends AppApiTransactionDraft {
   contract_alias: string | null;
   contract_address: string;
   dataspace: string;
-  tx_hash_hex: string | null;
-  status: string;
 }
 
 export interface ContractCallRequest {
   authority: string;
-  privateKey?: string | null;
-  private_key?: string | null;
-  privateKeyHex?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
-  private_key_hex?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
-  privateKeyBytes?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
-  private_key_bytes?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
-  privateKeyMultihash?: string | null;
-  private_key_multihash?: string | null;
   contractAddress?: string;
   contractAlias?: string;
   entrypoint: string;
@@ -9473,15 +9402,6 @@ export interface UaidManifestsResponse {
 export interface PublishSpaceDirectoryManifestRequest {
   authority: string;
   manifest: UaidAssetPermissionManifest | Record<string, unknown>;
-  privateKey?:
-    | ArrayBufferView
-    | ArrayBuffer
-    | Buffer
-    | ReadonlyArray<number>
-    | string;
-  privateKeyHex?: string;
-  privateKeyMultihash?: string;
-  privateKeyAlgorithm?: string;
   reason?: string | null;
 }
 
@@ -9490,15 +9410,6 @@ export interface RevokeSpaceDirectoryManifestRequest {
   uaid: string;
   dataspaceId: number;
   revokedEpoch: number;
-  privateKey?:
-    | ArrayBufferView
-    | ArrayBuffer
-    | Buffer
-    | ReadonlyArray<number>
-    | string;
-  privateKeyHex?: string;
-  privateKeyMultihash?: string;
-  privateKeyAlgorithm?: string;
   reason?: string | null;
 }
 
@@ -9645,30 +9556,6 @@ export interface ConfidentialTransferProofOutputV2 {
 }
 
 export interface ConfidentialTransferProofResultV2 {
-  nullifiers: ReadonlyArray<Buffer>;
-  outputCommitments: ReadonlyArray<Buffer>;
-  root: Buffer;
-  proof: Buffer;
-}
-
-export interface AssetHiddenTransferProofInputV1 {
-  chainId: string;
-  poolId: string;
-  assetSetRootHex?: string;
-  assetSetRoot?: BinaryLike;
-  inputCommitments?: ReadonlyArray<BinaryLike>;
-  inputCommitmentsHex?: ReadonlyArray<string>;
-  nullifiers?: ReadonlyArray<BinaryLike>;
-  nullifiersHex?: ReadonlyArray<string>;
-  outputCommitments?: ReadonlyArray<BinaryLike>;
-  outputCommitmentsHex?: ReadonlyArray<string>;
-  rootHintHex?: string;
-  rootHint?: BinaryLike;
-  verifyingKey: Record<string, unknown>;
-}
-
-export interface AssetHiddenTransferProofResultV1 {
-  inputCommitments: ReadonlyArray<Buffer>;
   nullifiers: ReadonlyArray<Buffer>;
   outputCommitments: ReadonlyArray<Buffer>;
   root: Buffer;
@@ -10886,11 +10773,11 @@ export declare class ToriiClient {
   registerVerifyingKey(
     payload: ToriiVerifyingKeyRegisterPayload,
     options?: { signal?: AbortSignal },
-  ): Promise<void>;
+  ): Promise<ToriiVerifyingKeyTransactionDraft>;
   updateVerifyingKey(
     payload: ToriiVerifyingKeyUpdatePayload,
     options?: { signal?: AbortSignal },
-  ): Promise<void>;
+  ): Promise<ToriiVerifyingKeyTransactionDraft>;
   resolveAlias(
     alias: string,
     options?: CanonicalRequestOptions,
@@ -11165,11 +11052,11 @@ export declare class ToriiClient {
   publishSpaceDirectoryManifest(
     request: PublishSpaceDirectoryManifestRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<unknown | null>;
+  ): Promise<AppApiTransactionDraft>;
   revokeSpaceDirectoryManifest(
     request: RevokeSpaceDirectoryManifestRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<unknown | null>;
+  ): Promise<AppApiTransactionDraft>;
   submitTransaction(
     payload: ArrayBufferView | ArrayBuffer | Buffer,
     options?: { signal?: AbortSignal },
@@ -11727,8 +11614,8 @@ export declare class ToriiClient {
   ): Promise<DeployContractResponse | null>;
   setContractAlias(
     request: SetContractAliasRequest,
-  ): Promise<SetContractAliasResponse | null>;
-  callContract(
+  ): Promise<SetContractAliasResponse>;
+  prepareContractCall(
     request: ContractCallRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ContractCallResponse>;
@@ -11876,7 +11763,7 @@ export declare class ToriiClient {
     subscriptionId: string,
     request: SubscriptionUsageRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<SubscriptionActionResponse>;}
+  ): Promise<SubscriptionUsageDraft>;}
 
 export interface NoritoRpcClientOptions {
   fetchImpl?: typeof fetch;
@@ -12147,6 +12034,10 @@ export function verifyBlockProofs(
 export function noritoEncodeInstructionBoxArchive(
   instruction: object | string | ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
+/** Decode one exact canonical compact `InstructionBox` transaction archive. */
+export function noritoDecodeInstructionBoxArchive(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+): unknown;
 /** Encode the exact current Rust manifest-provenance signing frame. */
 export function noritoEncodeContractManifestSignaturePayload(
   manifest: Record<string, unknown>,
@@ -12175,6 +12066,69 @@ export function noritoDecodeOpenVerifyEnvelope(
   proof_bytes: number[];
   aux: number[];
 };
+export const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1:
+  "iroha.privacy.exact12-typed-fixture-bundle.v1";
+export const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1: 2097152;
+export const PRIVACY_EXACT12_PROTOCOL_IDS_V1: readonly [
+  "zk-ace-pq-authorization-v0",
+  "anonymous-pgc-k-out-of-n-v1",
+  "verange-transparent-range-v1",
+  "iroha-zk-ams-v1",
+  "vega-existing-credential-zk-v0",
+  "iroha-zk-x509-stark-p256-v0",
+  "iroha-jindo-polynomial-commitment-v0",
+  "iroha-bootle-lantern-anoncred-v1",
+  "orchard-halo2-actions-v1",
+  "monero-fcmp-plus-plus-v1",
+  "iroha-ivm-private-note-stark-v1",
+  "pq-masp-stark-v0",
+];
+export type PrivacyExact12ProtocolIdV1 =
+  (typeof PRIVACY_EXACT12_PROTOCOL_IDS_V1)[number];
+export interface PrivacyExact12TypedFixtureRowV1 {
+  protocolId: PrivacyExact12ProtocolIdV1;
+  statementNorito: Uint8Array;
+  envelopeNorito: Uint8Array;
+  submitProofWireId: "iroha.privacy.submit_proof.v1";
+  submitProofInstructionNorito: Uint8Array;
+  transactionIntentProjectionNorito: Uint8Array;
+  transactionIntentDigest: Uint8Array;
+  unsignedTransactionPayloadNorito: Uint8Array;
+  signedTransactionVersionedNorito: Uint8Array;
+  signedTransactionHash: Uint8Array;
+}
+export interface PrivacyExact12TypedFixtureRowInputV1 {
+  protocolId: PrivacyExact12ProtocolIdV1;
+  statementNorito: BinaryLike;
+  envelopeNorito: BinaryLike;
+  submitProofWireId: "iroha.privacy.submit_proof.v1";
+  submitProofInstructionNorito: BinaryLike;
+  transactionIntentProjectionNorito: BinaryLike;
+  transactionIntentDigest: BinaryLike;
+  unsignedTransactionPayloadNorito: BinaryLike;
+  signedTransactionVersionedNorito: BinaryLike;
+  signedTransactionHash: BinaryLike;
+}
+export interface PrivacyExact12FixtureBundleV1 {
+  version: 1;
+  rows: PrivacyExact12TypedFixtureRowV1[];
+}
+export interface PrivacyExact12FixtureBundleInputV1 {
+  version: 1;
+  rows: ReadonlyArray<Readonly<PrivacyExact12TypedFixtureRowInputV1>>;
+}
+/** Decode an exact canonical-standard-base64 checked Exact12 archive. */
+export function noritoDecodePrivacyExact12FixtureBundleBase64V1(
+  value: string,
+): PrivacyExact12FixtureBundleV1;
+/** Decode one canonical native-independent Exact12 outer Norito archive. */
+export function noritoDecodePrivacyExact12FixtureBundleV1(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+): PrivacyExact12FixtureBundleV1;
+/** Re-encode a complete Exact12 bundle with canonical outer Norito layout. */
+export function noritoEncodePrivacyExact12FixtureBundleV1(
+  value: Readonly<PrivacyExact12FixtureBundleInputV1>,
+): Uint8Array;
 export interface NoritoFrameValidationOptions {
   context?: string;
   expectedSchemaHash?: ArrayBufferView | ArrayBuffer | Buffer;
@@ -12199,8 +12153,6 @@ export interface MultisigProposeNoritoRequest {
   multisigAccountAlias?: string | null;
   signer_account_id?: string;
   signerAccountId?: string;
-  private_key?: string | null;
-  privateKey?: string | null;
   public_key_hex?: string | null;
   publicKeyHex?: string | null;
   signature_b64?: string | null;
@@ -12702,9 +12654,6 @@ export function buildConfidentialTransferProofV2(input: {
   rootHintHex: string;
   verifyingKey: Record<string, unknown>;
 }): ConfidentialTransferProofResultV2;
-export function buildConfidentialAssetHiddenTransferProofV1(
-  input: AssetHiddenTransferProofInputV1,
-): AssetHiddenTransferProofResultV1;
 export function buildConfidentialUnshieldProofV2(input: {
   chainId: string;
   assetDefinitionId: string;
@@ -13477,20 +13426,6 @@ export function buildShieldInstruction(input: ShieldInstructionInput): object;
 
 export function buildZkTransferInstruction(
   input: ZkTransferInstructionInput,
-): object;
-
-/**
- * Build the asset-hidden transfer payload shape.
- *
- * The Rust data model and Norito encoder accept this instruction. Validator
- * execution remains fail-closed until asset-pool verifier state exists.
- */
-export function buildAssetHiddenZkTransferInstruction(
-  input: AssetHiddenZkTransferInstructionInput,
-): object;
-
-export function buildRegisterAssetHiddenZkPoolInstruction(
-  input: RegisterAssetHiddenZkPoolInstructionInput,
 ): object;
 
 export function buildUnshieldInstruction(

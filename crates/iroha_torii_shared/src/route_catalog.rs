@@ -1365,6 +1365,7 @@ pub mod core {
         ApiSurface::Public,
         Listener::Torii,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Create a VPN session.
@@ -1375,6 +1376,7 @@ pub mod core {
         ApiSurface::Public,
         Listener::Torii,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// List VPN settlement receipts.
@@ -1385,6 +1387,7 @@ pub mod core {
         ApiSurface::Public,
         Listener::Torii,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
@@ -1396,6 +1399,7 @@ pub mod core {
         ApiSurface::Public,
         Listener::Torii,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Read one VPN session.
@@ -1406,6 +1410,7 @@ pub mod core {
         ApiSurface::Public,
         Listener::Torii,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
@@ -1417,6 +1422,7 @@ pub mod core {
         ApiSurface::Public,
         Listener::Torii,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Read the node's wall-clock sample.
@@ -1747,7 +1753,9 @@ pub mod pipeline {
 
 /// ISO 20022 bridge submission, record, audit, and XML-view descriptors.
 pub mod iso20022 {
-    use super::{ApiSurface, HttpMethod, Listener, RouteDescriptor, RouteProjections};
+    use super::{
+        ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor, RouteProjections,
+    };
 
     const fn public_post(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -1757,6 +1765,7 @@ pub mod iso20022 {
             ApiSurface::Public,
             Listener::Torii,
         )
+        .with_authentication(AuthenticationPolicy::RequiredApiToken)
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
     }
@@ -1769,6 +1778,7 @@ pub mod iso20022 {
             ApiSurface::Public,
             Listener::Torii,
         )
+        .with_authentication(AuthenticationPolicy::RequiredApiToken)
         .with_projections(RouteProjections::ALL)
         .with_implicit_head(true)
         .with_cors_options(true)
@@ -2592,11 +2602,6 @@ pub mod runtime_governance {
     /// Build a zero-knowledge Merkle path.
     pub const ZK_MERKLE_PATH: RouteDescriptor =
         public_post("zk.merkle_path.build", "/v1/zk/merkle-path");
-    /// Verify one zero-knowledge proof.
-    pub const ZK_VERIFY: RouteDescriptor = public_post("zk.proof.verify", "/v1/zk/verify");
-    /// Submit one zero-knowledge proof record.
-    pub const ZK_SUBMIT_PROOF: RouteDescriptor =
-        public_post("zk.proof.submit", "/v1/zk/submit-proof");
     /// Read a zero-knowledge vote tally.
     pub const ZK_VOTE_TALLY: RouteDescriptor = public_post("zk.vote.tally", "/v1/zk/vote/tally");
     /// Derive an IVM zero-knowledge executable.
@@ -2849,8 +2854,6 @@ pub mod runtime_governance {
     pub const ROUTES: &[RouteDescriptor] = &[
         ZK_ROOTS,
         ZK_MERKLE_PATH,
-        ZK_VERIFY,
-        ZK_SUBMIT_PROOF,
         ZK_VOTE_TALLY,
         ZK_IVM_DERIVE,
         ZK_IVM_PROVE,
@@ -3640,6 +3643,18 @@ pub mod application_api {
         .with_cors_options(true)
     }
 
+    const fn app_api_token_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_get(id, path).with_authentication(AuthenticationPolicy::RequiredApiToken)
+    }
+
+    const fn app_api_token_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path).with_authentication(AuthenticationPolicy::RequiredApiToken)
+    }
+
+    const fn app_api_token_delete(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_delete(id, path).with_authentication(AuthenticationPolicy::RequiredApiToken)
+    }
+
     const fn app_wildcard_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_sdk_get(id, path).with_route_match(RouteMatch::Wildcard)
     }
@@ -3649,11 +3664,15 @@ pub mod application_api {
     }
 
     const fn push_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_post(id, path).with_feature_gate(FeatureGate::All(&["app_api", "push"]))
+        app_post(id, path)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_feature_gate(FeatureGate::All(&["app_api", "push"]))
     }
 
     const fn push_delete(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_delete(id, path).with_feature_gate(FeatureGate::All(&["app_api", "push"]))
+        app_delete(id, path)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_feature_gate(FeatureGate::All(&["app_api", "push"]))
     }
 
     const fn app_protocol_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -3903,9 +3922,9 @@ pub mod application_api {
         KAIGI_RELAYS_BY_RELAY_ID_GET => app_get("application.kaigi_relays_by_relay_id_get", "/v1/kaigi/relays/{relay_id}");
         KAIGI_RELAYS_HEALTH_GET => app_get("application.kaigi_relays_health_get", "/v1/kaigi/relays/health");
         KAIGI_RELAYS_EVENTS_GET => app_protocol_get("application.kaigi_relays_events_get", "/v1/kaigi/relays/events");
-        WEBHOOKS_GET => app_get("application.webhooks_get", "/v1/webhooks");
-        WEBHOOKS_POST => app_post("application.webhooks_post", "/v1/webhooks");
-        WEBHOOKS_BY_ID_DELETE => app_delete("application.webhooks_by_id_delete", "/v1/webhooks/{id}");
+        WEBHOOKS_GET => app_api_token_get("application.webhooks_get", "/v1/webhooks");
+        WEBHOOKS_POST => app_api_token_post("application.webhooks_post", "/v1/webhooks");
+        WEBHOOKS_BY_ID_DELETE => app_api_token_delete("application.webhooks_by_id_delete", "/v1/webhooks/{id}");
     }
 }
 
@@ -4185,7 +4204,7 @@ pub mod soracloud_gateway {
         ApiSurface::Protocol,
         Listener::Torii,
     )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "public SoraDNS virtual-host gateway",
@@ -4198,7 +4217,7 @@ pub mod soracloud_gateway {
         ApiSurface::Protocol,
         Listener::Torii,
     )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_route_match(RouteMatch::Wildcard)
     .with_path_policy(PathPolicy::ProtocolException {
@@ -4212,7 +4231,7 @@ pub mod soracloud_gateway {
         ApiSurface::Protocol,
         Listener::Torii,
     )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "public SoraCloud runtime gateway",
@@ -4225,7 +4244,7 @@ pub mod soracloud_gateway {
         ApiSurface::Protocol,
         Listener::Torii,
     )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_route_match(RouteMatch::Wildcard)
     .with_path_policy(PathPolicy::ProtocolException {
@@ -4433,8 +4452,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::VRF_REVEAL,
     runtime_governance::ZK_ROOTS,
     runtime_governance::ZK_MERKLE_PATH,
-    runtime_governance::ZK_VERIFY,
-    runtime_governance::ZK_SUBMIT_PROOF,
     runtime_governance::ZK_VOTE_TALLY,
     runtime_governance::ZK_IVM_DERIVE,
     runtime_governance::ZK_IVM_PROVE,
@@ -5209,6 +5226,30 @@ mod tests {
     }
 
     #[test]
+    fn public_runtime_gateway_authentication_is_exactly_scoped() {
+        let catalog_routes = CATALOGED_ROUTES
+            .iter()
+            .filter(|route| {
+                route
+                    .stable_route_id()
+                    .starts_with("protocol.soracloud.")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(catalog_routes.len(), soracloud_gateway::ROUTES.len());
+        assert_eq!(soracloud_gateway::ROUTES.len(), 4);
+
+        for route in soracloud_gateway::ROUTES {
+            assert!(catalog_routes.iter().any(|catalog| **catalog == *route));
+            assert_eq!(route.surface(), ApiSurface::Protocol);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::Unauthenticated
+            );
+            assert_eq!(route.projections(), RouteProjections::NONE);
+        }
+    }
+
+    #[test]
     fn dedicated_onboarding_authentication_is_exactly_scoped() {
         for route in [
             application_api::ACCOUNTS_ONBOARD_PLAN_POST,
@@ -5233,12 +5274,25 @@ mod tests {
     }
 
     #[test]
-    fn stream_token_api_token_authentication_is_exactly_scoped() {
-        assert_eq!(
-            sorafs::STORAGE_TOKEN.authentication(),
-            AuthenticationPolicy::RequiredApiToken,
-            "stream-token issuance must advertise its unconditional API credential"
-        );
+    fn required_api_token_authentication_is_exactly_scoped() {
+        let required_routes = iso20022::ROUTES
+            .iter()
+            .copied()
+            .chain([
+                sorafs::STORAGE_TOKEN,
+                application_api::WEBHOOKS_GET,
+                application_api::WEBHOOKS_POST,
+                application_api::WEBHOOKS_BY_ID_DELETE,
+            ])
+            .collect::<Vec<_>>();
+        for route in &required_routes {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::RequiredApiToken,
+                "{} must advertise its unconditional API credential",
+                route.stable_route_id()
+            );
+        }
         assert_eq!(
             CATALOGED_ROUTES
                 .iter()
@@ -5246,9 +5300,30 @@ mod tests {
                     route.authentication() == AuthenticationPolicy::RequiredApiToken
                 })
                 .count(),
-            1,
-            "no unrelated route may inherit the stream-token credential policy"
+            required_routes.len(),
+            "no unrelated route may inherit the unconditional API-token policy"
         );
+    }
+
+    #[test]
+    fn vpn_and_push_device_routes_declare_canonical_account_authentication() {
+        for route in [
+            core::VPN_QUOTE_CREATE,
+            core::VPN_SESSION_CREATE,
+            core::VPN_RECEIPTS,
+            core::VPN_RECEIPT_SUBMIT,
+            core::VPN_SESSION,
+            core::VPN_SESSION_DELETE,
+            application_api::NOTIFY_DEVICES_POST,
+            application_api::NOTIFY_DEVICES_DELETE,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} must advertise its body-bound account signature",
+                route.stable_route_id()
+            );
+        }
     }
 
     #[test]

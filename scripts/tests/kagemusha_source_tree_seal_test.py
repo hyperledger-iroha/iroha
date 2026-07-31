@@ -207,6 +207,69 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         with self.assertRaisesRegex(seal.SourceSealError, "singly linked"):
             seal.compute_observed_descriptor(self.root)
 
+    def test_gitlink_binds_index_commit_and_requires_empty_directory(self) -> None:
+        (self.root / "tracked.txt").write_text("first\n", encoding="utf-8")
+        self.commit()
+        first_commit = self.git("rev-parse", "HEAD").decode().strip()
+        (self.root / "tracked.txt").write_text("second\n", encoding="utf-8")
+        self.commit()
+        second_commit = self.git("rev-parse", "HEAD").decode().strip()
+        self.git(
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{first_commit},iroha-docs",
+        )
+
+        gitlink = self.root / "iroha-docs"
+        gitlink.mkdir()
+        empty_directory = seal.compute_observed_descriptor(self.root)
+        gitlink.rmdir()
+        absent = seal.compute_observed_descriptor(self.root)
+        self.assertEqual(
+            empty_directory["source_tree_sha256"],
+            absent["source_tree_sha256"],
+        )
+
+        self.git(
+            "update-index",
+            "--cacheinfo",
+            f"160000,{second_commit},iroha-docs",
+        )
+        changed_commit = seal.compute_observed_descriptor(self.root)
+        self.assertNotEqual(
+            absent["source_tree_sha256"],
+            changed_commit["source_tree_sha256"],
+        )
+
+        gitlink.mkdir()
+        (gitlink / "unbound.txt").write_text("unbound\n", encoding="utf-8")
+        with self.assertRaisesRegex(seal.SourceSealError, "must be empty"):
+            seal.compute_observed_descriptor(self.root)
+
+    def test_gitlink_rejects_non_directory_substitutions(self) -> None:
+        (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        self.commit()
+        commit = self.git("rev-parse", "HEAD").decode().strip()
+        self.git(
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{commit},iroha-docs",
+        )
+        gitlink = self.root / "iroha-docs"
+
+        gitlink.write_text("not a directory\n", encoding="utf-8")
+        with self.assertRaisesRegex(seal.SourceSealError, "empty directory"):
+            seal.compute_observed_descriptor(self.root)
+        gitlink.unlink()
+
+        os.symlink("tracked.txt", gitlink)
+        with self.assertRaisesRegex(
+            seal.SourceSealError, "empty directory|pinned Git failed"
+        ):
+            seal.compute_observed_descriptor(self.root)
+
     def test_root_must_be_exact_repository_root(self) -> None:
         (self.root / "nested").mkdir()
         (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")

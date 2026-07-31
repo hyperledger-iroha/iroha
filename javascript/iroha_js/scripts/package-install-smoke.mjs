@@ -85,6 +85,7 @@ export function validatePackPaths(metadata) {
     "ivm-artifact.d.ts",
     "kotodama-compiler.d.ts",
     "privacy-capabilities.d.ts",
+    "repo-agreement.d.ts",
     "src/index.js",
     "dist/index.js",
     "dist/ivmArtifact.js",

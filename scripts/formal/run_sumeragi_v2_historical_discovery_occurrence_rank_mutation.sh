@@ -6,9 +6,8 @@ set -euo pipefail
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
-readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|[0-9]+d) at \([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\)$'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly MODEL="SumeragiV2HistoricalDiscoveryOccurrenceRankMutation.tla"
 readonly MODULE="${MODEL%.tla}"
 readonly FIXED_CONFIG="historical_discovery_occurrence_rank_fixed.cfg"
@@ -17,7 +16,14 @@ readonly SANY_SUCCESS_MARKER="Semantic processing of module ${MODULE}"
 readonly FIXED_SUCCESS_MARKER="Model checking completed. No error has been found."
 readonly MUTANT_FIRST_MARKER="Error: Invariant RankNeverIncreases is violated."
 readonly RETAINED_NEGATIVE_CONTROL="INVARIANT LowerServiceStrictlyDescends"
+readonly CONTINUATION_MODEL="SumeragiV2HistoricalProducerContinuationMutation.tla"
+readonly CONTINUATION_MODULE="${CONTINUATION_MODEL%.tla}"
+readonly CONTINUATION_FIXED_CONFIG="historical_producer_continuation_fixed.cfg"
+readonly CONTINUATION_MUTANT_CONFIG="historical_producer_continuation_voter_only_bug.cfg"
+readonly CONTINUATION_SANY_SUCCESS_MARKER="Semantic processing of module ${CONTINUATION_MODULE}"
+readonly CONTINUATION_TEMPORAL_MARKER="Error: Temporal properties were violated."
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if (($#)); then
   echo "usage: $0" >&2
@@ -88,6 +94,27 @@ sany_last_nonblank="$(
 }
 echo "[sany] historical-discovery occurrence-rank mutation parsed with frozen Java 21.0.12"
 
+(
+  cd "$FORMAL_DIR"
+  "$JAVA_BIN" -cp "$TLA2TOOLS_JAR" tla2sany.SANY "$CONTINUATION_MODEL"
+) >"${run_dir}/continuation-sany.log" 2>&1
+continuation_sany_last_nonblank="$(
+  awk 'NF { line = $0 } END { print line }' \
+    "${run_dir}/continuation-sany.log"
+)"
+[[ "$continuation_sany_last_nonblank" == "$CONTINUATION_SANY_SUCCESS_MARKER" ]] || {
+  echo "historical producer-continuation SANY did not end at the exact semantic-processing marker" >&2
+  cat "${run_dir}/continuation-sany.log" >&2
+  exit 1
+}
+[[ "$(grep -Fxc "$CONTINUATION_SANY_SUCCESS_MARKER" \
+  "${run_dir}/continuation-sany.log" || true)" == 1 ]] || {
+  echo "historical producer-continuation SANY did not emit exactly one semantic-processing marker" >&2
+  cat "${run_dir}/continuation-sany.log" >&2
+  exit 1
+}
+echo "[sany] historical producer-continuation mutation parsed with frozen Java 21.0.12"
+
 common=(
   "$JAVA_BIN" -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC
   -cleanup -workers 1 -fp 89 -seed 351472986013
@@ -97,13 +124,14 @@ run_tlc() {
   local label="$1"
   local config="$2"
   local expected_status="$3"
+  local model="${4:-$MODEL}"
   local log="${run_dir}/${label}.log"
   local actual_status
   set +e
   (
     cd "$FORMAL_DIR"
     "${common[@]}" -metadir "${run_dir}/${label}" \
-      -config "$config" "$MODEL"
+      -config "$config" "$model"
   ) >"$log" 2>&1
   actual_status=$?
   set -e
@@ -112,18 +140,12 @@ run_tlc() {
     cat "$log" >&2
     exit 1
   }
-  [[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]] || {
-    echo "${label} did not emit exactly one TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
-  local last_nonblank
-  last_nonblank="$(awk 'NF { line = $0 } END { print line }' "$log")"
-  grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank" || {
-    echo "${label} did not end at the exact TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  else
+    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
   printf '%s\n' "$log"
 }
 
@@ -159,6 +181,16 @@ first_invariant_marker="$(
   cat "$mutant_log" >&2
   exit 1
 }
+mutant_primary_diagnostic_count="$(
+  grep -Ec \
+    "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+    "$mutant_log" || true
+)"
+[[ "$mutant_primary_diagnostic_count" -eq 1 ]] || {
+  echo "plain-minimum-mutant emitted ${mutant_primary_diagnostic_count} primary failure diagnostics" >&2
+  cat "$mutant_log" >&2
+  exit 1
+}
 [[ "$(grep -Fxc "Error: The behavior up to this point is:" "$mutant_log" || true)" == 1 ]] || {
   echo "plain-minimum-mutant did not emit exactly one counterexample trace marker" >&2
   cat "$mutant_log" >&2
@@ -166,3 +198,34 @@ first_invariant_marker="$(
 }
 echo "[tlc] plain-minimum mutant failed first at RankNeverIncreases with status 12"
 echo "[tlc] exact terminal contract passed; LowerServiceStrictlyDescends remained an enabled negative control"
+
+continuation_fixed_log="$(
+  run_tlc historical-producer-continuation-fixed \
+    "$CONTINUATION_FIXED_CONFIG" 0 "$CONTINUATION_MODEL"
+)"
+[[ "$(grep -Fxc "$FIXED_SUCCESS_MARKER" "$continuation_fixed_log" || true)" == 1 ]] || {
+  echo "historical producer-continuation repair missed its exact success marker" >&2
+  cat "$continuation_fixed_log" >&2
+  exit 1
+}
+
+continuation_mutant_log="$(
+  run_tlc historical-producer-continuation-voter-only \
+    "$CONTINUATION_MUTANT_CONFIG" 13 "$CONTINUATION_MODEL"
+)"
+sumeragi_v2_tlc_assert_exact_line \
+  "historical-producer-continuation-voter-only" \
+  "$continuation_mutant_log" "$CONTINUATION_TEMPORAL_MARKER"
+[[ "$(grep -Ec \
+  '^Error: (Invariant |Action property |Temporal properties were violated[.]$|Deadlock reached([.]|$))' \
+  "$continuation_mutant_log" || true)" == 1 ]] || {
+  echo "historical producer-continuation mutant did not emit exactly one primary diagnostic" >&2
+  cat "$continuation_mutant_log" >&2
+  exit 1
+}
+grep -Fq "Stuttering" "$continuation_mutant_log" || {
+  echo "historical producer-continuation mutant missed its stuttering lasso marker" >&2
+  cat "$continuation_mutant_log" >&2
+  exit 1
+}
+echo "[tlc] historical non-voter continuation produced exact temporal status 13"

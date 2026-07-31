@@ -334,7 +334,7 @@ impl BlockMessageWire {
         length.copy_from_slice(len_bytes);
         let payload_len = usize::try_from(u64::from_le_bytes(length))
             .map_err(|_| ncore::Error::LengthMismatch)?;
-        let align = core::mem::align_of::<ncore::Archived<BlockMessage>>();
+        let align = ncore::archived_payload_align::<BlockMessage>();
         let padding = if align <= 1 {
             0
         } else {
@@ -1107,7 +1107,7 @@ mod tests {
             PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
         },
         da::{
-            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
+            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
         isi::Log,
@@ -1437,7 +1437,6 @@ mod tests {
             ManifestDigest::new([0x22; 32]),
             DaProofScheme::MerkleSha256,
             Hash::prehashed([0x33; 32]),
-            Some(KzgCommitment::new([0x44; 48])),
             Some(Hash::prehashed([0x55; 32])),
             RetentionPolicy::default(),
             StorageTicketId::new([0x66; 32]),

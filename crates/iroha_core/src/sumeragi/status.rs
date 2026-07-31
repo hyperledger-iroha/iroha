@@ -324,7 +324,6 @@ mod archival_status_tests {
             stake_snapshot: None,
         }
     }
-
     #[test]
     fn capability_exposes_only_an_exact_roster_tuple() {
         let snapshot = fixture();
@@ -341,7 +340,6 @@ mod archival_status_tests {
         mismatched.validator_checkpoint.view += 1;
         assert!(AuthenticatedCommitRoster::from_snapshot_for_tests(mismatched).is_none());
     }
-
     #[test]
     fn archival_mode_tags_roundtrip_without_changing_v2_status() {
         let _guard = super::mode_tags_test_guard();
@@ -361,7 +359,6 @@ mod archival_status_tests {
 
         super::set_mode_tags("", None, None);
     }
-
     #[test]
     fn v2_operational_scalars_saturate_for_wire_diagnostics() {
         assert_eq!(super::bounded_u32(7), 7);
@@ -372,7 +369,6 @@ mod archival_status_tests {
         );
         assert_eq!(super::age_ms(None), None);
     }
-
     #[test]
     fn archival_commit_histories_are_newest_first_and_resettable() {
         let _guard = super::commit_history_test_guard();
@@ -406,7 +402,6 @@ mod archival_status_tests {
         assert!(super::commit_qc_history().is_empty());
         assert!(super::validator_checkpoint_history().is_empty());
     }
-
     #[test]
     fn lane_rbc_reset_clears_surviving_adapter_diagnostics() {
         let _guard = super::rbc_status_test_guard();
@@ -2255,9 +2250,13 @@ pub fn v2_status_with_restart_required(restart_required: bool) -> Option<Sumerag
     })
 }
 
-/// Retain the current diagnostic snapshot while marking the runner terminally
-/// fail-closed. The snapshot is deliberately kept until an explicit restart
-/// clears and reconstructs the registry.
+/// Mark a valid current reducer snapshot as restart-required.
+///
+/// The process-wide output guard is activated by the runner before this local
+/// projection is attempted and remains authoritative for admission and public
+/// status. A malformed local projection is rejected without mutating the
+/// snapshot; readers still observe the already-latched process guard through
+/// [`v2_status_with_restart_required`].
 pub(crate) fn mark_v2_restart_required() {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
@@ -2369,7 +2368,7 @@ mod v2_liveness_watchdog_tests {
         begin_v2_successor_activation, classify_v2_liveness_blocker, clear_v2_status,
         mark_v2_restart_required, overlay_v2_effect_status, set_v2_effect_completion_observer,
         set_v2_effect_status, set_v2_network_ingress, set_v2_status_at,
-        update_v2_successor_work_stage_at, v2_status_at,
+        update_v2_successor_work_stage_at, v2_status_at, v2_status_with_restart_required,
     };
     use crate::sumeragi::{
         BlockMessage, FairV2Ingress, InboundBlockMessage,
@@ -2593,7 +2592,6 @@ mod v2_liveness_watchdog_tests {
             watchdog_threshold: threshold,
         }
     }
-
     #[test]
     fn pending_tip_recovery_overlay_reports_the_exact_local_stage() {
         use SumeragiV2LocalWorkStage::{Complete, Idle, Queued, Running};
@@ -2667,7 +2665,6 @@ mod v2_liveness_watchdog_tests {
             );
         }
     }
-
     #[test]
     fn cross_thread_v2_publication_waits_for_status_test_lease_and_resumes_after_release() {
         let guard = super::rbc_status_test_guard();
@@ -2708,7 +2705,6 @@ mod v2_liveness_watchdog_tests {
         let _cleanup_guard = super::rbc_status_test_guard();
         clear_v2_status();
     }
-
     #[test]
     fn repeated_timeout_certificates_do_not_mask_height_no_progress() {
         let _guard = super::rbc_status_test_guard();
@@ -2802,7 +2798,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(resumed.liveness.blocker, None);
         clear_v2_status();
     }
-
     #[test]
     fn repeated_tc_reconstruction_of_same_locked_commit_pool_does_not_reset_height_clock() {
         let _guard = super::rbc_status_test_guard();
@@ -2890,7 +2885,6 @@ mod v2_liveness_watchdog_tests {
         assert_eq!(advanced.liveness.blocker, None);
         clear_v2_status();
     }
-
     #[test]
     fn blocker_classifier_has_stable_specific_precedence() {
         let baseline = status();
@@ -3050,7 +3044,6 @@ mod v2_liveness_watchdog_tests {
             "application must take precedence over a stopped ingress scheduler"
         );
     }
-
     #[test]
     fn current_view_timeout_path_yields_only_to_an_exact_locked_commit_owner() {
         let mut prepare = status();
@@ -3145,7 +3138,6 @@ mod v2_liveness_watchdog_tests {
             "a later-view timeout must not hide the retained old-round Commit path"
         );
     }
-
     #[test]
     fn runtime_work_overlay_precedes_watchdog_classification() {
         let _guard = super::rbc_status_test_guard();
@@ -3167,7 +3159,6 @@ mod v2_liveness_watchdog_tests {
         );
         clear_v2_status();
     }
-
     #[test]
     fn successor_startup_overlays_never_cross_the_height_context_boundary() {
         let _guard = super::rbc_status_test_guard();
@@ -3279,7 +3270,6 @@ mod v2_liveness_watchdog_tests {
         ingress.close();
         clear_v2_status();
     }
-
     #[test]
     fn rejected_running_successor_failure_projection_preserves_status() {
         let _guard = super::rbc_status_test_guard();
@@ -3303,9 +3293,19 @@ mod v2_liveness_watchdog_tests {
             SumeragiV2LocalWorkStage::Running,
             "failure cannot fabricate successor completion"
         );
+        let public = v2_status_with_restart_required(true)
+            .expect("process output guard must overlay the preserved local status");
+        assert!(
+            public.restart_required,
+            "the prelatched process output guard remains authoritative"
+        );
+        let local = v2_status_at(started_at).expect("local status remains visible");
+        assert!(
+            !local.restart_required,
+            "serving the process overlay must not rewrite rejected local state"
+        );
         clear_v2_status();
     }
-
     #[test]
     fn successor_handoff_is_visible_until_the_exact_successor_becomes_active_once() {
         let _guard = super::rbc_status_test_guard();
@@ -5559,17 +5559,6 @@ pub enum LanePrivacyCommitmentSchemeSnapshot {
         /// Maximum Merkle proof depth the lane operator promises to serve.
         max_depth: u8,
     },
-    /// zk-SNARK circuit commitment exposing the hash bindings.
-    Snark {
-        /// Circuit identifier within the manifest's SNARK registry.
-        circuit_id: u16,
-        /// BLAKE3 digest of the verifying key used for audits.
-        verifying_key_digest: [u8; 32],
-        /// Hash of the public statement constrained by the circuit.
-        statement_hash: [u8; 32],
-        /// Hash of the proof artifact stored alongside the commitment.
-        proof_hash: [u8; 32],
-    },
 }
 
 impl From<&LanePrivacyCommitment> for LanePrivacyCommitmentSnapshot {
@@ -5578,12 +5567,6 @@ impl From<&LanePrivacyCommitment> for LanePrivacyCommitmentSnapshot {
             CommitmentScheme::Merkle(merkle) => LanePrivacyCommitmentSchemeSnapshot::Merkle {
                 root: hash_of_bytes(*merkle.root()),
                 max_depth: merkle.max_depth(),
-            },
-            CommitmentScheme::Snark(snark) => LanePrivacyCommitmentSchemeSnapshot::Snark {
-                circuit_id: snark.circuit_id().get(),
-                verifying_key_digest: *snark.verifying_key_digest(),
-                statement_hash: *snark.statement_hash(),
-                proof_hash: *snark.proof_hash(),
             },
         };
         Self {
@@ -6538,7 +6521,7 @@ fn record_relay_error(err: &LaneRelayError) {
 fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: LaneRelayEnvelope) {
     match envelope.verify().and_then(|()| {
         if envelope.fastpq_proof.is_some() {
-            envelope.verify_fastpq_proof_material()
+            envelope.validate_fastpq_proof_metadata()
         } else {
             Ok(())
         }
@@ -6563,7 +6546,9 @@ fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: La
         .iter()
         .position(|candidate| lane_relay_key(candidate) == key)
     {
-        if storage[existing].is_merge_admissible() && !envelope.is_merge_admissible() {
+        if storage[existing].has_merge_admission_material()
+            && !envelope.has_merge_admission_material()
+        {
             return;
         }
         storage[existing] = envelope;

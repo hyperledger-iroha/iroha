@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     num::NonZeroUsize,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -17,8 +17,8 @@ use iroha_data_model::{
         InstructionBox,
         offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
     },
-    name::Name,
     offline::KagemushaRecursiveSpendTopUpAnchorV4,
+    state_path::StatePath,
     transaction::{
         SignedTransaction, TransactionBuilder, TransactionEntrypoint,
         error::TransactionRejectionReason, signed::TransactionResult,
@@ -31,6 +31,7 @@ use iroha_torii_shared::offline_api::{
     OfflineTopUpRequest, OfflineTopUpResult,
 };
 use mv::storage::StorageReadOnly;
+use parking_lot::Mutex;
 use tokio::sync::watch;
 
 use crate::{AppState, Error, SharedAppState, app_auth, routing};
@@ -69,7 +70,7 @@ impl OfflineCommandRuntime {
     }
 
     pub(super) fn startup_config(&self) -> actual::ToriiKagemushaCommands {
-        let admission = self.admission.lock().unwrap();
+        let admission = self.admission.lock();
         actual::ToriiKagemushaCommands {
             authority: self.authority.clone(),
             key_pair: self.key_pair.clone(),
@@ -805,11 +806,7 @@ impl OfflineCommandRuntime {
         // one mutex. The transition from reservation to admitted binding is
         // therefore atomic: no request can observe an absent operation between
         // the two states or overbook memory while submissions are stalled.
-        let mut admission = self.admission.lock().map_err(|_| {
-            Error::Query(ValidationFail::InternalError(
-                "offline operation admission registry lock is poisoned".to_owned(),
-            ))
-        })?;
+        let mut admission = self.admission.lock();
         let now_ms = now_ms();
         admission.prune_expired(now_ms);
         if let Some(existing) = admission.get(&operation_id) {
@@ -853,11 +850,7 @@ impl OfflineCommandRuntime {
         token: &Arc<()>,
     ) -> Result<AdmittedOfflineOperationRecord, Error> {
         let operation_id = record.binding.operation_id;
-        let mut admission = self.admission.lock().map_err(|_| {
-            Error::Query(ValidationFail::InternalError(
-                "offline operation admission registry lock is poisoned".to_owned(),
-            ))
-        })?;
+        let mut admission = self.admission.lock();
         admission.prune_expired(now_ms());
         if let Some(existing) = admission.get(&operation_id).cloned() {
             ensure_same_offline_request_binding(&existing.binding, &record.binding)?;
@@ -920,11 +913,11 @@ impl SubmissionLeader {
         if !self.active {
             return;
         }
-        if let Ok(mut admission) = self.issuer.admission.lock()
-            && admission
-                .in_flight
-                .get(&self.operation_id)
-                .is_some_and(|entry| Arc::ptr_eq(&entry.token, &self.token))
+        let mut admission = self.issuer.admission.lock();
+        if admission
+            .in_flight
+            .get(&self.operation_id)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.token, &self.token))
         {
             admission.in_flight.remove(&self.operation_id);
         }
@@ -961,11 +954,7 @@ fn find_admitted_offline_operation(
     issuer: &OfflineCommandRuntime,
     requested_binding: &OfflineOperationRequestBinding,
 ) -> Result<Option<AdmittedOfflineOperationRecord>, Error> {
-    let mut admission = issuer.admission.lock().map_err(|_| {
-        Error::Query(ValidationFail::InternalError(
-            "offline operation admission registry lock is poisoned".to_owned(),
-        ))
-    })?;
+    let mut admission = issuer.admission.lock();
     let now_ms = now_ms();
     admission.prune_expired(now_ms);
     let operation_id = requested_binding.operation_id;
@@ -1605,11 +1594,7 @@ pub(crate) fn handle_operation_status(
     let operation_id = parse_operation_id(operation_id)?;
     let issuer = require_issuer(app)?;
     let admitted = {
-        let mut admission = issuer.admission.lock().map_err(|_| {
-            Error::Query(ValidationFail::InternalError(
-                "offline operation admission registry lock is poisoned".to_owned(),
-            ))
-        })?;
+        let mut admission = issuer.admission.lock();
         admission.prune_expired(now_ms());
         admission.get(&operation_id).cloned()
     };
@@ -1750,7 +1735,7 @@ fn find_committed_kagemusha_v4_operation(
     Ok(Some(finality))
 }
 
-fn kagemusha_v4_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
+fn kagemusha_v4_anchor_state_key(operation_id: [u8; 32]) -> Result<StatePath, Error> {
     if operation_id == [0; 32] {
         return Err(offline_operation_index_inconsistent(
             "A finalized top-up anchor requires a non-zero operation id.",
@@ -2828,10 +2813,7 @@ mod tests {
 
         let restarted_issuer = submission_test_issuer();
         {
-            let admission = restarted_issuer
-                .admission
-                .lock()
-                .expect("operation admission lock");
+            let admission = restarted_issuer.admission.lock();
             assert!(
                 admission.records.is_empty() && admission.in_flight.is_empty(),
                 "restart fixture must not rely on the process-local admission registry"
@@ -3094,7 +3076,6 @@ mod tests {
         issuer
             .admission
             .lock()
-            .expect("operation admission lock")
             .insert_reserved(AdmittedOfflineOperationRecord {
                 binding: submission_test_binding(&request),
                 transaction_hash,
@@ -3192,23 +3173,8 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(
-            issuer
-                .admission
-                .lock()
-                .expect("admission lock")
-                .records
-                .len(),
-            1
-        );
-        assert!(
-            issuer
-                .admission
-                .lock()
-                .expect("admission lock")
-                .in_flight
-                .is_empty()
-        );
+        assert_eq!(issuer.admission.lock().records.len(), 1);
+        assert!(issuer.admission.lock().in_flight.is_empty());
     }
 
     #[tokio::test]
@@ -3242,22 +3208,8 @@ mod tests {
 
         let replacement = claim_test_leader(&issuer, &request);
         drop(replacement);
-        assert!(
-            issuer
-                .admission
-                .lock()
-                .expect("admission lock")
-                .in_flight
-                .is_empty()
-        );
-        assert!(
-            issuer
-                .admission
-                .lock()
-                .expect("admission lock")
-                .records
-                .is_empty()
-        );
+        assert!(issuer.admission.lock().in_flight.is_empty());
+        assert!(issuer.admission.lock().records.is_empty());
     }
 
     #[tokio::test]
@@ -3283,14 +3235,7 @@ mod tests {
 
         let replacement = claim_test_leader(&issuer, &request);
         drop(replacement);
-        assert!(
-            issuer
-                .admission
-                .lock()
-                .expect("admission lock")
-                .in_flight
-                .is_empty()
-        );
+        assert!(issuer.admission.lock().in_flight.is_empty());
     }
 
     #[tokio::test]
@@ -3303,7 +3248,7 @@ mod tests {
         let (replacement_updates, replacement_receiver) =
             watch::channel(SubmissionOutcome::Pending);
         {
-            let mut admission = issuer.admission.lock().expect("admission lock");
+            let mut admission = issuer.admission.lock();
             admission.in_flight.insert(
                 operation_id,
                 InFlightSubmission {
@@ -3319,7 +3264,7 @@ mod tests {
 
         drop(stale_leader);
 
-        let admission = issuer.admission.lock().expect("admission lock");
+        let admission = issuer.admission.lock();
         let replacement = admission
             .in_flight
             .get(&operation_id)
@@ -3331,12 +3276,7 @@ mod tests {
             SubmissionOutcome::Pending
         ));
 
-        issuer
-            .admission
-            .lock()
-            .expect("admission lock")
-            .in_flight
-            .remove(&operation_id);
+        issuer.admission.lock().in_flight.remove(&operation_id);
         let _ = replacement_updates.send_replace(SubmissionOutcome::Retry);
         retry_outcome(replacement_receiver).await;
     }
@@ -3352,7 +3292,7 @@ mod tests {
         let (replacement_updates, replacement_receiver) =
             watch::channel(SubmissionOutcome::Pending);
         {
-            let mut admission = issuer.admission.lock().expect("admission lock");
+            let mut admission = issuer.admission.lock();
             admission.in_flight.insert(
                 operation_id,
                 InFlightSubmission {
@@ -3376,7 +3316,7 @@ mod tests {
         retry_outcome(stale_follower).await;
 
         {
-            let admission = issuer.admission.lock().expect("admission lock");
+            let admission = issuer.admission.lock();
             assert!(admission.records.get(&operation_id).is_none());
             let replacement = admission
                 .in_flight
@@ -3384,12 +3324,7 @@ mod tests {
                 .expect("newer reservation survives stale acceptance");
             assert!(Arc::ptr_eq(&replacement.token, &replacement_token));
         }
-        issuer
-            .admission
-            .lock()
-            .expect("admission lock")
-            .in_flight
-            .remove(&operation_id);
+        issuer.admission.lock().in_flight.remove(&operation_id);
         let _ = replacement_updates.send_replace(SubmissionOutcome::Retry);
         retry_outcome(replacement_receiver).await;
     }
@@ -3840,7 +3775,7 @@ mod tests {
         pending_leader
             .accept(submission_test_hash(0x72))
             .expect("reserved pending fixture transition");
-        let admission = issuer.admission.lock().expect("admission lock");
+        let admission = issuer.admission.lock();
         assert_eq!(admission.records.len(), 2);
         assert!(admission.in_flight.is_empty());
         assert_eq!(admission.tracked_entries(), 2);
@@ -3871,23 +3806,9 @@ mod tests {
         drop(first_leader);
 
         let replacement = claim_test_leader(&issuer, &submission_test_request(0x12));
-        assert_eq!(
-            issuer
-                .admission
-                .lock()
-                .expect("admission lock")
-                .tracked_entries(),
-            1
-        );
+        assert_eq!(issuer.admission.lock().tracked_entries(), 1);
         drop(replacement);
-        assert_eq!(
-            issuer
-                .admission
-                .lock()
-                .expect("admission lock")
-                .tracked_entries(),
-            0
-        );
+        assert_eq!(issuer.admission.lock().tracked_entries(), 0);
     }
 
     #[test]
@@ -3931,7 +3852,7 @@ mod tests {
         assert_eq!(leaders.len(), CAPACITY);
         assert_eq!(rejected, ATTEMPTS - CAPACITY);
         {
-            let admission = issuer.admission.lock().expect("admission lock");
+            let admission = issuer.admission.lock();
             assert_eq!(admission.tracked_entries(), CAPACITY);
             assert_eq!(admission.in_flight.len(), CAPACITY);
             assert_eq!(
@@ -3940,14 +3861,7 @@ mod tests {
             );
         }
         drop(leaders);
-        assert_eq!(
-            issuer
-                .admission
-                .lock()
-                .expect("admission lock")
-                .tracked_entries(),
-            0
-        );
+        assert_eq!(issuer.admission.lock().tracked_entries(), 0);
     }
 
     #[test]

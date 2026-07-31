@@ -28,6 +28,7 @@ impl<B: IpaBackend> Polynomial<B> {
     ) {
         transcript.absorb("poly.curve_id", &B::CURVE_ID.as_u16().to_le_bytes());
         transcript.absorb("poly.n", &(params.n() as u32).to_le_bytes());
+        transcript.absorb("poly.params_fingerprint", &params.fingerprint());
         transcript.absorb("poly.z", &z.to_bytes());
         transcript.absorb("poly.t", &t.to_bytes());
         transcript.absorb("poly.p_g", &p_g.to_bytes());

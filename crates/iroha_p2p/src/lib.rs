@@ -6,15 +6,10 @@
 use std::{io, net::AddrParseError};
 
 use aead::{Nonce, Tag};
-use iroha_crypto::{
-    blake2::{
-        Blake2bVar,
-        digest::{Update, VariableOutput},
-    },
-    encryption::ChaCha20Poly1305,
-    kex::X25519Sha256,
+use iroha_crypto::encryption::ChaCha20Poly1305;
+pub use iroha_data_model::{
+    block::consensus_v2::ConsensusMode, confidential::ConfidentialFeatureDigest,
 };
-pub use iroha_data_model::confidential::ConfidentialFeatureDigest;
 pub use network::message::{UpdateTrustedPeers, *};
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -56,7 +51,7 @@ pub(crate) mod sampler {
 }
 
 /// The main type to use for secure communication.
-pub type NetworkHandle<T> = network::NetworkBaseHandle<T, X25519Sha256, ChaCha20Poly1305>;
+pub type NetworkHandle<T> = network::NetworkBaseHandle<T, ChaCha20Poly1305>;
 
 #[cfg(test)]
 const P2P_ENCRYPTION_OVERHEAD_BYTES: usize =
@@ -108,10 +103,8 @@ pub mod boilerplate {
     //! Module containing trait shorthands. Remove when trait aliases
     //! are stable <https://github.com/rust-lang/rust/issues/41517>
 
-    use aead::{Aead, AeadInOut, KeyInit};
-    use iroha_crypto::kex::KeyExchangeScheme;
-
     use super::*;
+    use aead::{Aead, AeadInOut, KeyInit};
 
     /// Shorthand for traits required for payload
     pub trait Pload:
@@ -122,10 +115,6 @@ pub mod boilerplate {
         T: Encode + Decode + for<'a> norito::core::DecodeFromSlice<'a> + Send + Clone + 'static
     {
     }
-
-    /// Shorthand for traits required for key exchange
-    pub trait Kex: KeyExchangeScheme + Send + 'static {}
-    impl<T> Kex for T where T: KeyExchangeScheme + Send + 'static {}
 
     /// Shorthand for traits required for encryptor type marker.
     pub trait Enc: Aead + AeadInOut + KeyInit + Clone + Send + 'static {}
@@ -272,6 +261,8 @@ mod frame_tests {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ConsensusConfigCaps {
+    /// Canonical V1 identity of every boot policy input which can affect execution.
+    pub execution_policy_hash: [u8; 32],
     /// Canonical digest of deterministic, locally configured Nexus policy.
     pub nexus_policy_digest: [u8; 32],
     /// Canonical fixed-width Sumeragi v2 shared-runtime configuration hash.
@@ -284,10 +275,10 @@ pub struct ConsensusConfigCaps {
 ///
 /// These fields allow peers to gate connections by consensus mode/protocol
 /// and a deterministic fingerprint derived from genesis and parameters.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConsensusHandshakeCaps {
-    /// Compile-time mode tag (e.g., "`iroha2-consensus::permissioned-sumeragi@v2`").
-    pub mode_tag: String,
+    /// Canonical consensus mode.
+    pub mode: ConsensusMode,
     /// Protocol wire version for consensus messages.
     pub proto_version: u32,
     /// Deterministic consensus fingerprint (blake2b-32 bytes).
@@ -343,17 +334,4 @@ pub enum RelayRole {
     Hub,
     /// Relay spoke; relies on a hub for fan-out.
     Spoke,
-}
-
-/// Module for unbounded channel with attached length of the channel.
-/// Create Blake2b hash as u64 value
-pub fn blake2b_hash(slice: impl AsRef<[u8]>) -> u64 {
-    const U64_SIZE: usize = core::mem::size_of::<u64>();
-    let hash = Blake2bVar::new(U64_SIZE)
-        .expect("Failed to create hash with given length")
-        .chain(&slice)
-        .finalize_boxed();
-    let mut bytes = [0; U64_SIZE];
-    bytes.copy_from_slice(&hash);
-    u64::from_be_bytes(bytes)
 }

@@ -1,23 +1,30 @@
 # Iroha CLI Client
 
-Iroha Client CLI is a "thin" wrapper around functionality exposed in the `iroha` crate. Specifically, it should be used as a reference for using `iroha`'s features, and not as a production-ready client. As such, the CLI client is not guaranteed to support all features supported by the client library. Check [Iroha 2 documentation](https://docs.iroha.tech/get-started/operate-iroha-2-via-cli.html) for a detailed tutorial on working with Iroha Client CLI.
+The `iroha` command-line client exposes the operator and ledger workflows for
+the first Hyperledger Iroha 3 release. It builds on the reusable `iroha` client
+crate. See [Operate Iroha 3 via CLI](https://docs.iroha.tech/get-started/operate-iroha-via-cli.html)
+for the current tutorial.
 
 Within this workspace, `crates/iroha` is the reusable Rust client library and
 `crates/iroha_cli` is the crate that builds the `iroha` command-line binary.
 
 ## Installation
 
-**Requirements:** the stable [Rust toolchain](https://www.rust-lang.org/learn/get-started) (the project pins `stable` via `rust-toolchain.toml`), installed and configured.
+**Requirements:** install
+[Rust 1.93.1](https://www.rust-lang.org/learn/get-started), the toolchain pinned
+for this workspace in the repository-root `rust-toolchain.toml`.
 
 Build Iroha and its binaries:
 
 ```bash
-cargo build
+cargo build -p iroha_cli --bin iroha
 ```
 
-The above command will produce the `iroha` ELF executable file for Linux/BSD, the `iroha` executable for MacOS, and the `iroha.exe` executable for Windows, depending on your platform and configuration.
+The binary is written to `target/debug/iroha` (`target/debug/iroha.exe` on
+Windows).
 
-Alternatively, check out the [documentation](https://docs.iroha.tech/get-started/install-iroha-2.html) for system-wide installation instructions.
+See [Install Iroha 3](https://docs.iroha.tech/get-started/install-iroha.html) for
+the current installation instructions.
 
 ## Usage
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
@@ -39,21 +46,24 @@ request and is never forwarded across redirects.
 
 ### Client configuration
 
-`client.toml` now owns canonical I105 parsing/rendering through `[account].chain_discriminant`.
-Known public chains infer their canonical prefix from `chain`, so Taira and Nexus configs do not
-need a second manual knob:
+Select a public network with `[account].profile`. The supported `taira` and
+`minamoto` profiles derive the correct I105 chain discriminant; the top-level
+`chain` value does not select that profile.
 
 ```toml
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 torii_url = "https://taira.sora.org/"
 
 [account]
+domain = "universal"
+profile = "taira"
 public_key = "..."
 private_key = "..."
 ```
 
-Set `account.chain_discriminant` or `ACCOUNT_CHAIN_DISCRIMINANT` only for custom/private chains
-that are not in the built-in registry.
+For a custom network, set `[account].chain_discriminant` explicitly instead.
+The corresponding environment overrides are `ACCOUNT_PROFILE` and
+`ACCOUNT_CHAIN_DISCRIMINANT`.
 
 ### Transaction waits
 
@@ -249,7 +259,9 @@ iroha ledger events governance [--proposal-id 0123...ABCD] [--referendum-id r1]
 
 ### ZK Verifying Key registry (register/update)
 
-The CLI wraps Torii VK registry endpoints to submit signed transactions.
+The CLI builds, quotes, signs, and submits VK registry transactions with the account and key from
+the active client configuration. VK JSON files contain public registry data only; signing
+authorities and private keys are not accepted in these files.
 
 Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex`):
 
@@ -260,8 +272,6 @@ must be non-empty and must not contain leading or trailing whitespace.
 ```bash
 cat >vk_register.json <<'JSON'
 {
-  "authority": "<authority_account_i105>",
-  "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add",
   "version": 1,
@@ -279,8 +289,6 @@ Update an existing verifying key (version must increase). You may supply only th
 ```bash
 cat >vk_update.json <<'JSON'
 {
-  "authority": "<authority_account_i105>",
-  "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add",
   "version": 2,
@@ -296,20 +304,6 @@ Read a VK record as JSON:
 
 ```bash
 iroha app zk vk get --backend halo2/ipa --name vk_add
-```
-
-Deprecate a VK (removes the record in v1):
-
-```bash
-cat >vk_deprecate.json <<'JSON'
-{
-  "authority": "<authority_account_i105>",
-  "private_key": {"algorithm":"ed25519","payload":"..."},
-  "backend": "halo2/ipa",
-  "name": "vk_add"
-}
-JSON
-iroha app zk vk deprecate --json vk_deprecate.json
 ```
 
 Compute the schema hash expected in the VK registry:
@@ -392,11 +386,10 @@ iroha app zk register-asset --asset <base58-asset-definition-id> \
 
 1) Prepare VK JSONs. Samples live under `fuzz/attachments/zk/`:
 
-   - `vk_register.json` — fields: `authority`, `private_key`, `backend`, `name`, `version`, one of:
+   - `vk_register.json` — fields: `backend`, `name`, `version`, one of:
      - `vk_bytes` (base64) or `commitment_hex` (64-hex)
    - `vk_unshield.sample.json` — minimal unshield VK sample (backend/name preset to `halo2/ipa:vk_unshield`)
    - `vk_update.json` — same shape; `version` must increase
-   - `vk_deprecate.json` — deprecate a VK record (status flips to Deprecated; retained subject to per‑backend cap)
 
 2) Register verifying keys (transfer and unshield):
 
@@ -459,7 +452,6 @@ It runs the following:
 
 Environment variables you can set before running:
 - `CLI_CONFIG`: path to client config TOML
-- `AUTHORITY`, `PRIVATE_KEY`: used for VK ops
 - `BACKEND` (default `halo2/ipa`), `ASSET_ID` (default `<base58-asset-definition-id>`)
 - `FROM`, `TO`, `AMOUNT`, `NOTE_COMMITMENT_HEX`
 - `RUN_UNSHIELD=1`, `PROOF_JSON=/path/to/proof.json` to attempt unshield

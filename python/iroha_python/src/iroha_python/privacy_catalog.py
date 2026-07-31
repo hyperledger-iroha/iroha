@@ -39,12 +39,194 @@ PRIVACY_PROTOCOL_IDS_V1: tuple[PrivacyProtocolIdV1, ...] = (
 )
 
 
+PrivacyProofSystemIdV1 = Literal[
+    "stark-fri-sha256-goldilocks",
+    "anonymous-pgc-p256",
+    "iroha-verange-p256",
+    "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512",
+    "vega-neutron-nova-spartan-hyrax-t256",
+    "jindo-polynomial-commitment",
+    "lantern-lnp22-module-linear-norm",
+    "halo2-ipa-pasta",
+    "fcmp-plus-plus-curve-tree-bulletproofs",
+]
+
+PrivacyEngineIdV1 = Literal[
+    "native-goldilocks-stark-fri",
+    "native-anonymous-pgc-p256",
+    "native-verange-p256",
+    "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
+    "native-vega",
+    "native-jindo",
+    "native-lantern-lnp22",
+    "native-halo2-orchard",
+    "native-fcmp-plus-plus",
+]
+
+
+class PrivacyProtocolTagV1(TypedDict):
+    """Canonical unit-valued protocol discriminant."""
+
+    protocol: PrivacyProtocolIdV1
+    value: None
+
+
+class PrivacyProofSystemTagV1(TypedDict):
+    """Canonical unit-valued proof-system discriminant."""
+
+    proof_system: PrivacyProofSystemIdV1
+    value: None
+
+
+class PrivacyEngineTagV1(TypedDict):
+    """Canonical unit-valued native-engine discriminant."""
+
+    engine: PrivacyEngineIdV1
+    value: None
+
+
+class PrivacyProtocolLimitsV1(TypedDict):
+    """Protocol-specific limits tagged by their exact protocol."""
+
+    protocol: PrivacyProtocolIdV1
+    limits: dict[str, int] | None
+
+
+class PrivacyCompiledProfileValueV1(TypedDict):
+    """One native compiled-profile binding and its hard ceilings."""
+
+    protocol_id: PrivacyProtocolTagV1
+    proof_system_id: PrivacyProofSystemTagV1
+    engine_id: PrivacyEngineTagV1
+    parameter_id: list[int]
+    parameter_digest: list[int]
+    verifier_digest: list[int]
+    statement_schema_digest: list[int]
+    engine_manifest_digest: list[int]
+    protocol_limits: PrivacyProtocolLimitsV1
+
+
+class PrivacyStatementSchemaErrorV1(TypedDict):
+    """Closed statement-schema initialization failure detail."""
+
+    schema_error: Literal[
+        "conflicting-stable-type-id",
+        "missing-type-reference",
+    ]
+    detail: None
+
+
+class PrivacyCompiledProfileUnavailableReasonV1(TypedDict):
+    """Fail-closed reason why a native compiled profile is unavailable."""
+
+    reason: Literal[
+        "engine-unavailable",
+        "profile-initialization-failed",
+        "statement-schema-invalid",
+    ]
+    detail: PrivacyStatementSchemaErrorV1 | None
+
+
+class PrivacyCompiledProfileAvailableV1(TypedDict):
+    """Available native profile variant."""
+
+    status: Literal["available"]
+    value: PrivacyCompiledProfileValueV1
+
+
+class PrivacyCompiledProfileUnavailableV1(TypedDict):
+    """Unavailable native profile variant."""
+
+    status: Literal["unavailable"]
+    value: PrivacyCompiledProfileUnavailableReasonV1
+
+
+PrivacyCompiledProfileV1 = (
+    PrivacyCompiledProfileAvailableV1 | PrivacyCompiledProfileUnavailableV1
+)
+
+
+class PrivacyLifecycleProposedRecordV1(TypedDict):
+    """Committed schedule for a proposed protocol activation."""
+
+    proposed_at_height: int
+    activate_at_height: int
+
+
+class PrivacyLifecycleEstablishedRecordV1(TypedDict):
+    """Committed heights for an active, suspended, or retired protocol."""
+
+    proposed_at_height: int
+    activated_at_height: int | None
+    state_since_height: int
+
+
+class PrivacyLifecycleV1(TypedDict):
+    """Validated on-chain lifecycle state and its height record."""
+
+    state: Literal["proposed", "active", "suspended", "retired"]
+    record: PrivacyLifecycleProposedRecordV1 | PrivacyLifecycleEstablishedRecordV1
+
+
+class PrivacyProtocolLimitsTighteningV1(TypedDict):
+    """Committed future tightening for one protocol-specific limit set."""
+
+    scheduled_at_height: int
+    effective_at_height: int
+    next_limits: PrivacyProtocolLimitsV1
+
+
+class PrivacyAssuranceTagV1(TypedDict):
+    """Closed first-release assurance classification."""
+
+    assurance: Literal["experimental"]
+    value: None
+
+
+class PrivacyActivationV1(PrivacyCompiledProfileValueV1):
+    """Authoritative governed activation bound to its compiled profile."""
+
+    lifecycle: PrivacyLifecycleV1
+    pending_protocol_limits_tightening: PrivacyProtocolLimitsTighteningV1 | None
+    assurance: PrivacyAssuranceTagV1
+
+
+class PrivacyConsensusLimitsV1(TypedDict):
+    """Closed consensus-wide first-release privacy resource limits."""
+
+    max_actions_per_transaction: int
+    max_actions_per_block: int
+    max_proof_bytes_per_action: int
+    max_action_bytes: int
+    max_privacy_bytes_per_transaction: int
+    max_privacy_bytes_per_block: int
+    max_statement_and_encrypted_output_bytes_per_transaction: int
+    max_nullifiers_per_action: int
+    max_commitments_per_action: int
+    retained_root_count: int
+
+
+class PrivacyConsensusLimitsTighteningV1(TypedDict):
+    """Committed future tightening of consensus-wide privacy limits."""
+
+    scheduled_at_height: int
+    effective_at_height: int
+    next_limits: PrivacyConsensusLimitsV1
+
+
+class PrivacyConsensusPolicyV1(TypedDict):
+    """Current and scheduled consensus-wide privacy limits."""
+
+    current_limits: PrivacyConsensusLimitsV1
+    pending_tightening: PrivacyConsensusLimitsTighteningV1 | None
+
+
 class PrivacyCapabilityRowV1(TypedDict):
     """One protocol row in canonical discriminant order."""
 
-    protocol_id: dict[str, Any]
-    compiled_profile: dict[str, Any]
-    activation: dict[str, Any] | None
+    protocol_id: PrivacyProtocolTagV1
+    compiled_profile: PrivacyCompiledProfileV1
+    activation: PrivacyActivationV1 | None
 
 
 class PrivacyCapabilitySnapshotV1(TypedDict):
@@ -52,7 +234,7 @@ class PrivacyCapabilitySnapshotV1(TypedDict):
 
     version: Literal[1]
     committed_height: int
-    consensus_policy: dict[str, Any]
+    consensus_policy: PrivacyConsensusPolicyV1
     protocols: list[PrivacyCapabilityRowV1]
 
 
@@ -192,14 +374,19 @@ def parse_privacy_capability_snapshot_v1(
             committed_height,
             f"privacy capability snapshot.protocols[{index}]",
         )
-        for index, (row, expected) in enumerate(zip(rows, PRIVACY_PROTOCOL_IDS_V1))
+        for index, (row, expected) in enumerate(
+            zip(rows, PRIVACY_PROTOCOL_IDS_V1, strict=True)
+        )
     ]
-    return {
-        "version": 1,
-        "committed_height": committed_height,
-        "consensus_policy": consensus_policy,
-        "protocols": protocols,
-    }
+    return cast(
+        PrivacyCapabilitySnapshotV1,
+        {
+            "version": 1,
+            "committed_height": committed_height,
+            "consensus_policy": consensus_policy,
+            "protocols": protocols,
+        },
+    )
 
 
 def parse_privacy_capability_snapshot_json_v1(
@@ -334,11 +521,14 @@ def _parse_capability_row(
     )
     if activation is not None and compiled["status"] != "available":
         _fail("cannot activate an unavailable compiled profile", f"{path}.activation")
-    return {
-        "protocol_id": _tagged("protocol", protocol),
-        "compiled_profile": compiled,
-        "activation": activation,
-    }
+    return cast(
+        PrivacyCapabilityRowV1,
+        {
+            "protocol_id": _tagged("protocol", protocol),
+            "compiled_profile": compiled,
+            "activation": activation,
+        },
+    )
 
 
 def _parse_compiled_profile(
@@ -548,6 +738,7 @@ def _parse_lifecycle(
     proposed = _positive_u64(
         record["proposed_at_height"], f"{path}.record.proposed_at_height"
     )
+    normalized: dict[str, Any]
     if state == "proposed":
         activate = _positive_u64(
             record["activate_at_height"], f"{path}.record.activate_at_height"
@@ -669,10 +860,10 @@ def _fixed_bytes(value: object, path: str) -> list[int]:
     if type(value) is not list or len(value) != 32:
         _fail("must be exactly 32 bytes", path)
     result: list[int] = []
-    for index, byte in enumerate(value):
+    for index, byte in enumerate(cast(list[object], value)):
         if type(byte) is not int or not 0 <= byte <= 255:
             _fail("must contain only uint8 values", f"{path}[{index}]")
-        result.append(byte)
+        result.append(cast(int, byte))
     if not any(result):
         _fail("must not be all zero", path)
     return result
@@ -692,7 +883,7 @@ def _exact_object(
 def _u32(value: object, path: str) -> int:
     if type(value) is not int or not 0 <= value <= _MAX_U32:
         _fail("must be a uint32 integer", path)
-    return value
+    return cast(int, value)
 
 
 def _positive_u32(value: object, path: str) -> int:
@@ -705,7 +896,7 @@ def _positive_u32(value: object, path: str) -> int:
 def _u64(value: object, path: str) -> int:
     if type(value) is not int or not 0 <= value <= _MAX_U64:
         _fail("must be a uint64 integer", path)
-    return value
+    return cast(int, value)
 
 
 def _positive_u64(value: object, path: str) -> int:
@@ -765,10 +956,31 @@ __all__ = [
     "PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1",
     "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
     "PRIVACY_PROTOCOL_IDS_V1",
+    "PrivacyActivationV1",
+    "PrivacyAssuranceTagV1",
     "PrivacyCapabilityRowV1",
     "PrivacyCapabilitySnapshotError",
     "PrivacyCapabilitySnapshotV1",
+    "PrivacyCompiledProfileAvailableV1",
+    "PrivacyCompiledProfileUnavailableReasonV1",
+    "PrivacyCompiledProfileUnavailableV1",
+    "PrivacyCompiledProfileV1",
+    "PrivacyCompiledProfileValueV1",
+    "PrivacyConsensusLimitsTighteningV1",
+    "PrivacyConsensusLimitsV1",
+    "PrivacyConsensusPolicyV1",
+    "PrivacyEngineIdV1",
+    "PrivacyEngineTagV1",
+    "PrivacyLifecycleEstablishedRecordV1",
+    "PrivacyLifecycleProposedRecordV1",
+    "PrivacyLifecycleV1",
+    "PrivacyProofSystemIdV1",
+    "PrivacyProofSystemTagV1",
     "PrivacyProtocolIdV1",
+    "PrivacyProtocolLimitsTighteningV1",
+    "PrivacyProtocolLimitsV1",
+    "PrivacyProtocolTagV1",
+    "PrivacyStatementSchemaErrorV1",
     "parse_privacy_capability_snapshot_json_v1",
     "parse_privacy_capability_snapshot_v1",
 ]

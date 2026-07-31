@@ -124,221 +124,118 @@ private func canonicalVerifierRecordArchive(
 
 private func nativeAmxDiagnosticsPayload(
     preparePhase: String = "prepare",
-    signature: [UInt8] = [UInt8](repeating: 0x9A, count: 96),
+    signature: [UInt8]? = nil,
     duplicateLeg: Bool = false,
     secondEntrypointHash: String? = nil,
     authorityContextHeight: Int = 40,
     receiptLaneIncarnation: String? = nil,
-    receiptProposalHash: String? = nil,
-    participantLegCount: Int? = nil
+    receiptProposalHash: String? = nil
 ) throws -> Data {
-    let source = String(repeating: "AB", count: 32)
-    let planDigest = nativeAmxTestHash(0x23)
-    let entrypoint = nativeAmxTestHash(0x67)
-    let validatorHash = nativeAmxTestHash(0x45)
-    let chainIdHash = nativeAmxTestHash(0x11)
-    let contextHash = nativeAmxTestHash(0xA7)
-    let coordinatorIncarnation = nativeAmxTestHash(0x89)
-    let coordinatorProposalHash = nativeAmxTestHash(0x55)
-    let validators = ["validator-0", "validator-1", "validator-2", "validator-3"]
-    func qc(
-        _ phase: String,
-        lane: Int,
-        dataspace: Int,
-        entrypointHash: String,
-        participantIncarnation: String,
-        participantProposalHash: String,
-        participantSettlementHash: String
-    ) -> [String: Any] {
-        return [
-            "body": [
-                "round": [
-                    "context_id": [contextHash],
-                    "height": authorityContextHeight,
-                    "view": 17,
-                ],
-                "epoch": 2,
-                "chain_id_hash": chainIdHash,
-                "source_id": source,
-                "tx_entrypoint_hash": entrypointHash,
-                "plan_digest": planDigest,
-                "phase": ["phase": phase, "detail": NSNull()],
-                "coordinator_lane_id": 7,
-                "coordinator_dataspace_id": 11,
-                "coordinator_lane_incarnation": coordinatorIncarnation,
-                "participant_lane_id": lane,
-                "participant_dataspace_id": dataspace,
-                "participant_lane_incarnation": participantIncarnation,
-                "participant_previous_block_height": 7,
-                "participant_previous_block_descriptor_hash": nativeAmxTestHash(0x5D),
-                "participant_lane_block_height": 8,
-                "participant_lane_block_view": 9,
-                "participant_proposal_hash": participantProposalHash,
-                "participant_settlement_commitment": participantSettlementHash,
-                "participant_validator_set_hash": validatorHash,
-                "participant_validator_count": validators.count,
-                "participant_min_quorum": 3,
-                "authority_context_height": authorityContextHeight,
-                "planned_coordinator_block_height": 42,
-                "coordinator_lane_block_view": 6,
-                "coordinator_proposal_hash": coordinatorProposalHash,
-            ],
-            "validator_set_hash_version": 1,
-            "validator_set_hash": validatorHash,
-            "validator_set": validators,
-            "validator_set_pops": Array(
-                repeating: [UInt8](repeating: 0x5A, count: 96),
-                count: validators.count
-            ),
-            "signers_bitmap": [7],
-            "bls_aggregate_signature": signature,
-        ]
+    guard let golden = try loadNativeAmxGroupedFixture()["golden"] as? [String: Any],
+          var diagnostics = golden["expected_diagnostics"] as? [String: Any],
+          var commitments =
+              diagnostics["lane_settlement_commitments"] as? [[String: Any]],
+          !commitments.isEmpty,
+          var nativeReceipts =
+              commitments[0]["native_amx_receipts"] as? [[String: Any]],
+          !nativeReceipts.isEmpty,
+          var legs = nativeReceipts[0]["legs"] as? [[String: Any]],
+          legs.count >= 2
+    else {
+        throw NSError(
+            domain: "SumeragiV2Fixture",
+            code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "native AMX grouped fixture lacks canonical diagnostics evidence",
+            ]
+        )
     }
-    func leg(_ lane: Int, _ dataspace: Int, _ entrypointHash: String) -> [String: Any] {
-        let laneSeed = UInt8(truncatingIfNeeded: lane)
-        let participantIncarnation = lane == 7
-            ? coordinatorIncarnation
-            : nativeAmxTestHash(laneSeed ^ 0xB1)
-        let participantProposalHash = nativeAmxTestHash(laneSeed ^ 0x69)
-        let participantSettlementHash = nativeAmxTestHash(laneSeed ^ 0x6B)
-        let participantProposal: [String: Any] = [
-            "descriptor": [
-                "lane_id": lane,
-                "dataspace_id": dataspace,
-                "lane_incarnation": participantIncarnation,
-                "proposal_height": authorityContextHeight,
-                "previous_lane_block_height": 7,
-                "previous_lane_block_descriptor_hash": nativeAmxTestHash(0x5D),
-                "lane_block_height": 8,
-                "lane_block_view": 9,
-                "subject_hash": nativeAmxTestHash(laneSeed ^ 0x71),
-                "payload_ownership_hash": nativeAmxTestHash(laneSeed ^ 0x73),
-                "rbc_instance_hash": nativeAmxTestHash(laneSeed ^ 0x75),
-                "accepted_candidate_indices": [0],
-                "accepted_transaction_hashes": [entrypointHash],
-                "validator_set_hash_version": 1,
-                "validator_set_hash": validatorHash,
-                "validator_set": validators,
-                "validator_count": validators.count,
-                "min_quorum": 3,
-                "qc_mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
-                "descriptor_hash": nativeAmxTestHash(laneSeed ^ 0x77),
-            ],
-            "proposal_hash": participantProposalHash,
-        ]
-        let participantSettlement: [String: Any] = [
-            "block_height": 8,
-            "lane_id": lane,
-            "lane_incarnation": participantIncarnation,
-            "dataspace_id": dataspace,
-            "tx_count": 1,
-            "total_local_amount": "0",
-            "total_xor_due": "0",
-            "total_xor_after_haircut": "0",
-            "total_xor_variance": "0",
-            "swap_metadata": NSNull(),
-            "receipts": [[
-                "source_id": source,
-                "local_amount": "0",
-                "xor_due": "0",
-                "xor_after_haircut": "0",
-                "xor_variance": "0",
-                "timestamp_ms": authorityContextHeight,
-            ]],
-            "nexus_fee_receipts": [],
-            "native_amx_receipts": [],
-        ]
-        return [
-            "lane_id": lane,
-            "dataspace_id": dataspace,
-            "participant_proposal": participantProposal,
-            "participant_settlement": participantSettlement,
-            "participant_settlement_hash": participantSettlementHash,
-            "prepare_qc": qc(
-                preparePhase,
-                lane: lane,
-                dataspace: dataspace,
-                entrypointHash: entrypointHash,
-                participantIncarnation: participantIncarnation,
-                participantProposalHash: participantProposalHash,
-                participantSettlementHash: participantSettlementHash
-            ),
-            "commit_qc": qc(
-                "commit",
-                lane: lane,
-                dataspace: dataspace,
-                entrypointHash: entrypointHash,
-                participantIncarnation: participantIncarnation,
-                participantProposalHash: participantProposalHash,
-                participantSettlementHash: participantSettlementHash
-            ),
-        ]
+
+    func mutateQcBody(
+        legAt index: Int,
+        qcKey: String,
+        _ mutate: (inout [String: Any]) -> Void
+    ) {
+        var qc = legs[index][qcKey] as! [String: Any]
+        var body = qc["body"] as! [String: Any]
+        mutate(&body)
+        qc["body"] = body
+        legs[index][qcKey] = qc
     }
-    let firstLeg = leg(9, 13, entrypoint)
-    let secondLeg = duplicateLeg
-        ? firstLeg
-        : leg(8, 12, secondEntrypointHash ?? entrypoint)
-    let participantLegs = participantLegCount.map { count in
-        (0..<count).map { index in
-            leg(100 + index, 1_000 + index, entrypoint)
+
+    mutateQcBody(legAt: 0, qcKey: "prepare_qc") { body in
+        body["phase"] = ["phase": preparePhase, "detail": NSNull()]
+    }
+    if let signature {
+        var qc = legs[0]["prepare_qc"] as! [String: Any]
+        qc["bls_aggregate_signature"] = signature
+        legs[0]["prepare_qc"] = qc
+    }
+    if duplicateLeg {
+        legs[1] = legs[0]
+    }
+    if let secondEntrypointHash {
+        for qcKey in ["prepare_qc", "commit_qc"] {
+            mutateQcBody(legAt: 1, qcKey: qcKey) { body in
+                body["tx_entrypoint_hash"] = secondEntrypointHash
+            }
         }
-    } ?? [firstLeg, secondLeg]
-    let nativeReceipt: [String: Any] = [
-        "version": 2,
-        "source_id": source,
-        "chain_id_hash": chainIdHash,
-        "plan_digest": planDigest,
-        "lane_id": 7,
-        "dataspace_id": 11,
-        "lane_incarnation": receiptLaneIncarnation ?? coordinatorIncarnation,
-        "authority_context_height": authorityContextHeight,
-        "lane_block_height": 42,
-        "lane_block_view": 6,
-        "coordinator_proposal_hash": receiptProposalHash ?? coordinatorProposalHash,
-        "legs": participantLegs,
+    }
+
+    nativeReceipts[0]["authority_context_height"] = authorityContextHeight
+    if let receiptLaneIncarnation {
+        nativeReceipts[0]["lane_incarnation"] = receiptLaneIncarnation
+    }
+    if let receiptProposalHash {
+        nativeReceipts[0]["coordinator_proposal_hash"] = receiptProposalHash
+    }
+    nativeReceipts[0]["legs"] = legs
+
+    var commitment = commitments[0]
+    commitment["total_local_amount"] = "170141183460469231731687303715884105851"
+    commitment["total_xor_due"] = "100.25"
+    commitment["total_xor_after_haircut"] = "90.2"
+    commitment["total_xor_variance"] = "10.05"
+    commitment["swap_metadata"] = [
+        "epsilon_bps": 25,
+        "twap_window_seconds": 60,
+        "liquidity_profile": ["profile": "Tier2", "state": NSNull()],
+        "twap_local_per_xor": "12.5",
+        "volatility_class": ["bucket": "Stable", "state": NSNull()],
     ]
-    let commitment: [String: Any] = [
+    commitment["nexus_fee_receipts"] = [[
+        "version": 1,
+        "source_id": String(repeating: "CD", count: 32),
+        "dataspace_id": 11,
+        "lane_id": 7,
         "block_height": 42,
-        "lane_id": 7,
-        "lane_incarnation": nativeAmxTestHash(0x89),
-        "dataspace_id": 11,
-        "tx_count": 2,
-        "total_local_amount": "170141183460469231731687303715884105851",
-        "total_xor_due": "100.25",
-        "total_xor_after_haircut": "90.2",
-        "total_xor_variance": "10.05",
-        "swap_metadata": [
-            "epsilon_bps": 25,
-            "twap_window_seconds": 60,
-            "liquidity_profile": ["profile": "Tier2", "state": NSNull()],
-            "twap_local_per_xor": "12.5",
-            "volatility_class": ["bucket": "Stable", "state": NSNull()],
+        "payer_account_id": "payer",
+        "fee_asset_id": "xor#universal",
+        "fee_amount": "18446744073709551616.25",
+        "schedule": [
+            "tx_bytes_len": 1024,
+            "instruction_count": 2,
+            "gas_used": 99,
+            "base_fee": "1.25",
+            "per_byte_fee": "0.01",
+            "per_instruction_fee": "2",
+            "per_gas_unit_fee": "0.125",
         ],
-        "receipts": [],
-        "nexus_fee_receipts": [[
-            "version": 1,
-            "source_id": String(repeating: "CD", count: 32),
-            "dataspace_id": 11,
-            "lane_id": 7,
-            "block_height": 42,
-            "payer_account_id": "payer",
-            "fee_asset_id": "xor#universal",
-            "fee_amount": "18446744073709551616.25",
-            "schedule": [
-                "tx_bytes_len": 1024,
-                "instruction_count": 2,
-                "gas_used": 99,
-                "base_fee": "1.25",
-                "per_byte_fee": "0.01",
-                "per_instruction_fee": "2",
-                "per_gas_unit_fee": "0.125",
-            ],
-        ]],
-        "native_amx_receipts": [nativeReceipt],
-    ]
-    let relay: [String: Any] = [
+    ]]
+    commitment["native_amx_receipts"] = nativeReceipts
+    commitments[0] = commitment
+    diagnostics["lane_settlement_commitments"] = commitments
+
+    diagnostics["tx_queue_depth"] = 2
+    diagnostics["tx_queue_capacity"] = 64
+    diagnostics["tx_queue_retained_bytes"] = 1024
+    diagnostics["tx_queue_max_retained_bytes"] = 8192
+    diagnostics["tx_queue_oldest_queued_age_ms"] = 5
+    let laneIncarnation = commitment["lane_incarnation"] as! String
+    diagnostics["lane_relay_envelopes"] = [[
         "lane_id": 7,
-        "lane_incarnation": nativeAmxTestHash(0x89),
+        "lane_incarnation": laneIncarnation,
         "dataspace_id": 11,
         "block_height": 42,
         "block_header": [
@@ -352,7 +249,7 @@ private func nativeAmxDiagnosticsPayload(
             "prev_roster_evidence_hash": NSNull(),
             "sccp_commitment_root": NSNull(),
             "creation_time_ms": 1_700_000_000_000,
-            "view_change_index": 6,
+            "view_change_index": 9,
             "confidential_features": NSNull(),
         ],
         "qc": NSNull(),
@@ -366,67 +263,9 @@ private func nativeAmxDiagnosticsPayload(
             "proof_digest": nativeAmxTestHash(0x97),
             "verified_at_height": 43,
         ],
-    ]
-    return try JSONSerialization.data(withJSONObject: [
-        "pipeline_execution": [
-            "tx_vertices_total": 0,
-            "tx_edges_total": 0,
-            "overlay_count_total": 0,
-            "overlay_instr_total": 0,
-            "overlay_bytes_total": 0,
-            "rbc_chunks_total": 0,
-            "rbc_bytes_total": 0,
-            "detached_prepared_total": 0,
-            "detached_merged_total": 0,
-            "detached_fallback_total": 0,
-            "detached_fallback_fee_postprocessing_total": 0,
-            "detached_fallback_user_executor_total": 0,
-            "detached_fallback_durable_state_total": 0,
-            "detached_fallback_unsupported_instruction_total": 0,
-            "detached_fallback_rejected_eval_total": 0,
-            "detached_fallback_overlay_error_total": 0,
-            "quarantine_executed_total": 0,
-        ],
-        "tx_queue_depth": 2,
-        "tx_queue_capacity": 64,
-        "tx_queue_retained_bytes": 1024,
-        "tx_queue_max_retained_bytes": 8192,
-        "tx_queue_saturated": false,
-        "tx_queue_saturated_by_count": false,
-        "tx_queue_saturated_by_bytes": false,
-        "tx_queue_saturated_by_age": false,
-        "tx_queue_oldest_queued_age_ms": 5,
-        "npos": NSNull(),
-        "lane_commitments": [],
-        "dataspace_commitments": [],
-        "lane_settlement_commitments": [commitment],
-        "lane_relay_envelopes": [relay],
-        "lane_payload_ownerships": [],
-        "committed_lane_blocks": [],
-        "lane_block_sessions": [],
-        "lane_governance_sealed_total": 0,
-        "lane_governance_sealed_aliases": [],
-        "lane_governance": [],
-        "native_amx_participant_applications": [[
-            "lane_id": 9,
-            "dataspace_id": 13,
-            "lane_incarnation": nativeAmxTestHash(0xB8),
-            "participant_height": 8,
-            "participant_view": 9,
-            "predecessor_height": 7,
-            "predecessor_descriptor_hash": nativeAmxTestHash(0x5D),
-            "descriptor_hash": nativeAmxTestHash(0x9E),
-            "proposal_hash": nativeAmxTestHash(0x60),
-            "settlement_hash": nativeAmxTestHash(0x62),
-            "source_count": 2,
-            "application_block_height": 42,
-            "application_block_hash": nativeAmxTestHash(0xA2),
-            "state": "durably_applied",
-        ]],
-        "autonomous_lane_executions": [],
-    ])
+    ]]
+    return try JSONSerialization.data(withJSONObject: diagnostics)
 }
-
 private func mutatedNativeAmxDiagnosticsPayload(
     _ mutate: (inout [String: Any]) throws -> Void
 ) throws -> Data {
@@ -1634,7 +1473,12 @@ final class ToriiClientTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        return ToriiClient(baseURL: baseURL, session: session, defaultHeaders: defaultHeaders)
+        return ToriiClient(
+            baseURL: baseURL,
+            session: session,
+            defaultHeaders: defaultHeaders,
+            localSigningContext: try! ToriiLocalSigningContext(chainId: "test-chain")
+        )
     }
 
     private func assertToriiInvalidPayload(
@@ -5860,10 +5704,10 @@ final class ToriiClientTests: XCTestCase {
         return Data(SHA256.hash(data: preimage)).hexEncodedString()
     }
 
-    private func expectedProductionBackendRejection(_ backend: String) -> String {
+    private func expectedVerifierRegistryBackendRejection(_ backend: String) -> String {
         backend.trimmingCharacters(in: .whitespacesAndNewlines) == backend
-            ? "unsupported production verifier backend"
-            : "surrounding whitespace"
+            ? "backend is not an exact supported verifier-registry label: \(backend)."
+            : "backend must not contain surrounding whitespace."
     }
 
     private func u64BigEndianData(_ value: UInt64) -> Data {
@@ -7237,7 +7081,7 @@ final class ToriiClientTests: XCTestCase {
                 "supported_exit_classes": ["standard", "low-latency", "high-security"],
                 "default_exit_class": "standard",
                 "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
-                "lease_secs": "900",
+                "lease_secs": 900,
                 "dns_push_interval_secs": 60,
                 "route_pushes": ["0.0.0.0/0"],
                 "excluded_routes": ["10.0.0.0/8"],
@@ -7505,8 +7349,8 @@ final class ToriiClientTests: XCTestCase {
                 "tunnel_addresses": ["10.208.0.2/32"],
                 "mtu_bytes": 1280,
                 "helper_ticket_hex": helperTicketHex,
-                "bytes_in": "0",
-                "bytes_out": "0",
+                "bytes_in": 0,
+                "bytes_out": 0,
                 "status": "active"
             ]
             let response = HTTPURLResponse(url: request.url!, statusCode: callCount == 1 ? 201 : 200, httpVersion: nil,
@@ -7602,7 +7446,7 @@ final class ToriiClientTests: XCTestCase {
             "disconnected_at_ms": 2,
             "duration_ms": 1,
             "bytes_in": 10,
-            "bytes_out": "20",
+            "bytes_out": 20,
             "status": "settled",
             "receipt_source": "relay",
             "quote_id": quoteId,
@@ -7635,7 +7479,7 @@ final class ToriiClientTests: XCTestCase {
                 XCTAssertEqual(request.httpMethod, "GET")
                 let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
-                return (response, try JSONSerialization.data(withJSONObject: ["items": [receiptPayload], "total": "1"]))
+                return (response, try JSONSerialization.data(withJSONObject: ["items": [receiptPayload], "total": 1]))
             }
             XCTAssertEqual(request.httpMethod, "DELETE")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
@@ -12052,7 +11896,10 @@ final class ToriiClientTests: XCTestCase {
                 "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             ),
             (
-                changingArtifact { $0["max_proof_bytes"] = 21_765 },
+                changingArtifact {
+                    $0["max_proof_bytes"] =
+                        KagemushaRecursiveSpend.absoluteMaximumProofPairBytesV4 + 1
+                },
                 "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             ),
             (
@@ -14010,6 +13857,147 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 }
 
+    private func verifyingKeyDraftResponse(
+        payload: Data? = nil
+    ) -> Data {
+        let payload = payload ?? canonicalVerifyingKeyTransactionPayload()
+        return try! JSONSerialization.data(withJSONObject: [
+            "submitted": false,
+            "transaction_payload_b64": payload.base64EncodedString(),
+            "signing_message_b64": IrohaHash.hash(payload).base64EncodedString(),
+        ])
+    }
+
+    private func canonicalVerifyingKeyTransactionPayload(
+        wireName: String =
+            "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+        chainId: String = "test-chain",
+        authority: String =
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+        backend: String = "halo2/ipa",
+        name: String = "vk_main",
+        version: UInt32 = 1,
+        circuitId: String = "halo2/ipa::transfer_v1",
+        schemaHash: Data = Data(repeating: 0xee, count: 32),
+        gasScheduleId: String? = "halo2_default",
+        keyBytes: Data? = Data([0x01, 0x02, 0x03]),
+        recordVersion: UInt32? = nil
+    ) -> Data {
+        func string(_ value: String) -> Data {
+            CompactNorito.encodeString(value)
+        }
+        func option(_ value: Data?) -> Data {
+            var writer = CompactNoritoWriter()
+            guard let value else {
+                writer.writeUInt8(0)
+                return writer.data
+            }
+            writer.writeUInt8(1)
+            writer.writeField(value)
+            return writer.data
+        }
+        func byteVector(_ value: Data) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt64LE(UInt64(value.count))
+            writer.writeBytes(value)
+            return writer.data
+        }
+        func uint32(_ value: UInt32) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt32LE(value)
+            return writer.data
+        }
+        func uint64(_ value: UInt64) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt64LE(value)
+            return writer.data
+        }
+        func structure(_ fields: [Data]) -> Data {
+            var writer = CompactNoritoWriter()
+            for field in fields {
+                writer.writeField(field)
+            }
+            return writer.data
+        }
+
+        let commitment: Data
+        if let keyBytes {
+            let backendBytes = Data(backend.utf8)
+            var preimage = Data("iroha:zk:v1:vk".utf8)
+            var backendLength = UInt64(backendBytes.count).bigEndian
+            var keyLength = UInt64(keyBytes.count).bigEndian
+            preimage.append(withUnsafeBytes(of: &backendLength) { Data($0) })
+            preimage.append(backendBytes)
+            preimage.append(withUnsafeBytes(of: &keyLength) { Data($0) })
+            preimage.append(keyBytes)
+            commitment = Data(SHA256.hash(data: preimage))
+        } else {
+            commitment = Data(repeating: 0x44, count: 32)
+        }
+        let id = structure([string(backend), string(name)])
+        let inlineKey = keyBytes.map {
+            structure([string(backend), byteVector($0)])
+        }
+        let record = structure([
+            uint32(recordVersion ?? version),
+            string(circuitId),
+            option(nil),
+            string("core"),
+            uint32(backend.hasPrefix("stark/") ? 1 : 0),
+            string("unknown"),
+            schemaHash,
+            commitment,
+            uint32(UInt32(keyBytes?.count ?? 1)),
+            uint32(0),
+            option(gasScheduleId.map(string)),
+            option(nil),
+            option(nil),
+            option(nil),
+            option(nil),
+            option(inlineKey),
+            Data([1]),
+        ])
+        let instructionBody = structure([id, record])
+        let archive = noritoEncode(
+            typeName: wireName,
+            payload: instructionBody,
+            flags: NoritoHeader.compactLen
+        )
+        let instruction = structure([string(wireName), byteVector(archive)])
+        var sequence = CompactNoritoWriter()
+        sequence.writeUInt64LE(1)
+        sequence.writeField(instruction)
+        var executable = CompactNoritoWriter()
+        executable.writeUInt32LE(0)
+        executable.writeField(sequence.data)
+
+        var chain = CompactNoritoWriter()
+        chain.writeField(string(chainId))
+        let authorityPayload = try! AccountAddress.parseEncoded(authority)
+            .compactNoritoAccountControllerPayload()
+        var feeAuthority = CompactNoritoWriter()
+        feeAuthority.writeField(uint64(0))
+        feeAuthority.writeField(Data([0]))
+        var feePayment = CompactNoritoWriter()
+        feePayment.writeUInt32LE(0)
+        feePayment.writeField(feeAuthority.data)
+        var payload = CompactNoritoWriter()
+        for field in [
+            chain.data,
+            authorityPayload,
+            uint64(0),
+            executable.data,
+            option(uint64(100_000)),
+            Data([0]),
+            feePayment.data,
+            uint64(0),
+            Data([0]),
+        ] {
+            payload.writeField(field)
+        }
+        return payload.data
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testGetRuntimeMetricsAsync() async throws {
         let payload = """
@@ -14569,7 +14557,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload, got \(error)")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
             await XCTAssertThrowsErrorAsync(
                 try await makeClient().listVerifyingKeys(query: ToriiVerifyingKeyListQuery(backend: backend))
@@ -14577,13 +14565,13 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload, got \(error)")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
             XCTAssertThrowsError(try ToriiVerifyingKeyListQuery(backend: backend).queryItems()) { error in
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload, got \(error)")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
         }
         XCTAssertEqual(requests, 0)
@@ -14641,15 +14629,17 @@ final class ToriiClientHeaderTests: XCTestCase {
             }]
             """
         ]
+        let canonicalDiagnostics = [
+            "backend is not an exact supported verifier-registry label:",
+            "backend must not contain surrounding whitespace"
+        ]
         for payload in payloads {
             let data = payload.data(using: .utf8)!
             XCTAssertThrowsError(try JSONDecoder().decode([ToriiVerifyingKeyListItem].self, from: data)) { error in
                 let description = String(describing: error)
-                XCTAssertTrue(
-                    description.contains("unsupported production verifier backend")
-                        || description.contains("surrounding whitespace")
-                        || description.contains("stored key backend must match record backend")
-                        || description.contains("vk_len must match stored key byte length"),
+                XCTAssertEqual(
+                    canonicalDiagnostics.filter { description.contains($0) }.count,
+                    1,
                     description
                 )
             }
@@ -14745,10 +14735,9 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterVerifyingKeyPostsSignedPayload() async throws {
+    func testRegisterVerifyingKeyReturnsUnsignedTransactionDraft() async throws {
         let requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:register-private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14765,25 +14754,27 @@ final class ToriiClientHeaderTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["authority"] as? String, requestBody.authority)
-            XCTAssertEqual(body["private_key"] as? String, "ed25519:register-private-key")
+            XCTAssertNil(body["private_key"])
             XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
             XCTAssertEqual(body["name"] as? String, "vk_main")
             XCTAssertEqual(body["vk_bytes"] as? String, "AQID")
             XCTAssertEqual(body["vk_len"] as? Int, 3)
             let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 202,
+                                           statusCode: 200,
                                            httpVersion: nil,
-                                           headerFields: nil)!
-            return (response, nil)
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, self.verifyingKeyDraftResponse())
         }
-        try await makeClient().registerVerifyingKey(requestBody)
+        let draft = try await makeClient().registerVerifyingKey(requestBody)
+        XCTAssertFalse(draft.submitted)
+        XCTAssertEqual(draft.transactionPayload, canonicalVerifyingKeyTransactionPayload())
+        XCTAssertEqual(draft.signingMessage, IrohaHash.hash(draft.transactionPayload))
         XCTAssertTrue(didSendRequest)
     }
 
     func testRegisterVerifyingKeyRejectsInvalidSchemaHash() {
         let requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14798,10 +14789,263 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testVerifyingKeyTransactionDraftRejectsMalformedOrRetiredFields() async throws {
+        let request = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "e", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01, 0x02, 0x03])
+        )
+        let payload = canonicalVerifyingKeyTransactionPayload()
+        let payloadB64 = payload.base64EncodedString()
+        let signingB64 = IrohaHash.hash(payload).base64EncodedString()
+        let cases: [(String, [String: Any])] = [
+            (
+                "submitted transaction",
+                [
+                    "submitted": true,
+                    "transaction_payload_b64": payloadB64,
+                    "signing_message_b64": signingB64,
+                ]
+            ),
+            (
+                "retired private key",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": payloadB64,
+                    "signing_message_b64": signingB64,
+                    "private_key": "ed25519:must-not-be-accepted",
+                ]
+            ),
+            (
+                "missing signing message",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": payloadB64,
+                ]
+            ),
+            (
+                "noncanonical payload base64",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": "AQI",
+                    "signing_message_b64": signingB64,
+                ]
+            ),
+            (
+                "noncanonical transaction payload",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": Data([0x01, 0x02, 0x03]).base64EncodedString(),
+                    "signing_message_b64": IrohaHash.hash(Data([0x01, 0x02, 0x03])).base64EncodedString(),
+                ]
+            ),
+            (
+                "wrong-size signing message",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": payloadB64,
+                    "signing_message_b64": Data(repeating: 0x01, count: 31).base64EncodedString(),
+                ]
+            ),
+            (
+                "mismatched signing message",
+                [
+                    "submitted": false,
+                    "transaction_payload_b64": payloadB64,
+                    "signing_message_b64": Data(repeating: 0x02, count: 32).base64EncodedString(),
+                ]
+            ),
+        ]
+
+        for (label, object) in cases {
+            let data = try JSONSerialization.data(withJSONObject: object)
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, data)
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().registerVerifyingKey(request),
+                label
+            ) { _ in }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testVerifyingKeyDraftRequiresImmutableLocalSigningContextBeforeDispatch() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiClient(
+            baseURL: URL(string: "https://example.test")!,
+            session: session
+        )
+        let request = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "e", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01, 0x02, 0x03])
+        )
+        var didDispatch = false
+        StubURLProtocol.handler = { request in
+            didDispatch = true
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 500,
+                                httpVersion: nil, headerFields: nil)!,
+                Data()
+            )
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await client.registerVerifyingKey(request)
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("ToriiLocalSigningContext"))
+        }
+        XCTAssertFalse(didDispatch)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterVerifyingKeyRejectsSemanticallySubstitutedDrafts() async throws {
+        let request = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "e", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01, 0x02, 0x03])
+        )
+        let cases: [(label: String, payload: Data, expectedReason: String)] = [
+            (
+                "wrong operation",
+                canonicalVerifyingKeyTransactionPayload(
+                    wireName: "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey"
+                ),
+                "requested registry operation"
+            ),
+            (
+                "wrong identifier",
+                canonicalVerifyingKeyTransactionPayload(name: "vk_substituted"),
+                "identifier does not match"
+            ),
+            (
+                "wrong full record",
+                canonicalVerifyingKeyTransactionPayload(recordVersion: 2),
+                "full requested record"
+            ),
+            (
+                "wrong chain",
+                canonicalVerifyingKeyTransactionPayload(chainId: "other-chain"),
+                "configured chain"
+            ),
+            (
+                "wrong authority",
+                canonicalVerifyingKeyTransactionPayload(
+                    authority: "sorauﾛ1NfｺｷﾘcﾙｦEﾑgsKti4Zﾘ6HKｳZCﾅｸｼ16fvSｲymｶｻﾘﾎ29JNWE"
+                ),
+                "requested authority"
+            ),
+        ]
+
+        for item in cases {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (
+                    response,
+                    self.verifyingKeyDraftResponse(payload: item.payload)
+                )
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().registerVerifyingKey(request),
+                item.label
+            ) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error, got \(error)")
+                }
+                XCTAssertTrue(reason.contains(item.expectedReason), "\(item.label): \(reason)")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterVerifyingKeyRequiresHttp200AndUniqueResponseFields() async throws {
+        let request = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01])
+        )
+        StubURLProtocol.handler = { urlRequest in
+            let response = HTTPURLResponse(
+                url: urlRequest.url!,
+                statusCode: 202,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, self.verifyingKeyDraftResponse())
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().registerVerifyingKey(request)
+        ) { error in
+            guard case let ToriiClientError.httpStatus(code, _, _) = error else {
+                return XCTFail("Expected HTTP status error, got \(error)")
+            }
+            XCTAssertEqual(code, 202)
+        }
+
+        StubURLProtocol.handler = { urlRequest in
+            let response = HTTPURLResponse(
+                url: urlRequest.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let payload = self.canonicalVerifyingKeyTransactionPayload()
+            let signing = IrohaHash.hash(payload)
+            let duplicate = """
+            {"submitted":false,"submitted":false,"transaction_payload_b64":"\(payload.base64EncodedString())","signing_message_b64":"\(signing.base64EncodedString())"}
+            """
+            return (response, Data(duplicate.utf8))
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().registerVerifyingKey(request)
+        ) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error, got \(error)")
+            }
+        }
+    }
+
     func testRegisterVerifyingKeyRejectsPaddedSelectorMetadata() {
         let base = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14853,7 +15097,6 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsVkLengthMismatch() {
         var requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14873,7 +15116,6 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsLengthOnlyVerifierMaterial() {
         var requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14894,7 +15136,6 @@ final class ToriiClientHeaderTests: XCTestCase {
         let bytes = Data([0x01, 0x02, 0x03])
         var registerRequest = ToriiVerifyingKeyRegisterRequest(
             authority: "alice",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14913,7 +15154,6 @@ final class ToriiClientHeaderTests: XCTestCase {
 
         var updateRequest = ToriiVerifyingKeyUpdateRequest(
             authority: "alice",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -14932,7 +15172,6 @@ final class ToriiClientHeaderTests: XCTestCase {
         let bytes = Data([0x01, 0x02, 0x03])
         var registerRequest = ToriiVerifyingKeyRegisterRequest(
             authority: "alice",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -14952,7 +15191,6 @@ final class ToriiClientHeaderTests: XCTestCase {
 
         var updateRequest = ToriiVerifyingKeyUpdateRequest(
             authority: "alice",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -14994,7 +15232,6 @@ final class ToriiClientHeaderTests: XCTestCase {
         for backend in unsupported {
             let registerRequest = ToriiVerifyingKeyRegisterRequest(
                 authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                privateKey: "ed25519:private-key",
                 backend: backend,
                 name: "vk_main",
                 version: 1,
@@ -15006,12 +15243,11 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
 
             let updateRequest = ToriiVerifyingKeyUpdateRequest(
                 authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                privateKey: "ed25519:private-key",
                 backend: backend,
                 name: "vk_main",
                 version: 2,
@@ -15022,7 +15258,7 @@ final class ToriiClientHeaderTests: XCTestCase {
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
         }
     }
@@ -15033,7 +15269,6 @@ final class ToriiClientHeaderTests: XCTestCase {
         for name in blankNames {
             let registerRequest = ToriiVerifyingKeyRegisterRequest(
                 authority: "alice",
-                privateKey: "ed25519:private-key",
                 backend: "halo2/ipa",
                 name: name,
                 version: 1,
@@ -15051,7 +15286,6 @@ final class ToriiClientHeaderTests: XCTestCase {
 
             let updateRequest = ToriiVerifyingKeyUpdateRequest(
                 authority: "alice",
-                privateKey: "ed25519:private-key",
                 backend: "halo2/ipa",
                 name: name,
                 version: 2,
@@ -15068,13 +15302,12 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
     }
 
-    func testVerifyingKeyRequestsRejectBlankSigningFieldsBeforeEncoding() {
+    func testVerifyingKeyRequestsRejectBlankAuthorityBeforeEncoding() {
         let blankValues = ["", "   ", "\t", "\n"]
 
         for blank in blankValues {
             let registerWithBlankAuthority = ToriiVerifyingKeyRegisterRequest(
                 authority: blank,
-                privateKey: "ed25519:private-key",
                 backend: "halo2/ipa",
                 name: "vk_main",
                 version: 1,
@@ -15090,27 +15323,8 @@ final class ToriiClientHeaderTests: XCTestCase {
                 XCTAssertTrue(reason.contains("authority must be a non-empty string"))
             }
 
-            let registerWithBlankPrivateKey = ToriiVerifyingKeyRegisterRequest(
-                authority: "alice",
-                privateKey: blank,
-                backend: "halo2/ipa",
-                name: "vk_main",
-                version: 1,
-                circuitId: "halo2/ipa::transfer_v1",
-                publicInputsSchemaHashHex: String(repeating: "a", count: 64),
-                gasScheduleId: "halo2_default"
-            )
-            XCTAssertThrowsError(try JSONEncoder().encode(registerWithBlankPrivateKey),
-                                 "register must reject blank private_key \(String(reflecting: blank))") { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("Expected invalidPayload error")
-                }
-                XCTAssertTrue(reason.contains("private_key must be a non-empty string"))
-            }
-
             let updateWithBlankAuthority = ToriiVerifyingKeyUpdateRequest(
                 authority: blank,
-                privateKey: "ed25519:private-key",
                 backend: "halo2/ipa",
                 name: "vk_main",
                 version: 2,
@@ -15124,31 +15338,13 @@ final class ToriiClientHeaderTests: XCTestCase {
                 }
                 XCTAssertTrue(reason.contains("authority must be a non-empty string"))
             }
-
-            let updateWithBlankPrivateKey = ToriiVerifyingKeyUpdateRequest(
-                authority: "alice",
-                privateKey: blank,
-                backend: "halo2/ipa",
-                name: "vk_main",
-                version: 2,
-                circuitId: "halo2/ipa::transfer_v2",
-                publicInputsSchemaHashHex: String(repeating: "b", count: 64)
-            )
-            XCTAssertThrowsError(try JSONEncoder().encode(updateWithBlankPrivateKey),
-                                 "update must reject blank private_key \(String(reflecting: blank))") { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("Expected invalidPayload error")
-                }
-                XCTAssertTrue(reason.contains("private_key must be a non-empty string"))
-            }
         }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testUpdateVerifyingKeyPostsSignedPayload() async throws {
+    func testUpdateVerifyingKeyReturnsUnsignedTransactionDraft() async throws {
         var requestBody = ToriiVerifyingKeyUpdateRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:update-private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -15168,26 +15364,46 @@ final class ToriiClientHeaderTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["authority"] as? String, requestBody.authority)
-            XCTAssertEqual(body["private_key"] as? String, "ed25519:update-private-key")
+            XCTAssertNil(body["private_key"])
             XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
             XCTAssertEqual(body["name"] as? String, "vk_main")
             XCTAssertEqual(body["commitment_hex"] as? String, requestBody.commitmentHex)
             XCTAssertEqual(body["vk_bytes"] as? String, "qg==")
             XCTAssertEqual(body["vk_len"] as? Int, 1)
             let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 202,
+                                           statusCode: 200,
                                            httpVersion: nil,
-                                           headerFields: nil)!
-            return (response, nil)
+                                           headerFields: ["Content-Type": "application/json"])!
+            let payload = self.canonicalVerifyingKeyTransactionPayload(
+                wireName: "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+                version: 2,
+                circuitId: "halo2/ipa::transfer_v2",
+                schemaHash: Data(repeating: 0xff, count: 32),
+                gasScheduleId: nil,
+                keyBytes: Data([0xAA])
+            )
+            return (response, self.verifyingKeyDraftResponse(payload: payload))
         }
-        try await makeClient().updateVerifyingKey(requestBody)
+        let draft = try await makeClient().updateVerifyingKey(requestBody)
+        XCTAssertFalse(draft.submitted)
+        XCTAssertEqual(
+            draft.transactionPayload,
+            canonicalVerifyingKeyTransactionPayload(
+                wireName: "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+                version: 2,
+                circuitId: "halo2/ipa::transfer_v2",
+                schemaHash: Data(repeating: 0xff, count: 32),
+                gasScheduleId: nil,
+                keyBytes: Data([0xAA])
+            )
+        )
+        XCTAssertEqual(draft.signingMessage, IrohaHash.hash(draft.transactionPayload))
         XCTAssertTrue(didSendRequest)
     }
 
     func testUpdateVerifyingKeyRejectsInvalidCommitmentHex() {
         var requestBody = ToriiVerifyingKeyUpdateRequest(
             authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -16575,9 +16791,7 @@ data: {"authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains("unsupported production verifier backend")
-                              || reason.contains("surrounding whitespace")
-                              || reason.contains("must be a non-empty string"))
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
         }
 
@@ -17176,7 +17390,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("Expected invalidPayload error")
                 }
-                XCTAssertTrue(reason.contains(expectedProductionBackendRejection(backend)), reason)
+                XCTAssertEqual(reason, expectedVerifierRegistryBackendRejection(backend))
             }
         }
 
@@ -17437,16 +17651,29 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         )
         XCTAssertEqual(receipt.version, 2)
         XCTAssertEqual(receipt.legs.count, 2)
-        XCTAssertEqual(receipt.chainIdHash, nativeAmxTestHash(0x11))
-        XCTAssertEqual(receipt.laneIncarnation, nativeAmxTestHash(0x89))
+        XCTAssertEqual(
+            receipt.chainIdHash,
+            "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628"
+        )
+        XCTAssertEqual(
+            receipt.planDigest,
+            "hash:98E3EE29122BBFA40FEF5FF5E694F8F695D2772A31BAADE91755A2AEA030DB93#9DCD"
+        )
+        XCTAssertEqual(
+            receipt.laneIncarnation,
+            "hash:27146A48934D7179538FC7D9F474067D761989CED98D26A46AF5EB2575A7547D#8337"
+        )
         XCTAssertEqual(receipt.authorityContextHeight, 40)
         XCTAssertEqual(receipt.laneBlockHeight, 42)
-        XCTAssertEqual(receipt.laneBlockView, 6)
-        XCTAssertEqual(receipt.coordinatorProposalHash, nativeAmxTestHash(0x55))
+        XCTAssertEqual(receipt.laneBlockView, 9)
+        XCTAssertEqual(
+            receipt.coordinatorProposalHash,
+            "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
+        )
         XCTAssertEqual(firstLeg.prepareQc.body.phase, .prepare)
         XCTAssertEqual(firstLeg.commitQc.body.phase, .commit)
         XCTAssertEqual(firstLeg.prepareQc.body.round.height, 40)
-        XCTAssertEqual(firstLeg.prepareQc.body.epoch, 2)
+        XCTAssertEqual(firstLeg.prepareQc.body.epoch, 3)
         XCTAssertEqual(firstLeg.prepareQc.body.plannedCoordinatorBlockHeight, 42)
         XCTAssertEqual(firstLeg.prepareQc.validatorSetPops.count, 4)
         XCTAssertEqual(firstLeg.prepareQc.validatorSetPops.first?.count, 96)
@@ -17457,10 +17684,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             commitment.nativeAmxReceipts
         )
         let application = try XCTUnwrap(snapshot.nativeAmxParticipantApplications.first)
-        XCTAssertEqual(application.laneID, 9)
-        XCTAssertEqual(application.dataspaceID, 13)
-        XCTAssertEqual(application.participantHeight, 8)
-        XCTAssertEqual(application.predecessorHeight, 7)
+        XCTAssertEqual(application.laneID, 8)
+        XCTAssertEqual(application.dataspaceID, 12)
+        XCTAssertEqual(application.participantHeight, 42)
+        XCTAssertEqual(application.predecessorHeight, 41)
         XCTAssertEqual(application.sourceCount, 2)
         XCTAssertEqual(application.applicationBlockHeight, 42)
         XCTAssertEqual(application.state, .durablyApplied)
@@ -18792,6 +19019,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             #"{"seiyaku_name":"__kotodama_quantity_ratio_round"}"#,
             #"{"seiyaku_name":"__kotodama_decimal_to_int_trunc"}"#,
             #"{"seiyaku_name":"__kotodama_decimal_to_int_round"}"#,
+            #"{"states":[{"name":"Amount","type_name":"quantity"}]}"#,
+            #"{"states":[{"name":"Balances","type_name":"Transfer{Amount: quantity}"}]}"#,
             #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount>"}]}"#,
             #"{"states":[{"name":"Balances","type_name":"StateMap<AccountId, amount>"}]}"#,
             #"{"states":[{"name":"Balances","type_name":"Amount: quantity"}]}"#,
@@ -18806,11 +19035,14 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             #"{"code_hash":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B"}"#,
             #"{"provenance":"not-an-object"}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Public","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"Amount","kind":{"kind":"View","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"View","value":null},"params":[{"name":"Amount","type_name":"bool"}],"argument_schema":{"fields":[{"name":"Amount","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":"Kotoage"},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[{\"name\":\"flag\",\"type_name\":\"bool\"}],\"argument_schema\":{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":1},\(validLeaf)]}}]},\"return_type\":null,\"return_schema\":null,\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}",
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"bool","return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}},{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":["not-an-object"]}]}"#,
             #"{"error_codes":[{"namespace":"Failure","name":"Denied","code":0}]}"#,
+            #"{"error_codes":[{"namespace":"Failure","name":"Amount","code":1}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"flag","type_name":"bool"}],"argument_schema":{"fields":[{"name":"different","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
             #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"tags","type_name":"List<Name, 64>"}],"argument_schema":{"fields":[{"name":"tags","ty":{"nodes":[{"kind":"List","value":{"capacity":65}},{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
@@ -18881,6 +19113,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "amount",
             "Transfer{amount: amount}",
             "Transfer{amount:: quantity}",
+            "Transfer{Amount: quantity}",
             "Transfer{amount:quantity}",
             "Transfer{amount:  quantity}",
             "Transfer {amount: quantity}",
@@ -19064,6 +19297,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "state:*",
             "state:Balances.more",
             "state:Balances:Other",
+            "state:Amount",
             "state:state:Balances",
             "state:match",
             "state:StateMap",
@@ -19278,6 +19512,35 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 "encoded retired error namespace \(retired)"
             )
         }
+    }
+
+    func testContractManifestTriggerBoundariesRejectExactAmountSourceFormOnly() throws {
+        let filter = "TlJUMAAAl9+YQQ4oJZjALRf6FAto0QAKAAAAAAAAANzCjydU9+jNAgIAAAAFBAAAAAA="
+
+        func payload(id: String, namespace: String?) -> Data {
+            let encodedNamespace = namespace.map { "\"\($0)\"" } ?? "null"
+            return Data(
+                """
+                {"id":"\(id)","repeats":{"Indefinitely":null},"filter":"\(filter)","authority":null,"metadata":{},"callback":{"namespace":\(encodedNamespace),"entrypoint":"transfer"}}
+                """.utf8
+            )
+        }
+
+        for (id, namespace) in [("Amount", nil), ("tick", "Amount")] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiContractTriggerDescriptor.self,
+                    from: payload(id: id, namespace: namespace)
+                )
+            )
+        }
+
+        let lowercase = try JSONDecoder().decode(
+            ToriiContractTriggerDescriptor.self,
+            from: payload(id: "amount", namespace: "RemoteLedger")
+        )
+        XCTAssertEqual(lowercase.id, "amount")
+        XCTAssertEqual(lowercase.callback.namespace, "RemoteLedger")
     }
 
     func testContractManifestEnforcesStrictCrossFieldInvariants() throws {
@@ -21509,7 +21772,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 "application/x-norito"
             )
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-            XCTAssertEqual(request.httpBody, signedBytes)
+            XCTAssertEqual(self.bodyData(from: request), signedBytes)
             let response = HTTPURLResponse(
                 url: request.url!,
                 statusCode: 202,

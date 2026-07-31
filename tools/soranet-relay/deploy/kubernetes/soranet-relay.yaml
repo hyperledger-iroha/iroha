@@ -13,15 +13,17 @@ data:
     {
       "mode": "Entry",
       "listen": "0.0.0.0:4433",
-      "admin_listen": "0.0.0.0:9090",
+      "admin_listen": "127.0.0.1:9090",
+      "admin_auth_token_path": "/etc/soranet/relay/secrets/admin-token",
       "tls": {
         "self_signed_subject": "relay.soranet.local"
       },
       "pow": {
         "required": true,
-        "difficulty": 16,
+        "difficulty": 6,
         "max_future_skew_secs": 600,
-        "min_ticket_ttl_secs": 45
+        "min_ticket_ttl_secs": 45,
+        "revocation_store_path": "/var/lib/soranet-relay/ticket_revocations.norito"
       },
       "padding": {
         "cell_size": 1024,
@@ -71,6 +73,9 @@ metadata:
   namespace: soranet
 type: Opaque
 stringData:
+  # Replace before deployment with at least 32 random printable ASCII bytes.
+  # This deliberately invalid short value makes an uncustomized deployment fail closed.
+  admin-token: "REPLACE_ME"
   relay-descriptor-manifest.json: |
     {
       "version": 1,
@@ -87,7 +92,13 @@ metadata:
   name: soranet-relay
   namespace: soranet
 spec:
-  replicas: 2
+  # A relay identity owns one single-use ticket ledger. Scale by deploying
+  # distinct relay identities, never by cloning this pod and its local ledger.
+  replicas: 1
+  # Do not let a rolling update overlap two processes that claim the same
+  # relay identity and replay ledger.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: soranet-relay
@@ -96,6 +107,14 @@ spec:
       labels:
         app: soranet-relay
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: relay
           image: ghcr.io/sora-nexus/soranet-relay:latest
@@ -106,24 +125,15 @@ spec:
           env:
             - name: RUST_LOG
               value: "soranet_relay=info,quinn=warn"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: quic
               containerPort: 4433
               protocol: UDP
-            - name: metrics
-              containerPort: 9090
-              protocol: TCP
-          readinessProbe:
-            httpGet:
-              path: /metrics
-              port: metrics
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            tcpSocket:
-              port: quic
-            initialDelaySeconds: 15
-            periodSeconds: 20
           volumeMounts:
             - name: config
               mountPath: /etc/soranet/relay
@@ -133,6 +143,12 @@ spec:
             - name: audit-spool
               mountPath: /var/spool/soranet/audit
               readOnly: false
+            - name: relay-logs
+              mountPath: /var/log/soranet
+              readOnly: false
+            - name: relay-state
+              mountPath: /var/lib/soranet-relay
+              readOnly: false
       volumes:
         - name: config
           configMap:
@@ -140,8 +156,26 @@ spec:
         - name: manifest
           secret:
             secretName: soranet-relay-manifest
+            defaultMode: 0440
         - name: audit-spool
           emptyDir: {}
+        - name: relay-logs
+          emptyDir: {}
+        - name: relay-state
+          persistentVolumeClaim:
+            claimName: soranet-relay-state
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soranet-relay-state
+  namespace: soranet
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: v1
 kind: Service
@@ -156,7 +190,3 @@ spec:
       port: 4433
       targetPort: quic
       protocol: UDP
-    - name: metrics
-      port: 9090
-      targetPort: metrics
-      protocol: TCP

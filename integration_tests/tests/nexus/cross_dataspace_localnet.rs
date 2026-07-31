@@ -7584,6 +7584,7 @@ mod tests {
             quorum: DualQuorum::from_roster(&roster).expect("valid weighted fixture roster"),
             roster,
             nexus_amx_context_hash: Hash::new(b"g12p historical roster"),
+            execution_policy_hash: Hash::new(b"g12p historical roster execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::Plain,
                 chunk_size_bytes: 4,
