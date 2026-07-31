@@ -1765,7 +1765,8 @@
             "ensure_prune_recovery_not_required",
             "native_amx_participant_application_evidence_for_block_under_publication_guard",
             "block, true",
-            "persist_native_amx_participant_application_evidence_under_publication_guard"
+            "persist_native_amx_participant_application_evidence_under_publication_guard",
+            "NativeAmxParticipantApplicationPublicationMode::PostWsvRepair"
           ]
         },
         {
@@ -2074,23 +2075,72 @@
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
-          "symbol": "persist_native_amx_participant_application_evidence_under_publication_guard",
+          "symbol": "prepublish_native_amx_participant_application_evidence",
           "required_tokens": [
-            "get_durable_block_hash",
-            "write_native_amx_participant_application_manifest_artifact_under_publication_guard",
-            "write_native_amx_participant_application_receipt_artifact_under_publication_guard"
+            "prune_lock.lock",
+            "ensure_prune_recovery_not_required",
+            "native_amx_participant_application_evidence_for_block_under_publication_guard",
+            "block, false",
+            "persist_native_amx_participant_application_evidence_under_publication_guard",
+            "NativeAmxParticipantApplicationPublicationMode::PreWsv"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "enum",
+          "symbol": "NativeAmxParticipantApplicationPublicationMode",
+          "required_tokens": [
+            "PreWsv",
+            "PostWsvRepair"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantApplicationPublicationMode::requires_post_apply_metadata",
+          "required_tokens": [
+            "matches!(self, Self::PostWsvRepair)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantApplicationPublicationMode::permits_retention_cleanup",
+          "required_tokens": [
+            "matches!(self, Self::PostWsvRepair)"
           ]
         },
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
-          "symbol": "write_native_amx_participant_application_manifest_artifact_under_publication_guard",
+          "symbol": "persist_native_amx_participant_application_evidence_under_publication_guard",
+          "required_tokens": [
+            "get_durable_block_hash",
+            "plan.application_block_height",
+            "plan.application_block_hash",
+            "plan.manifest_leaf_count",
+            "mode.permits_retention_cleanup()",
+            "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+            "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
+            "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+            "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
+            "mode.requires_post_apply_metadata()",
+            "NativeAmxParticipantApplicationPrepublicationToken::from_plan",
+            "if permit_cleanup",
+            "cleanup_native_amx_participant_application_evidence_under_publication_guard"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
           "required_tokens": [
             "ensure_prune_recovery_not_required",
             "get_durable_block_hash",
             "require_active_lane_incarnation",
             "native_amx_evidence_namespace_for_entry",
-            "complete_native_amx_evidence_prune_intent_locked",
+            "permit_retention_cleanup",
+            "require_native_amx_evidence_prune_intent_absent_locked",
             "recover_native_amx_evidence_publication_temp_locked",
             "discard_native_amx_latest_index_temp_locked",
             "publish_native_amx_evidence_file_locked",
@@ -2103,21 +2153,70 @@
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
-          "symbol": "write_native_amx_participant_application_receipt_artifact_under_publication_guard",
+          "symbol": "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
           "required_tokens": [
             "manifest_artifact_hash",
             "native_amx_participant_receipt_matches_manifest_leaf",
             "require_active_lane_artifact",
             "native_amx_evidence_namespace_for_entry",
-            "complete_native_amx_evidence_prune_intent_locked",
+            "permit_retention_cleanup",
+            "require_native_amx_evidence_prune_intent_absent_locked",
             "recover_native_amx_evidence_publication_temp_locked",
             "discard_native_amx_latest_index_temp_locked",
             "read_native_amx_participant_application_manifest_from_paths_locked",
             "publish_native_amx_evidence_file_locked",
             "NativeAmxEvidenceKind::Receipt",
-            "persist_native_amx_participant_receipt_latest_index_locked",
-            "prune_native_amx_evidence_pairs_locked",
             "progress_mutation_namespace_unchanged",
+            "native_amx_evidence_tracked_bytes_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+          "required_tokens": [
+            "manifest_artifact_hash",
+            "native_amx_participant_receipt_matches_manifest_leaf",
+            "get_durable_block_hash",
+            "require_active_lane_artifact",
+            "native_amx_evidence_namespace_for_entry",
+            "permit_retention_cleanup",
+            "require_native_amx_evidence_prune_intent_absent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "read_native_amx_participant_application_receipt_from_paths_locked",
+            "persist_native_amx_participant_receipt_latest_index_locked",
+            "progress_mutation_namespace_unchanged",
+            "native_amx_evidence_tracked_bytes_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
+          "required_tokens": [
+            "require_active_lane_artifact",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "read_native_amx_participant_application_receipt_from_paths_locked",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "require_post_apply_metadata",
+            "native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards",
+            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
+            "latest.matches_receipt",
+            "latest.matches_manifest",
+            "progress_mutation_namespace_unchanged"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "cleanup_native_amx_participant_application_evidence_under_publication_guard",
+          "required_tokens": [
+            "require_active_lane_artifact",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "latest.matches_receipt",
+            "prune_native_amx_evidence_pairs_locked",
             "native_amx_evidence_tracked_bytes_locked"
           ]
         },
@@ -2435,13 +2534,15 @@
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
-          "kind": "fn",
-          "symbol": "validate_and_apply",
+          "kind": "method",
+          "symbol": "V2ApplyService::validate_and_apply",
           "required_tokens": [
             "NativeAmxApplicationManifestV1::from_result_bearing_block",
             "execution_commitment_from_witness",
             "store_block",
             "store_v2_finality_artifact",
+            "prepublish_native_amx_participant_application_evidence",
+            "token.authenticates",
             "apply_without_execution_with_verified_v2_finality",
             "state_block.commit"
           ]

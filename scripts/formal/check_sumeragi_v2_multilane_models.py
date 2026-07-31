@@ -1418,6 +1418,211 @@ FORBIDDEN_PRODUCTION_TOKENS = {
         "reconcile_lane_reservation_ownership",
     ): ("merge_ledger_all_entries",),
 }
+NATIVE_PREPUBLICATION_MODULE = "SumeragiV2NativeApplicationEvidence"
+NATIVE_PREPUBLICATION_BINDINGS = (
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "repair_native_amx_participant_application_evidence",
+        (
+            "prune_lock.lock",
+            "ensure_prune_recovery_not_required",
+            "native_amx_participant_application_evidence_for_block_under_publication_guard",
+            "block, true",
+            "persist_native_amx_participant_application_evidence_under_publication_guard",
+            "NativeAmxParticipantApplicationPublicationMode::PostWsvRepair",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "prepublish_native_amx_participant_application_evidence",
+        (
+            "prune_lock.lock",
+            "ensure_prune_recovery_not_required",
+            "native_amx_participant_application_evidence_for_block_under_publication_guard",
+            "block, false",
+            "persist_native_amx_participant_application_evidence_under_publication_guard",
+            "NativeAmxParticipantApplicationPublicationMode::PreWsv",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "enum",
+        "NativeAmxParticipantApplicationPublicationMode",
+        ("PreWsv", "PostWsvRepair"),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "NativeAmxParticipantApplicationPublicationMode::requires_post_apply_metadata",
+        ("matches!(self, Self::PostWsvRepair)",),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "NativeAmxParticipantApplicationPublicationMode::permits_retention_cleanup",
+        ("matches!(self, Self::PostWsvRepair)",),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "persist_native_amx_participant_application_evidence_under_publication_guard",
+        (
+            "get_durable_block_hash",
+            "plan.application_block_height",
+            "plan.application_block_hash",
+            "plan.manifest_leaf_count",
+            "mode.permits_retention_cleanup()",
+            "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+            "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
+            "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+            "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
+            "mode.requires_post_apply_metadata()",
+            "NativeAmxParticipantApplicationPrepublicationToken::from_plan",
+            "if permit_cleanup",
+            "cleanup_native_amx_participant_application_evidence_under_publication_guard",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+        (
+            "ensure_prune_recovery_not_required",
+            "get_durable_block_hash",
+            "require_active_lane_incarnation",
+            "native_amx_evidence_namespace_for_entry",
+            "permit_retention_cleanup",
+            "require_native_amx_evidence_prune_intent_absent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "publish_native_amx_evidence_file_locked",
+            "NativeAmxEvidenceKind::Manifest",
+            "STRICT_INIT_MAX_BLOCK_BYTES",
+            "progress_mutation_namespace_unchanged",
+            "native_amx_evidence_tracked_bytes_locked",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
+        (
+            "manifest_artifact_hash",
+            "native_amx_participant_receipt_matches_manifest_leaf",
+            "require_active_lane_artifact",
+            "native_amx_evidence_namespace_for_entry",
+            "permit_retention_cleanup",
+            "require_native_amx_evidence_prune_intent_absent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "publish_native_amx_evidence_file_locked",
+            "NativeAmxEvidenceKind::Receipt",
+            "progress_mutation_namespace_unchanged",
+            "native_amx_evidence_tracked_bytes_locked",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+        (
+            "manifest_artifact_hash",
+            "native_amx_participant_receipt_matches_manifest_leaf",
+            "get_durable_block_hash",
+            "require_active_lane_artifact",
+            "native_amx_evidence_namespace_for_entry",
+            "permit_retention_cleanup",
+            "require_native_amx_evidence_prune_intent_absent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "read_native_amx_participant_application_receipt_from_paths_locked",
+            "persist_native_amx_participant_receipt_latest_index_locked",
+            "progress_mutation_namespace_unchanged",
+            "native_amx_evidence_tracked_bytes_locked",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
+        (
+            "require_active_lane_artifact",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "read_native_amx_participant_application_receipt_from_paths_locked",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "require_post_apply_metadata",
+            "native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards",
+            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
+            "latest.matches_receipt",
+            "latest.matches_manifest",
+            "progress_mutation_namespace_unchanged",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "cleanup_native_amx_participant_application_evidence_under_publication_guard",
+        (
+            "require_active_lane_artifact",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "latest.matches_receipt",
+            "prune_native_amx_evidence_pairs_locked",
+            "native_amx_evidence_tracked_bytes_locked",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "method",
+        "V2ApplyService::validate_and_apply",
+        (
+            "NativeAmxApplicationManifestV1::from_result_bearing_block",
+            "execution_commitment_from_witness",
+            "store_block",
+            "store_v2_finality_artifact",
+            "prepublish_native_amx_participant_application_evidence",
+            "token.authenticates",
+            "apply_without_execution_with_verified_v2_finality",
+            "state_block.commit",
+        ),
+    ),
+)
+NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "method",
+        "V2ApplyService::validate_and_apply",
+        (
+            ".store_v2_finality_artifact(artifact)",
+            ".prepublish_native_amx_participant_application_evidence(",
+            "!token.authenticates(committed_block.as_ref(), &native_amx_manifest, artifact)",
+            ".apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology)",
+            "state_block.commit().map_err",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "persist_native_amx_participant_application_evidence_under_publication_guard",
+        (
+            "self.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(",
+            "self.write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(",
+            "self.write_native_amx_participant_receipt_latest_index_under_publication_guard(",
+            "self.authenticate_native_amx_participant_application_prepublication_under_publication_guard(",
+            "let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan",
+            "if permit_cleanup {",
+            "self.cleanup_native_amx_participant_application_evidence_under_publication_guard(",
+        ),
+    ),
+)
+NATIVE_PREPUBLICATION_RETENTION_WRITERS = (
+    "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+    "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
+    "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+)
 QUEUE_PLAN_STARTUP_REPLAY_MODULE = "SumeragiV2QueuePlanAdmissionRegistry"
 QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
     (
@@ -2859,6 +3064,218 @@ def _rust_binding_item(
     return items[0]
 
 
+def _validate_native_prepublication_contract(
+    root: Path, models: Any, errors: list[str]
+) -> None:
+    """Bind Native participant frontier publication to its durable phase order."""
+
+    if not isinstance(models, list):
+        return
+    native_models = [
+        model
+        for model in models
+        if isinstance(model, dict)
+        and model.get("module") == NATIVE_PREPUBLICATION_MODULE
+    ]
+    if len(native_models) != 1:
+        errors.append(
+            "Native prepublication source contract requires exactly one "
+            f"{NATIVE_PREPUBLICATION_MODULE} model"
+        )
+        return
+    production_symbols = native_models[0].get("production_symbols")
+    if not isinstance(production_symbols, list):
+        return
+
+    for relative, kind, symbol, expected_tokens in NATIVE_PREPUBLICATION_BINDINGS:
+        matches = [
+            binding
+            for binding in production_symbols
+            if isinstance(binding, dict)
+            and binding.get("path") == relative
+            and binding.get("kind") == kind
+            and binding.get("symbol") == symbol
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{NATIVE_PREPUBLICATION_MODULE}: reviewed prepublication "
+                f"binding {relative}!{symbol} must occur exactly once, "
+                f"found {len(matches)}"
+            )
+            continue
+        actual_tokens = matches[0].get("required_tokens")
+        if (
+            not isinstance(actual_tokens, list)
+            or tuple(actual_tokens) != expected_tokens
+        ):
+            errors.append(
+                f"{NATIVE_PREPUBLICATION_MODULE}: reviewed prepublication "
+                f"tokens changed for {relative}!{symbol}"
+            )
+
+    binding_items: dict[tuple[str, str, str], str] = {}
+    for relative, kind, symbol, tokens in NATIVE_PREPUBLICATION_BINDINGS:
+        item = _rust_binding_item(
+            root,
+            relative,
+            kind,
+            symbol,
+            "Native prepublication production binding",
+            errors,
+        )
+        if item is None:
+            continue
+        binding_items[(relative, kind, symbol)] = item
+        for token in tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: Native prepublication item {symbol} "
+                    f"is missing source-bound token {token!r}"
+                )
+
+    for relative, kind, symbol, tokens in (
+        NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS
+    ):
+        item = binding_items.get((relative, kind, symbol))
+        if item is None:
+            item = _rust_binding_item(
+                root,
+                relative,
+                kind,
+                symbol,
+                "ordered Native prepublication source binding",
+                errors,
+            )
+        if item is None:
+            continue
+        cursor = -1
+        for token in tokens:
+            count = item.count(token)
+            position = item.find(token, cursor + 1)
+            if count != 1 or position < 0:
+                errors.append(
+                    f"{root / relative}: ordered Native prepublication item "
+                    f"{symbol} must contain exactly one ordered token "
+                    f"{token!r}, found {count}"
+                )
+                break
+            cursor = position
+
+    kura_relative = "crates/iroha_core/src/kura.rs"
+    persist_key = (
+        kura_relative,
+        "fn",
+        "persist_native_amx_participant_application_evidence_under_publication_guard",
+    )
+    persist_item = binding_items.get(persist_key)
+    if persist_item is not None:
+        normalized = " ".join(persist_item.split())
+        phase_snippets = (
+            "for (manifest, _) in &plan.artifacts { "
+            "self.write_native_amx_participant_application_manifest_artifact_"
+            "with_retention_policy_under_publication_guard( "
+            "manifest, permit_cleanup, )?; }",
+            "for (manifest, receipt) in &plan.artifacts { "
+            "self.write_native_amx_participant_application_receipt_artifact_"
+            "only_with_retention_policy_under_publication_guard( "
+            "receipt, manifest, permit_cleanup, )?; }",
+            "for (manifest, receipt) in &plan.artifacts { "
+            "self.write_native_amx_participant_receipt_latest_index_"
+            "under_publication_guard( "
+            "receipt, manifest, permit_cleanup, )?; }",
+            "if permit_cleanup { for (_, receipt) in &plan.artifacts { "
+            "self.cleanup_native_amx_participant_application_evidence_"
+            "under_publication_guard( receipt, )?; } }",
+        )
+        for snippet in phase_snippets:
+            if snippet not in normalized:
+                errors.append(
+                    f"{root / kura_relative}: Native prepublication phase "
+                    "loops must remain manifest-all, receipt-all, latest-all, "
+                    "read-back-authenticated, then cleanup-only-after-WSV"
+                )
+                break
+
+    expected_mode_methods = {
+        "NativeAmxParticipantApplicationPublicationMode::requires_post_apply_metadata": (
+            "const fn requires_post_apply_metadata(self) -> bool { "
+            "matches!(self, Self::PostWsvRepair) }"
+        ),
+        "NativeAmxParticipantApplicationPublicationMode::permits_retention_cleanup": (
+            "const fn permits_retention_cleanup(self) -> bool { "
+            "matches!(self, Self::PostWsvRepair) }"
+        ),
+    }
+    for symbol, expected in expected_mode_methods.items():
+        item = binding_items.get((kura_relative, "method", symbol))
+        if item is not None and " ".join(item.split()) != expected:
+            errors.append(
+                f"{root / kura_relative}: {symbol} must authorize only "
+                "PostWsvRepair"
+            )
+
+    retention_guard = (
+        "if !permit_retention_cleanup { "
+        "self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?; "
+        "}"
+    )
+    for symbol in NATIVE_PREPUBLICATION_RETENTION_WRITERS:
+        item = binding_items.get((kura_relative, "fn", symbol))
+        if item is None:
+            continue
+        normalized = " ".join(item.split())
+        if normalized.count(retention_guard) != 1:
+            errors.append(
+                f"{root / kura_relative}: Native prepublication writer {symbol} "
+                "must fail closed on retention state before PostWsvRepair"
+            )
+        for forbidden in (
+            "cleanup_native_amx_participant_application_evidence_under_publication_guard(",
+            "prune_native_amx_evidence_pairs_locked(",
+        ):
+            if forbidden in item:
+                errors.append(
+                    f"{root / kura_relative}: Native prepublication writer "
+                    f"{symbol} contains forbidden pre-WSV cleanup {forbidden!r}"
+                )
+
+    prepublish_item = binding_items.get(
+        (
+            kura_relative,
+            "fn",
+            "prepublish_native_amx_participant_application_evidence",
+        )
+    )
+    if prepublish_item is not None:
+        for forbidden in (
+            "NativeAmxParticipantApplicationPublicationMode::PostWsvRepair",
+            "cleanup_native_amx_participant_application_evidence_under_publication_guard(",
+            "prune_native_amx_evidence_pairs_locked(",
+        ):
+            if forbidden in prepublish_item:
+                errors.append(
+                    f"{root / kura_relative}: pre-WSV Native publication "
+                    f"contains forbidden cleanup/repair token {forbidden!r}"
+                )
+
+    repair_item = binding_items.get(
+        (
+            kura_relative,
+            "fn",
+            "repair_native_amx_participant_application_evidence",
+        )
+    )
+    if (
+        repair_item is not None
+        and "NativeAmxParticipantApplicationPublicationMode::PreWsv"
+        in repair_item
+    ):
+        errors.append(
+            f"{root / kura_relative}: post-WSV Native repair must not use "
+            "PreWsv publication mode"
+        )
+
+
 def _validate_queue_plan_startup_replay_contract(
     root: Path, models: Any, errors: list[str]
 ) -> None:
@@ -3588,6 +4005,7 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         )
     for model in models:
         _validate_model(root, formal_dir, model, errors)
+    _validate_native_prepublication_contract(root, models, errors)
     _validate_queue_plan_startup_replay_contract(root, models, errors)
     _validate_inflight_layout_contract(
         root,

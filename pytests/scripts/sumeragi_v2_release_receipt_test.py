@@ -18,6 +18,11 @@ from types import ModuleType
 
 import pytest
 
+from pytests.scripts.sumeragi_v2_release_receipt_components import (
+    proof_ledger_checker_components,
+    terminal_output_path,
+)
+
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
 FINAL_MARKER = (
@@ -196,7 +201,7 @@ def fixture_writer(tmp_path: Path) -> Path:
     fixture_cargo.mkdir()
     shutil.copy2(ROOT_DIR / ".cargo" / "config.toml", fixture_cargo / "config.toml")
     (formal / "check_sumeragi_v2_proof_ledger.py").write_text(
-        """import json
+        """_CHECKER_COMPONENT_FILES = (); import json
 import pathlib
 import sys
 
@@ -2380,12 +2385,11 @@ def run_writer(
     repository_root = evidence["release_root"]
     assert isinstance(repository_root, Path)
     source_root = writer.parent.parent
-    retained_scripts = repository_root / "scripts"
-    retained_formal = retained_scripts / "formal"
-    retained_formal.mkdir(parents=True, exist_ok=True)
+    (repository_root / "scripts" / "formal").mkdir(parents=True, exist_ok=True)
     for relative in (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/formal/check_sumeragi_v2_proof_ledger.py"),
+        *proof_ledger_checker_components(source_root),
         Path("scripts/formal/sumeragi_v2_verus_evidence.py"),
         Path("scripts/nexus/validate_multilane_scaling_evidence.py"),
         Path("scripts/deploy_localnet.sh"),
@@ -2489,14 +2493,6 @@ def run_writer(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-
-
-def terminal_output_path(
-    evidence: dict[str, Path | str | list[Path]],
-) -> Path:
-    output = evidence["terminal_output"]
-    assert isinstance(output, Path)
-    return output
 
 
 def rewrite_json(path: Path, value: dict[str, object]) -> None:
