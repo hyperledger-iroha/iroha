@@ -44,9 +44,7 @@ const ASSET_DEFINITION = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const SOURCE_ASSET = `${ASSET_DEFINITION}#${AUTHORITY}`;
 const EXPECTED_COMPACT_FIXTURE_KEYS = new Set([
   "schema.version",
-  "source.tag",
-  "source.commit",
-  "reference",
+  "source.fixture",
   "versioned.bytes",
   "versioned.sha256",
   "bare.bytes",
@@ -445,6 +443,8 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
 
 test("browser signed hash matches the shared compact Android and native Rust golden", () => {
   const fixture = properties(FIXTURE_PATH);
+  assert.equal(fixture["schema.version"], "2");
+  assert.equal(fixture["source.fixture"], "transfer_asset");
   const versioned = decodeCanonicalFixtureBase64(
     fixture["versioned.base64"],
     "versioned.base64",
@@ -467,7 +467,7 @@ test("browser signed hash matches the shared compact Android and native Rust gol
   const canonical = Buffer.concat([
     Buffer.alloc(4),
     Buffer.from(fixture["compact.length.hex"], "hex"),
-    bare,
+    payload.value,
   ]);
   assert.equal(
     canonical.subarray(0, 6).toString("hex"),

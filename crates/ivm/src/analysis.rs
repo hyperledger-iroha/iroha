@@ -30,7 +30,7 @@ use std::{
     num::NonZeroUsize,
 };
 
-use iroha_data_model::name::Name;
+use iroha_data_model::{name::Name, state_path::StatePath};
 
 use crate::{
     VMError, encoding,
@@ -43,8 +43,9 @@ use crate::{
 /// Bytecode-proven durable-state accesses for one deployable contract scope.
 ///
 /// `complete` is true only when every reachable durable-state syscall receives
-/// one canonical, authenticated `Name` literal on every control-flow path. A
-/// caller must retain its conservative state wildcard when this flag is false.
+/// one canonical, authenticated `StatePath` payload on every control-flow
+/// path. A caller must retain its conservative state wildcard when this flag
+/// is false.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StaticStateAccessAnalysis {
     /// Canonical scheduler keys read by the selected entrypoint scope.
@@ -60,8 +61,9 @@ pub struct StaticStateAccessAnalysis {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum StaticStateName {
+enum StaticStatePath {
     Literal(u16),
+    FromName(u16),
     MapChild { base: u16, key: StaticNoritoKey },
 }
 
@@ -73,7 +75,8 @@ enum StaticNoritoKey {
 
 #[derive(Clone, PartialEq, Eq)]
 struct StaticStateFacts {
-    names: [Option<StaticStateName>; 256],
+    names: [Option<u16>; 256],
+    paths: [Option<StaticStatePath>; 256],
     pointer_literals: [Option<u16>; 256],
     norito_keys: [Option<StaticNoritoKey>; 256],
     content_may_be_mutable: [bool; 256],
@@ -85,6 +88,7 @@ impl StaticStateFacts {
     fn entrypoint() -> Self {
         Self {
             names: [None; 256],
+            paths: [None; 256],
             pointer_literals: [None; 256],
             norito_keys: [None; 256],
             content_may_be_mutable: [false; 256],
@@ -95,6 +99,7 @@ impl StaticStateFacts {
 
     fn clear(&mut self) {
         self.names = [None; 256];
+        self.paths = [None; 256];
         self.pointer_literals = [None; 256];
         self.norito_keys = [None; 256];
         self.content_may_be_mutable = [false; 256];
@@ -103,6 +108,7 @@ impl StaticStateFacts {
 
     fn clear_content(&mut self, register: usize) {
         self.names[register] = None;
+        self.paths[register] = None;
         self.pointer_literals[register] = None;
         self.norito_keys[register] = None;
         self.content_may_be_mutable[register] = false;
@@ -115,6 +121,7 @@ impl StaticStateFacts {
 
     fn copy_register(&mut self, destination: usize, source: usize) {
         self.names[destination] = self.names[source];
+        self.paths[destination] = self.paths[source];
         self.pointer_literals[destination] = self.pointer_literals[source];
         self.norito_keys[destination] = self.norito_keys[source];
         self.content_may_be_mutable[destination] = self.content_may_be_mutable[source];
@@ -123,6 +130,7 @@ impl StaticStateFacts {
 
     fn mark_content_mutable(&mut self, register: usize) {
         if self.names[register].is_some()
+            || self.paths[register].is_some()
             || self.pointer_literals[register].is_some()
             || self.norito_keys[register].is_some()
         {
@@ -169,11 +177,13 @@ impl StaticStateFacts {
             changed
         }
         let mut changed = retain_common(&mut self.names, &incoming.names);
+        changed |= retain_common(&mut self.paths, &incoming.paths);
         changed |= retain_common(&mut self.pointer_literals, &incoming.pointer_literals);
         changed |= retain_common(&mut self.norito_keys, &incoming.norito_keys);
         changed |= retain_common(&mut self.stack_offsets, &incoming.stack_offsets);
         for register in 0..self.content_may_be_mutable.len() {
             let has_content = self.names[register].is_some()
+                || self.paths[register].is_some()
                 || self.pointer_literals[register].is_some()
                 || self.norito_keys[register].is_some();
             let may_be_mutable = has_content
@@ -308,6 +318,7 @@ pub fn analyze_prepared_static_state_accesses(
 
     let decoded = contract.decoded();
     let literal_names = authenticated_literal_names(contract);
+    let literal_state_paths = authenticated_literal_state_paths(contract);
     let literal_pointer_envelopes = authenticated_literal_pointer_envelopes(contract);
     let literal_norito_payloads = authenticated_literal_norito_payloads(contract);
     let mut incoming = BTreeMap::<u64, StaticStateFacts>::new();
@@ -336,11 +347,20 @@ pub fn analyze_prepared_static_state_accesses(
         transfer_static_state_facts(
             op,
             &literal_names,
+            &literal_state_paths,
             &literal_pointer_envelopes,
             &literal_norito_payloads,
             &mut outgoing,
             &mut result,
         );
+        if contract.has_indirect_control_flow(pc) {
+            // An indirect edge has no authenticated target in the prepared
+            // control-flow graph. Treat the proof as incomplete even when the
+            // visible instruction itself is not a durable-state syscall:
+            // otherwise a JR/JALR target could hide an unaccounted state
+            // access while the scheduler accepts an exact access set.
+            result.complete = false;
+        }
 
         let successors = contract.control_flow_successors(pc)?;
         let call_edges = direct_call_edges(op);
@@ -416,6 +436,20 @@ fn authenticated_literal_names(contract: &PreparedContract) -> Vec<Option<String
         .collect()
 }
 
+fn authenticated_literal_state_paths(contract: &PreparedContract) -> Vec<Option<String>> {
+    contract
+        .literal_table()
+        .entries()
+        .iter()
+        .map(|literal| match literal {
+            crate::ivm::DecodedLiteral::Pointer(pointer) => {
+                authenticated_literal_state_path(contract, *pointer)
+            }
+            crate::ivm::DecodedLiteral::I64(_) => None,
+        })
+        .collect()
+}
+
 fn authenticated_literal_pointer_envelopes(contract: &PreparedContract) -> Vec<Option<String>> {
     contract
         .literal_table()
@@ -454,8 +488,26 @@ fn authenticated_literal_name(contract: &PreparedContract, pointer: u64) -> Opti
         return None;
     }
     let name: Name = norito::decode_canonical(tlv.payload).ok()?;
-    crate::host::validate_state_path_name(&name).ok()?;
+    if crate::host::state_path_name_payload_len(&name).ok()?
+        > crate::syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
+    {
+        return None;
+    }
     Some(name.to_string())
+}
+
+fn authenticated_literal_state_path(contract: &PreparedContract, pointer: u64) -> Option<String> {
+    let bytes = authenticated_literal_tlv_bytes(contract, pointer)?;
+    let tlv = crate::pointer_abi::validate_tlv_bytes(bytes).ok()?;
+    if tlv.type_id != crate::pointer_abi::PointerType::NoritoBytes {
+        return None;
+    }
+    if tlv.payload.len() > crate::syscalls::STATE_MAX_PATH_FRAME_BYTES {
+        return None;
+    }
+    let path: StatePath = norito::decode_canonical(tlv.payload).ok()?;
+    crate::host::validate_state_path(&path).ok()?;
+    Some(path.to_string())
 }
 
 fn authenticated_literal_tlv_bytes(contract: &PreparedContract, pointer: u64) -> Option<&[u8]> {
@@ -478,6 +530,7 @@ fn authenticated_literal_tlv_bytes(contract: &PreparedContract, pointer: u64) ->
 fn transfer_static_state_facts(
     op: &DecodedOp,
     literal_names: &[Option<String>],
+    literal_state_paths: &[Option<String>],
     literal_pointer_envelopes: &[Option<String>],
     literal_norito_payloads: &[Option<String>],
     facts: &mut StaticStateFacts,
@@ -492,8 +545,12 @@ fn transfer_static_state_facts(
             facts.names[destination] = literal_names
                 .get(index)
                 .and_then(Option::as_ref)
+                .and_then(|_| u16::try_from(index).ok());
+            facts.paths[destination] = literal_state_paths
+                .get(index)
+                .and_then(Option::as_ref)
                 .and_then(|_| u16::try_from(index).ok())
-                .map(StaticStateName::Literal);
+                .map(StaticStatePath::Literal);
             facts.pointer_literals[destination] = literal_pointer_envelopes
                 .get(index)
                 .and_then(Option::as_ref)
@@ -562,6 +619,7 @@ fn transfer_static_state_facts(
             transfer_static_state_syscall(
                 number,
                 literal_names,
+                literal_state_paths,
                 literal_pointer_envelopes,
                 literal_norito_payloads,
                 facts,
@@ -573,6 +631,7 @@ fn transfer_static_state_facts(
             transfer_static_state_syscall(
                 number,
                 literal_names,
+                literal_state_paths,
                 literal_pointer_envelopes,
                 literal_norito_payloads,
                 facts,
@@ -590,6 +649,7 @@ fn transfer_static_state_facts(
 fn transfer_static_state_syscall(
     number: u32,
     literal_names: &[Option<String>],
+    literal_state_paths: &[Option<String>],
     literal_pointer_envelopes: &[Option<String>],
     literal_norito_payloads: &[Option<String>],
     facts: &mut StaticStateFacts,
@@ -611,14 +671,19 @@ fn transfer_static_state_syscall(
         crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
     ) {
-        let name = match (facts.names[10], facts.norito_keys[11]) {
-            (Some(StaticStateName::Literal(base)), Some(key)) => {
-                Some(StaticStateName::MapChild { base, key })
-            }
+        let path = match (facts.names[10], facts.norito_keys[11]) {
+            (Some(base), Some(key)) => Some(StaticStatePath::MapChild { base, key }),
             _ => None,
         };
         facts.clear_register(10);
-        facts.names[10] = name;
+        facts.paths[10] = path;
+        facts.mark_content_mutable(10);
+        return;
+    }
+    if number == crate::syscalls::SYSCALL_STATE_PATH_FROM_NAME {
+        let path = facts.names[10].map(StaticStatePath::FromName);
+        facts.clear_register(10);
+        facts.paths[10] = path;
         facts.mark_content_mutable(10);
         return;
     }
@@ -641,13 +706,17 @@ fn transfer_static_state_syscall(
             crate::syscalls::SyscallAccess::StateWrite => result.has_state_writes = true,
             _ => unreachable!("state access was matched above"),
         }
-        let key = facts.names[10]
-            .and_then(|name| match name {
-                StaticStateName::Literal(index) => literal_names
+        let key = facts.paths[10]
+            .and_then(|path| match path {
+                StaticStatePath::Literal(index) => literal_state_paths
                     .get(usize::from(index))
                     .and_then(Option::as_deref)
                     .map(ToOwned::to_owned),
-                StaticStateName::MapChild { base, key } => {
+                StaticStatePath::FromName(index) => literal_names
+                    .get(usize::from(index))
+                    .and_then(Option::as_deref)
+                    .map(ToOwned::to_owned),
+                StaticStatePath::MapChild { base, key } => {
                     let base = literal_names
                         .get(usize::from(base))
                         .and_then(Option::as_deref)?;
@@ -662,15 +731,20 @@ fn transfer_static_state_syscall(
                     Some(format!("{base}/{key}"))
                 }
             })
-            .map(|name| {
-                if matches!(
+            .and_then(|name| {
+                if !matches!(
                     number,
                     crate::syscalls::SYSCALL_STATE_KEYS | crate::syscalls::SYSCALL_STATE_COUNT
                 ) {
-                    format!("state:{name}[*]")
-                } else {
-                    format!("state:{name}")
+                    return Some(format!("state:{name}"));
                 }
+                // Scheduler wildcard interning is keyed by the map's first
+                // path segment. A scan rooted at a concrete map entry (or any
+                // deeper path) cannot be represented exactly as
+                // `state:{name}[*]`: that nested wildcard would not conflict
+                // with the concrete entry key. Keep only a declared-style
+                // bare map base exact and fail closed for nested scan roots.
+                (!name.contains('/')).then(|| format!("state:{name}[*]"))
             });
         if facts.direct {
             if let Some(key) = key {
@@ -1103,8 +1177,56 @@ seiyaku HelperMapAnalysis {
     }
 
     #[test]
+    fn static_state_analysis_marks_reachable_indirect_edge_incomplete() {
+        let source = r#"
+seiyaku IndirectStateAnalysis {
+  kotoage fn run() authorize("CanRun") {}
+}
+"#;
+        let program = crate::KotodamaCompiler::new()
+            .compile_source(source)
+            .expect("compile direct control-flow fixture");
+        let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
+            .expect("prepare direct control-flow fixture");
+        let entry_pc = prepared
+            .entrypoint_descriptor("run")
+            .expect("run entrypoint")
+            .entry_pc;
+        let mut decoded = prepared.decoded().as_ref().to_vec();
+        let entry = decoded
+            .iter_mut()
+            .find(|op| op.pc == entry_pc)
+            .expect("entrypoint instruction");
+        entry.inst = wide_enc::encode_rr(wide::control::JALR, 0, 2, 0);
+        let control_flow = crate::prepared::PreparedControlFlow::from_decoded(&decoded)
+            .expect("build adversarial indirect control flow");
+        let adversarial =
+            crate::prepared::PreparedContract::from_parts(crate::prepared::PreparedContractParts {
+                artifact: prepared.shared_artifact(),
+                metadata: prepared.metadata().clone(),
+                manifest: prepared.manifest().clone(),
+                header_len: prepared.header_len(),
+                code_offset: prepared.code_offset(),
+                code_hash: prepared.code_hash(),
+                contract_interface: prepared.shared_contract_interface(),
+                literal_table: prepared.literal_table().clone(),
+                decoded: std::sync::Arc::from(decoded),
+                prepared_program: prepared.prepared_program().clone(),
+                control_flow,
+            })
+            .expect("construct analyzer-only adversarial contract");
+
+        let analysis = analyze_prepared_static_state_accesses(&adversarial, Some("run"))
+            .expect("analyze indirect control flow");
+        assert!(!analysis.complete);
+        assert!(!analysis.has_state_reads);
+        assert!(!analysis.has_state_writes);
+    }
+
+    #[test]
     fn static_state_analysis_invalidates_host_paths_across_unbounded_stores() {
         let literal_names = vec![Some("Counters".to_owned())];
+        let literal_state_paths = vec![None];
         let literal_pointer_envelopes = vec![None];
         let literal_norito_payloads = vec![Some("00".to_owned())];
         let stores = [
@@ -1114,7 +1236,7 @@ seiyaku HelperMapAnalysis {
 
         for store in stores {
             let mut facts = StaticStateFacts::entrypoint();
-            facts.names[10] = Some(StaticStateName::Literal(0));
+            facts.names[10] = Some(0);
             facts.norito_keys[11] = Some(StaticNoritoKey::LiteralPayload(0));
             let mut analysis = StaticStateAccessAnalysis {
                 complete: true,
@@ -1123,6 +1245,7 @@ seiyaku HelperMapAnalysis {
             transfer_static_state_syscall(
                 crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
                 &literal_names,
+                &literal_state_paths,
                 &literal_pointer_envelopes,
                 &literal_norito_payloads,
                 &mut facts,
@@ -1137,6 +1260,7 @@ seiyaku HelperMapAnalysis {
                     len: 4,
                 },
                 &literal_names,
+                &literal_state_paths,
                 &literal_pointer_envelopes,
                 &literal_norito_payloads,
                 &mut facts,
@@ -1145,6 +1269,7 @@ seiyaku HelperMapAnalysis {
             transfer_static_state_syscall(
                 crate::syscalls::SYSCALL_STATE_SET,
                 &literal_names,
+                &literal_state_paths,
                 &literal_pointer_envelopes,
                 &literal_norito_payloads,
                 &mut facts,
@@ -1154,6 +1279,68 @@ seiyaku HelperMapAnalysis {
             assert!(analysis.has_state_writes);
             assert!(!analysis.complete);
             assert!(analysis.write_keys.is_empty());
+        }
+    }
+
+    #[test]
+    fn static_state_analysis_rejects_legacy_name_carrier() {
+        let literal_names = vec![Some("legacy".to_owned())];
+        let literal_state_paths = vec![None];
+        let literal_pointer_envelopes = vec![None];
+        let literal_norito_payloads = vec![None];
+        let mut facts = StaticStateFacts::entrypoint();
+        facts.names[10] = Some(0);
+        let mut analysis = StaticStateAccessAnalysis {
+            complete: true,
+            ..StaticStateAccessAnalysis::default()
+        };
+
+        transfer_static_state_syscall(
+            crate::syscalls::SYSCALL_STATE_SET,
+            &literal_names,
+            &literal_state_paths,
+            &literal_pointer_envelopes,
+            &literal_norito_payloads,
+            &mut facts,
+            &mut analysis,
+        );
+
+        assert!(analysis.has_state_writes);
+        assert!(!analysis.complete);
+        assert!(analysis.write_keys.is_empty());
+    }
+
+    #[test]
+    fn static_state_analysis_rejects_nested_scan_wildcard_claim() {
+        let literal_names = vec![None];
+        let literal_state_paths = vec![Some("Counters/00".to_owned())];
+        let literal_pointer_envelopes = vec![None];
+        let literal_norito_payloads = vec![None];
+
+        for syscall in [
+            crate::syscalls::SYSCALL_STATE_KEYS,
+            crate::syscalls::SYSCALL_STATE_COUNT,
+        ] {
+            let mut facts = StaticStateFacts::entrypoint();
+            facts.paths[10] = Some(StaticStatePath::Literal(0));
+            let mut analysis = StaticStateAccessAnalysis {
+                complete: true,
+                ..StaticStateAccessAnalysis::default()
+            };
+
+            transfer_static_state_syscall(
+                syscall,
+                &literal_names,
+                &literal_state_paths,
+                &literal_pointer_envelopes,
+                &literal_norito_payloads,
+                &mut facts,
+                &mut analysis,
+            );
+
+            assert!(analysis.has_state_reads);
+            assert!(!analysis.complete);
+            assert!(analysis.read_keys.is_empty());
         }
     }
 

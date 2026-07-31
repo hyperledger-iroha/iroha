@@ -1187,9 +1187,9 @@ mod tests {
 
     #[test]
     fn archived_alignments_are_natural() {
-        assert!(std::mem::align_of::<norito::core::Archived<ConnectFrameV1>>() >= 8);
-        assert!(std::mem::align_of::<norito::core::Archived<FrameKind>>() >= 4);
-        assert!(std::mem::align_of::<norito::core::Archived<ConnectControlV1>>() >= 4);
+        assert!(norito::core::archived_payload_align::<ConnectFrameV1>() >= 8);
+        assert!(norito::core::archived_payload_align::<FrameKind>() >= 4);
+        assert!(norito::core::archived_payload_align::<ConnectControlV1>() >= 4);
     }
 
     #[test]

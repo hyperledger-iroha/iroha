@@ -1,10 +1,28 @@
 ---
-title: Governance ZK Vote Tally
+title: Retired Governance Halo2 Vote Fixture
 ---
 
-## Overview
+## Status
 
-Iroha’s governance tally flow relies on a Halo2/IPA circuit that verifies a bit vote commitment and its membership in the eligible voter set. This note captures the circuit parameters, public inputs, and auditing fixtures so reviewers can regenerate the verifying key and proofs used in tests.
+`VoteBoolCommitMerkle` is a retired test fixture. It is not in the first-release
+Halo2 circuit registry and cannot be registered or verified through
+`halo2/ipa`. Its toy compressor and shared ballot/tally interpretation are not
+a production governance statement. The details below are retained only to
+explain historical test artifacts; they must not be used to construct a
+verifying-key record or deployment bundle.
+
+Production governance requires distinct `vote-ballot` and `vote-tally` circuit
+roles. A future Halo2 implementation must provide independently reviewed
+semantic circuits for those roles and explicitly add their exact identifiers
+to the closed verifier registry.
+
+The native STARK/FRI Binding AIR is also not a governance circuit: it proves
+generic public-data consistency but does not enforce ballot eligibility,
+single-vote nullifier semantics, or tally correctness. Governance therefore
+rejects STARK verifying keys whose circuit identifiers merely use the
+`vote-ballot` or `vote-tally` labels.
+
+## Historical fixture details
 
 ## Circuit Summary
 
@@ -78,9 +96,9 @@ The `public_inputs_schema_hash` recorded in the verifying-key registry is `blake
 public_inputs_schema_hash = 0xfae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3
 ```
 
-### Verifying key record
+### Historical verifying key record
 
-Governance registers the verifier under:
+The retired fixture used these values:
 
 - `backend = "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"`
 - `circuit_id = "halo2/pasta/vote-bool-commit-merkle8-v1"`
@@ -91,7 +109,7 @@ Governance registers the verifier under:
 
 The canonical bundle includes an embedded registry verifying key bytes (`key = Some(VerifyingKeyBox { … })`) together with the proof envelope. `vk_len`, `max_proof_bytes`, and optional metadata URIs are populated from the generated artefacts.
 
-## Reference Fixtures
+## Historical reference fixtures
 
 Use `cargo xtask zk-vote-tally-bundle --print-hashes` to regenerate the registry verifying key and proof bundle consumed by integration tests (outputs land in `fixtures/zk/vote_tally/` by default). The command prints a short summary (`backend`, `commit`, `root`, schema hash, lengths) and optionally the file hashes so auditors can capture attestation notes. Pass `--summary-json -` to emit the same data as JSON (or supply a path to write it to disk). Pass `--attestation attestation.json` (or `-` for stdout) to write a Norito JSON manifest containing the summary plus Blake2b-256 digests and sizes for every bundle artifact so attestation packets can be archived with the fixtures. When run with `--verify`, providing `--attestation <path>` checks that the manifest’s bundle metadata and artifact lengths match the freshly regenerated bundle (it does not compare the per-run proof digest, which changes with transcript randomness).
 

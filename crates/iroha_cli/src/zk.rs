@@ -35,10 +35,6 @@ use crate::{CliOutputFormat, Run, RunContext, json_utils, quote_and_sign_transac
 pub enum Command {
     /// Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
     Roots(RootsArgs),
-    /// Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v1/zk/verify
-    Verify(VerifyArgs),
-    /// Submit a ZK proof envelope for later reference/inspection. Posts to /v1/zk/submit-proof
-    SubmitProof(SubmitProofArgs),
     /// Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v1/zk/verify-batch
     VerifyBatch(VerifyBatchArgs),
     /// Compute the Blake2b-32 hash required for `public_inputs_schema_hash` and print it
@@ -52,7 +48,7 @@ pub enum Command {
     Shield(ShieldArgs),
     /// Unshield funds from shielded ledger to public (demo flow)
     Unshield(UnshieldArgs),
-    /// Verifying-key registry lifecycle (register/update/deprecate/get)
+    /// Verifying-key registry lifecycle (register/update/get)
     #[command(subcommand)]
     Vk(VkCommand),
     /// Inspect proof registry (list/count/get)
@@ -85,8 +81,6 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Command::Roots(args) => args.run(context),
-            Command::Verify(args) => args.run(context),
-            Command::SubmitProof(args) => args.run(context),
             Command::VerifyBatch(args) => args.run(context),
             Command::SchemaHash(args) => args.run(context),
             Command::Attachments(args) => args.run(context),
@@ -115,66 +109,6 @@ impl Run for RootsArgs {
         let value = client.get_zk_roots_json(&self.asset_id, self.max)?;
         context.print_data(&value)?;
         Ok(())
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct VerifyArgs {
-    /// Path to Norito-encoded `OpenVerifyEnvelope` bytes (mutually exclusive with --json)
-    #[arg(long, value_name = "PATH", conflicts_with = "json")]
-    norito: Option<std::path::PathBuf>,
-    /// Path to a JSON DTO describing the proof (backend, proof, vk) (mutually exclusive with --norito)
-    #[arg(long, value_name = "PATH", conflicts_with = "norito")]
-    json: Option<std::path::PathBuf>,
-}
-
-impl Run for VerifyArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
-        if let Some(p) = self.norito {
-            let body = std::fs::read(&p)?;
-            let value = client.post_zk_verify_norito(&body)?;
-            context.print_data(&value)?;
-            return Ok(());
-        }
-        if let Some(p) = self.json {
-            let s = std::fs::read_to_string(&p)?;
-            let v: norito::json::Value = norito::json::from_str(&s)?;
-            let value = client.post_zk_verify_json(&v)?;
-            context.print_data(&value)?;
-            return Ok(());
-        }
-        eyre::bail!("provide either --norito <file> or --json <file>");
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct SubmitProofArgs {
-    /// Path to Norito-encoded proof envelope bytes (mutually exclusive with --json)
-    #[arg(long, value_name = "PATH", conflicts_with = "json")]
-    norito: Option<std::path::PathBuf>,
-    /// Path to a JSON DTO describing the proof (backend, proof, vk) (mutually exclusive with --norito)
-    #[arg(long, value_name = "PATH", conflicts_with = "norito")]
-    json: Option<std::path::PathBuf>,
-}
-
-impl Run for SubmitProofArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
-        if let Some(p) = self.norito {
-            let body = std::fs::read(&p)?;
-            let value = client.post_zk_submit_proof_norito(&body)?;
-            context.print_data(&value)?;
-            return Ok(());
-        }
-        if let Some(p) = self.json {
-            let s = std::fs::read_to_string(&p)?;
-            let v: norito::json::Value = norito::json::from_str(&s)?;
-            let value = client.post_zk_submit_proof_json(&v)?;
-            context.print_data(&value)?;
-            return Ok(());
-        }
-        eyre::bail!("provide either --norito <file> or --json <file>");
     }
 }
 
@@ -2092,7 +2026,6 @@ mod tests {
             "halo2/ipa:anon-transfer-2x2",
             "halo2/pasta/vote-bool-commit",
             "halo2/ipa:vote-bool-commit",
-            "halo2/pasta/asset-hidden-transfer-public-test",
         ] {
             let json = format!(
                 r#"{{
@@ -2134,7 +2067,6 @@ mod tests {
             "stark/fri/boi-audited",
             "halo2/ipa:release-ready",
             "halo2/ipa:tiny-add",
-            "halo2/pasta/asset-hidden-transfer-public-test",
         ] {
             let args = ProofFilterArgs {
                 backend: Some(backend.to_string()),
@@ -2164,7 +2096,6 @@ mod tests {
             "stark/fri/boi-audited:vk_transfer",
             "halo2/ipa:release-ready:vk_transfer",
             "halo2/ipa:tiny-add:vk_transfer",
-            "halo2/pasta/asset-hidden-transfer-public-test:vk_transfer",
             "mock/dev:vk_transfer",
             "halo2/ipa:",
             "halo2/ipa:vk:shadow",
@@ -2262,10 +2193,7 @@ mod tests {
     }
 
     fn sample_vk_submission(namespace: Option<&str>) -> VkSubmissionJson {
-        let key_pair = checked_zk_ed25519_key_fixture();
         VkSubmissionJson {
-            authority: iroha::data_model::account::AccountId::new(key_pair.public_key().clone()),
-            private_key: iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()),
             backend: "halo2/ipa".to_owned(),
             name: "vk_namespace_test".to_owned(),
             version: 1,
@@ -2340,55 +2268,27 @@ mod tests {
         }
     }
 
-    fn sample_prepared_vk_submission(
-        key_pair: &iroha_crypto::KeyPair,
-        name: &str,
-    ) -> PreparedVkSubmission {
-        use iroha::data_model::{account::AccountId, proof::VerifyingKeyRecord, zk::BackendTag};
-
-        let mut record = VerifyingKeyRecord::new_with_owner(
-            1,
-            "test-zk-vk-circuit-v1",
-            None,
-            "core",
-            BackendTag::Halo2IpaPasta,
-            "pasta",
-            [7_u8; 32],
-            [9_u8; 32],
-        );
-        record.vk_len = 32;
-        record.max_proof_bytes = 4096;
-
-        PreparedVkSubmission {
-            authority: AccountId::new(key_pair.public_key().clone()),
-            private_key: iroha_crypto::ExposedPrivateKey(key_pair.private_key().clone()),
-            id: iroha::data_model::proof::VerifyingKeyId::new("halo2/ipa", name),
-            record,
-        }
-    }
-
     #[test]
-    fn vk_submission_key_must_match_exact_authority() {
-        let key_pair = iroha_crypto::KeyPair::try_from_seed(
-            vec![71, 72, 73, 74],
-            iroha_crypto::Algorithm::Ed25519,
-        )
-        .expect("nonzero deterministic test key");
-        let prepared = sample_prepared_vk_submission(&key_pair, "vk_register_checked");
-        let derived = vk_submission_key_pair(&prepared).expect("matching key should validate");
-        assert_eq!(derived.public_key(), key_pair.public_key());
+    fn vk_submission_rejects_signing_secrets_and_unknown_fields() {
+        let encoded =
+            norito::json::to_value(&sample_vk_submission(None)).expect("serialize VK submission");
 
-        let other = iroha_crypto::KeyPair::try_from_seed(
-            vec![75, 76, 77, 78],
-            iroha_crypto::Algorithm::Ed25519,
-        )
-        .expect("second deterministic key");
-        let mut mismatched = sample_prepared_vk_submission(&key_pair, "vk_update_checked");
-        mismatched.authority =
-            iroha::data_model::account::AccountId::new(other.public_key().clone());
-        let error = vk_submission_key_pair(&mismatched)
-            .expect_err("mismatched private key and authority must fail");
-        assert!(error.to_string().contains("does not match authority"));
+        for field in ["authority", "private_key", "unexpected"] {
+            let mut value = encoded.clone();
+            value
+                .as_object_mut()
+                .expect("VK submission JSON object")
+                .insert(
+                    field.to_owned(),
+                    norito::json::Value::String("retired".to_owned()),
+                );
+            let error = norito::json::from_value::<VkSubmissionJson>(value)
+                .expect_err("strict VK submission schema must reject unknown fields");
+            assert!(
+                error.to_string().contains(field),
+                "unexpected error for {field}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -2516,7 +2416,7 @@ impl Run for ZkRegisterAssetArgs {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum VkCommand {
-    /// Register a verifying key record (signed transaction via Torii app API)
+    /// Register a verifying key record with the configured account and key
     Register(VkRegisterArgs),
     /// Update an existing verifying key record (version must increase)
     Update(VkUpdateArgs),
@@ -2536,18 +2436,17 @@ impl Run for VkCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct VkRegisterArgs {
-    /// Path to a JSON DTO file for register (authority, `private_key`, backend, name, version,
-    /// optional `vk_bytes` (base64) or `commitment_hex`). Optional `namespace` defaults to `core`
-    /// and must be non-empty without leading or trailing whitespace.
+    /// Path to a JSON DTO file for register (backend, name, version, optional `vk_bytes` (base64)
+    /// or `commitment_hex`). The configured client account and key sign the transaction. Optional
+    /// `namespace` defaults to `core` and must be non-empty without leading or trailing whitespace.
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
 }
 
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
 #[cfg_attr(test, derive(norito::json::JsonSerialize))]
+#[norito(deny_unknown_fields)]
 struct VkSubmissionJson {
-    authority: iroha::data_model::account::AccountId,
-    private_key: iroha::data_model::prelude::ExposedPrivateKey,
     backend: String,
     name: String,
     version: u32,
@@ -2580,8 +2479,6 @@ struct VkSubmissionJson {
 }
 
 struct PreparedVkSubmission {
-    authority: iroha::data_model::account::AccountId,
-    private_key: iroha::data_model::prelude::ExposedPrivateKey,
     id: iroha::data_model::proof::VerifyingKeyId,
     record: iroha::data_model::proof::VerifyingKeyRecord,
 }
@@ -2594,7 +2491,6 @@ fn signed_vk_register_transaction(
 ) -> Result<iroha::data_model::prelude::SignedTransaction> {
     use iroha::data_model::{isi::verifying_keys, transaction::Executable};
 
-    let workflow_client = vk_submission_client(client, &prepared)?;
     let executable = Executable::Instructions(
         vec![InstructionBox::from(verifying_keys::RegisterVerifyingKey {
             id: prepared.id,
@@ -2602,7 +2498,7 @@ fn signed_vk_register_transaction(
         })]
         .into(),
     );
-    quote_and_sign_transaction(&workflow_client, executable, fee_payment, metadata)
+    quote_and_sign_transaction(client, executable, fee_payment, metadata)
         .map(|(transaction, _)| transaction)
         .wrap_err("failed to quote and sign VK register transaction")
 }
@@ -2615,7 +2511,6 @@ fn signed_vk_update_transaction(
 ) -> Result<iroha::data_model::prelude::SignedTransaction> {
     use iroha::data_model::{isi::verifying_keys, transaction::Executable};
 
-    let workflow_client = vk_submission_client(client, &prepared)?;
     let executable = Executable::Instructions(
         vec![InstructionBox::from(verifying_keys::UpdateVerifyingKey {
             id: prepared.id,
@@ -2623,28 +2518,9 @@ fn signed_vk_update_transaction(
         })]
         .into(),
     );
-    quote_and_sign_transaction(&workflow_client, executable, fee_payment, metadata)
+    quote_and_sign_transaction(client, executable, fee_payment, metadata)
         .map(|(transaction, _)| transaction)
         .wrap_err("failed to quote and sign VK update transaction")
-}
-
-fn vk_submission_client(client: &Client, prepared: &PreparedVkSubmission) -> Result<Client> {
-    let key_pair = vk_submission_key_pair(prepared)?;
-    let mut workflow_client = client.clone();
-    workflow_client.account = prepared.authority.clone();
-    workflow_client.key_pair = key_pair;
-    Ok(workflow_client)
-}
-
-fn vk_submission_key_pair(prepared: &PreparedVkSubmission) -> Result<iroha::crypto::KeyPair> {
-    let key_pair = iroha::crypto::KeyPair::from_private_key(prepared.private_key.0.clone())
-        .wrap_err("failed to derive VK submission public key")?;
-    let derived_authority =
-        iroha::data_model::account::AccountId::new(key_pair.public_key().clone());
-    if derived_authority != prepared.authority {
-        eyre::bail!("VK submission private_key does not match authority");
-    }
-    Ok(key_pair)
 }
 
 fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
@@ -2789,12 +2665,7 @@ fn load_vk_submission(path: &std::path::Path) -> Result<PreparedVkSubmission> {
     let id =
         iroha::data_model::proof::VerifyingKeyId::new(backend.to_string(), payload.name.clone());
     let record = build_vk_record(&payload)?;
-    Ok(PreparedVkSubmission {
-        authority: payload.authority,
-        private_key: payload.private_key,
-        id,
-        record,
-    })
+    Ok(PreparedVkSubmission { id, record })
 }
 
 impl Run for VkRegisterArgs {
@@ -2815,9 +2686,9 @@ impl Run for VkRegisterArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct VkUpdateArgs {
-    /// Path to a JSON DTO file for update (authority, `private_key`, backend, name, version,
-    /// optional `vk_bytes` or `commitment_hex`). Optional `namespace` defaults to `core` and must
-    /// be non-empty without leading or trailing whitespace.
+    /// Path to a JSON DTO file for update (backend, name, version, optional `vk_bytes` or
+    /// `commitment_hex`). The configured client account and key sign the transaction. Optional
+    /// `namespace` defaults to `core` and must be non-empty without leading or trailing whitespace.
     #[arg(long, value_name = "PATH")]
     json: std::path::PathBuf,
 }

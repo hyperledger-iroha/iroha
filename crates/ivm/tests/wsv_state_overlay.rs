@@ -22,6 +22,12 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 
+fn state_path_tlv(path: &str) -> Vec<u8> {
+    let path: iroha_data_model::state_path::StatePath = path.parse().expect("canonical state path");
+    let payload = norito::to_bytes(&path).expect("encode state path");
+    make_tlv(PointerType::NoritoBytes, &payload)
+}
+
 fn decode_state_payload(ptr: u64, vm: &IVM) -> Vec<u8> {
     assert!(
         (Memory::INPUT_START..Memory::INPUT_START + Memory::INPUT_SIZE).contains(&ptr),
@@ -54,7 +60,7 @@ fn set_and_get_program() -> Vec<u8> {
 
 #[test]
 fn overlay_stages_and_flushes_on_finish() {
-    let p_path = make_tlv(PointerType::Name, b"counter");
+    let p_path = state_path_tlv("counter");
     let p_val = make_tlv(
         PointerType::NoritoBytes,
         &common::encode_bytes_state_value(b"5"),
@@ -103,7 +109,7 @@ fn overlay_stages_and_flushes_on_finish() {
 
 #[test]
 fn overlay_restores_snapshot_on_rollback() {
-    let p_path = make_tlv(PointerType::Name, b"counter");
+    let p_path = state_path_tlv("counter");
     let initial = common::encode_bytes_state_value(b"1");
     let updated = make_tlv(
         PointerType::NoritoBytes,
@@ -220,7 +226,7 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
     let host = WsvHost::new_with_subject(wsv, sample_account(), HashMap::new());
     vm.set_host(host);
 
-    let p_path = make_tlv(PointerType::Name, b"counter");
+    let p_path = state_path_tlv("counter");
     let p_val = make_tlv(
         PointerType::NoritoBytes,
         &common::encode_bytes_state_value(b"5"),

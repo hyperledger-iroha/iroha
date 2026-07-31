@@ -259,6 +259,37 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
     fixtureDocument.rust_owner,
     "iroha_data_model::block::consensus",
   );
+  const expectedSettlementHashes = new Map([
+    [
+      "7/11",
+      "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
+    ],
+    [
+      "8/12",
+      "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+    ],
+  ]);
+  const vectorLegs =
+    fixtureDocument.golden.receipt_group.native_amx_receipts[0].legs;
+  for (const leg of vectorLegs) {
+    const expected = expectedSettlementHashes.get(
+      `${leg.lane_id}/${leg.dataspace_id}`,
+    );
+    assert.ok(expected);
+    assert.equal(leg.participant_settlement_hash, expected);
+    assert.equal(
+      sourceNativeAmxTestHelpers.computeParticipantSettlementHash(
+        leg.participant_settlement,
+      ),
+      expected,
+    );
+    assert.equal(
+      distNativeAmxTestHelpers.computeParticipantSettlementHash(
+        leg.participant_settlement,
+      ),
+      expected,
+    );
+  }
 
   for (const [implementation, Client] of clientImplementations) {
     const diagnostics = await diagnosticsClient(

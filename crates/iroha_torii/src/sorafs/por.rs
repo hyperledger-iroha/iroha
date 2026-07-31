@@ -8,7 +8,7 @@
 
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     path::{Component, Path, PathBuf},
@@ -64,6 +64,32 @@ const MAX_POR_COORDINATOR_RECORDS: usize = 65_536;
 const MAX_POR_COORDINATOR_FORCED_PROVIDERS: usize = 4_096;
 const MAX_POR_COORDINATOR_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_POR_COORDINATOR_DECODE_ALLOCATED_BYTES: usize = 512 * 1024 * 1024;
+
+#[derive(Debug)]
+struct RankedPorStatus(PorChallengeStatusV1);
+
+impl PartialEq for RankedPorStatus {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.issued_at == other.0.issued_at && self.0.challenge_id == other.0.challenge_id
+    }
+}
+
+impl Eq for RankedPorStatus {}
+
+impl PartialOrd for RankedPorStatus {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RankedPorStatus {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0
+            .issued_at
+            .cmp(&other.0.issued_at)
+            .then_with(|| self.0.challenge_id.cmp(&other.0.challenge_id))
+    }
+}
 
 const fn por_coordinator_decode_limits() -> norito::DecodeLimits {
     norito::DecodeLimits::new(
@@ -599,31 +625,43 @@ impl PorCoordinator {
         limit: Option<usize>,
         page_token: Option<[u8; 32]>,
     ) -> Vec<PorChallengeStatusV1> {
-        let mut statuses: Vec<_> = self
-            .records
-            .iter()
-            .map(|entry| entry.value().to_status())
-            .collect();
-        statuses.sort_by(|left, right| match left.issued_at.cmp(&right.issued_at) {
-            Ordering::Equal => left.challenge_id.cmp(&right.challenge_id),
-            other => other,
+        let after = page_token.and_then(|token| {
+            self.records.get(&token).map(|entry| {
+                let status = entry.to_status();
+                (status.issued_at, status.challenge_id)
+            })
         });
-        if let Some(token) = page_token {
-            let pos = statuses
-                .iter()
-                .position(|status| status.challenge_id == token)
-                .map(|idx| idx + 1)
-                .unwrap_or(0);
-            statuses = statuses.split_off(pos);
+        let limit = limit.unwrap_or(usize::MAX);
+        if limit == 0 {
+            return Vec::new();
         }
-        let mut statuses: Vec<_> = statuses
+
+        // Retain only the earliest requested records while scanning. The HTTP surface always
+        // supplies a bounded limit, so a small page no longer materializes and sorts the entire
+        // coordinator history.
+        let mut selected = BinaryHeap::with_capacity(limit.min(self.records.len()));
+        for entry in self.records.iter() {
+            let status = entry.value().to_status();
+            let key = (status.issued_at, status.challenge_id);
+            if after.is_some_and(|after| key <= after) || !filter.matches(&status) {
+                continue;
+            }
+            let ranked = RankedPorStatus(status);
+            if selected.len() < limit {
+                selected.push(ranked);
+            } else if selected
+                .peek()
+                .is_some_and(|latest| ranked.cmp(latest) == Ordering::Less)
+            {
+                selected.pop();
+                selected.push(ranked);
+            }
+        }
+        selected
+            .into_sorted_vec()
             .into_iter()
-            .filter(|status| filter.matches(status))
-            .collect();
-        if let Some(limit) = limit {
-            statuses.truncate(limit);
-        }
-        statuses
+            .map(|ranked| ranked.0)
+            .collect()
     }
 
     /// Export challenge statuses within an optional epoch range.
@@ -3065,11 +3103,30 @@ fn load_vrf_state(
             );
             continue;
         };
-        entry
+        if let Err(error) = entry
             .submission
             .verify_signature_for_provider(record.advert_key())
-            .map_err(|error| VrfError::InvalidSignature(error.to_string()))?;
-        verify_provider_vrf(&entry.submission, record.por_vrf_key(), chain_id)?;
+        {
+            // Entries are a rebuildable cache, while the separately persisted sequence
+            // high-water below is the replay-security boundary. A governed provider key
+            // rotation therefore invalidates old cached signatures without bricking startup.
+            iroha_logger::warn!(
+                provider_id = %hex::encode(entry.key.provider_id),
+                epoch_id = entry.key.epoch_id,
+                ?error,
+                "dropping persisted PoR VRF entry invalidated by current provider admission"
+            );
+            continue;
+        }
+        if let Err(error) = verify_provider_vrf(&entry.submission, record.por_vrf_key(), chain_id) {
+            iroha_logger::warn!(
+                provider_id = %hex::encode(entry.key.provider_id),
+                epoch_id = entry.key.epoch_id,
+                ?error,
+                "dropping persisted PoR VRF entry invalidated by current provider VRF policy"
+            );
+            continue;
+        }
         state.entries.insert(entry.key, entry.submission);
     }
     let mut previous_provider = None;
@@ -3878,6 +3935,8 @@ mod tests {
     use std::sync::{Arc as StdArc, Barrier};
 
     use ed25519_dalek::{Signer as _, SigningKey};
+    #[cfg(feature = "app_api")]
+    use sorafs_manifest::{ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1};
     use sorafs_manifest::{
         por::{
             POR_CHALLENGE_VERSION_V1, POR_PROOF_VERSION_V1, POR_VRF_SUBMISSION_VERSION_V1,
@@ -4471,6 +4530,71 @@ mod tests {
             .expect("revoked-provider state must not brick restart");
             assert!(restored.entries.is_empty());
             assert_eq!(restored.sequences.get(&provider_id), Some(&11));
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn vrf_restart_drops_entries_invalidated_by_active_key_rotation() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let dir = tempdir().expect("temp dir");
+            let root = canonical_temp_root(&dir);
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+                .expect("private state root");
+            let path = root.join("vrf-rotated-state.to");
+            let envelope: ProviderAdmissionEnvelopeV1 = norito::decode_from_bytes(include_bytes!(
+                "../../../../fixtures/sorafs_manifest/provider_admission/envelope_v1.to"
+            ))
+            .expect("decode provider admission fixture");
+            let provider_id = envelope.proposal.provider_id;
+            let trusted_signers = envelope
+                .council_signatures
+                .iter()
+                .map(|signature| signature.signer)
+                .collect::<HashSet<_>>();
+            let policy = ProviderAdmissionCouncilPolicy::new(trusted_signers, 1)
+                .expect("fixture council policy");
+            let admission = crate::sorafs::AdmissionRegistry::from_envelopes(policy, [envelope])
+                .expect("active admission fixture");
+            let manifest_digest = [0x52; 32];
+            let submission = ProviderVrfSubmissionV1 {
+                version: POR_VRF_SUBMISSION_VERSION_V1,
+                provider_id,
+                manifest_digest,
+                epoch_id: 8,
+                drand_round: 10,
+                output: [0x53; 32],
+                proof: iroha_crypto::vrf::VrfProof::SigInG1([0x54; 48]),
+                sequence: 12,
+                issued_at: 1_800_000_000,
+                // Structurally valid old-key material that cannot verify under the current
+                // council-admitted provider key.
+                signature: AdvertSignature {
+                    algorithm: SignatureAlgorithm::Ed25519,
+                    public_key: vec![0x55; 32],
+                    signature: vec![0x56; 64],
+                },
+            };
+            submission
+                .validate()
+                .expect("structural old-key submission");
+            let key = VrfStateKeyV1 {
+                epoch_id: submission.epoch_id,
+                provider_id,
+                manifest_digest,
+            };
+            let mut persisted = VrfState::default();
+            persisted.entries.insert(key, submission);
+            persisted.sequences.insert(provider_id, 12);
+            persist_vrf_state(&path, &persisted).expect("persist pre-rotation state");
+
+            let restored = load_vrf_state(&path, 16, &admission, b"test-chain")
+                .expect("governed key rotation must not brick restart");
+            assert!(restored.entries.is_empty());
+            assert_eq!(restored.sequences.get(&provider_id), Some(&12));
         }
     }
 

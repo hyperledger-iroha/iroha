@@ -15,10 +15,7 @@ use hex::FromHexError;
 use iroha_crypto::soranet::{
     certificate::{CertificateValidationPhase, RelayCertificateBundleV2},
     pow, puzzle,
-    token::{
-        AdmissionTokenVerifier, InMemoryTokenStore, PersistentTokenStore, TokenStore,
-        TokenStoreLimits,
-    },
+    token::{AdmissionTokenVerifier, PersistentTokenStore, TokenStore, TokenStoreLimits},
 };
 use iroha_data_model::soranet::{
     privacy_metrics::SoranetPrivacyModeV1,
@@ -1047,9 +1044,11 @@ pub const fn vpn_runtime_available() -> bool {
 /// Proof-of-work policy.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct PowConfig {
-    /// Whether PoW is required for admission tokens.
+    /// Whether PoW is required for admission tokens (must be `true` in v1).
+    #[norito(default = "PowConfig::default_required")]
     pub required: bool,
     /// Baseline difficulty (shifted into the PoW challenge).
+    #[norito(default = "PowConfig::default_difficulty")]
     pub difficulty: u32,
     /// Maximum clock skew accepted when verifying PoW tickets.
     #[norito(default)]
@@ -1057,7 +1056,7 @@ pub struct PowConfig {
     /// Minimum time-to-live accepted for PoW tickets.
     #[norito(default)]
     pub min_ticket_ttl_secs: u64,
-    /// Capacity of the in-memory revocation store for spent tickets.
+    /// Capacity of the persistent replay store for spent tickets.
     #[norito(default = "PowConfig::default_revocation_store_capacity")]
     pub revocation_store_capacity: u64,
     /// TTL (seconds) for PoW ticket revocations.
@@ -1081,7 +1080,8 @@ pub struct PowConfig {
     /// Slowloris mitigation thresholds applied to client hellos.
     #[norito(default)]
     pub slowloris: SlowlorisConfig,
-    /// Optional Argon2 puzzle applied to inbound connections.
+    /// Argon2 puzzle applied to every inbound connection without a signed
+    /// admission credential.
     #[norito(default)]
     pub puzzle: Option<PuzzleConfig>,
     /// Optional signed token authentication layer.
@@ -1098,8 +1098,8 @@ pub struct PowConfig {
 impl Default for PowConfig {
     fn default() -> Self {
         Self {
-            required: false,
-            difficulty: 0,
+            required: true,
+            difficulty: u32::from(puzzle::DEFAULT_DIFFICULTY),
             max_future_skew_secs: 300,
             min_ticket_ttl_secs: 30,
             revocation_store_capacity: Self::default_revocation_store_capacity(),
@@ -1110,12 +1110,7 @@ impl Default for PowConfig {
             quotas: QuotaConfig::default(),
             quotas_per_mode: None,
             slowloris: SlowlorisConfig::default(),
-            puzzle: Some(PuzzleConfig {
-                enabled: true,
-                memory_kib: PuzzleConfig::default_memory_kib(),
-                time_cost: PuzzleConfig::default_time_cost(),
-                lanes: PuzzleConfig::default_lanes(),
-            }),
+            puzzle: Some(PuzzleConfig::default()),
             token: None,
             replay_filter: ReplayFilterConfig::default(),
             emergency: None,
@@ -1124,6 +1119,14 @@ impl Default for PowConfig {
 }
 
 impl PowConfig {
+    const fn default_required() -> bool {
+        true
+    }
+
+    const fn default_difficulty() -> u32 {
+        puzzle::DEFAULT_DIFFICULTY as u32
+    }
+
     const fn default_revocation_store_capacity() -> u64 {
         8_192
     }
@@ -1137,6 +1140,23 @@ impl PowConfig {
     }
 
     pub fn apply_defaults(&mut self) -> Result<(), ConfigError> {
+        if !self.required {
+            return Err(ConfigError::Puzzle(
+                "pow.required must be true under the first-release admission policy".to_owned(),
+            ));
+        }
+        if self.difficulty == 0 {
+            return Err(ConfigError::Puzzle(
+                "pow.difficulty must be greater than zero under the first-release admission policy"
+                    .to_owned(),
+            ));
+        }
+        if self.difficulty > u32::from(puzzle::MAX_DIFFICULTY) {
+            return Err(ConfigError::Puzzle(format!(
+                "pow.difficulty must not exceed {}",
+                puzzle::MAX_DIFFICULTY
+            )));
+        }
         if self.max_future_skew_secs == 0 {
             self.max_future_skew_secs = 300;
         }
@@ -1153,15 +1173,15 @@ impl PowConfig {
             self.revocation_store_path = Self::default_revocation_store_path();
         }
         self.adaptive.apply_defaults();
+        self.adaptive.validate()?;
         self.quotas.apply_defaults();
         if let Some(overrides) = self.quotas_per_mode.as_mut() {
             overrides.apply_defaults();
         }
         self.slowloris.apply_defaults();
-        if let Some(puzzle) = self.puzzle.as_mut() {
-            puzzle.apply_defaults();
-            puzzle.validate()?;
-        }
+        let puzzle = self.puzzle.get_or_insert_with(PuzzleConfig::default);
+        puzzle.apply_defaults();
+        puzzle.validate()?;
         if let Some(token) = self.token.as_mut() {
             token.apply_defaults();
             token.validate()?;
@@ -1177,8 +1197,14 @@ impl PowConfig {
 
     /// Build the base PoW verifier parameters from config.
     pub fn parameters(&self) -> Result<pow::Parameters, ConfigError> {
+        let difficulty = u8::try_from(self.difficulty).map_err(|_| {
+            ConfigError::Puzzle(format!(
+                "pow.difficulty {} exceeds the u8 representation",
+                self.difficulty
+            ))
+        })?;
         pow::Parameters::try_new(
-            self.difficulty.min(u8::MAX as u32) as u8,
+            difficulty,
             Duration::from_secs(self.max_future_skew_secs),
             Duration::from_secs(self.min_ticket_ttl_secs),
         )
@@ -1274,7 +1300,7 @@ impl AdaptiveDifficultyConfig {
     }
 
     const fn default_min_difficulty() -> u8 {
-        6
+        puzzle::DEFAULT_DIFFICULTY
     }
 
     const fn default_max_difficulty() -> u8 {
@@ -1321,13 +1347,28 @@ impl AdaptiveDifficultyConfig {
             self.decrease_step = Self::default_decrease_step();
         }
     }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.min_difficulty == 0 {
+            return Err(ConfigError::Puzzle(
+                "pow.adaptive.min_difficulty must be greater than zero".to_owned(),
+            ));
+        }
+        if self.max_difficulty > puzzle::MAX_DIFFICULTY {
+            return Err(ConfigError::Puzzle(format!(
+                "pow.adaptive.max_difficulty must not exceed {}",
+                puzzle::MAX_DIFFICULTY
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Argon2 puzzle configuration applied to inbound handshakes.
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 pub struct PuzzleConfig {
-    /// Whether the Argon2 puzzle is enforced.
-    #[norito(default)]
+    /// Whether the Argon2 puzzle is enforced (must be `true` in v1).
+    #[norito(default = "PuzzleConfig::default_enabled")]
     pub enabled: bool,
     /// Memory cost (KiB) for the Argon2 puzzle.
     #[norito(default = "PuzzleConfig::default_memory_kib")]
@@ -1340,7 +1381,22 @@ pub struct PuzzleConfig {
     pub lanes: u32,
 }
 
+impl Default for PuzzleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            memory_kib: Self::default_memory_kib(),
+            time_cost: Self::default_time_cost(),
+            lanes: Self::default_lanes(),
+        }
+    }
+}
+
 impl PuzzleConfig {
+    const fn default_enabled() -> bool {
+        true
+    }
+
     const fn default_memory_kib() -> u32 {
         64 * 1024
     }
@@ -1367,7 +1423,10 @@ impl PuzzleConfig {
 
     fn validate(&self) -> Result<(), ConfigError> {
         if !self.enabled {
-            return Ok(());
+            return Err(ConfigError::Puzzle(
+                "pow.puzzle.enabled must be true under the first-release admission policy"
+                    .to_owned(),
+            ));
         }
         if self.memory_kib < 4096 {
             return Err(ConfigError::Puzzle(
@@ -1442,12 +1501,9 @@ pub struct TokenConfig {
     /// Capacity of the replay filter used to reject reused tokens.
     #[norito(default = "TokenConfig::default_replay_store_capacity")]
     pub replay_store_capacity: usize,
-    /// TTL (seconds) for entries in the token replay filter.
-    #[norito(default = "TokenConfig::default_replay_store_ttl_secs")]
-    pub replay_store_ttl_secs: u64,
-    /// On-disk path for persisting replay filter state.
-    #[norito(default)]
-    pub replay_store_path: Option<PathBuf>,
+    /// On-disk path for the mandatory consumed-token replay ledger.
+    #[norito(default = "TokenConfig::default_replay_store_path")]
+    pub replay_store_path: PathBuf,
     /// Hex-encoded list of revoked token identifiers.
     #[norito(default)]
     pub revocation_list_hex: Vec<String>,
@@ -1472,8 +1528,8 @@ impl TokenConfig {
         8_192
     }
 
-    const fn default_replay_store_ttl_secs() -> u64 {
-        900
+    fn default_replay_store_path() -> PathBuf {
+        PathBuf::from("./storage/soranet/token_replays.norito")
     }
 
     fn apply_defaults(&mut self) {
@@ -1486,8 +1542,8 @@ impl TokenConfig {
         if self.replay_store_capacity == 0 {
             self.replay_store_capacity = Self::default_replay_store_capacity();
         }
-        if self.replay_store_ttl_secs == 0 {
-            self.replay_store_ttl_secs = Self::default_replay_store_ttl_secs();
+        if self.replay_store_path.as_os_str().is_empty() {
+            self.replay_store_path = Self::default_replay_store_path();
         }
         if let Some(refresh) = self.revocation_refresh_secs.as_mut()
             && *refresh == 0
@@ -1534,31 +1590,33 @@ impl TokenConfig {
                 "pow.token.revocation_list_path must not be empty".to_string(),
             ));
         }
-        if let Some(path) = &self.replay_store_path
-            && path.as_os_str().is_empty()
-        {
-            return Err(ConfigError::Token(
-                "pow.token.replay_store_path must not be empty".to_string(),
-            ));
-        }
         if self.replay_store_capacity == 0 {
             return Err(ConfigError::Token(
                 "pow.token.replay_store_capacity must be greater than zero".to_string(),
             ));
         }
-        if self.replay_store_ttl_secs == 0 {
+        if self.replay_store_path.as_os_str().is_empty() {
             return Err(ConfigError::Token(
-                "pow.token.replay_store_ttl_secs must be greater than zero".to_string(),
+                "pow.token.replay_store_path must not be empty".to_string(),
             ));
         }
-        if let Some(path) = &self.replay_store_path
-            && path.as_os_str().is_empty()
-        {
-            return Err(ConfigError::Token(
-                "pow.token.replay_store_path must not be empty when set".to_string(),
-            ));
-        }
+        self.replay_retention_secs()?;
         Ok(())
+    }
+
+    fn replay_retention_secs(&self) -> Result<u64, ConfigError> {
+        let skew_allowance = self.clock_skew_secs.checked_mul(2).ok_or_else(|| {
+            ConfigError::Token(
+                "2 * pow.token.clock_skew_secs overflows the replay retention window".to_string(),
+            )
+        })?;
+        self.max_ttl_secs
+            .checked_add(skew_allowance)
+            .ok_or_else(|| {
+                ConfigError::Token(
+                    "pow.token max_ttl_secs + 2 * clock_skew_secs must not overflow".to_string(),
+                )
+            })
     }
 
     fn build_policy(&self) -> Result<Option<TokenPolicySource>, ConfigError> {
@@ -1576,25 +1634,23 @@ impl TokenConfig {
             kind,
         })?;
 
+        let replay_ttl_secs = self.replay_retention_secs()?;
         let store_limits = TokenStoreLimits::new(
             self.replay_store_capacity,
-            Duration::from_secs(self.replay_store_ttl_secs.min(self.max_ttl_secs)),
+            Duration::from_secs(replay_ttl_secs),
         )
         .map_err(|err| {
             ConfigError::Token(format!("invalid pow.token replay store settings: {err}"))
         })?;
-        let store: Arc<Mutex<dyn TokenStore + Send>> = if let Some(path) = &self.replay_store_path {
-            let persistent = PersistentTokenStore::load(path, store_limits, SystemTime::now())
+        let persistent =
+            PersistentTokenStore::load(&self.replay_store_path, store_limits, SystemTime::now())
                 .map_err(|err| {
                     ConfigError::Token(format!(
                         "failed to load pow.token replay store ({}): {err}",
-                        path.display()
+                        self.replay_store_path.display()
                     ))
                 })?;
-            Arc::new(Mutex::new(persistent))
-        } else {
-            Arc::new(Mutex::new(InMemoryTokenStore::new(store_limits)))
-        };
+        let store: Arc<Mutex<dyn TokenStore + Send>> = Arc::new(Mutex::new(persistent));
 
         let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
@@ -2336,70 +2392,6 @@ pub struct HandshakePolicy {
     pub certificate: Option<CertificateConfig>,
 }
 
-/// Validation phase setting accepted from configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CertificateValidationPhaseSetting {
-    Phase1AllowSingle,
-    Phase2PreferDual,
-    Phase3RequireDual,
-}
-
-impl CertificateValidationPhaseSetting {
-    const fn default_phase() -> Self {
-        Self::Phase2PreferDual
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Phase1AllowSingle => "phase1_allow_single",
-            Self::Phase2PreferDual => "phase2_prefer_dual",
-            Self::Phase3RequireDual => "phase3_require_dual",
-        }
-    }
-
-    fn into_runtime(self) -> CertificateValidationPhase {
-        match self {
-            Self::Phase1AllowSingle => CertificateValidationPhase::Phase1AllowSingle,
-            Self::Phase2PreferDual => CertificateValidationPhase::Phase2PreferDual,
-            Self::Phase3RequireDual => CertificateValidationPhase::Phase3RequireDual,
-        }
-    }
-}
-
-impl Default for CertificateValidationPhaseSetting {
-    fn default() -> Self {
-        Self::default_phase()
-    }
-}
-
-impl FromStr for CertificateValidationPhaseSetting {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "phase1_allow_single" | "phase1" | "allow_single" => Ok(Self::Phase1AllowSingle),
-            "phase2_prefer_dual" | "phase2" | "prefer_dual" => Ok(Self::Phase2PreferDual),
-            "phase3_require_dual" | "phase3" | "require_dual" => Ok(Self::Phase3RequireDual),
-            other => Err(format!(
-                "unknown certificate validation phase `{other}` (expected phase1_allow_single, phase2_prefer_dual, or phase3_require_dual)"
-            )),
-        }
-    }
-}
-
-impl json::JsonSerialize for CertificateValidationPhaseSetting {
-    fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(self.as_str(), out);
-    }
-}
-
-impl json::JsonDeserialize for CertificateValidationPhaseSetting {
-    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
-        let value = parser.parse_string()?;
-        CertificateValidationPhaseSetting::from_str(&value).map_err(json::Error::Message)
-    }
-}
-
 /// Certificate verification configuration.
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
 pub struct CertificateConfig {
@@ -2407,12 +2399,12 @@ pub struct CertificateConfig {
     pub bundle_path: PathBuf,
     /// Hex-encoded Ed25519 issuer public key expected in the bundle.
     pub issuer_ed25519_hex: String,
-    /// Optional hex-encoded ML-DSA issuer public key expected in the bundle.
+    /// Hex-encoded ML-DSA-65 issuer public key expected in the bundle.
+    ///
+    /// First-release certificate admission always requires both the Ed25519
+    /// witness signature and the ML-DSA-65 signature.
     #[norito(default)]
-    pub issuer_mldsa_hex: Option<String>,
-    /// Certificate validation phase enforced by the relay.
-    #[norito(default = "CertificateValidationPhaseSetting::default_phase")]
-    pub validation_phase: CertificateValidationPhaseSetting,
+    pub issuer_mldsa_hex: String,
 }
 
 impl CertificateConfig {
@@ -2421,11 +2413,22 @@ impl CertificateConfig {
             field: "handshake.certificate.issuer_ed25519_hex".to_string(),
             kind,
         })?;
-        if let Some(hex) = &self.issuer_mldsa_hex {
-            let _ = hex::decode(hex).map_err(|kind| ConfigError::Hex {
+        if self.issuer_mldsa_hex.is_empty() {
+            return Err(ConfigError::Handshake(
+                "handshake.certificate.issuer_mldsa_hex is required by the first-release dual-signature policy"
+                    .to_string(),
+            ));
+        }
+        let issuer_mldsa =
+            hex::decode(&self.issuer_mldsa_hex).map_err(|kind| ConfigError::Hex {
                 field: "handshake.certificate.issuer_mldsa_hex".to_string(),
                 kind,
             })?;
+        let expected_mldsa_len = MlDsaSuite::MlDsa65.public_key_len();
+        if issuer_mldsa.len() != expected_mldsa_len {
+            return Err(ConfigError::Handshake(format!(
+                "handshake.certificate.issuer_mldsa_hex must decode to an ML-DSA-65 public key ({expected_mldsa_len} bytes)"
+            )));
         }
         Ok(())
     }
@@ -2460,17 +2463,11 @@ impl CertificateConfig {
         })
     }
 
-    fn parse_issuer_mldsa(&self) -> Result<Option<Vec<u8>>, ConfigError> {
-        match &self.issuer_mldsa_hex {
-            Some(hex) => {
-                let bytes = hex::decode(hex).map_err(|kind| ConfigError::Hex {
-                    field: "handshake.certificate.issuer_mldsa_hex".to_string(),
-                    kind,
-                })?;
-                Ok(Some(bytes))
-            }
-            None => Ok(None),
-        }
+    fn parse_issuer_mldsa(&self) -> Result<Vec<u8>, ConfigError> {
+        hex::decode(&self.issuer_mldsa_hex).map_err(|kind| ConfigError::Hex {
+            field: "handshake.certificate.issuer_mldsa_hex".to_string(),
+            kind,
+        })
     }
 }
 
@@ -2656,25 +2653,12 @@ impl HandshakePolicy {
         let bundle = certificate.load_bundle()?;
         let issuer_ed25519 = certificate.parse_issuer_ed25519()?;
         let issuer_mldsa = certificate.parse_issuer_mldsa()?;
-        let validation_phase = certificate.validation_phase.into_runtime();
-
-        let mldsa_bytes = match (issuer_mldsa, validation_phase) {
-            (Some(bytes), _) => bytes,
-            (None, CertificateValidationPhase::Phase1AllowSingle) => Vec::new(),
-            (None, CertificateValidationPhase::Phase2PreferDual)
-            | (None, CertificateValidationPhase::Phase3RequireDual) => {
-                return Err(ConfigError::Handshake(
-                    "handshake.certificate.issuer_mldsa_hex must be provided for dual-signature validation phases"
-                        .to_string(),
-                ));
-            }
-        };
 
         bundle
             .verify_at(
                 &issuer_ed25519,
-                mldsa_bytes.as_slice(),
-                validation_phase,
+                issuer_mldsa.as_slice(),
+                CertificateValidationPhase::Phase3RequireDual,
                 at_unix,
             )
             .map_err(|err| ConfigError::Certificate {
@@ -2905,6 +2889,13 @@ pub struct RelayConfig {
     pub listen: String,
     /// Optional admin HTTP interface address.
     pub admin_listen: Option<String>,
+    /// File containing the bearer token for protected admin routes.
+    ///
+    /// Every enabled admin listener requires this file and must bind to a
+    /// loopback address. Remote observability must use a separately secured
+    /// proxy or sidecar.
+    #[norito(default)]
+    pub admin_auth_token_path: Option<PathBuf>,
     /// TLS settings for the QUIC endpoint.
     pub tls: Option<TlsConfig>,
     /// Proof-of-work admission configuration.
@@ -2951,8 +2942,29 @@ impl RelayConfig {
         tls.validate()?;
 
         self.listen_addr()?;
-        if self.admin_listen.is_some() {
-            self.admin_addr()?;
+        let admin_addr = self.admin_addr()?;
+        match (admin_addr, self.admin_auth_token_path.as_ref()) {
+            (None, Some(_)) => {
+                return Err(ConfigError::Admin(
+                    "admin_auth_token_path requires admin_listen".to_string(),
+                ));
+            }
+            (Some(addr), _) if !addr.ip().is_loopback() => {
+                return Err(ConfigError::Admin(
+                    "admin_listen must use a loopback address; expose observability through a separately authenticated and encrypted proxy".to_string(),
+                ));
+            }
+            (Some(_), None) => {
+                return Err(ConfigError::Admin(
+                    "admin_listen requires admin_auth_token_path".to_string(),
+                ));
+            }
+            (_, Some(path)) if path.as_os_str().is_empty() => {
+                return Err(ConfigError::Admin(
+                    "admin_auth_token_path must not be empty".to_string(),
+                ));
+            }
+            _ => {}
         }
 
         if self.pow.is_none() {
@@ -3024,6 +3036,10 @@ impl RelayConfig {
             }),
             None => Ok(None),
         }
+    }
+
+    pub fn admin_auth_token_path(&self) -> Option<&Path> {
+        self.admin_auth_token_path.as_deref()
     }
 
     pub fn certificate_path(&self) -> Option<&Path> {
@@ -3130,6 +3146,8 @@ pub enum ConfigError {
     Json(#[from] json::Error),
     #[error("invalid socket address for `{0}`: `{1}`")]
     InvalidAddress(String, String),
+    #[error("invalid admin listener configuration: {0}")]
+    Admin(String),
     #[error("invalid TLS configuration: {0}")]
     TlsPaths(String),
     #[error("invalid hex value for `{field}`: {kind}")]
@@ -3150,6 +3168,8 @@ pub enum ConfigError {
     Routing(String),
     #[error("replay filter configuration error: {0}")]
     ReplayFilter(String),
+    #[error("ticket replay store error: {0}")]
+    TicketReplayStore(String),
     #[error("emergency throttle configuration error: {0}")]
     EmergencyThrottle(String),
     #[error("privacy telemetry configuration error: {0}")]
@@ -3306,6 +3326,7 @@ mod tests {
                 "mode": "Entry",
                 "listen": "127.0.0.1:0",
                 "admin_listen": "127.0.0.1:0",
+                "admin_auth_token_path": "/run/secrets/soranet-admin-token",
                 "tls": {},
                 "pow": { "required": true, "difficulty": 18 },
                 "padding": { "cell_size": 1024, "max_idle_millis": 150 }
@@ -3339,6 +3360,56 @@ mod tests {
         assert!(cfg.compliance_config().pipeline_spool_dir().is_none());
         assert!(!cfg.incentive_log_config().enable);
         assert!(cfg.incentive_log_config().spool_dir.is_none());
+    }
+
+    #[test]
+    fn non_loopback_admin_listener_is_rejected() {
+        let json = r#"
+            {
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "admin_listen": "0.0.0.0:9090"
+            }
+        "#;
+        let path = write_config(json);
+        let err = RelayConfig::load(path).expect_err("remote admin listener must be protected");
+        match err {
+            ConfigError::Admin(message) => {
+                assert!(message.contains("loopback"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_loopback_admin_listener_remains_rejected_with_token_file() {
+        let json = r#"
+            {
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "admin_listen": "0.0.0.0:9090",
+                "admin_auth_token_path": "/run/secrets/soranet-admin-token"
+            }
+        "#;
+        let path = write_config(json);
+        let err = RelayConfig::load(path).expect_err("admin listener must remain local");
+        assert!(matches!(err, ConfigError::Admin(message) if message.contains("loopback")));
+    }
+
+    #[test]
+    fn loopback_admin_listener_requires_token_file() {
+        let json = r#"
+            {
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "admin_listen": "127.0.0.1:9090"
+            }
+        "#;
+        let path = write_config(json);
+        let err = RelayConfig::load(path).expect_err("local admin listener still requires auth");
+        assert!(
+            matches!(err, ConfigError::Admin(message) if message.contains("admin_auth_token_path"))
+        );
     }
 
     #[test]
@@ -3442,6 +3513,7 @@ mod tests {
             mode: RelayMode::Entry,
             listen: "127.0.0.1:0".to_owned(),
             admin_listen: None,
+            admin_auth_token_path: None,
             tls: None,
             pow: None,
             padding: None,
@@ -3517,7 +3589,124 @@ mod tests {
     }
 
     #[test]
-    fn puzzle_config_disabled_returns_none() {
+    fn pow_defaults_match_first_release_admission_policy() {
+        let pow = PowConfig::default();
+        assert!(pow.required);
+        assert_eq!(pow.difficulty, u32::from(puzzle::DEFAULT_DIFFICULTY));
+        assert!(
+            pow.puzzle.as_ref().is_some_and(|puzzle| puzzle.enabled),
+            "the default Argon2 gate must be enabled"
+        );
+    }
+
+    #[test]
+    fn omitted_pow_policy_fields_use_secure_first_release_defaults() {
+        let json = r#"
+            {
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "pow": {}
+            }
+        "#;
+        let path = write_config(json);
+        let config = RelayConfig::load(path).expect("load config with secure PoW defaults");
+        assert!(config.pow_config().required);
+        assert_eq!(
+            config.pow_config().difficulty,
+            u32::from(puzzle::DEFAULT_DIFFICULTY)
+        );
+        assert!(
+            config
+                .pow_config()
+                .puzzle
+                .as_ref()
+                .is_some_and(|puzzle| puzzle.enabled)
+        );
+    }
+
+    #[test]
+    fn pow_config_rejects_zero_difficulty() {
+        let mut pow = PowConfig {
+            difficulty: 0,
+            ..PowConfig::default()
+        };
+        let err = pow
+            .apply_defaults()
+            .expect_err("zero work factor must fail");
+        assert!(
+            matches!(err, ConfigError::Puzzle(ref message) if message.contains("difficulty")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn pow_config_rejects_difficulty_above_supported_corridor() {
+        let mut pow = PowConfig {
+            difficulty: u32::from(puzzle::MAX_DIFFICULTY) + 1,
+            ..PowConfig::default()
+        };
+        let err = pow
+            .apply_defaults()
+            .expect_err("oversized work factor must fail");
+        assert!(
+            matches!(err, ConfigError::Puzzle(ref message) if message.contains("difficulty")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn pow_config_rejects_optional_admission() {
+        let mut pow = PowConfig {
+            required: false,
+            ..PowConfig::default()
+        };
+        let err = pow
+            .apply_defaults()
+            .expect_err("optional admission must fail");
+        assert!(
+            matches!(err, ConfigError::Puzzle(ref message) if message.contains("required")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn pow_config_rejects_zero_adaptive_difficulty_floor() {
+        let mut pow = PowConfig {
+            adaptive: AdaptiveDifficultyConfig {
+                min_difficulty: 0,
+                ..AdaptiveDifficultyConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        let err = pow
+            .apply_defaults()
+            .expect_err("zero adaptive difficulty floor must fail");
+        assert!(
+            matches!(err, ConfigError::Puzzle(ref message) if message.contains("min_difficulty")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn pow_config_rejects_adaptive_difficulty_above_supported_corridor() {
+        let mut pow = PowConfig {
+            adaptive: AdaptiveDifficultyConfig {
+                max_difficulty: puzzle::MAX_DIFFICULTY + 1,
+                ..AdaptiveDifficultyConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        let err = pow
+            .apply_defaults()
+            .expect_err("oversized adaptive difficulty ceiling must fail");
+        assert!(
+            matches!(err, ConfigError::Puzzle(ref message) if message.contains("max_difficulty")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn puzzle_config_disabled_is_rejected() {
         let mut pow = PowConfig {
             puzzle: Some(PuzzleConfig {
                 enabled: false,
@@ -3527,9 +3716,11 @@ mod tests {
             }),
             ..PowConfig::default()
         };
-        pow.apply_defaults().expect("defaults");
-        let base = pow::Parameters::new(16, Duration::from_secs(60), Duration::from_secs(10));
-        assert!(pow.puzzle_parameters(&base).expect("parameters").is_none());
+        let err = pow.apply_defaults().expect_err("disabled puzzle must fail");
+        assert!(
+            matches!(err, ConfigError::Puzzle(ref message) if message.contains("enabled")),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
@@ -4139,6 +4330,7 @@ mod tests {
             issuer_public_key_hex: Some(issuer_hex),
             max_ttl_secs: 300,
             clock_skew_secs: 5,
+            replay_store_path: file.path().with_extension("replays.norito"),
             revocation_list_hex: vec![hex::encode([0x33; 32])],
             revocation_list_path: Some(file.path().to_path_buf()),
             ..TokenConfig::default()
@@ -4160,8 +4352,7 @@ mod tests {
         let config = CertificateConfig {
             bundle_path: PathBuf::from("relay.cbor"),
             issuer_ed25519_hex: hex::encode([0u8; 32]),
-            issuer_mldsa_hex: None,
-            validation_phase: CertificateValidationPhaseSetting::Phase1AllowSingle,
+            issuer_mldsa_hex: hex::encode(vec![0x55; MlDsaSuite::MlDsa65.public_key_len()]),
         };
 
         match config.parse_issuer_ed25519() {
@@ -4182,8 +4373,7 @@ mod tests {
         let config = CertificateConfig {
             bundle_path: PathBuf::from("relay.cbor"),
             issuer_ed25519_hex: hex::encode(SMALL_ORDER_ED25519_POINT),
-            issuer_mldsa_hex: None,
-            validation_phase: CertificateValidationPhaseSetting::Phase1AllowSingle,
+            issuer_mldsa_hex: hex::encode(vec![0x55; MlDsaSuite::MlDsa65.public_key_len()]),
         };
 
         match config.parse_issuer_ed25519() {
@@ -4196,10 +4386,30 @@ mod tests {
     }
 
     #[test]
+    fn certificate_config_requires_mldsa65_issuer_key() {
+        let config = CertificateConfig {
+            bundle_path: PathBuf::from("relay.cbor"),
+            issuer_ed25519_hex: hex::encode([0x44; 32]),
+            issuer_mldsa_hex: String::new(),
+        };
+
+        let err = config
+            .validate()
+            .expect_err("first-release certificate policy must require ML-DSA-65");
+        assert!(
+            matches!(&err, ConfigError::Handshake(message) if message.contains("dual-signature policy")),
+            "unexpected certificate configuration error: {err:?}"
+        );
+    }
+
+    #[test]
     fn token_config_rejects_invalid_issuer_key_without_panic() {
+        let replay_file = NamedTempFile::new().expect("replay path");
+        let replay_store_path = replay_file.path().with_extension("replays.norito");
         let mut cfg = TokenConfig {
             enabled: true,
             issuer_public_key_hex: Some(hex::encode([0x42; 32])),
+            replay_store_path,
             ..TokenConfig::default()
         };
 
@@ -4212,6 +4422,38 @@ mod tests {
             ),
             other => panic!("expected token config error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn token_config_rejects_overflowing_replay_retention_window() {
+        let cfg = TokenConfig {
+            enabled: true,
+            issuer_public_key_hex: Some(hex::encode([0x42; 32])),
+            max_ttl_secs: u64::MAX,
+            clock_skew_secs: 1,
+            replay_store_capacity: 1,
+            replay_store_path: PathBuf::from("unused.norito"),
+            ..TokenConfig::default()
+        };
+
+        match cfg.build_policy() {
+            Err(ConfigError::Token(message)) => {
+                assert!(message.contains("max_ttl_secs + 2 * clock_skew_secs"));
+                assert!(message.contains("overflow"));
+            }
+            other => panic!("expected token retention overflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn token_replay_retention_covers_both_clock_skew_edges() {
+        let cfg = TokenConfig {
+            max_ttl_secs: 900,
+            clock_skew_secs: 5,
+            ..TokenConfig::default()
+        };
+
+        assert_eq!(cfg.replay_retention_secs().expect("retention"), 910);
     }
 
     #[test]

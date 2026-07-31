@@ -139,23 +139,20 @@ adding new proof-authorizing bypasses.
 
 Severity: Medium.
 
-Status: Guarded. Diagnostic proof submission remains report-only and does not create
-ledger proof records or mutate WSV without a separate ledger-grade `VerifyProof` or
-proof-bearing instruction path.
+Status: Closed. The pre-release decode-only `/v1/zk/verify` and
+`/v1/zk/submit-proof` routes, their Rust client helpers, and their CLI commands were
+removed. Ledger proof records can be created only by a signed transaction containing
+`VerifyProof` or another proof-bearing instruction that reaches the guarded core
+verifier.
 
-Evidence: Torii proof submission, attachment storage, and background prover worker
-paths are app-facing and report-only. They do not mutate WSV directly, but a client
-can confuse diagnostic success with ledger-grade acceptance if the API contract is not
-explicit.
+Evidence: the remaining `POST /v1/zk/verify-batch` route performs bounded
+cryptographic verification of its standalone IPA diagnostic format and is documented
+as non-ledger-equivalent. Attachment storage and the background prover worker remain
+report-only and do not return a ledger-acceptance result.
 
-Recommendation: keep these endpoints labeled diagnostic/non-consensus in API docs and
-telemetry; never feed diagnostic success into ledger state without re-validating
-against the active VK registry, guardrails, proof attachment, and transaction context.
-
-Regression coverage: `diagnostic_zk_submit_proof_does_not_create_ledger_proof_record`
-posts a successful diagnostic `/v1/zk/submit-proof` request, derives the corresponding
-ledger proof id, and asserts that `/v1/proofs/{id}` still reports not found because no
-ledger `VerifyProof` path ran.
+Regression coverage: `zk_subrouter_smoke` asserts that both retired routes return
+`404 Not Found`; the existing `zk_verify_batch_*` integration suites cover the
+remaining bounded diagnostic verifier.
 
 ### ZK-AUDIT-03: ZK-ACE v0 STARK/FRI profile must remain compiled and soundness-bound
 
@@ -226,7 +223,9 @@ active registered VK records only.
 
 Registry and runtime guardrails reject trusted-setup and developer-only labels.
 `preverify_with_budget()` checks active VK status, budget, VK commitment, envelope
-metadata, and dedup cache keys. `verify_backend_with_timing_guardrails()` enforces
+metadata, and dedup cache keys. Its result is advisory only: it is not persisted
+as an authoritative acceptance decision and ledger execution always invokes the
+guarded cryptographic verifier. `verify_backend_with_timing_guardrails()` enforces
 backend enablement and maximum envelope/proof sizes before dispatch.
 
 ## Native STARK/FRI and ZK-ACE AIR
@@ -276,10 +275,13 @@ independently reproduce that reduction, and no qROM claim is made.
 
 ## IPA/Halo2 Verification
 
-The Iroha-owned IPA wrapper uses deterministic generator derivation under an Iroha
-domain separation tag, transcript label limits, curve/parameter consistency checks,
-public instance shape checks, proof round count checks, final verifier equality, batch
-helpers, and envelope decoding limits.
+The Iroha-owned IPA wrapper uses deterministic transparent generator derivation
+at circuit-fixed degrees, transcript label limits, curve/parameter consistency
+checks, exact compiled verifier-key equality, public instance shape checks,
+proof round count checks, final verifier equality, batch helpers, and envelope
+decoding limits. Persisted proving keys use bounded canonical Norito archives;
+their processed Halo2 payloads are structurally preflighted before the vendored
+reader and must re-encode canonically.
 
 Ledger integration adds active VK requirements, backend-label policy, envelope backend
 tag checks, VK hash/commitment checks, circuit/schema/public-input metadata checks,
@@ -358,9 +360,9 @@ Audit-driven regression coverage includes the retired ZK-ACE trust-flag
 bypass, diagnostic success not creating ledger proof records, continued
 backend-label rejection, compiled-profile substitution, typed-statement
 mutation, governed-policy drift, and malformed dedicated STARK proofs.
-Additional trust-boundary regressions cover tampered Kagemusha
-confidential-transfer and asset-hidden transfer proofs when committed-result
-trust is set. Add further regressions only for newly confirmed gaps.
+Additional trust-boundary regressions cover tampered Kagemusha and
+confidential-transfer proofs when committed-result trust is set. Add further
+regressions only for newly confirmed gaps.
 
 ## Conclusion
 

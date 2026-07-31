@@ -158,6 +158,8 @@ pub(crate) const P256_X5S1_SIGNATURES_V1: usize =
 /// Exact number of four-lane P-256 multiset arguments in one X5S1 proof.
 pub(crate) const P256_X5S1_PERMUTATION_ARGUMENTS_V1: usize =
     P256_X5S1_SIGNATURES_V1 * P256_PERMUTATION_ARGUMENTS_PER_SIGNATURE_V1;
+/// Independent challenge lanes used by each P-256 permutation argument.
+pub(crate) const P256_PERMUTATION_CHALLENGE_LANES_V1: usize = 4;
 /// Conservative per-argument collision exponent. For Goldilocks,
 /// `(2^20 - 1) / p < 2^-44`; four independent lanes therefore give a bound
 /// strictly below `2^-176`.
@@ -4618,9 +4620,12 @@ impl P256MainArithmeticFixedSourceV1 {
             &mut fixed
                 [ARITHMETIC_BOUNDARY_FIXED..ARITHMETIC_BOUNDARY_FIXED + CROSS_BOUNDARY_FIXED_WIDTH],
         );
-        for (slot, event) in arithmetic_value_copy_events_v1(row, P256_ARITHMETIC_OPERATIONS_V1)?
-            .into_iter()
-            .enumerate()
+        for (slot, event) in arithmetic_value_copy_events_v1(
+            row,
+            P256_ARITHMETIC_OPERATIONS_V1 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1,
+        )?
+        .into_iter()
+        .enumerate()
         {
             let start = ARITHMETIC_VALUE_COPY_FIXED + slot * ARITHMETIC_COPY_EVENT_FIXED_WIDTH;
             encode_arithmetic_copy_event_v1(
@@ -8519,6 +8524,41 @@ mod tests {
             "p256-main-registration",
             p256_main_registration_and_verifier_fixed_source_body_v1,
         );
+    }
+
+    #[test]
+    fn p256_main_arithmetic_copy_selectors_use_true_logical_row_bound() {
+        let logical_rows = P256_ARITHMETIC_OPERATIONS_V1 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
+        for role in [
+            P256EcdsaRoleV1::CertificateOrCrl,
+            P256EcdsaRoleV1::WalletOwnership,
+        ] {
+            let source =
+                P256MainArithmeticFixedSourceV1::new_v1(role).expect("closed arithmetic source");
+            for row in [
+                P256_ARITHMETIC_OPERATIONS_V1,
+                464 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1,
+                logical_rows - 17,
+                logical_rows - 16,
+                logical_rows - 1,
+                logical_rows,
+            ] {
+                let fixed = source.row_v1(row).expect("bounded MAIN fixed row");
+                let expected = arithmetic_value_copy_events_v1(row, logical_rows)
+                    .expect("canonical arithmetic-copy schedule");
+                for (slot, event) in expected.into_iter().enumerate() {
+                    let mut encoded = [F::ZERO; ARITHMETIC_COPY_EVENT_FIXED_WIDTH];
+                    encode_arithmetic_copy_event_v1(event, &mut encoded);
+                    let start =
+                        ARITHMETIC_VALUE_COPY_FIXED + slot * ARITHMETIC_COPY_EVENT_FIXED_WIDTH;
+                    assert_eq!(
+                        fixed[start..start + ARITHMETIC_COPY_EVENT_FIXED_WIDTH],
+                        encoded,
+                        "role {role:?}, row {row}, slot {slot}"
+                    );
+                }
+            }
+        }
     }
 
     fn p256_main_registration_and_verifier_fixed_source_body_v1() {

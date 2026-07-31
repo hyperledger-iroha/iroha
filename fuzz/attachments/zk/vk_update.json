@@ -1,8 +1,8 @@
 {
-  "authority": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-  "private_key": "ed0120...",
   "backend": "halo2/ipa",
   "name": "vk_add",
   "version": 2,
+  "circuit_id": "vk-add-v1",
+  "public_inputs_schema_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "commitment_hex": "0000000000000000000000000000000000000000000000000000000000000000"
 }

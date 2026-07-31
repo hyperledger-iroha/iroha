@@ -68,7 +68,6 @@ const MAX_STRING_BYTES: usize = 256;
     JsonSerialize,
     JsonDeserialize,
 )]
-#[norito(transparent)]
 pub struct RepairTicketId(pub String);
 
 impl RepairTicketId {

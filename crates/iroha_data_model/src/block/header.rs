@@ -65,10 +65,10 @@ mod model {
         /// Optional hash covering the DA proof policy bundle embedded in the block payload.
         #[getset(get_copy = "pub", set = "pub")]
         pub da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
-        /// Optional hash covering the DA commitment bundle embedded in this block.
+        /// Optional V1 commitment to the DA tree version, leaf count, and Merkle root.
         #[getset(get_copy = "pub", set = "pub")]
         pub da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
-        /// Optional hash covering the DA pin intent bundle embedded in this block.
+        /// Optional V1 commitment to the pin-intent tree version, leaf count, and Merkle root.
         #[getset(get_copy = "pub", set = "pub")]
         pub da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
         /// Optional hash covering previous-height roster evidence embedded in the block payload.
@@ -139,9 +139,9 @@ pub mod wire {
         pub u64,
         /// View change index recorded in the block header.
         pub u64,
-        /// Optional hash of the DA commitment bundle embedded in the block payload.
+        /// Optional V1 commitment to the DA tree version, leaf count, and Merkle root.
         pub Option<[u8; 32]>,
-        /// Optional hash of the DA pin intent bundle embedded in the block payload.
+        /// Optional V1 commitment to the pin-intent tree version, leaf count, and Merkle root.
         pub Option<[u8; 32]>,
         /// Optional hash of previous-height roster evidence embedded in the block payload.
         pub Option<[u8; 32]>,

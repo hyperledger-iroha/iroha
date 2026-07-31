@@ -15,6 +15,18 @@ Features:
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
 - Verifying key registry read/mutation/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `registerVerifyingKey`, `updateVerifyingKey`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
 
+The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
+`listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
+`listDaPinIntents`, `proveDaPinIntent`, and `verifyDaPinIntent`. Manifest and
+storage-ticket query conveniences accept 32-byte hex, but encode the canonical
+Norito JSON transparent-byte wrapper. Proof models preserve `UInt64` exactly
+and reject malformed hash checksums, unknown fields, contradictory verification
+results, and Merkle paths inconsistent with their bundle location. List calls
+use typed forward-only cursors bound to an exact ledger-tip height and block
+hash; pass the returned `nextCursor` into the next list request. Commitment and
+pin-intent proof selectors are separate from list requests and do not accept
+offset pagination.
+
 ## Installation
 
 The current SDK ships in this repository under `IrohaSwift/`. Use the local
@@ -1459,16 +1471,21 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Direct register/update helpers post the Torii app API payloads with explicit
-`authority` and `private_key` fields, and validate backend labels plus inline
-verifier-key commitments before sending:
+Direct register/update helpers send only the public authority and verifier
+metadata. Torii never receives a private key and never submits the transaction;
+it returns a validated `ToriiVerifyingKeyTransactionDraft` for local signing.
+Configure one immutable chain trust context on clients that prepare signing
+payloads; read-only clients may omit it:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    try await torii.registerVerifyingKey(
+    let torii = ToriiClient(
+        baseURL: toriiURL,
+        localSigningContext: try ToriiLocalSigningContext(chainId: "production-chain")
+    )
+    let draft = try await torii.registerVerifyingKey(
         ToriiVerifyingKeyRegisterRequest(
             authority: "alice",
-            privateKey: "ed25519:...",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -1479,11 +1496,20 @@ if #available(iOS 15, macOS 12, *) {
             status: .active
         )
     )
+    print("unsigned payload bytes:", draft.transactionPayload.count)
 }
 ```
 
-Completion-style overloads still mirror the async read and event-stream helpers
-so UI layers can cancel inflight work if needed.
+Pass `draft.transactionPayload` to Iroha SDK signing abstractions, which apply
+the Iroha prehash themselves. Use `draft.signingMessage` only with raw signature
+primitives or HSM APIs that expect an already-prehashed 32-byte message; signing
+that value through an SDK payload signer would hash it twice. After signing,
+assemble and submit the signed transaction through the normal pipeline API.
+Before returning a draft, the client decodes the canonical transaction, requires
+the configured chain and requested authority, and accepts exactly one matching
+register/update instruction whose identifier and complete verifying-key record
+equal the request. Completion-style register/update overloads return the same
+draft type.
 
 ```swift
 if #available(iOS 15, macOS 12, *) {

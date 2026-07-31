@@ -6,9 +6,9 @@
 //! witnesses, five complete P-256 equations, compact CA membership, and one
 //! deduplicated cross-segment byte-memory table.
 //!
-//! Assembly is not proof verification.  The engine remains fail-closed while
-//! the verifier-side terminal gaps are nonempty; native reference validation
-//! here is only a prover-side differential invariant.
+//! Assembly is not proof verification. Native reference validation here is a
+//! prover-side differential invariant; the independent aggregate verifier
+//! enforces the committed numeric constraints.
 
 use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyX509ExtendedKeyUsageV1};
 use p256::ecdsa::Signature as P256Signature;
@@ -75,7 +75,7 @@ use crate::privacy_state::PrivacyZkX509AuthoritativeStateV1;
 
 /// Stable identity of the canonical production material assembler.
 pub(crate) const ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-main-assembly-v1-incompatible:strict-reference-prover-invariant:exact-der-rfc-projection-ca-sources:29-verifier-positioned-sha-witnesses:five-p256-equations:optional-slot2-rfc-zero-source-and-public-valid-dummy-selector:statement-compiled-deduplicated-sequential-byte-io:exact-witness-declaration-replay:logical-active-row-census:exact49-registrations:no-host-verification-substitute:verifier-terminal-replay-still-gated:activation=false";
+    b"zk-x509-main-assembly-v1-incompatible:strict-reference-prover-invariant:exact-der-rfc-projection-ca-sources:29-verifier-positioned-sha-witnesses:five-p256-equations:optional-slot2-rfc-zero-source-and-public-valid-dummy-selector:statement-compiled-deduplicated-sequential-byte-io:exact-witness-declaration-replay:logical-active-row-census:exact49-registrations:no-host-verification-substitute:verifier-terminal-replay=complete:activation=governance-gated";
 
 const P256_SIGNATURES_V1: usize = 5;
 const PROJECTION_SHA_CALLS_V1: usize = 7;

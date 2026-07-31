@@ -3,7 +3,14 @@
 use std::io::Write;
 
 use iroha_schema::IntoSchema;
-use norito::core::{Error, NoritoSerialize};
+use norito::core::{Error, NoritoSerialize, encoded_payload_len};
+
+fn assert_exact_hint<T: NoritoSerialize>(value: &T) {
+    assert_eq!(
+        value.encoded_len_hint(),
+        Some(encoded_payload_len(value).expect("serialize hinted value"))
+    );
+}
 
 #[test]
 fn primitives_hint_sizes() {
@@ -17,13 +24,13 @@ fn primitives_hint_sizes() {
 #[test]
 fn string_hint_size() {
     let s = String::from("hello");
-    assert_eq!(s.encoded_len_hint(), Some(8 + 5));
+    assert_exact_hint(&s);
 }
 
 #[test]
 fn vec_hint_size() {
     let v = vec![1u16, 2u16, 3u16];
-    assert_eq!(v.encoded_len_hint(), None);
+    assert_exact_hint(&v);
 }
 
 // Custom type that provides no size hint regardless of content
@@ -54,19 +61,19 @@ impl NoritoSerialize for BigHint {
 #[test]
 fn vec_hint_empty() {
     let v: Vec<u8> = Vec::new();
-    assert_eq!(v.encoded_len_hint(), None);
+    assert_exact_hint(&v);
 }
 
 #[test]
 fn vec_hint_strings() {
     let v = vec![String::from("a"), String::from("bc")];
-    assert_eq!(v.encoded_len_hint(), None);
+    assert_exact_hint(&v);
 }
 
 #[test]
 fn vec_hint_nested_vecs() {
     let v = vec![vec![1u8, 2u8], vec![3u8]];
-    assert_eq!(v.encoded_len_hint(), None);
+    assert_exact_hint(&v);
 }
 
 #[test]
@@ -91,6 +98,5 @@ struct Pair {
 #[test]
 fn derive_struct_hint() {
     let p = Pair { a: 1, b: 2 };
-    // Per-field: 8 prefix + field size; sum both
-    assert_eq!(p.encoded_len_hint(), Some(8 + 4 + 8 + 8));
+    assert_exact_hint(&p);
 }

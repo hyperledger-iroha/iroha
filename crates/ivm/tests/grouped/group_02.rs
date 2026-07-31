@@ -42,6 +42,8 @@ mod cuda_fallback;
 mod cuda_parity_keccak_aes;
 #[path = "../cuda_sha256.rs"]
 mod cuda_sha256;
+#[path = "../cuda_source_contract.rs"]
+mod cuda_source_contract;
 #[path = "../debug_contains.rs"]
 mod debug_contains;
 #[path = "../debug_mul.rs"]

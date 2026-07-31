@@ -59,11 +59,35 @@ required_replicas = 3
 storage_class = "cold"
 governance_tag = "da.governance"
 
-[sumeragi.da]
-enabled = true
+[[torii.da_ingest.replication_policy.taikai_availability]]
+availability_class = "hot"
+[torii.da_ingest.replication_policy.taikai_availability.retention]
+hot_retention_secs = 86400          # 24 h
+cold_retention_secs = 1209600       # 14 d
+required_replicas = 5
+storage_class = "hot"
+governance_tag = "da.taikai.live"
+
+[[torii.da_ingest.replication_policy.taikai_availability]]
+availability_class = "warm"
+[torii.da_ingest.replication_policy.taikai_availability.retention]
+hot_retention_secs = 21600          # 6 h
+cold_retention_secs = 2592000       # 30 d
+required_replicas = 4
+storage_class = "warm"
+governance_tag = "da.taikai.warm"
+
+[[torii.da_ingest.replication_policy.taikai_availability]]
+availability_class = "cold"
+[torii.da_ingest.replication_policy.taikai_availability.retention]
+hot_retention_secs = 3600           # 1 h
+cold_retention_secs = 15552000      # 180 d
+required_replicas = 3
+storage_class = "cold"
+governance_tag = "da.taikai.archive"
 
 [genesis]
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
 # Joining nodes must set the exact expected_hash and enable remote bootstrap explicitly.
 bootstrap_enabled = false
 

@@ -1,63 +1,59 @@
 ---
 title: Nexus Privacy Commitments
 sidebar_label: Privacy Commitments
-description: Canonical commitment schemes, proof hashes, and registry workflow for NX-10 private lanes.
+description: Domain-separated Merkle commitments and registry workflow for NX-10 private lanes.
 ---
 
 # Privacy Commitment & Proof Framework (NX-10)
 
-> **Status:** 🈴 Completed (NX-10)  
+> **Status:** Merkle commitments available; proof-system commitments deferred
 > **Owners:** Cryptography WG · Privacy WG · Nexus Core WG  
 > **Related code:** [`crates/iroha_crypto/src/privacy.rs`](../crates/iroha_crypto/src/privacy.rs)
 
-NX-10 introduces a common commitment surface for private lanes. Every dataspace publishes a deterministic descriptor that ties its Merkle roots or zk-SNARK circuits to reproducible hashes. The global Nexus ring can therefore validate cross-lane transfers and confidentiality proofs without bespoke parsers.
+Nexus lanes can require a transaction to prove membership in a dataset committed
+by the lane governance manifest. The first release supports one scheme:
+domain-separated SHA-256 Merkle commitments.
 
-## Objectives & Scope
+The former `SnarkCircuit` descriptor did not invoke a proof system. It only
+compared hashes of attacker-visible bytes, so it has been removed from the
+runtime, data model, manifest parser, status output, and SDKs. A proof-system
+scheme must not be exposed again until admission resolves a verifying key from
+on-chain state and calls the corresponding cryptographic verifier.
 
-- Canonicalise commitment identifiers so governance manifests and SDKs agree on the numeric slot used during admission.
-- Ship reusable verification helpers (`iroha_crypto::privacy`) so runtimes, Torii, and off-chain auditors evaluate proofs consistently.
-- Bind zk-SNARK proofs to the canonical verifying-key digest and deterministic public-input encodings. No ad-hoc transcripts.
-- Document registry/export workflow so lane bundles and governance evidence include the same hashes that the runtime enforces.
+## Objectives and scope
 
-Out of scope for this note: DA fan-out mechanics, relay messaging, and settlement router plumbing. See `nexus_cross_lane.md` for those layers.
+- Keep commitment identifiers consistent across manifests, admission, and SDKs.
+- Verify every lane witness against node-held manifest state.
+- Separate raw leaves from internal nodes cryptographically.
+- Reject degenerate or sparse authentication paths at the verification
+  boundary, including witnesses constructed directly from decoded wire data.
 
-## Lane Commitment Model
+DA fan-out, relay messaging, and settlement routing are separate layers. See
+`nexus_cross_lane.md` for those topics.
 
-The registry stores an ordered list of `LanePrivacyCommitment` entries:
+## Lane commitment model
+
+The registry stores `LanePrivacyCommitment` entries keyed by a
+`LaneCommitmentId`:
 
 ```rust
 use iroha_crypto::privacy::{
-    CommitmentScheme, LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, SnarkCircuit,
-    SnarkCircuitId,
+    LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment,
 };
 
-let id = LaneCommitmentId::new(1);
-let merkle = LanePrivacyCommitment::merkle(
-    id,
+let commitment = LanePrivacyCommitment::merkle(
+    LaneCommitmentId::new(1),
     MerkleCommitment::from_root_bytes(root_bytes, 16),
-);
-
-let snark = LanePrivacyCommitment::snark(
-    LaneCommitmentId::new(2),
-    SnarkCircuit::new(
-        SnarkCircuitId::new(42),
-        verifying_key_digest,
-        statement_hash,
-        proof_hash,
-    ),
 );
 ```
 
-- **`LaneCommitmentId`** — 16‑bit stable identifier recorded in lane manifests.
-- **`CommitmentScheme`** — `Merkle` or `Snark`. Future variants (e.g., bulletproofs) extend the enum.
-- **Copy semantics** — all descriptors implement `Copy` so configs can reuse them without heap churn.
+`LaneCommitmentId` is a 16-bit identifier local to a lane manifest.
+`MerkleCommitment` records the root and the maximum accepted authentication-path
+depth.
 
-The registry rides along the Nexus lane bundle (`scripts/nexus/lane_registry_bundle.py`). When governance approves a new commitment, the bundle updates both the JSON manifest and the Norito overlay consumed by admission.
+## Manifest schema
 
-### Manifest Schema (`privacy_commitments`)
-
-Lane manifests now expose a `privacy_commitments` array. Each entry assigns an ID and scheme and
-includes the scheme-specific parameters:
+The first-release manifest parser accepts only `scheme: "merkle"`:
 
 ```json
 {
@@ -71,131 +67,105 @@ includes the scheme-specific parameters:
         "root": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "max_depth": 16
       }
-    },
-    {
-      "id": 2,
-      "scheme": "snark",
-      "snark": {
-        "circuit_id": 5,
-        "verifying_key_digest": "0x…",
-        "statement_hash": "0x…",
-        "proof_hash": "0x…"
-      }
     }
   ]
 }
 ```
 
-The registry bundler copies the manifest, records the commitment `(id, scheme)` tuples in
-`summary.json`, and CI (`lane_registry_verify.py`) re-parses the manifest to ensure the summary
-matches the on-disk contents.
+`max_depth` must be greater than zero. Duplicate IDs, malformed roots, missing
+Merkle fields, and every other scheme—including `snark`—make the manifest
+invalid. The lane-registry bundler and verifier apply the same Merkle-only
+validation before publishing or accepting a bundle. Commitment-only and
+split-replica lanes fail readiness if their manifest has no privacy
+commitments.
 
-## Merkle Commitments
+## Canonical lane Merkle hashing
 
-`MerkleCommitment` captures a canonical `HashOf<MerkleTree<[u8;32]>>` and a maximum audit-path depth. Operators export the root directly from their prover or ledger snapshot; no re-hashing inside the registry.
+Lane privacy reuses `MerkleProof<[u8; 32]>` only as an index-and-path container.
+It does not use the generic Merkle verifier or change its semantics.
 
-Verification flow:
+For a raw 32-byte leaf `L`, calculate:
+
+```text
+leaf_hash = SHA-256("iroha:nexus:lane-privacy:merkle:leaf:v1\0" || L)
+```
+
+For canonical child hashes `left` and `right`, calculate:
+
+```text
+node_hash = SHA-256(
+    "iroha:nexus:lane-privacy:merkle:node:v1\0" || left || right
+)
+```
+
+Each digest is stored using the canonical Iroha `Hash` representation, whose
+least-significant marker bit is set. Producers must use
+`lane_merkle_leaf_hash` and `lane_merkle_node_hash`, or reproduce those exact
+bytes, before publishing a manifest root.
+
+The witness leaf is raw data. Do not pre-hash it. Audit-path entries are
+canonical sibling hashes ordered from the leaf toward the root. The low bit of
+`leaf_index` selects whether the accumulator is the left or right child at the
+first level; successive bits select later levels.
+
+The V1 interoperability vector uses raw leaf `aa` repeated 32 times, sibling
+digest `bb` repeated 32 times, and `leaf_index = 0`. Its marked leaf hash is
+`7b08f69e5888269358d2f3029831ede108d0f7b464449001bcc5f7a64f498447`
+and its marked root is
+`175dd23c29dda55ead958e0b1db68811f2108aa9a6f8d2222bec59bd2aed3a09`.
+
+### Required proof shape
+
+Admission rejects a witness when:
+
+- its audit path is empty;
+- any audit-path entry is absent or `null`;
+- its path is deeper than the manifest's `max_depth`;
+- its leaf index is outside the range represented by the path; or
+- its domain-separated implied root differs from the manifest root.
+
+These checks run in `MerkleCommitment::verify`, after wire decoding. The
+`LanePrivacyProof::merkle_from_raw_path` constructor performs the same
+non-empty-path check for early client feedback, but it is not the security
+boundary.
+
+Verification example:
 
 ```rust
-use iroha_crypto::privacy::{LanePrivacyCommitment, MerkleWitness, PrivacyWitness};
+use iroha_crypto::privacy::{MerkleWitness, PrivacyWitness};
 
-let witness = MerkleWitness::from_leaf_bytes(leaf_bytes, proof);
+let witness = MerkleWitness::from_leaf_bytes(raw_leaf, proof);
 LanePrivacyCommitment::merkle(id, commitment)
     .verify(PrivacyWitness::Merkle(witness))?;
 ```
 
-- Proofs exceeding `max_depth` emit `PrivacyError::MerkleProofExceedsDepth`.
-- Audit paths reuse the `iroha_crypto::MerkleProof` utilities so shielded pools and Nexus private lanes share the same serialization.
-- Hosts that ingest external pools convert shielded leaves via `MerkleTree::shielded_leaf_from_commitment` before constructing the witness.
+## Runtime registry and admission
 
-### Operational Checklist
+1. `LaneManifestRegistry` parses and validates the manifest once.
+2. `LanePrivacyRegistry` snapshots its per-lane commitments.
+3. Admission reads `ProofAttachment.lane_privacy`, resolves the routed lane and
+   commitment ID from the registry, and verifies the attached Merkle witness.
+4. Only successfully verified IDs enter
+   `LaneComplianceContext::verified_privacy_commitments`.
+5. A compliance rule using `privacy_commitments_any_of` remains unsatisfied
+   unless at least one required ID verified.
 
-- Publish the `(id, root, depth)` tuple in the lane manifest summary and evidence bundle.
-- Attach the Merkle inclusion proof for every cross-lane transfer to the admission log; the helper reproduces the root byte-for-byte, so audits only compare the exported hash.
-- Track depth budgets in telemetry (`nexus_privacy_commitments.merkle.depth_used`) so alerts fire before rollouts exceed configured maxima.
+Torii status exposes only Merkle commitment metadata: the commitment ID, root,
+and maximum depth. SDK decoders reject any other lane-privacy scheme.
 
-## zk-SNARK Commitments
+## Operational checklist
 
-`SnarkCircuit` entries bind four fields:
+- Build roots with the versioned lane leaf and node domains above.
+- Never publish a root from the generic untagged `MerkleTree` helper.
+- Include at least one real sibling in every proof; do not use sparse
+  `None`/`null` path entries.
+- Keep the manifest root and proof generator on the same canonical Iroha hash
+  representation.
+- Rotate a commitment ID or root whenever the committed dataset changes.
+- Treat a request for a SNARK lane commitment as unsupported until a real
+  on-chain verifying-key-backed verifier is implemented and audited.
 
-| Field | Description |
-|-------|-------------|
-| `circuit_id` | Governance-controlled identifier for the circuit/version pair. |
-| `verifying_key_digest` | Blake3 hash of the canonical verifying key (DER or Norito encoding). |
-| `statement_hash` | Blake3 hash of the canonical public-input encoding (Norito or Borsh). |
-| `proof_hash` | Blake3 hash of `verifying_key_digest || proof_bytes`. |
-
-Runtime helpers:
-
-```rust
-use iroha_crypto::privacy::{
-    hash_proof, hash_public_inputs, LanePrivacyCommitment, PrivacyWitness, SnarkWitness,
-};
-
-let witness = SnarkWitness {
-    public_inputs: encoded_inputs,
-    proof: proof_bytes,
-};
-
-LanePrivacyCommitment::snark(id, circuit)
-    .verify(PrivacyWitness::Snark(witness))?;
-```
-
-- `hash_public_inputs` and `hash_proof` live in the same module; SDKs must call them when generating manifests or proofs to avoid format drift.
-- Any mismatch between the recorded statement hash and the presented public inputs yields `PrivacyError::SnarkStatementMismatch`.
-- Proof bytes must already be in their canonical compressed form (Groth16, Plonk, etc.). The helper only verifies the hash binding; full curve verification stays in the prover/verifier service.
-
-### Evidence Workflow
-
-1. Export the verifying key digest and proof hash into the lane bundle manifest.
-2. Attach the raw proof artefact to the governance evidence package so auditors can recompute `hash_proof`.
-3. Publish the canonical public-input encoding (hex or Norito) alongside the statement hash for deterministic replays.
-
-## Proof Ingestion Pipeline
-
-1. **Lane manifests** declare which `LaneCommitmentId` governs each contract or programmable-money bucket.
-2. **Admission** consumes `ProofAttachment.lane_privacy` entries, verifies the attached witnesses for the routed lane via `LanePrivacyRegistry::verify`, and feeds the validated commitment ids into lane compliance (`privacy_commitments_any_of`) so programmable-money allow/deny rules enforce proof presence before queueing.
-3. **Telemetry** increments `nexus_privacy_commitments.{merkle,snark}` counters with the `LaneId`, `commitment_id`, and outcome (`ok`, `depth_mismatch`, etc.).
-4. **Governance evidence** uses the same helper to regenerate acceptance reports (`ci/check_nexus_lane_registry_bundle.sh` hooks into bundle verification once SNARK metadata lands).
-
-### Operator Visibility
-
-Torii’s `/v1/sumeragi/status` endpoint now exposes the `lane_governance[].privacy_commitments`
-array so operators and SDKs can diff the live registry against the published manifests without
-re-reading the bundle. The snapshot is built inside
-`crates/iroha_core/src/sumeragi/status.rs`, exported by Torii’s REST/JSON handlers
-(`crates/iroha_torii/src/routing.rs`), and decoded by every client (`javascript/iroha_js/src/toriiClient.js`,
-`python/iroha_python/src/iroha_python/client.py`, `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`),
-mirroring the manifest schema for both Merkle roots and SNARK digests.
-
-Commitment-only or split-replica lanes now fail admission if their manifest omits the
-`privacy_commitments` section, ensuring programmable-money flows cannot start until deterministic
-proof anchors ship with the bundle.
-
-## Runtime Registry & Admission
-
-- `LanePrivacyRegistry` (`crates/iroha_core/src/interlane/mod.rs`) snapshots the manifest loader’s
-  `LaneManifestStatus` structures and stores per-lane commitment maps keyed by `LaneCommitmentId`.
-  The transaction queue and `State` install this registry alongside every manifest reload
-  (`Queue::install_lane_manifests`, `State::install_lane_manifests`), so admission and consensus
-  validation always have access to the canonical commitments.
-- `LaneComplianceContext` now carries an optional `Arc<LanePrivacyRegistry>` reference
-  (`crates/iroha_core/src/compliance/mod.rs`). When `LaneComplianceEngine` evaluates a transaction,
-  programmable-money flows can inspect the same per-lane commitments exposed through Torii before
-  queueing the payload.
-- Admission and core validation keep an `Arc<LanePrivacyRegistry>` next to the governance manifest
-  handle (`crates/iroha_core/src/queue.rs`, `crates/iroha_core/src/state.rs`), guaranteeing that
-  programmable-money modules and future interlane hosts read a consistent view of the privacy
-  descriptors even as manifests rotate.
-
-## Runtime Enforcement
-
-Lane privacy proofs now ride along transaction attachments via `ProofAttachment.lane_privacy`.
-Torii admission and `iroha_core` validation verify each attachment against the routed lane’s
-registry using `LanePrivacyRegistry::verify`, record the proven commitment ids, and feed them into
-the compliance engine. Any rule that specifies `privacy_commitments_any_of` now evaluates to `false`
-unless a matching attachment verifies successfully, so programmable-money lanes cannot be queued or
-committed without the required witness. Unit coverage lives in `interlane::tests` and the lane
-compliance tests to keep the attachment path and policy guardrails stable.
-
-For immediate experimentation, see the unit tests in [`privacy.rs`](../crates/iroha_crypto/src/privacy.rs) which demonstrate both success and failure cases for Merkle and zk-SNARK commitments.
+Focused unit coverage lives in
+[`privacy.rs`](../crates/iroha_crypto/src/privacy.rs), with registry and
+admission coverage in `iroha_core::interlane` and
+`integration_tests/tests/nexus/privacy_proof_enforcement.rs`.

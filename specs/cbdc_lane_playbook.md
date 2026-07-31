@@ -254,15 +254,15 @@ directory so auditors and regulators can replay the exact bytes later.
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "<i105-account-id>",
-            "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
           }'
   ```
 
-  Torii returns `202 Accepted` once the publish transaction is queued; the same
-  CIDR/API-token gates apply and the on-chain permission requirement matches the
-  CLI workflow.
+  Torii returns a canonical unsigned transaction draft. Validate
+  `transaction_payload_b64` and `signing_message_b64`, sign locally, and submit
+  the resulting `SignedTransaction`; the same CIDR/API-token gates apply and the
+  on-chain permission requirement matches the CLI workflow.
 - Emergency revocation can be issued remotely by POSTing to Torii:
 
   ```bash
@@ -270,7 +270,6 @@ directory so auditors and regulators can replay the exact bytes later.
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "<i105-account-id>",
-            "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,
             "revoked_epoch": 9216,
@@ -278,9 +277,9 @@ directory so auditors and regulators can replay the exact bytes later.
           }'
   ```
 
-  Torii returns `202 Accepted` once the revoke transaction is queued; the same
-  CIDR/API-token gates apply as other app endpoints, and `CanPublishSpaceDirectoryManifest`
-  is still required on-chain.
+  Torii returns a canonical unsigned transaction draft for local validation,
+  signing, and submission; the same CIDR/API-token gates apply as other app
+  endpoints, and `CanPublishSpaceDirectoryManifest` is still required on-chain.
 - Rotate whitelist membership: edit `cbdc.manifest.json`, bump `activation_epoch`, and redeploy via secure copy to all validators; `LaneManifestRegistry` hot-reloads on the configured poll interval.
 
 ## 3. Compliance Evidence Bundle

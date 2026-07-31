@@ -170,8 +170,8 @@
               "max_entity_correlation_pct": 25,
               "max_nominator_concentration_pct": 25,
               "max_validators": 128,
-              "min_nomination_bond": 1,
-              "min_self_bond": 1000,
+              "min_nomination_bond": "1",
+              "min_self_bond": "1000",
               "seat_band_pct": 5,
               "slashing_delay_blocks": 259200,
               "vrf_commit_window_blocks": 100,
@@ -194,13 +194,6 @@
             }
           }
         }
-      ],
-      "ivm_triggers": [],
-      "topology": []
-    },
-    {
-      "instructions": [
-        "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCwAQAAAAAAAGzdD3zS8F2/Ajw7aXJvaGFfZGF0YV9tb2RlbDo6aXNpOjp2ZXJpZnlpbmdfa2V5czo6UmVnaXN0ZXJWZXJpZnlpbmdLZXnxAmkBAAAAAAAATlJUMAAAYcE+cO3pqQus7y/PtkV0RgBBAQAAAAAAAChx2BviP68MAiMKCWhhbG8yL2lwYRcWb2ZmbGluZS1ub3RlLXJlY3Vyc2l2ZZsCBAEAAAAXFm9mZmxpbmUtbm90ZS1yZWN1cnNpdmUBAA0Mb2ZmbGluZV9ub3RlBAAAAAAHBnBhbGxhcyDaKA8JZD6SmvJbBT6hQJOtxIL2go0oloKqpoN2IOb4ZSA0k+oGcwLKshgM749dxg4OZ1Grm7DIUChuKqrOL4Y8JQRgAAAABAAAgAAQAQ4NaGFsbzJfZGVmYXVsdAEAAQABAAEAdgF0CgloYWxvMi9pcGFoYAAAAAAAAABaSzEASVBBSwQAAAAHAAAAQ0lEMRYAAABvZmZsaW5lLW5vdGUtcmVjdXJzaXZlSDJWSyoAAAACBwAAAAABAAAACHhQmxVrpzNt1+OwSDF6IIfJEbCLOOMYwD67kZBaBxwEAQAAAA=="
       ],
       "ivm_triggers": [],
       "topology": []
@@ -274,11 +267,11 @@
   ],
   "consensus_mode": "Npos",
   "wire_protocol_version": 3,
-  "consensus_fingerprint": "0x9a8dfaa453447b1e246b562a4b652a9d610a422cd67ff61d1212779b8ba46a6d",
+  "consensus_fingerprint": "0xb2773e61e419a3b1e04f2ea19c936372aadb013b6ad39b5b3e4dd737d1201527",
   "sumeragi_v2": {
     "da_layout": {
       "encoding": {
-        "encoding": "ReedSolomon16",
+        "encoding": "reed_solomon16",
         "details": null
       },
       "chunk_size_bytes": 262144,
@@ -287,7 +280,8 @@
       "max_payload_size_bytes": 16777216,
       "max_chunk_count": 1024
     },
-    "nexus_amx_context_hash": "83B1B4C42FB3BB4FD01FD99C6D15E0BED7C83C0F3100B9A7701522807B9F73BF"
+    "nexus_amx_context_hash": "1223707611ACC6016193FCBE4D238848FCE5E8E0B77AF9F9BC320A5D47E39F1F",
+    "execution_policy_hash": "0DAF0A3D7FA7E8E2629256AE8D7E748BB5EFB0CFE7B58D1801CDDC9A0B674097"
   },
   "crypto": {
     "sm_openssl_preview": false,

@@ -294,6 +294,32 @@
         }
     }
 
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn verifier_key_cache_rejects_parseable_key_for_another_circuit() {
+        let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
+        let attacker_vk =
+            halo2_backend::keygen_vk(&params, &pasta_tiny::Add).expect("attacker fixture vk");
+        let mut attacker_bytes = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut attacker_bytes, IVM_EXECUTION_V1_IPA_K);
+        zk1::wrap_append_vk_pasta(&mut attacker_bytes, &attacker_vk);
+        let attacker_vk_box =
+            VerifyingKeyBox::new(IVM_EXECUTION_V1_HALO2_BACKEND.to_owned(), attacker_bytes);
+
+        let expected_circuit = pasta_tiny::IvmExecutionBindV1::default();
+        let result = resolve_vk_cached(
+            IVM_EXECUTION_V1_HALO2_BACKEND,
+            &params,
+            &attacker_vk_box,
+            &expected_circuit,
+            || halo2_backend::keygen_vk(&params, &expected_circuit),
+        );
+        assert!(
+            result.is_err(),
+            "a parseable demo-circuit key must not be relabeled as ivm-execution-v1"
+        );
+    }
+
     #[cfg(all(
         feature = "halo2-dev-tests",
         feature = "zk-halo2",
@@ -549,6 +575,7 @@
         // Build ZK1 envelopes: VK has IPAK(k); proof has PROF + I10P(inst)
         let mut vk_env = zk1::wrap_start();
         zk1::wrap_append_ipa_k(&mut vk_env, k);
+        zk1::wrap_append_circuit_id(&mut vk_env, "halo2/pasta/ipa/kaigi-roster-v1");
         zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
 
         let mut prf_env = zk1::wrap_start();
@@ -558,7 +585,7 @@
         let backend = "halo2/pasta/ipa/tiny-add-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), prf_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(feature = "zk-halo2")]
@@ -686,6 +713,7 @@
 
         let mut vk_env = zk1::wrap_start();
         zk1::wrap_append_ipa_k(&mut vk_env, KAIGI_USAGE_CIRCUIT_K);
+        zk1::wrap_append_circuit_id(&mut vk_env, "halo2/pasta/ipa/kaigi-usage-v1");
         zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);
 
         let mut prf_env = zk1::wrap_start();
@@ -823,13 +851,13 @@
         let backend = "halo2/pasta/tiny-add";
         let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
         // Missing VK → reject
-        assert!(!super::verify_backend(backend, &proof, None));
+        assert!(!super::verify_halo2(backend, &proof, None));
         // Wrong backend in VK → reject
         let vk_wrong = VerifyingKeyBox::new("halo2/bls12_381".into(), vec![9]);
-        assert!(!super::verify_backend(backend, &proof, Some(&vk_wrong)));
+        assert!(!super::verify_halo2(backend, &proof, Some(&vk_wrong)));
         // Bad encoding → reject
         let vk_bad = VerifyingKeyBox::new(backend.into(), b"BAD!".to_vec());
-        assert!(!super::verify_backend(backend, &proof, Some(&vk_bad)));
+        assert!(!super::verify_halo2(backend, &proof, Some(&vk_bad)));
     }
 
     #[cfg(feature = "zk-halo2")]
@@ -957,7 +985,7 @@
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
 
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(feature = "zk-halo2")]
@@ -1089,7 +1117,7 @@
         let backend = "halo2/pasta/tiny-add-public";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(feature = "zk-halo2")]
@@ -1229,7 +1257,7 @@
         let backend = "halo2/pasta/tiny-add-2rows";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box = ProofBox::new(backend.into(), proof_container);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(feature = "zk-halo2")]
@@ -1335,7 +1363,7 @@
         zk1::wrap_append_proof(&mut proof_container, &proof_bytes);
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_container.clone());
         let prf_box = ProofBox::new(backend.into(), proof_container);
-        assert!(!super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(!super::verify_halo2(backend, &prf_box, Some(&vk_box)));
 
         // Case 2: With INST → should succeed
         let inst_val = Scalar::from(7u64);
@@ -1344,7 +1372,7 @@
         zk1::wrap_append_instances_pasta_fp(&[inst_val], &mut proof_container2);
         let vk_box2 = VerifyingKeyBox::new(backend.into(), vk_container);
         let prf_box2 = ProofBox::new(backend.into(), proof_container2);
-        assert!(super::verify_backend(backend, &prf_box2, Some(&vk_box2)));
+        assert!(super::verify_halo2(backend, &prf_box2, Some(&vk_box2)));
     }
 
     #[cfg(all(
@@ -1549,8 +1577,12 @@
         let pr_add_box = ProofBox::new(b_add.into(), pr_add_env);
         let pr_id_box = ProofBox::new(b_id.into(), pr_id_env);
 
-        assert!(super::verify_backend(b_add, &pr_add_box, Some(&vk_add_box)));
-        assert!(super::verify_backend(b_id, &pr_id_box, Some(&vk_id_box)));
+        assert!(super::verify_halo2_ipa(
+            b_add,
+            &pr_add_box,
+            Some(&vk_add_box)
+        ));
+        assert!(super::verify_halo2_ipa(b_id, &pr_id_box, Some(&vk_id_box)));
     }
 
     #[cfg(all(
@@ -1695,7 +1727,7 @@
         let backend = "halo2/pasta/ipa/tiny-add-2rows";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }
 
     #[cfg(all(
@@ -1826,5 +1858,5 @@
         let backend = "halo2/pasta/ipa/tiny-add3";
         let vk_box = VerifyingKeyBox::new(backend.into(), vk_env);
         let prf_box = ProofBox::new(backend.into(), proof_env);
-        assert!(super::verify_backend(backend, &prf_box, Some(&vk_box)));
+        assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
     }

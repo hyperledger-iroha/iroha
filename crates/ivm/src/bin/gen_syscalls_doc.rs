@@ -67,7 +67,7 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         gas = "G_numeric + bytes".into();
     } else if up.contains("BUILD_PATH_KEY_NORITO") || n == 0x56 {
         args = "r10=&Name(base), r11=&NoritoBytes(key)".into();
-        ret = "r10=ptr (&Name)".into();
+        ret = "r10=ptr (&NoritoBytes(StatePath))".into();
         gas = "G_path + bytes".into();
     } else if up.contains("JSON_ENCODE") || n == 0x57 {
         args = "r10=&Json".into();
@@ -235,17 +235,17 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         ret = "r10=unix_time_ms:u64".into();
         gas = "G_sysvar".into();
     } else if up.contains("STATE_GET") || n == 0x50 {
-        args = "r10=&Name".into();
+        args = "r10=&NoritoBytes(StatePath)".into();
         ret = "r10=ptr (&NoritoBytes) or 0".into();
-        gas = "G_state_get + bytes".into();
+        gas = "G_state_get + canonical path frame bytes + returned value bytes".into();
     } else if up.contains("STATE_SET") || n == 0x51 {
-        args = "r10=&Name, r11=&NoritoBytes".into();
+        args = "r10=&NoritoBytes(StatePath), r11=&NoritoBytes".into();
         ret = "u64=0".into();
-        gas = "G_state_set + bytes".into();
+        gas = "G_state_set + canonical path frame bytes + value bytes".into();
     } else if up.contains("STATE_DEL") || n == 0x52 {
-        args = "r10=&Name".into();
+        args = "r10=&NoritoBytes(StatePath)".into();
         ret = "u64=0".into();
-        gas = "G_state_del".into();
+        gas = "G_state_del + canonical path frame bytes".into();
     } else if up.contains("INPUT_PUBLISH_TLV") || n == 0xE0 {
         args = "r10=&Blob(TLV)".into();
         ret = "ptr (r10)".into();
@@ -301,23 +301,23 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         ret = "r10=&NoritoBytes(same payload)".into();
         gas = "G_pointer + bytes".into();
     } else if up.contains("STATE_KEYS") || n == 0x01_0030 {
-        args = "r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64)".into();
-        ret = "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64".into();
-        gas = "G_state_keys + count + bytes".into();
+        args = "r10=&NoritoBytes(StatePath prefix), r11=offset:u64, r12=limit:u64 (0..=64)".into();
+        ret = "r10=ptr (&NoritoBytes(Vec<StatePath>)), r11=total:u64, r12=count:u64".into();
+        gas = "G_state_keys + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes + canonical response frame bytes".into();
     } else if up.contains("STATE_HAS") || n == 0x01_0031 {
-        args = "r10=&Name(path)".into();
+        args = "r10=&NoritoBytes(StatePath)".into();
         ret = "r10=present:u64".into();
-        gas = "G_state_has".into();
+        gas = "G_state_has + canonical path frame bytes".into();
     } else if up.contains("STATE_LEN") || n == 0x01_0032 {
-        args = "r10=&Name(path)".into();
+        args = "r10=&NoritoBytes(StatePath)".into();
         ret = "r10=len:u64, r11=found:u64".into();
-        gas = "G_state_len + bytes".into();
+        gas = "G_state_len + canonical path frame bytes".into();
     } else if up.contains("STATE_COUNT") || n == 0x01_0033 {
-        args = "r10=&Name(prefix)".into();
+        args = "r10=&NoritoBytes(StatePath prefix)".into();
         ret = "r10=total:u64".into();
-        gas = "G_state_count + count".into();
+        gas = "G_state_count + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes".into();
     } else if up.contains("STATE_MAP_KEY_AT") || n == 0x01_0034 {
-        args = "r10=&NoritoBytes(Vec<Name>), r11=&Name(base), r12=index:u64".into();
+        args = "r10=&NoritoBytes(Vec<StatePath>), r11=&Name(base), r12=index:u64".into();
         ret = "r10=ptr (&NoritoBytes(canonical key)) or 0".into();
         gas = "G_path + bytes".into();
     } else if up.contains("STATE_VALUE_ENCODE") || n == 0x01_0035 {
@@ -328,6 +328,10 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1)".into();
         ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))".into();
         gas = "G_state_value + schema + record + pointers + output".into();
+    } else if up.contains("STATE_PATH_FROM_NAME") || n == 0x01_0037 {
+        args = "r10=&Name".into();
+        ret = "r10=ptr (&NoritoBytes(StatePath))".into();
+        gas = "G_path + bytes".into();
     } else if up.contains("EXECUTE_QUERY") || n == 0xA1 {
         args = "r10=&Json".into();
         ret = "ptr (r10)".into();

@@ -37,7 +37,7 @@ pub(super) const ACCUMULATOR_NODE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.proof-managed-note-tree.node.v1";
 
 /// Complete relation descriptor committed by the compiled engine manifest.
-pub(crate) const PQ_MASP_ENGINE_DESCRIPTOR_V1: &[u8] = b"pq-masp-stark-v0:native-rust:first-release:inputs=1..2:outputs=1..2:values=u128-checked:membership=sha256-depth32-exact-ledger-domains:nullifier=stable-note-secret+rho+commitment+pool:ownership=statement-mldsa65-key-digest:authorization=outer-mldsa65-over-canonical-statement-digest+inner-proof-digest:producer=typed-redacted-witness+relation-and-key-preflight+rand0.9-trycrypto-health64-exact-replay-policy-v1+independent-health64-sha256-authorization-hedge+self-verify:encryption=mlkem768+xchacha20poly1305+internal-health64-sha256-seed:successor=validator-derived-only:legacy=unrepresentable";
+pub(crate) const PQ_MASP_ENGINE_DESCRIPTOR_V1: &[u8] = b"pq-masp-stark-v0:native-rust:first-release:inputs=1..2:outputs=1..2:values=u128-checked:membership=sha256-depth32-exact-ledger-domains:nullifier=stable-note-secret+rho+commitment+pool:ownership=statement-mldsa65-key-digest:authorization=outer-mldsa65-over-canonical-statement-digest+inner-proof-digest:producer=typed-redacted-witness+relation-and-key-preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind-policy-v1+block1-stark-replay+block2-independent-health-sha256-authorization-hedge+block3plus-stark+self-verify:encryption=mlkem768+xchacha20poly1305+internal-fixed64-health-sha256-seed:successor=validator-derived-only:legacy=unrepresentable";
 /// Exact SHA-256 framing consumed by the native oracle and AIR.
 pub(crate) const PQ_MASP_HASH_PROFILE_DESCRIPTOR_V1: &[u8] = b"sha256:frame-domain-len-u16be-field-count-u16be-field-len-u64be:nullifier-key+note-commitment+stable-nullifier+ordered-recipient-and-encapsulation-digest:proof-managed-leaf-and-level-node-exact-v1";
 
@@ -209,6 +209,31 @@ impl PqMaspInputWitnessV1 {
     #[must_use]
     pub const fn authentication_path(&self) -> &[[u8; 32]; PQ_MASP_TREE_DEPTH_V1] {
         &self.authentication_path
+    }
+
+    /// Derive the public commitment opened by this input witness.
+    pub fn commitment_v1(
+        &self,
+        statement: &PqMaspStarkStatementV1,
+    ) -> Result<PrivacyCommitmentV1, PqMaspRelationErrorV1> {
+        derive_pq_masp_note_commitment_v1(statement, &self.note)
+    }
+
+    /// Derive the stable public nullifier for this input and pool.
+    ///
+    /// The nullifier secret remains encapsulated by the redacted witness and
+    /// is never returned to wallet adapters.
+    pub fn nullifier_v1(
+        &self,
+        statement: &PqMaspStarkStatementV1,
+    ) -> Result<PrivacyNullifierV1, PqMaspRelationErrorV1> {
+        let commitment = self.commitment_v1(statement)?;
+        derive_pq_masp_nullifier_v1(
+            statement,
+            &self.nullifier_secret,
+            self.note.rho(),
+            commitment,
+        )
     }
 }
 

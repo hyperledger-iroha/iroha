@@ -819,9 +819,7 @@ mod model {
     #[repr(transparent)]
     #[cfg_attr(
         feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-        norito(transparent),
-        norito(with = "crate::json_helpers::fixed_bytes")
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaDevicePublicKeyV2(
         pub(super) [u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2],
@@ -836,9 +834,7 @@ mod model {
     #[repr(transparent)]
     #[cfg_attr(
         feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-        norito(transparent),
-        norito(with = "crate::json_helpers::fixed_bytes")
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaDeviceSignatureV2(pub(super) [u8; KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V2]);
 
@@ -1244,6 +1240,8 @@ mod model {
         pub snapshot_bootstrap: Option<SnapshotBootstrapAnchor>,
         /// Frozen Nexus/AMX context commitment.
         pub nexus_amx_context_hash: Hash,
+        /// Canonical V1 identity of the process-local execution policy.
+        pub execution_policy_hash: Hash,
         /// Frozen data-availability layout.
         pub da_layout: DataAvailabilityLayout,
         /// Finalized leader-rotation seed.
@@ -6803,6 +6801,11 @@ impl KagemushaTopUpFinalityHeightContextV2 {
     ///
     /// Returns [`KagemushaValidationError`] when a required structure, bound, authorization, or contextual binding is invalid.
     pub fn validate_structure(&self) -> Result<(), KagemushaValidationError> {
+        if self.execution_policy_hash == Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context.execution_policy_hash",
+            });
+        }
         let next_roster_too_large = self.next_epoch_snapshot.as_ref().is_some_and(|snapshot| {
             snapshot.roster.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
                 || snapshot.validator_set_pops.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
@@ -6861,6 +6864,7 @@ impl KagemushaTopUpFinalityHeightContextV2 {
                 }
             })?,
             nexus_amx_context_hash: self.nexus_amx_context_hash,
+            execution_policy_hash: self.execution_policy_hash,
             da_layout: self.da_layout,
             leader_seed: self.leader_seed,
         };
@@ -10551,7 +10555,7 @@ fn canonical_kagemusha_archive_payload_v4<T: norito::NoritoSerialize>(
             length: header.length,
             limit: archive_limit,
         })?;
-    let align = core::mem::align_of::<norito::core::Archived<T>>();
+    let align = norito::core::archived_payload_align::<T>();
     let remainder = norito::core::Header::SIZE % align;
     let padding = if remainder == 0 { 0 } else { align - remainder };
     let payload_start = norito::core::Header::SIZE
@@ -11511,6 +11515,7 @@ mod kagemusha_v4_topup_provenance_tests {
                     parent_commit_qc: None,
                     snapshot_bootstrap: None,
                     nexus_amx_context_hash: Hash::new([seed, 11]),
+                    execution_policy_hash: Hash::new([seed, 12]),
                     da_layout: DataAvailabilityLayout {
                         encoding: crate::block::consensus_v2::PayloadEncoding::Plain,
                         chunk_size_bytes: 1024,
@@ -11649,6 +11654,24 @@ mod kagemusha_v4_topup_provenance_tests {
                 anchor_digest: [0xe2; 32],
             };
         rejects(&wrong_ref_fixture, &wrong_ref_fixture.provenance, 50);
+    }
+
+    #[test]
+    fn topup_finality_height_context_rejects_zero_execution_policy_hash() {
+        let fixture = fixture_with_seeds(&[0x22]);
+        let mut context = fixture.provenance.topup_finality_evidence[0]
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .clone();
+        context.execution_policy_hash = Hash::prehashed([0; Hash::LENGTH]);
+
+        assert!(matches!(
+            context.validate_structure(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context.execution_policy_hash"
+            })
+        ));
     }
 
     #[test]

@@ -20,7 +20,7 @@
 
 use std::{convert::TryFrom, mem, vec::Vec};
 
-use aead::{Aead, AeadCore, AeadInOut, KeyInit, Payload};
+use aead::{Aead, AeadCore, AeadInOut, KeyInit, Payload, TagPosition};
 pub use chacha20poly1305::ChaCha20Poly1305;
 use displaydoc::Display;
 use rand::rngs::OsRng;
@@ -247,6 +247,49 @@ where
         Ok(out.as_slice())
     }
 
+    /// Decrypt an easy-envelope directly inside its source allocation.
+    ///
+    /// The input remains laid out as `nonce || message || tag`, but the returned
+    /// slice covers only the authenticated plaintext. This is useful for bounded
+    /// transports that already own the source bytes and must not allocate an
+    /// unaccounted second frame-sized buffer.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotEnoughData`] when the ciphertext does not contain a
+    /// nonce and tag, or [`Error::Decryption`] when authentication fails.
+    pub fn decrypt_easy_in_place<'a, A: AsRef<[u8]>>(
+        &self,
+        aad: A,
+        data: &'a mut [u8],
+    ) -> Result<&'a mut [u8], Error>
+    where
+        E: AeadInOut,
+    {
+        let nonce_len = mem::size_of::<aead::Nonce<E>>();
+        let tag_len = mem::size_of::<aead::Tag<E>>();
+        if data.len() < nonce_len + tag_len {
+            return Err(Error::NotEnoughData);
+        }
+        let (nonce_bytes, envelope) = data.split_at_mut(nonce_len);
+        let nonce = nonce_from_slice::<E>(nonce_bytes)?;
+        let message_len = envelope
+            .len()
+            .checked_sub(tag_len)
+            .ok_or(Error::NotEnoughData)?;
+        let (message, tag_bytes) = match E::TAG_POSITION {
+            TagPosition::Prefix => {
+                let (tag, message) = envelope.split_at_mut(tag_len);
+                (message, tag)
+            }
+            TagPosition::Postfix => envelope.split_at_mut(message_len),
+        };
+        let tag = aead::Tag::<E>::try_from(&*tag_bytes).map_err(|_| Error::NotEnoughData)?;
+        self.encryptor
+            .decrypt_inout_detached(&nonce, aad.as_ref(), message.into(), &tag)
+            .map_err(Error::Decryption)?;
+        Ok(message)
+    }
+
     /// Decrypt `ciphertext` using integrity protected `aad` and the provided `nonce`.
     ///
     /// # Errors
@@ -433,6 +476,24 @@ mod tests {
             .decrypt_easy_into(aad.as_ref(), ciphertext2.as_slice(), &mut out)
             .expect("decrypt");
         assert_eq!(plaintext2, message2);
+    }
+
+    #[test]
+    fn decrypt_easy_in_place_roundtrip_preserves_envelope_allocation() {
+        let encryptor = encryptor();
+        let aad = b"Iroha2";
+        let message = b"Source-owned plaintext";
+        let mut envelope = encryptor
+            .encrypt_easy(aad.as_ref(), message.as_ref())
+            .expect("encrypt");
+        let original_allocation = envelope.as_ptr();
+
+        let plaintext = encryptor
+            .decrypt_easy_in_place(aad.as_ref(), envelope.as_mut_slice())
+            .expect("decrypt in source allocation");
+
+        assert_eq!(plaintext, message);
+        assert_eq!(envelope.as_ptr(), original_allocation);
     }
 
     #[test]

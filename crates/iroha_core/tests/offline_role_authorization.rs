@@ -146,7 +146,7 @@ fn exact_direct_and_assigned_role_grants_update_policy() {
             .execute(&ALICE_ID, &mut transaction)
             .expect("an exact direct or assigned-role grant must authorize policy updates");
 
-        let key: Name = POLICY_STATE_KEY.parse().expect("valid policy state key");
+        let key: StatePath = POLICY_STATE_KEY.parse().expect("valid policy state key");
         let stored = transaction
             .world()
             .smart_contract_state()
@@ -218,7 +218,7 @@ fn stale_unassigned_and_same_name_payload_grants_fail_closed() {
             context,
         );
 
-        let key: Name = POLICY_STATE_KEY.parse().expect("valid policy state key");
+        let key: StatePath = POLICY_STATE_KEY.parse().expect("valid policy state key");
         assert!(
             transaction
                 .world()

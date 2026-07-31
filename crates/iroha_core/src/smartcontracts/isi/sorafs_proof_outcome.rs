@@ -13,7 +13,6 @@ use iroha_data_model::{
             SubmitSorafsProofOutcome,
         },
     },
-    name::Name,
     permission::Permission,
     query::{
         error::{FindError, QueryExecutionFail, SorafsProofOutcomeFindErrorV1},
@@ -33,6 +32,7 @@ use iroha_data_model::{
             ProofOutcomeRecordV1, ProofOutcomeSignerPolicyRecordV1, ProofOutcomeSignerPolicyV1,
         },
     },
+    state_path::StatePath,
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanManageSorafsProofOutcomePolicy, CanRecordSorafsProofOutcome,
@@ -142,35 +142,35 @@ fn corrupt_state(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvariantViolation(message.into().into())
 }
 
-fn policy_key(provider_id: ProviderId) -> Name {
-    Name::from_str(&format!(
+fn policy_key(provider_id: ProviderId) -> StatePath {
+    StatePath::from_str(&format!(
         "{POLICY_STATE_KEY_PREFIX}{}",
         hex::encode(provider_id.as_bytes())
     ))
     .expect("static prefix plus provider hex is a valid state key")
 }
 
-fn outcome_key(kind: ProofOutcomeKindV1, identity_digest: [u8; 32]) -> Name {
+fn outcome_key(kind: ProofOutcomeKindV1, identity_digest: [u8; 32]) -> StatePath {
     let kind = match kind {
         ProofOutcomeKindV1::Pdp => "pdp",
         ProofOutcomeKindV1::Potr => "potr",
     };
-    Name::from_str(&format!(
+    StatePath::from_str(&format!(
         "{OUTCOME_STATE_KEY_PREFIX}{kind}_{}",
         hex::encode(identity_digest)
     ))
     .expect("static prefix plus proof kind and digest is a valid state key")
 }
 
-fn event_key(sequence: u64) -> Name {
-    Name::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
+fn event_key(sequence: u64) -> StatePath {
+    StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
 
-fn event_journal_head_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
+fn event_journal_head_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
-        Name::from_str(EVENT_JOURNAL_HEAD_STATE_KEY)
+        StatePath::from_str(EVENT_JOURNAL_HEAD_STATE_KEY)
             .expect("static proof-outcome event journal head key is valid")
     })
 }
@@ -901,8 +901,8 @@ fn ensure_no_event_after_head(
     world: &impl WorldReadOnly,
     head: Option<ProofOutcomeEventJournalHeadV1>,
 ) -> Result<(), InstructionExecutionError> {
-    let prefix =
-        Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static proof-outcome event prefix is valid");
+    let prefix = StatePath::from_str(EVENT_STATE_KEY_PREFIX)
+        .expect("static proof-outcome event prefix is valid");
     let first = world
         .smart_contract_state()
         .range(prefix.clone()..)

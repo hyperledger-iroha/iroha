@@ -39,6 +39,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Dummy {
 
 fn sample_consensus_config_caps() -> ConsensusConfigCaps {
     ConsensusConfigCaps {
+        execution_policy_hash: [0xB4; 32],
         nexus_policy_digest: [0xA5; 32],
         v2_config_fingerprint: [0xC3; 32],
         ivm_gas_schedule_hash: [0xE7; 32],
@@ -57,6 +58,7 @@ fn consensus_config_caps_wire_roundtrip_preserves_admission_digests() {
         "decoder must consume the complete caps wire payload"
     );
     assert_eq!(decoded, expected);
+    assert_eq!(decoded.execution_policy_hash, [0xB4; 32]);
     assert_eq!(decoded.nexus_policy_digest, [0xA5; 32]);
     assert_eq!(decoded.v2_config_fingerprint, [0xC3; 32]);
     assert_eq!(decoded.ivm_gas_schedule_hash, [0xE7; 32]);
@@ -253,7 +255,7 @@ async fn consensus_caps_match_connects() {
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         Some(caps.clone()),
         None,
         ShutdownSignal::new(),
@@ -266,7 +268,7 @@ async fn consensus_caps_match_connects() {
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         Some(caps.clone()),
         None,
         ShutdownSignal::new(),
@@ -309,7 +311,7 @@ async fn consensus_caps_mismatch_rejected() {
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         Some(caps_ok.clone()),
         None,
         ShutdownSignal::new(),
@@ -322,7 +324,7 @@ async fn consensus_caps_mismatch_rejected() {
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         Some(caps_bad.clone()),
         None,
         ShutdownSignal::new(),
@@ -368,7 +370,7 @@ async fn consensus_config_caps_mismatch_rejected() {
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         Some(caps_ok.clone()),
         None,
         ShutdownSignal::new(),
@@ -381,7 +383,7 @@ async fn consensus_config_caps_mismatch_rejected() {
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         Some(caps_bad.clone()),
         None,
         ShutdownSignal::new(),
@@ -425,7 +427,7 @@ async fn confidential_caps_match_connects() {
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(caps.clone()),
         ShutdownSignal::new(),
@@ -438,7 +440,7 @@ async fn confidential_caps_match_connects() {
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(caps.clone()),
         ShutdownSignal::new(),
@@ -488,7 +490,7 @@ async fn confidential_caps_mismatch_rejected() {
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(caps_ok.clone()),
         ShutdownSignal::new(),
@@ -501,7 +503,7 @@ async fn confidential_caps_mismatch_rejected() {
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(caps_bad.clone()),
         ShutdownSignal::new(),
@@ -551,7 +553,7 @@ async fn confidential_caps_backend_mismatch_rejected() {
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(caps_ok.clone()),
         ShutdownSignal::new(),
@@ -564,7 +566,7 @@ async fn confidential_caps_backend_mismatch_rejected() {
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(caps_bad.clone()),
         ShutdownSignal::new(),
@@ -621,7 +623,7 @@ async fn confidential_caps_features_mismatch_rejected() {
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start(
         kp1.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(caps_ok.clone()),
         ShutdownSignal::new(),
@@ -634,7 +636,7 @@ async fn confidential_caps_features_mismatch_rejected() {
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start(
         kp2.clone(),
         cfg(addr2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(caps_bad.clone()),
         ShutdownSignal::new(),
@@ -680,7 +682,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
     let (net1, _child1) = match NetworkHandle::<Dummy>::start(
         validator_kp.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(ConfidentialHandshakeCaps {
             enabled: true,
@@ -700,7 +702,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
     let (net2_stale, _child2_stale) = match NetworkHandle::<Dummy>::start(
         peer_kp.clone(),
         cfg(addr_stale.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(ConfidentialHandshakeCaps {
             enabled: true,
@@ -743,7 +745,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
     let (net2_fresh, _child2_fresh) = match NetworkHandle::<Dummy>::start(
         peer_kp.clone(),
         cfg(addr_fresh.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         Some(ConfidentialHandshakeCaps {
             enabled: true,
@@ -817,7 +819,7 @@ async fn crypto_caps_match_connects() {
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp1.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         Some(caps.clone()),
@@ -831,7 +833,7 @@ async fn crypto_caps_match_connects() {
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp2.clone(),
         cfg(addr2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         Some(caps.clone()),
@@ -874,7 +876,7 @@ async fn crypto_caps_mismatch_rejected() {
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp1.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         Some(caps_enabled.clone()),
@@ -888,7 +890,7 @@ async fn crypto_caps_mismatch_rejected() {
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp2.clone(),
         cfg(addr2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         Some(caps_disabled.clone()),
@@ -931,7 +933,7 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
     let (net1, _ch1) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp1.clone(),
         cfg(addr1.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         Some(caps_enabled.clone()),
@@ -945,7 +947,7 @@ async fn crypto_caps_mismatch_allowed_when_permissive() {
     let (_net2, _ch2) = match NetworkHandle::<Dummy>::start_with_crypto(
         kp2.clone(),
         cfg(addr2.clone()),
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         Some(caps_disabled.clone()),

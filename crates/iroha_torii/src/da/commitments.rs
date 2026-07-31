@@ -9,14 +9,16 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use axum::extract::State;
 use iroha_config::parameters::actual::Nexus;
 use iroha_core::da::{
-    active_lane_proof_policy_at_height, active_proof_policy_bundle_at_height,
-    build_da_commitment_proof, commitment_store::DaCommitmentStore, verify_da_commitment_proof,
+    ActiveLaneProofPolicyContext, active_proof_policy_bundle_at_height, build_da_commitment_proof,
+    commitment_store::DaCommitmentStore, verify_da_commitment_proof,
 };
+use iroha_crypto::HashOf;
 use iroha_data_model::{
+    block::BlockHeader,
     da::commitment::{
-        DaCommitmentProof, DaCommitmentWithLocation, DaProofPolicyBundle, DaProofScheme,
+        DaCommitmentKey, DaCommitmentProof, DaCommitmentWithLocation, DaProofPolicyBundle,
+        DaProofScheme,
     },
-    query::parameters::Pagination,
     sorafs::pin_registry::ManifestDigest,
 };
 
@@ -27,8 +29,76 @@ const ENDPOINT_DA_COMMITMENTS_PROVE: &str = "/v1/da/commitments/prove";
 const ENDPOINT_DA_COMMITMENTS_VERIFY: &str = "/v1/da/commitments/verify";
 const ENDPOINT_DA_PROOF_POLICIES: &str = "/v1/da/proof-policies";
 const ENDPOINT_DA_PROOF_POLICY_SNAPSHOT: &str = "/v1/da/proof-policies/snapshot";
+/// Maximum accepted body size for commitment list, prove, and verify requests.
+pub(crate) const DA_COMMITMENT_REQUEST_MAX_BYTES: usize = 64 * 1024;
+const DEFAULT_COMMITMENT_PAGE_SIZE: usize = 100;
+const MAX_COMMITMENT_PAGE_SIZE: usize = 1_000;
 
-/// Request payload for DA commitment queries and proof generation.
+/// Canonical ledger tip that binds a DA list cursor to one immutable view.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DaListSnapshot {
+    /// Committed chain height observed while constructing the page.
+    pub block_height: u64,
+    /// Hash of the block at `block_height`, absent only for the empty chain.
+    #[norito(default)]
+    pub block_hash: Option<HashOf<BlockHeader>>,
+}
+
+impl DaListSnapshot {
+    pub(super) fn is_canonical(self) -> bool {
+        (self.block_height == 0) == self.block_hash.is_none()
+    }
+}
+
+/// Forward-only cursor for canonically ordered DA commitments.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DaCommitmentListCursor {
+    /// Immutable ledger view this cursor was issued against.
+    pub snapshot: DaListSnapshot,
+    /// Last raw commitment examined in `(lane_id, epoch, sequence)` order.
+    pub after: DaCommitmentKey,
+}
+
+/// Request payload for bounded DA commitment traversal.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DaCommitmentListRequest {
+    /// Maximum raw index rows to inspect, capped by the server at 1,000.
+    #[norito(default)]
+    pub limit: Option<NonZeroU64>,
+    /// Server-issued continuation cursor from the preceding page.
+    #[norito(default)]
+    pub cursor: Option<DaCommitmentListCursor>,
+}
+
+/// Exact selector used to generate one DA commitment proof.
 #[derive(
     Debug,
     Default,
@@ -47,8 +117,6 @@ pub struct DaCommitmentProofRequest {
     pub epoch: Option<u64>,
     #[norito(default)]
     pub sequence: Option<u64>,
-    #[norito(default)]
-    pub pagination: Option<Pagination>,
 }
 
 /// Response surface for DA commitment listings.
@@ -63,6 +131,9 @@ pub struct DaCommitmentProofRequest {
 pub struct DaCommitmentListResponse {
     pub policies: DaProofPolicyBundle,
     pub commitments: Vec<DaCommitmentWithLocation>,
+    /// Cursor for the next bounded scan, or `None` when the ordered index is exhausted.
+    #[norito(default)]
+    pub next_cursor: Option<DaCommitmentListCursor>,
 }
 
 /// Response surface for DA commitment proofs.
@@ -97,16 +168,27 @@ pub struct DaCommitmentVerifyResponse {
 /// HTTP handler for `/v1/da/commitments`.
 pub async fn handler_list_commitments(
     State(app): State<SharedAppState>,
-    NoritoJson(request): NoritoJson<DaCommitmentProofRequest>,
+    NoritoJson(request): NoritoJson<DaCommitmentListRequest>,
 ) -> Result<JsonBody<DaCommitmentListResponse>, Error> {
+    let snapshot = list_snapshot_for_state(app.state.as_ref());
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS)?;
-    let store = app.state.da_commitments();
-    let items = list_active_from_store(&store, &request, &nexus);
+    let page = {
+        let store = app.state.da_commitments();
+        list_active_from_store(&store, &request, &nexus, snapshot)
+            .map_err(commitment_cursor_error)?
+    };
     let policies = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
+    if list_snapshot_for_state(app.state.as_ref()) != snapshot {
+        return Err(Error::AppConflict {
+            code: "da_list_snapshot_changed",
+            message: "the committed ledger tip changed while the DA commitment page was read; retry from the first page".to_owned(),
+        });
+    }
     Ok(JsonBody(DaCommitmentListResponse {
         policies,
-        commitments: items,
+        commitments: page.commitments,
+        next_cursor: page.next_cursor,
     }))
 }
 
@@ -117,12 +199,10 @@ pub async fn handler_prove_commitment(
 ) -> Result<JsonBody<Option<DaCommitmentProofResponse>>, Error> {
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS_PROVE)?;
-    let store = app.state.da_commitments();
-    let proof = build_active_proof_from_store(&store, &request, &nexus);
+    let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref());
     proof.map_or_else(
         || Ok(JsonBody(None)),
-        |proof| {
-            let policies = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
+        |(proof, policies)| {
             Ok(JsonBody(Some(DaCommitmentProofResponse {
                 policies,
                 proof,
@@ -138,12 +218,7 @@ pub async fn handler_verify_commitment(
 ) -> Result<JsonBody<DaCommitmentVerifyResponse>, Error> {
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS_VERIFY)?;
-    let response = verify_against_store(
-        &app.state.da_commitments(),
-        &nexus,
-        &proof,
-        app.state.as_ref(),
-    );
+    let response = verify_against_kura_block(&proof, app.state.as_ref());
     Ok(JsonBody(response))
 }
 
@@ -175,93 +250,114 @@ fn active_proof_policy_bundle_for_state(
     active_proof_policy_bundle_at_height(nexus, committed_height)
 }
 
+pub(super) fn list_snapshot_for_state(state: &iroha_core::state::State) -> DaListSnapshot {
+    DaListSnapshot {
+        block_height: u64::try_from(state.committed_height()).unwrap_or(u64::MAX),
+        block_hash: state.latest_block_hash_fast(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaCommitmentCursorError {
+    NonCanonicalSnapshot,
+    StaleSnapshot,
+    UnknownKey,
+}
+
+fn commitment_cursor_error(error: DaCommitmentCursorError) -> Error {
+    let (code, message) = match error {
+        DaCommitmentCursorError::NonCanonicalSnapshot => (
+            "invalid_da_commitment_cursor",
+            "DA commitment cursor snapshot must contain no block hash at height 0 and exactly one block hash at non-zero height",
+        ),
+        DaCommitmentCursorError::StaleSnapshot => (
+            "stale_da_commitment_cursor",
+            "DA commitment cursor does not target the current committed ledger tip; restart from the first page",
+        ),
+        DaCommitmentCursorError::UnknownKey => (
+            "invalid_da_commitment_cursor",
+            "DA commitment cursor key is absent from the current active query index",
+        ),
+    };
+    Error::AppQueryValidation {
+        code,
+        message: message.to_owned(),
+    }
+}
+
+#[derive(Debug)]
+struct DaCommitmentPage {
+    commitments: Vec<DaCommitmentWithLocation>,
+    next_cursor: Option<DaCommitmentListCursor>,
+}
+
 fn list_active_from_store(
     store: &DaCommitmentStore,
-    request: &DaCommitmentProofRequest,
+    request: &DaCommitmentListRequest,
     nexus: &Nexus,
-) -> Vec<DaCommitmentWithLocation> {
-    let pagination = request.pagination.clone().unwrap_or_default();
-    let limit = pagination
-        .limit
-        .map(NonZeroU64::get)
-        .and_then(|n| usize::try_from(n).ok())
-        .unwrap_or_else(|| store.len());
-    let Ok(offset) = usize::try_from(pagination.offset) else {
-        return Vec::new();
-    };
-    if limit == 0 {
-        return Vec::new();
-    }
-
-    if let Some(target) =
-        find_in_store(store, request).filter(|target| commitment_lane_is_active(nexus, target))
-    {
-        return if offset == 0 {
-            vec![target]
-        } else {
-            Vec::new()
-        };
-    }
-    if request_targets_commitment(request) {
-        return Vec::new();
-    }
-
-    store
-        .all_sorted()
-        .filter(|record| commitment_lane_is_active(nexus, record))
-        .skip(offset)
-        .take(limit)
-        .cloned()
-        .collect()
+    snapshot: DaListSnapshot,
+) -> Result<DaCommitmentPage, DaCommitmentCursorError> {
+    let policy_context = ActiveLaneProofPolicyContext::new(nexus);
+    list_page_from_store(store, request, snapshot, |record| {
+        commitment_lane_is_active(&policy_context, record)
+    })
 }
 
-fn list_from_store(
+fn list_page_from_store(
     store: &DaCommitmentStore,
-    request: &DaCommitmentProofRequest,
-) -> Vec<DaCommitmentWithLocation> {
-    let pagination = request.pagination.clone().unwrap_or_default();
-    let limit = pagination
+    request: &DaCommitmentListRequest,
+    snapshot: DaListSnapshot,
+    mut is_visible: impl FnMut(&DaCommitmentWithLocation) -> bool,
+) -> Result<DaCommitmentPage, DaCommitmentCursorError> {
+    let limit = request
         .limit
         .map(NonZeroU64::get)
         .and_then(|n| usize::try_from(n).ok())
-        .unwrap_or_else(|| store.len());
-    let Ok(offset) = usize::try_from(pagination.offset) else {
-        return Vec::new();
+        .unwrap_or(DEFAULT_COMMITMENT_PAGE_SIZE)
+        .min(MAX_COMMITMENT_PAGE_SIZE);
+
+    let after = request.cursor.map(|cursor| {
+        if !cursor.snapshot.is_canonical() {
+            return Err(DaCommitmentCursorError::NonCanonicalSnapshot);
+        }
+        if cursor.snapshot != snapshot {
+            return Err(DaCommitmentCursorError::StaleSnapshot);
+        }
+        if !store.contains_query_key(cursor.after) {
+            return Err(DaCommitmentCursorError::UnknownKey);
+        }
+        Ok(cursor.after)
+    });
+    let after = after.transpose()?;
+
+    let mut ordered = store.all_sorted_after(after);
+    let mut commitments = Vec::with_capacity(limit);
+    let mut last_examined = None;
+    for record in ordered.by_ref().take(limit) {
+        last_examined = Some(DaCommitmentKey::from_record(&record.commitment));
+        if is_visible(record) {
+            commitments.push(record.clone());
+        }
+    }
+    let next_cursor = if ordered.next().is_some() {
+        last_examined.map(|after| DaCommitmentListCursor { snapshot, after })
+    } else {
+        None
     };
-    if limit == 0 {
-        return Vec::new();
-    }
 
-    if let Some(target) = find_in_store(store, request) {
-        return if offset == 0 {
-            vec![target]
-        } else {
-            Vec::new()
-        };
-    }
-    if request_targets_commitment(request) {
-        return Vec::new();
-    }
-    if offset >= store.len() {
-        return Vec::new();
-    }
-
-    store
-        .all_sorted()
-        .enumerate()
-        .skip(offset)
-        .take(limit)
-        .map(|(_, record)| record.clone())
-        .collect()
+    Ok(DaCommitmentPage {
+        commitments,
+        next_cursor,
+    })
 }
 
-fn commitment_lane_is_active(nexus: &Nexus, target: &DaCommitmentWithLocation) -> bool {
-    active_lane_proof_policy_at_height(
-        nexus,
-        target.commitment.lane_id,
-        target.location.block_height,
-    )
-    .is_ok()
+fn commitment_lane_is_active(
+    policy_context: &ActiveLaneProofPolicyContext<'_>,
+    target: &DaCommitmentWithLocation,
+) -> bool {
+    policy_context
+        .policy_at_height(target.commitment.lane_id, target.location.block_height)
+        .is_ok()
 }
 
 fn find_in_store(
@@ -282,13 +378,6 @@ fn find_in_store(
     store
         .get_by_lane_epoch_sequence(lane_id, epoch, sequence)
         .cloned()
-}
-
-fn request_targets_commitment(request: &DaCommitmentProofRequest) -> bool {
-    request.manifest_hash.is_some()
-        || request.lane_id.is_some()
-        || request.epoch.is_some()
-        || request.sequence.is_some()
 }
 
 fn request_matches_commitment(
@@ -323,39 +412,41 @@ fn build_proof_from_store(
     let target = find_in_store(store, request)?;
     let bundle = store.bundle_at(target.location.block_height)?;
     let index = usize::try_from(target.location.index_in_bundle).ok()?;
-    build_da_commitment_proof(bundle, target.location.block_height, index)
-}
-
-fn build_active_proof_from_store(
-    store: &DaCommitmentStore,
-    request: &DaCommitmentProofRequest,
-    nexus: &Nexus,
-) -> Option<DaCommitmentProof> {
-    let target = find_in_store(store, request)?;
-    if !commitment_lane_is_active(nexus, &target) {
+    if bundle.commitments.get(index) != Some(&target.commitment) {
         return None;
     }
-    let bundle = store.bundle_at(target.location.block_height)?;
-    let index = usize::try_from(target.location.index_in_bundle).ok()?;
     build_da_commitment_proof(bundle, target.location.block_height, index)
 }
 
-fn verify_against_store(
-    store: &DaCommitmentStore,
+fn build_active_proof_from_state(
+    request: &DaCommitmentProofRequest,
     nexus: &Nexus,
+    state: &iroha_core::state::State,
+) -> Option<(DaCommitmentProof, DaProofPolicyBundle)> {
+    let policy_context = ActiveLaneProofPolicyContext::new(nexus);
+    let target = {
+        let store = state.da_commitments();
+        find_in_store(&store, request)?
+    };
+    if !commitment_lane_is_active(&policy_context, &target) {
+        return None;
+    }
+    let block_height = usize::try_from(target.location.block_height).ok()?;
+    let block = state.block_by_height(NonZeroUsize::new(block_height)?)?;
+    let bundle = block.as_ref().da_commitments()?;
+    let index = usize::try_from(target.location.index_in_bundle).ok()?;
+    if bundle.commitments.get(index) != Some(&target.commitment) {
+        return None;
+    }
+    let policies = block.as_ref().da_proof_policies()?.clone();
+    let proof = build_da_commitment_proof(bundle, target.location.block_height, index)?;
+    Some((proof, policies))
+}
+
+fn verify_against_kura_block(
     proof: &DaCommitmentProof,
     state: &iroha_core::state::State,
 ) -> DaCommitmentVerifyResponse {
-    let Some(bundle) = store.bundle_at(proof.location.block_height) else {
-        return DaCommitmentVerifyResponse {
-            valid: false,
-            error: Some(format!(
-                "no DA commitment bundle stored for block {}",
-                proof.location.block_height
-            )),
-        };
-    };
-
     let Ok(block_height) = usize::try_from(proof.location.block_height) else {
         return DaCommitmentVerifyResponse {
             valid: false,
@@ -381,18 +472,25 @@ fn verify_against_store(
         };
     };
 
-    let header = block.header();
-    if let Err(err) = active_lane_proof_policy_at_height(
-        nexus,
-        proof.commitment.lane_id,
-        proof.location.block_height,
-    ) {
+    if block.as_ref().da_commitments().is_none() {
         return DaCommitmentVerifyResponse {
             valid: false,
-            error: Some(err.to_string()),
+            error: Some(format!(
+                "block {} does not contain a DA commitment bundle",
+                proof.location.block_height
+            )),
         };
     }
-    match verify_da_commitment_proof(proof, bundle, &header, &nexus.lane_config) {
+    let Some(policies) = block.as_ref().da_proof_policies() else {
+        return DaCommitmentVerifyResponse {
+            valid: false,
+            error: Some(format!(
+                "block {} does not contain a DA proof-policy bundle",
+                proof.location.block_height
+            )),
+        };
+    };
+    match verify_da_commitment_proof(proof, &block.header(), policies) {
         Ok(()) => DaCommitmentVerifyResponse {
             valid: true,
             error: None,
@@ -444,7 +542,6 @@ mod tests {
             DaProofScheme::MerkleSha256,
             Hash::prehashed([sequence as u8; 32]),
             None,
-            None,
             RetentionClass::default(),
             StorageTicketId::new(storage_ticket),
             Signature::try_from_bytes(&[0x33; 64])
@@ -485,8 +582,11 @@ mod tests {
         DaCommitmentStore::from_bundle_at_height(&records, 9)
     }
 
-    fn pagination(limit: Option<u64>, offset: u64) -> Pagination {
-        Pagination::new(limit.and_then(NonZeroU64::new), offset)
+    fn list_request(limit: Option<u64>) -> DaCommitmentListRequest {
+        DaCommitmentListRequest {
+            limit: limit.and_then(NonZeroU64::new),
+            cursor: None,
+        }
     }
 
     fn enable_nexus(app: &mut crate::SharedAppState) {
@@ -585,6 +685,9 @@ mod tests {
             0,
         );
         let mut builder = BlockBuilder::new(header);
+        let committed_policies =
+            active_proof_policy_bundle_at_height(&app.state.nexus_snapshot(), 1);
+        builder.set_da_proof_policies(Some(committed_policies));
         builder.set_da_commitments(Some(bundle));
         let block = builder.build_with_signature(0, keypair.private_key());
         let header = block.header();
@@ -646,99 +749,140 @@ mod tests {
     }
 
     #[test]
-    fn list_respects_pagination() {
+    fn list_uses_forward_only_keyset_cursor() {
         let store = store_with_records();
-        let request = DaCommitmentProofRequest {
-            pagination: Some(pagination(Some(2), 1)),
-            ..DaCommitmentProofRequest::default()
+        let snapshot = DaListSnapshot {
+            block_height: 0,
+            block_hash: None,
         };
+        let first = list_page_from_store(&store, &list_request(Some(2)), snapshot, |_| true)
+            .expect("first page");
+        assert_eq!(first.commitments.len(), 2);
+        assert_eq!(first.commitments[0].location.index_in_bundle, 0);
+        assert_eq!(first.commitments[1].location.index_in_bundle, 1);
+        let cursor = first.next_cursor.expect("third row requires continuation");
+        assert_eq!(
+            cursor.after,
+            DaCommitmentKey::from_record(&first.commitments[1].commitment)
+        );
 
-        let items = list_from_store(&store, &request);
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].location.index_in_bundle, 1);
-        assert_eq!(items[1].location.index_in_bundle, 2);
-        assert_eq!(items[0].location.block_height, 9);
+        let second = list_page_from_store(
+            &store,
+            &DaCommitmentListRequest {
+                limit: NonZeroU64::new(2),
+                cursor: Some(cursor),
+            },
+            snapshot,
+            |_| true,
+        )
+        .expect("second page");
+        assert_eq!(second.commitments.len(), 1);
+        assert_eq!(second.commitments[0].location.index_in_bundle, 2);
+        assert!(second.next_cursor.is_none());
     }
 
     #[test]
-    fn list_with_manifest_filters_correct_record() {
+    fn list_cursor_rejects_unknown_key_and_stale_snapshot() {
         let store = store_with_records();
-        let manifest = ManifestDigest::new([2; 32]);
-        let request = DaCommitmentProofRequest {
-            manifest_hash: Some(manifest),
-            ..DaCommitmentProofRequest::default()
+        let snapshot = DaListSnapshot {
+            block_height: 0,
+            block_hash: None,
         };
+        let unknown_key = DaCommitmentKey {
+            lane_id: LaneId::new(9),
+            epoch: 9,
+            sequence: 9,
+        };
+        let unknown = DaCommitmentListRequest {
+            limit: NonZeroU64::new(1),
+            cursor: Some(DaCommitmentListCursor {
+                snapshot,
+                after: unknown_key,
+            }),
+        };
+        assert_eq!(
+            list_page_from_store(&store, &unknown, snapshot, |_| true)
+                .expect_err("foreign key must fail closed"),
+            DaCommitmentCursorError::UnknownKey
+        );
 
-        let items = list_from_store(&store, &request);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].commitment.manifest_hash, manifest);
-        assert_eq!(items[0].location.index_in_bundle, 1);
+        let valid_key = DaCommitmentKey::from_record(
+            &store
+                .all_sorted()
+                .next()
+                .expect("fixture has a first row")
+                .commitment,
+        );
+        let stale = DaCommitmentListRequest {
+            limit: NonZeroU64::new(1),
+            cursor: Some(DaCommitmentListCursor {
+                snapshot: DaListSnapshot {
+                    block_height: 1,
+                    block_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed([7; 32]))),
+                },
+                after: valid_key,
+            }),
+        };
+        assert_eq!(
+            list_page_from_store(&store, &stale, snapshot, |_| true)
+                .expect_err("stale tip must fail closed"),
+            DaCommitmentCursorError::StaleSnapshot
+        );
     }
 
     #[test]
-    fn list_manifest_filter_rejects_conflicting_lane_tuple() {
+    fn list_cursor_rejects_noncanonical_snapshot() {
         let store = store_with_records();
-        let manifest = ManifestDigest::new([2; 32]);
-        let request = DaCommitmentProofRequest {
-            manifest_hash: Some(manifest),
-            lane_id: Some(2),
-            epoch: Some(1),
-            sequence: Some(5),
-            ..DaCommitmentProofRequest::default()
+        let snapshot = DaListSnapshot {
+            block_height: 0,
+            block_hash: None,
         };
-
-        let items = list_from_store(&store, &request);
-        assert!(items.is_empty());
+        let after = DaCommitmentKey::from_record(
+            &store
+                .all_sorted()
+                .next()
+                .expect("fixture has a first row")
+                .commitment,
+        );
+        let request = DaCommitmentListRequest {
+            limit: NonZeroU64::new(1),
+            cursor: Some(DaCommitmentListCursor {
+                snapshot: DaListSnapshot {
+                    block_height: 1,
+                    block_hash: None,
+                },
+                after,
+            }),
+        };
+        assert_eq!(
+            list_page_from_store(&store, &request, snapshot, |_| true)
+                .expect_err("malformed snapshot must fail closed"),
+            DaCommitmentCursorError::NonCanonicalSnapshot
+        );
     }
 
     #[test]
-    fn list_partial_tuple_filter_does_not_fall_back_to_full_list() {
+    fn inactive_rows_cannot_amplify_the_raw_scan_budget() {
+        use std::cell::Cell;
+
         let store = store_with_records();
-        let request = DaCommitmentProofRequest {
-            lane_id: Some(1),
-            ..DaCommitmentProofRequest::default()
+        let snapshot = DaListSnapshot {
+            block_height: 0,
+            block_hash: None,
         };
+        let examined = Cell::new(0_usize);
+        let page = list_page_from_store(&store, &list_request(Some(2)), snapshot, |_| {
+            examined.set(examined.get() + 1);
+            false
+        })
+        .expect("bounded filtered page");
 
-        let items = list_from_store(&store, &request);
-        assert!(items.is_empty());
-    }
-
-    #[test]
-    fn list_targeted_record_respects_offset_as_empty_page() {
-        let store = store_with_records();
-        let request = DaCommitmentProofRequest {
-            manifest_hash: Some(ManifestDigest::new([2; 32])),
-            pagination: Some(pagination(Some(1), 1)),
-            ..DaCommitmentProofRequest::default()
-        };
-
-        let items = list_from_store(&store, &request);
-        assert!(items.is_empty());
-    }
-
-    #[test]
-    fn list_over_offset_returns_empty_page() {
-        let store = store_with_records();
-        let request = DaCommitmentProofRequest {
-            pagination: Some(pagination(Some(1), u64::MAX)),
-            ..DaCommitmentProofRequest::default()
-        };
-
-        let items = list_from_store(&store, &request);
-        assert!(items.is_empty());
-    }
-
-    #[test]
-    fn list_overlarge_limit_is_bounded_to_store_length() {
-        let store = store_with_records();
-        let request = DaCommitmentProofRequest {
-            pagination: Some(pagination(Some(u64::MAX), 0)),
-            ..DaCommitmentProofRequest::default()
-        };
-
-        let items = list_from_store(&store, &request);
-        assert_eq!(items.len(), store.len());
-        assert_eq!(items.len(), 3);
+        assert!(page.commitments.is_empty());
+        assert_eq!(examined.get(), 2, "visibility work is bounded by limit");
+        assert!(
+            page.next_cursor.is_some(),
+            "an empty visible page must still permit deterministic traversal"
+        );
     }
 
     #[test]
@@ -763,14 +907,16 @@ mod tests {
             0,
             0,
         );
-        header.set_da_commitments_hash(Some(bundle.canonical_hash()));
+        header.set_da_commitments_hash(bundle.merkle_commitment());
 
         let config = lane_config_with_entries(&[
             (LaneId::new(1), DaProofScheme::MerkleSha256),
             (LaneId::new(2), DaProofScheme::MerkleSha256),
         ]);
+        let policies = iroha_core::da::proof_policy_bundle(&config);
+        header.set_da_proof_policies_hash(Some(iroha_crypto::HashOf::new(&policies)));
 
-        assert!(verify_da_commitment_proof(&proof, bundle, &header, &config).is_ok());
+        assert!(verify_da_commitment_proof(&proof, &header, &policies).is_ok());
     }
 
     #[test]
@@ -812,10 +958,12 @@ mod tests {
             0,
             0,
         );
-        header.set_da_commitments_hash(Some(bundle.canonical_hash()));
+        header.set_da_commitments_hash(bundle.merkle_commitment());
         let config = lane_config_with_entries(&[(LaneId::new(2), DaProofScheme::MerkleSha256)]);
+        let policies = iroha_core::da::proof_policy_bundle(&config);
+        header.set_da_proof_policies_hash(Some(iroha_crypto::HashOf::new(&policies)));
 
-        assert!(verify_da_commitment_proof(&proof, bundle, &header, &config).is_ok());
+        assert!(verify_da_commitment_proof(&proof, &header, &policies).is_ok());
     }
 
     #[test]
@@ -848,13 +996,43 @@ mod tests {
     async fn list_handler_includes_policy_bundle() {
         let mut app = mk_app_state_for_tests();
         enable_nexus(&mut app);
-        let request = DaCommitmentProofRequest::default();
+        let request = DaCommitmentListRequest::default();
         let JsonBody(response) =
             super::handler_list_commitments(State(app.clone()), NoritoJson(request))
                 .await
                 .expect("handler should succeed");
 
         assert_eq!(response.policies.version, DaProofPolicyBundle::VERSION_V1);
+    }
+
+    #[tokio::test]
+    async fn list_handler_rejects_cursor_bound_to_another_tip() {
+        let app =
+            app_with_da_commitment_bundle(vec![sample_record(1, 1, 1), sample_record(1, 2, 2)]);
+        let JsonBody(first) =
+            super::handler_list_commitments(State(app.clone()), NoritoJson(list_request(Some(1))))
+                .await
+                .expect("first page");
+        let mut cursor = first.next_cursor.expect("second row requires continuation");
+        cursor.snapshot.block_hash =
+            Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; 32])));
+
+        let error = super::handler_list_commitments(
+            State(app),
+            NoritoJson(DaCommitmentListRequest {
+                limit: NonZeroU64::new(1),
+                cursor: Some(cursor),
+            }),
+        )
+        .await
+        .expect_err("cursor from another ledger tip must fail closed");
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "stale_da_commitment_cursor",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -931,7 +1109,7 @@ mod tests {
 
         let JsonBody(list_response) = super::handler_list_commitments(
             State(app.clone()),
-            NoritoJson(DaCommitmentProofRequest::default()),
+            NoritoJson(DaCommitmentListRequest::default()),
         )
         .await
         .expect("list handler should succeed");
@@ -988,7 +1166,7 @@ mod tests {
 
         let JsonBody(list_response) = super::handler_list_commitments(
             State(app.clone()),
-            NoritoJson(DaCommitmentProofRequest::default()),
+            NoritoJson(DaCommitmentListRequest::default()),
         )
         .await
         .expect("list handler should succeed");
@@ -1028,16 +1206,10 @@ mod tests {
                 .await
                 .expect("verify handler should succeed");
         assert!(
-            !verification.valid,
-            "verify must reject proofs for a future-created autoscale lane"
+            verification.valid,
+            "verification must use the block's signed policy snapshot, not mutable current lane geometry: {verification:?}"
         );
-        assert!(
-            verification
-                .error
-                .as_deref()
-                .is_some_and(|error| error.contains("configured lane catalog")),
-            "verification should explain the inactive lane, got {verification:?}"
-        );
+        assert!(verification.error.is_none());
     }
 
     #[tokio::test]
@@ -1147,6 +1319,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prove_handler_rejects_projection_location_drift_from_kura() {
+        let record = sample_record(1, 1, 1);
+        let manifest = record.manifest_hash;
+        let app = app_with_da_commitment_bundle(vec![record.clone()]);
+        {
+            let mut store = app.state.da_commitments.write();
+            *store = DaCommitmentStore::default();
+            assert!(store.insert(
+                &record,
+                iroha_data_model::da::commitment::DaCommitmentLocation {
+                    block_height: 1,
+                    index_in_bundle: 1,
+                },
+            ));
+        }
+
+        let JsonBody(response) = super::handler_prove_commitment(
+            State(app),
+            NoritoJson(DaCommitmentProofRequest {
+                manifest_hash: Some(manifest),
+                ..DaCommitmentProofRequest::default()
+            }),
+        )
+        .await
+        .expect("proof handler should succeed");
+        assert!(
+            response.is_none(),
+            "an index projection may select a record but cannot redefine its Kura position"
+        );
+    }
+
+    #[tokio::test]
     async fn verify_handler_rejects_tampered_merkle_root() {
         let records = vec![sample_record(1, 1, 1), sample_record(1, 2, 2)];
         let manifest = records[1].manifest_hash;
@@ -1186,7 +1390,7 @@ mod tests {
         let mut proof = prove_for_manifest(app.clone(), manifest).await;
         proof.location.block_height = 2;
 
-        verify_invalid(app, proof, "no DA commitment bundle stored for block 2").await;
+        verify_invalid(app, proof, "block 2 not available in Kura").await;
     }
 
     #[tokio::test]
@@ -1223,7 +1427,7 @@ mod tests {
         let mut proof = prove_for_manifest(app.clone(), manifest).await;
         proof.bundle_len = proof.bundle_len.saturating_add(1);
 
-        verify_invalid(app, proof, "bundle length").await;
+        verify_invalid(app, proof, "Merkle path is not valid").await;
     }
 
     #[tokio::test]
@@ -1234,7 +1438,7 @@ mod tests {
         let mut proof = prove_for_manifest(app.clone(), manifest).await;
         proof.commitment = sample_record(1, 9, 9);
 
-        verify_invalid(app, proof, "commitment payload differs").await;
+        verify_invalid(app, proof, "Merkle path does not fold").await;
     }
 
     #[tokio::test]
@@ -1250,7 +1454,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verify_handler_rejects_stale_runtime_lane_geometry() {
+    async fn verify_handler_uses_historical_policy_after_lane_removal() {
         let stale_lane = LaneId::new(1);
         let records = vec![sample_record(stale_lane.as_u32(), 1, 1)];
         let manifest = records[0].manifest_hash;
@@ -1259,7 +1463,15 @@ mod tests {
 
         install_stale_runtime_lane_geometry(&app, stale_lane);
 
-        verify_invalid(app, proof, "configured lane catalog").await;
+        let JsonBody(verification) =
+            super::handler_verify_commitment(State(app), NoritoJson(proof))
+                .await
+                .expect("verify handler should succeed");
+        assert!(
+            verification.valid,
+            "a proof authenticated by the historical block policy must survive current lane removal: {verification:?}"
+        );
+        assert!(verification.error.is_none());
     }
 
     #[tokio::test]
@@ -1267,7 +1479,7 @@ mod tests {
         let app = mk_app_state_for_tests();
         let err = super::handler_list_commitments(
             State(app),
-            NoritoJson(DaCommitmentProofRequest::default()),
+            NoritoJson(DaCommitmentListRequest::default()),
         )
         .await
         .expect_err("DA endpoints should reject when Nexus is disabled");
@@ -1280,6 +1492,56 @@ mod tests {
                 );
             }
             other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn commitment_post_routes_reject_oversized_bodies() {
+        use axum::{
+            Router,
+            body::Body,
+            extract::DefaultBodyLimit,
+            http::{Method, Request, StatusCode, header},
+            routing::post,
+        };
+        use tower::ServiceExt as _;
+
+        let app = mk_app_state_for_tests();
+        let router = Router::new()
+            .route(
+                ENDPOINT_DA_COMMITMENTS,
+                post(super::handler_list_commitments)
+                    .layer(DefaultBodyLimit::max(DA_COMMITMENT_REQUEST_MAX_BYTES)),
+            )
+            .route(
+                ENDPOINT_DA_COMMITMENTS_PROVE,
+                post(super::handler_prove_commitment)
+                    .layer(DefaultBodyLimit::max(DA_COMMITMENT_REQUEST_MAX_BYTES)),
+            )
+            .route(
+                ENDPOINT_DA_COMMITMENTS_VERIFY,
+                post(super::handler_verify_commitment)
+                    .layer(DefaultBodyLimit::max(DA_COMMITMENT_REQUEST_MAX_BYTES)),
+            )
+            .with_state(app);
+
+        for path in [
+            ENDPOINT_DA_COMMITMENTS,
+            ENDPOINT_DA_COMMITMENTS_PROVE,
+            ENDPOINT_DA_COMMITMENTS_VERIFY,
+        ] {
+            let request = Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(vec![b' '; DA_COMMITMENT_REQUEST_MAX_BYTES + 1]))
+                .expect("oversized request");
+            let response = router.clone().oneshot(request).await.expect("response");
+            assert_eq!(
+                response.status(),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "path={path}"
+            );
         }
     }
 }

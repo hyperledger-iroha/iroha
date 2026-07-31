@@ -177,7 +177,7 @@ impl Name {
     /// The manifest pins the normalization algorithm exactly and the baked tables are checked
     /// against a reviewed semantic fingerprint because this output is consensus-visible. Any
     /// intentional data upgrade must also update the fingerprint and regression corpus below.
-    fn normalize(candidate: &str) -> Result<Cow<'_, str>, ParseError> {
+    pub(crate) fn normalize(candidate: &str) -> Result<Cow<'_, str>, ParseError> {
         // Use ICU compiled data to apply NFC normalization deterministically
         // across platforms. This preserves compatibility forms but composes
         // canonically equivalent sequences (e.g., "e\u{0301}" -> "é"). The
@@ -339,7 +339,7 @@ fn reject_disallowed_unicode(label: &str) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn is_bidi_control(ch: char) -> bool {
+pub(crate) fn is_bidi_control(ch: char) -> bool {
     matches!(
         ch,
         '\u{061C}'

@@ -1,0 +1,35 @@
+{
+  "name": "xml-but-prettier",
+  "version": "1.0.1",
+  "title": "XML Beautifier",
+  "description": "Beautifies XML documents by putting each tag and text node on their own line and correctly indents everything",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "babel src --out-dir dist",
+    "prepublish": "npm run build",
+    "release": "release-it",
+    "test": "jest test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shockey/xml-but-prettier"
+  },
+  "author": "Kyle Shockey <kyleshockey@gmail.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "babel-cli": "^6.4.5",
+    "babel-jest": "^21.2.0",
+    "babel-preset-es2015": "^6.3.13",
+    "jest": "^21.2.1",
+    "release-it": "^4.1.1",
+    "tape": "^4.2.2"
+  },
+  "dependencies": {
+    "repeat-string": "^1.5.2"
+  },
+  "jest": {
+    "testMatch": [
+      "**/test/*.js"
+    ]
+  }
+}

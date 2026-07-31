@@ -706,7 +706,7 @@ fn complete_sampling_profile_digest_is_one_field_mutation_closed() {
     );
     assert_eq!(
         hex::encode(baseline_digest),
-        "ca1b5f131bbd477faa1b5e75ea8c3ea28fe843c7985ee161efc63da28d6c7f00"
+        "6e037c7342b327b75df5621f999506799174254ca7a7846d7549a6526f6ef897"
     );
 
     macro_rules! assert_mutation {

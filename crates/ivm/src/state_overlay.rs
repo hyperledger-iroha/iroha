@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fs, ops::Bound, path::PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64_STANDARD};
-use iroha_data_model::name::Name;
+use iroha_data_model::state_path::StatePath;
 use norito::json::{self, Map, Value};
 
 use crate::VMError;
@@ -15,23 +15,18 @@ use crate::VMError;
 #[derive(Clone, Debug, Default)]
 pub struct DurableStateOverlay {
     persist_path: Option<PathBuf>,
-    data: BTreeMap<String, Vec<u8>>,
+    data: BTreeMap<StatePath, Vec<u8>>,
 }
 
 /// Snapshot of a durable state overlay.
 #[derive(Clone, Debug, Default)]
 pub struct DurableStateSnapshot {
-    data: BTreeMap<String, Vec<u8>>,
+    data: BTreeMap<StatePath, Vec<u8>>,
 }
 
 impl DurableStateOverlay {
-    fn validate_entry(path: &str, value: &[u8]) -> Result<(), VMError> {
-        // Bound hostile persisted keys before Unicode normalization or allocation.
-        if path.len() > crate::syscalls::STATE_MAX_PATH_BYTES {
-            return Err(VMError::NoritoInvalid);
-        }
-        let name: Name = path.parse().map_err(|_| VMError::NoritoInvalid)?;
-        crate::host::validate_state_path_name(&name)?;
+    fn validate_entry(path: &StatePath, value: &[u8]) -> Result<(), VMError> {
+        crate::host::validate_state_path(path)?;
         crate::host::validate_state_value_payload_len(value.len())
     }
 
@@ -55,7 +50,7 @@ impl DurableStateOverlay {
     }
 
     /// Return a copy of the raw `NoritoBytes` payload for a path, if present.
-    pub fn get(&self, path: &str) -> Option<Vec<u8>> {
+    pub fn get(&self, path: &StatePath) -> Option<Vec<u8>> {
         self.data.get(path).cloned()
     }
 
@@ -63,7 +58,7 @@ impl DurableStateOverlay {
     ///
     /// Stateful syscall handlers use this to inspect the response length and
     /// prove affordability before allocating or copying guest-visible output.
-    pub fn get_ref(&self, path: &str) -> Option<&[u8]> {
+    pub fn get_ref(&self, path: &StatePath) -> Option<&[u8]> {
         self.data.get(path).map(Vec::as_slice)
     }
 
@@ -72,14 +67,14 @@ impl DurableStateOverlay {
     /// `set`, `restore`, and persisted-state loading enforce the payload-size
     /// bound before the value enters `data`. `STATE_LEN` can therefore read the
     /// stored vector length in constant time, independent of value size.
-    pub(crate) fn value_payload_ref(&self, path: &str) -> Result<Option<&[u8]>, VMError> {
+    pub(crate) fn value_payload_ref(&self, path: &StatePath) -> Result<Option<&[u8]>, VMError> {
         Ok(self.get_ref(path))
     }
 
     /// Insert or replace the raw payload for the provided path.
-    pub fn set(&mut self, path: &str, value: Vec<u8>) -> Result<(), VMError> {
+    pub fn set(&mut self, path: &StatePath, value: Vec<u8>) -> Result<(), VMError> {
         Self::validate_entry(path, &value)?;
-        let key = path.to_string();
+        let key = path.clone();
         let prev = self.data.insert(key.clone(), value);
         if let Err(err) = self.flush() {
             match prev {
@@ -87,7 +82,7 @@ impl DurableStateOverlay {
                     self.data.insert(key, old);
                 }
                 None => {
-                    self.data.remove(path);
+                    self.data.remove(&key);
                 }
             }
             return Err(err);
@@ -95,18 +90,8 @@ impl DurableStateOverlay {
         Ok(())
     }
 
-    /// Insert an entry while bypassing ingress validation.
-    ///
-    /// This is intentionally test-only and crate-private: runtime tests use it
-    /// to prove scanners reject corrupt state that could only have entered by
-    /// bypassing every supported persistence and mutation path.
-    #[cfg(test)]
-    pub(crate) fn insert_unchecked_for_test(&mut self, path: String, value: Vec<u8>) {
-        self.data.insert(path, value);
-    }
-
     /// Iterate over the stored state paths.
-    pub fn keys(&self) -> impl Iterator<Item = &String> {
+    pub fn keys(&self) -> impl Iterator<Item = &StatePath> {
         self.data.keys()
     }
 
@@ -118,19 +103,19 @@ impl DurableStateOverlay {
     pub fn keys_with_text_prefix<'a>(
         &'a self,
         prefix: &'a str,
-    ) -> impl Iterator<Item = &'a String> + 'a {
+    ) -> impl Iterator<Item = &'a StatePath> + 'a {
         self.data
             .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
             .map(|(key, _)| key)
-            .take_while(move |key| key.starts_with(prefix))
+            .take_while(move |key| (*key).as_ref().starts_with(prefix))
     }
 
     /// Delete the raw payload for the provided path.
-    pub fn del(&mut self, path: &str) -> Result<(), VMError> {
+    pub fn del(&mut self, path: &StatePath) -> Result<(), VMError> {
         let prev = self.data.remove(path);
         if let Err(err) = self.flush() {
             if let Some(old) = prev {
-                self.data.insert(path.to_string(), old);
+                self.data.insert(path.clone(), old);
             }
             return Err(err);
         }
@@ -164,7 +149,7 @@ impl DurableStateOverlay {
         }
         let mut map = Map::new();
         for (k, v) in &self.data {
-            map.insert(k.clone(), Value::String(B64_STANDARD.encode(v)));
+            map.insert(k.as_ref().to_owned(), Value::String(B64_STANDARD.encode(v)));
         }
         let serialized = json::to_vec(&Value::Object(map)).map_err(|_| VMError::NoritoInvalid)?;
         fs::write(path, serialized).map_err(|_| VMError::NoritoInvalid)?;
@@ -179,25 +164,36 @@ impl DurableStateOverlay {
             // Nothing to load yet; treat as empty.
             return Ok(());
         };
+        self.data = Self::decode_persisted(&bytes)?;
+        Ok(())
+    }
+
+    fn decode_persisted(bytes: &[u8]) -> Result<BTreeMap<StatePath, Vec<u8>>, VMError> {
         let val: Value = json::from_slice(&bytes).map_err(|_| VMError::NoritoInvalid)?;
         let obj = val.as_object().ok_or(VMError::NoritoInvalid)?;
         let mut map = BTreeMap::new();
         for (k, v) in obj {
+            // Reject an oversized persisted key before normalization allocates.
+            if k.len() > crate::syscalls::STATE_MAX_PATH_BYTES {
+                return Err(VMError::NoritoInvalid);
+            }
+            let path: StatePath = k.parse().map_err(|_| VMError::NoritoInvalid)?;
             let s = v.as_str().ok_or(VMError::NoritoInvalid)?.trim().to_string();
             let decoded = B64_STANDARD
                 .decode(s.as_bytes())
                 .map_err(|_| VMError::NoritoInvalid)?;
-            Self::validate_entry(k, &decoded)?;
-            map.insert(k.clone(), decoded);
+            Self::validate_entry(&path, &decoded)?;
+            if map.insert(path, decoded).is_some() {
+                return Err(VMError::NoritoInvalid);
+            }
         }
-        self.data = map;
-        Ok(())
+        Ok(map)
     }
 }
 
 impl DurableStateSnapshot {
     #[must_use]
-    pub fn new(data: BTreeMap<String, Vec<u8>>) -> Self {
+    pub fn new(data: BTreeMap<StatePath, Vec<u8>>) -> Self {
         Self { data }
     }
 }
@@ -206,60 +202,78 @@ impl DurableStateSnapshot {
 mod tests {
     use super::*;
 
+    fn path(value: &str) -> StatePath {
+        value.parse().expect("canonical state path")
+    }
+
     #[test]
     fn raw_payload_ingress_enforces_value_bound() {
         let mut overlay = DurableStateOverlay::in_memory();
         let maximum = vec![0xabu8; crate::syscalls::STATE_MAX_VALUE_BYTES];
+        let bounded = path("bounded");
         overlay
-            .set("bounded", maximum.clone())
+            .set(&bounded, maximum.clone())
             .expect("maximum raw payload must fit");
         assert_eq!(
             overlay
-                .value_payload_ref("bounded")
+                .value_payload_ref(&bounded)
                 .expect("valid overlay")
                 .expect("stored payload"),
             maximum
         );
 
         let oversized = vec![0xcdu8; crate::syscalls::STATE_MAX_VALUE_BYTES + 1];
+        let oversized_path = path("oversized");
         assert_eq!(
-            overlay.set("oversized", oversized),
+            overlay.set(&oversized_path, oversized),
             Err(VMError::NoritoInvalid)
         );
-        assert!(overlay.get_ref("oversized").is_none());
+        assert!(overlay.get_ref(&oversized_path).is_none());
     }
 
     #[test]
     fn restore_validates_all_entries_before_replacing_state() {
         let mut overlay = DurableStateOverlay::in_memory();
+        let existing = path("existing");
         overlay
-            .set("existing", b"kept".to_vec())
+            .set(&existing, b"kept".to_vec())
             .expect("seed overlay");
         let snapshot = DurableStateSnapshot::new(BTreeMap::from([
-            ("valid".to_owned(), b"value".to_vec()),
+            (path("valid"), b"value".to_vec()),
             (
-                "oversized".to_owned(),
+                path("oversized"),
                 vec![0u8; crate::syscalls::STATE_MAX_VALUE_BYTES + 1],
             ),
         ]));
 
         assert_eq!(overlay.restore(&snapshot), Err(VMError::NoritoInvalid));
-        assert_eq!(overlay.get_ref("existing"), Some(b"kept".as_slice()));
-        assert!(overlay.get_ref("valid").is_none());
+        assert_eq!(overlay.get_ref(&existing), Some(b"kept".as_slice()));
+        assert!(overlay.get_ref(&path("valid")).is_none());
     }
 
     #[test]
     fn text_prefix_iterator_starts_at_the_ordered_lower_bound() {
         let mut overlay = DurableStateOverlay::in_memory();
         for path in ["accounts/1", "orders/1", "orders/2", "payments/1"] {
-            overlay.set(path, Vec::new()).expect("insert bounded entry");
+            overlay
+                .set(&path.parse().expect("canonical state path"), Vec::new())
+                .expect("insert bounded entry");
         }
         assert_eq!(
             overlay
                 .keys_with_text_prefix("orders")
-                .map(String::as_str)
+                .map(AsRef::<str>::as_ref)
                 .collect::<Vec<_>>(),
             vec!["orders/1", "orders/2"]
+        );
+    }
+
+    #[test]
+    fn persisted_overlay_rejects_canonically_duplicate_state_paths() {
+        let duplicate = r#"{"root/e\u0301":"AQ==","root/é":"Ag=="}"#;
+        assert_eq!(
+            DurableStateOverlay::decode_persisted(duplicate.as_bytes()),
+            Err(VMError::NoritoInvalid)
         );
     }
 }

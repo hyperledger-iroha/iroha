@@ -106,7 +106,13 @@ device authority, and submits it to Torii. Core atomically:
 4. verifies the top-up-shield public inputs and proof;
 5. debits the exact public amount into escrow;
 6. appends the initial note commitment; and
-7. persists the finalized top-up anchor and operation receipt.
+7. persists the finalized top-up anchor, its zeroed cumulative drawdown
+   balance, and the operation receipt.
+
+The drawdown balance is an ordinary consensus-witnessed state leaf keyed by
+the top-up operation id. An anchor and its drawdown leaf are created together;
+an existing half-pair, a missing leaf, a malformed value, or a value above the
+anchor amount fails closed.
 
 After finality the wallet creates the initial recursive bundle
 with the ABI-21 SDK's `initSpendV4`. The note is not available for offline use until both the chain
@@ -152,11 +158,19 @@ and the offline change branch.
 Core validates the finalized top-up provenance, current recursive proof,
 active recursive StepEq, recursive StepEp, and unshield verifier records,
 nullifier freshness, exact scale, unshield public inputs, and optional change
-branch before mutating balances. It
-then consumes the branch nullifier, credits the exact public `Quantity`, appends
-the change commitment when present, and persists an idempotent receipt. A wallet
-keeps the source note and pending request until finality; retries reuse the same
-operation id and bytes.
+branch before mutating balances. It also allocates the exact public redemption
+amount across the canonically ordered top-up anchors and atomically advances
+each cumulative drawdown balance. No anchor can fund redemptions above its
+finalized amount, even if a later circuit or public-binding regression were to
+weaken the cryptographic conservation check. Partial redemption debits only the
+public amount, leaving the proven private change backed by the remaining
+drawdown capacity.
+
+Core then consumes the branch nullifier, credits the exact public `Quantity`,
+appends the change commitment when present, commits the drawdown updates, and
+persists an idempotent receipt as one transaction. A wallet keeps the source
+note and pending request until finality; retries reuse the same operation id and
+bytes.
 
 ## Wallet state and artifacts
 
@@ -254,11 +268,15 @@ that pending install. JVM artifact ingestion also limits every native write
 chunk to 1 MiB; the
 Kotlin and mirrored Java SDKs enforce that ceiling before cloning the caller's
 array.
-Before Halo2 parses an authenticated ParamsIPA, verifier key, or proving key,
-an allocation-free structural pass checks its exact degree, commitment counts,
-polynomial-vector counts, polynomial lengths, and total encoding length against
-the authenticated circuit shape. Serialized inner counts are never trusted as
-allocation sizes.
+The authenticated `ParamsIPA` payload is not accepted as a signer-selected
+generator set. Runtime first checks the fixed degree and exact encoded length,
+derives `ParamsIPA::new(k)` from Halo2's transparent public derivation, and
+requires its canonical serialized SHA-256 to match the authenticated payload.
+Before Halo2 parses a verifier or proving key, an allocation-free structural
+pass checks its exact degree, commitment counts, polynomial-vector counts,
+polynomial lengths, and total encoding length against the authenticated circuit
+shape. Serialized inner counts are never trusted as allocation sizes, and
+vendored processed-key reader panics are converted into ordinary rejection.
 Release verification and finalization likewise authenticate one framed role at
 a time and drop its payload before opening the next. They do not reconstruct an
 eight-role raw prover container merely to check carrier bindings.

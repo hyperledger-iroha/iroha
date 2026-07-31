@@ -43,13 +43,14 @@ fn decode_packed_offsets_fixed() {
     buf.extend_from_slice(&2u64.to_le_bytes());
     buf.extend_from_slice(&5u64.to_le_bytes());
     buf.extend_from_slice(&10u64.to_le_bytes());
+    buf.extend_from_slice(&[0xA5; 10]);
 
     {
         let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
         let (offsets, used, data_len, tail_len) =
             core::decode_packed_offsets_slice(&buf, 3).expect("decode packed offsets");
         assert_eq!(offsets, vec![0, 2, 5, 10]);
-        assert_eq!(used, buf.len());
+        assert_eq!(used, 4 * std::mem::size_of::<u64>());
         assert_eq!(data_len, 10);
         assert_eq!(tail_len, 0);
     }

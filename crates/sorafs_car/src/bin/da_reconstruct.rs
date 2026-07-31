@@ -556,11 +556,10 @@ fn platform_no_follow_flag() -> i32 {
 mod tests {
     use std::path::PathBuf;
 
-    use blake3::Hasher as Blake3Hasher;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
-            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
+            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
             manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
             types::{
                 BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
@@ -842,12 +841,6 @@ mod tests {
 
         let manifest_digest = ManifestDigest::new(*blake3::hash(&manifest_bytes).as_bytes());
         let chunk_root_hash = Hash::prehashed(*manifest.chunk_root.as_ref());
-        let mut kzg_bytes = [0u8; 48];
-        let mut kzg_hasher = Blake3Hasher::new();
-        kzg_hasher.update(manifest.chunk_root.as_ref());
-        kzg_hasher.update(manifest.storage_ticket.as_ref());
-        kzg_hasher.finalize_xof().fill(&mut kzg_bytes);
-        let kzg_commitment = KzgCommitment::new(kzg_bytes);
         let proof_digest = Hash::prehashed(*blake3::hash(b"da-fixture-proof").as_bytes());
         let acknowledgement_sig = Signature::try_from_bytes(&[0xA5; 64])
             .expect("DA reconstruction fixture acknowledgement signature is nonzero");
@@ -857,9 +850,8 @@ mod tests {
             42,
             manifest.client_blob_id,
             manifest_digest,
-            DaProofScheme::KzgBls12_381,
+            DaProofScheme::MerkleSha256,
             chunk_root_hash,
-            Some(kzg_commitment),
             Some(proof_digest),
             manifest.retention_policy.clone(),
             manifest.storage_ticket,

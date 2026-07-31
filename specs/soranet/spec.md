@@ -22,6 +22,31 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
 
 ## Handshake Overview (SNNet-1a)
 - Base transport: QUIC v1 with TLS 1.3 handshake. TLS provides DoS-resistant connection establishment.
+- Every post-handshake relay application stream is additionally protected by
+  the mandatory SoraNet record protocol (`SNR1`). TLS protects the live QUIC
+  transport; `SNR1` uses the hybrid handshake secret so recorded application
+  traffic retains the negotiated post-quantum confidentiality guarantee.
+  Direction- and QUIC-stream-specific ChaCha20-Poly1305 keys are derived with
+  HKDF-SHA-256. Each record carries
+  `magic("SNR1") || sequence(u64 BE) || plaintext_len(u32 BE) || ciphertext || tag`.
+  The header is authenticated as associated data, sequences start at zero and
+  must be contiguous, and plaintext is capped at 64 KiB before allocation.
+  Invalid, replayed, out-of-order, truncated, or unauthenticated records close
+  the affected stream without exposing plaintext. Node-to-node SoraNet sessions
+  use their existing equivalent ChaCha20-Poly1305 application framing.
+  The interoperable v1 derivation is
+  `HKDF-SHA-256(salt="iroha.soranet.record.hkdf-sha256.v1",
+  IKM=session_key).expand(info, 32)`, where `info` is the byte concatenation
+  `"iroha.soranet.record.chacha20poly1305.key.v1" || direction ||
+  initiator || stream_kind || stream_index:u64be`. Direction is `0` for
+  client-to-relay and `1` for relay-to-client; initiator is `0` for the QUIC
+  client and `1` for the QUIC server; stream kind is `0` for bidirectional and
+  `1` for unidirectional; and stream index is the QUIC stream number after
+  removing the two type bits. The ChaCha20-Poly1305 nonce is four zero bytes
+  followed by the record sequence as `u64be`.
+- Relays reject TLS 0-RTT and VPN helper clients do not offer it, so relay or
+  helper authentication and hybrid key derivation always complete before
+  application streams can carry data.
 - On top of TLS, a Noise XX hybrid handshake negotiates PQ and classical keys, binding capabilities.
 - Steps:
   1. **QUIC/TLS**: client connects to relay, completes TLS handshake using Ed25519 certificates signed by governance CA. TLS session used for initial key material.
@@ -54,13 +79,19 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   ```
 
   The relay reconstructs the Argon2id challenge by hashing the descriptor
-  commitment, relay identifier, optional transcript hash, and client nonce. The
+  commitment, relay identifier, required admission transcript binding, and
+  client nonce. The binding is carried in the `ClientHello` resume-hash field
+  and must be exactly 32 non-zero bytes. Unbound tickets and client hellos are
+  invalid. The
   resulting digest must contain at least `difficulty` leading zero bits once the
   client-supplied solution is hashed with `Argon2id(memory_kib, time_cost,
-  lanes)`. Tickets must expire within `max_future_skew_secs` of the relay's
-  clock and remain valid for at least `min_ticket_ttl_secs` seconds. Missing or
-  invalid tickets cause the relay to terminate the connection before parsing
-  the Noise payload.
+  lanes)`. The first-release default is 6 bits and zero is invalid. Tickets
+  must expire within `max_future_skew_secs` of the relay's
+  clock and remain valid for at least `min_ticket_ttl_secs` seconds. A relay
+  persistently consumes the ticket fingerprint before accepting the handshake;
+  a replay, concurrent duplicate, full replay store, or unavailable replay
+  store fails closed. Missing or invalid tickets cause the relay to terminate
+  the connection before invoking the hybrid Noise/ML-KEM engine.
 - Relays may also issue signed admission tokens to trusted clients. Tokens are
   sent as a standalone frame prefixed with the `SNTK` magic *before* any puzzle
   ticket and carry the relay identifier, handshake transcript hash, validity
@@ -68,15 +99,24 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   presented and verifies against the active policy (including revocation
   checks), the relay skips the puzzle requirement for that handshake. Tokens are
   single-use: relays store consumed `token_id_hex` entries in a bounded replay
-  store (`pow.token.replay_store_capacity`, `pow.token.replay_store_ttl_secs`,
-  optional `pow.token.replay_store_path` for persistence across restarts) and
-  evict the oldest non-expired entries when full. The Prometheus counter
+  ledger configured by `pow.token.replay_store_capacity` and the mandatory
+  durable `pow.token.replay_store_path`. Retention covers the maximum token TTL
+  plus both clock-skew edges (`max_ttl + 2 * clock_skew`). Active entries are
+  never evicted: an unreadable, malformed,
+  unwritable, or exhausted ledger fails startup or rejects admission instead of
+  admitting a replay. Each relay identity must have one authoritative ledger;
+  a process-lifetime exclusive sidecar lock rejects a second owner, and cloned
+  active replicas with independent stores are invalid. The Prometheus counter
   `soranet_token_verify_total{issuer,relay,outcome}` records accepted/replay/
   mismatch/expiry outcomes for dashboards and alerting.
   The token body includes a reserved `flags` byte (must be `0` in v1) and
   requires `issued_at < expires_at` for a non-zero validity window.
 - Transcript binding:
   - TLS exporter `tls-exporter("soranet handshake", 64)` hashed into Noise prologue.
+  - The 32-byte admission binding in `ClientHello` is mandatory and must equal
+    the binding used to mint a puzzle ticket or admission token.
+  - Ticket/token validation and single-use consumption complete before the relay
+    validates or encapsulates client ML-KEM material.
   - Transcript hash logged in handshake logs for downgrade detection.
 - Failure handling: if PQ negotiation fails, connection aborted; no fallback to classical-only allowed (mandated for first release).
 

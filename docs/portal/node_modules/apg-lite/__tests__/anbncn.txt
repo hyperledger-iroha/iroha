@@ -1,0 +1,6 @@
+S = &(AB !b) 1*a BC !c
+AB = a [ab] b
+BC = b [bc] c
+a = "a"
+b = "b"
+c = "c"

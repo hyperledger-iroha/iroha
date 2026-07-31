@@ -252,7 +252,6 @@ fn validate_manifest_root_cid_bytes(
 )]
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct ManifestDigest(
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
 );
@@ -660,7 +659,6 @@ impl ManifestAliasRecord {
 )]
 #[repr(transparent)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(transparent))]
 pub struct ReplicationOrderId(
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
 );

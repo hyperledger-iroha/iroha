@@ -1,18 +1,28 @@
 //! Lane privacy commitment registry and verification helpers (NX-10).
 //!
-//! This module defines the canonical commitment types used by Nexus private
-//! lanes. Runtime code and SDKs rely on these helpers to validate Merkle roots
-//! and zk-SNARK attestations before admitting cross-lane transfers.
+//! Nexus private lanes currently support only domain-separated Merkle
+//! commitments. A proof-system commitment must not be added here until
+//! admission can resolve an on-chain verifying key and invoke its real
+//! cryptographic verifier.
 
 use core::{convert::TryFrom, fmt};
 
-use blake3::Hasher;
 use iroha_schema::IntoSchema;
 #[cfg(feature = "json")]
 use norito::derive::{JsonDeserialize, JsonSerialize};
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::{Hash, HashOf, MerkleProof, MerkleTree};
+
+/// Domain tag used when hashing a raw lane-privacy Merkle leaf.
+///
+/// The trailing NUL prevents the tag from being a prefix of another protocol
+/// label.
+const LANE_MERKLE_LEAF_DOMAIN_V1: &[u8] = b"iroha:nexus:lane-privacy:merkle:leaf:v1\x00";
+
+/// Domain tag used when hashing a lane-privacy Merkle internal node.
+const LANE_MERKLE_NODE_DOMAIN_V1: &[u8] = b"iroha:nexus:lane-privacy:merkle:node:v1\x00";
 
 /// Result type returned by the privacy commitment helpers.
 pub type Result<T, E = PrivacyError> = core::result::Result<T, E>;
@@ -55,57 +65,21 @@ impl fmt::Display for LaneCommitmentId {
 }
 
 /// Canonical commitment schemes supported by Nexus private lanes.
+///
+/// The first release deliberately exposes only Merkle commitments. A
+/// proof-system variant requires a real, on-chain verifying-key-backed
+/// verifier before it can join this enum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommitmentScheme {
     /// Merkle tree root enforcing membership proofs.
     Merkle(MerkleCommitment),
-    /// zk-SNARK circuit attesting to a redacted state transition.
-    Snark(SnarkCircuit),
-}
-
-impl CommitmentScheme {
-    fn kind(&self) -> CommitmentSchemeKind {
-        match self {
-            CommitmentScheme::Merkle(_) => CommitmentSchemeKind::Merkle,
-            CommitmentScheme::Snark(_) => CommitmentSchemeKind::Snark,
-        }
-    }
-}
-
-/// Kind of scheme embedded in a [`LanePrivacyCommitment`].
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum CommitmentSchemeKind {
-    /// Merkle tree root commitment.
-    Merkle,
-    /// zk-SNARK circuit commitment.
-    Snark,
 }
 
 /// Runtime witness supplied when validating a commitment.
 #[derive(Clone, Debug)]
-pub enum PrivacyWitness<'a> {
+pub enum PrivacyWitness {
     /// Membership proof for a Merkle commitment.
     Merkle(MerkleWitness),
-    /// zk-SNARK proof bound to a registered circuit.
-    Snark(SnarkWitness<'a>),
-}
-
-impl PrivacyWitness<'_> {
-    fn kind(&self) -> PrivacyWitnessKind {
-        match self {
-            PrivacyWitness::Merkle(_) => PrivacyWitnessKind::Merkle,
-            PrivacyWitness::Snark(_) => PrivacyWitnessKind::Snark,
-        }
-    }
-}
-
-/// Kind of witness supplied during verification.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum PrivacyWitnessKind {
-    /// Merkle membership proof.
-    Merkle,
-    /// zk-SNARK proof.
-    Snark,
 }
 
 /// High-level commitment descriptor stored in the lane registry.
@@ -125,15 +99,6 @@ impl LanePrivacyCommitment {
         }
     }
 
-    /// Construct a zk-SNARK circuit commitment.
-    #[must_use]
-    pub const fn snark(id: LaneCommitmentId, circuit: SnarkCircuit) -> Self {
-        Self {
-            id,
-            scheme: CommitmentScheme::Snark(circuit),
-        }
-    }
-
     /// Return the identifier assigned to this commitment.
     #[must_use]
     pub const fn id(&self) -> LaneCommitmentId {
@@ -150,19 +115,12 @@ impl LanePrivacyCommitment {
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyError::SchemeMismatch`] when the witness kind does not
-    /// match the registered commitment, or any verification error raised by the
-    /// underlying proof system (`Merkle` or `Snark`).
-    pub fn verify(&self, witness: PrivacyWitness<'_>) -> Result<()> {
+    /// Returns any verification error raised by the Merkle verifier.
+    pub fn verify(&self, witness: PrivacyWitness) -> Result<()> {
         match (&self.scheme, witness) {
-            (CommitmentScheme::Merkle(commitment), PrivacyWitness::Merkle(w)) => {
-                commitment.verify(&w)
+            (CommitmentScheme::Merkle(commitment), PrivacyWitness::Merkle(witness)) => {
+                commitment.verify(&witness)
             }
-            (CommitmentScheme::Snark(circuit), PrivacyWitness::Snark(w)) => circuit.verify(w),
-            (scheme, witness) => Err(PrivacyError::SchemeMismatch {
-                expected: scheme.kind(),
-                actual: witness.kind(),
-            }),
         }
     }
 }
@@ -170,13 +128,14 @@ impl LanePrivacyCommitment {
 /// Errors raised when verifying lane commitments.
 #[derive(Debug, Error, PartialEq, Eq, Copy, Clone)]
 pub enum PrivacyError {
-    /// Witness does not match the registered scheme.
-    #[error("scheme mismatch (expected {expected:?}, got {actual:?})")]
-    SchemeMismatch {
-        /// Expected scheme.
-        expected: CommitmentSchemeKind,
-        /// Witness-kind supplied at runtime.
-        actual: PrivacyWitnessKind,
+    /// Lane privacy membership proofs must traverse at least one tree edge.
+    #[error("lane privacy merkle proof must contain at least one sibling")]
+    EmptyMerkleProof,
+    /// Lane privacy proofs use complete paths and may not omit siblings.
+    #[error("lane privacy merkle proof is missing sibling at level {level}")]
+    MissingMerkleSibling {
+        /// Zero-based level in the leaf-to-root path.
+        level: u8,
     },
     /// Proof depth exceeds the declared Merkle-tree budget.
     #[error("merkle proof depth {actual} exceeds declared limit {declared}")]
@@ -189,46 +148,84 @@ pub enum PrivacyError {
     /// Merkle proof failed verification against the registered root.
     #[error("merkle proof failed to verify against the registered root")]
     InvalidMerkleProof,
-    /// SNARK witness public inputs do not match the recorded trace hash.
-    #[error("snark statement hash mismatch")]
-    SnarkStatementMismatch,
-    /// SNARK proof bytes do not match the expected digest for the circuit.
-    #[error("snark proof digest mismatch")]
-    SnarkProofDigestMismatch,
 }
 
-/// Merkle membership proof bound to a canonical leaf hash.
+/// Merkle membership proof bound to a raw 32-byte lane leaf.
+///
+/// The verifier applies the lane-specific leaf domain before walking the
+/// proof. Callers must not pre-hash `leaf`.
 #[derive(Clone, Debug)]
 pub struct MerkleWitness {
-    leaf_hash: HashOf<[u8; 32]>,
+    leaf: [u8; 32],
     proof: MerkleProof<[u8; 32]>,
 }
 
 impl MerkleWitness {
-    /// Construct a witness from a pre-hashed leaf and proof.
+    /// Construct a witness from raw leaf bytes and a proof.
     #[must_use]
-    pub fn new(leaf_hash: HashOf<[u8; 32]>, proof: MerkleProof<[u8; 32]>) -> Self {
-        Self { leaf_hash, proof }
+    pub fn new(leaf: [u8; 32], proof: MerkleProof<[u8; 32]>) -> Self {
+        Self { leaf, proof }
     }
 
-    /// Hash raw leaf bytes using `Hash::prehashed` before storing them.
+    /// Construct a witness from raw leaf bytes and a proof.
     #[must_use]
     pub fn from_leaf_bytes(leaf: [u8; 32], proof: MerkleProof<[u8; 32]>) -> Self {
-        let hash = Hash::prehashed(leaf);
-        let typed = HashOf::<[u8; 32]>::from_untyped_unchecked(hash);
-        Self::new(typed, proof)
+        Self::new(leaf, proof)
     }
 
-    /// Borrow the leaf hash referenced by this witness.
+    /// Borrow the raw leaf referenced by this witness.
     #[must_use]
-    pub const fn leaf_hash(&self) -> &HashOf<[u8; 32]> {
-        &self.leaf_hash
+    pub const fn leaf(&self) -> &[u8; 32] {
+        &self.leaf
     }
 
     /// Borrow the Merkle proof.
     #[must_use]
     pub const fn proof(&self) -> &MerkleProof<[u8; 32]> {
         &self.proof
+    }
+
+    /// Compute the lane-specific Merkle root implied by this witness.
+    ///
+    /// Leaves and internal nodes use distinct SHA-256 domains. Paths must be
+    /// non-empty and every level must supply a sibling; generic
+    /// [`MerkleProof`] semantics remain unchanged for other callers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural or depth error when the proof is not a valid lane
+    /// privacy path.
+    pub fn implied_root(&self, max_depth: u8) -> Result<HashOf<MerkleTree<[u8; 32]>>> {
+        let depth = self.proof.audit_path().len();
+        if depth == 0 {
+            return Err(PrivacyError::EmptyMerkleProof);
+        }
+        if depth > usize::from(max_depth) {
+            return Err(PrivacyError::MerkleProofExceedsDepth {
+                declared: max_depth,
+                actual: u8::try_from(depth).unwrap_or(u8::MAX),
+            });
+        }
+        if depth < u32::BITS as usize && u64::from(self.proof.leaf_index()) >= 1_u64 << depth {
+            return Err(PrivacyError::InvalidMerkleProof);
+        }
+
+        let mut position = self.proof.leaf_index();
+        let mut accumulator = lane_merkle_leaf_hash(&self.leaf);
+        for (level, sibling) in self.proof.audit_path().iter().enumerate() {
+            let sibling = sibling.as_ref().ok_or(PrivacyError::MissingMerkleSibling {
+                level: u8::try_from(level).unwrap_or(u8::MAX),
+            })?;
+            accumulator = if position & 1 == 0 {
+                lane_merkle_node_hash(&accumulator, sibling)
+            } else {
+                lane_merkle_node_hash(sibling, &accumulator)
+            };
+            position >>= 1;
+        }
+
+        let root: Hash = accumulator.into();
+        Ok(HashOf::from_untyped_unchecked(root))
     }
 }
 
@@ -240,7 +237,7 @@ pub struct MerkleCommitment {
 }
 
 impl MerkleCommitment {
-    /// Create a new commitment from a canonical root hash.
+    /// Create a new commitment from a canonical lane-specific root hash.
     #[must_use]
     pub const fn new(root: HashOf<MerkleTree<[u8; 32]>>, max_depth: u8) -> Self {
         Self { root, max_depth }
@@ -267,20 +264,7 @@ impl MerkleCommitment {
     }
 
     fn verify(&self, witness: &MerkleWitness) -> Result<()> {
-        let depth = witness.proof.audit_path().len();
-        if depth > usize::from(self.max_depth) {
-            let actual = u8::try_from(depth).unwrap_or(u8::MAX);
-            return Err(PrivacyError::MerkleProofExceedsDepth {
-                declared: self.max_depth,
-                actual,
-            });
-        }
-        let proof = witness.proof.clone();
-        if proof.verify_sha256(
-            witness.leaf_hash(),
-            self.root(),
-            usize::from(self.max_depth),
-        ) {
+        if witness.implied_root(self.max_depth)? == self.root {
             Ok(())
         } else {
             Err(PrivacyError::InvalidMerkleProof)
@@ -288,196 +272,142 @@ impl MerkleCommitment {
     }
 }
 
-/// Unique identifier assigned to zk-SNARK circuits.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SnarkCircuitId(u16);
-
-impl SnarkCircuitId {
-    /// Construct a new identifier.
-    #[must_use]
-    pub const fn new(id: u16) -> Self {
-        Self(id)
-    }
-
-    /// Return the numeric ID.
-    #[must_use]
-    pub const fn get(self) -> u16 {
-        self.0
-    }
-}
-
-/// Metadata recorded for registered zk-SNARK circuits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SnarkCircuit {
-    circuit_id: SnarkCircuitId,
-    verifying_key_digest: [u8; 32],
-    statement_hash: [u8; 32],
-    proof_hash: [u8; 32],
-}
-
-impl SnarkCircuit {
-    /// Create a new circuit descriptor.
-    #[must_use]
-    pub const fn new(
-        circuit_id: SnarkCircuitId,
-        verifying_key_digest: [u8; 32],
-        statement_hash: [u8; 32],
-        proof_hash: [u8; 32],
-    ) -> Self {
-        Self {
-            circuit_id,
-            verifying_key_digest,
-            statement_hash,
-            proof_hash,
-        }
-    }
-
-    /// Return the circuit identifier.
-    #[must_use]
-    pub const fn circuit_id(&self) -> SnarkCircuitId {
-        self.circuit_id
-    }
-
-    /// Hash of the verifying key held by the registry.
-    #[must_use]
-    pub const fn verifying_key_digest(&self) -> &[u8; 32] {
-        &self.verifying_key_digest
-    }
-
-    /// Hash of the canonical public inputs statement.
-    #[must_use]
-    pub const fn statement_hash(&self) -> &[u8; 32] {
-        &self.statement_hash
-    }
-
-    /// Proof digest recorded for the circuit.
-    #[must_use]
-    pub const fn proof_hash(&self) -> &[u8; 32] {
-        &self.proof_hash
-    }
-
-    fn verify(&self, witness: SnarkWitness<'_>) -> Result<()> {
-        let expected_statement = hash_public_inputs(witness.public_inputs);
-        if expected_statement != self.statement_hash {
-            return Err(PrivacyError::SnarkStatementMismatch);
-        }
-        let expected_proof = hash_proof(self.verifying_key_digest(), witness.proof);
-        if expected_proof != self.proof_hash {
-            return Err(PrivacyError::SnarkProofDigestMismatch);
-        }
-        Ok(())
-    }
-}
-
-/// Runtime witness for zk-SNARK circuits.
-#[derive(Clone, Copy, Debug)]
-pub struct SnarkWitness<'a> {
-    /// Canonical encoding of the public inputs.
-    pub public_inputs: &'a [u8],
-    /// Proof bytes emitted by the zk-SNARK prover.
-    pub proof: &'a [u8],
-}
-
-/// Hash the canonical public inputs for zk-SNARK circuits.
+/// Hash a raw lane-privacy leaf using the versioned leaf domain.
 #[must_use]
-pub fn hash_public_inputs(public_inputs: &[u8]) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(public_inputs);
-    *hasher.finalize().as_bytes()
+pub fn lane_merkle_leaf_hash(leaf: &[u8; 32]) -> HashOf<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    hasher.update(LANE_MERKLE_LEAF_DOMAIN_V1);
+    hasher.update(leaf);
+    let digest: [u8; 32] = hasher.finalize().into();
+    HashOf::from_untyped_unchecked(Hash::prehashed(digest))
 }
 
-/// Hash the proof bytes while binding them to the verifying key digest.
+/// Hash a lane-privacy internal node using the versioned node domain.
 #[must_use]
-pub fn hash_proof(verifying_key_digest: &[u8; 32], proof_bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(verifying_key_digest);
-    hasher.update(proof_bytes);
-    *hasher.finalize().as_bytes()
+pub fn lane_merkle_node_hash(
+    left: &HashOf<[u8; 32]>,
+    right: &HashOf<[u8; 32]>,
+) -> HashOf<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    hasher.update(LANE_MERKLE_NODE_DOMAIN_V1);
+    hasher.update(left.as_ref());
+    hasher.update(right.as_ref());
+    let digest: [u8; 32] = hasher.finalize().into();
+    HashOf::from_untyped_unchecked(Hash::prehashed(digest))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn witness_with_root(
+        leaf: [u8; 32],
+        leaf_index: u32,
+        path: Vec<[u8; 32]>,
+    ) -> (MerkleWitness, HashOf<MerkleTree<[u8; 32]>>) {
+        let witness =
+            MerkleWitness::new(leaf, MerkleProof::from_audit_path_bytes(leaf_index, path));
+        let root = witness
+            .implied_root(u8::MAX)
+            .expect("well-formed proof must produce a root");
+        (witness, root)
+    }
+
     #[test]
     fn merkle_commitment_accepts_valid_proof() {
-        let leaf_bytes = [0x11u8; 32];
-        let leaf_hash = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_bytes));
-        let proof = MerkleProof::from_audit_path_bytes(1, vec![[0x22; 32], [0x33; 32]]);
-        let root = proof
-            .clone()
-            .compute_root_sha256(&leaf_hash, 8)
-            .expect("valid proof must produce root");
+        let (witness, root) = witness_with_root([0x11; 32], 1, vec![[0x22; 32], [0x33; 32]]);
         let commitment =
             LanePrivacyCommitment::merkle(LaneCommitmentId::new(7), MerkleCommitment::new(root, 8));
-        let witness = MerkleWitness::new(leaf_hash, proof);
         assert!(commitment.verify(PrivacyWitness::Merkle(witness)).is_ok());
     }
 
     #[test]
-    fn merkle_commitment_rejects_excessive_depth() {
-        let leaf_bytes = [0xFFu8; 32];
-        let witness = MerkleWitness::from_leaf_bytes(
-            leaf_bytes,
-            MerkleProof::from_audit_path_bytes(0, vec![[0x44; 32], [0x55; 32], [0x66; 32]]),
+    fn merkle_commitment_rejects_empty_path() {
+        let witness = MerkleWitness::new(
+            [0x11; 32],
+            MerkleProof::from_audit_path_bytes(0, Vec::new()),
         );
-        let root = witness
-            .proof()
-            .clone()
-            .compute_root_sha256(witness.leaf_hash(), 8)
-            .unwrap();
+        let commitment = LanePrivacyCommitment::merkle(
+            LaneCommitmentId::new(7),
+            MerkleCommitment::from_root_bytes([0x11; 32], 8),
+        );
+        assert_eq!(
+            commitment
+                .verify(PrivacyWitness::Merkle(witness))
+                .expect_err("empty paths must fail at the verifier"),
+            PrivacyError::EmptyMerkleProof
+        );
+    }
+
+    #[test]
+    fn merkle_commitment_rejects_missing_sibling() {
+        let witness = MerkleWitness::new([0x11; 32], MerkleProof::from_audit_path(0, vec![None]));
+        let commitment = LanePrivacyCommitment::merkle(
+            LaneCommitmentId::new(7),
+            MerkleCommitment::from_root_bytes([0x11; 32], 8),
+        );
+        assert_eq!(
+            commitment
+                .verify(PrivacyWitness::Merkle(witness))
+                .expect_err("omitted siblings must fail at the verifier"),
+            PrivacyError::MissingMerkleSibling { level: 0 }
+        );
+    }
+
+    #[test]
+    fn merkle_commitment_rejects_out_of_range_leaf_index() {
+        let witness = MerkleWitness::new(
+            [0x11; 32],
+            MerkleProof::from_audit_path_bytes(2, vec![[0x22; 32]]),
+        );
+        assert_eq!(
+            witness
+                .implied_root(8)
+                .expect_err("one proof level can address only leaves zero and one"),
+            PrivacyError::InvalidMerkleProof
+        );
+    }
+
+    #[test]
+    fn merkle_commitment_rejects_excessive_depth() {
+        let (witness, root) =
+            witness_with_root([0xFF; 32], 0, vec![[0x44; 32], [0x55; 32], [0x66; 32]]);
         let commitment =
             LanePrivacyCommitment::merkle(LaneCommitmentId::new(9), MerkleCommitment::new(root, 2));
         let err = commitment
             .verify(PrivacyWitness::Merkle(witness))
             .expect_err("depth mismatch");
-        assert!(matches!(
+        assert_eq!(
             err,
             PrivacyError::MerkleProofExceedsDepth {
                 declared: 2,
                 actual: 3
             }
-        ));
+        );
     }
 
     #[test]
-    fn snark_commitment_accepts_matching_hashes() {
-        let vk_digest = [0xAAu8; 32];
-        let public_inputs = b"lane=cbdc;amount=42";
-        let proof_bytes = b"demo-proof";
-        let circuit = SnarkCircuit::new(
-            SnarkCircuitId::new(5),
-            vk_digest,
-            hash_public_inputs(public_inputs),
-            hash_proof(&vk_digest, proof_bytes),
+    fn lane_merkle_leaf_and_node_domains_are_distinct() {
+        let raw = [0x5A; 32];
+        let leaf = lane_merkle_leaf_hash(&raw);
+        let node = lane_merkle_node_hash(&leaf, &leaf);
+        assert_ne!(
+            leaf.as_ref(),
+            node.as_ref(),
+            "an internal node must not be usable as a leaf"
         );
-        let commitment = LanePrivacyCommitment::snark(LaneCommitmentId::new(42), circuit);
-        let witness = SnarkWitness {
-            public_inputs,
-            proof: proof_bytes,
-        };
-        assert!(commitment.verify(PrivacyWitness::Snark(witness)).is_ok());
     }
 
     #[test]
-    fn snark_commitment_rejects_mismatched_statement() {
-        let vk_digest = [0x01u8; 32];
-        let good_inputs = b"lane=twas;amount=10";
-        let proof_bytes = b"proof";
-        let circuit = SnarkCircuit::new(
-            SnarkCircuitId::new(99),
-            vk_digest,
-            hash_public_inputs(good_inputs),
-            hash_proof(&vk_digest, proof_bytes),
+    fn lane_merkle_hashing_matches_v1_golden_vector() {
+        let (witness, root) = witness_with_root([0xAA; 32], 0, vec![[0xBB; 32]]);
+        assert_eq!(
+            hex::encode(lane_merkle_leaf_hash(witness.leaf()).as_ref()),
+            "7b08f69e5888269358d2f3029831ede108d0f7b464449001bcc5f7a64f498447"
         );
-        let commitment = LanePrivacyCommitment::snark(LaneCommitmentId::new(1), circuit);
-        let witness = SnarkWitness {
-            public_inputs: b"lane=twas;amount=11",
-            proof: proof_bytes,
-        };
-        let err = commitment
-            .verify(PrivacyWitness::Snark(witness))
-            .expect_err("mismatched inputs");
-        assert!(matches!(err, PrivacyError::SnarkStatementMismatch));
+        assert_eq!(
+            hex::encode(root.as_ref()),
+            "175dd23c29dda55ead958e0b1db68811f2108aa9a6f8d2222bec59bd2aed3a09"
+        );
     }
 }

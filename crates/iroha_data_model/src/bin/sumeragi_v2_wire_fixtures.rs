@@ -8,7 +8,13 @@
 
 mod native_amx_grouped;
 
-use std::{collections::BTreeSet, env, error::Error, fs, path::Path};
+use std::{
+    collections::BTreeSet,
+    env,
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -32,10 +38,8 @@ use iroha_data_model::{
 };
 use norito::codec::{DecodeAll, Encode};
 
-const FIXTURE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/sumeragi_v2/wire_v2.tsv"
-);
+const FIXTURE_DIRECTORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/sumeragi_v2");
+const WIRE_FIXTURE_BASENAME: &str = "wire_v2.tsv";
 const HEADER: &str = "# Accept rows were generated from iroha_data_model::block::consensus_v2 using Encode::encode.\n\
 # Reject rows are Rust-encoded invalid values or deliberate corruptions of those payloads.\n\
 # Bare Norito v1 layout with COMPACT_LEN; do not regenerate from an SDK codec.\n\
@@ -136,6 +140,7 @@ fn context() -> HeightContext {
         quorum: DualQuorum::from_roster(&roster).expect("four-validator roster is valid"),
         roster,
         nexus_amx_context_hash: Hash::new(b"nexus amx context"),
+        execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
             encoding: PayloadEncoding::Plain,
             chunk_size_bytes: 4,
@@ -1027,43 +1032,116 @@ fn render(rows: &[FixtureRow]) -> String {
     rendered
 }
 
-fn write_fixture(rendered: &str, check_only: bool) -> Result<(), Box<dyn Error>> {
+fn write_fixture(path: &Path, rendered: &str, check_only: bool) -> Result<(), Box<dyn Error>> {
     if check_only {
-        let existing = fs::read_to_string(FIXTURE_PATH)?;
+        let existing = fs::read_to_string(path)?;
         if existing != rendered {
             return Err(format!(
-                "fixture {FIXTURE_PATH} is stale; run cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures"
+                "fixture {} is stale; run cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures",
+                path.display(),
             )
             .into());
         }
         return Ok(());
     }
-    if let Some(parent) = Path::new(FIXTURE_PATH).parent() {
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(FIXTURE_PATH, rendered)?;
+    fs::write(path, rendered)?;
     Ok(())
 }
 
-fn parse_check_only() -> Result<bool, Box<dyn Error>> {
+#[derive(Debug, PartialEq, Eq)]
+struct Options {
+    check_only: bool,
+    output_dir: PathBuf,
+}
+
+fn parse_options_from(
+    arguments: impl IntoIterator<Item = String>,
+) -> Result<Options, Box<dyn Error>> {
     let mut check_only = false;
-    for argument in env::args().skip(1) {
+    let mut output_dir = None;
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--check" if !check_only => check_only = true,
             "--check" => return Err("--check was supplied more than once".into()),
+            "--out-dir" if output_dir.is_none() => {
+                let value = arguments
+                    .next()
+                    .ok_or("--out-dir requires a directory path")?;
+                if value.is_empty() {
+                    return Err("--out-dir requires a non-empty directory path".into());
+                }
+                output_dir = Some(PathBuf::from(value));
+            }
+            "--out-dir" => return Err("--out-dir was supplied more than once".into()),
             _ => {
-                return Err(format!("unknown argument `{argument}`; expected only --check").into());
+                return Err(format!(
+                    "unknown argument `{argument}`; expected --check or --out-dir <path>"
+                )
+                .into());
             }
         }
     }
-    Ok(check_only)
+    Ok(Options {
+        check_only,
+        output_dir: output_dir.unwrap_or_else(|| PathBuf::from(FIXTURE_DIRECTORY)),
+    })
+}
+
+fn parse_options() -> Result<Options, Box<dyn Error>> {
+    parse_options_from(env::args().skip(1))
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let check_only = parse_check_only()?;
+    let options = parse_options()?;
     let values = build_values()?;
     let rows = build_rows(&values)?;
     validate_rows(&rows, &values)?;
-    write_fixture(&render(&rows), check_only)?;
-    native_amx_grouped::write_fixture(check_only)
+    write_fixture(
+        &options.output_dir.join(WIRE_FIXTURE_BASENAME),
+        &render(&rows),
+        options.check_only,
+    )?;
+    native_amx_grouped::write_fixture(
+        &options
+            .output_dir
+            .join(native_amx_grouped::FIXTURE_BASENAME),
+        options.check_only,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn staged_output_directory_is_explicit() {
+        let options = parse_options_from([
+            "--out-dir".to_owned(),
+            "/tmp/sumeragi-fixtures".to_owned(),
+            "--check".to_owned(),
+        ])
+        .expect("valid staged options");
+        assert!(options.check_only);
+        assert_eq!(options.output_dir, Path::new("/tmp/sumeragi-fixtures"));
+    }
+
+    #[test]
+    fn duplicate_and_incomplete_options_are_rejected() {
+        for arguments in [
+            vec!["--check".to_owned(), "--check".to_owned()],
+            vec!["--out-dir".to_owned()],
+            vec![
+                "--out-dir".to_owned(),
+                "first".to_owned(),
+                "--out-dir".to_owned(),
+                "second".to_owned(),
+            ],
+        ] {
+            assert!(parse_options_from(arguments).is_err());
+        }
+    }
 }

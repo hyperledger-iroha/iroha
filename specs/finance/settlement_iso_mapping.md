@@ -6,6 +6,30 @@ by the bridge. It reflects the message scaffolding implemented in
 `crates/ivm/src/iso20022.rs` and serves as a reference when producing or
 validating Norito payloads.
 
+### Ledger authorization and finality
+
+An ISO message is evidence for constructing a settlement proposal; it does not
+authorize a ledger debit by itself. A `DvpIsi` or `PvpIsi` transaction must be
+submitted by the source of its initiating leg. Every other source account must
+first grant that submitter an exact `CanExecuteSettlement` permission binding:
+
+- the complete domain-separated canonical instruction hash;
+- the settlement identifier; and
+- the exact source `AssetId`, including its dataspace scope.
+
+Changing either leg, the execution order, metadata, settlement identifier, or
+balance scope changes the intent hash and invalidates the permission. Both legs
+must use distinct asset definitions and `AllOrNothing` atomicity; partial-commit
+plans are rejected in the first-release protocol.
+
+Successful execution passes both legs through the ordinary asset policy,
+transfer-control, transcript, and event pipeline before writing one immutable
+`SettlementReceipt`. A committed settlement identifier is permanently
+one-shot. Rejected attempts write no consensus receipt or failure ledger, so
+untrusted proposals cannot grow state or retain references to accounts and
+asset definitions. Operational failure detail belongs in telemetry and
+transaction rejection evidence, not permanent settlement state.
+
 ### Reference Data Policy (Identifiers and Validation)
 
 This policy packages the identifier preferences, validation rules, and reference-data
@@ -56,7 +80,8 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
     (length, country rules, mod-97 checksum).[^swift_iban]
 - **Currency** → **ISO 4217** 3-letter code, respect minor-unit rounding.[^iso_4217]
 - **Torii ingestion** → Submit PvP funding legs via `POST /v1/iso20022/pacs009`; the bridge
-  requires `Purp=SECU` and now enforces BIC crosswalks when reference data is configured.
+  requires `Purp=SECU` and an available BIC crosswalk before it accepts a message that
+  requires BIC reference validation.
 
 #### Validation rules (apply before emission)
 
@@ -91,15 +116,21 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
   the `iso_bridge.reference_data` configuration block (paths + refresh interval). Gauges
   `iso_reference_status`, `iso_reference_age_seconds`, `iso_reference_records`, and
   `iso_reference_refresh_interval_secs` expose runtime health for alerting. The Torii
-  bridge rejects `pacs.008` submissions whose agent BICs are absent from the configured
-  crosswalk, surfacing deterministic `InvalidIdentifier` errors when a counterparty is
-  unknown.【crates/iroha_torii/src/iso20022_bridge.rs#L1078】
+  bridge fails closed whenever a message invokes BIC, LEI, ISIN, CUSIP, MIC, or ledger
+  crosswalk validation but the corresponding dataset is missing or failed to load. An
+  unknown entry produces a deterministic `InvalidIdentifier`; an unavailable dataset
+  produces `ValidationFailed`. Profiles that do not use a reference-backed identifier
+  need not configure its dataset, but no validation call silently degrades to syntax-only
+  acceptance.【crates/iroha_torii/src/iso20022_bridge.rs#L3025】
 - IBAN and ISO 4217 bindings are enforced at the same layer: pacs.008/pacs.009 flows now
   emit `InvalidIdentifier` errors when debtor/creditor IBANs lack configured aliases or when
   the settlement currency is missing from `currency_assets`, preventing malformed bridge
-  instructions from reaching the ledger. IBAN validation also applies country-specific
-  lengths and numeric check digits before the ISO 7064 mod‑97 pass so structurally invalid
-  values are rejected early.【crates/iroha_torii/src/iso20022_bridge.rs#L775】【crates/iroha_torii/src/iso20022_bridge.rs#L827】【crates/ivm/src/iso20022.rs#L1255】
+  instructions from reaching the ledger. Every currency binding also requires a positive
+  `max_amount`; values above that per-message ceiling are rejected before signing.
+  `SplmtryData/SourceAccountId`, `TargetAccountId`, and `AssetDefinitionId` may repeat the
+  resolved binding for audit interoperability, but cannot replace it. IBAN validation also
+  applies country-specific lengths and numeric check digits before the ISO 7064 mod‑97 pass
+  so structurally invalid values are rejected early.【crates/iroha_torii/src/iso20022_bridge.rs#L775】【crates/iroha_torii/src/iso20022_bridge.rs#L827】【crates/ivm/src/iso20022.rs#L1255】
 - The CLI settlement helpers inherit the same guard rails: pass
   `--iso-reference-crosswalk <path>` alongside `--delivery-instrument-id` to have the DvP
   preview validate instrument IDs before emitting the `sese.023` XML snapshot.【crates/iroha_cli/src/main.rs#L3752】

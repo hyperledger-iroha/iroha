@@ -45,6 +45,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     permission::Permission,
+    prelude::QueryBuilderExt,
     privacy::{
         IrohaZkAmsProofV1, PrivacyActiveLifecycleV1, PrivacyCapabilityRowV1,
         PrivacyCapabilitySnapshotV1, PrivacyChallengeV1, PrivacyCompiledProfileResultV1,
@@ -72,12 +73,8 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-use p256::{
-    ecdsa::{
-        Signature as P256Signature, SigningKey as P256SigningKey,
-        signature::hazmat::PrehashSigner as _,
-    },
-    elliptic_curve::sec1::ToEncodedPoint as _,
+use p256::ecdsa::{
+    Signature as P256Signature, SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _,
 };
 use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 use sha2::{Digest, Sha256};
@@ -1013,7 +1010,7 @@ fn independently_resigned_stale_intent(
         .ok_or_else(|| eyre!("canonical privacy transaction omitted its direct submission"))?;
     let mut payload = transaction.payload().clone();
     payload.nonce =
-        NonZeroU32::new(nonce).ok_or_else(|| eyre!("stale-intent nonce must be non-zero"))?;
+        Some(NonZeroU32::new(nonce).ok_or_else(|| eyre!("stale-intent nonce must be non-zero"))?);
     let stale = TransactionBuilder::from_payload(payload)
         .wrap_err("re-open stale-intent payload")?
         .try_sign(client.key_pair.private_key())

@@ -3373,7 +3373,7 @@ fn render_queued_instructions(
 }
 
 fn render_durable_state_overlay(
-    overlay: &BTreeMap<Name, Option<Vec<u8>>>,
+    overlay: &BTreeMap<StatePath, Option<Vec<u8>>>,
 ) -> Result<norito::json::Value> {
     let mut object = norito::json::Map::new();
     for (path, value) in overlay {
@@ -3659,7 +3659,7 @@ fn parse_debug_account_list(raw: &str) -> Result<Vec<AccountId>> {
 fn load_debug_durable_state_fixture(
     durable_state_json: Option<&str>,
     durable_state_file: Option<&std::path::Path>,
-) -> Result<BTreeMap<Name, Vec<u8>>> {
+) -> Result<BTreeMap<StatePath, Vec<u8>>> {
     match (durable_state_json, durable_state_file) {
         (Some(raw), None) => parse_debug_durable_state_fixture(raw),
         (None, Some(path)) => {
@@ -3674,24 +3674,27 @@ fn load_debug_durable_state_fixture(
     }
 }
 
-fn parse_debug_durable_state_fixture(raw: &str) -> Result<BTreeMap<Name, Vec<u8>>> {
+fn parse_debug_durable_state_fixture(raw: &str) -> Result<BTreeMap<StatePath, Vec<u8>>> {
     let parsed: norito::json::Value =
         norito::json::from_str(raw).wrap_err("invalid durable state fixture JSON")?;
     let object = parsed
         .as_object()
         .ok_or_else(|| eyre!("durable state fixture must be a JSON object"))?;
-    object
-        .iter()
-        .map(|(path, value)| {
-            let name = Name::from_str(path)
-                .map_err(|err| eyre!("invalid durable state key `{path}`: {err}"))?;
-            let encoded = value
-                .as_str()
-                .ok_or_else(|| eyre!("durable state values must be strings"))?;
-            let bytes = decode_debug_fixture_bytes(encoded)?;
-            Ok((name, bytes))
-        })
-        .collect()
+    let mut state = BTreeMap::new();
+    for (path, value) in object {
+        let path = StatePath::from_str(path)
+            .map_err(|err| eyre!("invalid durable state key `{path}`: {err}"))?;
+        let encoded = value
+            .as_str()
+            .ok_or_else(|| eyre!("durable state values must be strings"))?;
+        let bytes = decode_debug_fixture_bytes(encoded)?;
+        if state.insert(path.clone(), bytes).is_some() {
+            return Err(eyre!(
+                "duplicate durable state key after canonicalization `{path}`"
+            ));
+        }
+    }
+    Ok(state)
 }
 
 fn decode_debug_fixture_bytes(raw: &str) -> Result<Vec<u8>> {
@@ -5960,6 +5963,32 @@ mod tests {
         assert_eq!(
             object.get("amount").and_then(norito::json::Value::as_i64),
             Some(7)
+        );
+    }
+
+    #[test]
+    fn debug_durable_state_fixture_enforces_canonical_state_path_boundaries() {
+        let maximum = "x".repeat(iroha::data_model::state_path::MAX_STATE_PATH_BYTES);
+        let fixture = format!(r#"{{"{maximum}":"0x00"}}"#);
+        let state = parse_debug_durable_state_fixture(&fixture).expect("maximum StatePath fixture");
+        assert_eq!(
+            state.keys().next().map(|path| path.as_ref()),
+            Some(maximum.as_str())
+        );
+
+        let oversized = format!("{maximum}x");
+        let fixture = format!(r#"{{"{oversized}":"0x00"}}"#);
+        let error = parse_debug_durable_state_fixture(&fixture)
+            .expect_err("oversized StatePath fixture must fail");
+        assert!(error.to_string().contains("invalid durable state key"));
+
+        let duplicate = r#"{"root/e\u0301":"0x01","root/é":"0x02"}"#;
+        let error = parse_debug_durable_state_fixture(duplicate)
+            .expect_err("canonically equivalent StatePath keys must not overwrite");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate durable state key after canonicalization")
         );
     }
 

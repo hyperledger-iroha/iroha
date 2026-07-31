@@ -1,0 +1,12 @@
+@swaggerexpert/cookie
+Copyright 2024, Vladimír Gorej
+@swaggerexpert/cookie is licensed under Apache 2.0 license.
+Copy of the Apache 2.0 license can be found in `LICENSE` file.
+
+cookie
+Copyright (c) 2012-2014 Roman Shtylman <shtylman@gmail.com>
+Copyright (c) 2015 Douglas Christopher Wilson <doug@somethingdoug.com>
+Tests in this project are highly inspired by test-suite of cookie project which
+is licensed under MIT License. All modifications are licensed under Apache 2.0 License.
+No part of test-suite is being distributes within the npm release artifacts.
+Copy of the original MIT license can be found in https://github.com/jshttp/cookie/blob/master/LICENSE.

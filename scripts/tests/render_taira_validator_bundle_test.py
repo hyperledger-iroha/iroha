@@ -34,7 +34,7 @@ TAIRA_GENESIS_DEPLOYER_ID = (
 )
 TAIRA_GAS_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 TAIRA_CONSENSUS_FINGERPRINT = (
-    "0x21591690e3c4d51fb3b81425aa8b9986eb417cc6a211dcfb8bce51c7600a6a7e"
+    "0x341dc1312934c312e6fb5cc8fab0902acaa54c2ce3d60fd67ddac8969eea0a54"
 )
 TAIRA_FEE_SPONSOR_SELECTORS = [
     "iroha.log",
@@ -64,6 +64,14 @@ TAIRA_FEE_SPONSOR_SELECTORS = [
 COUNCIL_KEY_1 = "ed01202152F8D19B791D24453242E15F2EAB6CB7CFFA7B6A5ED30097960E069881DB12"
 COUNCIL_KEY_2 = "ed012022FC297792F0B6FFC0BFCFDB7EDB0C0AA14E025A365EC0E342E86E3829CB74B6"
 COUNCIL_KEY_3 = "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"
+SORACLOUD_SIGNER_HANDLE = "hsm://soracloud/runtime-mutation/primary"
+SORACLOUD_SIGNER_AUTHORITY = (
+    "testuﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7"
+)
+SORACLOUD_SIGNER_PUBLIC_KEY_HEX = (
+    "4164bf554923ece1fd412d241036d863a6ae430476c898248b8237d77534cfc4"
+)
+SORACLOUD_SIGNER_POLICY_DIGEST_HEX = "95" * 32
 
 
 def test_taira_templates_require_operator_provisioned_scale_2_ds_offline_binding() -> None:
@@ -76,6 +84,10 @@ def test_taira_templates_require_operator_provisioned_scale_2_ds_offline_binding
     assert "offline_asset_scale = 2" in secrets_text
     assert "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" in secrets_text
     assert "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" in config_text
+    assert "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE" in secrets_text
+    assert "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE" in config_text
+    assert "operation_registry_max_entries = 4096" in config_text
+    assert "operation_registry_max_bytes = 524288" in config_text
     offline_section = config_text.split("[settlement.offline]", 1)[1].split("\n[", 1)[0]
     assert TAIRA_GAS_ASSET_ID not in offline_section
 
@@ -385,6 +397,14 @@ enabled = true
 enabled = true
 private_key = "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
 
+[soracloud_runtime.submission.signer]
+handle = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE"
+authority = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_AUTHORITY"
+algorithm = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_ALGORITHM"
+public_key_hex = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_PUBLIC_KEY_HEX"
+revision = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_REVISION"
+policy_digest_hex = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_POLICY_DIGEST_HEX"
+
 [settlement.offline]
 escrow_required = true
 escrow_accounts = { "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" = "REPLACE_WITH_TAIRA_OFFLINE_ESCROW_ACCOUNT" }
@@ -460,6 +480,15 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
         'torii_faucet_authority = "faucet-authority"',
         'torii_faucet_private_key = "faucet-private-key"',
         'kagemusha_commands_private_key = "kagemusha-commands-private-key"',
+        f'soracloud_runtime_signer_handle = "{SORACLOUD_SIGNER_HANDLE}"',
+        f'soracloud_runtime_signer_authority = "{SORACLOUD_SIGNER_AUTHORITY}"',
+        'soracloud_runtime_signer_algorithm = "ed25519"',
+        f'soracloud_runtime_signer_public_key_hex = "{SORACLOUD_SIGNER_PUBLIC_KEY_HEX}"',
+        "soracloud_runtime_signer_revision = 1",
+        (
+            "soracloud_runtime_signer_policy_digest_hex = "
+            f'"{SORACLOUD_SIGNER_POLICY_DIGEST_HEX}"'
+        ),
         'offline_asset_alias = "ds#boi.is"',
         f'offline_asset_definition_id = "{TAIRA_GAS_ASSET_ID}"',
         "offline_asset_scale = 2",
@@ -513,6 +542,14 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert 'authority = "bootstrap-authority"' in config
     assert 'authority = "faucet-authority"' in config
     assert 'private_key = "kagemusha-commands-private-key"' in config
+    assert f'handle = "{SORACLOUD_SIGNER_HANDLE}"' in config
+    assert f'authority = "{SORACLOUD_SIGNER_AUTHORITY}"' in config
+    assert 'algorithm = "ed25519"' in config
+    assert f'public_key_hex = "{SORACLOUD_SIGNER_PUBLIC_KEY_HEX}"' in config
+    assert "revision = 1" in config
+    assert (
+        f'policy_digest_hex = "{SORACLOUD_SIGNER_POLICY_DIGEST_HEX}"' in config
+    )
     assert (
         f'escrow_accounts = {{ "{TAIRA_GAS_ASSET_ID}" = '
         f'"{TAIRA_GENESIS_DEPLOYER_ID}" }}' in config
@@ -761,6 +798,7 @@ def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Pat
     )
     assert "$TAIRA_GENESIS_PRIVATE_KEY" in signing_command
     assert "taira-validator-1/config.toml" in signing_command
+    assert f"--bound-manifest-out {output_dir / 'genesis.json'}" in signing_command
 
 
 def test_genesis_renderer_preserves_fresh_contract_deployment_gate(
@@ -1269,6 +1307,62 @@ def test_secret_material_requires_exact_scale_2_ds_offline_binding(
             assert expected in str(error)
         else:  # pragma: no cover - defensive assertion
             raise AssertionError(f"renderer accepted offline mutation #{index}")
+
+
+def test_secret_material_requires_exact_provider_backed_soracloud_signer(
+    tmp_path: Path,
+) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    valid = secrets_path.read_text(encoding="utf-8")
+
+    mutations = (
+        (
+            valid.replace(
+                f'soracloud_runtime_signer_handle = "{SORACLOUD_SIGNER_HANDLE}"\n',
+                "",
+            ),
+            "production Soracloud runtime signer is mandatory",
+        ),
+        (
+            valid.replace(
+                f'soracloud_runtime_signer_handle = "{SORACLOUD_SIGNER_HANDLE}"',
+                'soracloud_runtime_signer_handle = "REPLACE_WITH_SIGNER"',
+            ),
+            "still contains placeholders",
+        ),
+        (
+            valid.replace(SORACLOUD_SIGNER_HANDLE, "hsm://soracloud/dummy"),
+            "credential-free production provider handle",
+        ),
+        (
+            valid.replace(SORACLOUD_SIGNER_AUTHORITY, TAIRA_GENESIS_DEPLOYER_ID),
+            "must be derived from soracloud_runtime_signer_public_key_hex",
+        ),
+        (
+            valid.replace(
+                SORACLOUD_SIGNER_PUBLIC_KEY_HEX,
+                SORACLOUD_SIGNER_PUBLIC_KEY_HEX.upper(),
+            ),
+            "canonical lowercase hexadecimal",
+        ),
+        (
+            valid.replace(
+                "soracloud_runtime_signer_revision = 1",
+                "soracloud_runtime_signer_revision = 0",
+            ),
+            "must be a positive integer",
+        ),
+        (
+            valid.replace(SORACLOUD_SIGNER_POLICY_DIGEST_HEX, "00" * 32),
+            "canonical nonzero 32-byte lowercase digest",
+        ),
+    )
+    for index, (text, expected) in enumerate(mutations):
+        candidate = tmp_path / f"soracloud_signer_{index}.toml"
+        candidate.write_text(text, encoding="utf-8")
+        with pytest.raises(ValueError, match=expected):
+            MODULE.load_secret_material(candidate)
 
 
 def test_secret_material_rejects_wonderland_onboarding_scope(tmp_path: Path) -> None:

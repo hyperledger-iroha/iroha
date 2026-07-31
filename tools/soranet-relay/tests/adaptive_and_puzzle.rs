@@ -150,6 +150,7 @@ fn puzzle_failures_surface_and_sync_policies() {
     let remote: SocketAddr = "192.0.2.44:7555".parse().expect("valid socket");
     let descriptor = DEFAULT_DESCRIPTOR_COMMIT;
     let relay_id = [0xCC; 32];
+    let transcript = [0xDD; 32];
     let mut rng = StdRng::from_seed([0xAA; 32]);
 
     let attempt = controls
@@ -159,7 +160,7 @@ fn puzzle_failures_surface_and_sync_policies() {
         .current_puzzle_parameters()
         .expect("puzzle policy active");
     let ttl = Duration::from_secs(45);
-    let binding = PuzzleBinding::new(&descriptor, &relay_id, None);
+    let binding = PuzzleBinding::new(&descriptor, &relay_id, &transcript);
     let mut ticket = puzzle::mint_ticket(&params, &binding, ttl, &mut rng).expect("mint ticket");
     ticket.difficulty = ticket.difficulty.saturating_sub(1);
     let err = puzzle::verify(&ticket, &binding, &params).expect_err("tampered must fail");
@@ -422,7 +423,8 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
     .expect("dos controls");
     let descriptor = DEFAULT_DESCRIPTOR_COMMIT;
     let relay_id = [0xBA; 32];
-    let binding = PuzzleBinding::new(&descriptor, &relay_id, None);
+    let transcript = [0xBC; 32];
+    let binding = PuzzleBinding::new(&descriptor, &relay_id, &transcript);
     let remote1: SocketAddr = "198.51.100.10:7000".parse().expect("valid socket addr");
     let remote2: SocketAddr = "198.51.100.11:7001".parse().expect("valid socket addr");
     let mut rng = StdRng::from_seed([0x42; 32]);

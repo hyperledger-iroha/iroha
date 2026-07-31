@@ -297,7 +297,7 @@ pub(crate) mod taikai_ingest {
                 "{TAIKAI_TRM_LOCK_PREFIX}{slug}{TAIKAI_TRM_LOCK_SUFFIX}"
             ));
             for attempt in 0..=1 {
-                match OpenOptions::new().write(true).create_new(true).open(&path) {
+                match open_new_private_artifact(&path) {
                     Ok(mut file) => {
                         let now = current_unix_seconds();
                         if let Err(err) = writeln!(file, "{now}") {
@@ -632,11 +632,7 @@ pub(crate) mod taikai_ingest {
         let rendered = json::to_json_pretty(&Value::Object(map))
             .map_err(|err| io::Error::new(ErrorKind::Other, err.to_string()))?;
         let tmp_path = path.with_extension(format!("tmp-{}", artifact_temp_suffix()?));
-        match OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&tmp_path)
-        {
+        match open_new_private_artifact(&tmp_path) {
             Ok(mut file) => {
                 if let Err(err) = file.write_all(rendered.as_bytes()) {
                     return Err(temp_artifact_write_error(&tmp_path, err));
@@ -1043,11 +1039,20 @@ pub(crate) mod taikai_ingest {
         }
     }
 
+    fn open_new_private_artifact(path: &Path) -> io::Result<fs::File> {
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        options.open(path)
+    }
+
     fn write_temp_artifact(tmp_path: &Path, bytes: &[u8]) -> io::Result<()> {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(tmp_path)?;
+        let mut file = open_new_private_artifact(tmp_path)?;
         file.write_all(bytes)?;
         file.sync_all()
     }
@@ -1146,6 +1151,28 @@ pub(crate) mod taikai_ingest {
             assert_eq!(
                 fs::read(&tmp_path).expect("read existing temp artifact after cleanup helper"),
                 b"existing"
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn taikai_temp_artifact_write_uses_owner_only_permissions() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let dir = tempdir().expect("tempdir");
+            let tmp_path = dir.path().join(".taikai.tmp");
+
+            write_temp_artifact(&tmp_path, b"sensitive Taikai artifact")
+                .expect("write owner-only temp artifact");
+
+            let mode = fs::metadata(&tmp_path)
+                .expect("inspect temp artifact")
+                .permissions()
+                .mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "Taikai temp artifact must not grant group or world access"
             );
         }
 

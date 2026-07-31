@@ -44,9 +44,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .consensus_fingerprint()
             .ok_or("manifest omitted consensus fingerprint")?;
         println!(
-            "{} {} {}",
+            "{} {} {} {}",
             path.display(),
             hex::encode(context.nexus_amx_context_hash),
+            hex::encode(context.execution_policy_hash),
             fingerprint
         );
     }

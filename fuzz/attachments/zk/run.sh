@@ -10,8 +10,7 @@ set -euo pipefail
 #
 # Configuration (env vars):
 # - CLI_CONFIG: optional path to client config TOML (passed via --config)
-# - AUTHORITY: account id like 'sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D' (required for VK ops)
-# - PRIVATE_KEY: ExposedPrivateKey string (multihash) for AUTHORITY (required for VK ops)
+# - The configured client account and key sign VK transactions.
 # - ELECTION_ID: optional vote id (default: demo-election-1)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,27 +33,10 @@ if ! iroha "${CONFIG_FLAG[@]}" Version >/dev/null; then
   exit 1
 fi
 
-echo "[1/7] VK register/update/deprecate (requires AUTHORITY and PRIVATE_KEY)"
-if [[ -z "${AUTHORITY:-}" || -z "${PRIVATE_KEY:-}" ]]; then
-  echo "  Skipping VK ops: AUTHORITY and/or PRIVATE_KEY not set" >&2
-else
-  tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' EXIT
-  # Register
-  jq --arg a "$AUTHORITY" --arg k "$PRIVATE_KEY" '.authority=$a | .private_key=$k' \
-    "$SCRIPT_DIR/vk_register.json" >"$tmp_dir/vk_register.eff.json"
-  iroha "${CONFIG_FLAG[@]}" zk vk register --json "$tmp_dir/vk_register.eff.json"
-  # Update (bump version)
-  jq --arg a "$AUTHORITY" --arg k "$PRIVATE_KEY" '.authority=$a | .private_key=$k' \
-    "$SCRIPT_DIR/vk_update.json" >"$tmp_dir/vk_update.eff.json"
-  iroha "${CONFIG_FLAG[@]}" zk vk update --json "$tmp_dir/vk_update.eff.json"
-  # Deprecate
-  jq --arg a "$AUTHORITY" --arg k "$PRIVATE_KEY" '.authority=$a | .private_key=$k' \
-    "$SCRIPT_DIR/vk_deprecate.json" >"$tmp_dir/vk_deprecate.eff.json"
-  iroha "${CONFIG_FLAG[@]}" zk vk deprecate --json "$tmp_dir/vk_deprecate.eff.json"
-  # Read
-  iroha "${CONFIG_FLAG[@]}" zk vk get --backend halo2/ipa --name vk_add
-fi
+echo "[1/7] VK register/update with the configured signer"
+iroha "${CONFIG_FLAG[@]}" zk vk register --json "$SCRIPT_DIR/vk_register.json"
+iroha "${CONFIG_FLAG[@]}" zk vk update --json "$SCRIPT_DIR/vk_update.json"
+iroha "${CONFIG_FLAG[@]}" zk vk get --backend halo2/ipa --name vk_add
 
 echo "[2/7] Upload JSON attachment"
 ATT_META_JSON=$(iroha "${CONFIG_FLAG[@]}" zk attachments upload --file "$SCRIPT_DIR/proof.json" --content-type application/json)

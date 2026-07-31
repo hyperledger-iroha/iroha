@@ -490,13 +490,15 @@ pub fn normalize_host_header(raw: &str) -> Option<String> {
         return None;
     }
     let authority = Authority::try_from(trimmed).ok()?;
-    Some(
-        authority
-            .host()
-            .trim()
-            .trim_end_matches('.')
-            .to_ascii_lowercase(),
-    )
+    let host = authority
+        .host()
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    // DNS names are bounded at 253 bytes, while textual IP literals are smaller. Keep the
+    // normalized form suitable for persistent policy events even when an HTTP implementation
+    // accepts a larger syntactically valid authority.
+    (!host.is_empty() && host.len() <= 253).then_some(host)
 }
 
 /// Encode a raw CID byte sequence using lowercase multibase base32.
@@ -722,6 +724,10 @@ mod tests {
         assert_eq!(
             normalize_host_header("taira.sora.org:443"),
             Some("taira.sora.org".to_string())
+        );
+        assert_eq!(
+            normalize_host_header(&format!("{}.org", "a".repeat(254))),
+            None
         );
     }
 

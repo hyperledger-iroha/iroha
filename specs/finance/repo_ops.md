@@ -81,7 +81,7 @@ collateral, custody scope, or maturity.
 `ReverseRepoIsi` contains only `agreement_id`. It is accepted only when:
 
 - the agreement exists and is still active;
-- the submitting authority is the recorded initiator; and
+- the submitting authority is the recorded initiator, counterparty, or custodian; and
 - the authoritative block time is at or after the recorded maturity.
 
 The runtime computes ACT/360 interest from the recorded principal, fixed rate,

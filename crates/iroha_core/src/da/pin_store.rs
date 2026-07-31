@@ -4,7 +4,10 @@
 //! provides fast lookups for Torii/query paths and can be rebuilt from the
 //! block log or WSV indexes after restart.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Bound::{Excluded, Unbounded},
+};
 
 use iroha_data_model::{
     da::{
@@ -132,6 +135,31 @@ impl DaPinStore {
         self.by_location.values()
     }
 
+    /// Return intents in canonical location order strictly after `cursor`.
+    ///
+    /// The ordered map seeks directly to the cursor in logarithmic time. Callers
+    /// should separately require [`Self::contains_query_location`] before
+    /// accepting a client-supplied cursor so removed or foreign locations fail
+    /// closed.
+    pub fn all_sorted_after(
+        &self,
+        cursor: Option<DaCommitmentLocation>,
+    ) -> impl Iterator<Item = &DaPinIntentWithLocation> {
+        let lower_bound = cursor.map_or(Unbounded, |location| {
+            Excluded((location.block_height, location.index_in_bundle))
+        });
+        self.by_location
+            .range((lower_bound, Unbounded))
+            .map(|(_, record)| record)
+    }
+
+    /// Return whether the active query index contains `location`.
+    #[must_use]
+    pub fn contains_query_location(&self, location: DaCommitmentLocation) -> bool {
+        self.by_location
+            .contains_key(&(location.block_height, location.index_in_bundle))
+    }
+
     /// Number of currently queryable pin intents.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -229,6 +257,28 @@ mod tests {
             .map(|rec| (rec.location.block_height, rec.location.index_in_bundle))
             .collect();
         assert_eq!(ordered, vec![(1, 0), (2, 3)]);
+    }
+
+    #[test]
+    fn seeks_strictly_after_query_location() {
+        let intents = vec![
+            located(sample_intent(1, 1, None), 1, 0),
+            located(sample_intent(2, 2, None), 2, 0),
+            located(sample_intent(3, 3, None), 3, 0),
+        ];
+        let store = DaPinStore::from_intents(&intents);
+        let cursor = intents[1].location;
+
+        assert!(store.contains_query_location(cursor));
+        let remaining = store
+            .all_sorted_after(Some(cursor))
+            .map(|entry| entry.location)
+            .collect::<Vec<_>>();
+        assert_eq!(remaining, vec![intents[2].location]);
+        assert!(!store.contains_query_location(DaCommitmentLocation {
+            block_height: 99,
+            index_in_bundle: 99,
+        }));
     }
 
     #[test]

@@ -3,15 +3,13 @@
 #![cfg(feature = "zk-tests")]
 //! Verifying-key registry indexing by `(circuit_id, version)`.
 
-use std::sync::Arc;
-
 use iroha_core::{
     executor::Executor,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, WorldReadOnly},
-    zk::{PreverifiedProofKey, hash_vk},
+    zk::hash_vk,
 };
 use iroha_crypto::Hash as CryptoHash;
 use iroha_data_model::{
@@ -34,9 +32,6 @@ use nonzero_ext::nonzero;
 
 #[path = "common/world_fixture.rs"]
 mod test_world;
-
-#[allow(clippy::disallowed_types)]
-type PreverifiedMap = iroha_core::zk::PreverifiedProofMap;
 
 fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
     let mut stx = block.transaction();
@@ -184,12 +179,6 @@ fn execute_verify_proof(
     vk_commitment: [u8; 32],
 ) -> Result<(), ValidationFail> {
     attachment.vk_commitment = Some(vk_commitment);
-    let mut preverified = PreverifiedMap::new();
-    preverified.insert(
-        PreverifiedProofKey::new(&attachment.proof, &attachment.vk_ref, vk_commitment),
-        true,
-    );
-    block.set_preverified_batch(Arc::new(preverified));
     let mut stx = block.transaction();
     let isi: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
     let res = isi
@@ -295,7 +284,7 @@ fn verify_proof_rejects_schema_hash_mismatch() {
 }
 
 #[test]
-fn verify_proof_accepts_matching_metadata() {
+fn verify_proof_records_matching_metadata_with_invalid_proof_as_rejected() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -332,8 +321,23 @@ fn verify_proof_accepts_matching_metadata() {
     let proof_box = iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), proof_bytes);
     let attachment =
         iroha_data_model::proof::ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+    let proof_id = iroha_data_model::proof::ProofId {
+        backend: attachment.backend.clone(),
+        proof_hash: iroha_core::zk::hash_proof(&attachment.proof),
+    };
 
-    execute_verify_proof(&mut block, attachment, commitment).expect("verify succeeds");
+    execute_verify_proof(&mut block, attachment, commitment)
+        .expect("invalid proof result should be recorded");
+    let record = block
+        .world
+        .proofs()
+        .get(&proof_id)
+        .expect("proof record must exist");
+    assert_eq!(
+        record.status,
+        iroha_data_model::proof::ProofStatus::Rejected,
+        "matching metadata must not substitute for cryptographic verification"
+    );
 }
 
 #[test]

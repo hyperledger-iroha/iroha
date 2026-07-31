@@ -17,7 +17,6 @@ use iroha_data_model::{
             SubmitSorafsReserveAppeal,
         },
     },
-    name::Name,
     permission::Permission,
     query::{
         error::{FindError, QueryExecutionFail},
@@ -41,6 +40,7 @@ use iroha_data_model::{
             ReserveTier,
         },
     },
+    state_path::StatePath,
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
@@ -199,30 +199,30 @@ fn require_governance(
     }
 }
 
-fn reserve_state_key() -> &'static Name {
-    static KEY: OnceLock<Name> = OnceLock::new();
-    KEY.get_or_init(|| Name::from_str(RESERVE_STATE_KEY).expect("static state key is valid"))
+fn reserve_state_key() -> &'static StatePath {
+    static KEY: OnceLock<StatePath> = OnceLock::new();
+    KEY.get_or_init(|| StatePath::from_str(RESERVE_STATE_KEY).expect("static state key is valid"))
 }
 
-fn digest_key(prefix: &str, digest: [u8; 32]) -> Name {
-    Name::from_str(&format!("{prefix}{}", hex::encode(digest)))
+fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
+    StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static prefix plus lowercase hex is a valid state key")
 }
 
-fn provider_key(provider_id: ProviderId) -> Name {
+fn provider_key(provider_id: ProviderId) -> StatePath {
     digest_key(PROVIDER_STATE_KEY_PREFIX, *provider_id.as_bytes())
 }
 
-fn movement_key(movement_id: [u8; 32]) -> Name {
+fn movement_key(movement_id: [u8; 32]) -> StatePath {
     digest_key(MOVEMENT_STATE_KEY_PREFIX, movement_id)
 }
 
-fn appeal_key(appeal_id: [u8; 32]) -> Name {
+fn appeal_key(appeal_id: [u8; 32]) -> StatePath {
     digest_key(APPEAL_STATE_KEY_PREFIX, appeal_id)
 }
 
-fn event_key(sequence: u64) -> Name {
-    Name::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
+fn event_key(sequence: u64) -> StatePath {
+    StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
 
@@ -413,7 +413,7 @@ fn validate_event_journal_head(
 fn ensure_reserve_namespace_empty(
     world: &impl WorldReadOnly,
 ) -> Result<(), InstructionExecutionError> {
-    let prefix = Name::from_str("sorafs_reserve_").expect("static reserve prefix is valid");
+    let prefix = StatePath::from_str("sorafs_reserve_").expect("static reserve prefix is valid");
     if world
         .smart_contract_state()
         .range(prefix..)
@@ -432,7 +432,7 @@ fn ensure_no_event_after_head(
     head: Option<ReserveEventJournalHeadV1>,
 ) -> Result<(), InstructionExecutionError> {
     let prefix_start =
-        Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
+        StatePath::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
     let first_event_key = world
         .smart_contract_state()
         .range(prefix_start..)
@@ -457,7 +457,7 @@ fn ensure_no_event_after_head(
         }
     }
     let start = head.map_or_else(
-        || Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid"),
+        || StatePath::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid"),
         |head| event_key(head.last_sequence),
     );
     for (key, _) in world.smart_contract_state().range(start..) {
@@ -796,7 +796,8 @@ fn ensure_apr_rotation_has_no_debt(
         return Ok(());
     }
 
-    let start = Name::from_str(PROVIDER_STATE_KEY_PREFIX).expect("static provider prefix is valid");
+    let start =
+        StatePath::from_str(PROVIDER_STATE_KEY_PREFIX).expect("static provider prefix is valid");
     for (key, payload) in world.smart_contract_state().range(start..) {
         if !key.to_string().starts_with(PROVIDER_STATE_KEY_PREFIX) {
             break;
@@ -1895,7 +1896,7 @@ impl ReserveEventQueryBudgetV1 {
 
     fn inspect_direct_read(
         &mut self,
-        key: &Name,
+        key: &StatePath,
         encoded_value_bytes: usize,
     ) -> Result<(), QueryExecutionFail> {
         self.inspect_storage_probe(key.as_ref().len(), None, encoded_value_bytes)
@@ -1918,8 +1919,8 @@ impl ReserveEventQueryBudgetV1 {
 
     fn inspect_range_read(
         &mut self,
-        probe_key: &Name,
-        result: Option<(&Name, usize)>,
+        probe_key: &StatePath,
+        result: Option<(&StatePath, usize)>,
     ) -> Result<(), QueryExecutionFail> {
         self.inspect_storage_probe(
             probe_key.as_ref().len(),
@@ -2060,7 +2061,7 @@ fn ensure_no_event_after_head_for_query(
     budget: &mut ReserveEventQueryBudgetV1,
 ) -> Result<(), QueryExecutionFail> {
     let prefix_start =
-        Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
+        StatePath::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
     let mut first_iter = world.smart_contract_state().range(prefix_start.clone()..);
     let first = first_iter.next();
     budget.inspect_range_read(&prefix_start, first.map(|(key, value)| (key, value.len())))?;
@@ -2278,10 +2279,10 @@ fn query_reserve_event_page(
 fn scan_reserve_records<T>(
     world: &impl WorldReadOnly,
     prefix: &str,
-    start: Name,
+    start: StatePath,
     limit: usize,
     budget: &mut ReserveEventQueryBudgetV1,
-    mut decode: impl FnMut(&Name, &[u8]) -> Result<Option<T>, QueryExecutionFail>,
+    mut decode: impl FnMut(&StatePath, &[u8]) -> Result<Option<T>, QueryExecutionFail>,
 ) -> Result<Vec<T>, QueryExecutionFail> {
     let mut records = Vec::with_capacity(limit.saturating_add(1));
     let mut probe_key = start.clone();
@@ -2413,7 +2414,10 @@ impl ValidSingularQuery for FindSorafsReserveProviders {
         }
         let after = self.after_provider_id;
         let start = after.map_or_else(
-            || Name::from_str(PROVIDER_STATE_KEY_PREFIX).expect("static provider prefix is valid"),
+            || {
+                StatePath::from_str(PROVIDER_STATE_KEY_PREFIX)
+                    .expect("static provider prefix is valid")
+            },
             provider_key,
         );
         let accounts = scan_reserve_records(
@@ -2464,7 +2468,10 @@ impl ValidSingularQuery for FindSorafsReserveMovements {
         }
         let after = self.after_movement_id;
         let start = after.map_or_else(
-            || Name::from_str(MOVEMENT_STATE_KEY_PREFIX).expect("static movement prefix is valid"),
+            || {
+                StatePath::from_str(MOVEMENT_STATE_KEY_PREFIX)
+                    .expect("static movement prefix is valid")
+            },
             movement_key,
         );
         let movements = scan_reserve_records(
@@ -2515,7 +2522,7 @@ impl ValidSingularQuery for FindSorafsReserveAppeals {
         }
         let after = self.after_appeal_id;
         let start = after.map_or_else(
-            || Name::from_str(APPEAL_STATE_KEY_PREFIX).expect("static appeal prefix is valid"),
+            || StatePath::from_str(APPEAL_STATE_KEY_PREFIX).expect("static appeal prefix is valid"),
             appeal_key,
         );
         let appeals = scan_reserve_records(
@@ -3895,29 +3902,6 @@ mod tests {
             Err(QueryExecutionFail::Conversion(_))
         ));
 
-        let mut oversized_probe_key = build_policy_state();
-        {
-            let header = block_header_at(2, NOW + 1);
-            let mut block = oversized_probe_key.block(header.clone());
-            let mut transaction = block.transaction();
-            let key = Name::from_str(&format!(
-                "{EVENT_STATE_KEY_PREFIX}{}",
-                "g".repeat(RESERVE_QUERY_MAX_EVENT_PROBE_KEY_BYTES_V1)
-            ))
-            .expect("construct oversized event probe key");
-            transaction
-                .world
-                .smart_contract_state
-                .insert(key, Vec::new());
-            transaction.apply();
-            block.commit().expect("commit oversized-key corruption");
-            oversized_probe_key.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
-        }
-        assert!(matches!(
-            FindSorafsReserveEvents::new(None, None, 10).execute(&oversized_probe_key.view()),
-            Err(QueryExecutionFail::Conversion(message)) if message.contains("probe key")
-        ));
-
         let mut read_budget = ReserveEventQueryBudgetV1::default();
         read_budget
             .inspect_storage_probe(1, None, RESERVE_QUERY_MAX_EVENT_READ_BYTES_V1)
@@ -3966,7 +3950,7 @@ mod tests {
         let treasury = account(&keypair(0x94));
         let mut state = state_fixture(&governance, &provider, &custody, &treasury);
         let legacy_key =
-            Name::from_str("sorafs_reserve_policy_v1").expect("legacy fixture key is valid");
+            StatePath::from_str("sorafs_reserve_policy_v1").expect("legacy fixture key is valid");
         state
             .world
             .smart_contract_state

@@ -647,18 +647,19 @@ mod tests {
             .expect("aggregate manifest attestation signature");
         let validator_set = vec![validator.clone()];
         let validator_set_hash = HashOf::new(&validator_set);
-        NativeAmxAttestationQcV2 {
+        NativeAmxAttestationQcV2::try_new(
             body,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
             validator_set,
-            validator_set_pops: vec![
+            vec![
                 iroha_crypto::bls_normal_pop_prove(validator_key.private_key())
                     .expect("manifest fixture validator PoP"),
             ],
-            signers_bitmap: vec![1],
-            bls_aggregate_signature: aggregate,
-        }
+            vec![1],
+            aggregate,
+        )
+        .expect("manifest fixture validator set and proofs must align")
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -2277,6 +2277,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             currentHandle: self.bridgeHandle,
             processHandle: staticHandle
         )
+        guard let castZkSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_encode_governance_cast_zk_ballot_signed_transaction")
+        }), let castZkAlgSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg")
+        }) else {
+            self.loadedBridgeAbiVersion = nil
+            NSLog(
+                "[NoritoNativeBridge] statically linked bridge is missing mandatory cast-ZK-ballot exports"
+            )
+            return
+        }
         // Swift 6.2 can fail to produce a diagnostic while coercing these large
         // imported C signatures directly to @convention(c) optionals. Resolve
         // the statically linked symbols through the process handle instead;
@@ -2294,6 +2305,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.encodeMintWithAlgFn = staticHandle
             .flatMap { dlsym($0, "connect_norito_encode_mint_signed_transaction_alg") }
             .map { unsafeBitCast($0, to: EncodeMintWithAlgFn.self) }
+        self.encodeGovernanceCastZkBallotFn = unsafeBitCast(
+            castZkSymbol,
+            to: EncodeGovernanceCastZkBallotFn.self
+        )
+        self.encodeGovernanceCastZkBallotWithAlgFn = unsafeBitCast(
+            castZkAlgSymbol,
+            to: EncodeGovernanceCastZkBallotWithAlgFn.self
+        )
         if let instructionBoxSymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_encode_transfer_instruction_box")
         }) {

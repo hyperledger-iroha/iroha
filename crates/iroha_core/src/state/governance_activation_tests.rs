@@ -109,7 +109,7 @@
         world: &mut WorldTransaction<'_, '_>,
         record: VerifiedFeeSponsorVaultAllocation,
     ) {
-        let key: Name = VerifiedFeeSponsorVaultAllocation::state_key_for(
+        let key: StatePath = VerifiedFeeSponsorVaultAllocation::state_key_for(
             &record.program_id,
             &record.asset_definition_id,
             &record.lease_id,
@@ -130,7 +130,7 @@
             FeeSponsorProgramId::new(sponsor, "never_drains".parse().expect("program name"));
         let record = fee_sponsor_activation_lease(program_id.clone(), 1, u64::MAX);
         let mut world = World::default();
-        let key: Name = VerifiedFeeSponsorVaultAllocation::state_key_for(
+        let key: StatePath = VerifiedFeeSponsorVaultAllocation::state_key_for(
             &record.program_id,
             &record.asset_definition_id,
             &record.lease_id,
@@ -155,7 +155,7 @@
         let program_id = FeeSponsorProgramId::new(sponsor, "later".parse().expect("program name"));
         let record = fee_sponsor_activation_lease(program_id.clone(), 1, 5);
         let mut world = World::default();
-        let key: Name = VerifiedFeeSponsorVaultAllocation::state_key_for(
+        let key: StatePath = VerifiedFeeSponsorVaultAllocation::state_key_for(
             &record.program_id,
             &record.asset_definition_id,
             &record.lease_id,

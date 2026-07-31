@@ -7867,10 +7867,10 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::StateGet => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "state_get expects (Name)".into(),
+                    message: "state_get expects (bytes StatePath)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7883,11 +7883,11 @@ fn analyze_surface_builtin_call(
         }
         Builtin::StateSet => {
             if arg_typed.len() != 2
-                || !(arg_typed[0].ty == Type::Name && is_blob_like(&arg_typed[1].ty))
+                || !(is_blob_like(&arg_typed[0].ty) && is_blob_like(&arg_typed[1].ty))
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "state_set expects (Name, bytes)".into(),
+                    message: "state_set expects (bytes StatePath, bytes value)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7899,10 +7899,10 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::StateDel => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "state_del expects (Name)".into(),
+                    message: "state_del expects (bytes StatePath)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7915,13 +7915,13 @@ fn analyze_surface_builtin_call(
         }
         Builtin::StateKeys => {
             if arg_typed.len() != 3
-                || arg_typed[0].ty != Type::Name
+                || !is_blob_like(&arg_typed[0].ty)
                 || !is_int_like(&arg_typed[1].ty)
                 || !is_int_like(&arg_typed[2].ty)
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "state_keys expects (Name, int offset, int limit)".into(),
+                    message: "state_keys expects (bytes StatePath, int offset, int limit)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7933,10 +7933,10 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::StateHas => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "state_has expects (Name)".into(),
+                    message: "state_has expects (bytes StatePath)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7948,10 +7948,10 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::StateLen => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "state_len expects (Name)".into(),
+                    message: "state_len expects (bytes StatePath)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7963,10 +7963,10 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::StateCount => {
-            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "state_count expects (Name)".into(),
+                    message: "state_count expects (bytes StatePath)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -9633,7 +9633,7 @@ fn analyze_surface_builtin_call(
                     name: builtin.name().to_string(),
                     args: arg_typed,
                 },
-                ty: Type::Name,
+                ty: Type::Bytes,
             })
         }
         Builtin::NameDecode => {
@@ -9928,7 +9928,7 @@ fn analyze_surface_builtin_call(
                     name: builtin.name().to_string(),
                     args: arg_typed,
                 },
-                ty: Type::Name,
+                ty: Type::Bytes,
             })
         }
         Builtin::SchemaEncode => {
@@ -17119,14 +17119,50 @@ mod tests {
     #[test]
     fn pagination_calls_require_offset_and_limit_names() {
         let positional =
-            analyze_error("fn page(Name path) -> bytes { return state::keys(path, 0, 10); }");
+            analyze_error("fn page(bytes path) -> bytes { return state::keys(path, 0, 10); }");
         assert_eq!(positional.code, "E_NAMED_ARGUMENTS_REQUIRED");
 
         let named = parse(
-            "fn page(Name path) -> bytes { return state::keys(limit: 10, path: path, offset: 0); }",
+            "fn page(bytes path) -> bytes { return state::keys(limit: 10, path: path, offset: 0); }",
         )
         .expect("parse named pagination call");
         analyze(&named).expect("named pagination call should type-check");
+    }
+
+    #[test]
+    fn durable_state_calls_reject_legacy_name_path_carriers() {
+        for source in [
+            "fn read() { let _value = state::get(Name::parse(\"legacy\")); }",
+            "fn write(bytes value) { state::set(path: Name::parse(\"legacy\"), value: value); }",
+            "fn delete() { state::delete(Name::parse(\"legacy\")); }",
+            "fn scan() { let _keys = state::keys(path: Name::parse(\"legacy\"), offset: 0, limit: 1); }",
+        ] {
+            let error = analyze_error(source);
+            assert_eq!(error.code, "K2003", "{source}");
+            assert!(
+                error.message.contains("bytes StatePath"),
+                "{source}: {}",
+                error.message
+            );
+        }
+
+        let canonical = parse(
+            "fn read(Name base) -> bytes { let bytes path = base.path(1); return state::get(path); }",
+        )
+        .expect("parse StatePath-producing helper");
+        analyze(&canonical).expect("base.path must produce a state-call-compatible bytes value");
+    }
+
+    #[test]
+    fn state_path_method_rejects_wrong_receiver_and_segment_types() {
+        for source in [
+            "fn invalid(string base) { let _path = base.path(1); }",
+            "fn invalid(Name base) { let _path = base.path(true); }",
+        ] {
+            let error = analyze_error(source);
+            assert_eq!(error.code, "K2003", "{source}");
+            assert_eq!(error.message, "path expects (Name, int|bytes)", "{source}");
+        }
     }
 
     #[test]

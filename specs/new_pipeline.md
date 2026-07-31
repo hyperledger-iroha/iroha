@@ -104,6 +104,7 @@ Verification status
 
 Acceptance (ZK verification)
 - Feature gates: `zk-preverify` (compile‑time) and `zk.halo2.enabled` (runtime) control pre‑verification and trace verification. Hosts additionally gate by `zk.halo2.max_k` and allowed curves.
+- Authority boundary: pre‑verification and deduplication are advisory diagnostics only. Their results cannot be installed into execution state or substitute for the normal guarded cryptographic verifier.
 - Determinism: ordering and proposal selection remain unaffected; pre‑verification failures do not reorder transactions. Non‑forking verification reports via Pipeline warnings.
 - Safety: proofs and envelopes are bounded (size, k) and verified deterministically; accelerators must produce bit‑exact results to scalar.
 
@@ -476,9 +477,15 @@ Wire/advisory format (implemented)
 
 Quarantine lane bounds (normative)
 - The quarantine lane (sequential re‑execution) is optional; when enabled it is
-  strictly bounded and never runs concurrently with other lanes. Limits:
-  - `max_quarantine_txs_per_block` (default: 8)
-  - `max_quarantine_steps_per_tx` and/or `max_quarantine_ms_per_tx`
+  strictly bounded and never runs concurrently with other lanes. Classification
+  is a pure consensus rule over authenticated transaction metadata: only an
+  exact Norito JSON boolean `true` at the `quarantine` key enters the lane.
+  Missing values, `false`, and string or numeric lookalikes do not classify.
+  There is no process-local classifier hook. Limits:
+  - `quarantine_max_txs_per_block` (default: 0; a zero cap disables the lane
+    and rejects transactions explicitly marked for quarantine)
+  - `quarantine_tx_max_cycles` (default: 0; otherwise bounded by the ordinary
+    IVM cycle ceiling)
   If a tx exceeds limits or still accesses keys outside its set, it MUST abort.
   Emit structured telemetry with code hash, offending keys, and decision.
 

@@ -39,7 +39,6 @@ mod model {
         IntoSchema,
     )]
     #[getset(get = "pub")]
-    #[cfg_attr(feature = "json", norito(transparent))]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct RoleId {

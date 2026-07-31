@@ -262,7 +262,6 @@ Body schema:
 | Field | Description |
 |-------|-------------|
 | `authority` | Account that signs the publication transaction (must own `CanPublishSpaceDirectoryManifest{dataspace}`). |
-| `private_key` | `ExposedPrivateKey` for `authority`. |
 | `manifest` | Full `AssetPermissionManifest` JSON payload (UAID, dataspace, lifecycle schedule, entries). |
 | `reason` (optional) | Convenience string applied to entries lacking `notes`, mirroring the CLI `--reason` helper. |
 
@@ -271,7 +270,6 @@ Example payload:
 ```jsonc
 {
   "authority": "<i105-account-id>",
-  "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
     "uaid": "uaid:0f4d…ab11",
@@ -290,13 +288,14 @@ Example payload:
 }
 ```
 
-The endpoint returns `202 Accepted` once the transaction is queued. The usual
-CIDR/API-token/fee-policy gates apply. Upon execution the node emits
+The endpoint returns HTTP 200 with `submitted: false`, canonical padded-base64
+`transaction_payload_b64`, and the corresponding `signing_message_b64`. Torii
+does not accept a private key or submit the draft. The client validates and
+signs the payload locally, constructs a `SignedTransaction`, and submits it
+through the ordinary transaction endpoint. The usual CIDR/API-token/fee-policy
+gates apply. Upon execution the node emits
 `SpaceDirectoryEvent::ManifestActivated`, rebuilds UAID bindings, and the read
 surfaces immediately expose the updated manifest.
-Python SDKs can invoke this workflow through
-`ToriiClient.publish_space_directory_manifest`, which normalises UAID literals,
-dataspace identifiers, and credential payloads before issuing the HTTP request.
 
 ## Manifest Revocation Endpoint
 
@@ -312,7 +311,6 @@ Body fields mirror the `RevokeSpaceDirectoryManifest` ISI:
 | Field | Description |
 |-------|-------------|
 | `authority` | Account ID that signs the transaction (must hold `CanPublishSpaceDirectoryManifest{dataspace}` or an equivalent grant). |
-| `private_key` | `ExposedPrivateKey` belonging to `authority`. |
 | `uaid` | UAID literal (`uaid:<hex>` or raw 64-hex digest, LSB=1). |
 | `dataspace` | Dataspace identifier hosting the manifest. |
 | `revoked_epoch` | Epoch (inclusive) when the revocation takes effect. |
@@ -323,7 +321,6 @@ Example payload:
 ```jsonc
 {
   "authority": "<i105-account-id>",
-  "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d…ab11",
   "dataspace": 11,
   "revoked_epoch": 9216,
@@ -331,12 +328,10 @@ Example payload:
 }
 ```
 
-Torii responds with `202 Accepted` once the transaction is queued; no body is
-returned. The same CIDR/API-token/fee-policy gates applied to the read
-endpoints protect this route as well. When the transaction executes the node
-emits `SpaceDirectoryEvent::ManifestRevoked`, rebuilds UAID bindings
-automatically, and the read APIs immediately reflect the revoked status. See
+Torii responds with the same canonical unsigned transaction-draft envelope as
+publication and never submits it. The same CIDR/API-token/fee-policy gates
+applied to the read endpoints protect this route as well. After a locally
+signed transaction executes, the node emits
+`SpaceDirectoryEvent::ManifestRevoked`, rebuilds UAID bindings automatically,
+and the read APIs immediately reflect the revoked status. See
 `specs/space_directory.md` for the operator runbook and evidence expectations.
-Python automation can call `ToriiClient.revoke_space_directory_manifest` to
-mirror the Norito payload without hand-rolling JSON serialisation or key
-formatting.

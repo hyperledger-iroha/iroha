@@ -64,19 +64,27 @@ async fn interval_dns_refresh_increments_counter() {
         dns_refresh_ttl: None,
         quic_enabled: false,
         quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-        quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-        quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-        quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
+        quic_datagram_max_payload_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+        quic_datagram_receive_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        quic_datagram_send_buffer_bytes:
+            iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
         tls_enabled: false,
         tls_listen_address: None,
         p2p_queue_cap_high: core::num::NonZeroUsize::new(128).unwrap(),
         p2p_queue_cap_low: core::num::NonZeroUsize::new(128).unwrap(),
         p2p_post_queue_cap: core::num::NonZeroUsize::new(64).unwrap(),
-        p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-        p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-        p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-        p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-        p2p_subscriber_queue_cap: iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
+        p2p_subscriber_queue_cap:
+            iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         max_incoming: None,
         max_total_connections: None,
         accept_rate_per_ip_per_sec: None,
@@ -110,7 +118,7 @@ async fn interval_dns_refresh_increments_counter() {
     let started1 = NetworkHandle::<TestMsg>::start(
         kp1.clone(),
         cfg1,
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),
@@ -123,7 +131,7 @@ async fn interval_dns_refresh_increments_counter() {
     let started2 = NetworkHandle::<TestMsg>::start(
         kp2.clone(),
         cfg2,
-        Some(chain.clone()),
+        chain.clone(),
         None,
         None,
         ShutdownSignal::new(),

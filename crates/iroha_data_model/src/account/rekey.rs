@@ -23,7 +23,7 @@ use crate::{
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[repr(transparent)]
-#[norito(transparent, decode_from_slice)]
+#[norito(decode_from_slice)]
 pub struct AccountAliasDomain(pub Name);
 
 impl AccountAliasDomain {
@@ -334,7 +334,6 @@ pub struct AccountRekeyRecord {
     /// Current concrete account id behind the stable label.
     pub active_account_id: AccountId,
     /// Historical concrete account ids retained for continuity and audit trails.
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     pub previous_account_ids: Vec<AccountId>,
     /// Current single-key signatory when the active account is directly key-controlled.
     ///
@@ -344,7 +343,6 @@ pub struct AccountRekeyRecord {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub active_signatory: Option<PublicKey>,
     /// Historical single-key signatories retained for audit trails.
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     pub previous_signatories: Vec<PublicKey>,
     /// Typed provenance for every transition in `previous_account_ids`.
     ///

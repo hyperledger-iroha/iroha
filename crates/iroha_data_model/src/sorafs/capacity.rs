@@ -23,9 +23,7 @@ use crate::metadata::Metadata;
 #[repr(transparent)]
 #[cfg_attr(
     feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-    norito(transparent),
-    norito(with = "crate::json_helpers::fixed_bytes")
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ProviderId(pub [u8; 32]);
 
@@ -490,9 +488,7 @@ pub enum CapacityLedgerMutationError {
 #[repr(transparent)]
 #[cfg_attr(
     feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-    norito(transparent),
-    norito(with = "crate::json_helpers::fixed_bytes")
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct CapacityDisputeId(pub [u8; 32]);
 

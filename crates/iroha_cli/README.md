@@ -259,7 +259,9 @@ iroha ledger events governance [--proposal-id 0123...ABCD] [--referendum-id r1]
 
 ### ZK Verifying Key registry (register/update)
 
-The CLI wraps Torii VK registry endpoints to submit signed transactions.
+The CLI builds, quotes, signs, and submits VK registry transactions with the account and key from
+the active client configuration. VK JSON files contain public registry data only; signing
+authorities and private keys are not accepted in these files.
 
 Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex`):
 
@@ -270,8 +272,6 @@ must be non-empty and must not contain leading or trailing whitespace.
 ```bash
 cat >vk_register.json <<'JSON'
 {
-  "authority": "<authority_account_i105>",
-  "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add",
   "version": 1,
@@ -289,8 +289,6 @@ Update an existing verifying key (version must increase). You may supply only th
 ```bash
 cat >vk_update.json <<'JSON'
 {
-  "authority": "<authority_account_i105>",
-  "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add",
   "version": 2,
@@ -388,7 +386,7 @@ iroha app zk register-asset --asset <base58-asset-definition-id> \
 
 1) Prepare VK JSONs. Samples live under `fuzz/attachments/zk/`:
 
-   - `vk_register.json` — fields: `authority`, `private_key`, `backend`, `name`, `version`, one of:
+   - `vk_register.json` — fields: `backend`, `name`, `version`, one of:
      - `vk_bytes` (base64) or `commitment_hex` (64-hex)
    - `vk_unshield.sample.json` — minimal unshield VK sample (backend/name preset to `halo2/ipa:vk_unshield`)
    - `vk_update.json` — same shape; `version` must increase
@@ -454,7 +452,6 @@ It runs the following:
 
 Environment variables you can set before running:
 - `CLI_CONFIG`: path to client config TOML
-- `AUTHORITY`, `PRIVATE_KEY`: used for VK ops
 - `BACKEND` (default `halo2/ipa`), `ASSET_ID` (default `<base58-asset-definition-id>`)
 - `FROM`, `TO`, `AMOUNT`, `NOTE_COMMITMENT_HEX`
 - `RUN_UNSHIELD=1`, `PROOF_JSON=/path/to/proof.json` to attempt unshield

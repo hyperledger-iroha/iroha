@@ -231,10 +231,10 @@ final class KagemushaPeerTransportTests: XCTestCase {
             noritoSchemaHash(forTypeName: KagemushaRecursiveSpend.bundleWireNameV4)
         )
         XCTAssertEqual(KagemushaRecursiveSpend.wireVersionV4, 4)
-        XCTAssertEqual(payment.archive.count, 11_854)
+        XCTAssertEqual(payment.archive.count, 11_887)
         XCTAssertEqual(
             sha256Hex(payment.archive),
-            "22e6ecf3fb9260004d6e6776e7ecdda5b5188bc87ac4b1a55836d48a26476aba"
+            "ae20bc0718f3a3ff31e18b6452422549d017b66301cde799d43609614661d019"
         )
         XCTAssertEqual(
             verifiedRequest.digest.hexEncodedString(),
@@ -270,7 +270,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
             XCTAssertEqual(
                 error as? KagemushaPeerTransportError,
                 .archiveTooLarge(
-                    actual: 11_854,
+                    actual: 11_887,
                     maximum: KagemushaPeerTransportContract.maximumTextArchiveBytes
                 )
             )

@@ -5,6 +5,7 @@ import { blake2b256 } from "./blake2b.js";
 import { verifyEd25519 } from "./crypto.browser.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import {
+  noritoDecodeInstructionBoxArchive,
   noritoEncodeInstructionBoxArchive,
   validateNoritoFrame,
 } from "./norito.js";
@@ -25,6 +26,8 @@ const MAX_METADATA_DEPTH = 32;
 const MAX_METADATA_NODES = 4096;
 const MAX_METADATA_KEY_BYTES = 255;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
+const MAX_VERIFYING_KEY_DRAFT_PAYLOAD_BYTES = 16 * 1024 * 1024;
+const MAX_VERIFYING_KEY_DRAFT_INSTRUCTION_FIELDS = 256;
 const MAX_SIGNED_TRANSACTION_BYTES = MAX_PAYLOAD_BYTES + 4096;
 const MAX_NUMERIC_SCALE = 28;
 // Rust BigInt permits at most 64 signed two's-complement bytes. Transfers are
@@ -250,6 +253,14 @@ class Reader {
 
 function fail(code, message) {
   throw new BrowserTransactionCodecError(code, message);
+}
+
+function isPlainDataObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function assertPlainDataObject(value, context) {
@@ -2299,6 +2310,179 @@ function validateInstructionTransactionPayload(payload, authorityLiteral) {
   return assertedAuthority ?? { publicKey: authorityPublicKey };
 }
 
+/**
+ * Decode and bind one canonical unsigned verifying-key registry transaction.
+ *
+ * This is deliberately narrower than the general browser transaction decoder:
+ * the payload must target the immutable chain and authority supplied by the
+ * caller and contain exactly one requested registry instruction. The returned
+ * instruction has already passed a byte-for-byte canonical Norito round trip.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
+ * @param {{
+ *   expectedChainId: string,
+ *   expectedAuthority: string,
+ *   operation: "register" | "update",
+ * }} constraints
+ * @returns {object}
+ */
+export function decodeCanonicalVerifyingKeyTransactionPayload(
+  payloadBytes,
+  constraints,
+) {
+  const payload = bytes(payloadBytes, "verifying-key transaction payload", {
+    maxBytes: MAX_VERIFYING_KEY_DRAFT_PAYLOAD_BYTES,
+  });
+  if (
+    payload.length === 0 ||
+    payload.length > MAX_VERIFYING_KEY_DRAFT_PAYLOAD_BYTES
+  ) {
+    fail(
+      "bounds_exceeded",
+      `verifying-key transaction payload must contain 1..=${MAX_VERIFYING_KEY_DRAFT_PAYLOAD_BYTES} bytes`,
+    );
+  }
+  const expectedChainId = exactString(
+    constraints?.expectedChainId,
+    "verifying-key signing context.chainId",
+    { maxBytes: MAX_CHAIN_ID_BYTES },
+  );
+  const expectedAuthority = accountInfo(
+    constraints?.expectedAuthority,
+    "verifying-key request.authority",
+  );
+  const operation = constraints?.operation;
+  if (operation !== "register" && operation !== "update") {
+    fail(
+      "invalid_input",
+      "verifying-key signing context.operation must be register or update",
+    );
+  }
+
+  const reader = new Reader(payload, "verifying-key transaction payload");
+  const chainId = validateChainIdArchive(
+    reader.readField("chain"),
+    "verifying-key transaction payload.chain",
+  );
+  if (chainId !== expectedChainId) {
+    fail(
+      "chain_mismatch",
+      "verifying-key transaction payload changed the configured chain ID",
+    );
+  }
+  const authorityArchive = reader.readField("authority");
+  validateAccountArchive(
+    authorityArchive,
+    "verifying-key transaction payload.authority",
+  );
+  if (!authorityArchive.equals(accountArchive(expectedAuthority))) {
+    fail(
+      "authority_mismatch",
+      "verifying-key transaction payload changed the requested authority",
+    );
+  }
+  const creationTime = reader.readField("creationTimeMs");
+  if (creationTime.length !== 8) {
+    fail(
+      "malformed_payload",
+      "verifying-key transaction payload.creationTimeMs must be a u64",
+    );
+  }
+
+  const executable = new Reader(
+    reader.readField("executable"),
+    "verifying-key transaction payload.executable",
+  );
+  if (executable.readU32("variant") !== 0) {
+    fail(
+      "unsupported_executable",
+      "verifying-key transaction payload must contain native instructions",
+    );
+  }
+  const instructions = new Reader(
+    executable.readField("instructions"),
+    "verifying-key transaction payload.instructions",
+  );
+  const instructionCount = instructions.readU64("count");
+  if (
+    instructionCount >
+    BigInt(MAX_VERIFYING_KEY_DRAFT_INSTRUCTION_FIELDS)
+  ) {
+    fail(
+      "bounds_exceeded",
+      "verifying-key transaction payload contains too many instructions",
+    );
+  }
+  const instructionArchives = [];
+  for (let index = 0; index < Number(instructionCount); index += 1) {
+    instructionArchives.push(instructions.readField(`item[${index}]`));
+  }
+  instructions.assertEof();
+  executable.assertEof();
+  if (instructionCount !== 1n) {
+    fail(
+      "unsupported_instruction",
+      "verifying-key transaction payload must contain exactly one instruction",
+    );
+  }
+  const [instructionArchive] = instructionArchives;
+
+  let instruction;
+  try {
+    instruction = noritoDecodeInstructionBoxArchive(instructionArchive);
+  } catch (error) {
+    fail(
+      "malformed_instruction",
+      `verifying-key transaction payload contains a non-canonical instruction: ${error.message}`,
+    );
+  }
+
+  validateOption(
+    reader.readField("ttlMs"),
+    8,
+    "verifying-key transaction payload.ttlMs",
+    { nonZero: true },
+  );
+  validateOption(
+    reader.readField("nonce"),
+    4,
+    "verifying-key transaction payload.nonce",
+    { nonZero: true },
+  );
+  validateFeePaymentArchive(
+    reader.readField("feePayment"),
+    "verifying-key transaction payload.feePayment",
+  );
+  rejectLegacyFeeMetadata(
+    validateMetadataArchive(
+      reader.readField("metadata"),
+      "verifying-key transaction payload.metadata",
+    ),
+  );
+  if (!reader.readField("attachments").equals(Buffer.of(0))) {
+    fail(
+      "unsupported_payload",
+      "verifying-key transaction payload must not contain proof attachments",
+    );
+  }
+  reader.assertEof();
+
+  const variant =
+    operation === "register" ? "RegisterVerifyingKey" : "UpdateVerifyingKey";
+  const verifyingKeys = instruction?.verifying_keys;
+  if (
+    !isPlainDataObject(verifyingKeys) ||
+    !isPlainDataObject(verifyingKeys[variant]) ||
+    Object.keys(verifyingKeys).length !== 1
+  ) {
+    fail(
+      "unsupported_instruction",
+      `verifying-key transaction payload must contain exactly one ${variant} instruction`,
+    );
+  }
+  return verifyingKeys[variant];
+}
+
 function normalizeSignature(signature) {
   if (
     Buffer.isBuffer(signature) ||
@@ -2372,6 +2556,32 @@ export function buildBrowserInstructionTransactionPayload(input) {
   const normalized = normalizeInstructionTransactionInput(input, Date.now);
   const payload = encodeInstructionTransactionPayload(normalized);
   validateInstructionTransactionPayload(payload, normalized.authority.literal);
+  return payload;
+}
+
+/**
+ * Build one canonical transaction payload containing exactly one verifying-key
+ * registry instruction. This narrow builder is useful for offline signing and
+ * for independently checking server-produced drafts.
+ *
+ * @param {object} input
+ * @param {"register" | "update"} operation
+ * @returns {Buffer}
+ */
+export function buildBrowserVerifyingKeyTransactionPayload(input, operation) {
+  const normalized = normalizeInstructionTransactionInput(input, Date.now);
+  if (normalized.instructions.length !== 1) {
+    fail(
+      "unsupported_instruction",
+      "verifying-key transaction must contain exactly one instruction",
+    );
+  }
+  const payload = encodeInstructionTransactionPayload(normalized);
+  decodeCanonicalVerifyingKeyTransactionPayload(payload, {
+    expectedChainId: normalized.chainId,
+    expectedAuthority: normalized.authority.literal,
+    operation,
+  });
   return payload;
 }
 

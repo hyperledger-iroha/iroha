@@ -1138,6 +1138,7 @@ mod tests {
 
     use iroha_crypto::soranet::token::compute_issuer_fingerprint;
     use rand::{SeedableRng, rngs::StdRng};
+    use tempfile::tempdir;
 
     use super::*;
     use crate::{
@@ -1476,6 +1477,7 @@ mod tests {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
         let issuer_hex = hex::encode(keypair.public_key());
+        let replay_dir = tempdir().expect("replay tempdir");
         let mut pow_cfg = PowConfig {
             required: true,
             token: Some(TokenConfig {
@@ -1483,6 +1485,7 @@ mod tests {
                 issuer_public_key_hex: Some(issuer_hex),
                 max_ttl_secs: 600,
                 clock_skew_secs: 5,
+                replay_store_path: replay_dir.path().join("tokens.norito"),
                 revocation_list_hex: Vec::new(),
                 revocation_list_path: None,
                 ..TokenConfig::default()
@@ -1560,6 +1563,7 @@ mod tests {
         )
         .expect("mint token");
         let revoked_hex = hex::encode(token.token_id());
+        let replay_dir = tempdir().expect("replay tempdir");
 
         let mut pow_cfg = PowConfig {
             required: true,
@@ -1568,6 +1572,7 @@ mod tests {
                 issuer_public_key_hex: Some(issuer_hex),
                 max_ttl_secs: 600,
                 clock_skew_secs: 5,
+                replay_store_path: replay_dir.path().join("tokens.norito"),
                 revocation_list_hex: vec![revoked_hex],
                 revocation_list_path: None,
                 ..TokenConfig::default()
@@ -1632,6 +1637,7 @@ mod tests {
             &mut rng,
         )
         .expect("mint token");
+        let replay_dir = tempdir().expect("replay tempdir");
 
         let mut pow_cfg = PowConfig {
             required: true,
@@ -1640,6 +1646,7 @@ mod tests {
                 issuer_public_key_hex: Some(issuer_hex),
                 max_ttl_secs: 600,
                 clock_skew_secs: 5,
+                replay_store_path: replay_dir.path().join("tokens.norito"),
                 ..TokenConfig::default()
             }),
             ..PowConfig::default()

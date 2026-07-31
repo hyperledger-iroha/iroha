@@ -63,6 +63,12 @@ tasks.withType<Test>().configureEach {
         rootProject.layout.projectDirectory
             .dir("..")
             .dir("..")
+            .file("fixtures/zk/verifying_key_record_v1.json"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
             .file("fixtures/offline/kagemusha_peer_transport_v2.json"),
     )
     inputs.dir(

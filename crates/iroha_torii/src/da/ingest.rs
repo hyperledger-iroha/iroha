@@ -28,7 +28,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     account::AccountId,
     da::{
-        commitment::{DaCommitmentRecord, DaProofScheme, KzgCommitment},
+        commitment::{DaCommitmentRecord, DaProofScheme},
         manifest::ChunkRole,
         pin_intent::DaPinIntent,
         prelude::*,
@@ -46,8 +46,7 @@ use iroha_zkp_halo2::pallas::{
     Params as IpaCurveParams, Polynomial as IpaPolynomial, Scalar as IpaScalar,
 };
 use norito::{
-    core::NoritoDeserialize,
-    decode_from_bytes, from_bytes,
+    decode_from_bytes,
     json::{self, JsonSerialize, Map, Value},
     to_bytes,
 };
@@ -1857,18 +1856,11 @@ fn resolve_manifest_with_observer(
     })?;
 
     let manifest_template = if let Some(bytes) = &request.norito_manifest {
-        let archived = from_bytes::<DaManifestV1>(bytes).map_err(|err| {
+        let manifest = decode_from_bytes::<DaManifestV1>(bytes).map_err(|err| {
             warn!(?err, "failed to decode DA manifest");
             (
                 StatusCode::BAD_REQUEST,
                 format!("failed to decode DA manifest: {err}"),
-            )
-        })?;
-        let manifest = NoritoDeserialize::try_deserialize(archived).map_err(|err| {
-            warn!(?err, "failed to deserialize DA manifest");
-            (
-                StatusCode::BAD_REQUEST,
-                format!("failed to deserialize DA manifest: {err}"),
             )
         })?;
         let expected_ipa = ipa_commitment_from_chunks(&chunk_commitments)?;
@@ -1955,19 +1947,6 @@ fn resolve_manifest_with_observer(
     })
 }
 
-fn derive_kzg_commitment(
-    chunk_root: &BlobDigest,
-    storage_ticket: &StorageTicketId,
-) -> KzgCommitment {
-    let mut hasher = Blake3Hasher::new();
-    hasher.update(chunk_root.as_ref());
-    hasher.update(storage_ticket.as_ref());
-
-    let mut bytes = [0u8; 48];
-    hasher.finalize_xof().fill(&mut bytes);
-    KzgCommitment::new(bytes)
-}
-
 fn build_da_commitment_record(
     request: &DaIngestRequest,
     manifest: &ManifestArtifacts,
@@ -1979,13 +1958,6 @@ fn build_da_commitment_record(
     let manifest_digest = ManifestDigest::new(*manifest.manifest_hash.as_bytes());
     let chunk_root = Hash::prehashed(*manifest.chunk_root.as_bytes());
     let proof_digest = Hash::new(pdp_commitment_bytes);
-    let kzg_commitment = match proof_scheme {
-        DaProofScheme::MerkleSha256 => None,
-        DaProofScheme::KzgBls12_381 => Some(derive_kzg_commitment(
-            &manifest.chunk_root,
-            &manifest.storage_ticket,
-        )),
-    };
     DaCommitmentRecord::new(
         request.lane_id,
         request.epoch,
@@ -1994,7 +1966,6 @@ fn build_da_commitment_record(
         manifest_digest,
         proof_scheme,
         chunk_root,
-        kzg_commitment,
         Some(proof_digest),
         retention.clone(),
         manifest.storage_ticket,

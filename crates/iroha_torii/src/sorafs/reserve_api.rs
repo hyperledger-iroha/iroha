@@ -1115,6 +1115,7 @@ pub(crate) async fn handle_get_sorafs_reserve_events_stream(
         drop(view);
         Sse::new(reserve_event_stream(
             state,
+            caller,
             initial,
             query.after(),
             query.limit(),
@@ -1165,8 +1166,15 @@ pub(crate) async fn handle_get_sorafs_reserve_events_ws(
         let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
         ws.on_upgrade(move |socket| async move {
             let _preauth_guard = preauth_guard;
-            if let Err(error) =
-                reserve_event_websocket(socket, state, initial, query.after(), query.limit()).await
+            if let Err(error) = reserve_event_websocket(
+                socket,
+                state,
+                caller,
+                initial,
+                query.after(),
+                query.limit(),
+            )
+            .await
             {
                 debug!(%error, "SoraFS reserve finalized-event WebSocket closed");
             }
@@ -1178,22 +1186,48 @@ pub(crate) async fn handle_get_sorafs_reserve_events_ws(
 
 fn query_reserve_events(
     state: &SharedAppState,
+    caller: &AccountId,
     expected: Option<ReserveFinalizedCursorV1>,
     after: Option<ReserveFinalizedEventCursorV1>,
     limit: u32,
-) -> Result<ReserveFinalizedEventPageV1, QueryExecutionFail> {
+) -> Result<ReserveFinalizedEventPageV1, String> {
     let view = state.state.query_view();
-    FindSorafsReserveEvents::new(expected, after, limit).execute(&view)
+    let policy = FindSorafsReservePolicy::new()
+        .execute(&view)
+        .map_err(|error| reserve_query_public_message(&error))?;
+    if !is_reserve_operator(caller, &policy) {
+        return Err("SoraFS reserve stream authorization is no longer valid".to_owned());
+    }
+    FindSorafsReserveEvents::new(expected, after, limit)
+        .execute(&view)
+        .map_err(|error| reserve_query_public_message(&error))
+}
+
+fn revalidate_reserve_stream_operator(
+    state: &SharedAppState,
+    caller: &AccountId,
+) -> Result<(), String> {
+    let view = state.state.query_view();
+    let policy = FindSorafsReservePolicy::new()
+        .execute(&view)
+        .map_err(|error| reserve_query_public_message(&error))?;
+    if is_reserve_operator(caller, &policy) {
+        Ok(())
+    } else {
+        Err("SoraFS reserve stream authorization is no longer valid".to_owned())
+    }
 }
 
 fn reserve_event_stream(
     state: SharedAppState,
+    caller: AccountId,
     initial: ReserveFinalizedEventPageV1,
     initial_after: Option<ReserveFinalizedEventCursorV1>,
     limit: u32,
 ) -> impl futures::Stream<Item = Result<SseEvent, Infallible>> {
     struct PollState {
         state: SharedAppState,
+        caller: AccountId,
         pending: VecDeque<ReserveFinalizedEventV1>,
         after: Option<ReserveFinalizedEventCursorV1>,
         limit: u32,
@@ -1204,6 +1238,7 @@ fn reserve_event_stream(
     stream::unfold(
         PollState {
             state,
+            caller,
             pending: initial.events.into_iter().collect(),
             after,
             limit,
@@ -1212,6 +1247,12 @@ fn reserve_event_stream(
         |mut poll| async move {
             loop {
                 if let Some(event) = poll.pending.pop_front() {
+                    if let Err(error) =
+                        revalidate_reserve_stream_operator(&poll.state, &poll.caller)
+                    {
+                        poll.terminal = true;
+                        return Some((Ok(SseEvent::default().event("error").data(error)), poll));
+                    }
                     let frame = reserve_sse_event(&event);
                     return Some((Ok(frame), poll));
                 }
@@ -1219,21 +1260,17 @@ fn reserve_event_stream(
                     return None;
                 }
                 tokio::time::sleep(RESERVE_EVENT_POLL_INTERVAL_V1).await;
-                match query_reserve_events(&poll.state, None, poll.after, poll.limit) {
+                match query_reserve_events(&poll.state, &poll.caller, None, poll.after, poll.limit)
+                {
                     Ok(page) => {
                         if let Some(after) = page.events.last().map(|event| event.cursor()) {
                             poll.after = Some(after);
                         }
                         poll.pending.extend(page.events);
                     }
-                    Err(error) => {
+                    Err(message) => {
                         poll.terminal = true;
-                        return Some((
-                            Ok(SseEvent::default()
-                                .event("error")
-                                .data(reserve_query_public_message(&error))),
-                            poll,
-                        ));
+                        return Some((Ok(SseEvent::default().event("error").data(message)), poll));
                     }
                 }
             }
@@ -1244,6 +1281,7 @@ fn reserve_event_stream(
 async fn reserve_event_websocket(
     socket: WebSocket,
     state: SharedAppState,
+    caller: AccountId,
     initial: ReserveFinalizedEventPageV1,
     initial_after: Option<ReserveFinalizedEventCursorV1>,
     limit: u32,
@@ -1251,6 +1289,7 @@ async fn reserve_event_websocket(
     let (mut sender, mut receiver) = socket.split();
     let mut after = reserve_event_resume_cursor(&initial.events, initial_after);
     for event in initial.events {
+        revalidate_reserve_stream_operator(&state, &caller)?;
         sender
             .send(WsMessage::Text(reserve_event_json(&event)?.into()))
             .await
@@ -1267,12 +1306,12 @@ async fn reserve_event_websocket(
                 }
             }
             () = tokio::time::sleep(RESERVE_EVENT_POLL_INTERVAL_V1) => {
-                let page = query_reserve_events(&state, None, after, limit)
-                    .map_err(|error| reserve_query_public_message(&error))?;
+                let page = query_reserve_events(&state, &caller, None, after, limit)?;
                 if let Some(next) = page.events.last().map(|event| event.cursor()) {
                     after = Some(next);
                 }
                 for event in page.events {
+                    revalidate_reserve_stream_operator(&state, &caller)?;
                     sender
                         .send(WsMessage::Text(reserve_event_json(&event)?.into()))
                         .await
@@ -1341,9 +1380,7 @@ fn require_reserve_operator(
     caller: &AccountId,
     policy: &ReserveAuthorityPolicyRecordV1,
 ) -> Result<(), Response> {
-    if caller.subject_id() == policy.policy.operations_authority.subject_id()
-        || caller.subject_id() == policy.policy.decision_authority.subject_id()
-    {
+    if is_reserve_operator(caller, policy) {
         Ok(())
     } else {
         Err(json_error(
@@ -1351,6 +1388,11 @@ fn require_reserve_operator(
             "SoraFS reserve collection reads require a governed reserve service authority",
         ))
     }
+}
+
+fn is_reserve_operator(caller: &AccountId, policy: &ReserveAuthorityPolicyRecordV1) -> bool {
+    caller.subject_id() == policy.policy.operations_authority.subject_id()
+        || caller.subject_id() == policy.policy.decision_authority.subject_id()
 }
 
 fn require_provider_or_operator_for_id(

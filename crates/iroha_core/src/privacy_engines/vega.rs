@@ -51,6 +51,8 @@ use thiserror::Error;
 use time::{Date, Month, OffsetDateTime};
 use zeroize::Zeroizing;
 
+use super::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
+
 pub use mdl::{
     VegaEcdsaWitnessV1, VegaMdlLookupTableV1, VegaMdlValidatedWitnessV1, VegaMdlWitnessV1,
     validate_mdl_witness,
@@ -591,6 +593,12 @@ pub enum VegaMdlError {
     /// The witness is not the one released exact deterministic-CBOR profile.
     #[error("Vega witness is not the released exact Figure 9 encoding")]
     InvalidClosedProfileEncoding,
+    /// The operating-system or caller-supplied cryptographic RNG failed.
+    #[error("Vega cryptographic random source is unavailable")]
+    RandomnessUnavailable,
+    /// The random source emitted a catastrophic constant or short-period prefix.
+    #[error("Vega cryptographic random source failed its health check")]
+    RandomnessHealthCheckFailed,
     /// A locally constructed proof failed the independent public verifier.
     #[error("Vega prover self-check failed")]
     ProverSelfCheckFailed,
@@ -858,11 +866,26 @@ impl VegaMdlPublicInputsV1 {
     }
 }
 
-struct CoreVegaRandomSource<'a, R>(&'a mut R);
+struct CoreVegaRandomSource<'a, R> {
+    source: HealthCheckedCryptoRngV1<'a, R>,
+}
+
+impl<'a, R> CoreVegaRandomSource<'a, R>
+where
+    R: RngCore + CryptoRng,
+{
+    fn new(source: &'a mut R) -> Result<Self, VegaMdlError> {
+        let source = HealthCheckedCryptoRngV1::new(source).map_err(|error| match error {
+            ProverRandomnessErrorV1::Unavailable => VegaMdlError::RandomnessUnavailable,
+            ProverRandomnessErrorV1::Unhealthy => VegaMdlError::RandomnessHealthCheckFailed,
+        })?;
+        Ok(Self { source })
+    }
+}
 
 impl<R: RngCore + CryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), VegaRandomSourceErrorV1> {
-        self.0
+        self.source
             .try_fill_bytes(destination)
             .map_err(|_| VegaRandomSourceErrorV1::Unavailable)
     }
@@ -891,7 +914,7 @@ pub fn prove_mdl_figure9_v1<R: RngCore + CryptoRng>(
 ) -> Result<Vec<u8>, VegaMdlError> {
     let validated = validate_mdl_witness(statement, binding, trusted_block_timestamp_ms, witness)?;
     let circuit_witness = validated.circuit_witness()?;
-    let mut random_source = CoreVegaRandomSource(random);
+    let mut random_source = CoreVegaRandomSource::new(random)?;
     let proof = prove_vega_mdl_figure9_v1(
         &binding.proof_context(),
         validated.public_inputs().as_array(),
@@ -1739,6 +1762,98 @@ mod tests {
 
     impl CryptoRng for PanicRng {}
 
+    #[derive(Clone, Copy)]
+    enum VegaEntropyModeV1 {
+        Healthy,
+        Constant(u8),
+        Periodic(usize),
+        PartialError { request: usize },
+        Panic { request: usize },
+    }
+
+    struct VegaEntropySourceV1 {
+        mode: VegaEntropyModeV1,
+        cursor: usize,
+        requests: Vec<usize>,
+    }
+
+    impl VegaEntropySourceV1 {
+        fn new(mode: VegaEntropyModeV1) -> Self {
+            Self {
+                mode,
+                cursor: 0,
+                requests: Vec::new(),
+            }
+        }
+
+        fn healthy_byte(index: usize) -> u8 {
+            u8::try_from(index % 251).expect("stream byte is reduced below 251")
+        }
+
+        fn stream_byte(&self, index: usize) -> u8 {
+            match self.mode {
+                VegaEntropyModeV1::Constant(byte) => byte,
+                VegaEntropyModeV1::Periodic(period) => {
+                    u8::try_from(index % period).expect("test periods fit u8")
+                }
+                VegaEntropyModeV1::Healthy
+                | VegaEntropyModeV1::PartialError { .. }
+                | VegaEntropyModeV1::Panic { .. } => Self::healthy_byte(index),
+            }
+        }
+    }
+
+    impl RngCore for VegaEntropySourceV1 {
+        fn next_u32(&mut self) -> u32 {
+            panic!("Vega must use the fallible RNG interface")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("Vega must use the fallible RNG interface")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("Vega must use the fallible RNG interface")
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            self.requests.push(destination.len());
+            let request = self.requests.len();
+            let partial_error = matches!(
+                self.mode,
+                VegaEntropyModeV1::PartialError {
+                    request: failing_request
+                } if failing_request == request
+            );
+            let panicking = matches!(
+                self.mode,
+                VegaEntropyModeV1::Panic {
+                    request: panicking_request
+                } if panicking_request == request
+            );
+            let written = if partial_error || panicking {
+                destination.len().min(17)
+            } else {
+                destination.len()
+            };
+            for offset in 0..written {
+                destination[offset] = self.stream_byte(self.cursor);
+                self.cursor += 1;
+            }
+            if panicking {
+                panic!("injected Vega entropy panic after a partial write")
+            }
+            if partial_error {
+                return Err(RngError::new(
+                    "injected Vega entropy failure after a partial write",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for VegaEntropySourceV1 {}
+
     fn transaction_key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixed Vega transaction key")
@@ -1807,6 +1922,102 @@ mod tests {
 
     fn device_signing_key() -> P256SigningKey {
         P256SigningKey::from_bytes((&[2_u8; 32]).into()).expect("fixed device key")
+    }
+
+    #[test]
+    fn vega_random_source_rejects_unavailable_constant_and_periodic_prefixes() {
+        let mut unavailable = VegaEntropySourceV1::new(VegaEntropyModeV1::PartialError {
+            request: 1,
+        });
+        assert!(matches!(
+            CoreVegaRandomSource::new(&mut unavailable),
+            Err(VegaMdlError::RandomnessUnavailable)
+        ));
+        assert_eq!(unavailable.requests, [64]);
+
+        let mut constant = VegaEntropySourceV1::new(VegaEntropyModeV1::Constant(0xA5));
+        assert!(matches!(
+            CoreVegaRandomSource::new(&mut constant),
+            Err(VegaMdlError::RandomnessHealthCheckFailed)
+        ));
+        assert_eq!(constant.requests, [64]);
+
+        for period in [1, 2, 4, 8, 16, 32] {
+            let mut periodic = VegaEntropySourceV1::new(VegaEntropyModeV1::Periodic(period));
+            assert!(matches!(
+                CoreVegaRandomSource::new(&mut periodic),
+                Err(VegaMdlError::RandomnessHealthCheckFailed)
+            ));
+            assert_eq!(periodic.requests, [64]);
+        }
+    }
+
+    #[test]
+    fn vega_random_source_uses_only_fixed_source_blocks_and_preserves_stream_order() {
+        let mut source = VegaEntropySourceV1::new(VegaEntropyModeV1::Healthy);
+        let mut actual = [0_u8; 129];
+        {
+            let mut random_source =
+                CoreVegaRandomSource::new(&mut source).expect("healthy Vega entropy");
+            random_source
+                .fill_bytes(&mut actual[..1])
+                .expect("one byte from initial reservoir");
+            random_source
+                .fill_bytes(&mut actual[1..64])
+                .expect("remaining initial reservoir");
+            random_source
+                .fill_bytes(&mut actual[64..])
+                .expect("two canonical refills");
+        }
+        let expected = core::array::from_fn(VegaEntropySourceV1::healthy_byte);
+        assert_eq!(actual, expected);
+        assert_eq!(source.requests, [64, 64, 64]);
+    }
+
+    #[test]
+    fn vega_random_source_partial_error_zeroizes_and_prevents_reentry() {
+        let mut source = VegaEntropySourceV1::new(VegaEntropyModeV1::PartialError { request: 2 });
+        let mut first = [0xA5; 65];
+        let mut retry = [0x5A; 65];
+        {
+            let mut random_source =
+                CoreVegaRandomSource::new(&mut source).expect("healthy initial block");
+            assert!(matches!(
+                random_source.fill_bytes(&mut first),
+                Err(VegaRandomSourceErrorV1::Unavailable)
+            ));
+            assert_eq!(first, [0; 65]);
+            assert!(matches!(
+                random_source.fill_bytes(&mut retry),
+                Err(VegaRandomSourceErrorV1::Unavailable)
+            ));
+            assert_eq!(retry, [0; 65]);
+        }
+        assert_eq!(source.requests, [64, 64]);
+    }
+
+    #[test]
+    fn vega_random_source_unwind_zeroizes_and_permanently_poisons_session() {
+        let mut source = VegaEntropySourceV1::new(VegaEntropyModeV1::Panic { request: 2 });
+        let mut first = [0xA5; 65];
+        let mut retry = [0x5A; 65];
+        {
+            let mut random_source =
+                CoreVegaRandomSource::new(&mut source).expect("healthy initial block");
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    random_source.fill_bytes(&mut first).ok();
+                }))
+                .is_err()
+            );
+            assert_eq!(first, [0; 65]);
+            assert!(matches!(
+                random_source.fill_bytes(&mut retry),
+                Err(VegaRandomSourceErrorV1::Unavailable)
+            ));
+            assert_eq!(retry, [0; 65]);
+        }
+        assert_eq!(source.requests, [64, 64]);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Fail-closed native zk-X509 engine boundary.
+//! Native zk-X509 engine boundary.
 //!
 //! The prover preparation path is complete and authoritative: it validates
 //! persisted governance/root state against trusted block time, decodes the
@@ -6,21 +6,31 @@
 //! relation.  This makes the codec and relation reachable production code
 //! rather than disconnected laboratory helpers.
 //!
-//! The constrained subproof machinery is not exposed as a credential proof
-//! while the explicit end-to-end gap inventory is non-empty. A native
-//! reference check, projection-only proof, or collection of unbound subproofs
-//! is never accepted as a credential proof.
+//! The sole credential path constructs and independently verifies the bound
+//! `X5S1` MAIN/compact-CA envelope. A native reference check, projection-only
+//! proof, or collection of unbound subproofs is never accepted as a
+//! credential proof.
 
 use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1};
+use rand::{TryCryptoRng, rngs::OsRng};
 use thiserror::Error;
 
 use super::{
-    air::{ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1, ZK_X509_AIR_GAPS_V1, ZkX509AirGapV1},
+    accumulator_stark::{
+        ZkX509CaAccumulatorProofErrorV1, ca_accumulator_base_root_from_proof_v1,
+        ca_accumulator_subproof_binding_from_proof_v1, ca_profile_digest_v1, ca_public_digest_v1,
+        prove_zk_x509_ca_accumulator_stark_v1_with_rng,
+    },
+    air::{ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1, ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1},
     codec::{ZkX509WitnessCodecErrorV1, ZkX509WitnessV1},
-    credential_pre_aux::ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1,
+    credential_pre_aux::{
+        ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1, ZkX509CredentialPreAuxErrorV1,
+        derive_zk_x509_credential_pre_aux_binding_v1,
+    },
     credential_stark::{
         ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
-        decode_zk_x509_credential_envelope_v1,
+        decode_zk_x509_credential_envelope_v1, encode_zk_x509_credential_envelope_v1,
+        validate_cross_subproof_binding_v1,
     },
     der_air::ZkX509Rfc5280StatementV1,
     fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
@@ -34,7 +44,8 @@ use super::{
     },
     io_air::ZK_X509_IO_AIR_DESCRIPTOR_V1,
     main_assembly::{
-        ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1,
+        ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1, ZkX509MainAssemblyErrorV1,
+        build_zk_x509_main_trace_assembly_v1,
         compile_zk_x509_rfc_statement_from_authoritative_state_v1,
     },
     main_io::ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1,
@@ -49,9 +60,19 @@ use super::{
         ZkX509GovernanceV1, ZkX509RelationErrorV1, ZkX509RelationOutputV1,
         validate_reference_relation_v1,
     },
-    sha_call_bus_stark::{ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1, ZkX509ShaCallPublicShapeV1},
+    sha_call_bus_stark::{
+        ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1, ZkX509ShaCallPublicShapeV1,
+        ZkX509ShaCallScheduleV1,
+    },
     sha256_air::ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
     sha256_word_air::ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1,
+    stark::{
+        ZkX509StarkErrorV1, commit_zk_x509_main_base_phase_v1_with_rng,
+        verify_zk_x509_main_aggregate_stark_v1, zk_x509_main_pre_aux_from_proof_v1,
+    },
+};
+use crate::privacy_engines::prover_randomness::{
+    HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1,
 };
 use crate::privacy_state::{
     PrivacyZkX509AuthoritativeStateV1, validate_privacy_zk_x509_statement_state_v1,
@@ -59,13 +80,17 @@ use crate::privacy_state::{
 
 const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.compiled-profile.v1";
 const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-IRX509W1-private-witness+strict-reference-relation";
-const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 28;
+const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 29;
 const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 
-// Filled only after all six algebraic schedules have independent release KATs.
-// There is deliberately no provisional, root-bearing, or certificate-bearing
-// profile in the first-release protocol.
-const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = None;
+// Independently encoded and SHA-256 checked from the exact ordered 29-field
+// release manifest after the compact-CA descriptor and all six algebraic
+// schedules passed their release KATs. There is no provisional, root-bearing,
+// or certificate-bearing profile in the first-release protocol.
+const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = Some([
+    0x31, 0x36, 0x4b, 0xf9, 0x8e, 0x76, 0xa8, 0x84, 0xea, 0xf1, 0x05, 0x65, 0x3c, 0x33, 0x4f, 0xfd,
+    0x6d, 0x6c, 0x2e, 0x28, 0x95, 0x41, 0x8c, 0x37, 0x9d, 0x98, 0x38, 0xb7, 0x7c, 0x73, 0x45, 0x89,
+]);
 
 /// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,7 +148,7 @@ fn compile_zk_x509_consensus_public_inputs_v1(
     })
 }
 
-/// Native prover preparation or release-gate failure.
+/// Native prover preparation or credential-proof failure.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509EngineErrorV1 {
     /// Persisted state, roots, epochs, policy, or trusted block time mismatch.
@@ -138,27 +163,97 @@ pub(crate) enum ZkX509EngineErrorV1 {
     /// Strict RFC 5280/reference relation failure.
     #[error(transparent)]
     ReferenceRelation(#[from] ZkX509RelationErrorV1),
+    /// Canonical challenge-independent MAIN material could not be assembled.
+    #[error(transparent)]
+    MainAssembly(#[from] ZkX509MainAssemblyErrorV1),
+    /// Joint MAIN/compact-CA challenge derivation failed.
+    #[error(transparent)]
+    CredentialPreAux(#[from] ZkX509CredentialPreAuxErrorV1),
+    /// Complete MAIN proof construction failed.
+    #[error(transparent)]
+    MainProofConstruction(#[from] ZkX509StarkErrorV1),
+    /// Dedicated compact-CA proof construction failed.
+    #[error(transparent)]
+    CaProofConstruction(#[from] ZkX509CaAccumulatorProofErrorV1),
+    /// Prover entropy was unavailable or failed the first-release health policy.
+    #[error(transparent)]
+    ProverRandomness(#[from] TryCryptoProverRandomnessErrorV1),
     /// Canonical credential envelope or consensus-context binding failure.
     #[error(transparent)]
     CredentialProof(#[from] ZkX509CredentialProofErrorV1),
-    /// One or more end-to-end constrained proof gaps remain.
-    #[error("zk-X509 canonical credential proof remains incomplete")]
-    AirIncomplete,
-    /// The complete main-plus-CA aggregate verifier has not been assembled.
-    #[error("zk-X509 consensus credential verifier is not assembled")]
-    ConsensusVerifierUnavailable,
+    /// Producer-generated X5S1 bytes failed the independent consensus verifier.
+    #[error("zk-X509 credential prover self-check failed")]
+    ProverSelfCheckFailed,
+    /// Canonical MAIN assembly did not reproduce prover preparation exactly.
+    #[error("zk-X509 canonical prover projection mismatch")]
+    ProverProjectionMismatch,
     /// The canonical SHA algebraic compiler or schedule rejected its profile.
     #[error(transparent)]
     ShaFixedAlgebraic(#[from] ZkX509ShaFixedAlgebraicErrorV1),
     /// The canonical P-256 algebraic compiler or schedule rejected its profile.
     #[error(transparent)]
     P256FixedAlgebraic(#[from] ZkX509P256FixedAlgebraicErrorV1),
-    /// The complete 28-field release manifest has not been pinned.
+    /// The complete 29-field release manifest has not been pinned.
     #[error("zk-X509 compiled profile is not release-pinned")]
     CompiledProfileUnpinned,
-    /// Recomputed 28-field manifest digest differs from the consensus pin.
+    /// Recomputed 29-field manifest digest differs from the consensus pin.
     #[error("zk-X509 compiled profile digest mismatch")]
     CompiledProfileMismatch,
+}
+
+/// Replay the complete cryptographic verifier for the bound subproof pair.
+fn verify_zk_x509_credential_subproofs_v1(
+    statement: &IrohaZkX509StarkP256StatementV1,
+    consensus_public: &ZkX509ConsensusPublicInputsV1,
+    main_aggregate: &[u8],
+    ca_subproof: &[u8],
+) -> Result<(), ZkX509EngineErrorV1> {
+    construct_zk_x509_compiled_profile_v1()?;
+    let sha_shape = ZkX509ShaCallPublicShapeV1 {
+        disclosed_attributes: consensus_public
+            .rfc_statement
+            .disclosed_attribute_indices
+            .len(),
+    };
+    let sha_schedule = ZkX509ShaCallScheduleV1::new(sha_shape)
+        .map_err(|_| ZkX509CredentialProofErrorV1::InvalidStatement)?;
+    let main_pre_aux =
+        zk_x509_main_pre_aux_from_proof_v1(consensus_public.credential_binding, main_aggregate)
+            .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
+    let ca_base_root = ca_accumulator_base_root_from_proof_v1(ca_subproof)
+        .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?;
+    let credential_binding = derive_zk_x509_credential_pre_aux_binding_v1(
+        main_pre_aux,
+        ca_profile_digest_v1().map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?,
+        ca_public_digest_v1(
+            consensus_public.credential_binding.ca_public_v1(),
+            &sha_schedule,
+        )
+        .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?,
+        ca_base_root,
+    )
+    .map_err(|_| ZkX509CredentialProofErrorV1::CrossSubproofMismatch)?;
+    let main_binding = verify_zk_x509_main_aggregate_stark_v1(
+        statement,
+        &consensus_public.rfc_statement,
+        consensus_public.credential_binding,
+        credential_binding,
+        main_aggregate,
+    )
+    .map_err(|_| ZkX509CredentialProofErrorV1::MainProof)?;
+    let ca_binding = ca_accumulator_subproof_binding_from_proof_v1(
+        consensus_public.credential_binding.ca_public_v1(),
+        &sha_schedule,
+        main_pre_aux,
+        ca_subproof,
+    )
+    .map_err(|_| ZkX509CredentialProofErrorV1::CaProof)?;
+    validate_cross_subproof_binding_v1(
+        consensus_public.credential_binding,
+        main_binding,
+        ca_binding,
+    )?;
+    Ok(())
 }
 
 /// Verify one canonical credential proof against verifier-owned consensus data.
@@ -168,9 +263,7 @@ pub(crate) enum ZkX509EngineErrorV1 {
 /// committed genesis hash before inspecting any aggregate. The caller must
 /// supply the same authoritative snapshot it already validated against trusted
 /// block time and consensus limits; the engine compiles the RFC public input
-/// from that snapshot rather than from proof metadata. It deliberately cannot
-/// succeed while either the explicit gap inventory is non-empty or the complete
-/// main-plus-compact-CA verifier is unavailable.
+/// from that snapshot rather than from proof metadata.
 pub(crate) fn verify_zk_x509_credential_proof_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
@@ -184,25 +277,18 @@ pub(crate) fn verify_zk_x509_credential_proof_v1(
         return Err(ZkX509CredentialProofErrorV1::PublicBindingMismatch.into());
     }
 
-    require_complete_zk_x509_air_v1()?;
-
-    // TODO(zk-x509-release): invoke the completed MAIN aggregate verifier and
-    // the real compact-CA verifier here under
-    // `construct_zk_x509_compiled_profile_v1`, then compare every SHA-call
-    // terminal and the root-SPKI I/O products through
-    // `verify_zk_x509_credential_envelope_with_v1`. Never replace this with a
-    // reference-relation check or an independently accepted CA proof.
-    let _rfc_statement = consensus_public.rfc_statement;
-    let _main_aggregate = envelope.main_aggregate;
-    let _ca_subproof = envelope.ca_subproof;
-    Err(ZkX509EngineErrorV1::ConsensusVerifierUnavailable)
+    verify_zk_x509_credential_subproofs_v1(
+        statement,
+        &consensus_public,
+        envelope.main_aggregate,
+        envelope.ca_subproof,
+    )
 }
 
 /// Decode and validate the exact prover input against trusted ledger state.
 ///
-/// This function performs no proof construction and does not weaken the
-/// activation gate. Its output is the only admitted input to a future complete
-/// credential-proof constructor.
+/// This function performs no proof construction. Its output is the only
+/// admitted input to the credential-proof constructor.
 pub(crate) fn prepare_zk_x509_prover_input_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
@@ -239,18 +325,119 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
     })
 }
 
-/// Exact remaining constrained proof gaps.
-pub(crate) const fn zk_x509_air_gaps_v1() -> &'static [ZkX509AirGapV1] {
-    &ZK_X509_AIR_GAPS_V1
+/// Construct one canonical `X5S1` credential proof with injected entropy.
+///
+/// Every state, witness, release-profile, topology, and native-relation check
+/// completes before the entropy source is touched. The constructor then:
+///
+/// 1. commits the exact six MAIN base groups;
+/// 2. constructs and self-verifies the compact-CA proof against those roots;
+/// 3. derives the sole joint `X5B1` capability from the seven committed roots;
+/// 4. commits MAIN auxiliary groups and completes `X5M1`;
+/// 5. wraps the ordered pair in `X5S1` and independently invokes the consensus
+///    verifier on the exact final bytes.
+///
+/// There is no independently accepted subproof path and no host-side
+/// reference-relation substitute for the final self-check.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
+    statement: &IrohaZkX509StarkP256StatementV1,
+    authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
+    trusted_block_timestamp_ms: u64,
+    consensus_limits: &PrivacyConsensusLimitsV1,
+    genesis_hash: [u8; 32],
+    encoded_witness: &[u8],
+    rng: &mut R,
+) -> Result<Vec<u8>, ZkX509EngineErrorV1> {
+    // Every witness-dependent preflight deliberately precedes the first
+    // entropy read.
+    construct_zk_x509_compiled_profile_v1()?;
+    let consensus_public =
+        compile_zk_x509_consensus_public_inputs_v1(statement, authoritative_state, genesis_hash)?;
+    let prepared = prepare_zk_x509_prover_input_v1(
+        statement,
+        authoritative_state,
+        trusted_block_timestamp_ms,
+        consensus_limits,
+        encoded_witness,
+    )?;
+    let trust_anchor = authoritative_state.trust_anchor();
+    let crl = authoritative_state.crl_record();
+    let governance = ZkX509GovernanceV1 {
+        trust_anchor: &trust_anchor,
+        certificate_policy: authoritative_state.certificate_policy(),
+        crl: &crl,
+    };
+    let assembly = build_zk_x509_main_trace_assembly_v1(statement, governance, prepared.witness())?;
+    if assembly.relation_output != prepared.projection() {
+        return Err(ZkX509EngineErrorV1::ProverProjectionMismatch);
+    }
+
+    let mut checked_rng = HealthCheckedTryCryptoRngV1::new(rng)?;
+    let (main_phase, main_pre_aux) = commit_zk_x509_main_base_phase_v1_with_rng(
+        statement,
+        &assembly,
+        consensus_public.credential_binding,
+        &mut checked_rng,
+    )?;
+    let ca_subproof = prove_zk_x509_ca_accumulator_stark_v1_with_rng(
+        &assembly.ca_accumulator_trace,
+        &assembly.sha_schedule,
+        main_pre_aux,
+        &mut checked_rng,
+    )?;
+    let ca_base_root = ca_accumulator_base_root_from_proof_v1(&ca_subproof)?;
+    let credential_binding = derive_zk_x509_credential_pre_aux_binding_v1(
+        main_pre_aux,
+        ca_profile_digest_v1()?,
+        ca_public_digest_v1(
+            consensus_public.credential_binding.ca_public_v1(),
+            &assembly.sha_schedule,
+        )?,
+        ca_base_root,
+    )?;
+    let main_aggregate = main_phase
+        .bind_credential_pre_aux_v1_with_rng(credential_binding, &mut checked_rng)?
+        .finish_v1_with_rng(&mut checked_rng)?;
+    let encoded = encode_zk_x509_credential_envelope_v1(
+        consensus_public.credential_binding,
+        &main_aggregate,
+        &ca_subproof,
+    )?;
+    let envelope = decode_zk_x509_credential_envelope_v1(&encoded)
+        .map_err(|_| ZkX509EngineErrorV1::ProverSelfCheckFailed)?;
+    if envelope.public != consensus_public.credential_binding {
+        return Err(ZkX509EngineErrorV1::ProverSelfCheckFailed);
+    }
+    verify_zk_x509_credential_subproofs_v1(
+        statement,
+        &consensus_public,
+        envelope.main_aggregate,
+        envelope.ca_subproof,
+    )
+    .map_err(|_| ZkX509EngineErrorV1::ProverSelfCheckFailed)?;
+    Ok(encoded)
 }
 
-/// Reject proof construction until the canonical end-to-end path exists.
-pub(crate) fn require_complete_zk_x509_air_v1() -> Result<(), ZkX509EngineErrorV1> {
-    if ZK_X509_AIR_GAPS_V1.is_empty() {
-        Ok(())
-    } else {
-        Err(ZkX509EngineErrorV1::AirIncomplete)
-    }
+/// Construct one canonical `X5S1` credential proof with operating-system
+/// cryptographic entropy.
+pub(crate) fn prove_zk_x509_credential_proof_v1(
+    statement: &IrohaZkX509StarkP256StatementV1,
+    authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
+    trusted_block_timestamp_ms: u64,
+    consensus_limits: &PrivacyConsensusLimitsV1,
+    genesis_hash: [u8; 32],
+    encoded_witness: &[u8],
+) -> Result<Vec<u8>, ZkX509EngineErrorV1> {
+    prove_zk_x509_credential_proof_v1_with_rng(
+        statement,
+        authoritative_state,
+        trusted_block_timestamp_ms,
+        consensus_limits,
+        genesis_hash,
+        encoded_witness,
+        &mut OsRng,
+    )
 }
 
 fn compiled_profile_fields_v1<'a>(
@@ -272,6 +459,7 @@ fn compiled_profile_fields_v1<'a>(
         ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1,
         ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1,
         ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1,
+        &ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1,
         ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
         ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1,
         ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1,
@@ -302,7 +490,7 @@ fn compiled_profile_schedule_digests_v1()
     Ok((sha, p256))
 }
 
-/// Recompute the sole exact 28-field compiled-profile digest.
+/// Recompute the sole exact 29-field compiled-profile digest.
 pub(crate) fn recompute_zk_x509_compiled_profile_digest_v1() -> Result<[u8; 32], ZkX509EngineErrorV1>
 {
     let (sha, p256) = compiled_profile_schedule_digests_v1()?;
@@ -358,12 +546,12 @@ mod tests {
     }
 
     #[test]
-    fn compiled_profile_manifest_has_the_exact_28_field_order() {
+    fn compiled_profile_manifest_has_the_exact_29_field_order() {
         let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
             core::array::from_fn(|shape| [u8::try_from(0x31 + shape).expect("five shapes"); 32]);
         let p256_digest = [0x41; 32];
         let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
-        let original_fields: [&[u8]; 19] = [
+        let original_fields: [&[u8]; 20] = [
             ZK_X509_SUITE_V1,
             ZK_X509_SOURCE_PROFILE_V1,
             ZK_X509_RFC5280_PROFILE_V1,
@@ -378,38 +566,64 @@ mod tests {
             ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1,
             ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1,
             ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1,
+            &ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1,
             ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
             ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1,
             ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1,
             ZK_X509_IO_AIR_DESCRIPTOR_V1,
             REFERENCE_PREPARATION_SCHEMA_V1,
         ];
-        assert_eq!(fields.len(), 28);
-        assert_eq!(&fields[..19], &original_fields);
-        assert_eq!(fields[19], ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
+        assert_eq!(fields.len(), 29);
+        assert_eq!(&fields[..20], &original_fields);
+        assert_eq!(fields[20], ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
         assert_eq!(
-            fields[20],
+            fields[21],
             ZK_X509_SHA_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_V1
         );
         for (shape, digest) in sha_digests.iter().enumerate() {
-            assert_eq!(fields[21 + shape], digest);
+            assert_eq!(fields[22 + shape], digest);
         }
-        assert_eq!(fields[26], ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
-        assert_eq!(fields[27], p256_digest);
+        assert_eq!(fields[27], ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
+        assert_eq!(fields[28], p256_digest);
         assert!(
             fields[12]
                 .windows(b"post-base-challenges=exact272-goldilocks-fields".len())
                 .any(|window| window == b"post-base-challenges=exact272-goldilocks-fields")
         );
         assert!(
-            fields[16]
+            fields[17]
                 .windows(b"main-common-lde-log25".len())
                 .any(|window| window == b"main-common-lde-log25")
         );
         assert!(
-            !fields[16]
+            !fields[17]
                 .windows(b"common-lde-log22".len())
                 .any(|window| window == b"common-lde-log22")
+        );
+    }
+
+    #[test]
+    fn compiled_profile_digest_exactly_binds_compact_ca_subproof_descriptor_pin() {
+        let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
+            core::array::from_fn(|shape| [u8::try_from(0x71 + shape).expect("five shapes"); 32]);
+        let p256_digest = [0x81; 32];
+        let canonical_fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        assert_eq!(
+            canonical_fields[14],
+            ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1.as_slice()
+        );
+        let canonical = independent_compiled_profile_digest_v1(&canonical_fields);
+
+        let mut changed = canonical_fields
+            .iter()
+            .map(|field| field.to_vec())
+            .collect::<Vec<_>>();
+        changed[14][0] ^= 1;
+        let changed_fields = changed.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        assert_ne!(
+            independent_compiled_profile_digest_v1(&changed_fields),
+            canonical,
+            "the compact-CA prover/verifier descriptor pin must rotate the compiled profile"
         );
     }
 
@@ -425,7 +639,7 @@ mod tests {
             .map(|field| field.to_vec())
             .collect::<Vec<_>>();
 
-        for field in 19..COMPILED_PROFILE_FIELD_COUNT_V1 {
+        for field in 20..COMPILED_PROFILE_FIELD_COUNT_V1 {
             let mut changed = owned.clone();
             changed[field][0] ^= 1;
             let changed_fields = changed.iter().map(Vec::as_slice).collect::<Vec<_>>();
@@ -437,7 +651,7 @@ mod tests {
         }
 
         let mut reordered = owned;
-        reordered.swap(21, 22);
+        reordered.swap(22, 23);
         let reordered_fields = reordered.iter().map(Vec::as_slice).collect::<Vec<_>>();
         assert_ne!(
             independent_compiled_profile_digest_v1(&reordered_fields),
@@ -447,29 +661,34 @@ mod tests {
     }
 
     #[test]
-    fn compiled_profile_constructor_is_closed_until_the_manifest_pin_exists() {
+    fn compiled_profile_constructor_matches_the_independent_release_pin() {
+        let (sha_digests, p256_digest) =
+            compiled_profile_schedule_digests_v1().expect("all six frozen schedules");
+        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        let independent = independent_compiled_profile_digest_v1(&fields);
+        let recomputed =
+            recompute_zk_x509_compiled_profile_digest_v1().expect("canonical manifest digest");
+        assert_eq!(recomputed, independent);
+        assert_eq!(ZK_X509_COMPILED_PROFILE_DIGEST_V1, Some(independent));
         assert_eq!(
-            construct_zk_x509_compiled_profile_v1(),
-            Err(ZkX509EngineErrorV1::CompiledProfileUnpinned)
+            construct_zk_x509_compiled_profile_v1()
+                .expect("release-pinned profile")
+                .digest(),
+            independent
         );
     }
 
     #[test]
-    fn sole_profile_and_gap_manifest_are_fail_closed() {
-        assert!(ZK_X509_COMPILED_PROFILE_DIGEST_V1.is_none());
-        assert!(!zk_x509_air_gaps_v1().is_empty());
-        assert_eq!(
-            require_complete_zk_x509_air_v1(),
-            Err(ZkX509EngineErrorV1::AirIncomplete)
-        );
+    fn sole_profile_is_pinned_while_release_activation_stays_governance_gated() {
+        assert!(ZK_X509_COMPILED_PROFILE_DIGEST_V1.is_some());
         assert!(
             String::from_utf8_lossy(ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1)
-                .ends_with("activation=false")
+                .ends_with("activation=governance-gated")
         );
     }
 
     #[test]
-    fn consensus_entry_point_decodes_and_binds_context_before_the_air_gate() {
+    fn consensus_entry_point_decodes_and_binds_context_before_verification() {
         let (statement, authoritative_state) =
             crate::privacy_verifier::zk_x509_dispatch_fixture_for_test();
         let genesis_hash = [0x91; 32];
@@ -509,7 +728,9 @@ mod tests {
                 genesis_hash,
                 &encoded,
             ),
-            Err(ZkX509EngineErrorV1::AirIncomplete)
+            Err(ZkX509EngineErrorV1::CredentialProof(
+                ZkX509CredentialProofErrorV1::MainProof
+            ))
         );
 
         let mut malformed = encoded.clone();
@@ -573,5 +794,123 @@ mod tests {
                 ZkX509CredentialProofErrorV1::InvalidStatement
             ))
         );
+    }
+
+    #[test]
+    fn credential_prover_has_one_preflighted_joint_root_path_and_no_subproof_escape() {
+        let source = include_str!("engine.rs");
+        let prover_start = source
+            .find("pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng")
+            .expect("sole credential prover");
+        let prover_end = source[prover_start..]
+            .find("/// Construct one canonical `X5S1` credential proof with operating-system")
+            .map(|offset| prover_start + offset)
+            .expect("sole credential prover end");
+        let prover = &source[prover_start..prover_end];
+        let production_source = &source[..source.find("#[cfg(test)]").expect("test module")];
+
+        let profile_gate = prover
+            .find("construct_zk_x509_compiled_profile_v1()")
+            .expect("pinned profile validation");
+        let preparation = prover
+            .find("prepare_zk_x509_prover_input_v1(")
+            .expect("canonical witness preparation");
+        let assembly = prover
+            .find("build_zk_x509_main_trace_assembly_v1(")
+            .expect("canonical MAIN assembly");
+        let entropy = prover
+            .find("HealthCheckedTryCryptoRngV1::new(rng)")
+            .expect("health-checked entropy");
+        let main_base = prover
+            .find("commit_zk_x509_main_base_phase_v1_with_rng(")
+            .expect("six MAIN base roots");
+        let ca = prover
+            .find("prove_zk_x509_ca_accumulator_stark_v1_with_rng(")
+            .expect("compact-CA proof");
+        let joint_binding = prover
+            .find("derive_zk_x509_credential_pre_aux_binding_v1(")
+            .expect("joint seven-root X5B1");
+        let main_aux = prover
+            .find(".bind_credential_pre_aux_v1_with_rng(")
+            .expect("bound MAIN auxiliary phase");
+        let envelope = prover
+            .find("encode_zk_x509_credential_envelope_v1(")
+            .expect("X5S1 envelope");
+        let self_check = prover
+            .find("verify_zk_x509_credential_subproofs_v1(")
+            .expect("independent final self-check");
+        assert!(
+            profile_gate < preparation
+                && preparation < assembly
+                && assembly < entropy
+                && entropy < main_base
+                && main_base < ca
+                && ca < joint_binding
+                && joint_binding < main_aux
+                && main_aux < envelope
+                && envelope < self_check
+        );
+        for forbidden in [
+            "verify_reference",
+            "accept_main_subproof",
+            "accept_ca_subproof",
+            "ConsensusVerifierUnavailable",
+            "require_complete_zk_x509_air_v1",
+            "after_release_gate",
+            "zk_x509_air_gaps_v1",
+        ] {
+            assert!(
+                !production_source.contains(forbidden),
+                "credential prover must not contain {forbidden}"
+            );
+        }
+
+        #[derive(Debug)]
+        struct EntropyMustNotBeRead;
+
+        impl core::fmt::Display for EntropyMustNotBeRead {
+            fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                formatter.write_str("credential preflight reached entropy")
+            }
+        }
+
+        struct PanicEntropy;
+
+        impl rand::TryRngCore for PanicEntropy {
+            type Error = EntropyMustNotBeRead;
+
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                panic!("invalid credential preflight reached entropy")
+            }
+
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                panic!("invalid credential preflight reached entropy")
+            }
+
+            fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+                panic!("invalid credential preflight reached entropy")
+            }
+        }
+
+        impl rand::TryCryptoRng for PanicEntropy {}
+
+        let (statement, authoritative_state) =
+            crate::privacy_verifier::zk_x509_dispatch_fixture_for_test();
+        let trusted_block_timestamp_ms = statement
+            .presentation_not_before_unix_seconds
+            .checked_mul(1_000)
+            .expect("fixture timestamp");
+        assert!(matches!(
+            prove_zk_x509_credential_proof_v1_with_rng(
+                &statement,
+                &authoritative_state,
+                trusted_block_timestamp_ms,
+                &PrivacyConsensusLimitsV1::taira_default(),
+                [0x91; 32],
+                &[],
+                &mut PanicEntropy,
+            ),
+            Err(ZkX509EngineErrorV1::WitnessCodec(_))
+        ));
     }
 }

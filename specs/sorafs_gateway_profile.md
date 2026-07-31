@@ -58,6 +58,15 @@ state. The former standalone `sorafs_gateway` process and its
 cannot prove current approval, retirement, signer revocation, or a finalized
 cursor.
 
+Gateway policy inputs have the same authority rule. Client-supplied policy-tag
+or moderation-slug headers are never authoritative and cannot satisfy a
+governed rule. When no finalized source supplies a required tag or slug, the
+rule fails closed. A deployment may consume `X-SoraFS-Region` only when the
+immediate transport peer belongs to its configured trusted-proxy networks; the
+value must be exactly two ASCII letters and is canonicalized to uppercase.
+Direct-client region headers are ignored, and a configured allow/deny
+geofence fails closed when no trusted region is available.
+
 ### 2.2. Stream Tokens
 
 Range clients obtain Torii's `sorafs_manifest::StreamTokenV1` from
@@ -185,6 +194,14 @@ Gateways MUST return deterministic error codes for refusal paths:
 
 Clients MUST treat any non-2xx response as a refusal and exclude the gateway
 from the multi-source schedule until an operator review occurs.
+
+Policy refusals disclose only the stable refusal category; they do not echo
+required policy labels or moderation slugs. The CDN-wide ceiling is charged to
+one global bucket rather than the request `Host`, and both that host and any
+trusted forwarding authority are normalized and length-bounded before use.
+Per-client throttling is keyed by the effective transport address, never by
+the opaque `X-SoraFS-Client` telemetry label, and its inactive-subject table is
+hard-bounded.
 
 The `451` response is derived only from the currently promoted, threshold-
 approved compliance catalog. Its `source` records whether the effective denial

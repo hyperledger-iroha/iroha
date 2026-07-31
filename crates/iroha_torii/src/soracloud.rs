@@ -3,7 +3,10 @@
 //! This module provides a deterministic control-plane surface for
 //! `deploy`/`upgrade`/`rollback` workflows plus SCR host-admission snapshots.
 //! Requests must carry signed payloads so admission can verify manifest
-//! provenance before mutating authoritative control-plane state.
+//! provenance before mutating authoritative control-plane state. Every
+//! top-level POST request schema is strict and excludes inline account
+//! authority/private-key fields; caller identity comes only from the verified
+//! HTTP signature or witness headers.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -766,6 +769,7 @@ pub(crate) struct SignedAgentAutonomyRunRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentAutonomyFinalizeRequest {
     pub apartment_name: String,
     pub run_id: String,
@@ -973,6 +977,7 @@ pub(crate) struct SignedDecryptionRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedCiphertextQueryRequest {
     pub query: CiphertextQuerySpecV1,
     pub provenance: ManifestProvenance,
@@ -1384,6 +1389,7 @@ pub(crate) struct PrivateUploadedModelQuantizedCpuModelDto {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct PrivateUploadedModelExecuteRequest {
     pub service_name: String,
     pub weight_version: String,
@@ -15304,6 +15310,68 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_post_requests_reject_inline_signing_fields_during_decode() {
+        macro_rules! assert_rejects_inline_signing_fields {
+            ($($request:ty),+ $(,)?) => {
+                $(
+                    for field in ["authority", "private_key"] {
+                        let json = format!(r#"{{"{field}":"must-not-cross-torii"}}"#);
+                        let error = norito::json::from_str::<$request>(&json)
+                            .expect_err("retired inline signing field must fail JSON admission");
+                        let message = error.to_string();
+                        assert!(
+                            message.contains("unknown field") && message.contains(field),
+                            "{} admitted retired field `{field}`: {message}",
+                            stringify!($request),
+                        );
+                    }
+                )+
+            };
+        }
+
+        assert_rejects_inline_signing_fields!(
+            SignedBundleRequest,
+            SignedAppInfraRequest,
+            SignedRollbackRequest,
+            SignedStateMutationRequest,
+            SignedServiceConfigSetRequest,
+            SignedServiceConfigDeleteRequest,
+            SignedServiceSecretSetRequest,
+            SignedServiceSecretDeleteRequest,
+            SignedRolloutAdvanceRequest,
+            SignedAgentDeployRequest,
+            SignedAgentLeaseRenewRequest,
+            SignedHfDeployRequest,
+            SignedHfLeaseLeaveRequest,
+            SignedHfLeaseRenewRequest,
+            SignedModelHostAdvertiseRequest,
+            SignedModelHostHeartbeatRequest,
+            SignedModelHostWithdrawRequest,
+            SignedAgentRestartRequest,
+            SignedAgentPolicyRevokeRequest,
+            SignedAgentWalletSpendRequest,
+            SignedAgentWalletApproveRequest,
+            SignedAgentMessageSendRequest,
+            SignedAgentMessageAckRequest,
+            SignedAgentArtifactAllowRequest,
+            SignedAgentAutonomyRunRequest,
+            SignedFheJobRunRequest,
+            SignedTrainingJobStartRequest,
+            SignedTrainingJobCheckpointRequest,
+            SignedTrainingJobRetryRequest,
+            SignedModelWeightRegisterRequest,
+            SignedModelWeightPromoteRequest,
+            SignedModelWeightRollbackRequest,
+            SignedModelArtifactRegisterRequest,
+            SignedUploadedModelRegisterRequest,
+            SignedDecryptionRequest,
+            SignedCiphertextQueryRequest,
+            PrivateUploadedModelExecuteRequest,
+            AgentAutonomyFinalizeRequest,
+        );
+    }
+
+    #[test]
     fn require_soracloud_mutation_signer_derives_authority_from_verified_headers() {
         let key_pair = checked_test_keypair(0x60);
         let account = AccountId::new(key_pair.public_key().clone());
@@ -15317,6 +15385,20 @@ mod tests {
             .expect("verified headers and matching provenance must identify the mutation signer");
         assert_eq!(signer.authority, account);
         assert_eq!(signer.request_signer, provenance.signer);
+    }
+
+    #[test]
+    fn app_infra_request_rejects_inline_signing_fields_in_nested_service_bundles() {
+        for field in ["authority", "private_key"] {
+            let json = format!(r#"{{"deploy_services":[{{"{field}":"must-not-cross-torii"}}]}}"#);
+            let error = norito::json::from_str::<SignedAppInfraRequest>(&json)
+                .expect_err("nested service bundle signing material must fail JSON admission");
+            let message = error.to_string();
+            assert!(
+                message.contains("unknown field") && message.contains(field),
+                "nested retired field `{field}` was not rejected: {message}"
+            );
+        }
     }
 
     #[test]

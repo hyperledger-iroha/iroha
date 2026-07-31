@@ -17,7 +17,16 @@ async fn zk_verify_batch_endpoint_accepts_json_b64_vec() {
         "/v1/zk/verify-batch",
         post(
             |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-                iroha_torii::handle_v1_zk_verify_batch(headers, body).await
+                iroha_torii::handle_v1_zk_verify_batch_with_limits(
+                    headers,
+                    body,
+                    iroha_zkp_halo2::OpenVerifyLimits::default(),
+                    4 * 1024 * 1024,
+                    16,
+                    1024 * 1024,
+                    false,
+                )
+                .await
             },
         ),
     );

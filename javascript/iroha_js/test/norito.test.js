@@ -373,20 +373,6 @@ const REGISTER_ASSET_WITH_POLICY = {
   },
 };
 
-const REGISTER_ASSET_HIDDEN_POOL = {
-  zk: {
-    RegisterAssetHiddenZkPool: {
-      pool_id: "boi-private-is-pool",
-      storage_asset: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-      asset_set_root: Array.from({ length: 32 }, (_, index) => index + 1),
-      vk_transfer: {
-        backend: "halo2/ipa",
-        name: "asset-hidden-transfer-v1",
-      },
-    },
-  },
-};
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
@@ -514,41 +500,6 @@ test("native Norito decoder accepts pure JS asset definition frames", () => {
     noritoEncodeInstruction(REGISTER_ASSET_WITH_POLICY),
   );
   assert.deepEqual(noritoDecodeInstruction(encoded), REGISTER_ASSET_WITH_POLICY);
-});
-
-baseTest("pure JS Norito codec supports asset-hidden pool registration without native binding", () => {
-  withMissingNativeBinding(() => {
-    const encoded = noritoEncodeInstruction(REGISTER_ASSET_HIDDEN_POOL);
-    const decoded = noritoDecodeInstruction(encoded);
-    assert.deepEqual(decoded, REGISTER_ASSET_HIDDEN_POOL);
-  });
-});
-
-test("unsupported instruction fallback cannot change later native encodings", () => {
-  const supported = noritoDecodeInstruction(
-    loadInstructionBytes("burn_asset_quantity.json"),
-  );
-  const expected = Buffer.from(
-    nativeBinding.noritoEncodeInstruction(JSON.stringify(supported)),
-  );
-
-  const fallback = Buffer.from(
-    noritoEncodeInstruction(REGISTER_ASSET_HIDDEN_POOL),
-  );
-  assert.ok(fallback.length > 32);
-
-  assert.deepEqual(
-    Buffer.from(noritoEncodeInstruction(supported)),
-    expected,
-    "an automatic fallback for one unsupported instruction must remain per-call",
-  );
-});
-
-test("native Norito decoder accepts pure JS asset-hidden pool registration frames", () => {
-  const encoded = withMissingNativeBinding(() =>
-    noritoEncodeInstruction(REGISTER_ASSET_HIDDEN_POOL),
-  );
-  assert.deepEqual(noritoDecodeInstruction(encoded), REGISTER_ASSET_HIDDEN_POOL);
 });
 
 baseTest("pure JS Norito asset definition codec rejects adversarial fields", () => {
@@ -1190,7 +1141,6 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
     "multisig_account_id",
     "multisig_account_alias",
     "signer_account_id",
-    "private_key",
     "public_key_hex",
     "signature_b64",
     "creation_time_ms",
@@ -1295,6 +1245,31 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
   assert.equal(feeTransferEntryIndexString.payload.toString("utf8"), "2");
   assert.equal(feeTransferEntryIndexString.offset, feeTransferEntryIndexValue.payload.length);
   assert.equal(feeTransferEntryIndexValue.offset, feeTransferEntryIndex.payload.length);
+});
+
+test("native multisig DTO encoders reject inline private-key fields", () => {
+  assert.throws(
+    () =>
+      noritoEncodeMultisigProposeRequest({
+        instructions: [],
+        private_key: "secret",
+      }),
+    /does not accept private-key fields/,
+  );
+  assert.throws(
+    () =>
+      noritoEncodeMultisigContractCallProposeRequest({
+        privateKeyHex: "11".repeat(32),
+      }),
+    /does not accept private-key fields/,
+  );
+  assert.throws(
+    () =>
+      noritoEncodeMultisigContractCallApproveRequest({
+        private_key_bytes: [1],
+      }),
+    /does not accept private-key fields/,
+  );
 });
 
 test("native multisig proposal DTO rejects malformed validation-fee metadata", () => {

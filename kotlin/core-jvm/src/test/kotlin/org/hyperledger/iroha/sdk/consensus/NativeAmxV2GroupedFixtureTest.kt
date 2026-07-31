@@ -50,7 +50,7 @@ class NativeAmxV2GroupedFixtureTest {
             firstLeg.participantProposal.proposalHash.value,
         )
         assertEquals(
-            "hash:48238EDD90CB56277753360B4815696675EFB7D883F2A7B5954C3578C329B8FD#C72C",
+            "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72",
             firstLeg.participantSettlementHash.value,
         )
         assertTrue(
@@ -78,6 +78,10 @@ class NativeAmxV2GroupedFixtureTest {
         }
         val remoteLeg = group.receipts.first().legs.single { it.laneId == 8L }
         assertEquals(BigInteger.ZERO, remoteLeg.participantProposal.descriptor.laneBlockView)
+        assertEquals(
+            "hash:40C7FCA7AA143B323B473A9958B96F49896C03C3547B83DD340FAE2FC1A85D29#B452",
+            remoteLeg.participantSettlementHash.value,
+        )
         assertEquals(false, remoteLeg.requiresMixedRoleAnchorValidation)
 
         val diagnostics = golden.objectValue("expected_diagnostics")

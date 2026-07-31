@@ -43,7 +43,8 @@ class TransactionPayloadTest {
                 null,
                 FeePaymentIntent.authority(emptyList()),
                 null,
-                0xbf,
+                null, // attachments
+                0x1bf,
                 null,
             )
         }
@@ -66,7 +67,8 @@ class TransactionPayloadTest {
                 null,
                 FeePaymentIntent.authority(emptyList()),
                 null,
-                0xbf,
+                null, // attachments
+                0x1bf,
                 null,
             )
         }

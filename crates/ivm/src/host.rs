@@ -27,6 +27,7 @@ use iroha_data_model::{
     name::Name,
     nexus::{AxtPolicySnapshot, AxtPolicySnapshotValidationError, DataSpaceId},
     nft::NftId,
+    state_path::StatePath,
     zk::{OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
 #[cfg(test)]
@@ -45,7 +46,7 @@ use ivm_abi::{
     },
 };
 use norito::{
-    core::{Archived, Header, NoritoDeserialize, NoritoSerialize},
+    core::{Header, NoritoDeserialize, NoritoSerialize},
     decode_from_bytes,
 };
 use sha2::{Digest as Sha2Digest, Sha256};
@@ -211,25 +212,33 @@ pub const STATE_QUERY_GAS_BASE: u64 = gas::STATE_QUERY_GAS_BASE;
 /// Returns an ABI or memory error for an invalid pointer and
 /// [`VMError::NoritoInvalid`] when the V1 path bound is exceeded.
 pub fn quote_state_path_payload_len_at(vm: &IVM, address: u64) -> Result<usize, VMError> {
-    let path_len = quote_tlv_payload_len_at(vm, address, PointerType::Name)?;
-    if path_len > syscalls::STATE_MAX_PATH_BYTES {
+    let path_len = quote_tlv_payload_len_at(vm, address, PointerType::NoritoBytes)?;
+    if path_len > syscalls::STATE_MAX_PATH_FRAME_BYTES {
         return Err(VMError::NoritoInvalid);
     }
     Ok(path_len)
 }
 
-/// Return the framed Norito payload length used by a durable-state `Name` TLV.
+/// Return the framed Norito payload length used by a `StateMap` base `Name`.
 ///
 /// # Errors
 ///
 /// Returns [`VMError::NoritoInvalid`] when the canonical length overflows.
 pub fn state_path_name_payload_len(name: &Name) -> Result<usize, VMError> {
-    state_path_text_payload_len(name.as_ref())
+    state_path_text_payload_len(name.as_ref(), core::mem::align_of::<Name>())
 }
 
-fn state_path_text_payload_len(path: &str) -> Result<usize, VMError> {
+/// Return the framed Norito payload length used by a durable-state `StatePath`.
+///
+/// # Errors
+///
+/// Returns [`VMError::NoritoInvalid`] when the canonical length overflows.
+pub fn state_path_payload_len(path: &StatePath) -> Result<usize, VMError> {
+    state_path_text_payload_len(path.as_ref(), core::mem::align_of::<StatePath>())
+}
+
+fn state_path_text_payload_len(path: &str, align: usize) -> Result<usize, VMError> {
     let encoded = state_key_encoded_len_from_text(path)?;
-    let align = core::mem::align_of::<Archived<Name>>();
     let padding = if align <= 1 {
         0
     } else {
@@ -242,24 +251,26 @@ fn state_path_text_payload_len(path: &str) -> Result<usize, VMError> {
         .ok_or(VMError::NoritoInvalid)
 }
 
-/// Validate canonical durable-state path text without allocating a `Name`.
+/// Validate canonical durable-state path text without applying `Name`'s
+/// business-identifier length bound.
 ///
 /// Stored-key scanners use this before counting or skipping an entry, so an
 /// oversized preloaded key cannot evade validation through pagination.
 pub fn validate_state_path_text(path: &str) -> Result<(), VMError> {
-    if state_path_text_payload_len(path)? > syscalls::STATE_MAX_PATH_BYTES {
-        return Err(VMError::NoritoInvalid);
-    }
-    Ok(())
+    let path: StatePath = path.parse().map_err(|_| VMError::NoritoInvalid)?;
+    validate_state_path(&path)
 }
 
-/// Validate a canonical durable-state path against the V1 framed-size bound.
+/// Validate a canonical durable-state path against the V1 text and
+/// canonical-frame bounds.
 ///
 /// # Errors
 ///
 /// Returns [`VMError::NoritoInvalid`] when the path exceeds the V1 bound.
-pub fn validate_state_path_name(name: &Name) -> Result<(), VMError> {
-    if state_path_name_payload_len(name)? > syscalls::STATE_MAX_PATH_BYTES {
+pub fn validate_state_path(path: &StatePath) -> Result<(), VMError> {
+    if path.as_ref().len() > syscalls::STATE_MAX_PATH_BYTES
+        || state_path_payload_len(path)? > syscalls::STATE_MAX_PATH_FRAME_BYTES
+    {
         return Err(VMError::NoritoInvalid);
     }
     Ok(())
@@ -309,8 +320,9 @@ pub(crate) fn debug_log_gas(payload_len: usize) -> u64 {
 pub(crate) const TLV_ENVELOPE_OVERHEAD: usize = 7 + iroha_crypto::Hash::LENGTH;
 
 /// Build the injective V1 durable-map path for canonical Norito key bytes.
-pub fn canonical_state_map_path(base: &Name, key: &[u8]) -> Result<Name, VMError> {
-    if state_path_name_payload_len(base)? > syscalls::STATE_MAP_MAX_BASE_BYTES
+pub fn canonical_state_map_path(base: &Name, key: &[u8]) -> Result<StatePath, VMError> {
+    if base.as_ref().len() > syscalls::STATE_MAP_MAX_BASE_BYTES
+        || state_path_name_payload_len(base)? > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
         || key.is_empty()
         || key.len() > syscalls::STATE_MAP_MAX_KEY_BYTES
     {
@@ -321,8 +333,8 @@ pub fn canonical_state_map_path(base: &Name, key: &[u8]) -> Result<Name, VMError
     path.push_str(base);
     path.push('/');
     path.push_str(&hex::encode(key));
-    let path = path.parse().map_err(|_| VMError::NoritoInvalid)?;
-    validate_state_path_name(&path)?;
+    let path: StatePath = path.parse().map_err(|_| VMError::NoritoInvalid)?;
+    validate_state_path(&path)?;
     Ok(path)
 }
 
@@ -440,7 +452,7 @@ pub(crate) fn canonical_typed_state_map_path(
     vm: &IVM,
     base: &Name,
     key: &[u8],
-) -> Result<Name, VMError> {
+) -> Result<StatePath, VMError> {
     let path = canonical_state_map_path(base, key)?;
     validate_declared_state_map_key(vm, base, key)?;
     Ok(path)
@@ -453,7 +465,7 @@ enum DeclaredStatePath<'a> {
 
 fn resolve_declared_state_path<'a>(
     vm: &'a IVM,
-    path: &Name,
+    path: &StatePath,
 ) -> Result<Option<DeclaredStatePath<'a>>, VMError> {
     let Some(interface) = vm.contract_interface() else {
         return Ok(None);
@@ -502,7 +514,7 @@ fn resolve_declared_state_path<'a>(
 /// name exactly one declared scalar or one canonical `StateMap` entry. The
 /// bare map base is a collection prefix and is therefore invalid for value
 /// operations.
-pub fn validate_declared_state_path(vm: &IVM, path: &Name) -> Result<(), VMError> {
+pub fn validate_declared_state_path(vm: &IVM, path: &StatePath) -> Result<(), VMError> {
     match resolve_declared_state_path(vm, path)? {
         Some(DeclaredStatePath::MapBase) => Err(VMError::NoritoInvalid),
         Some(DeclaredStatePath::Value(_)) | None => Ok(()),
@@ -515,7 +527,7 @@ pub fn validate_declared_state_path(vm: &IVM, path: &Name) -> Result<(), VMError
 /// `StateMap`. Generic programs never reach this host-side check because the
 /// VM rejects their durable-state syscalls before quoting or dispatch, while
 /// malformed or undeclared typed paths still fail closed.
-pub fn validate_declared_state_scan_path(vm: &IVM, path: &Name) -> Result<(), VMError> {
+pub fn validate_declared_state_scan_path(vm: &IVM, path: &StatePath) -> Result<(), VMError> {
     resolve_declared_state_path(vm, path).map(drop)
 }
 
@@ -526,7 +538,7 @@ pub fn validate_declared_state_scan_path(vm: &IVM, path: &Name) -> Result<(), VM
 /// from writing a well-formed record for a different scalar or aggregate type.
 pub fn validate_declared_state_value_payload(
     vm: &IVM,
-    path: &Name,
+    path: &StatePath,
     payload: &[u8],
 ) -> Result<(), VMError> {
     let Some(declared) = resolve_declared_state_path(vm, path)? else {
@@ -545,26 +557,29 @@ pub fn validate_declared_state_value_payload(
 /// pointer ABI, while `key_payload_len` is the raw canonical key payload. The
 /// returned output length is conservative and includes framing slack; the
 /// decoded execution path repeats the semantic base/key checks and validates
-/// the final canonical `Name` against [`syscalls::STATE_MAX_PATH_BYTES`].
+/// the final canonical `StatePath` against [`syscalls::STATE_MAX_PATH_BYTES`].
 pub(crate) fn quote_canonical_state_map_path_lengths(
     base_payload_len: usize,
     key_payload_len: usize,
 ) -> Result<(usize, usize), VMError> {
-    if base_payload_len > syscalls::STATE_MAP_MAX_BASE_BYTES
+    if base_payload_len > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
         || key_payload_len == 0
         || key_payload_len > syscalls::STATE_MAP_MAX_KEY_BYTES
     {
         return Err(VMError::NoritoInvalid);
     }
-    let output_bound = base_payload_len
+    let output_text_bound = syscalls::STATE_MAP_MAX_BASE_BYTES
         .checked_add(1)
         .and_then(|len| len.checked_add(key_payload_len.checked_mul(2)?))
-        // Covers the fixed canonical Name framing delta for every V1 flag set.
-        .and_then(|len| len.checked_add(16))
         .ok_or(VMError::NoritoInvalid)?;
-    if output_bound > syscalls::STATE_MAX_PATH_BYTES {
+    if output_text_bound > syscalls::STATE_MAX_PATH_BYTES {
         return Err(VMError::NoritoInvalid);
     }
+    let output_bound = output_text_bound
+        .checked_add(
+            syscalls::STATE_MAX_PATH_FRAME_BYTES.saturating_sub(syscalls::STATE_MAX_PATH_BYTES),
+        )
+        .ok_or(VMError::NoritoInvalid)?;
     let input_len = base_payload_len
         .checked_add(key_payload_len)
         .ok_or(VMError::NoritoInvalid)?;
@@ -578,14 +593,45 @@ pub(crate) fn canonical_state_map_key_at(
     index: u64,
 ) -> Result<Option<Vec<u8>>, VMError> {
     if page_payload.len() > syscalls::STATE_MAP_MAX_PAGE_BYTES
-        || state_path_name_payload_len(base)? > syscalls::STATE_MAP_MAX_BASE_BYTES
+        || base.as_ref().len() > syscalls::STATE_MAP_MAX_BASE_BYTES
+        || state_path_name_payload_len(base)? > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
     {
         return Err(VMError::NoritoInvalid);
     }
-    let paths: Vec<Name> =
-        decode_canonical_norito(page_payload).map_err(|_| VMError::DecodeError)?;
-    if paths.len() > usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS).unwrap_or(usize::MAX) {
-        return Err(VMError::NoritoInvalid);
+    let default_limits = ivm_abi::codec::canonical_norito_decode_limits(page_payload.len());
+    let item_limit = usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS).unwrap_or(usize::MAX);
+    let page_limits = norito::core::DecodeLimits::new(
+        default_limits.max_sequence_elements().min(item_limit),
+        default_limits.max_field_bytes(),
+        default_limits.max_total_elements(),
+        default_limits.max_total_allocated_bytes(),
+        default_limits.max_nesting_depth(),
+    );
+    let paths: Vec<StatePath> = decode_canonical_norito_with_limits(page_payload, page_limits)
+        .map_err(|_| VMError::DecodeError)?;
+    let mut previous: Option<&StatePath> = None;
+    for path in &paths {
+        validate_state_path(path)?;
+        if previous.is_some_and(|previous| previous >= path) {
+            return Err(VMError::NoritoInvalid);
+        }
+        previous = Some(path);
+
+        let suffix = path
+            .as_ref()
+            .strip_prefix(base.as_ref())
+            .and_then(|suffix| suffix.strip_prefix('/'))
+            .ok_or(VMError::NoritoInvalid)?;
+        if suffix.is_empty()
+            || suffix.len() > syscalls::STATE_MAP_MAX_KEY_BYTES.saturating_mul(2)
+            || suffix.len() % 2 != 0
+            || suffix.contains('/')
+            || !suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(VMError::NoritoInvalid);
+        }
     }
     let index = usize::try_from(index).unwrap_or(usize::MAX);
     let Some(path) = paths.get(index) else {
@@ -853,13 +899,13 @@ pub fn decode_canonical_zk_batch(
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let _payload_context = norito::core::PayloadCtxGuard::enter(payload);
     // Validate the complete frame without requiring the TLV payload address
-    // itself to satisfy `Archived<Batch>` alignment. Inspect the bounded
+    // itself to satisfy `Batch` payload-storage alignment. Inspect the bounded
     // top-level count before materializing any elements.
     let view = norito::core::from_bytes_view(payload).map_err(|_| ERR_DECODE)?;
     if view.schema() != <Batch as NoritoDeserialize>::schema_hash() {
         return Err(ERR_DECODE);
     }
-    let alignment = core::mem::align_of::<Archived<Batch>>();
+    let alignment = norito::core::archived_payload_align::<Batch>();
     let expected_padding = if alignment <= 1 {
         0
     } else {
@@ -1265,6 +1311,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
             | syscalls::SYSCALL_NAME_DECODE
             | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
+            | syscalls::SYSCALL_STATE_PATH_FROM_NAME
             | syscalls::SYSCALL_ENCODE_INT
             | syscalls::SYSCALL_DECODE_INT
             | syscalls::SYSCALL_POINTER_TO_NORITO
@@ -1540,7 +1587,7 @@ pub fn preflight_reserved_state_scan_work_with_tail(
 
 /// Return a conservative framed-Norito byte bound for one `STATE_KEYS` page.
 ///
-/// The calculation borrows the selected names and performs no serialization or
+/// The calculation borrows the selected paths and performs no serialization or
 /// allocation. It covers both plain sequences (one length prefix per element)
 /// and packed sequences (an `n + 1` offset table), plus the Norito header and
 /// alignment padding.
@@ -1556,7 +1603,7 @@ fn state_keys_page_payload_bound_from_parts(
         .checked_add(offset_table)
         .and_then(|bytes| bytes.checked_add(encoded_elements))
         .ok_or(VMError::NoritoInvalid)?;
-    let align = core::mem::align_of::<Archived<Vec<Name>>>();
+    let align = core::mem::align_of::<Vec<StatePath>>();
     let padding = if align <= 1 {
         0
     } else {
@@ -1601,7 +1648,11 @@ pub fn state_keys_response_tail_after_item(
     Ok((encoded_elements, response))
 }
 
-fn state_keys_page_payload_bound(keys: &[Name], offset: u64, limit: u64) -> Result<usize, VMError> {
+fn state_keys_page_payload_bound(
+    keys: &[StatePath],
+    offset: u64,
+    limit: u64,
+) -> Result<usize, VMError> {
     let take = checked_state_keys_limit(limit)?;
     let start = usize::try_from(offset)
         .unwrap_or(usize::MAX)
@@ -1609,7 +1660,7 @@ fn state_keys_page_payload_bound(keys: &[Name], offset: u64, limit: u64) -> Resu
     let end = start.saturating_add(take).min(keys.len());
     let selected = &keys[start..end];
     let elements = selected.iter().try_fold(0_usize, |total, key| {
-        validate_state_path_name(key)?;
+        validate_state_path(key)?;
         total
             .checked_add(state_key_encoded_len_from_text(key.as_ref())?)
             .ok_or(VMError::NoritoInvalid)
@@ -1630,7 +1681,7 @@ fn state_keys_page_payload_bound(keys: &[Name], offset: u64, limit: u64) -> Resu
 /// Returns [`VMError::NoritoInvalid`] when `limit` exceeds the ABI-v1 page bound
 /// or the conservative size calculation overflows.
 pub fn state_keys_prepare_minimum(path_len: usize, limit: u64) -> Result<u64, VMError> {
-    if path_len > syscalls::STATE_MAX_PATH_BYTES {
+    if path_len > syscalls::STATE_MAX_PATH_FRAME_BYTES {
         return Err(VMError::NoritoInvalid);
     }
     checked_state_keys_limit(limit)?;
@@ -1650,7 +1701,7 @@ pub fn state_keys_prepare_minimum(path_len: usize, limit: u64) -> Result<u64, VM
 /// exceeds the ABI-v1 maximum.
 #[must_use = "the quote must be preflighted before result materialization"]
 pub fn state_keys_page_gas_quote(
-    keys: &[Name],
+    keys: &[StatePath],
     scan_work_gas: u64,
     offset: u64,
     limit: u64,
@@ -1669,7 +1720,7 @@ pub fn state_keys_page_gas_quote(
 /// every examined item and the conservative framed response size.
 pub fn preflight_reserved_state_keys_page(
     vm: &IVM,
-    keys: &[Name],
+    keys: &[StatePath],
     scan_work_gas: u64,
     offset: u64,
     limit: u64,
@@ -1794,6 +1845,17 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
         }
         syscalls::SYSCALL_STATE_VALUE_ENCODE | syscalls::SYSCALL_STATE_VALUE_DECODE => {
             reserve_available_syscall_gas(vm)?
+        }
+        syscalls::SYSCALL_STATE_PATH_FROM_NAME => {
+            let input = quote_tlv_payload_len_at(
+                vm,
+                DefaultHost::resolve_code_tlv_addr(vm, vm.register(10)),
+                PointerType::Name,
+            )?;
+            if input > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES {
+                return Err(VMError::NoritoInvalid);
+            }
+            DefaultHost::path_gas(input, syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES)
         }
         syscalls::SYSCALL_SM3_HASH
         | syscalls::SYSCALL_SHA256_HASH
@@ -2022,7 +2084,7 @@ pub struct DefaultHostForwardedCallCheckpoint {
 pub struct DefaultHost {
     private_inputs: Vec<Vec<u8>>,
     public_inputs: BTreeMap<Name, Vec<u8>>,
-    state: BTreeMap<Name, Vec<u8>>,
+    state: BTreeMap<StatePath, Vec<u8>>,
     pub_output: Vec<u8>,
     zk_cfg: ZkHalo2Config,
     zk_gas_schedule: gas::ZkGasScheduleV1,
@@ -2263,8 +2325,10 @@ impl DefaultHost {
         self
     }
 
-    /// Set chain_id used for VRF prehash binding. When set, VRF_VERIFY will
-    /// enforce the envelope chain_id equals this value and use it for hashing.
+    /// Set the host-owned chain identity used for VRF prehash binding.
+    ///
+    /// VRF verification fails closed when this context is absent and rejects
+    /// envelopes whose claimed chain identity does not match it.
     pub fn with_chain_id(mut self, chain_id: Vec<u8>) -> Self {
         self.chain_id = Some(chain_id);
         self
@@ -2276,7 +2340,7 @@ impl DefaultHost {
         self
     }
 
-    /// Mutably set chain id without moving the host.
+    /// Mutably set the host-owned chain identity without moving the host.
     pub fn set_chain_id_bytes(&mut self, chain_id: Vec<u8>) {
         self.chain_id = Some(chain_id);
     }
@@ -2671,29 +2735,31 @@ impl DefaultHost {
         MUTATION_GAS.saturating_add(MUTATION_GAS_PER_BYTE.saturating_mul(bytes))
     }
 
-    fn decode_state_path_tlv(vm: &IVM, reg: usize) -> Result<(Name, usize), VMError> {
-        let tlv = Self::expect_tlv(vm, reg, PointerType::Name)?;
-        if tlv.payload.len() > syscalls::STATE_MAX_PATH_BYTES {
+    fn decode_state_path_tlv(vm: &IVM, reg: usize) -> Result<(StatePath, usize), VMError> {
+        let tlv = Self::expect_tlv(vm, reg, PointerType::NoritoBytes)?;
+        if tlv.payload.len() > syscalls::STATE_MAX_PATH_FRAME_BYTES {
             return Err(VMError::NoritoInvalid);
         }
-        let path: Name = decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
-        validate_state_path_name(&path)?;
+        let path: StatePath =
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        validate_state_path(&path)?;
         validate_declared_state_path(vm, &path)?;
         Ok((path, tlv.payload.len()))
     }
 
-    fn decode_state_scan_path_tlv(vm: &IVM, reg: usize) -> Result<(Name, usize), VMError> {
-        let tlv = Self::expect_tlv(vm, reg, PointerType::Name)?;
-        if tlv.payload.len() > syscalls::STATE_MAX_PATH_BYTES {
+    fn decode_state_scan_path_tlv(vm: &IVM, reg: usize) -> Result<(StatePath, usize), VMError> {
+        let tlv = Self::expect_tlv(vm, reg, PointerType::NoritoBytes)?;
+        if tlv.payload.len() > syscalls::STATE_MAX_PATH_FRAME_BYTES {
             return Err(VMError::NoritoInvalid);
         }
-        let path: Name = decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
-        validate_state_path_name(&path)?;
+        let path: StatePath =
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        validate_state_path(&path)?;
         validate_declared_state_scan_path(vm, &path)?;
         Ok((path, tlv.payload.len()))
     }
 
-    fn state_key_matches_prefix(key: &Name, prefix: &Name) -> bool {
+    fn state_key_matches_prefix(key: &StatePath, prefix: &StatePath) -> bool {
         let key = key.as_ref();
         let prefix = prefix.as_ref();
         key == prefix
@@ -2705,11 +2771,11 @@ impl DefaultHost {
     fn state_keys_page_with_prefix(
         &self,
         vm: &IVM,
-        prefix: &Name,
+        prefix: &StatePath,
         path_len: usize,
         offset: u64,
         limit: u64,
-    ) -> Result<(Vec<Name>, u64, u64), VMError> {
+    ) -> Result<(Vec<StatePath>, u64, u64), VMError> {
         let prefix_text = prefix.as_ref();
         let take = checked_state_keys_limit(limit)?;
         let mut selected = Vec::new();
@@ -2725,7 +2791,7 @@ impl DefaultHost {
             if !key.as_ref().starts_with(prefix_text) {
                 break;
             }
-            validate_state_path_name(key)?;
+            validate_state_path(key)?;
             preflight_reserved_state_scan_work_with_tail(
                 vm,
                 scan_work_gas,
@@ -3026,12 +3092,27 @@ impl IVMHost for DefaultHost {
             quote_any_tlv_at(vm, pointer).map(|(_, payload_len)| payload_len)
         };
         let quote = match number {
+            crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO => {
+                let base_len = quote_tlv_payload_len_at(
+                    vm,
+                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
+                    PointerType::Name,
+                )?;
+                let key_len = quote_tlv_payload_len_at(
+                    vm,
+                    Self::resolve_code_tlv_addr(vm, vm.register(11)),
+                    PointerType::NoritoBytes,
+                )?;
+                let (input_len, output_bound) =
+                    quote_canonical_state_map_path_lengths(base_len, key_len)?;
+                Self::path_gas(input_len, output_bound)
+            }
             crate::syscalls::SYSCALL_STATE_MAP_KEY_AT => {
                 let page_len =
                     quote_tlv_payload_len_at(vm, vm.register(10), PointerType::NoritoBytes)?;
                 let base_len = quote_tlv_payload_len_at(vm, vm.register(11), PointerType::Name)?;
                 if page_len > syscalls::STATE_MAP_MAX_PAGE_BYTES
-                    || base_len > syscalls::STATE_MAP_MAX_BASE_BYTES
+                    || base_len > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES
                 {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -3305,6 +3386,33 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE => Err(
                 VMError::metered_not_implemented(STATE_QUERY_GAS_BASE, number),
             ),
+            crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO => {
+                let base_tlv = Self::expect_tlv(vm, 10, PointerType::Name)?;
+                let key_tlv = Self::expect_tlv(vm, 11, PointerType::NoritoBytes)?;
+                let input_len = base_tlv.payload.len().saturating_add(key_tlv.payload.len());
+                let base: Name =
+                    decode_canonical_norito(base_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let path = canonical_typed_state_map_path(vm, &base, key_tlv.payload)?;
+                let body = encode_canonical_norito(&path)?;
+                let pointer = Self::alloc_norito_bytes_tlv(vm, &body)?;
+                vm.set_register(10, pointer);
+                Ok(Self::path_gas(input_len, body.len()))
+            }
+            crate::syscalls::SYSCALL_STATE_PATH_FROM_NAME => {
+                let name_tlv = Self::expect_tlv(vm, 10, PointerType::Name)?;
+                if name_tlv.payload.len() > syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let input_len = name_tlv.payload.len();
+                let name: Name =
+                    decode_canonical_norito(name_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let path = StatePath::from(name);
+                validate_state_path(&path)?;
+                let body = encode_canonical_norito(&path)?;
+                let pointer = Self::alloc_norito_bytes_tlv(vm, &body)?;
+                vm.set_register(10, pointer);
+                Ok(Self::path_gas(input_len, body.len()))
+            }
             crate::syscalls::SYSCALL_STATE_GET => {
                 let (path, path_len) = Self::decode_state_path_tlv(vm, 10)?;
                 if let Some(value) = self.state.get(&path) {
@@ -3730,19 +3838,20 @@ impl IVMHost for DefaultHost {
                 let actual = Self::vrf_verify_gas(1, payload_len);
                 preflight_reserved_syscall_gas(vm, actual)?;
 
-                // Prehash input with domain separation; enforce configured chain_id when present
-                if let Some(cid) = &self.chain_id
-                    && req.chain_id != *cid
-                {
+                // VRF domains are host-owned consensus context. A guest-supplied
+                // chain identifier is only a claimed binding and can never
+                // substitute for an absent host configuration.
+                let Some(chain_id) = self.chain_id.as_ref() else {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ERR_CHAIN);
+                    return Ok(actual);
+                };
+                if req.chain_id != *chain_id {
                     vm.set_register(10, 0);
                     vm.set_register(11, ERR_CHAIN);
                     return Ok(actual);
                 }
-                let chain_bytes: &[u8] = if let Some(cid) = &self.chain_id {
-                    cid
-                } else {
-                    &req.chain_id
-                };
+                let chain_bytes = chain_id.as_slice();
                 let mut in_buf = Vec::with_capacity(
                     b"iroha:vrf:v1:input|".len() + chain_bytes.len() + 1 + req.input.len(),
                 );
@@ -4013,20 +4122,19 @@ impl IVMHost for DefaultHost {
                 let mut outputs: Vec<[u8; 32]> = Vec::with_capacity(req.items.len());
                 for (idx, it) in req.items.iter().enumerate() {
                     let examined_gas = Self::vrf_verify_gas(idx.saturating_add(1), payload_len);
-                    if let Some(cid) = &self.chain_id
-                        && it.chain_id != *cid
-                    {
+                    let Some(chain_id) = self.chain_id.as_ref() else {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, ERR_CHAIN);
+                        vm.set_register(12, idx as u64);
+                        return Ok(examined_gas);
+                    };
+                    if it.chain_id != *chain_id {
                         vm.set_register(10, 0);
                         vm.set_register(11, ERR_CHAIN);
                         vm.set_register(12, idx as u64);
                         return Ok(examined_gas);
                     }
-                    // Prehash with configured chain id (if present)
-                    let chain_bytes: &[u8] = if let Some(cid) = &self.chain_id {
-                        cid
-                    } else {
-                        &it.chain_id
-                    };
+                    let chain_bytes = chain_id.as_slice();
                     let mut in_buf = Vec::with_capacity(
                         b"iroha:vrf:v1:input|".len() + chain_bytes.len() + 1 + it.input.len(),
                     );
@@ -4987,6 +5095,7 @@ mod tests {
     use super::*;
     use crate::ProgramMetadata;
     use crate::pointer_abi::PointerType;
+    use iroha_data_model::name::MAX_NAME_BYTES;
     use iroha_data_model::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
     use iroha_data_model::zk::BackendTag;
 
@@ -5110,7 +5219,7 @@ mod tests {
         vm.set_register(10, pointer);
         vm.set_register(11, u64::MAX);
         vm.set_register(12, u64::MAX);
-        let mut host = DefaultHost::new();
+        let mut host = DefaultHost::new().with_chain_id(b"test-chain".to_vec());
         let quote = host
             .prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm)
             .expect("quote VRF batch without decoding");
@@ -5342,82 +5451,76 @@ mod tests {
         );
     }
 
-    fn maximum_bounded_state_name(index: usize) -> Name {
+    fn maximum_bounded_state_path(index: usize) -> StatePath {
         let prefix = format!("k{index:02}/");
-        let mut low = 0_usize;
-        let mut high = syscalls::STATE_MAX_PATH_BYTES;
-        while low < high {
-            let middle = low + (high - low).div_ceil(2);
-            let candidate: Name = format!("{prefix}{}", "a".repeat(middle))
-                .parse()
-                .expect("bounded ASCII state name");
-            if state_path_name_payload_len(&candidate)
-                .is_ok_and(|len| len <= syscalls::STATE_MAX_PATH_BYTES)
-            {
-                low = middle;
-            } else {
-                high = middle - 1;
-            }
-        }
-        let name: Name = format!("{prefix}{}", "a".repeat(low))
+        let suffix_len = syscalls::STATE_MAX_PATH_BYTES
+            .checked_sub(prefix.len())
+            .expect("bounded prefix fits in Name");
+        let path: StatePath = format!("{prefix}{}", "a".repeat(suffix_len))
             .parse()
-            .expect("maximum bounded state name");
+            .expect("maximum bounded state path");
+        assert_eq!(path.as_ref().len(), syscalls::STATE_MAX_PATH_BYTES);
         assert!(
-            state_path_name_payload_len(&name).expect("state name length")
-                <= syscalls::STATE_MAX_PATH_BYTES
+            state_path_payload_len(&path).expect("state path length")
+                <= syscalls::STATE_MAX_PATH_FRAME_BYTES
         );
         assert_eq!(
-            state_path_name_payload_len(&name).expect("state name length"),
-            norito::to_bytes(&name).expect("encode state name").len(),
+            state_path_payload_len(&path).expect("state path length"),
+            norito::to_bytes(&path).expect("encode state path").len(),
             "path bound and canonical framed encoding must use one size definition"
         );
-        name
+        path
     }
 
-    fn maximum_bounded_state_map_base() -> Name {
-        let mut low = 1_usize;
-        let mut high = syscalls::STATE_MAP_MAX_BASE_BYTES;
-        while low < high {
-            let middle = low + (high - low).div_ceil(2);
-            let candidate: Name = "b".repeat(middle).parse().expect("ASCII map base");
-            if state_path_name_payload_len(&candidate)
-                .is_ok_and(|len| len <= syscalls::STATE_MAP_MAX_BASE_BYTES)
-            {
-                low = middle;
-            } else {
-                high = middle - 1;
-            }
-        }
-        "b".repeat(low).parse().expect("maximum map base")
+    fn maximum_bounded_state_map_fixture(fill: u8) -> (Name, Vec<u8>) {
+        let base: Name = "b"
+            .repeat(syscalls::STATE_MAP_MAX_BASE_BYTES)
+            .parse()
+            .expect("maximum map base");
+        let key = vec![fill; syscalls::STATE_MAP_MAX_KEY_BYTES];
+        let path = canonical_state_map_path(&base, &key).expect("maximum bounded map path");
+        assert_eq!(
+            path.as_ref().len(),
+            syscalls::STATE_MAP_MAX_BASE_BYTES + 1 + 2 * syscalls::STATE_MAP_MAX_KEY_BYTES
+        );
+        assert_eq!(
+            state_path_payload_len(&path).expect("framed path length"),
+            norito::to_bytes(&path).expect("encode maximum path").len()
+        );
+        (base, key)
     }
 
     #[test]
     fn maximum_state_map_base_and_key_fit_final_framed_path() {
-        let base = maximum_bounded_state_map_base();
+        let (base, key) = maximum_bounded_state_map_fixture(0xa5);
         let base_len = state_path_name_payload_len(&base).expect("base length");
-        assert!(base_len <= syscalls::STATE_MAP_MAX_BASE_BYTES);
-        let key = vec![0xa5; syscalls::STATE_MAP_MAX_KEY_BYTES];
+        assert!(base_len <= syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES);
         let path = canonical_state_map_path(&base, &key).expect("maximum canonical map path");
-        let path_len = state_path_name_payload_len(&path).expect("path length");
-        assert!(path_len <= syscalls::STATE_MAX_PATH_BYTES);
+        let path_len = state_path_payload_len(&path).expect("path length");
+        assert!(path_len <= syscalls::STATE_MAX_PATH_FRAME_BYTES);
         let (_, output_bound) =
             quote_canonical_state_map_path_lengths(base_len, key.len()).expect("header quote");
         assert!(output_bound >= path_len);
+        let (_, configured_output_bound) = quote_canonical_state_map_path_lengths(
+            syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES,
+            syscalls::STATE_MAP_MAX_KEY_BYTES,
+        )
+        .expect("configured maximum header lengths");
+        assert!(configured_output_bound <= syscalls::STATE_MAX_PATH_FRAME_BYTES);
 
         assert_eq!(
             canonical_state_map_path(&base, &[0u8; syscalls::STATE_MAP_MAX_KEY_BYTES + 1]),
             Err(VMError::NoritoInvalid)
         );
-        let oversized_base: Name = format!("{}x", base.as_ref())
-            .parse()
-            .expect("oversized ASCII map base");
-        assert!(
-            state_path_name_payload_len(&oversized_base).expect("oversized base length")
-                > syscalls::STATE_MAP_MAX_BASE_BYTES
-        );
         assert_eq!(
-            canonical_state_map_path(&oversized_base, &[1]),
+            quote_canonical_state_map_path_lengths(syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES + 1, 1),
             Err(VMError::NoritoInvalid)
+        );
+        assert!("b".repeat(MAX_NAME_BYTES + 1).parse::<Name>().is_err());
+        assert!(
+            "p".repeat(syscalls::STATE_MAX_PATH_BYTES + 1)
+                .parse::<StatePath>()
+                .is_err()
         );
     }
 
@@ -5426,7 +5529,14 @@ mod tests {
         let maximum_items = usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS)
             .expect("the V1 state-key page limit must fit usize");
         for count in [0_usize, 1, maximum_items] {
-            let keys: Vec<Name> = (0..count).map(maximum_bounded_state_name).collect();
+            let keys: Vec<StatePath> = (0..count)
+                .map(|index| {
+                    let prefix = format!("k{index:02}/");
+                    format!("{prefix}{}", "a".repeat(8 * 1024 - prefix.len()))
+                        .parse()
+                        .expect("bounded page path")
+                })
+                .collect();
             let encoded = norito::to_bytes(&keys).expect("encode bounded state-key page");
             let quote =
                 state_keys_page_gas_quote(&keys, 0, 0, u64::try_from(count).expect("small page"))
@@ -5434,12 +5544,12 @@ mod tests {
             assert!(
                 quote.saturating_sub(STATE_QUERY_GAS_BASE)
                     >= u64::try_from(encoded.len()).expect("encoded page length"),
-                "page bound underquoted {count} maximum-sized names"
+                "page bound underquoted {count} large state paths"
             );
             assert!(encoded.len() <= syscalls::STATE_MAP_MAX_PAGE_BYTES);
         }
-        let oversized: Vec<Name> = (0..=maximum_items)
-            .map(maximum_bounded_state_name)
+        let oversized: Vec<StatePath> = (0..=maximum_items)
+            .map(maximum_bounded_state_path)
             .collect();
         assert_eq!(
             state_keys_page_gas_quote(&oversized, 0, 0, syscalls::STATE_KEYS_MAX_ITEMS + 1,),
@@ -5449,13 +5559,13 @@ mod tests {
 
     #[test]
     fn state_path_and_page_bounds_ignore_ambient_layout() {
-        let name: Name = "state/ambient_layout_probe"
+        let path: StatePath = "state/ambient_layout_probe"
             .parse()
             .expect("valid state path");
-        let canonical_name = encode_canonical_norito(&name).expect("encode canonical state path");
+        let canonical_name = encode_canonical_norito(&path).expect("encode canonical state path");
         let canonical_path_len =
-            state_path_name_payload_len(&name).expect("canonical state path length");
-        let canonical_tail = state_keys_response_tail_after_item(0, 0, name.as_ref())
+            state_path_payload_len(&path).expect("canonical state path length");
+        let canonical_tail = state_keys_response_tail_after_item(0, 0, path.as_ref())
             .expect("canonical state-key page tail");
 
         assert_eq!(canonical_path_len, canonical_name.len());
@@ -5463,18 +5573,18 @@ mod tests {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-        let alternate_name = norito::to_bytes(&name).expect("encode alternate-layout state path");
+        let alternate_name = norito::to_bytes(&path).expect("encode alternate-layout state path");
         assert_ne!(
             alternate_name, canonical_name,
             "fixture must distinguish the ambient layout from canonical V1"
         );
         assert_eq!(
-            state_path_name_payload_len(&name),
+            state_path_payload_len(&path),
             Ok(canonical_path_len),
             "path admission and gas must use canonical V1 lengths"
         );
         assert_eq!(
-            state_keys_response_tail_after_item(0, 0, name.as_ref()),
+            state_keys_response_tail_after_item(0, 0, path.as_ref()),
             Ok(canonical_tail),
             "page selection and response bounds must use canonical V1 lengths"
         );
@@ -5482,11 +5592,11 @@ mod tests {
 
     #[test]
     fn maximum_state_map_page_is_accepted_by_key_decoder() {
-        let base = maximum_bounded_state_map_base();
+        let (base, maximum_key) = maximum_bounded_state_map_fixture(0xa5);
         let mut expected_last = Vec::new();
         let mut paths = Vec::new();
         for index in 0..syscalls::STATE_KEYS_MAX_ITEMS {
-            let mut key = vec![0xa5; syscalls::STATE_MAP_MAX_KEY_BYTES];
+            let mut key = maximum_key.clone();
             let last = key.len() - 1;
             key[last] = u8::try_from(index).expect("bounded index");
             if index + 1 == syscalls::STATE_KEYS_MAX_ITEMS {
@@ -5510,10 +5620,51 @@ mod tests {
     }
 
     #[test]
+    fn state_map_key_decoder_rejects_pages_not_produced_by_ordered_base_scan() {
+        let base: Name = "orders".parse().expect("map base");
+        let other: Name = "payments".parse().expect("foreign map base");
+        let first = canonical_state_map_path(&base, &[0x01]).expect("first map path");
+        let second = canonical_state_map_path(&base, &[0x02]).expect("second map path");
+        let foreign = canonical_state_map_path(&other, &[0x03]).expect("foreign map path");
+
+        for paths in [
+            vec![second.clone(), first.clone()],
+            vec![first.clone(), first.clone()],
+            vec![first.clone(), foreign],
+        ] {
+            let page = encode_canonical_norito(&paths).expect("encode adversarial page");
+            assert_eq!(
+                canonical_state_map_key_at(&page, &base, u64::MAX),
+                Err(VMError::NoritoInvalid),
+                "the complete page must be validated even when the index is out of range"
+            );
+        }
+    }
+
+    #[test]
+    fn state_map_key_decoder_rejects_oversized_sequence_during_bounded_decode() {
+        let base: Name = "orders".parse().expect("map base");
+        let paths = (0..=syscalls::STATE_KEYS_MAX_ITEMS)
+            .map(|index| {
+                canonical_state_map_path(&base, &index.to_le_bytes())
+                    .expect("canonical bounded map path")
+            })
+            .collect::<Vec<_>>();
+        let page = encode_canonical_norito(&paths).expect("encode oversized map page");
+
+        assert_eq!(
+            canonical_state_map_key_at(&page, &base, 0),
+            Err(VMError::DecodeError),
+            "the top-level sequence limit must reject before Vec<StatePath> materialization"
+        );
+    }
+
+    #[test]
     fn state_keys_prepare_minimum_fits_default_and_rejects_bad_limits() {
-        let empty = norito::to_bytes(&Vec::<Name>::new()).expect("encode empty state-key page");
-        let prefix: Name = "k".parse().expect("state prefix");
-        let prefix_len = state_path_name_payload_len(&prefix).expect("prefix length");
+        let empty =
+            norito::to_bytes(&Vec::<StatePath>::new()).expect("encode empty state-key page");
+        let prefix: StatePath = "k".parse().expect("state prefix");
+        let prefix_len = state_path_payload_len(&prefix).expect("prefix length");
         let minimum = state_keys_prepare_minimum(prefix_len, syscalls::STATE_KEYS_MAX_ITEMS)
             .expect("prepare maximum page");
         assert!(
@@ -5670,7 +5821,7 @@ mod tests {
     fn default_host_vrf_verify_status_paths_charge_bytes_and_examined_items() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
-        let mut host = DefaultHost::new();
+        let mut host = DefaultHost::new().with_chain_id(b"test-chain".to_vec());
 
         let wrong_type_payload = b"{\"not\":\"vrf\"}";
         let wrong_type_ptr = vm
@@ -5769,12 +5920,66 @@ mod tests {
     }
 
     #[test]
+    fn default_host_vrf_verification_rejects_absent_host_chain_context() {
+        crate::set_banner_enabled(false);
+        let request = crate::vrf::VrfVerifyRequest {
+            variant: 1,
+            pk: vec![1; 48],
+            proof: vec![2; 96],
+            chain_id: b"guest-selected-chain".to_vec(),
+            input: b"message".to_vec(),
+        };
+        let body = encode_canonical_norito(&request).expect("encode canonical VRF request");
+        let mut vm = IVM::new(u64::MAX);
+        let pointer = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &body))
+            .expect("allocate VRF request");
+        vm.set_register(10, pointer);
+        let mut host = DefaultHost::new();
+
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_VRF_VERIFY, &mut vm),
+            Ok(DefaultHost::vrf_verify_gas(1, body.len()))
+        );
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), 8);
+
+        let batch = crate::vrf::VrfVerifyBatchRequest {
+            items: vec![request],
+        };
+        let batch_body =
+            encode_canonical_norito(&batch).expect("encode canonical VRF batch request");
+        let batch_pointer = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &batch_body))
+            .expect("allocate VRF batch request");
+        vm.set_register(10, batch_pointer);
+        vm.set_register(11, u64::MAX);
+        vm.set_register(12, u64::MAX);
+
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &mut vm),
+            Ok(DefaultHost::vrf_verify_gas(1, batch_body.len()))
+        );
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), 8);
+        assert_eq!(vm.register(12), 0);
+        assert_eq!(
+            host.vrf_execution_counters(),
+            VrfExecutionCounters {
+                canonical_decodes: 2,
+                backend_invocations: 0,
+                response_allocations: 0,
+            }
+        );
+    }
+
+    #[test]
     fn vm_dispatched_vrf_batch_count_boundaries_have_stable_refunds() {
         let invalid = crate::vrf::VrfVerifyRequest {
             variant: 0,
             pk: Vec::new(),
             proof: Vec::new(),
-            chain_id: Vec::new(),
+            chain_id: b"test-chain".to_vec(),
             input: Vec::new(),
         };
         for count in [0_usize, crate::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1 + 1] {
@@ -6537,15 +6742,15 @@ mod tests {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut host = DefaultHost::new();
-        let key: Name = "orders/1".parse().expect("state key");
-        let prefix: Name = "orders".parse().expect("state prefix");
+        let key: StatePath = "orders/1".parse().expect("state key");
+        let prefix: StatePath = "orders".parse().expect("state prefix");
         let key_payload = norito::to_bytes(&key).expect("encode key");
         let prefix_payload = norito::to_bytes(&prefix).expect("encode prefix");
         let key_ptr = vm
-            .alloc_input_tlv(&tlv(PointerType::Name, &key_payload))
+            .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &key_payload))
             .expect("alloc key");
         let prefix_ptr = vm
-            .alloc_input_tlv(&tlv(PointerType::Name, &prefix_payload))
+            .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &prefix_payload))
             .expect("alloc prefix");
         let value_ptr = vm
             .alloc_input_tlv(&tlv(PointerType::NoritoBytes, b"value"))
@@ -6586,7 +6791,8 @@ mod tests {
         assert_eq!(vm.register(11), 1);
         assert_eq!(vm.register(12), 1);
         let keys_tlv = vm.validate_tlv(vm.register(10)).expect("keys tlv");
-        let keys: Vec<Name> = norito::decode_from_bytes(keys_tlv.payload).expect("decode keys");
+        let keys: Vec<StatePath> =
+            norito::decode_from_bytes(keys_tlv.payload).expect("decode keys");
         assert_eq!(keys, vec![key.clone()]);
 
         vm.set_register(10, key_ptr);
@@ -6601,12 +6807,46 @@ mod tests {
     }
 
     #[test]
+    fn state_path_from_name_is_explicit_and_state_rejects_name_carrier() {
+        let mut vm = IVM::new(u64::MAX);
+        let mut host = DefaultHost::new();
+        let name: Name = "orders".parse().expect("canonical Name");
+        let name_payload = norito::to_bytes(&name).expect("encode Name");
+        let name_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::Name, &name_payload))
+            .expect("allocate Name");
+
+        vm.set_register(10, name_ptr);
+        let gas = host
+            .syscall(syscalls::SYSCALL_STATE_PATH_FROM_NAME, &mut vm)
+            .expect("convert Name to StatePath");
+        let output = vm
+            .validate_tlv(vm.register(10))
+            .expect("validate StatePath output");
+        assert_eq!(output.type_id, PointerType::NoritoBytes);
+        let path: StatePath = norito::decode_from_bytes(output.payload).expect("decode StatePath");
+        assert_eq!(path.as_ref(), name.as_ref());
+        assert_eq!(
+            gas,
+            DefaultHost::path_gas(name_payload.len(), output.payload.len())
+        );
+
+        vm.set_register(10, name_ptr);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_STATE_HAS, &mut vm),
+            Err(VMError::NoritoInvalid),
+            "durable-state operations must not accept Name as a compatibility carrier"
+        );
+        assert_eq!(vm.register(10), name_ptr);
+    }
+
+    #[test]
     fn host_state_dependent_prepare_reserves_without_observing_state() {
         let mut vm = IVM::new(4_000_000);
-        let path: Name = "orders".parse().expect("state path");
+        let path: StatePath = "orders".parse().expect("state path");
         let path = norito::to_bytes(&path).expect("encode state path");
         let path = vm
-            .alloc_input_tlv(&test_tlv(PointerType::Name, &path))
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &path))
             .expect("allocate state path");
         vm.set_register(10, path);
         vm.set_register(12, syscalls::STATE_KEYS_MAX_ITEMS);

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>apg-exp</title>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/themes/start/jquery-ui.css" />
+<style>
+body {
+	margin: 10px;
+	height: 100%;
+ font-size: 100%
+}
+
+#parse {
+	width: 100px;
+}
+
+#string {
+	font-family: monospace;
+}
+
+.comment {
+	font-size: 100%;
+	font-style: italic;
+}
+
+#tabs {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	right: 0;
+}
+
+#tabs-home {
+	height: 100%;
+}
+</style>
+</head>
+<body>
+ <div id="tabs">
+  <ul>
+   <li><a href="#tabs-home">home</a></li>
+   <li><a href="#tabs-stats">stats</a></li>
+   <li><a href="#tabs-trace">trace</a></li>
+  </ul>
+  <div id="tabs-home">
+  <p>
+  The SABNF grammar:<br>
+  <pre id="grammar-bnf"></pre>
+  </p>
+     <p>
+      <b>input:</b> <span class="comment">(the non-context-free string to parse)</span><br>
+      <textarea id="string" wrap="off" rows="1" cols="20"></textarea>
+     </p>
+     <p>
+      <input type="button" id="parse" value="parse" /><span id="parse-msg" class="comment">
+     </p>
+     <p id="result"><pre id="values"></pre></p>
+  </div>
+  <pre id="tabs-stats"></pre>
+  <pre id="tabs-trace"></pre>
+ </div>
+</body>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.2/jquery.min.js"></script>
+<script src="https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js"></script>
+<script src="./web-min.js" charset="utf-8"></script>
+</html>

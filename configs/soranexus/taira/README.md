@@ -92,8 +92,13 @@ into multi-second stalls.
   public addresses, public keys, and PoPs. Keep the populated file user-local.
 - `validator_secrets.example.toml`: copy-me runtime template for per-validator
   private keys, shared onboarding/faucet authority and streaming identity key
-  material, plus the public SoraFS admission-council roots and quorum. Keep the
-  populated file user-local.
+  material, the public identity of the provider-backed Soracloud mutation
+  signer, plus the public SoraFS admission-council roots and quorum. Keep the
+  populated file user-local. The Soracloud provider owns its private key; only
+  its credential-free handle and authenticated public binding belong here.
+  At startup and before use, `irohad` resolves that provider and fails closed
+  unless its handle, authority key, revision, and public-policy digest exactly
+  match the rendered binding.
 - `genesis.json`: NPoS genesis with DA enabled.
 - `dns_records.json`: DNS targets for the convenience host, explorer host, and
   direct per-validator Torii hostnames.
@@ -222,12 +227,30 @@ post-build release gate, not a source-schema or pre-bundle report:
   expectation set. Its checked-in JSON projection is equally mandatory for
   review, and the runner rejects any byte or typed-value disagreement between
   them;
+- `zk_x509_native_resource_v1.norito` is the authoritative typed X.509
+  native-resource certificate. Its mandatory JSON projection binds the exact
+  Linux/ARM64/Graviton3 environment, fixed process and isolation limits,
+  expectation digests, deterministic KAT digest and size, and the separately
+  observed positive and maximum-shape resource measurements;
 - the frozen expectations enforce a peak-RSS ceiling and a generous elapsed
   ceiling for every exact-12 maximum-shape row. The stage bundle records case
   descriptors, failure classes, and the canonical valid proof bytes needed for
   independent audit and reverification. It contains no witnesses or private
   inputs. Every proof is bounded by its exact protocol ceiling and the 8 MiB
   Taira consensus cap, and its recorded SHA-256 is recomputed from those bytes.
+
+The first release has one capture corridor:
+`.github/workflows/capture_taira_privacy_native_evidence.yml`. It is a
+manual-only workflow for the existing self-hosted c7g.4xlarge ARM64 release
+runner. Dispatch requires the exact Iroha commit, reviewed DPN source-tree and
+Cargo-lock pins, exact-12 fixture pin, and reviewed generic ceilings. It fails
+unless all four native fixture targets are absent and every KAT, expectation,
+resource-observation, and resource-certificate source pin is still zero. The
+job captures and validates the four artifacts, installs them with create-new
+semantics, recomputes the source identity, performs a clean final build, and
+uploads a non-publishing provenance archive. It never pushes, deploys, or
+modifies `Cargo.lock`; a failed or partial run must be discarded rather than
+reused.
 
 The validator-image workflow does not send the mutable checkout as the Docker
 context. It freezes the raw-byte-sorted source path list, creates a
@@ -273,6 +296,8 @@ source_sha="$(tr -d '\n' < "${bundle}/provenance/privacy-native/workspace-source
   --exact12-matrix "${bundle}/provenance/privacy-native/exact12-v1.tsv" \
   --expectations-norito "${bundle}/provenance/privacy-native/expectations-v1.norito" \
   --expectations-json "${bundle}/provenance/privacy-native/expectations-v1.json" \
+  --x509-resource-norito "${bundle}/provenance/privacy-native/zk-x509-resource-v1.norito" \
+  --x509-resource-json "${bundle}/provenance/privacy-native/zk-x509-resource-v1.json" \
   --cargo-lock "${bundle}/provenance/Cargo.lock" \
   --validator-binary "${bundle}/bin/irohad" \
   --command-manifest-norito "${bundle}/provenance/privacy-native/command-manifest-v1.norito" \
@@ -376,7 +401,9 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    `public_address` plus its own direct `torii_public_address` in the public
    roster, then put the matching validator `private_key` values and the shared
    `account_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`,
-   `kagemusha_commands_private_key`, `offline_asset_alias = "ds#boi.is"`,
+   `kagemusha_commands_private_key`, every
+   `soracloud_runtime_signer_*` public binding field,
+   `offline_asset_alias = "ds#boi.is"`,
    the operator-provisioned canonical `offline_asset_definition_id`,
    `offline_asset_scale = 2`, and canonical Taira I105
    `offline_escrow_account`,
@@ -402,10 +429,12 @@ The bundle also contains one shared unsigned `genesis.json` whose dedicated
 topology transaction is rebuilt from the public roster and PoPs, plus
 `genesis-signing-command.txt`. Set `TAIRA_GENESIS_PRIVATE_KEY` only in the
 operator shell and run that command. `kagami genesis sign --config` executes
-genesis in a disposable state block, replaces the template Nexus/AMX context
-hash with the exact staged value, recomputes the consensus fingerprint, and
-then writes `genesis.signed.nrt`. Never copy the genesis signer or validator
-private keys into the checked-in template or rendered genesis JSON.
+genesis in a disposable state block, replaces the template Nexus/AMX and
+execution-policy context hashes with the exact staged values, recomputes the
+consensus fingerprint, atomically replaces only the rendered `genesis.json`
+with that bound manifest, and then writes `genesis.signed.nrt`. Never copy the
+genesis signer or validator private keys into the checked-in template or
+rendered genesis JSON.
 
 ## Authenticated offline-cash bootstrap
 
@@ -1498,9 +1527,10 @@ release-specific seal described in
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
    - `validator_secrets.local.toml` must include both the validator private
      keys and the shared `account_onboarding_*`, `torii_faucet_*`, and
-     `streaming_identity_*`, `sorafs_council_public_keys`, and
-     `sorafs_council_signature_threshold` fields because the checked-in template
-     intentionally leaves those deployment values as fail-closed placeholders
+     `streaming_identity_*`, `soracloud_runtime_signer_*`,
+     `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
+     fields because the checked-in template intentionally leaves those
+     deployment values as fail-closed placeholders
    - the following `iroha`-owned paths are for the unsealed generic layout
      only; never recursively chown the public-lane qualified tree or seal
    - `sudo install -d -m 0700 -o iroha -g iroha /etc/iroha/taira-validator`
@@ -1800,6 +1830,11 @@ For the local `dist/taira-localnet` deployment, use:
    - `cargo build -p iroha_kagami --example taira_kaigi_localnet --release`
 2. Run the local bootstrap:
    - `bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+   - the script reads the owner-held `genesis.private_key` emitted by
+     `kagami localnet`; override its path with
+     `IROHA_TAIRA_GENESIS_PRIVATE_KEY_FILE` when custody lives elsewhere.
+     Raw private-key environment variables and command-line values are not
+     accepted.
    - if you built the helper in a non-default target dir, point the bootstrap
      at it explicitly, for example:
      `IROHA_TAIRA_KAIGI_HELPER_BIN=/tmp/iroha_taira_kaigi_helper/debug/examples/taira_kaigi_localnet bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`

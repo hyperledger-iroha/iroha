@@ -61,8 +61,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<offline::ActivateKagemushaRecursiveReleaseV4>,
     InstructionRegistry::register_slice::<offline::RegisterOfflineDeviceAttestation>,
     InstructionRegistry::register_slice::<offline::SetOfflineDeviceAttestationPolicy>,
-    InstructionRegistry::register_slice::<zk::RegisterAssetHiddenZkPool>,
-    InstructionRegistry::register_slice::<zk::AssetHiddenZkTransfer>,
     InstructionRegistry::register_slice::<asset_alias::SetAssetDefinitionBalancePolicy>,
     InstructionRegistry::register_slice::<crate::isi::staking::RegisterPublicLaneValidator>,
     InstructionRegistry::register_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>,
@@ -1108,9 +1106,9 @@ mod tests {
 
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "6b0e25a3b82013a68c900bf8b27f415f313c32cbeabce7c45ac8b55bd8d3c410";
+            "cac7fc565a6a5a5b25be028218e08cb46973b96bfc24dd488c56c9b84bbdc297";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "4edee0ad8a317d19fb4705b9fe2b0496229df9b7fa04f3b6702e43468800ec6f";
+            "8b3425102fdceb1cf4e61ef19ec6db5474d365918d1fe233255aa47e08de47b8";
 
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries

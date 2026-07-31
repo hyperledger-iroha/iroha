@@ -1743,6 +1743,8 @@
             checked_torii_test_ed25519_keypair(0x80, "derive ISO bridge signer fixture key");
         actual::IsoBridge {
             enabled: true,
+            max_body_bytes:
+                iroha_config::parameters::defaults::torii::ISO_BRIDGE_MAX_BODY_BYTES,
             dedupe_ttl_secs: 30,
             default_profile: "generic-iso20022".to_owned(),
             profiles: Vec::new(),

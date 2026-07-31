@@ -417,6 +417,9 @@ fn assemble_range_from_chunks<'a, F>(
 where
     F: FnMut(&[u8; 32]) -> Option<&'a [u8]>,
 {
+    if chunk_size == 0 {
+        return Err(AssembleError::InvalidChunkSize);
+    }
     if start >= end {
         return Err(AssembleError::SliceBounds);
     }
@@ -452,6 +455,7 @@ struct RangeSpec {
 
 #[derive(Debug)]
 enum AssembleError {
+    InvalidChunkSize,
     MissingChunk,
     SliceBounds,
     Overflow,
@@ -461,12 +465,13 @@ impl AssembleError {
     fn outcome(&self) -> &'static str {
         match self {
             Self::MissingChunk => "da_missing_chunk",
-            Self::SliceBounds | Self::Overflow => "internal",
+            Self::InvalidChunkSize | Self::SliceBounds | Self::Overflow => "internal",
         }
     }
 
     fn message(&self) -> &'static str {
         match self {
+            Self::InvalidChunkSize => "content chunk size must be greater than zero",
             Self::MissingChunk => "missing content chunk",
             Self::SliceBounds => "invalid chunk slice bounds",
             Self::Overflow => "content chunk offset overflow",
@@ -690,7 +695,8 @@ mod tests {
         struct Guard(std::sync::MutexGuard<'static, ()>);
         impl Drop for Guard {
             fn drop(&mut self) {
-                crate::app_auth::configure(crate::app_auth::CanonicalRequestAuthConfig::default());
+                crate::app_auth::configure(crate::app_auth::CanonicalRequestAuthConfig::default())
+                    .expect("default app-auth config");
             }
         }
 
@@ -698,7 +704,7 @@ mod tests {
             .get_or_init(|| std::sync::Mutex::new(()))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        crate::app_auth::configure(config);
+        crate::app_auth::configure(config).expect("valid app-auth test config");
         Guard(guard)
     }
 
@@ -813,6 +819,16 @@ mod tests {
         .expect("assemble range");
 
         assert_eq!(body, b"cdefghij");
+    }
+
+    #[test]
+    fn assemble_range_from_chunks_rejects_zero_chunk_size() {
+        let chunk_hashes = [[0x01; 32]];
+
+        let err = assemble_range_from_chunks(0, &chunk_hashes, 0, 1, |_| Some(&[0xAA]))
+            .expect_err("zero chunk size must be rejected");
+
+        assert!(matches!(err, AssembleError::InvalidChunkSize));
     }
 
     #[test]

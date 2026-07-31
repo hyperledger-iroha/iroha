@@ -1,6 +1,9 @@
+use std::path::PathBuf;
+
 use clap::{ArgGroup, ValueEnum, builder::PossibleValue};
 use color_eyre::eyre::WrapErr as _;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
+use zeroize::Zeroizing;
 
 use super::*;
 use crate::tui;
@@ -33,6 +36,13 @@ pub struct Args {
     /// Output the key-pair without additional text
     #[clap(long, short, group = "format")]
     compact: bool,
+    /// Write the key pair into a new owner-only custody directory.
+    ///
+    /// The directory must not contain any existing entries. Files are written
+    /// as `public.key` and `private.key`; `--pop` also writes `pop.hex`. The
+    /// private key never passes through standard output.
+    #[clap(long, value_name = "DIR", group = "format")]
+    out_dir: Option<PathBuf>,
     /// Also output a BLS Proof-of-Possession (PoP) for this key (BLS-normal only).
     /// Printed as hex in JSON or plain hex in compact mode.
     #[clap(long)]
@@ -79,6 +89,7 @@ impl<T: Write> RunArgs<T> for Args {
         let json = self.json;
         let json_mh_prefixed = self.json_mh_prefixed;
         let compact = self.compact;
+        let out_dir = self.out_dir.clone();
         let key_pair = self.clone().key_pair()?;
         let exposed_private_key = ExposedPrivateKey(key_pair.private_key().clone());
         let pop_hex = if self.pop {
@@ -98,7 +109,15 @@ impl<T: Write> RunArgs<T> for Args {
             None
         };
 
-        if json {
+        if let Some(out_dir) = out_dir {
+            write_key_custody(
+                writer,
+                &out_dir,
+                key_pair.public_key(),
+                &exposed_private_key,
+                pop_hex.as_deref(),
+            )?;
+        } else if json {
             if json_mh_prefixed {
                 #[derive(crate::json_macros::JsonSerialize)]
                 struct KeyPairStrings {
@@ -165,6 +184,57 @@ impl<T: Write> RunArgs<T> for Args {
     }
 }
 
+const PUBLIC_KEY_FILE: &str = "public.key";
+const PRIVATE_KEY_FILE: &str = "private.key";
+const POP_FILE: &str = "pop.hex";
+
+fn write_key_custody<T: Write>(
+    writer: &mut BufWriter<T>,
+    out_dir: &std::path::Path,
+    public_key: &iroha_crypto::PublicKey,
+    private_key: &ExposedPrivateKey,
+    pop_hex: Option<&str>,
+) -> Outcome {
+    crate::secure_fs::prepare_empty_private_directory(out_dir)
+        .wrap_err("prepare key custody directory")?;
+
+    let public_path = out_dir.join(PUBLIC_KEY_FILE);
+    let mut public_record = public_key.to_string();
+    public_record.push('\n');
+    crate::secure_fs::write_private_file_atomic(&public_path, public_record.as_bytes())
+        .wrap_err("write public-key custody file")?;
+
+    let mut pop_path = None;
+    if let Some(pop_hex) = pop_hex {
+        let path = out_dir.join(POP_FILE);
+        let mut pop_record = pop_hex.to_owned();
+        pop_record.push('\n');
+        crate::secure_fs::write_private_file_atomic(&path, pop_record.as_bytes())
+            .wrap_err("write proof-of-possession custody file")?;
+        pop_path = Some(path);
+    }
+
+    let private_path = out_dir.join(PRIVATE_KEY_FILE);
+    let canonical_private = Zeroizing::new(
+        private_key
+            .try_to_multihash_string()
+            .wrap_err("encode private key")?,
+    );
+    let mut private_record = Zeroizing::new(Vec::with_capacity(canonical_private.len() + 1));
+    private_record.extend_from_slice(canonical_private.as_bytes());
+    private_record.push(b'\n');
+    crate::secure_fs::write_private_file_atomic(&private_path, private_record.as_slice())
+        .wrap_err("write private-key custody file")?;
+
+    writeln!(writer, "public_key_file: {}", public_path.display())?;
+    writeln!(writer, "private_key_file: {}", private_path.display())?;
+    if let Some(pop_path) = pop_path {
+        writeln!(writer, "pop_file: {}", pop_path.display())?;
+    }
+
+    Ok(())
+}
+
 fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -220,7 +290,7 @@ mod tests {
     // Bring `ValueEnum` into scope so `AlgorithmArg::value_variants()` is callable in this module.
     use clap::ValueEnum;
 
-    use super::{Algorithm, AlgorithmArg, Args, ExposedPrivateKey, RunArgs};
+    use super::{Algorithm, AlgorithmArg, Args, ExposedPrivateKey, KeyPair, RunArgs};
 
     #[test]
     fn algorithm_arg_displays_as_algorithm() {
@@ -280,6 +350,7 @@ mod tests {
             json: true,
             json_mh_prefixed: true,
             compact: false,
+            out_dir: None,
             pop: false,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -312,6 +383,69 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn out_dir_writes_consistent_owner_only_custody_and_refuses_reuse() {
+        use std::{fs, os::unix::fs::PermissionsExt as _, str::FromStr as _};
+
+        let sandbox = tempfile::tempdir().expect("create key custody sandbox");
+        let out_dir = sandbox.path().join("custody");
+        let args = Args {
+            algorithm: AlgorithmArg(Algorithm::Ed25519),
+            private_key: None,
+            seed: Some("42".repeat(32)),
+            json: false,
+            json_mh_prefixed: false,
+            compact: false,
+            out_dir: Some(out_dir.clone()),
+            pop: false,
+        };
+        let mut writer = BufWriter::new(Vec::new());
+
+        args.clone()
+            .run(&mut writer)
+            .expect("write key custody directory");
+        let output = String::from_utf8(writer.into_inner().expect("flush custody summary"))
+            .expect("custody summary is UTF-8");
+        let public_record =
+            fs::read_to_string(out_dir.join(super::PUBLIC_KEY_FILE)).expect("read public key");
+        let private_record =
+            fs::read_to_string(out_dir.join(super::PRIVATE_KEY_FILE)).expect("read private key");
+        let exposed_private =
+            ExposedPrivateKey::from_str(private_record.trim_end()).expect("parse private key");
+        let reconstructed = KeyPair::from_private_key(exposed_private.0.clone())
+            .expect("derive matching public key");
+
+        assert_eq!(public_record, format!("{}\n", reconstructed.public_key()));
+        assert_eq!(private_record, format!("{exposed_private}\n"));
+        assert!(!output.contains(private_record.trim_end()));
+        assert!(output.contains("public_key_file:"));
+        assert!(output.contains("private_key_file:"));
+        assert_eq!(
+            fs::metadata(&out_dir)
+                .expect("custody directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        for name in [super::PUBLIC_KEY_FILE, super::PRIVATE_KEY_FILE] {
+            assert_eq!(
+                fs::metadata(out_dir.join(name))
+                    .expect("custody file metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("existing custody directory must never be reused");
+        assert!(error.to_string().contains("prepare key custody directory"));
+    }
+
     #[test]
     fn key_pair_random_path_uses_checked_generation() {
         let args = Args {
@@ -321,6 +455,7 @@ mod tests {
             json: false,
             json_mh_prefixed: false,
             compact: false,
+            out_dir: None,
             pop: false,
         };
 

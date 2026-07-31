@@ -179,6 +179,8 @@ pub mod sorafs_uri;
 pub mod soranet;
 /// World state snapshot representations.
 pub mod state;
+/// Canonical logical paths for durable ledger state.
+pub mod state_path;
 /// Subscription metadata schemas for trigger-based billing.
 pub mod subscription;
 /// Taikai broadcast metadata and segment envelope types.
@@ -415,6 +417,7 @@ pub mod prelude {
         sns::prelude::*,
         social::prelude::*,
         sorafs_uri::SorafsUri,
+        state_path::prelude::*,
         subscription::prelude::*,
         transaction::prelude::*,
         trigger::prelude::*,

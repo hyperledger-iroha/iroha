@@ -865,6 +865,10 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
             crate::syscalls::STATE_MAX_PATH_BYTES as u64,
         ),
         (
+            "state_max_path_frame_bytes",
+            crate::syscalls::STATE_MAX_PATH_FRAME_BYTES as u64,
+        ),
+        (
             "state_max_value_bytes",
             crate::syscalls::STATE_MAX_VALUE_BYTES as u64,
         ),
@@ -875,6 +879,10 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
         (
             "state_map_max_base_bytes",
             crate::syscalls::STATE_MAP_MAX_BASE_BYTES as u64,
+        ),
+        (
+            "state_map_max_base_frame_bytes",
+            crate::syscalls::STATE_MAP_MAX_BASE_FRAME_BYTES as u64,
         ),
         (
             "state_map_max_page_bytes",

@@ -4,7 +4,9 @@
 //! deployment artifacts. Mutation and status commands validate request inputs
 //! locally and then call the authoritative Soracloud control plane through
 //! Torii. Model-training, Hugging Face shared-lease, and weight-lifecycle
-//! helpers also execute through live Torii endpoints.
+//! helpers also execute through live Torii endpoints. Outbound mutation DTOs
+//! carry signed provenance only; account identity is authenticated by the HTTP
+//! signature/witness headers and private keys never enter request JSON.
 
 use std::{
     cell::RefCell,
@@ -21441,6 +21443,20 @@ mod tests {
         path
     }
 
+    fn assert_request_has_no_inline_signing_fields(request: &impl JsonSerialize) {
+        let Value::Object(body) =
+            norito::json::to_value(request).expect("serialize Soracloud request")
+        else {
+            panic!("Soracloud request must serialize as a JSON object");
+        };
+        for field in ["authority", "private_key"] {
+            assert!(
+                !body.contains_key(field),
+                "Soracloud request serialized retired field `{field}`"
+            );
+        }
+    }
+
     #[test]
     fn bundle_pack_writes_deterministic_canonical_archive_and_reports_exact_bytes() {
         let dir = temp_dir("bundle_pack_canonical");
@@ -21934,13 +21950,9 @@ mod tests {
         .expect("signed service secret set request");
         assert_signed_mutation_omits_inline_signing_material(&secret_set);
 
-        let secret_delete = signed_service_secret_delete_request(
-            "web_portal",
-            "api_token",
-            &authority,
-            &key_pair,
-        )
-        .expect("signed service secret delete request");
+        let secret_delete =
+            signed_service_secret_delete_request("web_portal", "api_token", &authority, &key_pair)
+                .expect("signed service secret delete request");
         assert_signed_mutation_omits_inline_signing_material(&secret_delete);
 
         let app_infra = signed_app_infra_request(
@@ -21959,9 +21971,8 @@ mod tests {
         .expect("signed app infra request");
         assert_signed_mutation_omits_inline_signing_material(&app_infra);
 
-        let heartbeat =
-            signed_model_host_heartbeat_request(1, &authority, &key_pair)
-                .expect("signed model host heartbeat request");
+        let heartbeat = signed_model_host_heartbeat_request(1, &authority, &key_pair)
+            .expect("signed model host heartbeat request");
         assert_signed_mutation_omits_inline_signing_material(&heartbeat);
 
         let withdraw = signed_model_host_withdraw_request(&authority, &key_pair)
@@ -24815,6 +24826,76 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
     }
 
     #[test]
+    fn signed_request_builders_serialize_without_inline_signing_fields() {
+        let key_pair = soracloud_fixture_key_pair(0x20);
+        let authority = AccountId::new(key_pair.public_key().clone());
+
+        let config_set = signed_service_config_set_request(
+            "web_portal",
+            "runtime",
+            norito::json!({"workers": 2}),
+            &authority,
+            &key_pair,
+        )
+        .expect("signed service config set request");
+        assert_request_has_no_inline_signing_fields(&config_set);
+
+        let config_delete =
+            signed_service_config_delete_request("web_portal", "runtime", &authority, &key_pair)
+                .expect("signed service config delete request");
+        assert_request_has_no_inline_signing_fields(&config_delete);
+
+        let secret = SecretEnvelopeV1 {
+            schema_version: iroha::data_model::soracloud::prelude::SECRET_ENVELOPE_VERSION_V1,
+            encryption: iroha::data_model::soracloud::SecretEnvelopeEncryptionV1::ClientCiphertext,
+            key_id: "kms/test".to_owned(),
+            key_version: NonZeroU32::new(1).expect("non-zero key version"),
+            nonce: vec![0x01],
+            ciphertext: vec![0x02],
+            commitment: Hash::new(b"secret"),
+            aad_digest: None,
+        };
+        let secret_set = signed_service_secret_set_request(
+            "web_portal",
+            "api_token",
+            secret,
+            &authority,
+            &key_pair,
+        )
+        .expect("signed service secret set request");
+        assert_request_has_no_inline_signing_fields(&secret_set);
+
+        let secret_delete =
+            signed_service_secret_delete_request("web_portal", "api_token", &authority, &key_pair)
+                .expect("signed service secret delete request");
+        assert_request_has_no_inline_signing_fields(&secret_delete);
+
+        let app = signed_app_infra_request(
+            MutationMode::Deploy,
+            SoraAppInfraManifestV1 {
+                schema_version: SORA_APP_INFRA_MANIFEST_VERSION_V1,
+                app_name: "test_app".parse().expect("valid app name"),
+                app_version: "1".to_owned(),
+                public_url: "https://test.invalid".to_owned(),
+                static_site: None,
+                services: Vec::new(),
+            },
+            Vec::new(),
+            &key_pair,
+        )
+        .expect("signed app infra request");
+        assert_request_has_no_inline_signing_fields(&app);
+
+        let heartbeat = signed_model_host_heartbeat_request(1, &authority, &key_pair)
+            .expect("signed model host heartbeat request");
+        assert_request_has_no_inline_signing_fields(&heartbeat);
+
+        let withdraw = signed_model_host_withdraw_request(&authority, &key_pair)
+            .expect("signed model host withdraw request");
+        assert_request_has_no_inline_signing_fields(&withdraw);
+    }
+
+    #[test]
     fn signed_bundle_request_uses_verifiable_signature() {
         let container = fixture_container();
         let mut service = fixture_service();
@@ -24845,7 +24926,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -24957,7 +25038,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -24980,7 +25061,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -24997,7 +25078,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25013,7 +25094,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25070,7 +25151,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             )
             .expect("generated service provenance should verify");
         assert!(request.generated_apartment_provenance.is_some());
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25095,7 +25176,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25127,7 +25208,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         assert_eq!(request.payload.model_name, "gpt-oss");
         assert!(request.generated_service_provenance.is_some());
         assert!(request.generated_apartment_provenance.is_some());
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25176,7 +25257,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             request.payload.capability.heartbeat_expires_at_ms
                 > request.payload.capability.advertised_at_ms
         );
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25193,7 +25274,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25215,7 +25296,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25238,7 +25319,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25259,7 +25340,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25282,7 +25363,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25303,7 +25384,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25325,7 +25406,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25354,7 +25435,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             request.payload.workflow_input_json.as_deref(),
             Some("{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}")
         );
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25383,7 +25464,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25407,7 +25488,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25429,7 +25510,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25456,7 +25537,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25485,7 +25566,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25509,7 +25590,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -25532,7 +25613,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]
@@ -26104,7 +26185,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             .signature
             .verify(&request.finalize_provenance.signer, &finalize_payload)
             .expect("finalize signature should verify");
-        assert_signed_mutation_omits_inline_signing_material(&request);
+        assert_request_has_no_inline_signing_fields(&request);
     }
 
     #[test]

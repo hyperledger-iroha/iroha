@@ -33,7 +33,7 @@
         let digest: [u8; 32] = Sha256::digest(proof).into();
         assert_eq!(
             hex::encode(digest),
-            "91846071540939b76a13e81ba10ce3b084c066b06a5c43b78c65b7406b2b1073",
+            "bd7e1827553dcaed27a5b18a4e29a9d5db948aa3a8ad7ace3427e98ee87d279b",
             "update only when the canonical projection proof protocol intentionally changes"
         );
     }
@@ -95,7 +95,7 @@
         let digest: [u8; 32] = Sha256::digest(proof).into();
         assert_eq!(
             hex::encode(digest),
-            "f4369ff3c42b816a445f0c00b67f12fa786085fa34da9ffe0c712778867801fd",
+            "edb5e8a1e839059f449a818f53eaac0598f6c634ca2e0767a211ad70c4f08bce",
             "update only when the canonical proof protocol intentionally changes"
         );
     }
@@ -435,7 +435,7 @@
     }
 
     #[test]
-    fn query_reordering_duplication_grinding_and_lane_substitution_reject() {
+    fn query_reordering_duplication_grinding_and_composition_mutations_reject() {
         let mut changed = decode_fixture();
         changed.queries.swap(0, 1);
         assert_rejected(&changed);
@@ -446,10 +446,10 @@
         changed.grinding_nonce ^= 1;
         assert_rejected(&changed);
         changed = decode_fixture();
-        changed.composition_roots.swap(0, 1);
+        changed.composition_roots[0][0] ^= 1;
         assert_rejected(&changed);
         changed = decode_fixture();
-        changed.fri_lanes.swap(0, 1);
+        changed.fri_lanes[0].roots[0][0] ^= 1;
         assert_rejected(&changed);
     }
 
@@ -2430,30 +2430,29 @@
         }
     }
 
-    fn tiny_authenticated_main_scratch_fixture_v1(
+    fn tiny_authenticated_main_polynomial_fixture_v1(
         seed: u8,
-    ) -> aggregate::EncryptedFieldMatrixScratchV1 {
+    ) -> aggregate::MaskedTracePolynomialSetV1 {
         let mut rng = StdRng::from_seed([seed; 32]);
-        let (_, _, scratch) =
-            aggregate::commit_masked_trace_columns_retaining_encrypted_scratch_v1(
-                b"iroha:test:zk-x509:main-scratch-leaf:v1",
-                b"iroha:test:zk-x509:main-scratch-node:v1",
-                usize::from(seed),
-                2,
-                4,
-                1,
-                1,
-                &[],
-                &mut rng,
-                |_| Ok(vec![F(u64::from(seed)); 4]),
-            )
-            .expect("tiny authenticated anonymous scratch");
-        scratch
+        let (_, polynomials) = aggregate::commit_masked_trace_polynomial_columns_v1(
+            b"iroha:test:zk-x509:main-scratch-leaf:v1",
+            b"iroha:test:zk-x509:main-scratch-node:v1",
+            usize::from(seed),
+            2,
+            4,
+            1,
+            1,
+            &[],
+            &mut rng,
+            |_| Ok(vec![F(u64::from(seed)); 4]),
+        )
+        .expect("tiny authenticated masked polynomials");
+        polynomials
     }
 
     #[test]
-    fn main_scratch_set_fails_closed_on_count_shape_and_phase_lifecycle() {
-        assert!(core::mem::needs_drop::<MainTraceScratchSetV1>());
+    fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
+        assert!(core::mem::needs_drop::<MainTracePolynomialSetV1>());
         assert!(core::mem::needs_drop::<
             ZkX509MainAwaitingCredentialBindingV1<'static>,
         >());
@@ -2464,36 +2463,36 @@
             FULL_PROFILE_TRACE_GROUPS_V1 - 1,
             FULL_PROFILE_TRACE_GROUPS_V1 + 1,
         ] {
-            let scratches = (0..hostile_count)
+            let polynomials = (0..hostile_count)
                 .map(|index| {
-                    tiny_authenticated_main_scratch_fixture_v1(
+                    tiny_authenticated_main_polynomial_fixture_v1(
                         u8::try_from(index + 1).expect("small hostile count"),
                     )
                 })
                 .collect();
             assert!(matches!(
-                MainTraceScratchSetV1::from_ordered_v1(
+                MainTracePolynomialSetV1::from_ordered_v1(
                     &layout,
                     MainTraceColumnKindV1::Base,
-                    scratches,
+                    polynomials,
                 ),
                 Err(ZkX509StarkErrorV1::TranscriptMismatch)
             ));
         }
 
-        // Six authenticated matrices are still rejected when any committed
-        // common-domain shape is not the verifier-fixed MAIN shape. The
-        // consuming constructor owns the vector, so every anonymous file and
-        // zeroizing key is dropped on this failure path.
+        // Six authenticated polynomial sets are still rejected when any
+        // native/commitment-domain shape is not the verifier-fixed MAIN shape.
+        // The consuming constructor owns the vector, so every retained secret
+        // coefficient is zeroized on this failure path.
         let wrong_shape = (0..FULL_PROFILE_TRACE_GROUPS_V1)
             .map(|index| {
-                tiny_authenticated_main_scratch_fixture_v1(
+                tiny_authenticated_main_polynomial_fixture_v1(
                     u8::try_from(index + 0x21).expect("six fixtures"),
                 )
             })
             .collect();
         assert!(matches!(
-            MainTraceScratchSetV1::from_ordered_v1(
+            MainTracePolynomialSetV1::from_ordered_v1(
                 &layout,
                 MainTraceColumnKindV1::Aux,
                 wrong_shape,
@@ -2504,7 +2503,7 @@
 
     #[test]
     fn main_phase_source_has_no_root_only_or_reconstruction_commit_path() {
-        let source = include_str!("../stark.rs");
+        let source = include_str!("main_aggregate.rs");
         let helper_start = source
             .find("fn commit_main_trace_group_v1")
             .expect("MAIN commitment helper");
@@ -2514,14 +2513,15 @@
             .expect("MAIN commitment helper end");
         let helper = &source[helper_start..helper_end];
         assert!(
-            helper.contains("commit_masked_trace_columns_retaining_encrypted_scratch_v1"),
-            "MAIN commitments must retain the authenticated masked LDE"
+            helper.contains("commit_masked_trace_polynomial_columns_v1"),
+            "MAIN commitments must retain the authenticated masked polynomials"
         );
         assert!(
             !helper.contains("commit_masked_trace_columns_v1(")
+                && !helper.contains("commit_masked_trace_columns_retaining_encrypted_scratch_v1")
                 && !helper.contains("spill_replayed_masked_trace_columns_v1")
                 && !helper.contains("replay_masked_trace_columns_via_encrypted_scratch_v1"),
-            "MAIN must not discard or reconstruct a committed masked LDE"
+            "MAIN must not discard its committed polynomials or reconstruct them from native witness"
         );
 
         let phase_start = source
@@ -2533,14 +2533,14 @@
             .expect("typed MAIN phase end");
         let phases = &source[phase_start..phase_end];
         assert_eq!(
-            phases.matches("base_scratch.push(scratch)").count(),
+            phases.matches("base_polynomials.push(polynomials)").count(),
             FULL_PROFILE_TRACE_GROUPS_V1,
-            "phase one must retain exactly six base matrices"
+            "phase one must retain exactly six base polynomial sets"
         );
         assert_eq!(
-            phases.matches("aux_scratch.push(scratch)").count(),
+            phases.matches("aux_polynomials.push(polynomials)").count(),
             FULL_PROFILE_TRACE_GROUPS_V1,
-            "phase two must retain exactly six auxiliary matrices"
+            "phase two must retain exactly six auxiliary polynomial sets"
         );
         let provenance = phases
             .find("matches_main_pre_aux_v1")
@@ -2555,6 +2555,180 @@
             provenance < absorption && provenance < child_bind,
             "cross-phase provenance must fail before transcript or child mutation"
         );
+    }
+
+    fn empty_main_composition_chunks_v1() -> Vec<Vec<Vec<E>>> {
+        (0..SECURITY_LANES)
+            .map(|_| (0..COMPOSITION_DEGREE_CHUNKS).map(|_| Vec::new()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn main_coefficient_accumulator_is_bounded_transactional_and_order_independent() {
+        let coefficient_cap = 8;
+        let value = |value| E::from_base(F(value));
+        let mut first = empty_main_composition_chunks_v1();
+        first[0][0] = vec![value(1), value(2), value(3)];
+        first[0][2] = vec![value(9)];
+        let mut second = empty_main_composition_chunks_v1();
+        second[0][0] = vec![value(4), value(5)];
+        second[0][1] = vec![value(7), value(8), value(9), value(10)];
+        second[0][2] = vec![value(9).neg()];
+
+        let mut first_then_second = empty_main_composition_chunks_v1();
+        add_main_composition_coefficient_chunks_v1(&mut first_then_second, &first, coefficient_cap)
+            .expect("first contribution");
+        add_main_composition_coefficient_chunks_v1(
+            &mut first_then_second,
+            &second,
+            coefficient_cap,
+        )
+        .expect("second contribution");
+        let mut second_then_first = empty_main_composition_chunks_v1();
+        add_main_composition_coefficient_chunks_v1(
+            &mut second_then_first,
+            &second,
+            coefficient_cap,
+        )
+        .expect("second contribution first");
+        add_main_composition_coefficient_chunks_v1(&mut second_then_first, &first, coefficient_cap)
+            .expect("first contribution second");
+        assert_eq!(first_then_second, second_then_first);
+        assert!(
+            first_then_second[0][2].is_empty(),
+            "exact cancellation must remove the retained tail"
+        );
+
+        let canonical = first_then_second.clone();
+        let mut wrong_lanes = second.clone();
+        wrong_lanes.pop();
+        assert!(matches!(
+            add_main_composition_coefficient_chunks_v1(
+                &mut first_then_second,
+                &wrong_lanes,
+                coefficient_cap,
+            ),
+            Err(ZkX509StarkErrorV1::ProfileMismatch)
+        ));
+        assert_eq!(first_then_second, canonical);
+
+        let mut wrong_chunks = second.clone();
+        wrong_chunks[0].pop();
+        assert!(matches!(
+            add_main_composition_coefficient_chunks_v1(
+                &mut first_then_second,
+                &wrong_chunks,
+                coefficient_cap,
+            ),
+            Err(ZkX509StarkErrorV1::ProfileMismatch)
+        ));
+        assert_eq!(first_then_second, canonical);
+
+        let mut oversized = second.clone();
+        oversized[0][0].resize(coefficient_cap + 1, E::ONE);
+        assert!(matches!(
+            add_main_composition_coefficient_chunks_v1(
+                &mut first_then_second,
+                &oversized,
+                coefficient_cap,
+            ),
+            Err(ZkX509StarkErrorV1::ProfileMismatch)
+        ));
+        assert_eq!(first_then_second, canonical);
+        assert!(matches!(
+            add_main_composition_coefficient_chunks_v1(&mut first_then_second, &second, 0,),
+            Err(ZkX509StarkErrorV1::ProfileMismatch)
+        ));
+        assert_eq!(first_then_second, canonical);
+    }
+
+    #[test]
+    fn composition_chunk_split_rejects_hidden_high_degree_coefficients() {
+        let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
+        let shared = layout.as_shared().expect("shared MAIN layout");
+        let value = |value| E::from_base(F(value));
+        let mut coefficients = vec![value(1), value(2), value(3), E::ZERO, E::ZERO, E::ZERO];
+        let chunks =
+            composition_coefficient_chunks_v1(&coefficients, 2, &shared).expect("zero high tail");
+        assert_eq!(chunks.len(), COMPOSITION_DEGREE_CHUNKS);
+        assert_eq!(chunks[0], vec![value(1), value(2), value(3)]);
+        coefficients[5] = value(1);
+        assert!(matches!(
+            composition_coefficient_chunks_v1(&coefficients, 2, &shared),
+            Err(ZkX509StarkErrorV1::ConstraintOpening)
+        ));
+        assert!(matches!(
+            composition_coefficient_chunks_v1(&coefficients, usize::MAX, &shared),
+            Err(ZkX509StarkErrorV1::ProfileMismatch)
+        ));
+    }
+
+    #[test]
+    fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() {
+        let source = include_str!("main_aggregate.rs");
+        let finish_start = source
+            .find("pub(crate) fn finish_v1_with_rng")
+            .expect("MAIN finish");
+        let finish_end = source[finish_start..]
+            .find("/// Exact six-provider registry")
+            .map(|offset| finish_start + offset)
+            .expect("MAIN finish end");
+        let finish = &source[finish_start..finish_end];
+        assert!(finish.contains("replay_masked_trace_polynomial_columns_v1"));
+        assert!(finish.contains("self.composition_material_v1()"));
+        let material_start = source
+            .find("fn composition_material_v1(&self)")
+            .expect("retained composition material");
+        let material_end = source[material_start..]
+            .find("pub(super) fn record_main_group_commitment_v1")
+            .map(|offset| material_start + offset)
+            .expect("retained composition material end");
+        assert!(
+            source[material_start..material_end]
+                .contains("main_composition_material_from_polynomials_v1")
+        );
+        assert!(!finish.contains("verify_opened_query_relations_with_deep_v1"));
+        for forbidden in [
+            "spill_replayed_masked_trace_columns_v1",
+            "replay_masked_trace_columns_via_encrypted_scratch_v1",
+            "EncryptedFieldMatrixScratch",
+            "native_base_column_v1",
+            "native_aux_column_v1",
+        ] {
+            assert!(
+                !finish.contains(forbidden),
+                "MAIN finish must not use {forbidden}"
+            );
+        }
+
+        let verifier_start = source
+            .find("pub(crate) fn verify_zk_x509_main_aggregate_stark_v1")
+            .expect("complete MAIN verifier");
+        let verifier = &source[verifier_start..];
+        let grinding = verifier
+            .find("verify_grinding_nonce_v1")
+            .expect("grinding verification");
+        let queries = verifier
+            .find("let expected_indices = query_indices_v1")
+            .expect("post-grinding queries");
+        let fixed = verifier
+            .find("derive_zk_x509_main_fixed_openings_after_grinding_v1")
+            .expect("verifier-derived fixed openings");
+        assert!(grinding < queries && queries < fixed);
+        assert_eq!(
+            verifier.matches("MainOpenedGroupProviderV1::").count(),
+            FULL_PROFILE_TRACE_GROUPS_V1
+        );
+        assert!(verifier.contains("verify_opened_query_relations_with_deep_v1"));
+
+        let engine = include_str!("../engine.rs");
+        let engine_production = &engine[..engine
+            .find("#[cfg(test)]")
+            .expect("engine production/test boundary")];
+        assert!(engine_production.contains("verify_zk_x509_main_aggregate_stark_v1"));
+        assert!(engine_production.contains("ca_accumulator_subproof_binding_from_proof_v1"));
+        assert!(engine_production.contains("validate_cross_subproof_binding_v1"));
+        assert!(!engine_production.contains("ConsensusVerifierUnavailable"));
     }
 
     #[test]

@@ -46,6 +46,8 @@ use iroha_data_model::nexus::{
     FeeSponsorProgramId, FeeSponsorProgramRevisionKey, LaneCatalog, LaneId, LaneLifecyclePlan,
     LanePrivacyProof, LaneStorageProfile, LaneVisibility, UniversalAccountId,
 };
+#[cfg(test)]
+use iroha_data_model::state_path::StatePath;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
@@ -14340,8 +14342,8 @@ pub mod tests {
         parameters::actual::{Kura as KuraConfig, LaneRoutingMatcher, LaneRoutingRule},
     };
     use iroha_crypto::{
-        Algorithm, Hash, KeyPair, MerkleTree,
-        privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
+        Algorithm, Hash, KeyPair, MerkleProof,
+        privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness},
     };
     use iroha_data_model::{
         account::{AccountDetails, AccountValue},
@@ -14663,7 +14665,7 @@ pub mod tests {
         binding_hash: Hash,
     ) {
         let registry_key = binding.registry_key();
-        let marker_key: Name = format!(
+        let marker_key: StatePath = format!(
             "queue_plan_admission_v2_{}_{}",
             hex::encode(registry_key.chain_id_digest.as_ref()),
             hex::encode(registry_key.entrypoint_hash.as_ref()),
@@ -16416,20 +16418,11 @@ pub mod tests {
         let (confidential_id, confidential_keypair) = gen_account_in("wonderland");
 
         // Build a Merkle commitment + witness for privacy-gated policies
-        let mut leaves = Vec::new();
-        leaves.extend_from_slice(&[0x01_u8; 32]);
-        leaves.extend_from_slice(&[0x02_u8; 32]);
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&leaves, 32).expect("valid chunk");
-        let merkle_root = tree.root().expect("merkle root");
-        let proof = tree.get_proof(0).expect("merkle proof");
-        let first_leaf_hash: [u8; 32] = tree
-            .leaves()
-            .next()
-            .expect("leaf hash")
-            .as_ref()
-            .as_ref()
-            .try_into()
-            .expect("hash length");
+        let first_leaf = [0x01_u8; 32];
+        let proof = MerkleProof::from_audit_path_bytes(0, vec![[0x02_u8; 32]]);
+        let merkle_root = MerkleWitness::new(first_leaf, proof.clone())
+            .implied_root(8)
+            .expect("valid lane proof must produce a root");
         let merkle_commitment = LanePrivacyCommitment::merkle(
             LaneCommitmentId::new(9),
             MerkleCommitment::new(merkle_root, 8),
@@ -16529,7 +16522,7 @@ pub mod tests {
             lane_privacy: Some(LanePrivacyProof {
                 commitment_id: LaneCommitmentId::new(9),
                 witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
-                    leaf: first_leaf_hash,
+                    leaf: first_leaf,
                     proof,
                 }),
             }),

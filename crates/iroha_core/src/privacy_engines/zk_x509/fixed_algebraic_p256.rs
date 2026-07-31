@@ -15,9 +15,11 @@ use std::{sync::OnceLock, vec::Vec};
 
 use thiserror::Error;
 
+#[cfg(test)]
+use super::fixed_algebraic::ZkX509FixedAlgebraicAtomV1;
 use super::{
     fixed_algebraic::{
-        ZkX509FixedAlgebraicDomainV1, ZkX509FixedAlgebraicErrorV1,
+        ZkX509FixedAlgebraicDomainV1, ZkX509FixedAlgebraicErrorV1, ZkX509FixedAlgebraicOpeningsV1,
         ZkX509FixedAlgebraicScheduleBuilderV1, ZkX509FixedAlgebraicScheduleV1,
     },
     p256_aggregate_adapter::{
@@ -50,10 +52,12 @@ use crate::privacy_engines::transparent_stark::{
 
 /// Exact compact P-256 fixed-schedule semantics bound by the release profile.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log25:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=initial850-local+min-local-vs14x43-phase+min-local-vs64x222-phase+tail18-local:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
+    b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log25:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:typed-composite-children=134,134,46,46,22,22:each-child-generic-cap65536:composite-digest-binds-profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:sorted-whole-plan=min-exact-global-local-vs-phase-hybrid:global-local-on-tie:phase-hybrid=prefix893-local+min-local-vs13x43-phase+scalar-boundary222-local+min-local-vs63x222-phase+tail18-local:pinned-boundary-extents=1712,9984:pinned-repeated-extents=1888,10176:local-on-phase-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
 
 const P256_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:p256-fixed-algebraic-compiler:v1";
+const P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:zk-x509:p256-fixed-algebraic-composite:v1";
 
 /// Exact number of unique verifier-owned schedules.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1: usize = 6;
@@ -61,6 +65,48 @@ pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1: usize = 6;
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_ALIAS_COUNT_V1: usize = 15;
 /// Exact combined fixed width.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1: usize = 404;
+const P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1: [usize; 6] = [
+    P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1,
+    P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1,
+    P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1,
+    P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1,
+    P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
+    P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
+];
+const P256_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1: [usize; 6] =
+    [11_563, 11_563, 28_673, 28_681, 59_556, 59_556];
+const P256_FIXED_ALGEBRAIC_CHILD_DIGESTS_V1: [[u8; 32]; 6] = [
+    [
+        0xac, 0x03, 0x64, 0x4c, 0x23, 0xd8, 0x8a, 0x37, 0xec, 0x8d, 0x12, 0x8f, 0x23, 0x2d, 0xd9,
+        0x4a, 0x6f, 0xa2, 0x2d, 0x2b, 0x9b, 0x35, 0xbb, 0xc4, 0x59, 0x28, 0x78, 0x24, 0xaa, 0xda,
+        0x95, 0x03,
+    ],
+    [
+        0xac, 0x03, 0x64, 0x4c, 0x23, 0xd8, 0x8a, 0x37, 0xec, 0x8d, 0x12, 0x8f, 0x23, 0x2d, 0xd9,
+        0x4a, 0x6f, 0xa2, 0x2d, 0x2b, 0x9b, 0x35, 0xbb, 0xc4, 0x59, 0x28, 0x78, 0x24, 0xaa, 0xda,
+        0x95, 0x03,
+    ],
+    [
+        0x2d, 0xfa, 0x33, 0x51, 0x3a, 0xd2, 0xaa, 0xcb, 0x85, 0xf7, 0x54, 0x0c, 0xc6, 0x74, 0xf1,
+        0xb9, 0x63, 0xa9, 0x78, 0x0f, 0xd7, 0x93, 0xf0, 0x6f, 0x1f, 0xc1, 0x5d, 0x0e, 0x8e, 0xd8,
+        0x0b, 0x72,
+    ],
+    [
+        0xdd, 0x65, 0x87, 0x6e, 0xf5, 0x61, 0x10, 0x2b, 0xcb, 0xda, 0x2a, 0x0f, 0x9d, 0xf4, 0xb1,
+        0x51, 0x3e, 0xec, 0xa5, 0x27, 0x4a, 0xc1, 0x73, 0x1d, 0x6f, 0xe9, 0xd9, 0xd9, 0xf6, 0xa5,
+        0xbc, 0xdd,
+    ],
+    [
+        0xd5, 0x93, 0x28, 0xe4, 0xbc, 0x64, 0x52, 0xb9, 0x23, 0x2d, 0x02, 0x12, 0x2b, 0x3d, 0xe2,
+        0x6a, 0x0f, 0x20, 0x48, 0x0d, 0x84, 0x72, 0xec, 0x4e, 0x0d, 0xbf, 0x85, 0x0e, 0x20, 0xa9,
+        0xb1, 0x6b,
+    ],
+    [
+        0xd5, 0x93, 0x28, 0xe4, 0xbc, 0x64, 0x52, 0xb9, 0x23, 0x2d, 0x02, 0x12, 0x2b, 0x3d, 0xe2,
+        0x6a, 0x0f, 0x20, 0x48, 0x0d, 0x84, 0x72, 0xec, 0x4e, 0x0d, 0xbf, 0x85, 0x0e, 0x20, 0xa9,
+        0xb1, 0x6b,
+    ],
+];
 
 const CERTIFICATE_ARITHMETIC_START_V1: usize = 0;
 const WALLET_ARITHMETIC_START_V1: usize =
@@ -93,6 +139,16 @@ const P256_VARIABLE_VALUE_START_V1: usize = P256_INITIAL_VALUES_V1;
 const P256_SCALAR_VALUE_START_V1: usize =
     P256_VARIABLE_VALUE_START_V1 + P256_VARIABLE_TABLE_OPERATIONS_V1;
 const P256_FINAL_VALUE_START_V1: usize = P256_INITIAL_VALUES_V1 + P256_FINAL_OPERATION_START_V1;
+const P256_VARIABLE_REPEATED_VALUE_START_V1: usize =
+    P256_VARIABLE_VALUE_START_V1 + P256_COMPLETE_ADD_OPERATIONS_V1;
+const P256_VARIABLE_REPEATED_CALLS_V1: usize = P256_VARIABLE_TABLE_CALLS_V1 - 1;
+const P256_SCALAR_REPEATED_VALUE_START_V1: usize =
+    P256_SCALAR_VALUE_START_V1 + P256_SCALAR_ROUND_OPERATIONS_V1;
+const P256_SCALAR_REPEATED_ROUNDS_V1: usize = P256_SCALAR_ROUNDS_V1 - 1;
+const P256_VARIABLE_BOUNDARY_FACTORS_V1: usize = 1_712;
+const P256_VARIABLE_REPEATED_BLOCK_FACTORS_V1: usize = 1_888;
+const P256_SCALAR_BOUNDARY_FACTORS_V1: usize = 9_984;
+const P256_SCALAR_REPEATED_BLOCK_FACTORS_V1: usize = 10_176;
 const P256_VALUE_BUS_LOGICAL_FACTORS_V1: usize =
     (P256_ARITHMETIC_OPERATIONS_V1 + P256_VALUE_BUS_ASSERTIONS_V1) * P256_VALUE_BUS_SEGMENT_ROWS_V1;
 const P256_VALUE_BUS_LOGICAL_PACKED_ROWS_V1: usize =
@@ -152,6 +208,15 @@ const EXECUTION_VALUE_COPY_START_V1: usize = EXECUTION_WRITER_BOUNDARY_START_V1 
 const EXECUTION_VALUE_COPY_BOUNDARY_START_V1: usize = EXECUTION_VALUE_COPY_START_V1 + 2 * 2;
 
 const _: () = {
+    assert!(
+        P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1[0]
+            + P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1[1]
+            + P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1[2]
+            + P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1[3]
+            + P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1[4]
+            + P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1[5]
+            == ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1
+    );
     assert!(P256_ARITHMETIC_ROWS_PER_OPERATION_V1 == 32);
     assert!(ARITH_PADDING_V1 + 1 == P256_ARITHMETIC_STARK_FIXED_WIDTH_V1);
     assert!(ARITH_VALUE_COPY_BOUNDARY_START_V1 + 3 == P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1);
@@ -168,6 +233,10 @@ const _: () = {
     assert!(P256_VARIABLE_VALUE_START_V1 == 850);
     assert!(P256_SCALAR_VALUE_START_V1 == 1_452);
     assert!(P256_FINAL_VALUE_START_V1 == 15_660);
+    assert!(P256_VARIABLE_REPEATED_VALUE_START_V1 == 893);
+    assert!(P256_VARIABLE_REPEATED_CALLS_V1 == 13);
+    assert!(P256_SCALAR_REPEATED_VALUE_START_V1 == 1_674);
+    assert!(P256_SCALAR_REPEATED_ROUNDS_V1 == 63);
     assert!(P256_FINAL_VALUE_START_V1 + P256_FINAL_OPERATIONS_V1 == 15_678);
     assert!(P256_VALUE_BUS_LOGICAL_FACTORS_V1 == 949_312);
     assert!(P256_VALUE_BUS_LOGICAL_PACKED_ROWS_V1 == 474_656);
@@ -1763,9 +1832,10 @@ enum P256SortedWholeAxisV1 {
 struct P256SortedRunPlanV1 {
     global_local_atoms: usize,
     hybrid_atoms: usize,
-    initial_local_atoms: usize,
-    variable: P256SortedRepeatedPhasePlanV1,
-    scalar: P256SortedRepeatedPhasePlanV1,
+    prefix_local_atoms: usize,
+    variable_repeated: P256SortedRepeatedPhasePlanV1,
+    scalar_boundary_local_atoms: usize,
+    scalar_repeated: P256SortedRepeatedPhasePlanV1,
     tail_local_atoms: usize,
     axis: P256SortedWholeAxisV1,
 }
@@ -1929,58 +1999,6 @@ fn compile_sorted_repeated_phase_plan_v1(
     })
 }
 
-#[cfg(test)]
-fn report_sorted_phase_groups_v1(
-    label: &'static str,
-    metadata: &[P256ValueMetadataV1],
-    prefix: &[usize],
-    value_start: usize,
-    repeats: usize,
-    values_per_repeat: usize,
-) -> Result<(), ZkX509P256FixedAlgebraicErrorV1> {
-    let value_end = checked_add_v1(value_start, checked_mul_v1(repeats, values_per_repeat)?)?;
-    if prefix.len() != metadata.len() + 1 || value_end > metadata.len() || repeats == 0 {
-        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
-    }
-    let mut extents = Vec::new();
-    extents
-        .try_reserve_exact(repeats)
-        .map_err(|_| ZkX509P256FixedAlgebraicErrorV1::Resource)?;
-    for repetition in 0..repeats {
-        let start = checked_add_v1(value_start, checked_mul_v1(repetition, values_per_repeat)?)?;
-        let end = checked_add_v1(start, values_per_repeat)?;
-        extents.push(
-            prefix[end]
-                .checked_sub(prefix[start])
-                .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)?,
-        );
-    }
-    let mut groups = Vec::new();
-    let mut group_start = 0_usize;
-    for repetition in 1..=repeats {
-        let same_as_group = if repetition == repeats {
-            false
-        } else {
-            let group_value_start =
-                checked_add_v1(value_start, checked_mul_v1(group_start, values_per_repeat)?)?;
-            let repeat_value_start =
-                checked_add_v1(value_start, checked_mul_v1(repetition, values_per_repeat)?)?;
-            extents[repetition] == extents[group_start]
-                && metadata[group_value_start..group_value_start + values_per_repeat]
-                    == metadata[repeat_value_start..repeat_value_start + values_per_repeat]
-        };
-        if !same_as_group {
-            groups.push((group_start, repetition, extents[group_start]));
-            group_start = repetition;
-        }
-    }
-    eprintln!(
-        "P256_PHASE_GROUPS label={label} value_start={value_start} repeats={repeats} \
-         values_per_repeat={values_per_repeat} extents={extents:?} groups={groups:?}"
-    );
-    Ok(())
-}
-
 fn compile_sorted_run_plan_v1(
     metadata: &[P256ValueMetadataV1],
     prefix: &[usize],
@@ -1998,60 +2016,69 @@ fn compile_sorted_run_plan_v1(
         );
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
-    #[cfg(test)]
-    {
-        report_sorted_phase_groups_v1(
-            "variable",
-            metadata,
-            prefix,
-            P256_VARIABLE_VALUE_START_V1,
-            P256_VARIABLE_TABLE_CALLS_V1,
-            P256_COMPLETE_ADD_OPERATIONS_V1,
-        )?;
-        report_sorted_phase_groups_v1(
-            "scalar",
-            metadata,
-            prefix,
-            P256_SCALAR_VALUE_START_V1,
-            P256_SCALAR_ROUNDS_V1,
-            P256_SCALAR_ROUND_OPERATIONS_V1,
-        )?;
-    }
-    let variable = compile_sorted_repeated_phase_plan_v1(
+    let variable_repeated = compile_sorted_repeated_phase_plan_v1(
         metadata,
         prefix,
-        P256_VARIABLE_VALUE_START_V1,
-        P256_VARIABLE_TABLE_CALLS_V1,
+        P256_VARIABLE_REPEATED_VALUE_START_V1,
+        P256_VARIABLE_REPEATED_CALLS_V1,
         P256_COMPLETE_ADD_OPERATIONS_V1,
     )?;
-    let scalar = compile_sorted_repeated_phase_plan_v1(
+    let scalar_repeated = compile_sorted_repeated_phase_plan_v1(
         metadata,
         prefix,
-        P256_SCALAR_VALUE_START_V1,
-        P256_SCALAR_ROUNDS_V1,
+        P256_SCALAR_REPEATED_VALUE_START_V1,
+        P256_SCALAR_REPEATED_ROUNDS_V1,
         P256_SCALAR_ROUND_OPERATIONS_V1,
     )?;
-    if variable.value_end_v1()? != P256_SCALAR_VALUE_START_V1
-        || scalar.value_end_v1()? != P256_FINAL_VALUE_START_V1
+    let variable_boundary_factors = prefix[P256_VARIABLE_REPEATED_VALUE_START_V1]
+        .checked_sub(prefix[P256_VARIABLE_VALUE_START_V1])
+        .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)?;
+    let scalar_boundary_factors = prefix[P256_SCALAR_REPEATED_VALUE_START_V1]
+        .checked_sub(prefix[P256_SCALAR_VALUE_START_V1])
+        .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)?;
+    if variable_boundary_factors != P256_VARIABLE_BOUNDARY_FACTORS_V1
+        || variable_repeated.block_factors != P256_VARIABLE_REPEATED_BLOCK_FACTORS_V1
+        || scalar_boundary_factors != P256_SCALAR_BOUNDARY_FACTORS_V1
+        || scalar_repeated.block_factors != P256_SCALAR_REPEATED_BLOCK_FACTORS_V1
+        || variable_repeated.value_end_v1()? != P256_SCALAR_VALUE_START_V1
+        || scalar_repeated.value_end_v1()? != P256_FINAL_VALUE_START_V1
     {
         #[cfg(test)]
         eprintln!(
-            "P256_PHASE_DIAGNOSTIC invariant=phase-boundaries variable_end={:?} \
-             expected_variable_end={P256_SCALAR_VALUE_START_V1} scalar_end={:?} \
-             expected_scalar_end={P256_FINAL_VALUE_START_V1}",
-            variable.value_end_v1(),
-            scalar.value_end_v1(),
+            "P256_PHASE_DIAGNOSTIC invariant=release-phase-groups \
+             variable_boundary_factors={variable_boundary_factors} \
+             expected_variable_boundary_factors={P256_VARIABLE_BOUNDARY_FACTORS_V1} \
+             variable_repeated_factors={} \
+             expected_variable_repeated_factors={P256_VARIABLE_REPEATED_BLOCK_FACTORS_V1} \
+             scalar_boundary_factors={scalar_boundary_factors} \
+             expected_scalar_boundary_factors={P256_SCALAR_BOUNDARY_FACTORS_V1} \
+             scalar_repeated_factors={} \
+             expected_scalar_repeated_factors={P256_SCALAR_REPEATED_BLOCK_FACTORS_V1} \
+             variable_end={:?} expected_variable_end={P256_SCALAR_VALUE_START_V1} \
+             scalar_end={:?} expected_scalar_end={P256_FINAL_VALUE_START_V1}",
+            variable_repeated.block_factors,
+            scalar_repeated.block_factors,
+            variable_repeated.value_end_v1(),
+            scalar_repeated.value_end_v1(),
         );
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
-    let initial_local_atoms =
-        sorted_local_range_atom_count_v1(metadata, 0, P256_VARIABLE_VALUE_START_V1)?;
+    let prefix_local_atoms =
+        sorted_local_range_atom_count_v1(metadata, 0, P256_VARIABLE_REPEATED_VALUE_START_V1)?;
+    let scalar_boundary_local_atoms = sorted_local_range_atom_count_v1(
+        metadata,
+        P256_SCALAR_VALUE_START_V1,
+        P256_SCALAR_REPEATED_VALUE_START_V1,
+    )?;
     let tail_local_atoms =
         sorted_local_range_atom_count_v1(metadata, P256_FINAL_VALUE_START_V1, metadata.len())?;
     let hybrid_atoms = checked_add_v1(
         checked_add_v1(
-            checked_add_v1(initial_local_atoms, variable.selected_atoms_v1())?,
-            scalar.selected_atoms_v1(),
+            checked_add_v1(
+                checked_add_v1(prefix_local_atoms, variable_repeated.selected_atoms_v1())?,
+                scalar_boundary_local_atoms,
+            )?,
+            scalar_repeated.selected_atoms_v1(),
         )?,
         tail_local_atoms,
     )?;
@@ -2064,9 +2091,10 @@ fn compile_sorted_run_plan_v1(
     Ok(P256SortedRunPlanV1 {
         global_local_atoms,
         hybrid_atoms,
-        initial_local_atoms,
-        variable,
-        scalar,
+        prefix_local_atoms,
+        variable_repeated,
+        scalar_boundary_local_atoms,
+        scalar_repeated,
         tail_local_atoms,
         axis,
     })
@@ -2543,45 +2571,86 @@ fn emit_sorted_run_plan_v1(
             emit_sorted_local_range_v1(builder, slice_start, metadata, prefix, 0, metadata.len())?
         }
         P256SortedWholeAxisV1::PhaseHybrid => {
-            let mut emitted = emit_sorted_local_range_v1(
+            let prefix_atoms = emit_sorted_local_range_v1(
                 builder,
                 slice_start,
                 metadata,
                 prefix,
                 0,
-                P256_VARIABLE_VALUE_START_V1,
+                P256_VARIABLE_REPEATED_VALUE_START_V1,
             )?;
-            for phase in [plan.variable, plan.scalar] {
-                let phase_atoms = match phase.axis {
-                    P256SortedRepeatedPhaseAxisV1::Local => emit_sorted_local_range_v1(
-                        builder,
-                        slice_start,
-                        metadata,
-                        prefix,
-                        phase.value_start,
-                        phase.value_end_v1()?,
-                    )?,
-                    P256SortedRepeatedPhaseAxisV1::Phase => emit_sorted_repeated_phase_v1(
-                        builder,
-                        slice_start,
-                        metadata,
-                        prefix,
-                        phase,
-                    )?,
-                };
-                emitted = checked_add_v1(emitted, phase_atoms)?;
+            if prefix_atoms != plan.prefix_local_atoms {
+                return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
             }
-            emitted = checked_add_v1(
-                emitted,
-                emit_sorted_local_range_v1(
+            let mut emitted = prefix_atoms;
+            let variable_phase = plan.variable_repeated;
+            let variable_atoms = match variable_phase.axis {
+                P256SortedRepeatedPhaseAxisV1::Local => emit_sorted_local_range_v1(
                     builder,
                     slice_start,
                     metadata,
                     prefix,
-                    P256_FINAL_VALUE_START_V1,
-                    metadata.len(),
+                    variable_phase.value_start,
+                    variable_phase.value_end_v1()?,
                 )?,
+                P256SortedRepeatedPhaseAxisV1::Phase => emit_sorted_repeated_phase_v1(
+                    builder,
+                    slice_start,
+                    metadata,
+                    prefix,
+                    variable_phase,
+                )?,
+            };
+            if variable_atoms != variable_phase.selected_atoms_v1() {
+                return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+            }
+            emitted = checked_add_v1(emitted, variable_atoms)?;
+            let scalar_boundary_atoms = emit_sorted_local_range_v1(
+                builder,
+                slice_start,
+                metadata,
+                prefix,
+                P256_SCALAR_VALUE_START_V1,
+                P256_SCALAR_REPEATED_VALUE_START_V1,
             )?;
+            if scalar_boundary_atoms != plan.scalar_boundary_local_atoms {
+                return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+            }
+            emitted = checked_add_v1(emitted, scalar_boundary_atoms)?;
+            let scalar_phase = plan.scalar_repeated;
+            let scalar_atoms = match scalar_phase.axis {
+                P256SortedRepeatedPhaseAxisV1::Local => emit_sorted_local_range_v1(
+                    builder,
+                    slice_start,
+                    metadata,
+                    prefix,
+                    scalar_phase.value_start,
+                    scalar_phase.value_end_v1()?,
+                )?,
+                P256SortedRepeatedPhaseAxisV1::Phase => emit_sorted_repeated_phase_v1(
+                    builder,
+                    slice_start,
+                    metadata,
+                    prefix,
+                    scalar_phase,
+                )?,
+            };
+            if scalar_atoms != scalar_phase.selected_atoms_v1() {
+                return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+            }
+            emitted = checked_add_v1(emitted, scalar_atoms)?;
+            let tail_atoms = emit_sorted_local_range_v1(
+                builder,
+                slice_start,
+                metadata,
+                prefix,
+                P256_FINAL_VALUE_START_V1,
+                metadata.len(),
+            )?;
+            if tail_atoms != plan.tail_local_atoms {
+                return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+            }
+            emitted = checked_add_v1(emitted, tail_atoms)?;
             emitted
         }
     };
@@ -2785,17 +2854,208 @@ pub(crate) fn zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
     .map_err(|_| ZkX509P256FixedAlgebraicErrorV1::Topology)
 }
 
+/// Typed composition of the six independently capped P-256 registrations.
+///
+/// Child order is the canonical MAIN registration order: certificate
+/// arithmetic, wallet arithmetic, certificate execution, wallet execution,
+/// certificate sorted memory, and wallet sorted memory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ZkX509P256FixedAlgebraicScheduleV1 {
+    children: [ZkX509FixedAlgebraicScheduleV1; ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1],
+    descriptor_digest: [u8; 32],
+}
+
+impl ZkX509P256FixedAlgebraicScheduleV1 {
+    fn new_v1(
+        children: [ZkX509FixedAlgebraicScheduleV1; ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1],
+    ) -> Result<Self, ZkX509P256FixedAlgebraicErrorV1> {
+        let domain = children
+            .first()
+            .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)?
+            .domain_v1();
+        if children
+            .iter()
+            .zip(P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1)
+            .zip(P256_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1)
+            .zip(P256_FIXED_ALGEBRAIC_CHILD_DIGESTS_V1)
+            .any(|(((child, width), atom_count), digest)| {
+                child.domain_v1() != domain
+                    || usize::from(child.width_v1()) != width
+                    || child.atoms_v1().len() != atom_count
+                    || child.descriptor_digest_v1() != digest
+            })
+        {
+            return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+        }
+        let mut encoded_widths = [0_u8; 2 * ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1];
+        let mut child_digests = [0_u8; 32 * ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1];
+        for (index, child) in children.iter().enumerate() {
+            let width = child.width_v1().to_be_bytes();
+            encoded_widths[index * 2..index * 2 + 2].copy_from_slice(&width);
+            child_digests[index * 32..index * 32 + 32]
+                .copy_from_slice(&child.descriptor_digest_v1());
+        }
+        let descriptor_digest = sha256_frame_v1(
+            P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1,
+            &[
+                ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
+                &encoded_widths,
+                &child_digests,
+            ],
+        )
+        .map_err(|_| ZkX509P256FixedAlgebraicErrorV1::Topology)?;
+        Ok(Self {
+            children,
+            descriptor_digest,
+        })
+    }
+
+    /// Exact combined fixed width in canonical child order.
+    pub(crate) const fn width_v1(&self) -> u16 {
+        ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1 as u16
+    }
+
+    /// Digest binding compiler semantics and every ordered child descriptor.
+    pub(crate) const fn descriptor_digest_v1(&self) -> [u8; 32] {
+        self.descriptor_digest
+    }
+
+    /// Fail closed unless the compiled profile pins this exact composite.
+    pub(crate) fn verify_descriptor_digest_v1(
+        &self,
+        expected: &[u8; 32],
+    ) -> Result<(), ZkX509FixedAlgebraicErrorV1> {
+        if self.descriptor_digest != *expected {
+            return Err(ZkX509FixedAlgebraicErrorV1::DescriptorMismatch);
+        }
+        Ok(())
+    }
+
+    /// Common child domain shared by all six registrations.
+    pub(crate) fn domain_v1(&self) -> ZkX509FixedAlgebraicDomainV1 {
+        self.children[0].domain_v1()
+    }
+
+    /// Exact total across the six independently bounded atom collections.
+    pub(crate) fn atom_count_v1(&self) -> usize {
+        self.children
+            .iter()
+            .map(|child| child.atoms_v1().len())
+            .sum()
+    }
+
+    /// Borrow the six independently capped schedules in registration order.
+    pub(crate) fn children_v1(
+        &self,
+    ) -> &[ZkX509FixedAlgebraicScheduleV1; ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1] {
+        &self.children
+    }
+
+    /// Evaluate one combined native row without constructing a native matrix.
+    pub(crate) fn native_row_v1(
+        &self,
+        row: u64,
+        output: &mut [F],
+    ) -> Result<(), ZkX509FixedAlgebraicErrorV1> {
+        if output.len() != ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1 {
+            return Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery);
+        }
+        let mut start = 0_usize;
+        for child in &self.children {
+            let end = start
+                .checked_add(usize::from(child.width_v1()))
+                .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
+            child.native_row_v1(row, &mut output[start..end])?;
+            start = end;
+        }
+        if start != output.len() {
+            return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
+        }
+        Ok(())
+    }
+
+    /// Evaluate and concatenate all six child openings in canonical order.
+    pub(crate) fn evaluate_query_indices_v1(
+        &self,
+        query_indices: &[u64],
+    ) -> Result<ZkX509FixedAlgebraicOpeningsV1, ZkX509FixedAlgebraicErrorV1> {
+        let mut parts = Vec::new();
+        parts
+            .try_reserve_exact(self.children.len())
+            .map_err(|_| ZkX509FixedAlgebraicErrorV1::AllocationFailure)?;
+        for child in &self.children {
+            parts.push(child.evaluate_query_indices_v1(query_indices)?);
+        }
+        ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(self.descriptor_digest, &parts)
+    }
+
+    #[cfg(test)]
+    fn atoms_v1(&self) -> Vec<ZkX509FixedAlgebraicAtomV1> {
+        let mut atoms = Vec::with_capacity(self.atom_count_v1());
+        let mut column_offset = 0_u16;
+        for child in &self.children {
+            atoms.extend(child.atoms_v1().iter().copied().map(|atom| match atom {
+                ZkX509FixedAlgebraicAtomV1::Affine {
+                    column,
+                    start,
+                    end,
+                    start_value,
+                    step,
+                } => ZkX509FixedAlgebraicAtomV1::Affine {
+                    column: column_offset + column,
+                    start,
+                    end,
+                    start_value,
+                    step,
+                },
+                ZkX509FixedAlgebraicAtomV1::Repeated {
+                    column,
+                    first,
+                    count,
+                    stride,
+                    start_value,
+                    step,
+                } => ZkX509FixedAlgebraicAtomV1::Repeated {
+                    column: column_offset + column,
+                    first,
+                    count,
+                    stride,
+                    start_value,
+                    step,
+                },
+                ZkX509FixedAlgebraicAtomV1::Sparse { column, row, value } => {
+                    ZkX509FixedAlgebraicAtomV1::Sparse {
+                        column: column_offset + column,
+                        row,
+                        value,
+                    }
+                }
+            }));
+            column_offset += child.width_v1();
+        }
+        atoms
+    }
+}
+
+fn compile_p256_fixed_child_v1(
+    domain: ZkX509FixedAlgebraicDomainV1,
+    width: usize,
+    compile: impl FnOnce(
+        &mut ZkX509FixedAlgebraicScheduleBuilderV1,
+    ) -> Result<(), ZkX509P256FixedAlgebraicErrorV1>,
+) -> Result<ZkX509FixedAlgebraicScheduleV1, ZkX509P256FixedAlgebraicErrorV1> {
+    let mut builder = ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(domain, u16_v1(width)?)?;
+    compile(&mut builder)?;
+    builder.finish_v1().map_err(Into::into)
+}
+
 /// Compile the exact six-schedule, 404-column verifier-owned P-256 schedule.
 pub(crate) fn compile_zk_x509_p256_fixed_algebraic_schedule_v1()
--> Result<ZkX509FixedAlgebraicScheduleV1, ZkX509P256FixedAlgebraicErrorV1> {
+-> Result<ZkX509P256FixedAlgebraicScheduleV1, ZkX509P256FixedAlgebraicErrorV1> {
     let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
         ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
         ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
         F(GOLDILOCKS_GENERATOR_V1),
-    )?;
-    let mut builder = ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(
-        domain,
-        u16_v1(ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1)?,
     )?;
     let certificate = compile_p256_ecdsa_topology_v1(P256EcdsaRoleV1::CertificateOrCrl)
         .map_err(map_trace_error_v1)?;
@@ -2804,30 +3064,49 @@ pub(crate) fn compile_zk_x509_p256_fixed_algebraic_schedule_v1()
     let certificate_metadata = compile_value_metadata_v1(&certificate)?;
     let wallet_metadata = compile_value_metadata_v1(&wallet)?;
 
-    compile_arithmetic_fixed_v1(&mut builder, CERTIFICATE_ARITHMETIC_START_V1, &certificate)?;
-    compile_arithmetic_fixed_v1(&mut builder, WALLET_ARITHMETIC_START_V1, &wallet)?;
-    compile_execution_fixed_v1(
-        &mut builder,
-        CERTIFICATE_EXECUTION_START_V1,
-        &certificate,
-        &certificate_metadata,
-    )?;
-    compile_execution_fixed_v1(
-        &mut builder,
-        WALLET_EXECUTION_START_V1,
-        &wallet,
-        &wallet_metadata,
-    )?;
-    compile_sorted_fixed_v1(
-        &mut builder,
-        CERTIFICATE_SORTED_START_V1,
-        &certificate_metadata,
-    )?;
-    compile_sorted_fixed_v1(&mut builder, WALLET_SORTED_START_V1, &wallet_metadata)?;
-    Ok(builder.finish_v1()?)
+    let mut children = Vec::new();
+    children
+        .try_reserve_exact(ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1)
+        .map_err(|_| ZkX509P256FixedAlgebraicErrorV1::Resource)?;
+    children.push(compile_p256_fixed_child_v1(
+        domain,
+        P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1,
+        |builder| compile_arithmetic_fixed_v1(builder, 0, &certificate),
+    )?);
+    children.push(compile_p256_fixed_child_v1(
+        domain,
+        P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1,
+        |builder| compile_arithmetic_fixed_v1(builder, 0, &wallet),
+    )?);
+    children.push(compile_p256_fixed_child_v1(
+        domain,
+        P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1,
+        |builder| compile_execution_fixed_v1(builder, 0, &certificate, &certificate_metadata),
+    )?);
+    children.push(compile_p256_fixed_child_v1(
+        domain,
+        P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1,
+        |builder| compile_execution_fixed_v1(builder, 0, &wallet, &wallet_metadata),
+    )?);
+    children.push(compile_p256_fixed_child_v1(
+        domain,
+        P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
+        |builder| compile_sorted_fixed_v1(builder, 0, &certificate_metadata),
+    )?);
+    children.push(compile_p256_fixed_child_v1(
+        domain,
+        P256_VALUE_BUS_STARK_FIXED_WIDTH_V1,
+        |builder| compile_sorted_fixed_v1(builder, 0, &wallet_metadata),
+    )?);
+    let children = children
+        .try_into()
+        .map_err(|_: Vec<ZkX509FixedAlgebraicScheduleV1>| {
+            ZkX509P256FixedAlgebraicErrorV1::Topology
+        })?;
+    ZkX509P256FixedAlgebraicScheduleV1::new_v1(children)
 }
 
-static ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1: OnceLock<ZkX509FixedAlgebraicScheduleV1> =
+static ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1: OnceLock<ZkX509P256FixedAlgebraicScheduleV1> =
     OnceLock::new();
 
 /// Borrow the canonical verifier-derived P-256 schedule.
@@ -2837,7 +3116,7 @@ static ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1: OnceLock<ZkX509FixedAlgebraicSc
 /// cell, while the raw compiler remains available for independent KAT
 /// reproduction.
 pub(crate) fn zk_x509_p256_fixed_algebraic_schedule_v1()
--> Result<&'static ZkX509FixedAlgebraicScheduleV1, ZkX509P256FixedAlgebraicErrorV1> {
+-> Result<&'static ZkX509P256FixedAlgebraicScheduleV1, ZkX509P256FixedAlgebraicErrorV1> {
     if let Some(schedule) = ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1.get() {
         return Ok(schedule);
     }
@@ -2863,7 +3142,6 @@ mod tests {
         zk_x509::{
             fixed_algebraic::{
                 ZK_X509_FIXED_ALGEBRAIC_MAX_ATOMS_V1, ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1,
-                ZkX509FixedAlgebraicAtomV1,
             },
             p256_aggregate_adapter::P256MainVerifierFixedSourceV1,
         },
@@ -2872,16 +3150,21 @@ mod tests {
     // Filled from the first successful structural compilation and deliberately
     // pinned thereafter. A topology or atom-decomposition change must update
     // the profile and this KAT together.
-    const P256_FIXED_ALGEBRAIC_ATOM_COUNT_KAT_V1: usize = 0;
-    const P256_FIXED_ALGEBRAIC_DESCRIPTOR_DIGEST_KAT_V1: [u8; 32] = [0; 32];
+    const P256_FIXED_ALGEBRAIC_ATOM_COUNT_KAT_V1: usize = 199_592;
+    const P256_FIXED_ALGEBRAIC_DESCRIPTOR_DIGEST_KAT_V1: [u8; 32] = [
+        0x8d, 0x80, 0xd2, 0x4c, 0x12, 0x24, 0x94, 0xfb, 0xae, 0x13, 0x91, 0xcf, 0xcb, 0xef, 0xda,
+        0x98, 0xbc, 0xfa, 0xa0, 0x4a, 0x8a, 0x16, 0x1f, 0xc6, 0x2c, 0x3c, 0xb6, 0x1a, 0x04, 0x3d,
+        0xa8, 0xbb,
+    ];
     const P256_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_DIGEST_KAT_V1: [u8; 32] = [
-        0xc0, 0xfe, 0xda, 0x7d, 0xe4, 0xf8, 0x91, 0xcb, 0xc9, 0x7a, 0xf1, 0x4d, 0xd4, 0xd0, 0x42,
-        0x03, 0xeb, 0x89, 0x9b, 0xf6, 0x05, 0x4b, 0xec, 0x6b, 0x4c, 0x11, 0xf7, 0xa0, 0x54, 0x68,
-        0xfa, 0x28,
+        0x3a, 0x71, 0x2e, 0xff, 0x50, 0x38, 0xbd, 0x4f, 0xfa, 0x81, 0xbf, 0x0c, 0xe9, 0xb9, 0xa0,
+        0x9b, 0x04, 0x3b, 0xc6, 0x12, 0x64, 0xce, 0x46, 0xbe, 0xa1, 0x57, 0x06, 0x14, 0xe3, 0x86,
+        0x22, 0x97,
     ];
     const P256_FIXED_ALGEBRAIC_ATOM_PROFILE_KAT_V1: (usize, usize, usize, u64, u64) =
-        (0, 0, 0, 0, 0);
-    const P256_FIXED_ALGEBRAIC_UNIQUE_REPEAT_STRIDES_KAT_V1: &[u64] = &[];
+        (41_848, 149_102, 8_642, 21_813_752, 14_828);
+    const P256_FIXED_ALGEBRAIC_UNIQUE_REPEAT_STRIDES_KAT_V1: &[u64] =
+        &[2, 3, 5, 7, 8, 16, 24, 25, 32, 944, 1_376, 5_088, 7_104];
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct P256DiagnosticStageCountV1 {
@@ -3223,17 +3506,28 @@ mod tests {
 
     #[test]
     fn collect_exact_release_kats_or_report_stage_v1() {
-        let compilation = compile_diagnostic_schedule_v1().unwrap_or_else(|failure| {
-            panic!(
-                "P256_DIAGNOSTIC stage={} combined_before={} stage_atoms={:?} cap={} error={:?}",
-                failure.stage,
-                failure.combined_before,
-                failure.stage_atoms,
-                ZK_X509_FIXED_ALGEBRAIC_MAX_ATOMS_V1,
-                failure.error,
-            )
-        });
-        let schedule = compilation.schedule;
+        let schedule = compile_zk_x509_p256_fixed_algebraic_schedule_v1()
+            .expect("six independently capped canonical child schedules");
+        let stages: Vec<P256DiagnosticStageCountV1> = [
+            "certificate-arithmetic",
+            "wallet-arithmetic",
+            "certificate-execution",
+            "wallet-execution",
+            "certificate-sorted",
+            "wallet-sorted",
+        ]
+        .into_iter()
+        .zip(schedule.children_v1())
+        .map(|(stage, child)| P256DiagnosticStageCountV1 {
+            stage,
+            atoms: child.atoms_v1().len(),
+        })
+        .collect();
+        let child_digests: Vec<String> = schedule
+            .children_v1()
+            .iter()
+            .map(|child| digest_hex_v1(child.descriptor_digest_v1()))
+            .collect();
         let mut affine = 0_usize;
         let mut repeated = 0_usize;
         let mut sparse = 0_usize;
@@ -3255,18 +3549,23 @@ mod tests {
             }
         }
         println!(
-            "P256_KATS stages={:?} atom_count={} schedule_digest={} compiler_digest={} \
+            "P256_KATS stages={:?} child_digests={child_digests:?} atom_count={} \
+             schedule_digest={} compiler_digest={} \
              atom_profile=({affine},{repeated},{sparse},{repeated_terms},{maximum_repetition}) \
              unique_repeat_strides={:?} maximum_116_query_work={}",
-            compilation.stages,
-            schedule.atoms_v1().len(),
+            stages,
+            schedule.atom_count_v1(),
             digest_hex_v1(schedule.descriptor_digest_v1()),
             digest_hex_v1(
                 zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1()
                     .expect("stable compiler descriptor"),
             ),
             strides,
-            exact_maximum_116_query_work_score_v1(&schedule),
+            schedule
+                .children_v1()
+                .iter()
+                .map(exact_maximum_116_query_work_score_v1)
+                .sum::<u64>(),
         );
     }
 
@@ -3798,7 +4097,7 @@ mod tests {
         assert_eq!(row[EXECUTION_WRITER_START_V1 + 2], F::ZERO);
     }
 
-    fn schedule_v1() -> &'static ZkX509FixedAlgebraicScheduleV1 {
+    fn schedule_v1() -> &'static ZkX509P256FixedAlgebraicScheduleV1 {
         zk_x509_p256_fixed_algebraic_schedule_v1()
             .expect("canonical cached structural P-256 algebraic schedule")
     }
@@ -3931,6 +4230,48 @@ mod tests {
         assert_eq!(
             independently_compiled.descriptor_digest_v1(),
             first.descriptor_digest_v1()
+        );
+    }
+
+    #[test]
+    fn composite_children_are_exact_and_reject_order_width_and_substitution_attacks() {
+        let schedule = schedule_v1();
+        assert_eq!(
+            core::array::from_fn(|index| schedule.children_v1()[index].atoms_v1().len()),
+            P256_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1,
+        );
+        assert_eq!(
+            core::array::from_fn(|index| { schedule.children_v1()[index].descriptor_digest_v1() }),
+            P256_FIXED_ALGEBRAIC_CHILD_DIGESTS_V1
+        );
+
+        let mut reordered = schedule.children.clone();
+        reordered.swap(2, 3);
+        assert_eq!(
+            ZkX509P256FixedAlgebraicScheduleV1::new_v1(reordered),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
+        );
+
+        let mut substituted = schedule.children.clone();
+        substituted[2] = substituted[3].clone();
+        assert_eq!(
+            ZkX509P256FixedAlgebraicScheduleV1::new_v1(substituted),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
+        );
+
+        let domain = schedule.domain_v1();
+        let mut wrong_width =
+            ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(domain, 45).expect("bounded child");
+        wrong_width
+            .push_sparse_v1(0, 0, F::ONE)
+            .expect("canonical sparse child");
+        let mut malformed_width = schedule.children.clone();
+        malformed_width[2] = wrong_width
+            .finish_v1()
+            .expect("canonical wrong-width child");
+        assert_eq!(
+            ZkX509P256FixedAlgebraicScheduleV1::new_v1(malformed_width),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
         );
     }
 
@@ -4301,7 +4642,12 @@ mod tests {
 
     #[test]
     fn kernel_resource_and_canonicality_limits_fail_closed() {
-        assert!(schedule_v1().atoms_v1().len() <= ZK_X509_FIXED_ALGEBRAIC_MAX_ATOMS_V1);
+        assert!(
+            schedule_v1()
+                .children_v1()
+                .iter()
+                .all(|child| child.atoms_v1().len() <= ZK_X509_FIXED_ALGEBRAIC_MAX_ATOMS_V1)
+        );
         let too_many_queries: Vec<u64> =
             (0..=ZK_X509_FIXED_ALGEBRAIC_MAX_QUERIES_V1 as u64).collect();
         assert_eq!(

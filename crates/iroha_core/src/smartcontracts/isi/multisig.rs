@@ -19,6 +19,7 @@ use iroha_data_model::{
     prelude::{Grant, Json, Level, Log, Register, Revoke},
     query::error::{FindError, QueryExecutionFail},
     role::{Role, RoleId},
+    state_path::StatePath,
 };
 use iroha_executor_data_model::isi::multisig::{
     DEFAULT_MULTISIG_TTL_MS, MultisigAccountState, MultisigApprovalOutcomeStatusV1,
@@ -300,86 +301,86 @@ fn home_domain_key() -> Name {
     (*MULTISIG_HOME_DOMAIN_KEY).clone()
 }
 
-pub(crate) fn multisig_account_state_key(account: &AccountId) -> Name {
-    Name::from_str(&format!(
+pub(crate) fn multisig_account_state_key(account: &AccountId) -> StatePath {
+    StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_ACCOUNT_STATE}{DELIMITER}{}",
         HashOf::new(account)
     ))
-    .expect("multisig account state path must be a valid name")
+    .expect("multisig account state path must be valid")
 }
 
-fn multisig_signatory_index_key(signatory: &AccountId) -> Name {
-    Name::from_str(&format!(
+fn multisig_signatory_index_key(signatory: &AccountId) -> StatePath {
+    StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_SIGNATORY_INDEX_STATE}{DELIMITER}{}",
         HashOf::new(&signatory.subject_id())
     ))
-    .expect("multisig signatory state path must be a valid name")
+    .expect("multisig signatory state path must be valid")
 }
 
-fn multisig_proposal_state_prefix(account: &AccountId) -> Name {
-    Name::from_str(&format!(
+fn multisig_proposal_state_prefix(account: &AccountId) -> StatePath {
+    StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_STATE}{DELIMITER}{}{DELIMITER}",
         HashOf::new(account)
     ))
-    .expect("multisig proposal state prefix must be a valid name")
+    .expect("multisig proposal state prefix must be valid")
 }
 
 fn multisig_proposal_state_key(
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
-) -> Name {
-    Name::from_str(&format!(
+) -> StatePath {
+    StatePath::from_str(&format!(
         "{}{}",
         multisig_proposal_state_prefix(multisig_account),
         instructions_hash
     ))
-    .expect("constant string must be a valid name")
+    .expect("constant string must be a valid state path")
 }
 
-fn multisig_proposal_terminal_state_prefix(account: &AccountId) -> Name {
-    Name::from_str(&format!(
+fn multisig_proposal_terminal_state_prefix(account: &AccountId) -> StatePath {
+    StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_TERMINAL_STATE}{DELIMITER}{}{DELIMITER}",
         HashOf::new(account)
     ))
-    .expect("multisig proposal terminal state prefix must be a valid name")
+    .expect("multisig proposal terminal state prefix must be valid")
 }
 
 fn multisig_proposal_terminal_state_key(
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
-) -> Name {
-    Name::from_str(&format!(
+) -> StatePath {
+    StatePath::from_str(&format!(
         "{}{}",
         multisig_proposal_terminal_state_prefix(multisig_account),
         instructions_hash
     ))
-    .expect("multisig proposal terminal state path must be a valid name")
+    .expect("multisig proposal terminal state path must be valid")
 }
 
 fn multisig_proposal_terminal_execution_state_key(
     terminal_entrypoint_hash: [u8; Hash::LENGTH],
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
-) -> Name {
+) -> StatePath {
     let terminal_entrypoint_hash = Hash::prehashed(terminal_entrypoint_hash);
-    Name::from_str(&format!(
+    StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_TERMINAL_EXECUTION_STATE}{DELIMITER}{terminal_entrypoint_hash}{DELIMITER}{}{DELIMITER}{instructions_hash}",
         HashOf::new(multisig_account),
     ))
-    .expect("multisig proposal terminal execution path must be a valid name")
+    .expect("multisig proposal terminal execution path must be valid")
 }
 
 fn multisig_approval_outcome_state_key(
     entrypoint_hash: [u8; Hash::LENGTH],
     entrypoint_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
-) -> Name {
+) -> StatePath {
     let entrypoint_hash = Hash::prehashed(entrypoint_hash);
-    Name::from_str(&format!(
+    StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_APPROVAL_OUTCOME_STATE}{DELIMITER}{entrypoint_hash}{DELIMITER}{}{DELIMITER}{instructions_hash}",
         HashOf::new(entrypoint_account),
     ))
-    .expect("multisig approval outcome path must be a valid name")
+    .expect("multisig approval outcome path must be valid")
 }
 
 fn account_role_suffix(account: &AccountId) -> String {
@@ -1246,24 +1247,28 @@ fn replace_account_id_in_settlements(
     old: &AccountId,
     new: &AccountId,
 ) {
-    let ledger_ids: Vec<_> = state_transaction
+    let receipt_ids: Vec<_> = state_transaction
         .world
-        .settlement_ledgers
+        .settlement_receipts
         .iter()
         .map(|(id, _)| id.clone())
         .collect();
-    for ledger_id in ledger_ids {
-        if let Some(ledger) = state_transaction
+    for receipt_id in receipt_ids {
+        if let Some(receipt) = state_transaction
             .world
-            .settlement_ledgers
-            .get_mut(&ledger_id)
+            .settlement_receipts
+            .get_mut(&receipt_id)
         {
-            for entry in &mut ledger.entries {
-                replace_account_id(&mut entry.authority, old, new);
-                for leg in &mut entry.legs {
-                    replace_account_id(&mut leg.leg.from, old, new);
-                    replace_account_id(&mut leg.leg.to, old, new);
-                }
+            replace_account_id(&mut receipt.authority, old, new);
+            for leg in &mut receipt.legs {
+                replace_account_id(&mut leg.leg.from, old, new);
+                replace_account_id(&mut leg.leg.to, old, new);
+            }
+            if let Some(fx_corridor) = receipt.fx_corridor.as_mut() {
+                replace_account_id(&mut fx_corridor.source_account, old, new);
+                replace_account_id(&mut fx_corridor.source_sink, old, new);
+                replace_account_id(&mut fx_corridor.destination_reserve, old, new);
+                replace_account_id(&mut fx_corridor.recipient, old, new);
             }
         }
     }
@@ -3203,7 +3208,12 @@ mod tests {
         domain::DomainId,
         isi::{
             AddSignatory, ExecuteTrigger, Grant, Mint, RemoveSignatory, SetAccountQuorum,
-            SetKeyValue, alias_setup::EnsureAlias,
+            SetKeyValue,
+            alias_setup::EnsureAlias,
+            settlement::{
+                FxCorridorSettlementDetails, SettlementKind, SettlementLeg, SettlementLegRole,
+                SettlementLegSnapshot, SettlementPlan, SettlementReceipt,
+            },
         },
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
         permission::Permission,
@@ -5633,6 +5643,97 @@ mod tests {
         );
 
         let _ = domain_id;
+    }
+
+    #[test]
+    fn rekey_settlement_receipt_updates_fx_detail_accounts_with_legs() {
+        let state = State::new_with_chain(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("multisig-rekey-settlement-receipt"),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let old_account = new_account_id(&checked_keypair());
+        let new_account = new_account_id(&checked_keypair());
+        let counterparty = new_account_id(&checked_keypair());
+        let domain_id = DomainId::try_new("fx", "universal").expect("domain id");
+        let source_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "source".parse().expect("asset name"));
+        let destination_asset_definition_id =
+            AssetDefinitionId::new(domain_id, "destination".parse().expect("asset name"));
+        let settlement_id: iroha_data_model::isi::settlement::SettlementId =
+            "fx_rekey_receipt".parse().expect("settlement id");
+        let receipt = SettlementReceipt {
+            kind: SettlementKind::FxCorridor,
+            authority: old_account.clone(),
+            plan: SettlementPlan::default(),
+            metadata: Metadata::default(),
+            block_height: 1,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0; Hash::LENGTH],
+            )),
+            executed_at_ms: 1,
+            legs: [
+                SettlementLegSnapshot {
+                    role: SettlementLegRole::FxSource,
+                    leg: SettlementLeg::new(
+                        source_asset_definition_id.clone(),
+                        Quantity::one(),
+                        old_account.clone(),
+                        counterparty.clone(),
+                    ),
+                },
+                SettlementLegSnapshot {
+                    role: SettlementLegRole::FxDestination,
+                    leg: SettlementLeg::new(
+                        destination_asset_definition_id.clone(),
+                        Quantity::one(),
+                        counterparty.clone(),
+                        old_account.clone(),
+                    ),
+                },
+            ],
+            fx_corridor: Some(FxCorridorSettlementDetails {
+                policy_id: "corridor".parse().expect("policy id"),
+                policy_revision: 1,
+                source_dataspace: DataSpaceId::new(1),
+                destination_dataspace: DataSpaceId::new(2),
+                rate_numerator: 1,
+                rate_denominator: 1,
+                source_account: old_account.clone(),
+                source_sink: old_account.clone(),
+                destination_reserve: old_account.clone(),
+                recipient: old_account.clone(),
+                source_asset_definition_id,
+                destination_asset_definition_id,
+                source_amount: Quantity::one(),
+                destination_amount: Quantity::one(),
+            }),
+        };
+        state_transaction
+            .world
+            .settlement_receipts
+            .insert(settlement_id.clone(), receipt);
+
+        replace_account_id_in_settlements(&mut state_transaction, &old_account, &new_account);
+
+        let receipt = state_transaction
+            .world
+            .settlement_receipts
+            .get(&settlement_id)
+            .expect("rekeyed settlement receipt");
+        assert_eq!(receipt.authority, new_account);
+        assert_eq!(receipt.legs[0].leg.from(), &new_account);
+        assert_eq!(receipt.legs[0].leg.to(), &counterparty);
+        assert_eq!(receipt.legs[1].leg.from(), &counterparty);
+        assert_eq!(receipt.legs[1].leg.to(), &new_account);
+        let details = receipt.fx_corridor.as_ref().expect("FX receipt details");
+        assert_eq!(details.source_account, new_account);
+        assert_eq!(details.source_sink, new_account);
+        assert_eq!(details.destination_reserve, new_account);
+        assert_eq!(details.recipient, new_account);
     }
 
     #[test]

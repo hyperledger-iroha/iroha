@@ -14,15 +14,13 @@ mod zk_testkit;
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 mod tests {
-    use std::sync::Arc;
-
     use iroha_core::{
         executor::Executor,
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::Execute,
         state::{State, World},
-        zk::{self as zk_backend, PreverifiedProofKey},
+        zk as zk_backend,
     };
     use iroha_data_model::{
         Registrable, ValidationFail,
@@ -114,13 +112,8 @@ mod tests {
         let attachment =
             ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
 
-        execute_verify_proof(
-            &mut block,
-            attachment,
-            Some(true),
-            bundle.vk_record.commitment,
-        )
-        .expect("canonical vote tally proof should verify");
+        execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
+            .expect("canonical vote tally proof should verify");
     }
 
     #[test]
@@ -139,13 +132,8 @@ mod tests {
         let attachment =
             ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
 
-        let err = execute_verify_proof(
-            &mut block,
-            attachment,
-            Some(true),
-            bundle.vk_record.commitment,
-        )
-        .expect_err("tampered commit must be rejected");
+        let err = execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
+            .expect_err("tampered commit must be rejected");
         assert_schema_hash_violation(err);
     }
 
@@ -165,13 +153,8 @@ mod tests {
         let attachment =
             ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
 
-        let err = execute_verify_proof(
-            &mut block,
-            attachment,
-            Some(true),
-            bundle.vk_record.commitment,
-        )
-        .expect_err("tampered root must be rejected");
+        let err = execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
+            .expect_err("tampered root must be rejected");
         assert_schema_hash_violation(err);
     }
 
@@ -192,13 +175,8 @@ mod tests {
         let attachment =
             ProofAttachment::new_ref(bundle.backend.into(), proof, bundle.vk_id.clone());
 
-        let err = execute_verify_proof(
-            &mut block,
-            attachment,
-            Some(true),
-            bundle.vk_record.commitment,
-        )
-        .expect_err("registry hash tamper must be rejected");
+        let err = execute_verify_proof(&mut block, attachment, bundle.vk_record.commitment)
+            .expect_err("registry hash tamper must be rejected");
         assert_schema_hash_violation(err);
     }
 
@@ -303,9 +281,6 @@ mod tests {
         state
     }
 
-    #[allow(clippy::disallowed_types)]
-    type PreverifiedMap = iroha_core::zk::PreverifiedProofMap;
-
     fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
         let mut stx = block.transaction();
         let perm = Permission::new(
@@ -340,22 +315,9 @@ mod tests {
     fn execute_verify_proof(
         block: &mut iroha_core::state::StateBlock<'_>,
         mut attachment: ProofAttachment,
-        preverified: Option<bool>,
         vk_commitment: [u8; 32],
     ) -> Result<(), ValidationFail> {
         attachment.vk_commitment = Some(vk_commitment);
-        let batch = match preverified {
-            Some(result) => {
-                let mut map = PreverifiedMap::new();
-                map.insert(
-                    PreverifiedProofKey::new(&attachment.proof, &attachment.vk_ref, vk_commitment),
-                    result,
-                );
-                Arc::new(map)
-            }
-            None => Arc::new(PreverifiedMap::new()),
-        };
-        block.set_preverified_batch(batch);
         let mut stx = block.transaction();
         let isi: InstructionBox = zk_isi::VerifyProof::new(attachment).into();
         let res = isi

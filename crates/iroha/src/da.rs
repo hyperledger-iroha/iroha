@@ -4,6 +4,7 @@ use std::{
     collections::HashSet,
     convert::TryFrom,
     fs,
+    num::NonZeroU64,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -12,17 +13,21 @@ use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
 use blake3::Hasher;
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
+    block::BlockHeader,
     da::{
-        commitment::{DaCommitmentProof, DaCommitmentWithLocation, DaProofPolicyBundle},
+        commitment::{
+            DaCommitmentKey, DaCommitmentLocation, DaCommitmentProof, DaCommitmentWithLocation,
+            DaProofPolicyBundle,
+        },
         ingest::{DaIngestReceipt, DaIngestRequest, DaIngestRequestIntentV1},
         manifest::DaManifestV1,
+        pin_intent::DaPinIntentWithLocation,
         types::{
             BlobClass, BlobCodec, BlobDigest, Compression, DaRentLedgerProjection, ErasureProfile,
             ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
         },
     },
     nexus::LaneId,
-    query::parameters::Pagination,
     sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
 use iroha_primitives::numeric::XorQuantity;
@@ -38,7 +43,7 @@ use sorafs_manifest::pdp::PdpCommitmentV1;
 use sorafs_orchestrator::prelude::{CarBuildPlan, ChunkStore, InMemoryPayload, PorProof};
 
 use crate::{
-    crypto::KeyPair,
+    crypto::{HashOf, KeyPair},
     data_model::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
@@ -121,7 +126,34 @@ pub struct DaManifestPersistedPaths {
     pub chunk_plan: PathBuf,
 }
 
-/// Request payload for `/v1/da/commitments` and `/v1/da/commitments/prove`.
+/// Canonical ledger tip that binds a DA list cursor to one immutable view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaListSnapshot {
+    /// Committed chain height observed while constructing the page.
+    pub block_height: u64,
+    /// Hash of the block at `block_height`, absent only for the empty chain.
+    pub block_hash: Option<HashOf<BlockHeader>>,
+}
+
+/// Forward-only cursor for canonically ordered DA commitments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaCommitmentListCursor {
+    /// Immutable ledger view this cursor was issued against.
+    pub snapshot: DaListSnapshot,
+    /// Last raw commitment examined in `(lane_id, epoch, sequence)` order.
+    pub after: DaCommitmentKey,
+}
+
+/// Request payload for `/v1/da/commitments`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaCommitmentListRequest {
+    /// Maximum raw index rows to inspect, capped by Torii at 1,000.
+    pub limit: Option<NonZeroU64>,
+    /// Server-issued continuation cursor from the preceding page.
+    pub cursor: Option<DaCommitmentListCursor>,
+}
+
+/// Request payload for `/v1/da/commitments/prove`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentProofRequest {
     /// Optional manifest digest used as the primary lookup key.
@@ -132,8 +164,6 @@ pub struct DaCommitmentProofRequest {
     pub epoch: Option<u64>,
     /// Optional sequence used with `lane_id` and `epoch` fallback lookup.
     pub sequence: Option<u64>,
-    /// Optional pagination metadata for list responses.
-    pub pagination: Option<Pagination>,
 }
 
 /// Response payload for `/v1/da/commitments`.
@@ -143,12 +173,14 @@ pub struct DaCommitmentListResponse {
     pub policies: DaProofPolicyBundle,
     /// Matching commitment records with on-chain location metadata.
     pub commitments: Vec<DaCommitmentWithLocation>,
+    /// Cursor for the next bounded scan, or `None` when the index is exhausted.
+    pub next_cursor: Option<DaCommitmentListCursor>,
 }
 
 /// Response payload for `/v1/da/commitments/prove`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentProofResponse {
-    /// Active proof-policy bundle for DA commitments.
+    /// Proof-policy sidecar committed by the referenced block.
     pub policies: DaProofPolicyBundle,
     /// Commitment proof bound to the requested record.
     pub proof: DaCommitmentProof,
@@ -157,20 +189,48 @@ pub struct DaCommitmentProofResponse {
 /// Response payload for `/v1/da/commitments/verify`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaCommitmentVerifyResponse {
-    /// Indicates whether the supplied proof verified against the current store.
+    /// Indicates whether the proof verified against the canonical committed block and policy
+    /// sidecar loaded from Kura.
     pub valid: bool,
     /// Optional verification failure detail when `valid` is false.
     pub error: Option<String>,
 }
 
-/// Request payload for `/v1/da/pin-intents` and `/v1/da/pin-intents/prove`.
+/// Forward-only cursor for canonically ordered DA pin intents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaPinIntentListCursor {
+    /// Immutable ledger view this cursor was issued against.
+    pub snapshot: DaListSnapshot,
+    /// Last raw pin intent examined in canonical block-location order.
+    pub after: DaCommitmentLocation,
+}
+
+/// Request payload for `/v1/da/pin-intents`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaPinIntentListRequest {
+    /// Maximum raw index rows to inspect, capped by Torii at 1,000.
+    pub limit: Option<NonZeroU64>,
+    /// Server-issued continuation cursor from the preceding page.
+    pub cursor: Option<DaPinIntentListCursor>,
+}
+
+/// Response payload for `/v1/da/pin-intents`.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct DaPinIntentListResponse {
+    /// Visible intents among the bounded raw index rows examined for this page.
+    pub intents: Vec<DaPinIntentWithLocation>,
+    /// Cursor for the next bounded scan, or `None` when the index is exhausted.
+    pub next_cursor: Option<DaPinIntentListCursor>,
+}
+
+/// Request payload for `/v1/da/pin-intents/prove`.
 #[derive(Debug, Default, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentQueryRequest {
     /// Optional manifest digest used as a lookup key.
     pub manifest_hash: Option<ManifestDigest>,
     /// Optional storage ticket used as a lookup key.
     pub storage_ticket: Option<StorageTicketId>,
-    /// Optional human-readable alias used as a lookup key.
+    /// Optional human-readable alias used as a lookup key (at most 256 UTF-8 bytes).
     pub alias: Option<String>,
     /// Optional lane id used with `epoch` and `sequence` fallback lookup.
     pub lane_id: Option<u32>,
@@ -178,15 +238,15 @@ pub struct DaPinIntentQueryRequest {
     pub epoch: Option<u64>,
     /// Optional sequence used with `lane_id` and `epoch` fallback lookup.
     pub sequence: Option<u64>,
-    /// Optional pagination metadata for list responses.
-    pub pagination: Option<Pagination>,
 }
 
 /// Response payload for `/v1/da/pin-intents/verify`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct DaPinIntentVerifyResponse {
-    /// Indicates whether the supplied pin intent verified against the current store.
+    /// Indicates whether the supplied pin-intent membership proof verified.
     pub valid: bool,
+    /// Optional verification failure detail when `valid` is false.
+    pub error: Option<String>,
 }
 
 impl DaManifestBundle {
@@ -1285,7 +1345,6 @@ mod tests {
             lane_id: Some(7),
             epoch: Some(9),
             sequence: Some(12),
-            pagination: Some(Pagination::new(std::num::NonZeroU64::new(2), 1)),
         };
 
         let bytes = norito::json::to_vec(&request).expect("encode request");
@@ -1296,20 +1355,30 @@ mod tests {
         assert_eq!(decoded.lane_id, request.lane_id);
         assert_eq!(decoded.epoch, request.epoch);
         assert_eq!(decoded.sequence, request.sequence);
-        assert_eq!(
-            decoded
-                .pagination
-                .as_ref()
-                .and_then(|pagination| pagination.limit.map(std::num::NonZeroU64::get)),
-            Some(2)
-        );
-        assert_eq!(
-            decoded
-                .pagination
-                .as_ref()
-                .map(|pagination| pagination.offset),
-            Some(1)
-        );
+    }
+
+    #[test]
+    fn da_commitment_list_cursor_roundtrips_json() {
+        let request = DaCommitmentListRequest {
+            limit: NonZeroU64::new(2),
+            cursor: Some(DaCommitmentListCursor {
+                snapshot: DaListSnapshot {
+                    block_height: 0,
+                    block_hash: None,
+                },
+                after: DaCommitmentKey {
+                    lane_id: LaneId::new(7),
+                    epoch: 9,
+                    sequence: 12,
+                },
+            }),
+        };
+
+        let bytes = norito::json::to_vec(&request).expect("encode request");
+        let decoded: DaCommitmentListRequest =
+            norito::json::from_slice(&bytes).expect("decode request");
+
+        assert_eq!(decoded, request);
     }
 
     #[test]
@@ -1321,7 +1390,6 @@ mod tests {
             lane_id: Some(4),
             epoch: Some(8),
             sequence: Some(16),
-            pagination: Some(Pagination::new(std::num::NonZeroU64::new(5), 3)),
         };
 
         let bytes = norito::json::to_vec(&request).expect("encode request");
@@ -1334,20 +1402,29 @@ mod tests {
         assert_eq!(decoded.lane_id, request.lane_id);
         assert_eq!(decoded.epoch, request.epoch);
         assert_eq!(decoded.sequence, request.sequence);
-        assert_eq!(
-            decoded
-                .pagination
-                .as_ref()
-                .and_then(|pagination| pagination.limit.map(std::num::NonZeroU64::get)),
-            Some(5)
-        );
-        assert_eq!(
-            decoded
-                .pagination
-                .as_ref()
-                .map(|pagination| pagination.offset),
-            Some(3)
-        );
+    }
+
+    #[test]
+    fn da_pin_intent_list_cursor_roundtrips_json() {
+        let request = DaPinIntentListRequest {
+            limit: NonZeroU64::new(5),
+            cursor: Some(DaPinIntentListCursor {
+                snapshot: DaListSnapshot {
+                    block_height: 0,
+                    block_hash: None,
+                },
+                after: DaCommitmentLocation {
+                    block_height: 7,
+                    index_in_bundle: 3,
+                },
+            }),
+        };
+
+        let bytes = norito::json::to_vec(&request).expect("encode request");
+        let decoded: DaPinIntentListRequest =
+            norito::json::from_slice(&bytes).expect("decode request");
+
+        assert_eq!(decoded, request);
     }
 
     #[test]

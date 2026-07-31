@@ -17,9 +17,7 @@ TAIRA_DIR = ROOT / "configs" / "soranexus" / "taira"
 
 
 def test_taira_release_freezes_fail_closed_network_time_policy() -> None:
-    config = tomllib.loads(
-        (TAIRA_DIR / "config.toml").read_text(encoding="utf-8")
-    )
+    config = tomllib.loads((TAIRA_DIR / "config.toml").read_text(encoding="utf-8"))
     assert config["nts"] == {
         "sample_interval_ms": 5_000,
         "sample_cap_per_round": 8,
@@ -35,11 +33,14 @@ def test_taira_release_freezes_fail_closed_network_time_policy() -> None:
         "enforcement_mode": "reject",
     }
 
-    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
-        encoding="utf-8"
+    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
+    assert (
+        "canonical Taira config must contain the explicit [nts] release policy"
+        in builder
     )
-    assert "canonical Taira config must contain the explicit [nts] release policy" in builder
-    assert "canonical Taira [nts] release policy has missing or unknown fields" in builder
+    assert (
+        "canonical Taira [nts] release policy has missing or unknown fields" in builder
+    )
     assert '"enforcement_mode": "reject"' in builder
 
 
@@ -51,9 +52,18 @@ def test_verify_soraswap_rollout_passes_expected_git_sha_to_mcp_check() -> None:
     assert 'mcp_cmd+=(--expected-git-sha "$EXPECTED_TAIRA_GIT_SHA")' in source
     assert "--validator-root)" in source
     assert 'mcp_cmd+=(--validator-root "$validator_root_spec")' in source
-    assert 'mcp_cmd+=(--offline-asset-definition-id "$OFFLINE_ASSET_DEFINITION_ID")' in source
-    assert 'mcp_cmd+=(--offline-expected-identity "$OFFLINE_EXPECTED_IDENTITY_PATH")' in source
-    assert "public SoraSwap mutation/release paths cannot skip the mandatory Taira offline/fleet gate" in source
+    assert (
+        'mcp_cmd+=(--offline-asset-definition-id "$OFFLINE_ASSET_DEFINITION_ID")'
+        in source
+    )
+    assert (
+        'mcp_cmd+=(--offline-expected-identity "$OFFLINE_EXPECTED_IDENTITY_PATH")'
+        in source
+    )
+    assert (
+        "public SoraSwap mutation/release paths cannot skip the mandatory Taira offline/fleet gate"
+        in source
+    )
 
 
 def test_rollout_bundle_manifest_followup_pins_mcp_and_soraswap_checks() -> None:
@@ -74,13 +84,14 @@ def test_rollout_bundle_manifest_followup_pins_mcp_and_soraswap_checks() -> None
         "--validator-root <label>=<validator-url> (once per validator) "
         "--offline-asset-definition-id <registered-scale-2-ds-asset-definition-id> "
         "--offline-expected-identity /run/secrets/taira-offline-release-identity.json "
-        "--expected-git-sha "
-        in source
+        "--expected-git-sha " in source
     )
     assert '+ os.environ["GIT_HEAD"]' in source
 
 
-def test_taira_validator_release_uses_post_build_feature_isolated_native_evidence() -> None:
+def test_taira_validator_release_uses_post_build_feature_isolated_native_evidence() -> (
+    None
+):
     source = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     workflow = (
@@ -99,21 +110,32 @@ def test_taira_validator_release_uses_post_build_feature_isolated_native_evidenc
         '*"$PRIVACY_RELEASE_EVIDENCE_FEATURE"* ]]' in source
     )
     assert (
-        '$PRIVACY_RELEASE_RUNNER_PACKAGE feature '
-        '\\"$PRIVACY_RELEASE_EVIDENCE_FEATURE\\"'
-        in source
+        "$PRIVACY_RELEASE_RUNNER_PACKAGE feature "
+        '\\"$PRIVACY_RELEASE_EVIDENCE_FEATURE\\"' in source
     )
     assert 'iroha_core feature \\"$PRIVACY_RELEASE_EVIDENCE_FEATURE\\"' in source
-    assert (
-        'cargo "${core_build_args[@]}"'
-        in source
-    )
+    assert 'cargo "${core_build_args[@]}"' in source
     assert 'cargo "${privacy_runner_build_args[@]}"' in source
+    assert "privacy_runner_build_args=(\n    rustc\n    --locked" in source
+    assert "privacy_runner_build_args+=(-- -C target-feature=+crt-static)" in source
+    assert 'if [[ "$(uname -s)" != "Linux" ]]' in source
+    assert 'case "$(uname -m)" in' in source
+    assert "x86_64|aarch64)" in source
+    assert "readelf --program-headers --wide" in source
+    assert "must not contain a PT_INTERP segment" in source
+    assert "readelf --dynamic --wide" in source
+    assert "must not contain DT_NEEDED entries" in source
     assert '"$privacy_runner_path" generate' in source
     assert source.index('cargo "${core_build_args[@]}"') < source.index(
         'cargo "${privacy_runner_build_args[@]}"'
     )
     assert source.index('cargo "${privacy_runner_build_args[@]}"') < source.index(
+        "readelf --program-headers --wide"
+    )
+    assert source.index("readelf --program-headers --wide") < source.index(
+        "readelf --dynamic --wide"
+    )
+    assert source.index("readelf --dynamic --wide") < source.index(
         '"$privacy_runner_path" generate'
     )
     assert "taira_privacy_prebundle_gate" not in source
@@ -121,19 +143,22 @@ def test_taira_validator_release_uses_post_build_feature_isolated_native_evidenc
     assert '"privacy_release":' not in source
 
     assert workflow.count('"FEATURES=embedded-soracloud-runtime,zk-stark"') == 1
-    assert workflow.count(
-        '"WORKSPACE_SOURCE_MANIFEST_SHA256='
-        '${{ env.IROHA_WORKSPACE_SOURCE_MANIFEST_SHA256 }}"'
-    ) == 1
     assert (
-        'test "${FEATURES}" = "embedded-soracloud-runtime,zk-stark"' in dockerfile
+        workflow.count(
+            '"WORKSPACE_SOURCE_MANIFEST_SHA256='
+            '${{ env.IROHA_WORKSPACE_SOURCE_MANIFEST_SHA256 }}"'
+        )
+        == 1
     )
+    assert 'test "${FEATURES}" = "embedded-soracloud-runtime,zk-stark"' in dockerfile
     assert "Taira irohad must not contain privacy-release-evidence" in dockerfile
-    assert "Taira irohad must not contain deterministic privacy test fixtures" in dockerfile
+    assert (
+        "Taira irohad must not contain deterministic privacy test fixtures"
+        in dockerfile
+    )
     assert (
         """case "${runner_privacy_features}" in """
-        """*'iroha_test_network feature "privacy-release-evidence"'*)"""
-        in dockerfile
+        """*'iroha_test_network feature "privacy-release-evidence"'*)""" in dockerfile
     )
     assert (
         "-p iroha_test_network --bin taira_privacy_release_runner "
@@ -141,8 +166,7 @@ def test_taira_validator_release_uses_post_build_feature_isolated_native_evidenc
     )
     assert (
         """case "${runner_fixture_features}" in """
-        """*'iroha_data_model feature "test-fixtures"'*)"""
-        in dockerfile
+        """*'iroha_data_model feature "test-fixtures"'*)""" in dockerfile
     )
     assert "Taira privacy runner omits compiled exact12 semantics" in dockerfile
     assert "/outbin/taira_privacy_release_runner generate" in dockerfile
@@ -152,16 +176,21 @@ def test_taira_validator_release_uses_post_build_feature_isolated_native_evidenc
     assert "/outprovenance/privacy-release.json" not in dockerfile
 
 
-def test_rollout_bundle_persists_typed_native_evidence_pairs_and_bundled_verification() -> None:
-    source = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
-        encoding="utf-8"
-    )
+def test_rollout_bundle_persists_typed_native_evidence_pairs_and_bundled_verification() -> (
+    None
+):
+    source = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
+    readme = (TAIRA_DIR / "README.md").read_text(encoding="utf-8")
 
     for stem in ("receipt", "stage-artifacts", "command-manifest"):
         assert f"{stem}-v1.norito" in source
         assert f"{stem}-v1.json" in source
     assert "native_release_expectations_v1.norito" in source
     assert "native_release_expectations_v1.json" in source
+    assert "zk_x509_native_resource_v1.norito" in source
+    assert "zk_x509_native_resource_v1.json" in source
+    assert "zk-x509-resource-v1.norito" in source
+    assert "zk-x509-resource-v1.json" in source
     for flag in (
         "--command-manifest-norito-out",
         "--command-manifest-json-out",
@@ -177,6 +206,8 @@ def test_rollout_bundle_persists_typed_native_evidence_pairs_and_bundled_verific
         "--receipt-json",
         "--expectations-norito",
         "--expectations-json",
+        "--x509-resource-norito",
+        "--x509-resource-json",
     ):
         assert flag in source
     assert '"authoritative_encoding": "norito"' in source
@@ -188,6 +219,7 @@ def test_rollout_bundle_persists_typed_native_evidence_pairs_and_bundled_verific
     assert '"contains_canonical_proof_artifacts": True' in source
     assert "contains_witnesses_or_raw_proofs" not in source
     assert '"peak_rss_and_elapsed_ceilings_enforced": True' in source
+    assert '"x509_native_resource_certificate": evidence_pair(' in source
     assert '"phase": "post_build"' in source
     assert '"bundled_verify_passed": True' in source
     assert '"algorithm": "sha256"' in source
@@ -198,21 +230,26 @@ def test_rollout_bundle_persists_typed_native_evidence_pairs_and_bundled_verific
     assert '"VALIDATOR_BINARY_SHA256"' in source
     assert '"PRIVACY_RUNNER_BINARY_SHA256"' in source
     assert '"also_bound_by_typed_receipt": True' in source
-    assert (
-        '"${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}" verify'
-        in source
-    )
+    assert '"${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}" verify' in source
     included_paths = source.partition('"included_paths": [')[2].partition(
         '"required_followup":'
     )[0]
-    assert 'f\'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}\'' in included_paths
+    assert "f'bin/{os.environ[\"PRIVACY_RELEASE_RUNNER_BIN\"]}'" in included_paths
     assert 'os.environ["PRIVACY_NATIVE_RELATIVE_DIR"] + "/"' in included_paths
-
-
-def test_native_evidence_source_manifest_is_rechecked_across_release_boundaries() -> None:
-    source = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
-        encoding="utf-8"
+    assert (
+        "--x509-resource-norito "
+        '"${bundle}/provenance/privacy-native/zk-x509-resource-v1.norito"' in readme
     )
+    assert (
+        "--x509-resource-json "
+        '"${bundle}/provenance/privacy-native/zk-x509-resource-v1.json"' in readme
+    )
+
+
+def test_native_evidence_source_manifest_is_rechecked_across_release_boundaries() -> (
+    None
+):
+    source = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     workflow = (
         ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
@@ -225,9 +262,7 @@ def test_native_evidence_source_manifest_is_rechecked_across_release_boundaries(
     initial = source.index(
         'workspace_source_manifest_sha256="$(compute_workspace_source_manifest)"'
     )
-    post_build = source.index(
-        'assert_workspace_source_manifest_unchanged "post-build"'
-    )
+    post_build = source.index('assert_workspace_source_manifest_unchanged "post-build"')
     generate = source.index('"$privacy_runner_path" generate')
     post_evidence = source.index(
         'assert_workspace_source_manifest_unchanged "post-evidence"'
@@ -244,9 +279,7 @@ def test_native_evidence_source_manifest_is_rechecked_across_release_boundaries(
 
     assert 'workspace_source_manifest_before="$(python3 -I -S' in dockerfile
     assert "IROHA_WORKSPACE_SOURCE_MANIFEST_SHA256" in workflow
-    assert (
-        "python3 -I -S scripts/compute_workspace_source_manifest.py" in workflow
-    )
+    assert "python3 -I -S scripts/compute_workspace_source_manifest.py" in workflow
     assert "--write-path-list" in workflow
     assert "--create-sealed-archive" in workflow
     assert "--extract-sealed-archive" in dockerfile
@@ -255,8 +288,7 @@ def test_native_evidence_source_manifest_is_rechecked_across_release_boundaries(
 
 def _assert_single_sealed_taira_image_contract(workflow: str) -> None:
     build_action = (
-        "uses: docker/build-push-action@"
-        "10e90e3645eae34f1e60eeb005ba3a3d33f178e8"
+        "uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8"
     )
     assert workflow.count(build_action) == 1
     assert "context: ${{ env.TAIRA_SEALED_CONTEXT }}" in workflow
@@ -272,25 +304,17 @@ def _assert_single_sealed_taira_image_contract(workflow: str) -> None:
     assert "taira-workspace-source-paths-v1.bin" in workflow
     assert "context-control.sha256" in workflow
     assert (
-        'install -m 0555 scripts/taira_image_smoke.sh \\\n'
-        '            "$sealed_context/scripts/taira_image_smoke.sh"'
-        in workflow
+        "install -m 0555 scripts/taira_image_smoke.sh \\\n"
+        '            "$sealed_context/scripts/taira_image_smoke.sh"' in workflow
     )
-    assert (
-        workflow.count(
-            '"IROHA_RELEASE_PREPROVISIONED_BASES=1"'
-        )
-        == 1
-    )
+    assert workflow.count('"IROHA_RELEASE_PREPROVISIONED_BASES=1"') == 1
     assert "TAIRA_SEALED_SOURCE_ARCHIVE_SHA256" in workflow
     assert "TAIRA_SEALED_SOURCE_PATH_LIST_SHA256" in workflow
     assert "TAIRA_SEALED_CONTEXT_CONTROL_SHA256" in workflow
-    assert "find \"$sealed_context\" -type f -exec chmod 0444 {} +" in workflow
+    assert 'find "$sealed_context" -type f -exec chmod 0444 {} +' in workflow
     assert 'chmod 0555 "$sealed_context/scripts" "$sealed_context"' in workflow
 
-    precheck = workflow.index(
-        "Recheck the immutable source immediately before Buildx"
-    )
+    precheck = workflow.index("Recheck the immutable source immediately before Buildx")
     build = workflow.index(build_action)
     smoke = workflow.index("Smoke the exact locally loaded publish image")
     authority = workflow.index(
@@ -327,15 +351,14 @@ def _assert_single_sealed_taira_image_contract(workflow: str) -> None:
         in workflow[precheck:build]
     )
     assert (
-        "docker image inspect --format '{{.Id}}' \"$LOCAL_TAG\""
-        in workflow[smoke:push]
+        "docker image inspect --format '{{.Id}}' \"$LOCAL_TAG\"" in workflow[smoke:push]
     )
     assert (
         'bash "$TAIRA_SEALED_CONTEXT/scripts/taira_image_smoke.sh"'
         in workflow[smoke:push]
     )
-    assert "docker push \"$publish_tag\"" in workflow[push:]
-    assert "docker manifest inspect --verbose \"$publish_tag\"" in workflow[push:]
+    assert 'docker push "$publish_tag"' in workflow[push:]
+    assert 'docker manifest inspect --verbose "$publish_tag"' in workflow[push:]
     assert 'test "$pushed_digest" = "$TAIRA_BUILD_MANIFEST_DIGEST"' in workflow[push:]
     assert 'test "$registry_digest" = "$pushed_digest"' in workflow[push:]
     assert (
@@ -347,8 +370,7 @@ def _assert_single_sealed_taira_image_contract(workflow: str) -> None:
     assert "scan_inventory_paths(root)" in replay_block
     assert (
         'cmp \\\n              "$LOCAL_AUTHORITY_DIR/$relative" \\\n'
-        '              "$downloaded/$relative"'
-        in replay_block
+        '              "$downloaded/$relative"' in replay_block
     )
     assert "scripts/release_manifest_signing.py verify" in replay_block
     assert '"$downloaded/artifacts/taira_release_authority.py"' in replay_block
@@ -376,8 +398,7 @@ def test_taira_image_is_built_once_from_exact_minimal_sealed_context() -> None:
             1,
         ),
         lambda source: source.replace(
-            "uses: docker/build-push-action@"
-            "10e90e3645eae34f1e60eeb005ba3a3d33f178e8",
+            "uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8",
             "uses: docker/build-push-action@"
             "10e90e3645eae34f1e60eeb005ba3a3d33f178e8\n"
             "      # injected second build\n"
@@ -386,8 +407,8 @@ def test_taira_image_is_built_once_from_exact_minimal_sealed_context() -> None:
             1,
         ),
         lambda source: source.replace(
-            "docker push \"$publish_tag\"",
-            "docker build \"$publish_tag\"",
+            'docker push "$publish_tag"',
+            'docker build "$publish_tag"',
             1,
         ),
         lambda source: source.replace(
@@ -406,8 +427,7 @@ def test_taira_image_is_built_once_from_exact_minimal_sealed_context() -> None:
             1,
         ),
         lambda source: source.replace(
-            "uses: actions/download-artifact@"
-            "d3f86a106a0bac45b974a628896c90dbdf5c8093",
+            "uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
             "# uploaded authority download deleted",
             1,
         ),
@@ -448,26 +468,21 @@ def _assert_docker_sealed_source_and_final_verify_contract(
     assert "COPY . /build-context/" in dockerfile
     assert 'if [ "${CONFIG_PROFILE}" = "taira" ]; then' in dockerfile
     assert "--validate-sealed-context /build-context" in dockerfile
+    assert "sha256sum /build-context/taira-workspace-source-v1.seal" in dockerfile
     assert (
-        "sha256sum /build-context/taira-workspace-source-v1.seal"
+        "--extract-sealed-archive /build-context/taira-workspace-source-v1.seal"
         in dockerfile
     )
-    assert "--extract-sealed-archive /build-context/taira-workspace-source-v1.seal" in dockerfile
-    assert (
-        "cmp /build-context/Dockerfile /app/Dockerfile"
-        in dockerfile
-    )
+    assert "cmp /build-context/Dockerfile /app/Dockerfile" in dockerfile
     assert (
         "cmp /build-context/scripts/compute_workspace_source_manifest.py "
-        "/app/scripts/compute_workspace_source_manifest.py"
-        in dockerfile
+        "/app/scripts/compute_workspace_source_manifest.py" in dockerfile
     )
     assert (
         "cmp /build-context/scripts/taira_image_smoke.sh "
-        "/app/scripts/taira_image_smoke.sh"
-        in dockerfile
+        "/app/scripts/taira_image_smoke.sh" in dockerfile
     )
-    assert 'else \\\n        mkdir -p /app;' in dockerfile
+    assert "else \\\n        mkdir -p /app;" in dockerfile
     assert "cp -a /build-context/. /app/" in dockerfile
     assert "--mount=type=cache,target=/cargo-target" in dockerfile
     assert "export CARGO_TARGET_DIR=/cargo-target" in dockerfile
@@ -479,6 +494,38 @@ def _assert_docker_sealed_source_and_final_verify_contract(
     final_exact = dockerfile.rindex("--require-exact-closure")
     evidence = dockerfile.index("/outbin/taira_privacy_release_runner verify")
     assert first_exact < first_cargo < evidence < final_exact
+    for source_name in (
+        "zk_x509_native_resource_v1.norito",
+        "zk_x509_native_resource_v1.json",
+    ):
+        assert (
+            f"test -s /app/fixtures/privacy/{source_name} && "
+            f"test ! -L /app/fixtures/privacy/{source_name} && "
+            f"test \"$(stat -c '%h' /app/fixtures/privacy/{source_name})\" = 1"
+            in dockerfile
+        )
+    for installed_name in (
+        "zk-x509-resource-v1.norito",
+        "zk-x509-resource-v1.json",
+    ):
+        assert f"/outprovenance/privacy-native/{installed_name}" in dockerfile
+        assert f"/opt/iroha/provenance/privacy-native/{installed_name}" in dockerfile
+    assert (
+        "cp /app/fixtures/privacy/zk_x509_native_resource_v1.norito "
+        "/outprovenance/privacy-native/zk-x509-resource-v1.norito" in dockerfile
+    )
+    assert (
+        "cp /app/fixtures/privacy/zk_x509_native_resource_v1.json "
+        "/outprovenance/privacy-native/zk-x509-resource-v1.json" in dockerfile
+    )
+    assert dockerfile.count("--x509-resource-norito") == 3
+    assert dockerfile.count("--x509-resource-json") == 3
+    evidence_hash_block = dockerfile[
+        dockerfile.index(
+            "(cd /outprovenance/privacy-native && find . -type f"
+        ) : dockerfile.index('workspace_source_manifest_after="')
+    ]
+    assert "sha256sum > sha256sums.txt" in evidence_hash_block
 
     final_verify_marker = "/usr/local/bin/taira_privacy_release_runner verify"
     assert final_verify_marker in dockerfile
@@ -488,13 +535,18 @@ def _assert_docker_sealed_source_and_final_verify_contract(
     assert final_verify < final_user < final_entrypoint
     final_block = dockerfile[final_verify:final_user]
     assert "--validator-binary /usr/local/bin/irohad" in final_block
-    assert (
-        "--cargo-lock /opt/iroha/provenance/Cargo.lock"
-        in final_block
-    )
+    assert "--cargo-lock /opt/iroha/provenance/Cargo.lock" in final_block
     for stem in ("command-manifest", "stage-artifacts", "receipt"):
         assert f"/opt/iroha/provenance/privacy-native/{stem}-v1.norito" in final_block
         assert f"/opt/iroha/provenance/privacy-native/{stem}-v1.json" in final_block
+    assert (
+        "--x509-resource-norito "
+        "/opt/iroha/provenance/privacy-native/zk-x509-resource-v1.norito" in final_block
+    )
+    assert (
+        "--x509-resource-json "
+        "/opt/iroha/provenance/privacy-native/zk-x509-resource-v1.json" in final_block
+    )
 
 
 def test_docker_recomputes_sealed_source_and_verifies_final_runtime_paths() -> None:
@@ -521,6 +573,18 @@ def test_docker_recomputes_sealed_source_and_verifies_final_runtime_paths() -> N
             1,
         ),
         lambda source: source.replace(
+            "--x509-resource-json "
+            "/opt/iroha/provenance/privacy-native/zk-x509-resource-v1.json",
+            "# final X.509 resource JSON omitted",
+            1,
+        ),
+        lambda source: source.replace(
+            "cp /app/fixtures/privacy/zk_x509_native_resource_v1.norito "
+            "/outprovenance/privacy-native/zk-x509-resource-v1.norito",
+            "# X.509 resource Norito copy omitted",
+            1,
+        ),
+        lambda source: source.replace(
             'CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}"',
             'CARGO_BUILD_JOBS="2"',
             1,
@@ -530,6 +594,8 @@ def test_docker_recomputes_sealed_source_and_verifies_final_runtime_paths() -> N
         "final-verify-deleted",
         "builder-validator-path",
         "builder-evidence-path",
+        "resource-json-omitted",
+        "resource-norito-copy-omitted",
         "cargo-jobs-overridden",
     ),
 )
@@ -539,16 +605,12 @@ def test_docker_release_contract_rejects_deleted_overridden_or_builder_path_muta
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     _assert_docker_sealed_source_and_final_verify_contract(dockerfile)
     with pytest.raises(AssertionError):
-        _assert_docker_sealed_source_and_final_verify_contract(
-            mutation(dockerfile)
-        )
+        _assert_docker_sealed_source_and_final_verify_contract(mutation(dockerfile))
 
 
 def test_taira_publish_image_binary_and_job_contract_is_documented() -> None:
     readme = (TAIRA_DIR / "README.md").read_text(encoding="utf-8")
-    smoke = (ROOT / "scripts" / "taira_image_smoke.sh").read_text(
-        encoding="utf-8"
-    )
+    smoke = (ROOT / "scripts" / "taira_image_smoke.sh").read_text(encoding="utf-8")
 
     assert "`BINARIES=irohad kagami`" in readme
     assert "`CARGO_BUILD_JOBS=1` unchanged" in readme
@@ -556,7 +618,9 @@ def test_taira_publish_image_binary_and_job_contract_is_documented() -> None:
     assert "`irohad` and `kagami`" in smoke
     assert "--entrypoint kagami" in smoke
     assert 'invocation_root="$(pwd -P)"' in smoke
-    assert 'renderer_relative="scripts/render_taira_localnet_container_bundle.py"' in smoke
+    assert (
+        'renderer_relative="scripts/render_taira_localnet_container_bundle.py"' in smoke
+    )
     assert "--extract-sealed-archive" in smoke
     assert "--expected-path-list-sha256" in smoke
     assert "--validate-sealed-context" in smoke
@@ -571,21 +635,25 @@ def test_taira_publish_image_binary_and_job_contract_is_documented() -> None:
 
 
 def _assert_native_evidence_fail_closed_static_contract(source: str) -> None:
-    assert 'if [[ ! -f "$release_input" || -L "$release_input" ]]' in source
+    assert 'if [[ ! -s "$release_input" || -L "$release_input" ]]' in source
+    assert "stat -c '%h' \"$release_input\"" in source
     assert 'if [[ ! -s "$evidence_path" || -L "$evidence_path" ]]' in source
     assert 'cp "$PRIVACY_EXPECTATIONS_NORITO"' in source
     assert 'cp "$PRIVACY_EXPECTATIONS_JSON"' in source
+    assert 'cp "$PRIVACY_X509_RESOURCE_NORITO"' in source
+    assert 'cp "$PRIVACY_X509_RESOURCE_JSON"' in source
     bundled_verify = source.partition(
         '"${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}" verify'
     )[2].partition(
-        'assert_workspace_source_manifest_unchanged '
-        '"post-bundled-runner-verification"'
+        'assert_workspace_source_manifest_unchanged "post-bundled-runner-verification"'
     )[0]
-    bundled_common = source.partition("bundled_privacy_runner_common_args=(")[2].partition(
-        "\n)"
-    )[0]
+    bundled_common = source.partition("bundled_privacy_runner_common_args=(")[
+        2
+    ].partition("\n)")[0]
     assert "--expectations-norito" in bundled_common
     assert "--expectations-json" in bundled_common
+    assert "--x509-resource-norito" in bundled_common
+    assert "--x509-resource-json" in bundled_common
     assert '"${bundled_privacy_runner_common_args[@]}"' in bundled_verify
     assert "--command-manifest-norito" in bundled_verify
     assert "--command-manifest-json" in bundled_verify
@@ -599,13 +667,18 @@ def _assert_native_evidence_fail_closed_static_contract(source: str) -> None:
     "mutation",
     (
         lambda source: source.replace(
-            'if [[ ! -f "$release_input" || -L "$release_input" ]]',
-            'if [[ ! -f "$release_input" ]]',
+            'if [[ ! -s "$release_input" || -L "$release_input" ]]',
+            'if [[ ! -s "$release_input" ]]',
             1,
         ),
         lambda source: source.replace(
             'cp "$PRIVACY_EXPECTATIONS_JSON"',
-            '# missing JSON expectation projection',
+            "# missing JSON expectation projection",
+            1,
+        ),
+        lambda source: source.replace(
+            'cp "$PRIVACY_X509_RESOURCE_JSON"',
+            "# missing JSON resource-certificate projection",
             1,
         ),
         lambda source: source.replace(
@@ -614,14 +687,17 @@ def _assert_native_evidence_fail_closed_static_contract(source: str) -> None:
             1,
         ),
     ),
-    ids=("symlink-accepted", "projection-missing", "pair-mutated"),
+    ids=(
+        "symlink-accepted",
+        "projection-missing",
+        "resource-projection-missing",
+        "pair-mutated",
+    ),
 )
 def test_native_evidence_static_contract_rejects_adversarial_mutations(
     mutation,
 ) -> None:
-    source = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
-        encoding="utf-8"
-    )
+    source = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
     _assert_native_evidence_fail_closed_static_contract(source)
     with pytest.raises(AssertionError):
         _assert_native_evidence_fail_closed_static_contract(mutation(source))
@@ -641,8 +717,7 @@ def test_release_bundle_rejects_skip_build_before_external_prerequisites() -> No
     assert result.returncode == 1
     assert (
         "refusing --skip-build with --profile release: release binaries must be "
-        "rebuilt from the exact tested source"
-        in result.stderr
+        "rebuilt from the exact tested source" in result.stderr
     )
     assert "Kagemusha release policy is mandatory" not in result.stderr
     release_guard = source.index(
@@ -652,7 +727,9 @@ def test_release_bundle_rejects_skip_build_before_external_prerequisites() -> No
     assert release_guard < prerequisite_checks
 
 
-def test_release_bundle_rejects_skipped_regressions_before_external_prerequisites() -> None:
+def test_release_bundle_rejects_skipped_regressions_before_external_prerequisites() -> (
+    None
+):
     builder = TAIRA_DIR / "build_taira_rollout_bundle.sh"
     source = builder.read_text(encoding="utf-8")
     result = subprocess.run(
@@ -672,8 +749,7 @@ def test_release_bundle_rejects_skipped_regressions_before_external_prerequisite
     assert result.returncode == 1
     assert (
         "refusing --skip-local-regressions with --profile release: every "
-        "release gate is mandatory"
-        in result.stderr
+        "release gate is mandatory" in result.stderr
     )
     assert "must be provisioned outside the Iroha checkout" not in result.stderr
     release_guard = source.index(
@@ -724,18 +800,12 @@ def _assert_portable_signed_taira_authority_contract(
     assert "release_manifest.json.pub" in workflow
     assert "release_manifest.replay.json" in builder
     assert "release_manifest.replay.json" in workflow
-    assert 'os.path.realpath(sys.argv[1])' in builder
-    assert 'os.path.realpath(sys.argv[1])' in workflow
+    assert "os.path.realpath(sys.argv[1])" in builder
+    assert "os.path.realpath(sys.argv[1])" in workflow
     assert '[[ "$canonical_path" != "$path" ]]' in builder
     assert '[[ "$canonical_path" != "$path" ]]' in workflow
-    assert (
-        '"$canonical_path" == "$canonical_repo_root/"*'
-        in builder
-    )
-    assert (
-        '"$canonical_path" == "$canonical_workspace/"*'
-        in workflow
-    )
+    assert '"$canonical_path" == "$canonical_repo_root/"*' in builder
+    assert '"$canonical_path" == "$canonical_workspace/"*' in workflow
     assert (
         'cmp "$release_authority_manifest" "$release_authority_manifest_replay"'
         in builder
@@ -747,9 +817,7 @@ def _assert_portable_signed_taira_authority_contract(
     sign = workflow.index(
         "Create and verify the portable signed exact-12 release authority"
     )
-    upload = workflow.index(
-        "Upload the authenticated portable Taira release authority"
-    )
+    upload = workflow.index("Upload the authenticated portable Taira release authority")
     download = workflow.index(
         "Download the uploaded authority into a fresh replay root"
     )
@@ -762,8 +830,7 @@ def _assert_portable_signed_taira_authority_contract(
     assert image_build < image_smoke < sign < upload < download < reverify < push
     assert (
         "uses: actions/download-artifact@"
-        "d3f86a106a0bac45b974a628896c90dbdf5c8093"
-        in workflow[download:reverify]
+        "d3f86a106a0bac45b974a628896c90dbdf5c8093" in workflow[download:reverify]
     )
     replay_block = workflow[reverify:push]
     assert "scan_inventory_paths(root)" in replay_block
@@ -772,9 +839,7 @@ def _assert_portable_signed_taira_authority_contract(
 
 
 def test_taira_release_requires_portable_signed_exact12_authority() -> None:
-    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
-        encoding="utf-8"
-    )
+    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
     workflow = (
         ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
     ).read_text(encoding="utf-8")
@@ -800,15 +865,17 @@ def test_taira_release_requires_portable_signed_exact12_authority() -> None:
         ),
         lambda source: source.replace(
             'if [[ "$canonical_path" != "$path" ]]; then',
-            'if false; then # canonical external-path guard deleted',
+            "if false; then # canonical external-path guard deleted",
             1,
         ),
-        lambda source: source.replace(
-            '    "repo_root": os.environ["REPO_ROOT"],',
-            '    "repo_root": os.environ["REPO_ROOT"],',
-            1,
-        )
-        + '\n# "repo_root": reintroduced absolute build host path\n',
+        lambda source: (
+            source.replace(
+                '    "repo_root": os.environ["REPO_ROOT"],',
+                '    "repo_root": os.environ["REPO_ROOT"],',
+                1,
+            )
+            + '\n# "repo_root": reintroduced absolute build host path\n'
+        ),
     ),
     ids=(
         "signing-deleted",
@@ -821,9 +888,7 @@ def test_taira_release_requires_portable_signed_exact12_authority() -> None:
 def test_bundle_signed_authority_static_contract_rejects_mutations(
     mutation,
 ) -> None:
-    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
-        encoding="utf-8"
-    )
+    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
     workflow = (
         ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
     ).read_text(encoding="utf-8")
@@ -867,15 +932,13 @@ def test_release_bundle_rejects_parent_alias_into_checkout() -> None:
 
 
 def test_workflow_canonical_external_path_guard_rejects_mutation() -> None:
-    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
-        encoding="utf-8"
-    )
+    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(encoding="utf-8")
     workflow = (
         ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
     ).read_text(encoding="utf-8")
     mutated = workflow.replace(
         'if [[ "$canonical_path" != "$path" ]]; then',
-        'if false; then # canonical external-path guard deleted',
+        "if false; then # canonical external-path guard deleted",
         1,
     )
 
@@ -890,8 +953,7 @@ def test_workflow_dispatch_inputs_never_enter_shell_source() -> None:
     ).read_text(encoding="utf-8")
     assert (
         "TAIRA_INPUT_VALIDATOR_RELEASE_REF: "
-        "${{ inputs.validator_release_ref }}"
-        in workflow
+        "${{ inputs.validator_release_ref }}" in workflow
     )
     assert "TAIRA_INPUT_TAG_SUFFIX: ${{ inputs.tag_suffix }}" in workflow
     assert "TAIRA_INPUT_PUSH_LATEST: ${{ inputs.push_latest }}" in workflow
@@ -902,8 +964,7 @@ def test_workflow_dispatch_inputs_never_enter_shell_source() -> None:
     assert 'raw_suffix="$TAIRA_INPUT_TAG_SUFFIX"' in workflow
     assert (
         '[[ -n "$raw_suffix" && ! "$raw_suffix" =~ '
-        "^[a-z0-9][a-z0-9._-]{0,47}$ ]]"
-        in workflow
+        "^[a-z0-9][a-z0-9._-]{0,47}$ ]]" in workflow
     )
     assert 'suffix="source-${IROHA_WORKSPACE_SOURCE_MANIFEST_SHA256}"' in workflow
     assert "source-${IROHA_WORKSPACE_SOURCE_MANIFEST_SHA256:0:12}" not in workflow
@@ -913,8 +974,12 @@ def test_mcp_rollout_has_no_default_offline_asset_escape_hatch() -> None:
     source = (TAIRA_DIR / "check_mcp_rollout.sh").read_text(encoding="utf-8")
 
     assert 'OFFLINE_ASSET_DEFINITION_ID="${OFFLINE_ASSET_DEFINITION_ID:-}"' in source
-    assert 'OFFLINE_EXPECTED_IDENTITY_PATH="${OFFLINE_EXPECTED_IDENTITY_PATH:-}"' in source
-    assert 'OFFLINE_ASSET_DEFINITION_ID:-${ROLLOUT_CANARY_FAUCET_ASSET_ID}' not in source
+    assert (
+        'OFFLINE_EXPECTED_IDENTITY_PATH="${OFFLINE_EXPECTED_IDENTITY_PATH:-}"' in source
+    )
+    assert (
+        "OFFLINE_ASSET_DEFINITION_ID:-${ROLLOUT_CANARY_FAUCET_ASSET_ID}" not in source
+    )
     assert (
         "--offline-asset-definition-id must be one canonical unprefixed Base58 "
         "asset-definition ID" in source
@@ -931,10 +996,7 @@ def test_mcp_automatic_canary_threads_explicit_onboarding_token_file() -> None:
         "automatic canary bootstrap requires --onboarding-token-file "
         "ABSOLUTE_PATH" in source
     )
-    assert (
-        '--onboarding-token-file "$ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE"'
-        in source
-    )
+    assert '--onboarding-token-file "$ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE"' in source
     assert 'domain = account.get("domain", "universal")' in source
     assert 'domain = f"{domain}.universal"' not in source
 
@@ -944,11 +1006,23 @@ def test_public_cutover_cannot_skip_fleet_or_exact_commit() -> None:
 
     assert "TAIRA_RELEASE_VALIDATOR_COUNT=4" in source
     assert "public Taira rollout requires --require-all-validators" in source
-    assert "public Taira rollout requires exactly ${TAIRA_RELEASE_VALIDATOR_COUNT}" in source
-    assert "public Taira rollout requires --expected-git-sha with the exact full 40-character commit" in source
-    assert "public Taira rollout requires at least three advancing validator fleet samples" in source
+    assert (
+        "public Taira rollout requires exactly ${TAIRA_RELEASE_VALIDATOR_COUNT}"
+        in source
+    )
+    assert (
+        "public Taira rollout requires --expected-git-sha with the exact full 40-character commit"
+        in source
+    )
+    assert (
+        "public Taira rollout requires at least three advancing validator fleet samples"
+        in source
+    )
     assert "REQUIRE_EXACT_GIT_SHA=1" in source
-    assert "Taira MCP local diagnostic checks passed; this is not public cutover evidence." in source
+    assert (
+        "Taira MCP local diagnostic checks passed; this is not public cutover evidence."
+        in source
+    )
 
 
 def test_readme_rollout_commands_are_executable_under_fail_closed_parser() -> None:
@@ -956,7 +1030,8 @@ def test_readme_rollout_commands_are_executable_under_fail_closed_parser() -> No
     command_lines = [
         line
         for line in readme.splitlines()
-        if "check_mcp_rollout.sh" in line and line.lstrip().startswith(("- `bash", "`bash"))
+        if "check_mcp_rollout.sh" in line
+        and line.lstrip().startswith(("- `bash", "`bash"))
     ]
     assert command_lines
     for line in command_lines:

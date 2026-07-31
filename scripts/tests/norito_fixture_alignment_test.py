@@ -41,7 +41,7 @@ def _fixture_entry(creation_time_ms: int) -> dict:
         "encoded_len": len(payload),
         "signed_len": len(signed),
         "creation_time_ms": creation_time_ms,
-        "time_to_live_ms": None,
+        "time_to_live_ms": 100_000,
         "nonce": None,
     }
 
@@ -134,18 +134,44 @@ def test_compare_manifests_flags_nonce_drift(tmp_path: Path) -> None:
     assert "nonce" in result.mismatched[0].differences
 
 
-def test_load_manifest_treats_missing_optional_fields_as_none(tmp_path: Path) -> None:
+def test_load_manifest_treats_missing_optional_nonce_as_none(tmp_path: Path) -> None:
     path = _write_manifest(tmp_path / "manifest.json", creation_time_ms=100)
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["fixtures"][0].pop("time_to_live_ms")
     payload["fixtures"][0].pop("nonce")
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     manifest = MODULE.load_manifest(path)
 
     fixture = manifest.fixtures["alpha"]
-    assert fixture.time_to_live_ms is None
+    assert fixture.time_to_live_ms == 100_000
     assert fixture.nonce is None
+
+
+def test_load_manifest_rejects_missing_ttl(tmp_path: Path) -> None:
+    path = _write_manifest(tmp_path / "manifest.json", creation_time_ms=100)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["fixtures"][0].pop("time_to_live_ms")
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="time_to_live_ms"):
+        MODULE.load_manifest(path)
+
+
+@pytest.mark.parametrize(
+    "ttl",
+    [None, 0, -1, True, False, 1.5, "100000"],
+    ids=["null", "zero", "negative", "true", "false", "float", "string"],
+)
+def test_load_manifest_rejects_non_positive_integer_ttl(
+    tmp_path: Path, ttl: object
+) -> None:
+    path = _write_manifest(tmp_path / "manifest.json", creation_time_ms=100)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["fixtures"][0]["time_to_live_ms"] = ttl
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="time_to_live_ms"):
+        MODULE.load_manifest(path)
 
 
 def test_load_manifest_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
@@ -217,7 +243,6 @@ def test_compare_manifests_flags_canonical_payload_byte_drift(tmp_path: Path) ->
         ("encoded_len", 1.0),
         ("signed_len", True),
         ("creation_time_ms", "100"),
-        ("time_to_live_ms", -1),
         ("nonce", 1.0),
     ],
 )

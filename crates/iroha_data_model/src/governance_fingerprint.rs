@@ -17,7 +17,11 @@ pub(crate) const VALIDATION_FEE_PAYOUT_LIFECYCLE_V1: &[u8] =
 
 pub(crate) fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
     let encoded = proposal.encode();
+    let domain_len = u64::try_from(domain.len())
+        .expect("protocol-defined digest domains fit in u64")
+        .to_le_bytes();
     let mut hasher = Blake2bVar::new(32).expect("Blake2bVar length is fixed and valid");
+    hasher.update(&domain_len);
     hasher.update(domain);
     hasher.update(&encoded);
     let mut fingerprint = [0_u8; 32];
