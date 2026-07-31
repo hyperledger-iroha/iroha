@@ -462,6 +462,11 @@ for fixture_regeneration_pass in 1 2; do
     --output-dir "${pass_root}/appeal_finance"
   NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked \
     -p sorafs_manifest \
+    --bin generate_pdp_fixtures \
+    -- \
+    --output-dir "${pass_root}/pdp"
+  NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked \
+    -p sorafs_manifest \
     --bin generate_por_fixtures \
     -- \
     --output-dir "${pass_root}"
@@ -497,7 +502,7 @@ fi
 echo "[sorafs-fixtures] reference-SDK fixtures and signed inventory are deterministic"
 
 # Run parity tests to ensure all generated bindings remain aligned.
-cargo test -p sorafs_chunker --test vectors --quiet
+cargo test --locked -p sorafs_chunker --test vectors --quiet
 
 # Verify canonical handles are published everywhere.
 python3 <<'PY'

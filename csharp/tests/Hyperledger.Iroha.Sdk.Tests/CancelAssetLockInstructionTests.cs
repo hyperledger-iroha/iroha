@@ -172,7 +172,7 @@ public sealed class CancelAssetLockInstructionTests
             new TransactionEncodingContext(AccountId));
         var payload = new FixedFieldReader(canonicalPayload);
         var escrowField = payload.ReadField().ToArray();
-        var quantityField = payload.ReadField().ToArray();
+        _ = payload.ReadField();
         payload.RequireEnd();
 
         Assert.Throws<ArgumentException>(() =>
@@ -217,7 +217,7 @@ public sealed class CancelAssetLockInstructionTests
             CancelAssetLockInstruction.NativeTypeName,
             EncodeCompactFields(
                 EncodeCompactFields(escrowField),
-                quantityField),
+                EncodeCompactQuantity(mantissa: 20, scale: 0)),
             flags: 0x02);
         Assert.Equal(86, retiredNestedEscrowId.Length);
         Assert.Equal(new byte[] { 0x21, 0x20 }, retiredNestedEscrowId[40..42]);

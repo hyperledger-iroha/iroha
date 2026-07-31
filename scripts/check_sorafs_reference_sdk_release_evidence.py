@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import secrets
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -73,11 +76,17 @@ from sorafs_response_args import (  # noqa: E402
     non_negative_int_arg,
     positive_int_arg,
 )
-
-
 from sorafs_topology_qualification import (  # noqa: E402
+    DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
     add_topology_qualification_argument,
-    bind_lane_summary_to_topology,
+    lane_summary_deployment_context,
+    load_signed_topology_qualification_binding,
+)
+from sccp_release_common import verify_ed25519  # noqa: E402
+from sorafs_reference_sdk_supply_chain import (  # noqa: E402
+    SOURCE_ARTIFACT_KINDS,
+    SupplyChainSourceResult,
+    validate_supply_chain_sources,
 )
 
 SUMMARY_SCHEMA = "sorafs.reference_sdk.release_evidence_gate.v1"
@@ -87,6 +96,10 @@ DEFAULT_MIN_RELEASE_TARGETS = 5
 DEFAULT_MIN_DOWNSTREAM_PACKAGES = 6
 DEFAULT_MAX_SMOKE_DURATION_SECS = 30 * 60
 HEX64_LEN = 64
+INDEPENDENT_VERIFICATION_KEYS_ERROR = (
+    "topology qualification and provenance verification keys must be "
+    "independently administered"
+)
 
 MANDATORY_RELEASE_TARGETS = (
     "x86_64-apple-darwin",
@@ -130,6 +143,21 @@ SUPPLY_CHAIN_TARGET_RESULT_FIELDS = frozenset(
         "oidc_identity_verified",
         "cosign_provenance_verified",
     }
+)
+SUPPLY_CHAIN_SOURCE_ARTIFACT_FIELDS = frozenset(
+    {"kind", "artifact_path", "sha256"}
+)
+SUPPLY_CHAIN_DERIVED_FIELDS = (
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "release_manifest_digest_hex",
+    "source_artifacts",
+    "target_count",
+    "target_results",
+    "sbom_index_digest_hex",
+    "vulnerability_report_digest_hex",
+    "provenance_bundle_digest_hex",
 )
 
 SENSITIVE_KEYS = {
@@ -256,10 +284,14 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     + (
         "target_count",
         "target_results",
+        "source_artifacts",
         "release_manifest_digest_hex",
         "sbom_index_digest_hex",
         "vulnerability_report_digest_hex",
         "provenance_bundle_digest_hex",
+        "provenance_certificate_identity",
+        "provenance_oidc_issuer",
+        "provenance_verification_key_fingerprint_hex",
         "raw_sboms_included",
         "raw_vulnerability_reports_included",
         "raw_provenance_included",
@@ -326,7 +358,10 @@ class ValidationOptions:
     min_release_targets: int
     min_downstream_packages: int
     max_smoke_duration_secs: int
-
+    supply_chain_source_root: Path | None = None
+    provenance_certificate_identity: str | None = None
+    provenance_oidc_issuer: str | None = None
+    provenance_verification_public_key: bytes | None = None
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
@@ -346,6 +381,10 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "sbom_index_digest_hex",
     "vulnerability_report_digest_hex",
     "provenance_bundle_digest_hex",
+    "source_artifacts",
+    "provenance_certificate_identity",
+    "provenance_oidc_issuer",
+    "provenance_verification_key_fingerprint_hex",
     "policy_digest_hex",
 )
 
@@ -408,7 +447,231 @@ def validate_signed_manifest(payload: dict[str, Any], errors: list[str]) -> None
     require_false(payload, "raw_manifest_included", errors)
 
 
-def validate_supply_chain(payload: dict[str, Any], errors: list[str]) -> None:
+def decode_ed25519_public_key(value: str | None) -> bytes | None:
+    """Decode one non-zero raw Ed25519 public key without echoing it."""
+
+    if (
+        not isinstance(value, str)
+        or len(value) != HEX64_LEN
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        return None
+    public_key = bytes.fromhex(value)
+    return public_key if any(public_key) else None
+
+
+def validate_independent_verification_keys(
+    topology_public_key_hex: str | None,
+    provenance_public_key_hex: str | None,
+) -> list[str]:
+    """Reject reuse of one Ed25519 key across independent trust domains."""
+
+    topology_public_key = decode_ed25519_public_key(topology_public_key_hex)
+    provenance_public_key = decode_ed25519_public_key(provenance_public_key_hex)
+    if (
+        topology_public_key is not None
+        and provenance_public_key is not None
+        and secrets.compare_digest(topology_public_key, provenance_public_key)
+    ):
+        return [INDEPENDENT_VERIFICATION_KEYS_ERROR]
+    return []
+
+
+def bind_lane_summary_to_signed_topology(
+    summary: dict[str, Any],
+    qualification_path: Path,
+    envelope_path: Path,
+    *,
+    verification_public_key_hex: str,
+    signer_identity: str,
+    signer_key_revision: int,
+    signer_policy_digest_hex: str,
+    now_unix: int,
+    max_review_age_secs: int,
+) -> list[str]:
+    """Attach one independently authenticated topology binding to an SF-11 summary."""
+
+    deployment_id, environment, errors = lane_summary_deployment_context(summary)
+    trusted_public_key = decode_ed25519_public_key(verification_public_key_hex)
+    binding, binding_errors = load_signed_topology_qualification_binding(
+        qualification_path,
+        envelope_path,
+        trusted_public_key=(
+            trusted_public_key if trusted_public_key is not None else b""
+        ),
+        trusted_signer_identity=signer_identity,
+        trusted_key_revision=signer_key_revision,
+        trusted_policy_digest_hex=signer_policy_digest_hex,
+        now_unix=now_unix,
+        max_review_age_secs=max_review_age_secs,
+        expected_deployment_id=deployment_id,
+        expected_environment=environment,
+    )
+    errors.extend(binding_errors)
+    summary["topology_qualification"] = binding
+    return errors
+
+
+def provenance_receipt_authenticator(
+    public_key: bytes,
+) -> tuple[str, Callable[[str, bytes, bytes], bool]]:
+    """Bind source receipt authentication to one operator-trusted key."""
+
+    fingerprint = hashlib.sha256(public_key).hexdigest()
+
+    def authenticate(
+        claimed_fingerprint: str,
+        message: bytes,
+        signature: bytes,
+    ) -> bool:
+        return secrets.compare_digest(
+            claimed_fingerprint,
+            fingerprint,
+        ) and verify_ed25519(public_key, signature, message)
+
+    return fingerprint, authenticate
+
+
+def validate_supply_chain_source_artifacts(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> dict[str, str] | None:
+    """Validate and return the four payload-declared source paths by kind."""
+
+    source_artifacts = payload.get("source_artifacts")
+    if not isinstance(source_artifacts, list):
+        errors.append("source_artifacts must be an array")
+        return None
+    if len(source_artifacts) != len(SOURCE_ARTIFACT_KINDS):
+        errors.append("source_artifacts must contain exactly four bindings")
+
+    observed_kinds: list[str] = []
+    source_paths: dict[str, str] = {}
+    for index, artifact in enumerate(source_artifacts):
+        path = f"source_artifacts[{index}]"
+        if not isinstance(artifact, dict):
+            errors.append(f"{path} must be an object")
+            continue
+        if set(artifact) != SUPPLY_CHAIN_SOURCE_ARTIFACT_FIELDS:
+            errors.append(f"{path} fields must match the schema-closed contract")
+        kind = require_string(artifact, "kind", errors)
+        artifact_path = require_string(artifact, "artifact_path", errors)
+        require_hex(
+            artifact,
+            "sha256",
+            HEX64_LEN,
+            errors,
+            path=f"{path}.sha256",
+        )
+        if kind:
+            observed_kinds.append(kind)
+            if (
+                kind in SOURCE_ARTIFACT_KINDS
+                and kind not in source_paths
+                and artifact_path
+            ):
+                source_paths[kind] = artifact_path
+    if observed_kinds != list(SOURCE_ARTIFACT_KINDS):
+        errors.append(
+            "source_artifacts kinds must match the canonical four-source order"
+        )
+    if set(source_paths) != frozenset(SOURCE_ARTIFACT_KINDS):
+        return None
+    return source_paths
+
+
+def validate_supply_chain_trust_metadata(
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> tuple[
+    Path,
+    str,
+    str,
+    str,
+    Callable[[str, bytes, bytes], bool],
+] | None:
+    """Require payload trust metadata to match all operator-trusted inputs."""
+
+    certificate_identity = require_string(
+        payload,
+        "provenance_certificate_identity",
+        errors,
+    )
+    oidc_issuer = require_string(payload, "provenance_oidc_issuer", errors)
+    verification_key_fingerprint = require_hex(
+        payload,
+        "provenance_verification_key_fingerprint_hex",
+        HEX64_LEN,
+        errors,
+    )
+
+    inputs_missing = False
+    if options.supply_chain_source_root is None:
+        errors.append(
+            "supply_chain validation requires --supply-chain-source-root"
+        )
+        inputs_missing = True
+    if not options.provenance_certificate_identity:
+        errors.append(
+            "supply_chain validation requires "
+            "--provenance-certificate-identity"
+        )
+        inputs_missing = True
+    if not options.provenance_oidc_issuer:
+        errors.append(
+            "supply_chain validation requires --provenance-oidc-issuer"
+        )
+        inputs_missing = True
+    public_key = options.provenance_verification_public_key
+    if (
+        not isinstance(public_key, bytes)
+        or len(public_key) != 32
+        or not any(public_key)
+    ):
+        errors.append(
+            "supply_chain validation requires a non-zero raw Ed25519 "
+            "--provenance-verification-public-key-hex"
+        )
+        inputs_missing = True
+    if inputs_missing:
+        return None
+
+    assert options.supply_chain_source_root is not None
+    assert options.provenance_certificate_identity is not None
+    assert options.provenance_oidc_issuer is not None
+    assert isinstance(public_key, bytes)
+    expected_fingerprint, authenticator = provenance_receipt_authenticator(
+        public_key
+    )
+    if certificate_identity != options.provenance_certificate_identity:
+        errors.append(
+            "provenance_certificate_identity must match the operator-trusted "
+            "identity"
+        )
+    if oidc_issuer != options.provenance_oidc_issuer:
+        errors.append(
+            "provenance_oidc_issuer must match the operator-trusted issuer"
+        )
+    if verification_key_fingerprint != expected_fingerprint:
+        errors.append(
+            "provenance_verification_key_fingerprint_hex must match the "
+            "operator-trusted key"
+        )
+    return (
+        options.supply_chain_source_root,
+        options.provenance_certificate_identity,
+        options.provenance_oidc_issuer,
+        expected_fingerprint,
+        authenticator,
+    )
+
+
+def validate_supply_chain(
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> None:
     """Require complete per-target release, security, and provenance evidence."""
 
     require_string_inventory_count_match(
@@ -422,42 +685,43 @@ def validate_supply_chain(payload: dict[str, Any], errors: list[str]) -> None:
     target_results = payload.get("target_results")
     if not isinstance(target_results, list):
         errors.append("target_results must be an array")
-        return
-    if len(target_results) != len(REQUIRED_RELEASE_TARGETS):
-        errors.append("target_results must cover exactly five release targets")
     observed_targets: list[str] = []
-    for index, result in enumerate(target_results):
-        path = f"target_results[{index}]"
-        if not isinstance(result, dict):
-            errors.append(f"{path} must be an object")
-            continue
-        if set(result) != SUPPLY_CHAIN_TARGET_RESULT_FIELDS:
-            errors.append(f"{path} fields must match the schema-closed contract")
-        target = require_string(result, "target", errors)
-        if target:
-            observed_targets.append(target)
-        for field in (
-            "binary_smoke_passed",
-            "deterministic_archive_replay_passed",
-            "installation_verified",
-            "rollback_verified",
-            "yank_verified",
-            "sbom_generated",
-            "oidc_identity_verified",
-            "cosign_provenance_verified",
-        ):
-            require_bool_true(result, field, errors)
-        for field in (
-            "critical_vulnerability_count",
-            "high_vulnerability_count",
-        ):
-            value = require_non_negative_int(result, field, errors)
-            if value is not None and value != 0:
-                errors.append(f"{field} must be zero")
+    if isinstance(target_results, list):
+        if len(target_results) != len(REQUIRED_RELEASE_TARGETS):
+            errors.append("target_results must cover exactly five release targets")
+        for index, result in enumerate(target_results):
+            path = f"target_results[{index}]"
+            if not isinstance(result, dict):
+                errors.append(f"{path} must be an object")
+                continue
+            if set(result) != SUPPLY_CHAIN_TARGET_RESULT_FIELDS:
+                errors.append(f"{path} fields must match the schema-closed contract")
+            target = require_string(result, "target", errors)
+            if target:
+                observed_targets.append(target)
+            for field in (
+                "binary_smoke_passed",
+                "deterministic_archive_replay_passed",
+                "installation_verified",
+                "rollback_verified",
+                "yank_verified",
+                "sbom_generated",
+                "oidc_identity_verified",
+                "cosign_provenance_verified",
+            ):
+                require_bool_true(result, field, errors)
+            for field in (
+                "critical_vulnerability_count",
+                "high_vulnerability_count",
+            ):
+                value = require_non_negative_int(result, field, errors)
+                if value is not None and value != 0:
+                    errors.append(f"{field} must be zero")
     if observed_targets != list(REQUIRED_RELEASE_TARGETS):
         errors.append(
             "target_results targets must match the canonical five-target order"
         )
+    source_paths = validate_supply_chain_source_artifacts(payload, errors)
     require_hex(payload, "release_manifest_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "sbom_index_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "vulnerability_report_digest_hex", HEX64_LEN, errors)
@@ -465,6 +729,51 @@ def validate_supply_chain(payload: dict[str, Any], errors: list[str]) -> None:
     require_false(payload, "raw_sboms_included", errors)
     require_false(payload, "raw_vulnerability_reports_included", errors)
     require_false(payload, "raw_provenance_included", errors)
+
+    trust = validate_supply_chain_trust_metadata(payload, errors, options)
+    if source_paths is None or trust is None:
+        return
+    (
+        source_root,
+        certificate_identity,
+        oidc_issuer,
+        verification_key_fingerprint,
+        authenticator,
+    ) = trust
+    source_result, source_errors = validate_supply_chain_sources(
+        source_root,
+        expected_deployment_id=payload.get("deployment_id"),
+        expected_environment=payload.get("environment"),
+        expected_release_manifest_digest_hex=payload.get(
+            "release_manifest_digest_hex"
+        ),
+        expected_certificate_identity=certificate_identity,
+        expected_oidc_issuer=oidc_issuer,
+        expected_verification_key_fingerprint_hex=verification_key_fingerprint,
+        verification_receipt_authenticator=authenticator,
+        now_unix=options.now_unix,
+        max_source_age_secs=options.max_evidence_age_secs,
+        release_rehearsal_path=source_paths["release_rehearsal"],
+        sbom_index_path=source_paths["sbom_index"],
+        vulnerability_report_path=source_paths["vulnerability_report"],
+        provenance_bundle_path=source_paths["provenance_bundle"],
+    )
+    errors.extend(f"supply-chain source: {error}" for error in source_errors)
+    if source_result is None:
+        if not source_errors:
+            errors.append(
+                "supply-chain source validation did not return a validated result"
+            )
+        return
+    if not isinstance(source_result, SupplyChainSourceResult):
+        errors.append(
+            "supply-chain source validation returned an invalid result"
+        )
+        return
+    derived = source_result.to_dict()
+    for field in SUPPLY_CHAIN_DERIVED_FIELDS:
+        if payload.get(field) != derived[field]:
+            errors.append(f"{field} must equal the source-derived value")
 
 
 def validate_downstream_bindings(
@@ -561,7 +870,7 @@ def validate_kind_specific(
     elif kind.name == "signed_manifest":
         validate_signed_manifest(payload, errors)
     elif kind.name == "supply_chain":
-        validate_supply_chain(payload, errors)
+        validate_supply_chain(payload, errors, options)
     elif kind.name == "downstream_bindings":
         validate_downstream_bindings(payload, errors, options)
     elif kind.name == "cookbook_smoke":
@@ -576,14 +885,32 @@ def validate_evidence_payload(
     payload: dict[str, Any],
     options: ValidationOptions,
 ) -> tuple[str | None, list[str]]:
+    sensitivity_payload = payload
+    if (
+        isinstance(payload, dict)
+        and payload.get("schema") == KIND_BY_NAME["supply_chain"].schema
+    ):
+        sensitivity_payload = dict(payload)
+        for field, trusted_value in (
+            (
+                "provenance_certificate_identity",
+                options.provenance_certificate_identity,
+            ),
+            ("provenance_oidc_issuer", options.provenance_oidc_issuer),
+        ):
+            if (
+                isinstance(trusted_value, str)
+                and sensitivity_payload.get(field) == trusted_value
+            ):
+                sensitivity_payload[field] = "<public-provenance-metadata>"
     return validate_standard_evidence_payload(
-        payload,
+        sensitivity_payload,
         SCHEMA_TO_KIND,
         "SoraFS SF-11 release artifact",
         SENSITIVE_KEYS,
         "release evidence",
-        lambda kind, checked_payload, errors: validate_kind_specific(
-            kind, checked_payload, errors, options
+        lambda kind, _checked_payload, errors: validate_kind_specific(
+            kind, payload, errors, options
         ),
         require_reviewed_deployment_context=True,
     )
@@ -850,6 +1177,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     add_topology_qualification_argument(parser)
     parser.add_argument(
+        "--topology-qualification-envelope",
+        required=True,
+        type=Path,
+        help="Independently signed companion for the exact topology summary.",
+    )
+    parser.add_argument(
+        "--topology-qualification-verification-public-key-hex",
+        required=True,
+        help="Operator-trusted non-zero raw Ed25519 topology verification public key.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-identity",
+        required=True,
+        help="Operator-trusted topology qualification signer identity.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-key-revision",
+        required=True,
+        type=positive_int_arg,
+        help="Operator-trusted positive topology signer key revision.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-policy-digest-hex",
+        required=True,
+        help="Operator-trusted topology signer policy SHA-256 digest.",
+    )
+    parser.add_argument(
+        "--max-topology-qualification-review-age-secs",
+        type=non_negative_int_arg,
+        default=DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
+        help="Maximum accepted age of the independently signed topology review.",
+    )
+    parser.add_argument(
         "--evidence-dir",
         action="append",
         type=Path,
@@ -896,6 +1256,26 @@ def main(argv: list[str] | None = None) -> int:
         type=positive_int_arg,
         default=DEFAULT_MAX_SMOKE_DURATION_SECS,
     )
+    parser.add_argument(
+        "--supply-chain-source-root",
+        type=Path,
+        help=(
+            "Root containing source artifacts named by supply_chain "
+            "source_artifacts bindings."
+        ),
+    )
+    parser.add_argument(
+        "--provenance-certificate-identity",
+        help="Operator-trusted provenance certificate identity.",
+    )
+    parser.add_argument(
+        "--provenance-oidc-issuer",
+        help="Operator-trusted provenance OIDC issuer.",
+    )
+    parser.add_argument(
+        "--provenance-verification-public-key-hex",
+        help="Operator-trusted non-zero raw Ed25519 verification public key.",
+    )
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)
@@ -923,8 +1303,20 @@ def main(argv: list[str] | None = None) -> int:
         min_release_targets=args.min_release_targets,
         min_downstream_packages=args.min_downstream_packages,
         max_smoke_duration_secs=args.max_smoke_duration_secs,
+        supply_chain_source_root=args.supply_chain_source_root,
+        provenance_certificate_identity=args.provenance_certificate_identity,
+        provenance_oidc_issuer=args.provenance_oidc_issuer,
+        provenance_verification_public_key=decode_ed25519_public_key(
+            args.provenance_verification_public_key_hex
+        ),
     )
     preflight_errors = validate_checker_preflight(args)
+    preflight_errors.extend(
+        validate_independent_verification_keys(
+            args.topology_qualification_verification_public_key_hex,
+            args.provenance_verification_public_key_hex,
+        )
+    )
     if preflight_errors:
         emit_checker_error_lines(preflight_errors)
         return 2
@@ -933,8 +1325,22 @@ def main(argv: list[str] | None = None) -> int:
         args.evidence_dir, args.evidence, required_kinds, options, args.summary_out
     )
     errors.extend(
-        bind_lane_summary_to_topology(
-            summary, args.topology_qualification_summary
+        bind_lane_summary_to_signed_topology(
+            summary,
+            args.topology_qualification_summary,
+            args.topology_qualification_envelope,
+            verification_public_key_hex=(
+                args.topology_qualification_verification_public_key_hex
+            ),
+            signer_identity=args.topology_qualification_signer_identity,
+            signer_key_revision=args.topology_qualification_signer_key_revision,
+            signer_policy_digest_hex=(
+                args.topology_qualification_signer_policy_digest_hex
+            ),
+            now_unix=args.now_unix,
+            max_review_age_secs=(
+                args.max_topology_qualification_review_age_secs
+            ),
         )
     )
     summary["status"] = evidence_gate_status(errors)

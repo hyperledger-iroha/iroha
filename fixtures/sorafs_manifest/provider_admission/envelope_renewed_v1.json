@@ -1,9 +1,9 @@
 {
-  "advert_body_digest_hex": "972982282b3dabe34fe5d6a707e1249ced85efbeff5c1c4c2ae4c89ef13398e2",
-  "authorization_digest_hex": "868d46905d34de5f51c5ce555ae06fd8003a565ea73afb5400513e92815b8844",
+  "advert_body_digest_hex": "d31ef8606de79cfada5e9a4a2c26f924f24c0216c9b2bf86b5457fcf3c61b92f",
+  "authorization_digest_hex": "011f595a069017baa7158ecf58304e7f78f4221ed221aa4a90b28b4a4e1fc182",
   "council_signature_count": 1,
-  "envelope_digest_hex": "14c4e80d9134e260c91590fd98edb6593682bd25e7375745863dbe37c8e8f10e",
-  "proposal_digest_hex": "b7bc86af9f65b0833ac6c8153869ce8c1d8c20132ea44743c2ada10e8bb4730d",
+  "envelope_digest_hex": "294b8940c05ba5508c9810333307578fbbbcec45df907a6d71b1538fdc9c2cde",
+  "proposal_digest_hex": "943dfd8af9f8bd89aeed038a5beb251d4f71ab533c612a0f8eca44fb6eb95fab",
   "signature_threshold": 1,
   "trusted_council_keys_hex": [
     "6355691c178a8ff91007a7478afb955ef7352c63e7b25703984cf78b26e21a56"

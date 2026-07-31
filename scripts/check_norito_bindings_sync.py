@@ -133,8 +133,8 @@ def update_flags(flags: PathFlags, raw_path: str) -> None:
         path.startswith("crates/norito/")
         or path.startswith("crates/norito_derive/")
         or path == "norito.md"
-        or path == "docs/source/norito.md"
-        or path.startswith("docs/source/norito/")
+        or path == "specs/norito.md"
+        or path.startswith("specs/norito/")
     ):
         flags.needs_reference_update = True
         return

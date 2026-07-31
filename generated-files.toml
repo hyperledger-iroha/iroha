@@ -101,7 +101,7 @@ kind = "regions"
 outputs = [
   "crates/ivm_abi/src/access_hints.rs",
   "crates/kotodama_lang/src/semantic.rs",
-  "docs/source/kotodama_grammar.md",
+  "specs/kotodama_grammar.md",
   "tools/kotodama_linguist/grammar-repo/syntaxes/kotodama.tmLanguage.json",
   "javascript/iroha_js/src/numericV1.js",
   "javascript/iroha_js/index.d.ts",

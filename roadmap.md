@@ -5,6 +5,21 @@ Last updated: 2026-07-30
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Repository structure follow-ups
+
+- Continue extracting cohesive production modules from the exact source-budget
+  exceptions, prioritizing Kura, Torii routing/API, core state, and other files
+  still above 20,000 lines. Preserve public facades and wire behavior; every
+  split must ratchet the checked-in line count downward.
+- Reduce the data-model frontend and monomorphization surface without exceeding
+  the 41-unit compile baseline or its 44-unit hard limit. Prefer bounded
+  internal modules and derive-family isolation over new crates or feature
+  fragmentation.
+- Move additional SDK/code-generation callers onto the focused
+  `norito_codegen_exporter` library. Keep the `xtask` compatibility commands
+  until every documented and CI caller has migrated, then remove only the
+  adapters whose replacement paths have parity evidence.
+
 ## Taira testnet recovery and offline-cash release closure
 
 The source-side consensus-stall, exact `/status.blocks`, restart-cost,
@@ -56,7 +71,7 @@ evidence.
 
 The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
-[`docs/source/sumeragi_v2_multilane_closure_ledger.md`](./docs/source/sumeragi_v2_multilane_closure_ledger.md).
+[`specs/sumeragi_v2_multilane_closure_ledger.md`](./specs/sumeragi_v2_multilane_closure_ledger.md).
 The former autonomous `execution_batch.is_none()` exclusion and its in-scope
 TODO are gone; no remaining lane/autoscale/merge/Native multilane TODO was
 found. This is source implementation closure, not release completion.
@@ -76,24 +91,32 @@ semantic request-kernel validation, atomic constant-scan batch cleanup,
 mandatory first-release journaling, and successful backpressure refresh are
 now pinned across restart. Three additional Native latest-index regressions
 reject a legacy V1 pointer filename, a fully unbacked pointer, and
-receipt-absent executed-wire/finality/manifest binding drift. They raise the
-pending G-UNIT execution inventory to 280 exact tests. The fresh 24-test
-queue/configuration slice and 130-test Native AMX slice are green; the complete
-280-test archived execution receipt is still outstanding.
+receipt-absent executed-wire/finality/manifest binding drift. They establish
+the prior 280-test G-UNIT checkpoint. One exact in-flight refinement-kernel
+regression and eight reservation-journal checked-application/adversarial
+regressions now raise the current source inventory to 289 tests. The fresh
+24-test queue/configuration slice and 130-test Native AMX slice are green; the
+exact-source isolated reservation-journal slice is green at `65/65`, and the
+identity-bound in-flight refinement regression is green at `1/1`. The complete
+289-test archived execution receipt is still outstanding.
 
 The in-flight carrier formal corpus is now bound to the versions that
 production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
-container, QueuePlan journal V4, and reservation journal V5. Schema 3 of the
+container, QueuePlan journal V4, and reservation journal V5. Schema 4 of the
 multilane binding ledger keeps this as
 `layout_only_no_transition_refinement`, source-binds exact payload,
 reservation, queue-order, Kura persistence/recovery, runner, and release
 receipt consumers, and requires a distinct fifth layout-only Apalache result
-after the four refinement rows. The structural checker, exact 738-test/280
-G-UNIT inventory, 12 fail-closed layout tests, two receipt parser tests, and
-12 Apalache-runner contract controls are fresh and green. The TLC trace
-normalizer also imports on the supported Xcode Python 3.9 runtime again and
-passes all 15 focused tests. No TLC or Apalache execution is claimed by those
-static checks, and the total Rust transition projection remains open.
+after the four refinement rows. The schema-4 structural/source-binding checks,
+exact 738-test production inventory, 289-test G-UNIT source inventory, 12
+fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
+contract controls are fresh and green. The G-UNIT inventory has 290 TSV lines
+and SHA-256
+`1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733`.
+The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
+again and passes all 15 focused tests. No TLC or Apalache engine execution is
+claimed by those static checks, and the total Rust transition projection
+remains open.
 
 The remaining work is evidence-driven and must stay in order:
 
@@ -130,13 +153,21 @@ The remaining work is evidence-driven and must stay in order:
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 280 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 289 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
-  `ML-API-04`/`G-SDK`. The standalone OpenAPI replay is already fresh at
-  `4/4`; it is not the remaining SDK blocker.
+  `ML-API-04`/`G-SDK`. The current harness contract requires OpenAPI `7`,
+  Python `56`, JavaScript `54`, Swift `3`, Kotlin `6`, and Java `5` cases. Its
+  exact fixture SHA-256 is
+  `ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`,
+  and its suite-source manifest SHA-256 is
+  `ad932dcf6feee2c60b26aa7d7aa3b3d8375a665c44108236799e59937f16f93b`.
+  Current standalone OpenAPI and installed-package Python runs pass `7/7` and
+  `56/56`, respectively. Those results are not an archived all-surface replay;
+  the remaining SDK blocker is one archived release replay of every required
+  language surface together.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
@@ -195,7 +226,11 @@ remain outside its scope.
 
 The canonical first-release implementation, validation, documentation,
 authority-removal, and rollout-evidence mapping is
-[`docs/source/sorafs/v1_closure_ledger.md`](./docs/source/sorafs/v1_closure_ledger.md).
+[`specs/sorafs/v1_closure_ledger.md`](./specs/sorafs/v1_closure_ledger.md).
+Canonical implementation-coupled SoraFS plans and fixture notes live in this
+repository under `specs/` and `fixtures/`. Public and localized mirrors belong
+to the optional sibling `iroha-docs` repository; they are not hashed release
+inputs or static-contract scan targets here.
 Repository conformance and production promotion are separate: the current
 production aggregate remains blocked with zero recognized lane summaries and
 no trusted foundational envelope. Promotion requires one reviewed production
@@ -224,17 +259,21 @@ Python 3.12. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed, and
 the runner rejects any tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or
 `.dll`, activates its selected virtual environment, covers the
 cancel-asset-lock, reference-validation, and provider-ingest suites, and rejects
-JUnit skips. Its static workflow-file contract is green at 9/9. Clean native
-rebuilds and source-bound provenance across all five release targets remain
-open. Kotlin/JVM and mirrored Java Android now require both exact bridge ABI 21
-and `NativeSignerBridge` JNI contract revision 1 before making any native signer
-call; the Android artifact gate requires both revision-probe exports, preventing
-a stale same-ABI JNI descriptor from passing package qualification. The
-separate SoraFS pin-register SDK workflow, runner, and guard are also
-exact Python 3.12 and install only the hash-locked, binary-only
-`requirements-ci.lock`; a fresh isolated CPython 3.12.13 venv is green at 3/3,
-including positive static coverage and version/resolver/major/workflow/lock
-negative controls.
+JUnit skips. Its static workflow-file contract is green at 9/9. The closed
+reference inventory currently binds 82 payload artifacts, 32 exact
+`ValidationOutcomeV1` files, and 38 negative payload vectors; all eight
+appeal-finance `CancelAssetLock` files are mandatory. Available native outputs
+are stale or mixed and no native-dependent SDK suite is qualified. Clean native
+rebuilds, unskipped fixture replay, and source-bound provenance across all five
+release targets remain open. Kotlin/JVM and mirrored Java Android now require
+both exact bridge ABI 21 and `NativeSignerBridge` JNI contract revision 1 before
+making any native signer call; the Android artifact gate requires both
+revision-probe exports, preventing a stale same-ABI JNI descriptor from passing
+package qualification. The separate SoraFS pin-register SDK workflow, runner,
+and guard are also exact Python 3.12 and install only the hash-locked,
+binary-only `requirements-ci.lock`; a fresh isolated CPython 3.12.13 venv is
+green at 3/3, including positive static coverage and
+version/resolver/major/workflow/lock negative controls.
 
 Provider ingest is now an opt-in supervised `irohad` worker over one immutable,
 bounded finalized replication-order snapshot. Its durable single-writer
@@ -2087,7 +2126,7 @@ excluded from the first release.
   `app_attest_public_key_base64` and `device_public_key` must reject, and
   `offline_v2_vectors` must reject noncanonical fixture platform aliases
   instead of mapping them to canonical profiles. The
-  `docs/source/offline_note_v2_attestation.md` contract must describe
+  `specs/offline_note_v2_attestation.md` contract must describe
   structured redemption aliases as rejected. The policy guard's
   `--negative-control-torii-offline-v2-retired-ios-app-attest-profile` and
   `--negative-control-torii-offline-v2-retired-assertion-key-aliases` plus
@@ -3459,8 +3498,8 @@ excluded from the first release.
   than adding compatibility aliases.
 - The SoraFS gateway DNS owner runbook family now uses governed cutover
   runtime tokens and reviewed sample ticket IDs instead of fixed March 2025
-  command examples; the rollout static contract scans canonical and localized
-  copies for stale `OPS-XXXX`/`SNS-DF-XXXX` tickets, dated 2025 cutover
+  command examples; the rollout static contract scans the canonical `specs/`
+  runbook for stale `OPS-XXXX`/`SNS-DF-XXXX` tickets, dated 2025 cutover
   examples, date-coded DNS tags, and reopened kickoff wording.
 - SoraFS gateway direct-mode enable now keeps `require_manifest_envelope`,
   `enforce_admission`, and `enforce_capabilities` enabled in the emitted Torii
@@ -3664,12 +3703,12 @@ excluded from the first release.
 		  SoraFS so only the contract test's negative controls may retain those
 		  literals. The tracked `todo_list.txt` inventory now has stale closed
 		  SoraFS rows removed and a contract guard preventing active-marker rows
-		  for SoraFS from reappearing. Completed localized root-roadmap
-		  SoraFS/SoraNet portal translation rows use `Completed:` instead of
-		  the unfinished-marker form, and the stale
-		  rollout-gate wording guard now scans canonical plus localized SoraFS
-		  plan mirrors before any `Add fail-closed ... rollout evidence gate`
-		  wording can reappear, so
+		  for SoraFS from reappearing. The in-repository localization mirrors
+		  were removed by the documentation split; the stale rollout-gate
+		  wording guard now scans canonical SoraFS plans under `specs/` before
+		  any `Add fail-closed ... rollout evidence gate` wording can reappear,
+		  while public and localized copies remain sibling `iroha-docs`
+		  responsibilities, so
 		  first-release unfinished-work drift cannot re-enter unnoticed. Shared SoraFS
 		  evidence sensitivity checks also treat
 	  API/auth/session/x-api/id/OAuth/refresh/JWT tokens, cookies, passwords,
@@ -4931,16 +4970,17 @@ excluded from the first release.
   deployed-only reputation spellings such as `reputation ingest`,
   `reputation publisher`, `reputation graphql`, and `reputation promote`, while
   preserving the read-only local `reputation snapshot|fetch|watch|verify` and
-  canary commands. The SF-3 node
-  implementation plan, localized mirrors, and
-  canonical plus localized portal mirrors now document the current
-  OpenAPI-backed `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface,
-  reject legacy unversioned `/sorafs/*` prototype endpoint names and the removed
-  `sorafs-storage` feature-flag wording, keep node-storage readback routes on
-  the OpenAPI `{manifest_id}` parameter, retire the unauthenticated local PoR
-  sampling route in favor of authenticated `/v1/sorafs/proof/stream`, and
-  carry a rollout static contract that keeps those docs and route labels
-  aligned with the OpenAPI route strings. The grouped Torii SoraFS storage tests
+  canary commands. The canonical SF-3 node implementation plan documents the
+  current OpenAPI-backed `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route
+  surface, rejects legacy unversioned `/sorafs/*` prototype endpoint names and
+  the removed `sorafs-storage` feature-flag wording, keeps node-storage readback
+  routes on the OpenAPI `{manifest_id}` parameter, retires the unauthenticated
+  local PoR sampling route in favor of authenticated
+  `/v1/sorafs/proof/stream`, and carries a rollout static contract that keeps
+  those docs and route labels
+  aligned with the OpenAPI route strings. Public and localized copies are
+  maintained separately in the sibling `iroha-docs` repository. The grouped
+  Torii SoraFS storage tests
   now canonicalize temporary storage roots before exercising the backend,
   preserving the production no-symlink parent-chain guard while keeping the
   storage-pin/fetch/PoR round-trip green on symlinked system temp roots.
@@ -5161,7 +5201,7 @@ excluded from the first release.
   guards must preserve the shipped authenticated provider routes while keeping
   only the remaining production service, authoritative repair, and promotion
   surfaces unshipped.
-  `docs/examples/sorafs_reference_sdk/` ships a runnable cookbook that validates
+  `fixtures/documentation/sorafs_reference_sdk/` ships a runnable cookbook that validates
   committed fixtures, exercises advert/order/governance signing, checks
   orderbook receipt validation and bundle cross-links, and emits manifest/CAR
   replay outcomes for SDK and release smoke testing. The docs portal SoraFS
@@ -6042,10 +6082,10 @@ excluded from the first release.
   rejecting `x...`, `not-...`, `/...`, `/internal/...`, and canary/evidence/
   local/fixture suffixed fragments so diagnostic command text cannot satisfy an
   exact warning-only exposure check. Those warning-only command scans now cover
-  top-level SoraFS source docs, nested `docs/source/sorafs/**` docs,
-  portal SoraFS docs, and portal i18n SoraFS mirrors, so reserved operator
-  commands cannot be published through mirrored runbooks outside the top-level
-  plan files. It now also pins deployed AI
+  top-level SoraFS plans under `specs/` and nested `specs/sorafs/**` docs, so
+  reserved operator commands cannot be published through the repository-local
+  implementation-coupled documentation. Public and localized mirrors belong
+  in the sibling `iroha-docs` repository. It now also pins deployed AI
   pre-screening workflow promotion
   surfaces for deployed runner/committee promotion, deployed juror notification
   transport, deployed commit/reveal executor, end-to-end release workflow, and
@@ -6228,10 +6268,11 @@ excluded from the first release.
   such as `/v1/transparency-canary/*` stay local without weakening the generic
   public-route block. The warning-only public
   route scan now shares the broad SoraFS docs path inventory used by reserved
-  operator-command checks, covering top-level source docs, nested
-  `docs/source/sorafs/**` docs, portal SoraFS docs, and portal i18n SoraFS
-  mirrors before mirrored public evidence routes can be published outside the
-  reviewed warning context. The same static contract now also pins the
+  operator-command checks, covering top-level SoraFS plans under `specs/` and
+  nested `specs/sorafs/**` docs before repository-local public evidence routes
+  can be published outside the reviewed warning context. Public and localized
+  mirrors remain sibling `iroha-docs` inputs. The same static contract now also
+  pins the
   deployed-only SFM-4c source-entry producer, GAR/moderation/appeal/legal-hold/
   redaction/evidence-viewer producer, publisher-identity/anchoring, public
   receipt explorer, proof-token issuance producer/explorer-linking,
@@ -7211,9 +7252,10 @@ excluded from the first release.
 	  now also requires a left boundary so prefixed internal paths cannot satisfy
 	  reserved public route checks, and the SoraFS docs warning-only scan covers
 	  the unshipped voting-contract, ballot-orchestrator, juror portal, and
-	  deployed ballot-service names across canonical, localized, nested, portal,
-	  and portal-i18n docs before those names can appear outside an explicit
-	  do-not-document-as-shipped warning. SFM-4b4 still
+	  deployed ballot-service names across top-level `specs/` plans and nested
+	  `specs/sorafs/**` docs before those names can appear outside an explicit
+	  do-not-document-as-shipped warning. Public and localized copies belong in
+	  sibling `iroha-docs`. SFM-4b4 still
 	  needs production orchestration, on-chain or ledger recording, scheduled
   no-show dispatch/settlement handoff, production juror portal flows, public
   decision/challenge DAG

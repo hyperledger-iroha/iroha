@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate docs/source/benchmarks/history.md from FASTPQ artefacts."""
+"""Regenerate specs/benchmarks/history.md from FASTPQ artefacts."""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +13,7 @@ from typing import Any, Iterable
 ARTIFACTS_DIR = Path("artifacts/fastpq_benchmarks")
 POSEIDON_MANIFEST = Path("benchmarks/poseidon/manifest.json")
 MERKLE_DIR = Path("benchmarks/merkle_threshold")
-HISTORY_DOC = Path("docs/source/benchmarks/history.md")
+HISTORY_DOC = Path("specs/benchmarks/history.md")
 
 
 @dataclass

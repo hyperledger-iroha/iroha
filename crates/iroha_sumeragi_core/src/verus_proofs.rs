@@ -3763,7 +3763,7 @@ pub struct ProductionSchedulerTraceProjection {
     pub fifo_owed_after: bool,
 }
 
-/// Verus-side primitive ingress identity and service-class trace.
+/// Verus-side primitive ingress identity, ordinal, and service-class trace.
 #[derive(Copy, Clone)]
 pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub incoming_height: u64,
@@ -3777,6 +3777,40 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub queue_len_before: u64,
     pub queue_len_after: u64,
     pub queue_capacity: u64,
+    pub ordinal_source_before: u128,
+    pub physical_admission_ordinal: u128,
+    pub lifecycle_ordinal: u128,
+    pub ordinal_source_after: u128,
+    pub dormant_reservations_before: u64,
+    pub dormant_reservations_after: u64,
+    pub dormant_owner_ordinal: u128,
+    pub ordinal_minted: bool,
+}
+
+/// Verus-side exact replacement of one unpublished reservation by its
+/// reducer-visible command.
+#[derive(Copy, Clone)]
+pub struct ProductionIngressReservationMaterializationTraceProjection {
+    pub incoming_height: u64,
+    pub incoming_view: u64,
+    pub incoming_generation: u64,
+    pub incoming_class: u8,
+    pub stored_height: u64,
+    pub stored_view: u64,
+    pub stored_generation: u64,
+    pub stored_class: u8,
+    pub queue_len_before: u64,
+    pub queue_len_after: u64,
+    pub reserved_slots_before: u8,
+    pub reserved_slots_after: u8,
+    pub queue_capacity: u64,
+    pub ordinal_source_before: u128,
+    pub physical_admission_ordinal: u128,
+    pub lifecycle_ordinal: u128,
+    pub ordinal_source_after: u128,
+    pub dormant_reservations_before: u64,
+    pub dormant_reservations_after: u64,
+    pub dormant_owner_ordinal: u128,
 }
 
 /// Verus-side total durable leader-wire admission transition.
@@ -4033,6 +4067,24 @@ pub struct ProductionTerminalApplicationWithoutSuccessorActivationProjection {
     pub pending_successor_activation_present: bool,
 }
 
+/// Verus-side primitive durable owner of one exact lane queue reservation.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightReservationOwnerProjection {
+    pub state: u8,
+    pub reservation_identity: CanonicalIdentityProjection,
+    pub release_identity: CanonicalIdentityProjection,
+}
+
+/// Verus-side mirror of one primitive reservation-journal owner transition.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightReservationTransitionProjection {
+    pub action: u8,
+    pub requested_reservation_identity: CanonicalIdentityProjection,
+    pub requested_release_identity: CanonicalIdentityProjection,
+    pub before: ProductionInFlightReservationOwnerProjection,
+    pub after: ProductionInFlightReservationOwnerProjection,
+}
+
 /// Verus-side complete immutable identity of one durable predecessor.
 #[derive(Copy, Clone)]
 pub struct ProductionDurablePredecessorIdentityProjection {
@@ -4258,6 +4310,19 @@ pub closed spec fn check_production_ingress_transition(
     }
 }
 
+/// Total exact reservation-materialization gate mirrored by production.
+pub closed spec fn check_production_ingress_reservation_materialization_transition(
+    projection: ProductionIngressReservationMaterializationTraceProjection,
+) -> Option<ProductionIngressReservationMaterializationTraceProjection> {
+    if production_ingress_reservation_materialization_refines_protected_ownership_kernel(
+        projection,
+    ) {
+        Some(projection)
+    } else {
+        None
+    }
+}
+
 /// Total durable leader-wire admission gate mirrored by production.
 pub closed spec fn check_production_leader_wire_admission_transition(
     projection: ProductionLeaderWireAdmissionTraceProjection,
@@ -4330,6 +4395,20 @@ pub closed spec fn check_production_terminal_application_transition(
     projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
 ) -> Option<ProductionTerminalApplicationWithoutSuccessorActivationProjection> {
     if production_terminal_application_without_successor_activation_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
+}
+
+/// Total gate over the primitive reservation-owner projection mirrored by production.
+///
+/// This is intentionally not a total refinement checker for the surrounding
+/// QueuePlan/Kura/carrier/WSV/FIFO lifecycle.
+pub closed spec fn check_production_in_flight_reservation_transition(
+    projection: ProductionInFlightReservationTransitionProjection,
+) -> Option<ProductionInFlightReservationTransitionProjection> {
+    if production_in_flight_reservation_transition_kernel(projection) {
         Some(projection)
     } else {
         None
@@ -4420,6 +4499,13 @@ pub closed spec fn production_ingress_identity_and_class_trace_refines_protected
     production_ingress_identity_and_class_trace_body!(projection)
 }
 
+/// Exact Verus mirror of the reservation-materialization ownership kernel.
+pub closed spec fn production_ingress_reservation_materialization_refines_protected_ownership_kernel(
+    projection: ProductionIngressReservationMaterializationTraceProjection,
+) -> bool {
+    production_ingress_reservation_materialization_trace_body!(projection)
+}
+
 /// Exact Verus mirror of the durable leader-wire admission kernel.
 pub closed spec fn production_leader_wire_admission_refines_lifecycle_ownership_kernel(
     projection: ProductionLeaderWireAdmissionTraceProjection,
@@ -4468,6 +4554,13 @@ pub closed spec fn production_terminal_application_without_successor_activation_
     projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
 ) -> bool {
     production_terminal_application_without_successor_activation_body!(projection)
+}
+
+/// Exact Verus mirror of the primitive reservation-owner production kernel.
+pub closed spec fn production_in_flight_reservation_transition_kernel(
+    projection: ProductionInFlightReservationTransitionProjection,
+) -> bool {
+    production_in_flight_reservation_transition_body!(projection)
 }
 
 /// Exact applied predecessor ownership and the prepared successor marker admit
@@ -4730,7 +4823,8 @@ pub proof fn production_scheduler_trace_refines_protected_ownership(
     reveal(production_scheduler_trace_refines_protected_ownership_kernel);
 }
 
-/// One bounded ingress admission preserves its complete tag and service class.
+/// One bounded ingress admission preserves its complete tag, service class,
+/// immutable lifecycle owner, and atomic ordinal/dormant-slot transition.
 pub proof fn production_ingress_identity_and_class_trace_refines_protected_ownership(
     projection: ProductionIngressIdentityAndClassTraceProjection,
 )
@@ -4745,10 +4839,77 @@ pub proof fn production_ingress_identity_and_class_trace_refines_protected_owner
             && projection.incoming_class == projection.stored_class
             && projection.queue_len_after > projection.queue_len_before
             && projection.queue_len_after <= projection.queue_capacity
+            && projection.dormant_reservations_after <= projection.queue_capacity
+            && projection.queue_len_after
+                <= projection.queue_capacity - projection.dormant_reservations_after
+            && projection.physical_admission_ordinal > 0u128
+            && projection.lifecycle_ordinal > 0u128
+            && projection.lifecycle_ordinal <= projection.physical_admission_ordinal
+            && projection.ordinal_minted
+            && projection.ordinal_source_before
+                == projection.physical_admission_ordinal
+            && projection.ordinal_source_after
+                == projection.ordinal_source_before + 1u128
+            && (
+                projection.dormant_owner_ordinal == 0u128 ==>
+                    projection.dormant_reservations_after
+                        == projection.dormant_reservations_before
+            )
+            && (
+                projection.dormant_owner_ordinal != 0u128 ==> (
+                    projection.ordinal_minted
+                    && projection.dormant_owner_ordinal == projection.lifecycle_ordinal
+                    && projection.dormant_reservations_before
+                        == projection.dormant_reservations_after + 1u64
+                )
+            )
         ),
 {
     reveal(check_production_ingress_transition);
     reveal(production_ingress_identity_and_class_trace_refines_protected_ownership_kernel);
+}
+
+/// One exact reservation materialization preserves source and effective
+/// occupancy while replacing the token (and optional dormant backing) with
+/// one reducer-visible command.
+pub proof fn production_ingress_reservation_materialization_refines_protected_ownership(
+    projection: ProductionIngressReservationMaterializationTraceProjection,
+)
+    ensures
+        check_production_ingress_reservation_materialization_transition(projection)
+            == Some(projection) ==> (
+            production_ingress_reservation_materialization_refines_protected_ownership_kernel(
+                projection
+            )
+            && projection.incoming_height == projection.stored_height
+            && projection.incoming_view == projection.stored_view
+            && projection.incoming_generation == projection.stored_generation
+            && projection.incoming_class == projection.stored_class
+            && projection.queue_len_after == projection.queue_len_before + 1u64
+            && projection.reserved_slots_before == 1u8
+            && projection.reserved_slots_after == 0u8
+            && projection.queue_len_after <= projection.queue_capacity
+            && projection.queue_len_after
+                <= projection.queue_capacity - projection.dormant_reservations_after
+            && projection.ordinal_source_after == projection.ordinal_source_before
+            && projection.physical_admission_ordinal
+                < projection.ordinal_source_before
+            && (
+                projection.dormant_owner_ordinal == 0u128 ==>
+                    projection.dormant_reservations_after
+                        == projection.dormant_reservations_before
+            )
+            && (
+                projection.dormant_owner_ordinal != 0u128 ==> (
+                    projection.dormant_owner_ordinal == projection.lifecycle_ordinal
+                    && projection.dormant_reservations_before
+                        == projection.dormant_reservations_after + 1u64
+                )
+            )
+        ),
+{
+    reveal(check_production_ingress_reservation_materialization_transition);
+    reveal(production_ingress_reservation_materialization_refines_protected_ownership_kernel);
 }
 
 /// One durable leader-wire admission preserves immutable identity and ordinal
@@ -5104,6 +5265,32 @@ pub proof fn production_terminal_application_without_successor_activation_refine
 {
     reveal(check_production_terminal_application_transition);
     reveal(production_terminal_application_without_successor_activation_kernel);
+}
+
+/// A successful primitive checker result is exactly the shared executable
+/// identity/state relation. Collection extraction and cross-store ordering are
+/// deliberately outside this theorem.
+pub proof fn production_in_flight_reservation_transition_preserves_primitive_identity(
+    projection: ProductionInFlightReservationTransitionProjection,
+)
+    ensures
+        check_production_in_flight_reservation_transition(projection) == Some(projection)
+            ==> production_in_flight_reservation_transition_kernel(projection),
+{
+    reveal(check_production_in_flight_reservation_transition);
+}
+
+/// Runtime commit cannot fabricate a commit barrier from absent ownership.
+pub proof fn production_in_flight_reservation_commit_rejects_absent_owner(
+    projection: ProductionInFlightReservationTransitionProjection,
+)
+    requires
+        projection.action == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_COMMIT),
+        projection.before.state == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT),
+    ensures
+        !production_in_flight_reservation_transition_kernel(projection),
+{
+    reveal(production_in_flight_reservation_transition_kernel);
 }
 
 /// Verus-side shape of one fixed-width effect capability key.
@@ -6861,204 +7048,7 @@ pub fn verified_transition_branch_gate(
     )
 }
 
-/// Exact executable decision procedure used by `refinement::accepts` in a
-/// normal build.  The body is one shared macro expansion, not a transcription.
-pub fn verified_production_transition_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_transition_action_relation(facts),
-{
-    let accepted = production_transition_gate_body!(
-        facts,
-        verified_volatile_summary_gate,
-        verified_named_action_gate,
-        verified_effect_trace_gate,
-        verified_transition_branch_gate,
-    );
-    proof {
-        reveal(production_transition_action_relation);
-    }
-    accepted
-}
-
-/// Safety relation of the exact primitive production kernel.
-pub closed spec fn production_kernel_relation(
-    projection: ProductionTransitionProjection,
-) -> bool {
-    production_transition_action_relation(production_facts_from_projection(projection))
-}
-
-/// An accepted active persisted-TC transition selects the maximum of the
-/// pre-transition lock and the TC's highest `PrepareQC`, carries that exact
-/// durable lock in `EnterView`, and emits one immediately following recovery
-/// fetch exactly when the selected lock is present.
-///
-/// This is a serialized transition theorem only. It intentionally makes no
-/// claim that asynchronous transport or executor work is eventually serviced.
-pub proof fn accepted_core_enter_view_projection_selects_post_install_lock(
-    projection: ProductionTransitionProjection,
-)
-    requires
-        production_kernel_relation(projection),
-        projection.enter_view.active,
-    ensures
-        production_enter_view_projection_relation(projection.enter_view),
-        production_enter_view_preserves_locked_prepare_qc_identity(projection.enter_view),
-        production_enter_view_retains_high_prepare_qc_identity(projection.enter_view),
-        certificate_identity_equal_body!(
-            projection.enter_view.durable_lock_after,
-            production_enter_view_selected_lock(projection.enter_view)
-        ),
-        certificate_identity_equal_body!(
-            projection.enter_view.effect_protected_lock,
-            projection.enter_view.durable_lock_after
-        ),
-        projection.enter_view.durable_lock_after.present
-            <==> production_enter_view_has_exact_following_fetch(projection.enter_view),
-        !projection.enter_view.durable_lock_after.present
-            ==> projection.enter_view.fetch_count == 0
-                && !projection.enter_view.following_fetch_lock.present,
-{
-    reveal(production_kernel_relation);
-    reveal(production_transition_action_relation);
-    reveal(production_facts_from_projection);
-    reveal(production_enter_view_projection_relation);
-    reveal(production_enter_view_preserves_locked_prepare_qc_identity);
-    reveal(production_enter_view_retains_high_prepare_qc_identity);
-    reveal(production_enter_view_selected_lock);
-    reveal(production_enter_view_has_exact_following_fetch);
-}
-
-/// An accepted active persisted-TC transition exposes the complete exact
-/// `EnterView` fact consumed by the effective-lock production refinement.
-pub proof fn accepted_core_enter_view_has_exact_fact(
-    projection: ProductionTransitionProjection,
-)
-    requires
-        production_kernel_relation(projection),
-        projection.enter_view.active,
-    ensures
-        production_enter_view_exact_fact(projection),
-{
-    reveal(production_kernel_relation);
-    reveal(production_transition_action_relation);
-    reveal(production_facts_from_projection);
-    reveal(production_enter_view_exact_fact);
-}
-
-/// Exact executable kernel called conceptually by `refinement::accepts`:
-/// derive facts from concrete primitives first, then evaluate the established
-/// transition gate.  No authorization or action-exactness boolean is an input.
-pub fn verified_production_kernel(
-    projection: ProductionTransitionProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_kernel_relation(projection),
-{
-    let facts = verified_facts_from_projection(projection);
-    let accepted = verified_production_transition_gate(facts);
-    proof {
-        reveal(production_kernel_relation);
-    }
-    accepted
-}
-
-/// A nonzero invariant-violation counter cannot be hidden by the fact
-/// derivation and therefore cannot pass the production kernel.
-pub proof fn production_kernel_rejects_invalid_before_state(
-    projection: ProductionTransitionProjection,
-)
-    requires
-        projection.safety_before.durable_identity_mismatches > 0
-            || projection.safety_before.asynchronous_fence_conflicts > 0
-            || projection.safety_before.invalid_highest_prepare > 0
-            || projection.safety_before.invalid_lock > 0
-            || projection.safety_before.invalid_timeout > 0
-            || projection.safety_before.invalid_decision > 0
-            || projection.safety_before.invalid_pending_append > 0
-            || projection.safety_before.unauthorized_signables > 0
-            || projection.safety_before.invalid_application > 0,
-    ensures
-        !production_kernel_relation(projection),
-{
-    reveal(production_kernel_relation);
-    reveal(production_transition_action_relation);
-}
-
-/// A counterfeit grant whose primitive key differs from the requested key in
-/// any active slot cannot authorize the effect vector.
-pub proof fn production_effect_slot_rejects_counterfeit_grant(
-    slot: ProductionEffectSlotProjection,
-)
-    requires
-        1 <= slot.kind <= 9,
-        slot.requested.kind == slot.kind,
-        slot.granted.kind == slot.kind,
-        !capability_key_equal_body!(slot.requested, slot.granted),
-    ensures
-        !production_effect_slot_authorized(slot),
-{
-}
-
-/// Acceptance refines to the production action relation and exposes the
-/// durable invariants and complete per-slot effect authorization on which the
-/// reducer's commit depends.
-pub proof fn accepted_production_transition_refines_action(
-    facts: ProductionTransitionFactsProjection,
-)
-    requires
-        production_transition_action_relation(facts),
-    ensures
-        facts.before_invariant,
-        facts.after_invariant,
-        facts.context_unchanged,
-        production_volatile_summary_well_formed(
-            facts.volatile_before,
-            facts.validator_count,
-        ),
-        production_volatile_summary_well_formed(
-            facts.volatile_after,
-            facts.validator_count,
-        ),
-        production_named_action_relation(facts),
-        facts.enter_view_exact,
-        production_effect_trace_relation(facts.effects, facts.event_kind),
-        production_transition_branch_relation(facts),
-        (!facts.tag_matches || !facts.busy_fence_open)
-            ==> facts.whole_state_unchanged,
-        facts.effects.len <= 8,
-        facts.effects.len > 0 ==> production_effect_slot_authorized(facts.effects.slot0),
-        facts.effects.len > 1 ==> production_effect_slot_authorized(facts.effects.slot1),
-        facts.effects.len > 2 ==> production_effect_slot_authorized(facts.effects.slot2),
-        facts.effects.len > 3 ==> production_effect_slot_authorized(facts.effects.slot3),
-        facts.effects.len > 4 ==> production_effect_slot_authorized(facts.effects.slot4),
-        facts.effects.len > 5 ==> production_effect_slot_authorized(facts.effects.slot5),
-        facts.effects.len > 6 ==> production_effect_slot_authorized(facts.effects.slot6),
-        facts.effects.len > 7 ==> production_effect_slot_authorized(facts.effects.slot7),
-        effect_count_body!(facts.effects, 1u8) > 0
-            ==> effect_count_body!(facts.effects, 5u8) == 0
-                && effect_count_body!(facts.effects, 7u8) == 0
-                && effect_count_body!(facts.effects, 8u8) == 0,
-        effect_count_body!(facts.effects, 5u8) > 0
-            ==> match facts.effects.len {
-                1 => facts.effects.slot0.kind == 5,
-                2 => facts.effects.slot1.kind == 5,
-                3 => facts.effects.slot2.kind == 5,
-                4 => facts.effects.slot3.kind == 5,
-                5 => facts.effects.slot4.kind == 5,
-                6 => facts.effects.slot5.kind == 5,
-                7 => facts.effects.slot6.kind == 5,
-                8 => facts.effects.slot7.kind == 5,
-                _ => false,
-            },
-        effect_count_body!(facts.effects, 8u8) > 0
-            ==> facts.acknowledge_persist_exact
-                && facts.acknowledgement_continuation == 2,
-{
-    reveal(production_transition_action_relation);
-}
-
-
-
 } // verus!
+
+// The production-kernel proof tail remains in this lexical module.
+include!("verus_proofs/production_kernel_tail.rs");

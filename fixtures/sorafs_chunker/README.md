@@ -21,6 +21,6 @@ cargo run -p sorafs_chunker --bin export_vectors
 
 Local runs typically pass `--allow-unsigned`; the canonical signature set comes
 from Parliament events fetched by the tooling helpers described in
-`docs/source/sorafs/signing_ceremony.md`. After an approval lands on-chain,
+`specs/sorafs/signing_ceremony.md`. After an approval lands on-chain,
 rerun the generator to refresh the language fixtures and confirm that the
 BLAKE3 digest matches the Nexus record.

@@ -488,6 +488,14 @@ def test_decode_evidence_json_sanitizes_sensitive_duplicate_key_label() -> None:
             b'{"raw_provider_records":1,"raw_provider_records":2}',
             "raw_provider_records",
         ),
+        (
+            b'{"signed_auditor_request":1,"signed_auditor_request":2}',
+            "signed_auditor_request",
+        ),
+        (
+            b'{"signed%5Fauditor%5Frequest":1,"signed%5Fauditor%5Frequest":2}',
+            "signed%5Fauditor%5Frequest",
+        ),
     ):
         try:
             decode_evidence_json(raw)
@@ -526,6 +534,10 @@ def test_decode_evidence_json_keeps_payload_free_duplicate_reference_label() -> 
         (
             b'{"route_body_blake3_hex":1,"route_body_blake3_hex":2}',
             "route_body_blake3_hex",
+        ),
+        (
+            b'{"signed_auditor_request_sha256":1,"signed_auditor_request_sha256":2}',
+            "signed_auditor_request_sha256",
         ),
     ):
         try:

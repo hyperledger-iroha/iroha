@@ -6,7 +6,7 @@ regeneration commands, drift guards, and evidence locations so the GPU parity
 gates (WP1-E/F/G) and the cross-SDK cadence council have a single reference.
 
 ## Shared guardrails
-- **Canonical playbook:** `docs/source/norito_binding_regen_playbook.md` spells out
+- **Canonical playbook:** `specs/norito_binding_regen_playbook.md` spells out
   the rotation policy, expected evidence, and the escalation workflow for Android,
   Swift, Python, and future bindings.
 - **Norito schema parity:** `scripts/check_norito_bindings_sync.py` (invoked via
@@ -23,9 +23,9 @@ gates (WP1-E/F/G) and the cross-SDK cadence council have a single reference.
 | Binding | Entry points | Fixture / regen command | Drift guards | Evidence |
 |---------|--------------|-------------------------|--------------|----------|
 | Android (Java) | `java/iroha_android/` (`java/iroha_android/README.md`) | `scripts/android_fixture_regen.sh` → `artifacts/android_fixture_regen_state.json` | `scripts/check_android_fixtures.py`, `ci/check_android_fixtures.sh`, `java/iroha_android/run_tests.sh` | `artifacts/android/fixture_runs/` |
-| Swift (iOS/macOS) | `IrohaSwift/` (`IrohaSwift/README.md`) | `scripts/swift_fixture_regen.sh` (optionally `SWIFT_FIXTURE_ARCHIVE`) → `artifacts/swift_fixture_regen_state.json` | `scripts/check_swift_fixtures.py`, `ci/check_swift_fixtures.sh`, `scripts/swift_fixture_archive.py` | `docs/source/swift_parity_triage.md`, `docs/source/sdk/swift/ios2_fixture_cadence_brief.md` |
-| Python | `python/iroha_python/` (`python/iroha_python/README.md`) | `scripts/python_fixture_regen.sh` → `artifacts/python_fixture_regen_state.json` | `scripts/check_python_fixtures.py`, `python/iroha_python/scripts/run_checks.sh` | `docs/source/norito_binding_regen_playbook.md`, `docs/source/sdk/python/connect_end_to_end.md` |
-| JavaScript | `javascript/iroha_js/` (`docs/source/sdk/js/publishing.md`) | `npm run release:provenance`, `scripts/js_sbom_provenance.sh`, `scripts/js_signed_staging.sh` | `npm run test`, `javascript/iroha_js/scripts/verify-release-tarball.mjs`, `javascript/iroha_js/scripts/record-release-provenance.mjs` | `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`, `artifacts/js/verification/`, `artifacts/js/sbom/` |
+| Swift (iOS/macOS) | `IrohaSwift/` (`IrohaSwift/README.md`) | `scripts/swift_fixture_regen.sh` (optionally `SWIFT_FIXTURE_ARCHIVE`) → `artifacts/swift_fixture_regen_state.json` | `scripts/check_swift_fixtures.py`, `ci/check_swift_fixtures.sh`, `scripts/swift_fixture_archive.py` | `specs/swift_parity_triage.md`, `specs/sdk/swift/ios2_fixture_cadence_brief.md` |
+| Python | `python/iroha_python/` (`python/iroha_python/README.md`) | `scripts/python_fixture_regen.sh` → `artifacts/python_fixture_regen_state.json` | `scripts/check_python_fixtures.py`, `python/iroha_python/scripts/run_checks.sh` | `specs/norito_binding_regen_playbook.md`, `specs/sdk/python/connect_end_to_end.md` |
+| JavaScript | `javascript/iroha_js/` (`specs/sdk/js/publishing.md`) | `npm run release:provenance`, `scripts/js_sbom_provenance.sh`, `scripts/js_signed_staging.sh` | `npm run test`, `javascript/iroha_js/scripts/verify-release-tarball.mjs`, `javascript/iroha_js/scripts/record-release-provenance.mjs` | `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`, `artifacts/js/verification/`, `artifacts/js/sbom/` |
 
 ## Binding details
 
@@ -50,8 +50,8 @@ Rust-generated archives; `scripts/check_swift_fixtures.py` and
 `ci/check_swift_fixtures.sh` enforce byte-level parity plus SLA age limits, while
 `scripts/swift_fixture_regen.sh` supports `SWIFT_FIXTURE_EVENT_TRIGGER` for manual
 rotations. The escalation workflow, KPIs, and dashboards are documented in
-`docs/source/swift_parity_triage.md` and the cadence briefs under
-`docs/source/sdk/swift/`.
+`specs/swift_parity_triage.md` and the cadence briefs under
+`specs/sdk/swift/`.
 
 ### Python
 The Python client (`python/iroha_python/`) shares the Android fixtures. Running
@@ -60,7 +60,7 @@ The Python client (`python/iroha_python/`) shares the Android fixtures. Running
 `artifacts/python_fixture_regen_state.json` once the first post-roadmap rotation
 is captured. `scripts/check_python_fixtures.py` and
 `python/iroha_python/scripts/run_checks.sh` gate pytest, mypy, ruff, and fixture
-parity locally and in CI. The end-to-end docs (`docs/source/sdk/python/…`) and
+parity locally and in CI. The end-to-end docs (`specs/sdk/python/…`) and
 the binding regen playbook describe how to coordinate rotations with the Android
 owners.
 
@@ -75,4 +75,4 @@ SBOM bundles with `scripts/js_sbom_provenance.sh`, runs the signed staging dry-r
 lands under `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`,
 `artifacts/js/sbom/`, and `artifacts/js/verification/`, providing deterministic
 evidence for roadmap JS5/JS6 and WP1-F benchmark runs. The publishing playbook in
-`docs/source/sdk/js/` ties the automation together.
+`specs/sdk/js/` ties the automation together.

@@ -97,7 +97,7 @@ use iroha_data_model::{
         },
         time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     },
-    executor::{ContractRejection, ValidationFail},
+    executor::ValidationFail,
     isi::{
         BatchMode, Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue,
         Revoke, SetAssetHoldingLimit, SetAssetTransferAvailability, SetAssetTransferBlacklist,
@@ -7935,7 +7935,9 @@ mod tests {
     #[test]
     fn signed_transaction_python_boundaries_use_the_canonical_transaction_limit() {
         let maximum = usize::try_from(
-            iroha_data_model::parameter::system::defaults::transaction::max_tx_bytes().get(),
+            iroha_data_model::parameter::system::TransactionParameters::default()
+                .max_tx_bytes()
+                .get(),
         )
         .expect("canonical transaction limit fits the test platform");
         let adversarial = vec![0_u8; maximum + 1];
@@ -9202,7 +9204,7 @@ mod tests {
             "NotPermitted"
         );
         let contract = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
-            ContractRejection {
+            iroha_data_model::executor::ContractRejection {
                 contract: "BoiFiLiquidity".into(),
                 namespace: "FiLiquidityError".into(),
                 name: "BelowMinimum".into(),
@@ -14035,16 +14037,8 @@ impl TransactionBuilder {
         let policy = python_zk_ace_policy_v1(canonical_policy_archive)?;
         require_non_blank_unpadded(source_account_id, "source_account_id")?;
         require_non_blank_unpadded(destination_account_id, "destination_account_id")?;
-        let source = AccountId::from_str(source_account_id).map_err(|error| {
-            PyValueError::new_err(format!(
-                "invalid ZK-ACE source_account_id `{source_account_id}`: {error}"
-            ))
-        })?;
-        let destination = AccountId::from_str(destination_account_id).map_err(|error| {
-            PyValueError::new_err(format!(
-                "invalid ZK-ACE destination_account_id `{destination_account_id}`: {error}"
-            ))
-        })?;
+        let source = parse_account_id(source_account_id)?;
+        let destination = parse_account_id(destination_account_id)?;
         let amount = parse_canonical_u128_text(amount, "amount")?;
         if amount == 0 {
             return Err(PyValueError::new_err(
@@ -14824,9 +14818,7 @@ impl TransactionBuilder {
             ));
         }
         require_non_blank_unpadded(account_id, "account_id")?;
-        let account_id = AccountId::from_str(account_id).map_err(|error| {
-            PyValueError::new_err(format!("invalid ZK-AMS account_id `{account_id}`: {error}"))
-        })?;
+        let account_id = parse_account_id(account_id)?;
         if seed_secret_bytes.0.len() != 32 {
             return Err(PyValueError::new_err(
                 "seed_secret must be exactly 32 bytes",
@@ -17794,7 +17786,9 @@ fn hash_blake2b_32_py(py: Python<'_>, payload: &[u8]) -> PyResult<Py<PyBytes>> {
 
 fn require_canonical_signed_transaction_wire_size_v1(bytes: &[u8]) -> PyResult<()> {
     let maximum = usize::try_from(
-        iroha_data_model::parameter::system::defaults::transaction::max_tx_bytes().get(),
+        iroha_data_model::parameter::system::TransactionParameters::default()
+            .max_tx_bytes()
+            .get(),
     )
     .map_err(|_| {
         PyRuntimeError::new_err("canonical transaction byte limit does not fit this platform")

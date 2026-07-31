@@ -103,7 +103,7 @@ for task in "${tasks[@]}"; do
             do_check "$cmd_genesis" "defaults/genesis.json"
             ;;
         "schema")
-            do_check "$cmd_schema" "docs/source/references/schema.json"
+            do_check "$cmd_schema" "specs/references/schema.json"
             ;;
         "cli-help")
             do_render_check "$cmd_iroha_help"

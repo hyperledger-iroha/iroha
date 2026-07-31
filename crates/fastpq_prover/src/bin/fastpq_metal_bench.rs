@@ -2,7 +2,7 @@
 //!
 //! Measures CPU vs GPU planner operations when the Metal backend is enabled
 //! and emits JSON suitable for dashboards or release artefacts. See
-//! `docs/source/fastpq_plan.md` (Stage 5) for expected usage.
+//! `specs/fastpq_plan.md` (Stage 5) for expected usage.
 
 #![allow(
     clippy::assigning_clones,

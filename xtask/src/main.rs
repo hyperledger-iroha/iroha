@@ -93,7 +93,6 @@ mod address_manifest;
 mod codec;
 mod compute;
 mod compute_harness;
-mod docs_preview;
 mod fastpq;
 mod gar;
 mod gar_bus;
@@ -184,7 +183,6 @@ enum CommandKind {
     SoranetChaosReport {
         options: soranet_chaos::ChaosReportOptions,
     },
-    DocsPreview(docs_preview::Command),
     ComputeSloReport {
         options: compute::ComputeSloReportOptions,
     },
@@ -226,9 +224,6 @@ enum CommandKind {
     SorafsAdoptionCheck {
         options: sorafs::AdoptionCheckOptions,
         report: Option<PathBuf>,
-    },
-    SnsPortalStub {
-        options: sns::PortalStubOptions,
     },
     SorafsScoreboardDiff {
         options: sorafs::ScoreboardDiffOptions,
@@ -1223,9 +1218,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                 summary.scenarios.len()
             );
         }
-        CommandKind::DocsPreview(command) => {
-            docs_preview::run(command)?;
-        }
         CommandKind::ComputeSloReport { options } => {
             compute::run_slo_report(options)?;
         }
@@ -1322,9 +1314,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                 fs::write(&path, rendered)?;
                 println!("sorafs adoption check report written to {}", path.display());
             }
-        }
-        CommandKind::SnsPortalStub { options } => {
-            sns::write_portal_stub(options)?;
         }
         CommandKind::SorafsScoreboardDiff { options, report } => {
             let diff = sorafs::run_scoreboard_diff(options)?;
@@ -2584,76 +2573,6 @@ where
                 .into()),
             }
         }
-        "docs-preview" => {
-            let mut pending = args.peekable();
-            let Some(subcommand) = pending.next() else {
-                return Err("docs-preview requires a subcommand (summary)".into());
-            };
-            match subcommand.as_str() {
-                "summary" => {
-                    let mut log_path = docs_preview::default_log_path();
-                    let mut filter_wave: Option<String> = None;
-                    let mut output = docs_preview::SummaryOutput::Human;
-                    while let Some(arg) = pending.next() {
-                        match arg.as_str() {
-                            "--log" => {
-                                let Some(path) = pending.next() else {
-                                    return Err("--log requires a path".into());
-                                };
-                                log_path = PathBuf::from(path);
-                            }
-                            "--wave" => {
-                                let Some(label) = pending.next() else {
-                                    return Err("--wave requires a label".into());
-                                };
-                                filter_wave = Some(label);
-                            }
-                            "--json" => {
-                                let Some(target) = pending.next() else {
-                                    return Err("--json requires a path or '-'".into());
-                                };
-                                if target == "-" {
-                                    output = docs_preview::SummaryOutput::JsonStdout;
-                                } else {
-                                    output = docs_preview::SummaryOutput::JsonFile(PathBuf::from(
-                                        target,
-                                    ));
-                                }
-                            }
-                            "--json-stdout" => {
-                                output = docs_preview::SummaryOutput::JsonStdout;
-                            }
-                            "--text" => {
-                                output = docs_preview::SummaryOutput::Human;
-                            }
-                            flag if flag.starts_with('-') => {
-                                return Err(format!(
-                                    "unknown option `{flag}` for docs-preview summary"
-                                )
-                                .into());
-                            }
-                            other => {
-                                return Err(format!(
-                                    "unexpected argument `{other}` for docs-preview summary"
-                                )
-                                .into());
-                            }
-                        }
-                    }
-                    Ok(CommandKind::DocsPreview(docs_preview::Command::Summary(
-                        docs_preview::SummaryOptions {
-                            log_path,
-                            filter_wave,
-                            output,
-                        },
-                    )))
-                }
-                other => Err(format!(
-                    "unknown docs-preview subcommand `{other}` (expected summary)"
-                )
-                .into()),
-            }
-        }
         "compute" => {
             let Some(subcmd) = args.next() else {
                 return Err("compute requires a subcommand (slo-report|fixtures)".into());
@@ -3256,55 +3175,6 @@ where
                     require_direct_only,
                 },
                 report,
-            })
-        }
-        "sns-portal-stub" => {
-            let mut pending = args.peekable();
-            let mut cycle: Option<String> = None;
-            let mut suffixes: Vec<String> = Vec::new();
-            let mut output: Option<PathBuf> = None;
-            let mut overwrite = false;
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--cycle" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --cycle".into());
-                        };
-                        cycle = Some(value);
-                    }
-                    "--suffix" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --suffix".into());
-                        };
-                        suffixes.push(value);
-                    }
-                    "--output" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output = Some(normalize_path(Path::new(&value))?);
-                    }
-                    "--force" | "--overwrite" => {
-                        overwrite = true;
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for sns-portal-stub: {flag}").into());
-                    }
-                }
-            }
-            let cycle =
-                cycle.ok_or_else(|| "--cycle is required for sns-portal-stub".to_string())?;
-            if suffixes.is_empty() {
-                return Err("sns-portal-stub requires at least one --suffix <.suffix>".into());
-            }
-            let output = output.unwrap_or_else(|| sns::default_portal_stub_path(&cycle));
-            Ok(CommandKind::SnsPortalStub {
-                options: sns::PortalStubOptions {
-                    cycle,
-                    suffixes,
-                    output,
-                    overwrite,
-                },
             })
         }
         "sorafs-scoreboard-diff" => {
@@ -7705,7 +7575,6 @@ where
             let mut dashboard_label: Option<String> = None;
             let mut dashboard_artifact: Option<PathBuf> = None;
             let mut regulatory_entry: Option<PathBuf> = None;
-            let mut portal_entry: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -7755,12 +7624,6 @@ where
                         };
                         regulatory_entry = Some(normalize_path(Path::new(&path))?);
                     }
-                    "--portal-entry" | "--portal-memo" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --portal-entry (portal memo)".into());
-                        };
-                        portal_entry = Some(normalize_path(Path::new(&path))?);
-                    }
                     flag => {
                         return Err(format!("unknown flag for sns-annex: {flag}").into());
                     }
@@ -7773,7 +7636,7 @@ where
                 dashboard.ok_or("sns-annex requires --dashboard <path to grafana export>")?;
             let output_markdown = output.unwrap_or_else(|| {
                 let mut candidate = workspace_root();
-                candidate.push("docs/source/sns/reports");
+                candidate.push("specs/sns/reports");
                 candidate.push(&suffix);
                 candidate.push(format!("{cycle}.md"));
                 candidate
@@ -7787,7 +7650,6 @@ where
                 dashboard_label,
                 dashboard_artifact,
                 regulatory_entry,
-                portal_entry,
             }))
         }
         "codec" => {
@@ -9895,7 +9757,7 @@ fn generate_openapi(
         let canonical = default_openapi_path();
         if !outputs.contains(&canonical) {
             return Err(
-                "OpenAPI manifests require generating docs/portal/static/openapi/torii.json; include the canonical output path"
+                "OpenAPI manifests require generating artifacts/openapi/torii.json; include the canonical output path"
                     .into(),
             );
         }
@@ -10017,29 +9879,22 @@ const OPENAPI_CARGO_LOCK_PIN: &[u8] = include_bytes!("../../release/openapi-carg
 const OPENAPI_CARGO_LOCK_PIN_PATH: &str = "release/openapi-cargo-lock-v1.txt";
 const OPENAPI_CARGO_LOCK_PIN_SCHEMA: &str = "iroha.openapi.cargo-lock.v1";
 const OPENAPI_CARGO_LOCK_PIN_MAX_BYTES: u64 = 1_024;
-const OPENAPI_CARGO_LOCK_EXPECTED_BYTES: u64 = 315_037;
+const OPENAPI_CARGO_LOCK_EXPECTED_BYTES: u64 = 315_213;
 const OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX: &str =
-    "e4e1c9b8939a9d76f80c593dd0105a4e2783cbc6e3a0020e2ae860d83a5cdc24";
+    "c52a098b84fe27deda651868a87cf0670250a38a999ddf299a1061b2f37fa528";
 const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
     ".github/workflows/openapi.yml",
     "Cargo.lock",
     "Cargo.toml",
     "IrohaSwift",
     "Makefile",
+    "artifacts/openapi/allowed_signers.json",
     "ci",
     "ci/check_android_codegen.sh",
     "ci/check_openapi_spec.sh",
     "crates",
     "csharp",
     "data_model",
-    "docs/i18n",
-    "docs/portal/package-lock.json",
-    "docs/portal/package.json",
-    "docs/portal/scripts",
-    "docs/portal/static/openapi/allowed_signers.json",
-    "docs/source/sdk/android/generated",
-    "docs/source/sdk/android/generated/codegen_hash_tree.json",
-    "docs/source/sdk/android/generated/codegen_manifest_metadata.json",
     "fixtures",
     "integration_tests",
     "java/iroha_android",
@@ -10058,6 +9913,9 @@ const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
     "scripts/android_codegen_replay_sorafs_fixture.py",
     "scripts/check_android_codegen_parity.py",
     "scripts/check_sorafs_release_version_map.py",
+    "specs/sdk/android/generated",
+    "specs/sdk/android/generated/codegen_hash_tree.json",
+    "specs/sdk/android/generated/codegen_manifest_metadata.json",
     "tools",
     "vendor",
     "xtask",
@@ -12138,7 +11996,7 @@ mod openapi_tests {
     fn openapi_generator_input_closure_matches_the_cross_language_fixture() {
         assert_eq!(
             openapi_generator_input_closure_sha256(b"tree-fixture-v1\0", b"lock-fixture-v1\n"),
-            "d46a10a45a97a731c8c20330f435f6ca2ab143dfc38b9ca7949c2ab5010fb9f1"
+            "6f93a76e9e1490ce1ff577bbd6d0c32760f0a9656920e122000608cc6bbc0e41"
         );
     }
 
@@ -12165,7 +12023,7 @@ mod openapi_tests {
             ),
             (
                 canonical
-                    .replace("bytes=315037", "bytes=315038")
+                    .replace("bytes=315213", "bytes=315214")
                     .into_bytes(),
                 "exact V1 size",
             ),
@@ -12196,9 +12054,6 @@ mod openapi_tests {
             "crates",
             "csharp",
             "data_model",
-            "docs/i18n",
-            "docs/portal/scripts",
-            "docs/source/sdk/android/generated",
             "fixtures",
             "integration_tests",
             "java/iroha_android",
@@ -12209,6 +12064,7 @@ mod openapi_tests {
             "python/iroha_python",
             "python/iroha_torii_client",
             "scripts",
+            "specs/sdk/android/generated",
             "tools",
             "vendor",
             "xtask",
@@ -12243,15 +12099,15 @@ mod openapi_tests {
         fs::write(root.join(".gitignore"), b"/Cargo.lock\n")
             .expect("write ignored Cargo lock rule");
         fs::write(root.join("xtask/source.txt"), b"source-v1\n").expect("write fixture source");
-        fs::create_dir_all(root.join("docs/portal/static/openapi/versions/current"))
+        fs::create_dir_all(root.join("artifacts/openapi/versions/current"))
             .expect("create generated fixture directory");
         fs::write(
-            root.join("docs/portal/static/openapi/torii.json"),
+            root.join("artifacts/openapi/torii.json"),
             b"{\"version\":1}\n",
         )
         .expect("write generated fixture spec");
         fs::write(
-            root.join("docs/portal/static/openapi/manifest.json"),
+            root.join("artifacts/openapi/manifest.json"),
             b"{\"generated_unix_ms\":1}\n",
         )
         .expect("write generated fixture manifest");
@@ -12963,13 +12819,13 @@ mod openapi_tests {
         let tmp = tempdir().expect("tempdir");
         initialize_git_fixture(tmp.path());
         let generated = vec![
-            tmp.path().join("docs/portal/static/openapi/torii.json"),
-            tmp.path().join("docs/portal/static/openapi/manifest.json"),
+            tmp.path().join("artifacts/openapi/torii.json"),
+            tmp.path().join("artifacts/openapi/manifest.json"),
             tmp.path()
-                .join("docs/portal/static/openapi/versions/current/torii.json"),
+                .join("artifacts/openapi/versions/current/torii.json"),
             tmp.path()
-                .join("docs/portal/static/openapi/versions/current/manifest.json"),
-            tmp.path().join("docs/portal/static/openapi/versions.json"),
+                .join("artifacts/openapi/versions/current/manifest.json"),
+            tmp.path().join("artifacts/openapi/versions.json"),
         ];
         let clean = git_source_provenance(tmp.path(), &generated).expect("clean provenance");
         assert!(!clean.dirty);
@@ -14662,15 +14518,15 @@ pub(crate) fn workspace_root() -> PathBuf {
 }
 
 fn default_openapi_path() -> PathBuf {
-    workspace_root().join("docs/portal/static/openapi/torii.json")
+    workspace_root().join("artifacts/openapi/torii.json")
 }
 
 fn default_openapi_manifest_path() -> PathBuf {
-    workspace_root().join("docs/portal/static/openapi/manifest.json")
+    workspace_root().join("artifacts/openapi/manifest.json")
 }
 
 fn default_openapi_allowed_signers_path() -> PathBuf {
-    workspace_root().join("docs/portal/static/openapi/allowed_signers.json")
+    workspace_root().join("artifacts/openapi/allowed_signers.json")
 }
 
 fn default_da_report_path() -> PathBuf {
@@ -15082,7 +14938,7 @@ fn print_usage() {
         "  cargo xtask openapi [--output <path>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );
     eprintln!(
-        "    Generate the Torii OpenAPI spec from a live Torii router. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the HSM, then attach --signature-envelope. Defaults to docs/portal/static/openapi/torii.json"
+        "    Generate the Torii OpenAPI spec from a live Torii router. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the HSM, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
     );
     eprintln!(
         "  cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]"
@@ -15125,7 +14981,7 @@ fn print_usage() {
     );
     eprintln!("  cargo xtask address-manifest verify --bundle <dir> [--previous <dir>]");
     eprintln!(
-        "    Validate address manifest bundles (checksums, entry schema, monotonic sequence/digest). See docs/source/runbooks/address_manifest_ops.md for required inputs."
+        "    Validate address manifest bundles (checksums, entry schema, monotonic sequence/digest). See specs/runbooks/address_manifest_ops.md for required inputs."
     );
     eprintln!("  cargo xtask address-vectors [--out <path>] [--stdout] [--verify]");
     eprintln!(
@@ -15333,7 +15189,7 @@ fn print_usage() {
         "  cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> [--alias <alias>] [--content-cid <cid>] [--hostname <host>] [--proof-status <status>] [--manifest-json <path>]"
     );
     eprintln!(
-        "    Validate docs portal gateway binding artefacts before attaching them to DG-3 change tickets. Confirms Sora-Name/Proof headers, route metadata, and proof payloads match the expected alias/content CID."
+        "    Validate gateway binding artefacts before attaching them to DG-3 change tickets. Confirms Sora-Name/Proof headers, route metadata, and proof payloads match the expected alias/content CID."
     );
     eprintln!(
         "  cargo xtask sorafs-adoption-check [--scoreboard <path>] [--summary <path>] [--min-providers <count>] [--allow-zero-weight] [--allow-single-source] [--adoption-override-id <id>] [--allow-implicit-metadata] [--require-direct-only] [--require-telemetry] [--require-telemetry-region] [--report <path>]"
@@ -15349,12 +15205,6 @@ fn print_usage() {
     );
     eprintln!(
         "    Compare eligible provider weights between scoreboards; highlights deltas and flags entries exceeding the configured threshold."
-    );
-    eprintln!(
-        "  cargo xtask docs-preview summary [--log <path>] [--wave <label>] [--json <path|->]"
-    );
-    eprintln!(
-        "    Summarise docs portal preview invite logs (DOCS-SORA) and emit human or JSON output. Defaults to artifacts/docs_portal_preview/feedback_log.json."
     );
     eprintln!(
         "  cargo xtask compute slo-report [--manifest <path>] [--json-out <path>] [--markdown-out <path|->] [--samples <n>]"
@@ -15485,7 +15335,7 @@ fn print_usage() {
     );
     eprintln!("  cargo xtask soranet-testnet-kit [--out <dir>]");
     eprintln!(
-        "    Materialise the SoraNet testnet operator kit. Defaults to docs/examples/soranet_testnet_operator_kit"
+        "    Materialise the SoraNet testnet operator kit. Defaults to fixtures/documentation/soranet_testnet_operator_kit"
     );
     eprintln!("  cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]");
     eprintln!(
@@ -15598,7 +15448,7 @@ fn print_usage() {
         "  cargo xtask ministry-transparency ingest --quarter <YYYY-Q> --ledger <path> --appeals <path> --denylist <path> --treasury <path> [--volunteer <path>] [--red-team-report <path> ...] --output <path>"
     );
     eprintln!(
-        "    Run the Ministry transparency ingest job to build the quarterly snapshot described in docs/source/ministry/transparency_plan.md."
+        "    Run the Ministry transparency ingest job to build the quarterly snapshot described in specs/ministry/transparency_plan.md."
     );
     eprintln!(
         "  cargo xtask ministry-transparency build --ingest <path> --metrics-out <path> --manifest-out <path> [--note <text>]"
@@ -15610,25 +15460,25 @@ fn print_usage() {
         "  cargo xtask ministry-transparency sanitize --ingest <path> --output <path> --report <path> [--epsilon-counts <f64> --epsilon-accuracy <f64> --delta <f64> --suppress-threshold <u64> --min-accuracy-samples <u64> --seed <u64>]"
     );
     eprintln!(
-        "    Apply the DP sanitizer from docs/source/ministry/transparency_plan.md to an ingest snapshot, emitting sanitized metrics and an audit report."
+        "    Apply the DP sanitizer from specs/ministry/transparency_plan.md to an ingest snapshot, emitting sanitized metrics and an audit report."
     );
     eprintln!(
         "  cargo xtask ministry-transparency volunteer-validate --input <path> [--input <path> ...] [--json-output <path>]"
     );
     eprintln!(
-        "    Validate volunteer brief payloads against docs/source/ministry/volunteer_brief_template.md before publishing."
+        "    Validate volunteer brief payloads against specs/ministry/volunteer_brief_template.md before publishing."
     );
     eprintln!(
         "  cargo xtask ministry-agenda validate --proposal <path> [--registry <path>] [--allow-registry-conflicts]"
     );
     eprintln!(
-        "    Validate Agenda Council proposal payloads (docs/source/ministry/agenda_council_proposal.md) and detect duplicate target fingerprints."
+        "    Validate Agenda Council proposal payloads (specs/ministry/agenda_council_proposal.md) and detect duplicate target fingerprints."
     );
     eprintln!(
         "  cargo xtask ministry-agenda sortition --roster <path> --slots <count> --seed <hex> [--out <path>]"
     );
     eprintln!(
-        "    Generate a deterministic Agenda Council draw with Merkle proofs for audit (docs/source/ministry/agenda_council_proposal.md#sortition-cli)."
+        "    Generate a deterministic Agenda Council draw with Merkle proofs for audit (specs/ministry/agenda_council_proposal.md#sortition-cli)."
     );
     eprintln!(
         "  cargo xtask ministry-agenda impact [--proposal <path>]... [--proposal-dir <dir>]... [--registry <path>] [--policy-snapshot <path>] [--out <path>]"
@@ -15640,13 +15490,13 @@ fn print_usage() {
         "  cargo xtask ministry-panel synthesize --proposal <path> --volunteer <path> --ai-manifest <path> --panel-round <RP-YYYY-##> --output <path> [--language <tag> --generated-at <unix-ms>]"
     );
     eprintln!(
-        "    Generate the review panel neutral summary + lint report for roadmap item MINFO-4a (docs/source/ministry/review_panel_summary.md)."
+        "    Generate the review panel neutral summary + lint report for roadmap item MINFO-4a (specs/ministry/review_panel_summary.md)."
     );
     eprintln!(
         "  cargo xtask ministry-jury sortition --roster <path> --proposal <id> --round <id> --beacon <hex> --committee-size <count> --waitlist-size <count> --drawn-at <RFC3339> [--waitlist-ttl-hours <hours>] [--grace-period <secs>] [--failover-grace <secs>] [--out <path>]"
     );
     eprintln!(
-        "    Produce a PolicyJurySortitionV1 manifest for roadmap item MINFO-5 (docs/source/ministry/policy_jury_ballots.md), wiring deterministic draws + waitlists into referendum packets."
+        "    Produce a PolicyJurySortitionV1 manifest for roadmap item MINFO-5 (specs/ministry/policy_jury_ballots.md), wiring deterministic draws + waitlists into referendum packets."
     );
     eprintln!(
         "  cargo xtask mochi-bundle [--out <path>] [--profile <name>] [--no-archive] [--kagami <path>] [--matrix <path>] [--smoke] [--stage <path>]"
@@ -15746,20 +15596,6 @@ mod tests {
             }
             _ => panic!("expected sorafs-adoption-check command"),
         }
-    }
-
-    #[test]
-    fn parse_sns_portal_stub_requires_explicit_suffix() {
-        let args = ["xtask", "sns-portal-stub", "--cycle", "2026-11"];
-        let iter = args.into_iter().map(String::from);
-        let err = match parse_command(iter) {
-            Ok(_) => panic!("sns-portal-stub must require an explicit suffix"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string()
-                .contains("requires at least one --suffix <.suffix>")
-        );
     }
 
     #[test]

@@ -18,9 +18,7 @@ use halo2_proofs::{
         ff::{Field, PrimeField},
         pasta::Fp,
     },
-    plonk::{
-        Advice, Circuit, Column, ConstraintSystem, Error, Fixed, Instance, Selector,
-    },
+    plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Fixed, Instance, Selector},
     poly::Rotation,
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree};
@@ -404,9 +402,7 @@ fn assign_poseidon_permutation(
         if round < half_full_rounds || round >= half_full_rounds + POSEIDON_PARTIAL_ROUNDS {
             config.q_full_round.enable(region, start_row + round)?;
         } else {
-            config
-                .q_partial_round
-                .enable(region, start_row + round)?;
+            config.q_partial_round.enable(region, start_row + round)?;
         }
 
         state_values = poseidon_round_value(state_values, round);
@@ -646,11 +642,9 @@ impl Circuit<Scalar> for KaigiUsageCommitmentCircuit {
                     duration_value,
                     billed_value,
                 )?;
-                let stage_value = duration_value
-                    .zip(billed_value)
-                    .map(|(duration, billed)| {
-                        poseidon_compress(DOMAIN_USAGE_STAGE, duration, billed)
-                    });
+                let stage_value = duration_value.zip(billed_value).map(|(duration, billed)| {
+                    poseidon_compress(DOMAIN_USAGE_STAGE, duration, billed)
+                });
                 let (stage_again, commitment_cell) = assign_poseidon_permutation(
                     &mut region,
                     &config.poseidon,
@@ -705,14 +699,10 @@ mod tests {
         ];
         let inverse_three =
             Option::<Scalar>::from(Scalar::from(3u64).invert()).expect("three is non-zero");
-        let fifth_root = (Scalar::from(2u64) * inverse_three)
-            .pow_vartime(inverse_five_exponent);
+        let fifth_root = (Scalar::from(2u64) * inverse_three).pow_vartime(inverse_five_exponent);
 
         let first = (Scalar::ONE - Scalar::from(7u64), -Scalar::from(13u64));
-        let second = (
-            -Scalar::from(7u64),
-            fifth_root - Scalar::from(13u64),
-        );
+        let second = (-Scalar::from(7u64), fifth_root - Scalar::from(13u64));
         let retired_compressor = |left: Scalar, right: Scalar| {
             Scalar::from(2u64) * (left + Scalar::from(7u64)).pow_vartime([5])
                 + Scalar::from(3u64) * (right + Scalar::from(13u64)).pow_vartime([5])
@@ -759,8 +749,7 @@ mod tests {
         let nullifier_seed = FieldScalar::from(25u64);
         let root_hash = empty_roster_root_hash();
         let root_limbs = roster_root_limbs(&root_hash);
-        let circuit =
-            KaigiRosterJoinCircuit::new(account, domain_salt, nullifier_seed, root_limbs);
+        let circuit = KaigiRosterJoinCircuit::new(account, domain_salt, nullifier_seed, root_limbs);
         let commitment = compute_commitment(account, domain_salt);
         let nullifier = compute_nullifier(account, nullifier_seed);
         let mut public_inputs = vec![vec![commitment], vec![nullifier]];
@@ -771,9 +760,8 @@ mod tests {
             .assert_satisfied();
 
         public_inputs[2][0] += FieldScalar::ONE;
-        let mismatched =
-            MockProver::run(KAIGI_ROSTER_CIRCUIT_K, &circuit, public_inputs)
-                .expect("mismatched public root still constructs");
+        let mismatched = MockProver::run(KAIGI_ROSTER_CIRCUIT_K, &circuit, public_inputs)
+            .expect("mismatched public root still constructs");
         assert!(
             mismatched.verify().is_err(),
             "the proof statement must bind the advertised roster root"
@@ -823,13 +811,9 @@ mod tests {
         let circuit = KaigiUsageCommitmentCircuit::new(duration, billed, segment);
         let commitment = compute_usage_commitment(duration, billed, segment);
 
-        MockProver::run(
-            KAIGI_USAGE_CIRCUIT_K,
-            &circuit,
-            vec![vec![commitment]],
-        )
-        .expect("valid usage circuit")
-        .assert_satisfied();
+        MockProver::run(KAIGI_USAGE_CIRCUIT_K, &circuit, vec![vec![commitment]])
+            .expect("valid usage circuit")
+            .assert_satisfied();
 
         let mismatched = MockProver::run(
             KAIGI_USAGE_CIRCUIT_K,

@@ -15,6 +15,7 @@ from iroha_python import (
     AccountAssetsPage,
     AssetHolderRecord,
     CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
+    ContractCallIntent,
     DataEventFilter,
     Ed25519KeyPair,
     ExplorerRwaRecord,
@@ -27,12 +28,6 @@ from iroha_python import (
     UaidPortfolioAsset,
     authority_fee_payment,
     decode_cancel_asset_lock_v1,
-)
-from iroha_python._privacy_backends import (
-    _VERIFIER_BACKEND_REGISTRY_LABELS_V1,
-    _is_verifier_backend_registry_label_v1,
-    _require_verifier_backend_registry_label_v1,
-    _verifier_backend_registry_tag_v1,
 )
 from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER, DATA_MODEL_VERSION
 from iroha_python.repo import (
@@ -242,183 +237,6 @@ def test_onboard_account_does_not_follow_redirect_or_accept_retired_fields() -> 
             public_key_hex="ab" * 32,
             gas_asset_id="retired",
         )
-
-
-def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
-    expected = frozenset(
-        {
-            "halo2/ipa",
-            "halo2/pasta/kaigi-roster-v1",
-            "halo2/pasta/kaigi-usage-v1",
-            "halo2/pasta/ivm-overlay-bind",
-            "halo2/pasta/ivm-execution-v1",
-            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-            (
-                "halo2/pasta/kagemusha-recursive-spend-step-eq-"
-                "two-parent-operation-protocol-v2"
-            ),
-            (
-                "halo2/pasta/kagemusha-recursive-spend-step-ep-"
-                "two-parent-operation-protocol-v2"
-            ),
-            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
-        }
-    )
-    assert len(expected) == 15
-    assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == expected
-    for backend in expected:
-        expected_tag = "halo2-ipa-pasta" if backend.startswith("halo2/") else "stark"
-        assert _verifier_backend_registry_tag_v1(backend) == expected_tag
-        assert _is_verifier_backend_registry_label_v1(backend)
-        assert (
-            _require_verifier_backend_registry_label_v1(backend, "backend")
-            == backend
-        )
-
-
-def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() -> None:
-    unsupported = (
-        "",
-        "unknown/privacy/backend",
-        "halo2/unknown-native-v1",
-        "halo2/ipa:unknown-native-v1",
-        "stark/unknown-native-v1",
-        "halo2/bn254",
-        "groth16",
-        "groth16/bls12-377",
-        " halo2/ipa",
-        "halo2/ipa ",
-        "\thalo2/ipa",
-        "halo2/ipa\n",
-        "halo2\uFF0Fipa",
-        "halo2/\u200Bipa",
-        "h\u0430lo2/ipa",
-        "halo2/ipa\0",
-        "HALO2/IPA",
-        "stark/FRI",
-        "halo2/ipa::ivm-execution-v1",
-        "halo2//ipa",
-        "halo2/ipa:",
-        "halo2/ipa.",
-        "halo2/ipa/.ivm-execution-v1",
-        "halo2/ipa:ivm..execution-v1",
-        "halo2/pasta/ipa-pasta-cycle-v1",
-        "halo2/ipa-pasta-cycle-v1",
-        "../halo2/ipa",
-        "halo2/ipa/orchard",
-        "halo2-ipa-orchard",
-        "halo2/ipa/penumbra",
-        "halo2/ipa/masp",
-        "halo2/ipa/monero",
-        "halo2/ipa/curve-tree",
-        "halo2/pasta/tiny-add",
-        "halo2/ipa/tiny-add",
-        "halo2/ipa:tiny-add",
-        "halo2/pasta/asset-hidden-transfer-public-test",
-        "halo2/ipa/asset-hidden-transfer-public-test",
-        "halo2/ipa:asset-hidden-transfer-public-test",
-        "stark/fri/miden",
-        "stark/fri/miden/claimed-production",
-        "stark/fri/latest",
-        "stark/fri/random-profile",
-        "stark/fri/sha512-goldilocks",
-        "stark/fri/audit-proof-v1",
-        "stark/fri/sha256 goldilocks",
-        "stark/fri/sha256+goldilocks",
-        "fcmp++",
-        "halo2/ipa+mock",
-        "halo2/ipa:production-ready",
-        "halo2/ipa:claimed-production",
-        "halo2/ipa:mainnet-ready",
-        "halo2/ipa:release-ready",
-        "halo2/ipa:certified-mainnet",
-        "halo2/ipa:third-party-audited",
-        "halo2/ipa/orchard:production-ready",
-        "orchard:mainnet-ready",
-        "penumbra-masp:external-security-review",
-        "jindo-lattice-pcs-zk:release-ready",
-        "miden-stark:dev-fixture",
-        "sis-hints-anoncred-pq-v0",
-        "sis-with-hints",
-        "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
-        "halo2/ipa/orchard:kzg",
-        "orchard:universal-srs",
-        "penumbra-masp:kzg",
-        "jindo-lattice-pcs-zk:trusted-setup",
-        "miden-stark:ptau",
-        "sis-with-hints:groth16",
-        "pq-masp-stark-fri:kzg",
-        "stark/fri/audit-signoff",
-        "stark/fri/externally-audited",
-        "stark/fri/boi-audited",
-        "stark/fri/external-security-review",
-        "stark/fri/security-review-passed",
-        "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
-        "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
-        "stark/fri/a-u-d-i-t-c-l-a-i-m",
-        "stark/fri/dev-fixture",
-        "stark/fri/d-e-v-f-i-x-t-u-r-e",
-        "stark/fri/test",
-        "stark/fri/t-e-s-t",
-        "stark/fri/todo",
-        "stark/fri/t-o-d-o",
-        "stark/fri/draft-only",
-        "stark/fri/d-r-a-f-t",
-        "stark/fri/pending-audit",
-        "stark/fri/replace-before-mainnet",
-        "stark/fri/not-production-ready",
-        "halo2/ipa:dev-fixture",
-        "halo2/ipa:todo-proof",
-        "halo2/ipa:t-o-d-o-proof",
-        "halo2/ipa:draft-proof",
-        "halo2/ipa:d-r-a-f-t-proof",
-        "halo2/ipa:pending-audit",
-        "halo2/ipa:replace-before-production",
-        "halo2/ipa:not-for-production",
-        "halo2/ipa:dummy",
-        "halo2/ipa:f-a-k-e",
-        "halo2/ipa:stub",
-        "halo2/kzg",
-        "halo2/pasta/mock",
-        "kzg/powersoftau",
-    )
-    for backend in unsupported:
-        assert _verifier_backend_registry_tag_v1(backend) is None, backend
-        assert not _is_verifier_backend_registry_label_v1(backend), backend
-        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
-            _require_verifier_backend_registry_label_v1(backend, "backend")
-    for backend in (None, b"halo2/ipa", 1, object()):
-        assert _verifier_backend_registry_tag_v1(backend) is None
-        assert not _is_verifier_backend_registry_label_v1(backend)
-        with pytest.raises(TypeError, match="must be a string"):
-            _require_verifier_backend_registry_label_v1(backend, "backend")
-
-
-def test_each_privacy_verifier_registry_label_rejects_structural_mutations() -> None:
-    for label in _VERIFIER_BACKEND_REGISTRY_LABELS_V1:
-        replacement = "y" if label.endswith("x") else "x"
-        mutations = {
-            f" {label}",
-            f"{label} ",
-            label.upper(),
-            f"{label}/",
-            f"{label}\0",
-            f"{label}\u200b",
-            label.replace("/", "//", 1),
-            f"{label[:-1]}{replacement}",
-        }
-        mutations.discard(label)
-        for mutation in mutations:
-            assert not _is_verifier_backend_registry_label_v1(mutation), (
-                mutation,
-                label,
-            )
 
 
 def zk_verifying_key_commitment(backend: str, vk_bytes: bytes) -> str:
@@ -1741,34 +1559,22 @@ def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
     ):
         with pytest.raises(
             ValueError,
-            match=(
-                "must be a non-empty string|surrounding whitespace|"
-                "unsupported production verifier backend"
-            ),
+            match="unsupported verifier-registry label",
         ):
             DataEventFilter.verifying_key(backend=backend, name="vk_transfer")
         with pytest.raises(
             ValueError,
-            match=(
-                "must be a non-empty string|surrounding whitespace|"
-                "unsupported production verifier backend"
-            ),
+            match="unsupported verifier-registry label",
         ):
             DataEventFilter.proof(backend=backend, proof_hash_hex="a" * 64)
         with pytest.raises(
             ValueError,
-            match=(
-                "must be a non-empty string|surrounding whitespace|"
-                "unsupported production verifier backend"
-            ),
+            match="unsupported verifier-registry label",
         ):
             client.stream_verifying_key_events(backend=backend, name="vk_transfer")
         with pytest.raises(
             ValueError,
-            match=(
-                "must be a non-empty string|surrounding whitespace|"
-                "unsupported production verifier backend"
-            ),
+            match="unsupported verifier-registry label",
         ):
             client.stream_proof_events(backend=backend, proof_hash_hex="a" * 64)
     assert session.calls == []
@@ -1984,42 +1790,25 @@ def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None
 
 
 
-def test_call_contract_and_wait_posts_typed_request() -> None:
+def test_call_contract_and_wait_delegates_to_caller_signed_batch() -> None:
     tx_hash = "d" * 64
-    session = FakeSession(
-        [
-            response(
-                200,
-                {
-                    "ok": True,
-                    "submitted": True,
-                    "dataspace": "is",
-                    "code_hash_hex": "b" * 64,
-                    "abi_hash_hex": "c" * 64,
-                    "creation_time_ms": 1,
-                    "contract_alias": "contract::is",
-                    "tx_hash_hex": tx_hash,
-                    "entrypoint": "main",
-                    "operation_receipt": {
-                        "operation_kind": "contract_call",
-                        "status": "submitted",
-                        "transport": "torii",
-                        "dataspace": "is",
-                        "tx_hash_hex": tx_hash,
-                        "entrypoint": "main",
-                        "gas_limit": 5000,
-                        "payload_digest_hex": "a" * 64,
-                    },
-                },
-            ),
-            response(200, {"status": {"kind": "Committed"}, "hash": tx_hash}),
-        ]
-    )
+    session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    captured: dict[str, object] = {}
+
+    def call_batch(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "hash": tx_hash,
+            "submission": {"accepted": True},
+        }
+
+    client.call_contract_batch_and_wait = call_batch  # type: ignore[method-assign]
 
     result = client.call_contract_and_wait(
+        chain_id="chain",
         authority="authority@is",
-        private_key="priv",
+        private_key_hex="11" * 32,
         contract_alias="contract::is",
         entrypoint="main",
         payload={"amount": 7},
@@ -2029,66 +1818,41 @@ def test_call_contract_and_wait_posts_typed_request() -> None:
         interval=0,
     )
 
-    assert result["terminal_kind"] == "Committed"
-    call_payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert call_payload["payload"] == {"amount": 7}
+    assert captured["chain_id"] == "chain"
+    assert captured["authority"] == "authority@is"
+    assert captured["private_key"] is None
+    assert captured["private_key_hex"] == "11" * 32
+    entries = captured["entries"]
+    assert isinstance(entries, list) and len(entries) == 1
+    intent = entries[0]
+    assert isinstance(intent, ContractCallIntent)
+    assert intent.to_payload() == {
+        "entrypoint": "main",
+        "contract_alias": "contract::is",
+        "payload": {"amount": 7},
+    }
+    assert result["submit"] == {"accepted": True}
+    assert result["tx_hashes"] == [tx_hash]
+    assert session.calls == []
 
 
-def test_call_contract_and_wait_uses_embedded_pipeline_status_without_polling() -> None:
-    tx_hash = "e" * 64
-    session = FakeSession(
-        [
-            response(
-                200,
-                {
-                    "ok": True,
-                    "submitted": True,
-                    "dataspace": "is",
-                    "code_hash_hex": "b" * 64,
-                    "abi_hash_hex": "c" * 64,
-                    "creation_time_ms": 1,
-                    "contract_alias": "contract::is",
-                    "tx_hash_hex": tx_hash,
-                    "pipeline_status": {
-                        "hash": tx_hash,
-                        "status": {"kind": "Committed", "block_height": 42},
-                        "summary": None,
-                        "diagnostics": [],
-                        "scope": "global",
-                        "resolved_from": "endpoint",
-                    },
-                    "entrypoint": "main",
-                    "operation_receipt": {
-                        "operation_kind": "contract_call",
-                        "status": "submitted",
-                        "transport": "torii",
-                        "dataspace": "is",
-                        "tx_hash_hex": tx_hash,
-                        "entrypoint": "main",
-                        "gas_limit": 5000,
-                        "payload_digest_hex": "a" * 64,
-                    },
-                },
-            ),
-        ]
-    )
+def test_call_contract_and_wait_requires_explicit_chain_id_before_dispatch() -> None:
+    session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    result = client.call_contract_and_wait(
-        authority="authority@is",
-        private_key="priv",
-        contract_alias="contract::is",
-        entrypoint="main",
-        payload={"amount": 7},
-        fee_payment=authority_fee_payment(charge_limits=[], gas_limit=5000),
-        wait=True,
-        timeout_ms=1000,
-        interval=0,
+    client.call_contract_batch_and_wait = (  # type: ignore[method-assign]
+        lambda **_kwargs: pytest.fail("missing chain_id must fail before dispatch")
     )
 
-    assert result["terminal_kind"] == "Committed"
-    assert result["r#final"]["hash"] == tx_hash
-    assert [call["path"] for call in session.calls] == ["/v1/contracts/call"]
+    with pytest.raises(TypeError, match="chain_id"):
+        client.call_contract_and_wait(  # type: ignore[call-arg]
+            authority="authority@is",
+            private_key_hex="11" * 32,
+            contract_alias="contract::is",
+            entrypoint="main",
+            payload={"amount": 7},
+            fee_payment=authority_fee_payment(charge_limits=[], gas_limit=5000),
+        )
+    assert session.calls == []
 
 
 def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:

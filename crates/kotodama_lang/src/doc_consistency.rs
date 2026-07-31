@@ -13,12 +13,11 @@ mod tests {
         session::{CompileRequest, CompilerSession},
     };
 
-    fn docs_roots() -> [PathBuf; 3] {
+    fn docs_roots() -> [PathBuf; 2] {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         [
-            manifest_dir.join("../../docs/source"),
+            manifest_dir.join("../../specs"),
             manifest_dir.join("../ivm/docs"),
-            manifest_dir.join("../../docs/portal/docs/norito"),
         ]
     }
 
@@ -223,7 +222,7 @@ mod tests {
     fn canonical_syntax_tables_cover_docs_and_textmate_grammar() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let specification =
-            fs::read_to_string(manifest_dir.join("../../docs/source/kotodama_grammar.md"))
+            fs::read_to_string(manifest_dir.join("../../specs/kotodama_grammar.md"))
                 .expect("read normative Kotodama grammar");
         let textmate =
             fs::read_to_string(manifest_dir.join(

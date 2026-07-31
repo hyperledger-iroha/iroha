@@ -14,7 +14,7 @@ This directory hosts canonical samples for the Nexus **Space Directory**:
   deny-wins guards.
 - `profile/cbdc_lane_profile.json` — Dataspace profile describing governance,
   DA attesters, composability whitelist, and audit hooks that Space Directory
-  entries will eventually expose.
+  entries publish.
 - `capability/*.manifest.to` — Norito-encoded payloads for the canonical
   capability manifests. Each `.to` file is the deterministic encoding of the
   adjacent JSON source; current digests:
@@ -26,13 +26,13 @@ This directory hosts canonical samples for the Nexus **Space Directory**:
   | `capability/eu_regulator_audit.manifest.json` | `capability/eu_regulator_audit.manifest.to` | `82ee92406e6e361b0f32735d765ee5f21e0aeafdc6d119ffb43bc3930021fabd` |
   | `capability/jp_regulator_supervision.manifest.json` | `capability/jp_regulator_supervision.manifest.to` | `fc173ed0949bfd6ec931b91a355f5cc29be97859e9e723b15a94a596c9f51ec9` |
 
-The fixtures are referenced by docs (`docs/space-directory.md`) and will back
-upcoming integration tests once the Space Directory contract lands.
+The fixtures are referenced by `specs/space_directory.md` and exercised by the
+Space Directory data-model and integration tests.
 
 ## Regeneration
 
 1. Edit the JSON sources in this directory. Use
-   `docs/space-directory.md#manifest-template` as the authoritative schema
+   `specs/space_directory.md#4-manifest-template--fixtures` as the authoritative schema
    reference.
 2. Convert each JSON manifest into its Norito `.to` representation for on-chain
    publication. `iroha app space-directory manifest encode` takes care of the

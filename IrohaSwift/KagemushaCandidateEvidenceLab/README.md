@@ -16,4 +16,4 @@ execution. Every sample must be `unsatisfied`, and the installed
 is compile-time rejected.
 
 The public operator procedure and evidence contract are documented in
-`docs/source/sdk/swift/readiness/kagemusha_candidate_ios_lab.md`.
+`specs/sdk/swift/readiness/kagemusha_candidate_ios_lab.md`.

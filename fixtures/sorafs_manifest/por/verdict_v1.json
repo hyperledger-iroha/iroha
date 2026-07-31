@@ -3,7 +3,7 @@
     {
       "algorithm": "ed25519",
       "public_key_hex": "5e212c0980e4b39fc09721134aa02109374edfd260c0d3d03cb501c8d65457a9",
-      "signature_hex": "cfddf6e66176f0f617fab64cb341f7dd1f5b0e3e4ef89d8db76b5359ac20ea98de47c895d00cfcdb0102f790ab1212e782f482d6f7f1397403ca96666654b202"
+      "signature_hex": "68f65b0041939c68d26aab31d30d9848330457ebfee5de12abfbed1c41f456e74c0f02a150d04dd0421eec312023506cc486fa7911835af5b48cd527c4f3a70c"
     }
   ],
   "challenge_id_hex": "d845a72fd33216d1994265becc7de0bbeddd8555ad51b6f7bfa809e863fc42b8",

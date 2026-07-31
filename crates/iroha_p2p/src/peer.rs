@@ -14264,7 +14264,7 @@ mod state {
         None
     }
 
-    fn hex_bytes(bytes: &[u8]) -> String {
+    pub(super) fn hex_bytes(bytes: &[u8]) -> String {
         use core::fmt::Write as _;
 
         let mut out = String::with_capacity(bytes.len() * 2);
@@ -15976,7 +15976,6 @@ mod tests {
         cryptographer: Cryptographer<ChaCha20Poly1305>,
     ) -> Result<Ready<ChaCha20Poly1305>, crate::Error> {
         use tokio::io::AsyncWriteExt;
-
         let (algorithm, public_key) = key_pair
             .public_key()
             .try_to_bytes()

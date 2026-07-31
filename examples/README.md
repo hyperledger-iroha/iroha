@@ -51,6 +51,6 @@ memory, invoke direct syscall variants, or submit opaque instruction bytes. ABI
 v1 is unconditional, and the selected cycle ceiling is embedded in the hashed
 artifact header.
 
-See `docs/source/kotodama_grammar.md` for the normative language and
-`docs/source/kotodama_examples.md` for compile-checked examples and security
+See `specs/kotodama_grammar.md` for the normative language and
+`specs/kotodama_examples.md` for compile-checked examples and security
 boundaries.

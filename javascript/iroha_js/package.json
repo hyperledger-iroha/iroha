@@ -1,7 +1,7 @@
 {
   "name": "@iroha/iroha-js",
   "version": "0.0.3",
-  "description": "Preview Node.js SDK for interacting with Hyperledger Iroha via Norito payloads and Torii APIs.",
+  "description": "Node.js SDK for interacting with Hyperledger Iroha via Norito payloads and Torii APIs.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./index.d.ts",
@@ -212,6 +212,7 @@
     "README.md",
     "LICENSE",
     "index.d.ts",
+    "repo-agreement.d.ts",
     "privacy-capabilities.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",

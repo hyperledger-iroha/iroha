@@ -3684,6 +3684,20 @@ def test_contract_helpers_against_mock_server() -> None:
         server.stop()
 
 
+def test_mock_server_advertises_current_data_model_version() -> None:
+    server = ToriiMockServer().start()
+    try:
+        response = requests.get(
+            f"{server.base_url.rstrip('/')}/v1/node/capabilities",
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        assert response.json()["data_model_version"] == 4
+    finally:
+        server.stop()
+
+
 def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
     server = ToriiMockServer().start()
     try:

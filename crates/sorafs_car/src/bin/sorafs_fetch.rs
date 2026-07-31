@@ -1100,7 +1100,7 @@ fields (`metadata.range_capability`, `metadata.stream_budget`, \
 checks are enabled by default; provide `--provider-advert=name=PATH` for every \
 `--provider` entry or pass `--allow-implicit-provider-metadata` when replaying \
 fixtures that rely on baked-in capability hints.\n\n",
-    include_str!("../../../../docs/source/sorafs/snippets/multi_source_flag_notes.txt")
+    include_str!("../../../../specs/sorafs/snippets/multi_source_flag_notes.txt")
 );
 
 fn usage() -> &'static str {

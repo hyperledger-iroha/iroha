@@ -6065,7 +6065,6 @@ seiyaku DynamicAccessCounter {
     #[test]
     fn register_trigger_keys_cover_definition_and_repetitions() {
         use iroha_primitives::const_vec::ConstVec;
-
         let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let trig: TriggerId = "t_reg".parse().unwrap();
         let trigger = Trigger::new(

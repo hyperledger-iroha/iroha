@@ -115,7 +115,7 @@
       "id": 4,
       "options": {
         "mode": "markdown",
-        "content": "### Rollout Phase Guidance\n\nConsult `docs/source/soranet/pq_rollout_plan.md` for the canary → ramp → default promotion checklist. Keep configuration knobs (`sorafs.gateway.rollout_phase`, `sorafs.rollout_phase`) aligned with the phase shown here.\n\nPhase labels are derived from the orchestrator config; update this panel when the playbook changes."
+        "content": "### Rollout Phase Guidance\n\nConsult `specs/soranet/pq_rollout_plan.md` for the canary → ramp → default promotion checklist. Keep configuration knobs (`sorafs.gateway.rollout_phase`, `sorafs.rollout_phase`) aligned with the phase shown here.\n\nPhase labels are derived from the orchestrator config; update this panel when the playbook changes."
       }
     }
   ]

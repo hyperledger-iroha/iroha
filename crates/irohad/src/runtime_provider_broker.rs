@@ -25,1305 +25,15 @@
 //! non-empty broker-backed catalog until an equivalently authenticated
 //! platform transport exists.
 
-use crate::{
-    IrohaRuntimeDeps,
-    runtime_provider_registry::{
-        IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderRegistryErrorV1,
-        IrohaRuntimeProviderRegistryV1, IrohaRuntimeProviderSlotV1,
-    },
+/// Launcher-facing broker lifecycle, registry, backend set, and serve boundary.
+mod api;
+
+pub(crate) use api::StockRuntimeProviderBrokerRegistryV1;
+pub use api::{
+    RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
+    RuntimeProviderBrokerServerErrorV1, StockGovernanceDagServiceRuntimeProviderRegistryV1,
+    serve_runtime_provider_broker_v1, serve_runtime_provider_broker_with_lifecycle_v1,
 };
-use std::{fmt, sync::Arc};
-
-const BROKER_LIFECYCLE_STARTING_V1: u8 = 0;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-const BROKER_LIFECYCLE_READY_V1: u8 = 1;
-const BROKER_LIFECYCLE_STOPPING_V1: u8 = 2;
-
-/// One-shot lifecycle control shared by a broker launcher and serving thread.
-///
-/// Readiness publication and shutdown are linearized through a bounded
-/// callback gate plus one atomic state. A shutdown request that wins while the
-/// server is starting prevents the readiness callback and short-circuits
-/// startup before backend qualification when it is already present at entry.
-#[derive(Debug)]
-pub struct RuntimeProviderBrokerLifecycleV1 {
-    state: std::sync::atomic::AtomicU8,
-    readiness_publication_gate: std::sync::Mutex<()>,
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    active_provider_calls: std::sync::atomic::AtomicUsize,
-}
-
-impl RuntimeProviderBrokerLifecycleV1 {
-    /// Construct a fresh one-shot lifecycle in the starting state.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            state: std::sync::atomic::AtomicU8::new(BROKER_LIFECYCLE_STARTING_V1),
-            readiness_publication_gate: std::sync::Mutex::new(()),
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            active_provider_calls: std::sync::atomic::AtomicUsize::new(0),
-        }
-    }
-
-    /// Request orderly shutdown without waiting for in-flight provider calls.
-    ///
-    /// The serving call closes accepted local transports and joins every
-    /// session before it returns. A provider qualification already in progress
-    /// or an operation already admitted when this method linearizes is allowed
-    /// to finish because the synchronous V1 provider traits do not expose
-    /// cancellation. Operation admission is the final atomic check immediately
-    /// before dispatch; it can precede the actual trait-method call by a small
-    /// in-process interval.
-    ///
-    /// This call waits for a readiness callback that already owns the bounded
-    /// publication gate. The callback must therefore be bounded and must not
-    /// call `request_shutdown` reentrantly.
-    pub fn request_shutdown(&self) {
-        let _publication = self
-            .readiness_publication_gate
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.state.store(
-            BROKER_LIFECYCLE_STOPPING_V1,
-            std::sync::atomic::Ordering::SeqCst,
-        );
-    }
-
-    /// Return whether orderly shutdown has been requested or begun.
-    #[must_use]
-    pub fn shutdown_requested(&self) -> bool {
-        self.state.load(std::sync::atomic::Ordering::SeqCst) == BROKER_LIFECYCLE_STOPPING_V1
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn publish_ready<R>(&self, on_ready: R) -> bool
-    where
-        R: FnOnce(),
-    {
-        let _publication = self
-            .readiness_publication_gate
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self
-            .state
-            .compare_exchange(
-                BROKER_LIFECYCLE_STARTING_V1,
-                BROKER_LIFECYCLE_READY_V1,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            )
-            .is_err()
-        {
-            return false;
-        }
-        on_ready();
-        true
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn try_begin_qualification(self: &Arc<Self>) -> Option<RuntimeProviderBrokerCallPermitV1> {
-        if self.state.load(std::sync::atomic::Ordering::SeqCst) == BROKER_LIFECYCLE_STOPPING_V1 {
-            return None;
-        }
-        self.active_provider_calls
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        if self.state.load(std::sync::atomic::Ordering::SeqCst) == BROKER_LIFECYCLE_STOPPING_V1 {
-            self.active_provider_calls
-                .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-            return None;
-        }
-        Some(RuntimeProviderBrokerCallPermitV1 {
-            lifecycle: Arc::clone(self),
-        })
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn try_begin_operation(self: &Arc<Self>) -> Option<RuntimeProviderBrokerCallPermitV1> {
-        if self.state.load(std::sync::atomic::Ordering::SeqCst) != BROKER_LIFECYCLE_READY_V1 {
-            return None;
-        }
-        self.active_provider_calls
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        if self.state.load(std::sync::atomic::Ordering::SeqCst) != BROKER_LIFECYCLE_READY_V1 {
-            self.active_provider_calls
-                .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-            return None;
-        }
-        Some(RuntimeProviderBrokerCallPermitV1 {
-            lifecycle: Arc::clone(self),
-        })
-    }
-}
-
-impl Default for RuntimeProviderBrokerLifecycleV1 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-struct RuntimeProviderBrokerCallPermitV1 {
-    lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl Drop for RuntimeProviderBrokerCallPermitV1 {
-    fn drop(&mut self) {
-        self.lifecycle
-            .active_provider_calls
-            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-    }
-}
-
-/// Stock platform-fixed runtime-provider registry used by `main_entry`.
-///
-/// Construction performs no I/O. The registry connects to the fixed local
-/// endpoint only when the validated public binding catalog is non-empty.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct StockRuntimeProviderBrokerRegistryV1;
-
-impl StockRuntimeProviderBrokerRegistryV1 {
-    /// Construct the stock registry without connecting to the broker.
-    #[must_use]
-    pub(crate) const fn new() -> Self {
-        Self
-    }
-}
-
-impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
-    fn resolve(
-        &self,
-        bindings: &IrohaRuntimeProviderBindingsV1,
-    ) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
-        if bindings.is_empty() {
-            return Ok(IrohaRuntimeDeps::default());
-        }
-
-        // Every currently defined V1 slot is enumerated explicitly. Unknown
-        // or future roles remain deliberately fail-closed until their bounded
-        // protocol surface is reviewed and added here.
-        if bindings.iter().any(|binding| {
-            !matches!(
-                binding.slot(),
-                IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper
-                    | IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider
-                    | IrohaRuntimeProviderSlotV1::PrivacyReleaseAnchor
-                    | IrohaRuntimeProviderSlotV1::TransparencyLeaderLease
-                    | IrohaRuntimeProviderSlotV1::FencedPrivacyPublisher
-                    | IrohaRuntimeProviderSlotV1::FencedPrivacyHeadReader
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagSigner
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator
-                    | IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::StreamTokenSigner
-                    | IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint
-                    | IrohaRuntimeProviderSlotV1::ProofOutcomeTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::RepairTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::ReserveTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::OrderbookTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::ModerationTransactionSigner
-                    | IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff
-                    | IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff
-                    | IrohaRuntimeProviderSlotV1::ModerationPanelNotification
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::ProviderIngestRetentionAuthority
-                    | IrohaRuntimeProviderSlotV1::ReputationFinalizedArchiveRetentionAuthority
-                    | IrohaRuntimeProviderSlotV1::PopCredentialProviderRegistry
-                    | IrohaRuntimeProviderSlotV1::PotrGatewaySigner
-                    | IrohaRuntimeProviderSlotV1::PotrProviderSigner
-                    | IrohaRuntimeProviderSlotV1::GatewayAcmeClient
-                    | IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport
-                    | IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter
-                    | IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint
-                    | IrohaRuntimeProviderSlotV1::ReputationThresholdSigner
-                    | IrohaRuntimeProviderSlotV1::ReputationGovernanceDag
-                    | IrohaRuntimeProviderSlotV1::BillingFinalizedQuery
-                    | IrohaRuntimeProviderSlotV1::BillingJournalVerifier
-                    | IrohaRuntimeProviderSlotV1::BillingStatementSigner
-                    | IrohaRuntimeProviderSlotV1::BillingStatementPublisher
-                    | IrohaRuntimeProviderSlotV1::BillingAcknowledgementAuthority
-                    | IrohaRuntimeProviderSlotV1::BillingEpochWitnessStore
-                    | IrohaRuntimeProviderSlotV1::PorFinalizedReplayArchive
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerReceiptSigner
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerErasure
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore
-                    | IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive
-                    | IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner
-            )
-        }) {
-            return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
-        }
-
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        {
-            protocol::resolve(bindings)
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            let _ = bindings;
-            Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
-        }
-    }
-}
-
-/// Runtime-only backends injected into the stock local broker server.
-///
-/// The value contains no credential loader, key material, endpoint discovery,
-/// or built-in implementation. A deployment-owned launcher must inject each
-/// backend requested by its public binding catalog. Startup rejects missing,
-/// extra, substituted, stale, revoked, and test-marked bindings.
-#[derive(Clone, Default)]
-pub struct RuntimeProviderBrokerBackendsV1 {
-    moderation_quarantine_key_wrapper:
-        Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
-    privacy_cycle_prf_provider:
-        Option<Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1>>,
-    privacy_release_anchor: Option<Arc<dyn sorafs_node::ProductionPrivacyReleaseAnchorV1>>,
-    transparency_leader_lease_provider:
-        Option<Arc<dyn sorafs_node::ProductionTransparencyLeaderLeaseProviderV1>>,
-    fenced_privacy_publisher: Option<Arc<dyn sorafs_node::FencedTransparencyPublisherV1>>,
-    fenced_privacy_head_reader:
-        Option<Arc<dyn sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1>>,
-    governance_dag_signer: Option<Arc<dyn sorafs_node::GovernanceDagRuntimeSigner>>,
-    governance_dag_ipfs_authenticator:
-        Option<Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator>>,
-    governance_dag_head_authenticator:
-        Option<Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator>>,
-    governance_dag_checkpoint_store:
-        Option<Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>>,
-    stream_token_signer: Option<Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>>,
-    appeal_finance_transaction_signers:
-        Vec<Arc<dyn iroha_torii::SoraFsAppealFinanceTransactionSigner>>,
-    appeal_finance_checkpoint:
-        Option<
-            Arc<
-                dyn sorafs_node::appeal_finance_transaction_forwarder::
-                    AppealFinanceCheckpointRuntime,
-            >,
-        >,
-    proof_outcome_transaction_signer:
-        Option<Arc<dyn iroha_torii::SoraFsProofOutcomeTransactionSigner>>,
-    repair_transaction_signer: Option<Arc<dyn iroha_torii::SoraFsRepairTransactionSigner>>,
-    reserve_transaction_signer: Option<Arc<dyn iroha_torii::SoraFsReserveTransactionSigner>>,
-    orderbook_transaction_signer: Option<Arc<dyn iroha_torii::SoraFsOrderbookTransactionSigner>>,
-    moderation_transaction_signer: Option<
-        Arc<
-            dyn iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1,
-        >,
-    >,
-    moderation_settlement_handoff: Option<
-        Arc<dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>,
-    >,
-    moderation_publication_handoff: Option<
-        Arc<dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>,
-    >,
-    moderation_panel_notification: Option<
-        Arc<
-            dyn iroha_torii::sorafs::moderation_runtime::
-                ModerationDurablePanelNotificationBoundaryV1,
-        >,
-    >,
-    provider_ingest_authenticated_source: Option<
-        Arc<
-            dyn crate::sorafs_provider_ingest_runtime::
-                ProviderIngestAuthenticatedSourceRuntimeV1,
-        >,
-    >,
-    provider_ingest_signer_resolver: Option<
-        Arc<
-            dyn crate::sorafs_provider_ingest_runtime::
-                ProviderIngestGovernedSignerResolverRuntimeV1,
-        >,
-    >,
-    provider_ingest_checkpoint_store:
-        Option<Arc<dyn sorafs_node::ProviderIngestCheckpointRuntimeV1>>,
-    provider_ingest_retention_authority: Option<
-        Arc<
-            dyn iroha_core::query::provider_ingest_finalized::
-                ProviderIngestFinalizedArchiveRetentionAuthorityV1,
-        >,
-    >,
-    reputation_finalized_archive_retention_authority: Option<
-        Arc<
-            dyn iroha_core::query::reputation_finalized::
-                ReputationFinalizedArchiveRetentionAuthorityV1,
-        >,
-    >,
-    reputation_journal_transaction_submitter: Option<
-        Arc<dyn sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1>,
-    >,
-    reputation_journal_checkpoint: Option<
-        Arc<dyn sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1>,
-    >,
-    reputation_threshold_signer: Option<
-        Arc<dyn sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1>,
-    >,
-    reputation_governance_dag: Option<
-        Arc<dyn sorafs_node::reputation::runtime::ReputationGovernanceDagClientV1>,
-    >,
-    billing_finalized_query:
-        Option<Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingFinalizedQuery>>,
-    billing_journal_verifier:
-        Option<Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingJournalVerifier>>,
-    billing_statement_signer:
-        Option<Arc<dyn sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner>>,
-    billing_statement_publisher:
-        Option<Arc<dyn sorafs_node::hedging_billing_service::BillingStatementPublisher>>,
-    billing_acknowledgement_authority: Option<
-        Arc<
-            dyn sorafs_node::hedging_billing_service::
-                BillingStatementAcknowledgementAuthority,
-        >,
-    >,
-    billing_epoch_witness_store:
-        Option<Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessStore>>,
-    pop_credential_provider_registry: Option<
-        Arc<
-            dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1,
-        >,
-    >,
-    potr_gateway_signer: Option<Arc<dyn iroha_torii::sorafs::PotrGatewaySignerV1>>,
-    potr_provider_signer: Option<Arc<dyn iroha_torii::sorafs::PotrProviderSignerV1>>,
-    gateway_acme_client:
-        Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
-    gateway_compliance_feed_transport: Option<
-        Arc<
-            dyn iroha_torii::sorafs::gateway::
-                GatewayComplianceFeedTransport,
-        >,
-    >,
-    por_finalized_replay_archive:
-        Option<Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1>>,
-    evidence_viewer_webauthn:
-        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>>,
-    evidence_viewer_grants:
-        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1>>,
-    evidence_viewer_receipt_signer:
-        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1>>,
-    evidence_viewer_erasure:
-        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1>>,
-    evidence_viewer_checkpoint_store:
-        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreV1>>,
-    evidence_viewer_compaction_archive:
-        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>>,
-    soracloud_runtime_mutation_signer:
-        Option<Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>>,
-}
-
-impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RuntimeProviderBrokerBackendsV1")
-            .field(
-                "moderation_quarantine_key_wrapper",
-                &self.moderation_quarantine_key_wrapper.is_some(),
-            )
-            .field(
-                "privacy_cycle_prf_provider",
-                &self.privacy_cycle_prf_provider.is_some(),
-            )
-            .field(
-                "privacy_release_anchor",
-                &self.privacy_release_anchor.is_some(),
-            )
-            .field(
-                "transparency_leader_lease_provider",
-                &self.transparency_leader_lease_provider.is_some(),
-            )
-            .field(
-                "fenced_privacy_publisher",
-                &self.fenced_privacy_publisher.is_some(),
-            )
-            .field(
-                "fenced_privacy_head_reader",
-                &self.fenced_privacy_head_reader.is_some(),
-            )
-            .field(
-                "governance_dag_signer",
-                &self.governance_dag_signer.is_some(),
-            )
-            .field(
-                "governance_dag_ipfs_authenticator",
-                &self.governance_dag_ipfs_authenticator.is_some(),
-            )
-            .field(
-                "governance_dag_head_authenticator",
-                &self.governance_dag_head_authenticator.is_some(),
-            )
-            .field(
-                "governance_dag_checkpoint_store",
-                &self.governance_dag_checkpoint_store.is_some(),
-            )
-            .field("stream_token_signer", &self.stream_token_signer.is_some())
-            .field(
-                "appeal_finance_transaction_signer_count",
-                &self.appeal_finance_transaction_signers.len(),
-            )
-            .field(
-                "appeal_finance_checkpoint",
-                &self.appeal_finance_checkpoint.is_some(),
-            )
-            .field(
-                "proof_outcome_transaction_signer",
-                &self.proof_outcome_transaction_signer.is_some(),
-            )
-            .field(
-                "repair_transaction_signer",
-                &self.repair_transaction_signer.is_some(),
-            )
-            .field(
-                "reserve_transaction_signer",
-                &self.reserve_transaction_signer.is_some(),
-            )
-            .field(
-                "orderbook_transaction_signer",
-                &self.orderbook_transaction_signer.is_some(),
-            )
-            .field(
-                "moderation_transaction_signer",
-                &self.moderation_transaction_signer.is_some(),
-            )
-            .field(
-                "moderation_settlement_handoff",
-                &self.moderation_settlement_handoff.is_some(),
-            )
-            .field(
-                "moderation_publication_handoff",
-                &self.moderation_publication_handoff.is_some(),
-            )
-            .field(
-                "moderation_panel_notification",
-                &self.moderation_panel_notification.is_some(),
-            )
-            .field(
-                "provider_ingest_authenticated_source",
-                &self.provider_ingest_authenticated_source.is_some(),
-            )
-            .field(
-                "provider_ingest_signer_resolver",
-                &self.provider_ingest_signer_resolver.is_some(),
-            )
-            .field(
-                "provider_ingest_checkpoint_store",
-                &self.provider_ingest_checkpoint_store.is_some(),
-            )
-            .field(
-                "provider_ingest_retention_authority",
-                &self.provider_ingest_retention_authority.is_some(),
-            )
-            .field(
-                "reputation_finalized_archive_retention_authority",
-                &self
-                    .reputation_finalized_archive_retention_authority
-                    .is_some(),
-            )
-            .field(
-                "reputation_journal_transaction_submitter",
-                &self.reputation_journal_transaction_submitter.is_some(),
-            )
-            .field(
-                "reputation_journal_checkpoint",
-                &self.reputation_journal_checkpoint.is_some(),
-            )
-            .field(
-                "reputation_threshold_signer",
-                &self.reputation_threshold_signer.is_some(),
-            )
-            .field(
-                "reputation_governance_dag",
-                &self.reputation_governance_dag.is_some(),
-            )
-            .field(
-                "billing_finalized_query",
-                &self.billing_finalized_query.is_some(),
-            )
-            .field(
-                "billing_journal_verifier",
-                &self.billing_journal_verifier.is_some(),
-            )
-            .field(
-                "billing_statement_signer",
-                &self.billing_statement_signer.is_some(),
-            )
-            .field(
-                "billing_statement_publisher",
-                &self.billing_statement_publisher.is_some(),
-            )
-            .field(
-                "billing_acknowledgement_authority",
-                &self.billing_acknowledgement_authority.is_some(),
-            )
-            .field(
-                "billing_epoch_witness_store",
-                &self.billing_epoch_witness_store.is_some(),
-            )
-            .field(
-                "pop_credential_provider_registry",
-                &self.pop_credential_provider_registry.is_some(),
-            )
-            .field("potr_gateway_signer", &self.potr_gateway_signer.is_some())
-            .field("potr_provider_signer", &self.potr_provider_signer.is_some())
-            .field("gateway_acme_client", &self.gateway_acme_client.is_some())
-            .field(
-                "gateway_compliance_feed_transport",
-                &self.gateway_compliance_feed_transport.is_some(),
-            )
-            .field(
-                "por_finalized_replay_archive",
-                &self.por_finalized_replay_archive.is_some(),
-            )
-            .field(
-                "evidence_viewer_webauthn",
-                &self.evidence_viewer_webauthn.is_some(),
-            )
-            .field(
-                "evidence_viewer_grants",
-                &self.evidence_viewer_grants.is_some(),
-            )
-            .field(
-                "evidence_viewer_receipt_signer",
-                &self.evidence_viewer_receipt_signer.is_some(),
-            )
-            .field(
-                "evidence_viewer_erasure",
-                &self.evidence_viewer_erasure.is_some(),
-            )
-            .field(
-                "evidence_viewer_checkpoint_store",
-                &self.evidence_viewer_checkpoint_store.is_some(),
-            )
-            .field(
-                "evidence_viewer_compaction_archive",
-                &self.evidence_viewer_compaction_archive.is_some(),
-            )
-            .field(
-                "soracloud_runtime_mutation_signer",
-                &self.soracloud_runtime_mutation_signer.is_some(),
-            )
-            .finish()
-    }
-}
-
-impl RuntimeProviderBrokerBackendsV1 {
-    /// Construct an empty injection set.
-    ///
-    /// The server accepts this only for an empty catalog. Every requested
-    /// production role must be attached explicitly before serving.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            moderation_quarantine_key_wrapper: None,
-            privacy_cycle_prf_provider: None,
-            privacy_release_anchor: None,
-            transparency_leader_lease_provider: None,
-            fenced_privacy_publisher: None,
-            fenced_privacy_head_reader: None,
-            governance_dag_signer: None,
-            governance_dag_ipfs_authenticator: None,
-            governance_dag_head_authenticator: None,
-            governance_dag_checkpoint_store: None,
-            stream_token_signer: None,
-            appeal_finance_transaction_signers: Vec::new(),
-            appeal_finance_checkpoint: None,
-            proof_outcome_transaction_signer: None,
-            repair_transaction_signer: None,
-            reserve_transaction_signer: None,
-            orderbook_transaction_signer: None,
-            moderation_transaction_signer: None,
-            moderation_settlement_handoff: None,
-            moderation_publication_handoff: None,
-            moderation_panel_notification: None,
-            provider_ingest_authenticated_source: None,
-            provider_ingest_signer_resolver: None,
-            provider_ingest_checkpoint_store: None,
-            provider_ingest_retention_authority: None,
-            reputation_finalized_archive_retention_authority: None,
-            reputation_journal_transaction_submitter: None,
-            reputation_journal_checkpoint: None,
-            reputation_threshold_signer: None,
-            reputation_governance_dag: None,
-            billing_finalized_query: None,
-            billing_journal_verifier: None,
-            billing_statement_signer: None,
-            billing_statement_publisher: None,
-            billing_acknowledgement_authority: None,
-            billing_epoch_witness_store: None,
-            pop_credential_provider_registry: None,
-            potr_gateway_signer: None,
-            potr_provider_signer: None,
-            gateway_acme_client: None,
-            gateway_compliance_feed_transport: None,
-            por_finalized_replay_archive: None,
-            evidence_viewer_webauthn: None,
-            evidence_viewer_grants: None,
-            evidence_viewer_receipt_signer: None,
-            evidence_viewer_erasure: None,
-            evidence_viewer_checkpoint_store: None,
-            evidence_viewer_compaction_archive: None,
-            soracloud_runtime_mutation_signer: None,
-        }
-    }
-
-    /// Attach the deployment-owned Soracloud transaction and provenance signer.
-    #[must_use]
-    pub fn with_soracloud_runtime_mutation_signer(
-        mut self,
-        signer: Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,
-    ) -> Self {
-        self.soracloud_runtime_mutation_signer = Some(signer);
-        self
-    }
-
-    /// Attach the deployment-owned PKCS#11/KMS quarantine-DEK wrapper.
-    #[must_use]
-    pub fn with_moderation_quarantine_key_wrapper(
-        mut self,
-        key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>,
-    ) -> Self {
-        self.moderation_quarantine_key_wrapper = Some(key_wrapper);
-        self
-    }
-
-    /// Attach the deployment-owned threshold-PRF provider used for privacy cycles.
-    #[must_use]
-    pub fn with_privacy_cycle_prf_provider(
-        mut self,
-        provider: Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1>,
-    ) -> Self {
-        self.privacy_cycle_prf_provider = Some(provider);
-        self
-    }
-
-    /// Attach the independently administered finalized privacy-release anchor.
-    #[must_use]
-    pub fn with_privacy_release_anchor(
-        mut self,
-        anchor: Arc<dyn sorafs_node::ProductionPrivacyReleaseAnchorV1>,
-    ) -> Self {
-        self.privacy_release_anchor = Some(anchor);
-        self
-    }
-
-    /// Attach the external sealed-CAS transparency leader-lease provider.
-    #[must_use]
-    pub fn with_transparency_leader_lease_provider(
-        mut self,
-        provider: Arc<dyn sorafs_node::ProductionTransparencyLeaderLeaseProviderV1>,
-    ) -> Self {
-        self.transparency_leader_lease_provider = Some(provider);
-        self
-    }
-
-    /// Attach the deployment-owned fused privacy Governance target writer.
-    #[must_use]
-    pub fn with_fenced_privacy_publisher(
-        mut self,
-        publisher: Arc<dyn sorafs_node::FencedTransparencyPublisherV1>,
-    ) -> Self {
-        self.fenced_privacy_publisher = Some(publisher);
-        self
-    }
-
-    /// Attach the authenticated fused-privacy authoritative-head reader.
-    #[must_use]
-    pub fn with_fenced_privacy_head_reader(
-        mut self,
-        reader: Arc<dyn sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1>,
-    ) -> Self {
-        self.fenced_privacy_head_reader = Some(reader);
-        self
-    }
-
-    /// Attach the deployment-owned Governance DAG HSM/KMS signer.
-    #[must_use]
-    pub fn with_governance_dag_signer(
-        mut self,
-        signer: Arc<dyn sorafs_node::GovernanceDagRuntimeSigner>,
-    ) -> Self {
-        self.governance_dag_signer = Some(signer);
-        self
-    }
-
-    /// Attach the deployment-owned Governance DAG IPFS request-auth HSM.
-    #[must_use]
-    pub fn with_governance_dag_ipfs_authenticator(
-        mut self,
-        authenticator: Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator>,
-    ) -> Self {
-        self.governance_dag_ipfs_authenticator = Some(authenticator);
-        self
-    }
-
-    /// Attach the independently administered signed-head request-auth HSM.
-    #[must_use]
-    pub fn with_governance_dag_head_authenticator(
-        mut self,
-        authenticator: Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator>,
-    ) -> Self {
-        self.governance_dag_head_authenticator = Some(authenticator);
-        self
-    }
-
-    /// Attach the deployment-owned Governance DAG sealed checkpoint store.
-    #[must_use]
-    pub fn with_governance_dag_checkpoint_store(
-        mut self,
-        store: Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>,
-    ) -> Self {
-        self.governance_dag_checkpoint_store = Some(store);
-        self
-    }
-
-    /// Attach the deployment-owned stream-token Ed25519 signer.
-    #[must_use]
-    pub fn with_stream_token_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>,
-    ) -> Self {
-        self.stream_token_signer = Some(signer);
-        self
-    }
-
-    /// Attach one independently administered appeal-finance transaction signer.
-    ///
-    /// Call this once for every configured signer handle. Server startup
-    /// rejects duplicates, missing providers, and extras.
-    #[must_use]
-    pub fn with_appeal_finance_transaction_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::SoraFsAppealFinanceTransactionSigner>,
-    ) -> Self {
-        self.appeal_finance_transaction_signers.push(signer);
-        self
-    }
-
-    /// Attach the appeal-finance HSM signer and sealed monotonic checkpoint store.
-    #[must_use]
-    pub fn with_appeal_finance_checkpoint(
-        mut self,
-        checkpoint: Arc<
-            dyn sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointRuntime,
-        >,
-    ) -> Self {
-        self.appeal_finance_checkpoint = Some(checkpoint);
-        self
-    }
-
-    /// Attach the independently administered proof-outcome transaction signer.
-    #[must_use]
-    pub fn with_proof_outcome_transaction_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::SoraFsProofOutcomeTransactionSigner>,
-    ) -> Self {
-        self.proof_outcome_transaction_signer = Some(signer);
-        self
-    }
-
-    /// Attach the independently administered native repair transaction signer.
-    #[must_use]
-    pub fn with_repair_transaction_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::SoraFsRepairTransactionSigner>,
-    ) -> Self {
-        self.repair_transaction_signer = Some(signer);
-        self
-    }
-
-    /// Attach the independently administered reserve/rent transaction signer.
-    #[must_use]
-    pub fn with_reserve_transaction_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::SoraFsReserveTransactionSigner>,
-    ) -> Self {
-        self.reserve_transaction_signer = Some(signer);
-        self
-    }
-
-    /// Attach the independently administered orderbook transaction signer.
-    #[must_use]
-    pub fn with_orderbook_transaction_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::SoraFsOrderbookTransactionSigner>,
-    ) -> Self {
-        self.orderbook_transaction_signer = Some(signer);
-        self
-    }
-
-    /// Attach the independently administered moderation transaction signer.
-    #[must_use]
-    pub fn with_moderation_transaction_signer(
-        mut self,
-        signer: Arc<
-            dyn iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1,
-        >,
-    ) -> Self {
-        self.moderation_transaction_signer = Some(signer);
-        self
-    }
-
-    /// Attach the durable exactly-once moderation settlement boundary.
-    #[must_use]
-    pub fn with_moderation_settlement_handoff(
-        mut self,
-        boundary: Arc<
-            dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1,
-        >,
-    ) -> Self {
-        self.moderation_settlement_handoff = Some(boundary);
-        self
-    }
-
-    /// Attach the durable exactly-once moderation publication boundary.
-    #[must_use]
-    pub fn with_moderation_publication_handoff(
-        mut self,
-        boundary: Arc<
-            dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1,
-        >,
-    ) -> Self {
-        self.moderation_publication_handoff = Some(boundary);
-        self
-    }
-
-    /// Attach the durable payload-free moderation panel notification boundary.
-    #[must_use]
-    pub fn with_moderation_panel_notification(
-        mut self,
-        boundary: Arc<
-            dyn iroha_torii::sorafs::moderation_runtime::
-                ModerationDurablePanelNotificationBoundaryV1,
-        >,
-    ) -> Self {
-        self.moderation_panel_notification = Some(boundary);
-        self
-    }
-
-    /// Attach the authenticated governed provider-ingest source pool.
-    #[must_use]
-    pub fn with_provider_ingest_authenticated_source(
-        mut self,
-        source: Arc<
-            dyn crate::sorafs_provider_ingest_runtime::ProviderIngestAuthenticatedSourceRuntimeV1,
-        >,
-    ) -> Self {
-        self.provider_ingest_authenticated_source = Some(source);
-        self
-    }
-
-    /// Attach the governed provider-ingest completion-signer resolver.
-    #[must_use]
-    pub fn with_provider_ingest_signer_resolver(
-        mut self,
-        resolver: Arc<
-            dyn crate::sorafs_provider_ingest_runtime::
-                ProviderIngestGovernedSignerResolverRuntimeV1,
-        >,
-    ) -> Self {
-        self.provider_ingest_signer_resolver = Some(resolver);
-        self
-    }
-
-    /// Attach the provider-ingest sealed monotonic checkpoint store.
-    #[must_use]
-    pub fn with_provider_ingest_checkpoint_store(
-        mut self,
-        store: Arc<dyn sorafs_node::ProviderIngestCheckpointRuntimeV1>,
-    ) -> Self {
-        self.provider_ingest_checkpoint_store = Some(store);
-        self
-    }
-
-    /// Attach the provider-ingest finalized-archive retention authority.
-    #[must_use]
-    pub fn with_provider_ingest_retention_authority(
-        mut self,
-        authority: Arc<
-            dyn iroha_core::query::provider_ingest_finalized::
-                ProviderIngestFinalizedArchiveRetentionAuthorityV1,
-        >,
-    ) -> Self {
-        self.provider_ingest_retention_authority = Some(authority);
-        self
-    }
-
-    /// Attach the reputation finalized-archive sealed retention authority.
-    #[must_use]
-    pub fn with_reputation_finalized_archive_retention_authority(
-        mut self,
-        authority: Arc<
-            dyn iroha_core::query::reputation_finalized::
-                ReputationFinalizedArchiveRetentionAuthorityV1,
-        >,
-    ) -> Self {
-        self.reputation_finalized_archive_retention_authority = Some(authority);
-        self
-    }
-
-    /// Attach the runtime-only native reputation-journal transaction submitter.
-    #[must_use]
-    pub fn with_reputation_journal_transaction_submitter(
-        mut self,
-        submitter: Arc<
-            dyn sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1,
-        >,
-    ) -> Self {
-        self.reputation_journal_transaction_submitter = Some(submitter);
-        self
-    }
-
-    /// Attach the externally sealed monotonic reputation-journal checkpoint provider.
-    #[must_use]
-    pub fn with_reputation_journal_checkpoint(
-        mut self,
-        checkpoint: Arc<dyn sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1>,
-    ) -> Self {
-        self.reputation_journal_checkpoint = Some(checkpoint);
-        self
-    }
-
-    /// Attach the independently administered reputation threshold signer.
-    #[must_use]
-    pub fn with_reputation_threshold_signer(
-        mut self,
-        signer: Arc<dyn sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1>,
-    ) -> Self {
-        self.reputation_threshold_signer = Some(signer);
-        self
-    }
-
-    /// Attach the authenticated reputation Governance DAG publication/readback provider.
-    #[must_use]
-    pub fn with_reputation_governance_dag(
-        mut self,
-        governance_dag: Arc<dyn sorafs_node::reputation::runtime::ReputationGovernanceDagClientV1>,
-    ) -> Self {
-        self.reputation_governance_dag = Some(governance_dag);
-        self
-    }
-
-    /// Attach the immutable finalized-ledger billing query.
-    #[must_use]
-    pub fn with_billing_finalized_query(
-        mut self,
-        query: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingFinalizedQuery>,
-    ) -> Self {
-        self.billing_finalized_query = Some(query);
-        self
-    }
-
-    /// Attach the consensus billing-journal proof verifier.
-    #[must_use]
-    pub fn with_billing_journal_verifier(
-        mut self,
-        verifier: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingJournalVerifier>,
-    ) -> Self {
-        self.billing_journal_verifier = Some(verifier);
-        self
-    }
-
-    /// Attach the independently administered billing statement HSM/KMS signer.
-    #[must_use]
-    pub fn with_billing_statement_signer(
-        mut self,
-        signer: Arc<dyn sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner>,
-    ) -> Self {
-        self.billing_statement_signer = Some(signer);
-        self
-    }
-
-    /// Attach the immutable billing statement publication/readback provider.
-    #[must_use]
-    pub fn with_billing_statement_publisher(
-        mut self,
-        publisher: Arc<dyn sorafs_node::hedging_billing_service::BillingStatementPublisher>,
-    ) -> Self {
-        self.billing_statement_publisher = Some(publisher);
-        self
-    }
-
-    /// Attach the authenticated acknowledgement/reconciliation authority.
-    #[must_use]
-    pub fn with_billing_acknowledgement_authority(
-        mut self,
-        authority: Arc<
-            dyn sorafs_node::hedging_billing_service::BillingStatementAcknowledgementAuthority,
-        >,
-    ) -> Self {
-        self.billing_acknowledgement_authority = Some(authority);
-        self
-    }
-
-    /// Attach the sealed monotonic billing epoch-witness store.
-    #[must_use]
-    pub fn with_billing_epoch_witness_store(
-        mut self,
-        store: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessStore>,
-    ) -> Self {
-        self.billing_epoch_witness_store = Some(store);
-        self
-    }
-
-    /// Attach the deployment-owned PoP private-runtime provider registry.
-    #[must_use]
-    pub fn with_pop_credential_provider_registry(
-        mut self,
-        registry: Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>,
-    ) -> Self {
-        self.pop_credential_provider_registry = Some(registry);
-        self
-    }
-
-    /// Attach the independently administered PoTR gateway Ed25519 signer.
-    #[must_use]
-    pub fn with_potr_gateway_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::sorafs::PotrGatewaySignerV1>,
-    ) -> Self {
-        self.potr_gateway_signer = Some(signer);
-        self
-    }
-
-    /// Attach the independently administered PoTR provider ML-DSA-65 signer.
-    #[must_use]
-    pub fn with_potr_provider_signer(
-        mut self,
-        signer: Arc<dyn iroha_torii::sorafs::PotrProviderSignerV1>,
-    ) -> Self {
-        self.potr_provider_signer = Some(signer);
-        self
-    }
-
-    /// Attach the deployment-owned authenticated ACME client.
-    #[must_use]
-    pub fn with_gateway_acme_client(
-        mut self,
-        client: Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>,
-    ) -> Self {
-        self.gateway_acme_client = Some(client);
-        self
-    }
-
-    /// Attach the deployment-owned pinned DNS/HTTPS compliance-feed transport.
-    #[must_use]
-    pub fn with_gateway_compliance_feed_transport(
-        mut self,
-        transport: Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
-    ) -> Self {
-        self.gateway_compliance_feed_transport = Some(transport);
-        self
-    }
-
-    /// Attach the deployment-owned authenticated finalized-PoR replay archive.
-    #[must_use]
-    pub fn with_por_finalized_replay_archive(
-        mut self,
-        archive: Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1>,
-    ) -> Self {
-        self.por_finalized_replay_archive = Some(archive);
-        self
-    }
-
-    /// Attach the deployment-owned evidence-viewer WebAuthn boundary.
-    #[must_use]
-    pub fn with_evidence_viewer_webauthn(
-        mut self,
-        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>,
-    ) -> Self {
-        self.evidence_viewer_webauthn = Some(boundary);
-        self
-    }
-
-    /// Attach the deployment-owned evidence-viewer rotating-grant authority.
-    #[must_use]
-    pub fn with_evidence_viewer_grants(
-        mut self,
-        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1>,
-    ) -> Self {
-        self.evidence_viewer_grants = Some(boundary);
-        self
-    }
-
-    /// Attach the deployment-owned evidence-viewer receipt signer.
-    #[must_use]
-    pub fn with_evidence_viewer_receipt_signer(
-        mut self,
-        signer: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1>,
-    ) -> Self {
-        self.evidence_viewer_receipt_signer = Some(signer);
-        self
-    }
-
-    /// Attach the deployment-owned evidence-viewer erasure boundary.
-    #[must_use]
-    pub fn with_evidence_viewer_erasure(
-        mut self,
-        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1>,
-    ) -> Self {
-        self.evidence_viewer_erasure = Some(boundary);
-        self
-    }
-
-    /// Attach the deployment-owned evidence-viewer authoritative checkpoint store.
-    #[must_use]
-    pub fn with_evidence_viewer_checkpoint_store(
-        mut self,
-        store: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreV1>,
-    ) -> Self {
-        self.evidence_viewer_checkpoint_store = Some(store);
-        self
-    }
-
-    /// Attach the deployment-owned evidence-viewer immutable compaction archive.
-    #[must_use]
-    pub fn with_evidence_viewer_compaction_archive(
-        mut self,
-        archive: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1>,
-    ) -> Self {
-        self.evidence_viewer_compaction_archive = Some(archive);
-        self
-    }
-}
-
-/// Payload-free stock broker-server startup or transport failure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RuntimeProviderBrokerServerErrorV1 {
-    /// The catalog requests a role the bounded V1 server does not implement.
-    UnsupportedRole,
-    /// A requested backend is absent or an unrequested backend was injected.
-    BackendSetMismatch,
-    /// A backend's live public identity or qualification is not exact.
-    BindingMismatch,
-    /// The fixed service-UID-owned local endpoint could not be secured.
-    EndpointUnavailable,
-    /// The broker could not prove and remove its bound endpoint entry without
-    /// risking a path-substitution unlink.
-    EndpointCleanupFailed,
-    /// A canonical protocol or authenticated peer invariant failed.
-    Protocol,
-    /// This platform lacks the authenticated V1 local transport.
-    UnsupportedPlatform,
-}
-
-impl fmt::Display for RuntimeProviderBrokerServerErrorV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::UnsupportedRole => "runtime-provider broker role is unsupported",
-            Self::BackendSetMismatch => "runtime-provider broker backend set is incomplete",
-            Self::BindingMismatch => "runtime-provider broker binding is not qualified",
-            Self::EndpointUnavailable => "runtime-provider broker endpoint is unavailable",
-            Self::EndpointCleanupFailed => {
-                "runtime-provider broker endpoint cleanup could not be completed safely"
-            }
-            Self::Protocol => "runtime-provider broker protocol failed",
-            Self::UnsupportedPlatform => {
-                "runtime-provider broker transport is unsupported on this platform"
-            }
-        })
-    }
-}
-
-impl std::error::Error for RuntimeProviderBrokerServerErrorV1 {}
-
-/// Serve the exact catalog on the platform-fixed service-UID-owned endpoint.
-///
-/// This is the packaged launcher boundary for deployment-owned broker
-/// executables. It blocks in the authenticated accept loop and never loads
-/// credentials, private keys, environment overrides, or test backends.
-///
-/// # Errors
-///
-/// Fails before accepting clients if the catalog/backend set is incomplete or
-/// any live public binding is missing, substituted, stale, revoked, or
-/// test-marked. It also fails when the fixed endpoint cannot be created with
-/// the required ownership and mode.
-pub fn serve_runtime_provider_broker_v1(
-    bindings: &IrohaRuntimeProviderBindingsV1,
-    backends: RuntimeProviderBrokerBackendsV1,
-) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        protocol::serve(bindings, backends)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (bindings, backends);
-        Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
-    }
-}
-
-/// Serve the exact catalog until the caller requests an orderly shutdown.
-///
-/// The caller retains a clone of `lifecycle` and requests shutdown through
-/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`]. `on_ready` runs
-/// exactly once, on the serving thread, after all requested backends have
-/// passed live qualification, the fixed endpoint has been securely bound, and
-/// the complete backend catalog has passed an immediate second qualification.
-/// A bounded gate linearizes the complete callback against shutdown: a
-/// shutdown that wins suppresses the callback, while a shutdown that loses
-/// waits for the callback to finish before returning.
-///
-/// The callback must be bounded and infallible, and it must not call
-/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`] reentrantly. If it
-/// panics, endpoint cleanup is attempted while the panic unwinds.
-///
-/// After shutdown, the server closes every accepted transport and joins every
-/// session before returning. Synchronous deployment-owned provider methods do
-/// not expose cancellation or a uniform deadline, so a qualification call
-/// already in progress or an operation already admitted can delay this return;
-/// deployments must enforce their advertised bounds inside each provider
-/// adapter. Admission is the final atomic check immediately before dispatch
-/// and can precede entry into the trait method by a small in-process interval.
-/// No operation is admitted after the shutdown transition.
-///
-/// Startup binds an unpredictable staging name in a pinned parent directory,
-/// establishes the socket identity guard before permission changes, then
-/// atomically promotes that entry to the canonical name without replacement.
-/// Portable Linux/macOS pathname APIs do not provide an atomic
-/// “unlink-if-device-and-inode-match” operation. Cleanup resolves and unlinks
-/// relative to the pinned directory descriptor, checks the socket identity
-/// immediately before that unlink, and reports substitution instead of
-/// knowingly removing a different entry. These pathname APIs still leave
-/// check/use intervals around mode changes and cleanup, so the service-owned
-/// runtime directory must exclude untrusted same-UID pathname mutators. If the
-/// broker cannot establish the staging entry's identity immediately after a
-/// successful bind, it closes the listener, reports
-/// [`RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed`], and leaves
-/// that unpredictable staging entry for operator inspection rather than
-/// unlinking an unproven replacement.
-///
-/// # Errors
-///
-/// Fails before readiness if the catalog/backend set is incomplete, any live
-/// public binding is missing, substituted, stale, revoked, or test-marked, or
-/// the fixed endpoint cannot be created with the required ownership and mode.
-pub fn serve_runtime_provider_broker_with_lifecycle_v1<R>(
-    bindings: &IrohaRuntimeProviderBindingsV1,
-    backends: RuntimeProviderBrokerBackendsV1,
-    lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
-    on_ready: R,
-) -> Result<(), RuntimeProviderBrokerServerErrorV1>
-where
-    R: FnOnce(),
-{
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        protocol::serve_with_lifecycle(bindings, backends, lifecycle, on_ready)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        lifecycle.request_shutdown();
-        let _ = (bindings, backends, on_ready);
-        Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
-    }
-}
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod protocol {
     #[cfg(not(target_pointer_width = "64"))]
@@ -1365,11 +75,15 @@ mod protocol {
     const FRAME_KIND_PROVIDER_INGEST_SOURCE_TRAILER_V1: u8 = 6;
 
     const MAX_HANDSHAKE_FRAME_BYTES_V1: usize = 256 * 1024;
-    // Appeal-finance configuration permits a 512 MiB canonical recovery
-    // checkpoint. V1 cannot safely retain that payload, its nested envelope,
-    // its typed decode, and a canonical re-encode in one unary broker call.
-    // TODO: add an authenticated streaming checkpoint protocol before lifting
-    // the enforced broker-unary ceiling below.
+    // Appeal-finance's local data model permits a 512 MiB canonical recovery
+    // checkpoint, while the V1 broker protocol intentionally admits only the
+    // fixed unary ceiling selected in `operation_frame_limit`; an exact
+    // deployment binding may lower that limit further.
+    // Retaining the payload, its nested envelope, its typed decode, and a
+    // canonical re-encode at the full semantic maximum would exceed the
+    // broker's audited live-memory budget. This lower unary transport ceiling
+    // is a V1 wire invariant; supporting larger checkpoints requires a
+    // separately versioned authenticated streaming protocol.
     const MAX_APPEAL_FINANCE_CHECKPOINT_BYTES_V1: usize = 512 * 1024 * 1024;
     const MAX_APPEAL_FINANCE_CHECKPOINT_RECORD_BYTES_V1: usize =
         MAX_APPEAL_FINANCE_CHECKPOINT_BYTES_V1
@@ -1380,6 +94,7 @@ mod protocol {
     const MAX_BROKER_FRAME_ENVELOPE_BYTES_V1: usize = 128 * 1024;
     const MAX_BROKER_UNARY_PAYLOAD_BYTES_V1: usize = 32 * 1024 * 1024;
     const MAX_BROKER_UNARY_FRAME_BYTES_V1: usize = 33 * 1024 * 1024;
+    const MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1: usize = 65 * 1024 * 1024;
     const MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1: usize =
         iroha_config::parameters::defaults::torii::
             SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES as usize;
@@ -1409,10 +124,10 @@ mod protocol {
     const MAX_PROVIDER_INGEST_SOURCE_PLAN_HEAP_BYTES_V1: usize = 256 * 1024 * 1024;
     // The source-plan ceiling is independent of Governance DAG sealed-state
     // slots, whose limits are selected by
-    // `governance_dag_sealed_state_payload_max_bytes_v1`. The CAR plan is
-    // unary metadata, so it is capped below the broker frame ceiling; larger
-    // plans require a future authenticated streaming-plan protocol.
-    // TODO: stream canonical CAR plan entries before raising this V1 cap.
+    // `governance_dag_sealed_state_payload_max_bytes_v1`. In V1 the canonical
+    // CAR plan is unary metadata and is permanently capped below the broker
+    // frame ceiling; larger plans require a separately versioned authenticated
+    // streaming-plan protocol rather than raising this wire limit.
     const MAX_PROVIDER_INGEST_SOURCE_PLAN_PAYLOAD_BYTES_V1: usize =
         MAX_BROKER_UNARY_PAYLOAD_BYTES_V1;
     // Keep the HSM transport exactly aligned with the canonical Governance
@@ -1446,13 +161,19 @@ mod protocol {
     const MAX_PROVIDER_INGEST_CONTROL_FRAME_BYTES_V1: usize = 128 * 1024;
     const MAX_PROVIDER_INGEST_SIGNER_FRAME_BYTES_V1: usize =
         MAX_PROVIDER_INGEST_SIGNED_TRANSACTION_BYTES_V1 + 128 * 1024;
-    const MAX_OPERATION_FRAME_BYTES_V1: usize = if MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1
+    const MAX_NON_HF_OPERATION_FRAME_BYTES_V1: usize = if MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1
         > MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1
     {
         MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1
     } else {
         MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1
     };
+    const MAX_OPERATION_FRAME_BYTES_V1: usize =
+        if MAX_NON_HF_OPERATION_FRAME_BYTES_V1 > MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1 {
+            MAX_NON_HF_OPERATION_FRAME_BYTES_V1
+        } else {
+            MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
+        };
     const MAX_PROVIDER_INGEST_CHECKPOINT_RECORD_BYTES_V1: usize =
         MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1
             + sorafs_node::provider_ingest_outbox::
@@ -1860,6 +581,24 @@ mod protocol {
             5,
         ),
     );
+    const SORACLOUD_HF_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 96 * 1024 * 1024;
+    const SORACLOUD_HF_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
+        (
+            MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
+            MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
+        ),
+        (
+            112 * 1024 * 1024,
+            SORACLOUD_HF_MAX_DECODE_ALLOCATION_BYTES_V1,
+        ),
+        (4 * 1024 * 1024, 24 * 1024 * 1024),
+        32,
+        operation_resource_caps(
+            MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
+            SORACLOUD_HF_MAX_DECODE_ALLOCATION_BYTES_V1,
+            5,
+        ),
+    );
     // Billing validation retains the framed response, operation envelope,
     // request/result cross-checks, and caller result. The policy admits the
     // service's full 128 MiB epoch-witness checkpoint.
@@ -2054,571 +793,12 @@ mod protocol {
             ),
         );
 
-    const OPERATION_QUALIFY_V1: u16 = 1;
-    const OPERATION_SIGN_V1: u16 = 2;
-    const OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1: u16 = 3;
-    const OPERATION_NATIVE_TRANSACTION_SIGN_V1: u16 = 4;
-    const OPERATION_STREAM_TOKEN_SIGN_V1: u16 = 5;
-    const OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1: u16 = 6;
-    const OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1: u16 = 7;
-    const OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1: u16 = 8;
-    const OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 9;
-    const OPERATION_SEALED_LOAD_V1: u16 = 10;
-    const OPERATION_SEALED_COMPARE_AND_SWAP_V1: u16 = 11;
-    const OPERATION_SEALED_DELETE_V1: u16 = 12;
-    const OPERATION_POTR_SIGN_V1: u16 = 13;
-    const OPERATION_MODERATION_HANDOFF_DELIVER_ONCE_V1: u16 = 14;
-    const OPERATION_MODERATION_PANEL_NOTIFICATION_DELIVER_ONCE_V1: u16 = 15;
-    const OPERATION_REPUTATION_JOURNAL_SUPPORTS_AUTHORITY_V1: u16 = 16;
-    const OPERATION_REPUTATION_JOURNAL_SUBMIT_V1: u16 = 17;
-    const OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1: u16 = 18;
-    const OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1: u16 = 19;
-    const OPERATION_PROVIDER_INGEST_RESOLVER_READINESS_V1: u16 = 20;
-    const OPERATION_PROVIDER_INGEST_RESOLVE_SIGNER_V1: u16 = 21;
-    const OPERATION_PROVIDER_INGEST_SIGN_V1: u16 = 22;
-    const OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1: u16 = 23;
-    const OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 24;
-    const OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1: u16 = 25;
-    const OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1: u16 = 26;
-    const OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1: u16 = 27;
-    const OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1: u16 = 28;
-    const OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1: u16 = 30;
-    const OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1: u16 = 31;
-    const OPERATION_EVIDENCE_VIEWER_ISSUE_CHALLENGE_V1: u16 = 40;
-    const OPERATION_EVIDENCE_VIEWER_VERIFY_AND_CONSUME_V1: u16 = 41;
-    const OPERATION_EVIDENCE_VIEWER_GRANT_ISSUE_V1: u16 = 42;
-    const OPERATION_EVIDENCE_VIEWER_GRANT_VERIFY_V1: u16 = 43;
-    const OPERATION_EVIDENCE_VIEWER_GRANT_REVOKE_V1: u16 = 44;
-    const OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1: u16 = 45;
-    const OPERATION_EVIDENCE_VIEWER_ERASE_V1: u16 = 46;
-    const OPERATION_EVIDENCE_VIEWER_CHECKPOINT_LOAD_V1: u16 = 47;
-    const OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 48;
-    const OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1: u16 = 49;
-    const OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1: u16 = 50;
-    const OPERATION_REPUTATION_RETENTION_LOAD_V1: u16 = 51;
-    const OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1: u16 = 52;
-    const OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1: u16 = 53;
-    const OPERATION_GATEWAY_COMPLIANCE_RESOLVE_V1: u16 = 54;
-    const OPERATION_GATEWAY_COMPLIANCE_FETCH_V1: u16 = 55;
-    const OPERATION_POP_RUNTIME_RESOLVE_V1: u16 = 60;
-    const OPERATION_POP_ISSUER_SIGN_V1: u16 = 61;
-    const OPERATION_POP_AUTHENTICATE_V1: u16 = 62;
-    const OPERATION_POP_REGISTRY_SUBMIT_V1: u16 = 63;
-    const OPERATION_POP_REGISTRY_NEXT_V1: u16 = 64;
-    const OPERATION_POP_ISSUANCE_DRAFT_V1: u16 = 65;
-    const OPERATION_POP_WALLET_WRAP_DEK_V1: u16 = 66;
-    const OPERATION_POP_WALLET_UNWRAP_DEK_V1: u16 = 67;
-    const OPERATION_POP_WALLET_WITNESS_V1: u16 = 68;
-    const OPERATION_POP_FINALIZED_TIME_V1: u16 = 69;
-    const OPERATION_POR_REPLAY_ARCHIVE_READINESS_V1: u16 = 70;
-    const OPERATION_POR_REPLAY_ARCHIVE_CURRENT_HEAD_V1: u16 = 71;
-    const OPERATION_POR_REPLAY_ARCHIVE_APPEND_V1: u16 = 72;
-    const OPERATION_POR_REPLAY_ARCHIVE_LOOKUP_V1: u16 = 73;
-    const OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1: u16 = 74;
-    const OPERATION_PRIVACY_RELEASE_ANCHOR_FINALIZED_HEAD_V1: u16 = 75;
-    const OPERATION_PRIVACY_RELEASE_ANCHOR_COMPARE_AND_SET_V1: u16 = 76;
-    const OPERATION_TRANSPARENCY_LEADER_LEASE_ACQUIRE_V1: u16 = 77;
-    const OPERATION_TRANSPARENCY_LEADER_LEASE_RENEW_V1: u16 = 78;
-    const OPERATION_TRANSPARENCY_LEADER_LEASE_RELEASE_V1: u16 = 79;
-    const OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1: u16 = 80;
-    const OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1: u16 = 81;
-    const OPERATION_BILLING_IDENTITY_V1: u16 = 82;
-    const OPERATION_BILLING_READINESS_V1: u16 = 83;
-    const OPERATION_BILLING_QUERY_CAPABILITIES_V1: u16 = 84;
-    const OPERATION_BILLING_FINALIZED_HEAD_V1: u16 = 85;
-    const OPERATION_BILLING_QUERY_PAGE_V1: u16 = 86;
-    const OPERATION_BILLING_QUERY_PERIOD_CLOSE_V1: u16 = 87;
-    const OPERATION_BILLING_VERIFY_PAGE_V1: u16 = 88;
-    const OPERATION_BILLING_VERIFY_PERIOD_CLOSE_V1: u16 = 89;
-    const OPERATION_BILLING_VERIFY_EPOCH_TRANSITION_V1: u16 = 90;
-    const OPERATION_BILLING_SIGN_STATEMENT_DIGEST_V1: u16 = 91;
-    const OPERATION_BILLING_PUBLISH_STATEMENT_V1: u16 = 92;
-    const OPERATION_BILLING_LOOKUP_PUBLICATION_V1: u16 = 93;
-    const OPERATION_BILLING_VERIFY_ACKNOWLEDGEMENT_V1: u16 = 94;
-    const OPERATION_BILLING_RECORD_ACKNOWLEDGEMENT_V1: u16 = 95;
-    const OPERATION_BILLING_LOOKUP_ACKNOWLEDGEMENT_V1: u16 = 96;
-    const OPERATION_BILLING_LOAD_LATEST_EPOCH_V1: u16 = 97;
-    const OPERATION_BILLING_LOAD_EPOCH_V1: u16 = 98;
-    const OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1: u16 = 99;
-    const OPERATION_SORACLOUD_PROVENANCE_SIGN_V1: u16 = 100;
-    const OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1: u16 = 101;
-    const OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 102;
-    // A real payload byte avoids relying on zero-sized archive reconstruction;
-    // the authenticated slot and operation provide the request-domain binding.
-    const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
-
-    const STATUS_OK_V1: u8 = 0;
-    const STATUS_REJECTED_V1: u8 = 1;
-    const STATUS_CONFLICT_V1: u8 = 2;
-    const STATUS_STALE_OR_REVOKED_V1: u8 = 3;
-    const STATUS_AMBIGUOUS_V1: u8 = 4;
-    const STATUS_UNAVAILABLE_V1: u8 = 5;
-
-    const ERROR_UNAVAILABLE: &str = "runtime provider is unavailable";
-    const ERROR_STALE_OR_REVOKED: &str = "runtime provider binding is stale or revoked";
-    const ERROR_REJECTED: &str = "runtime provider request was rejected";
-    const ERROR_CONFLICT: &str = "runtime provider compare-and-swap conflict";
-    const ERROR_AMBIGUOUS: &str = "runtime provider outcome is ambiguous";
-
-    const CATALOG_DIGEST_DOMAIN_V1: &[u8] = b"iroha.runtime-provider-broker.catalog.v1";
-    const CLIENT_TRANSCRIPT_DOMAIN_V1: &[u8] =
-        b"iroha.runtime-provider-broker.client-transcript.v1";
-    const SERVER_TRANSCRIPT_DOMAIN_V1: &[u8] =
-        b"iroha.runtime-provider-broker.server-transcript.v1";
-    const PROVIDER_METADATA_DOMAIN_V1: &[u8] =
-        b"iroha.runtime-provider-broker.provider-metadata.v1";
-    const OPERATION_PAYLOAD_DOMAIN_V1: &[u8] =
-        b"iroha.runtime-provider-broker.operation-payload.v1";
-    const OPERATION_REQUEST_DOMAIN_V1: &[u8] =
-        b"iroha.runtime-provider-broker.operation-request.v1";
-    const OPERATION_RESULT_DOMAIN_V1: &[u8] = b"iroha.runtime-provider-broker.operation-result.v1";
-    const OPERATION_RESPONSE_DOMAIN_V1: &[u8] =
-        b"iroha.runtime-provider-broker.operation-response.v1";
-    const PROVIDER_INGEST_SOURCE_STREAM_DOMAIN_V1: &[u8] =
-        b"iroha.runtime-provider-broker.provider-ingest-source-stream.v1";
-    const PROVIDER_INGEST_SOURCE_CHUNK_DOMAIN_V1: &[u8] =
-        b"iroha.runtime-provider-broker.provider-ingest-source-chunk.v1";
-
-    struct ScrubbedBytes {
-        bytes: Vec<u8>,
-        inbound_permit: Option<tokio::sync::OwnedSemaphorePermit>,
-        decode_admission: Option<Arc<DecodeResourceAdmissionV1>>,
+    /// Exact operation identifiers and foundational canonical wire containers.
+    mod primitives {
+        use super::*;
+        include!("runtime_provider_broker/protocol_primitives.rs");
     }
-
-    impl ScrubbedBytes {
-        fn new(bytes: Vec<u8>) -> Self {
-            Self {
-                bytes,
-                inbound_permit: None,
-                decode_admission: None,
-            }
-        }
-
-        fn with_inbound_permit(
-            bytes: Vec<u8>,
-            inbound_permit: tokio::sync::OwnedSemaphorePermit,
-        ) -> Self {
-            Self {
-                bytes,
-                inbound_permit: Some(inbound_permit),
-                decode_admission: None,
-            }
-        }
-
-        fn with_decode_admission(
-            bytes: Vec<u8>,
-            decode_admission: Arc<DecodeResourceAdmissionV1>,
-        ) -> Self {
-            Self {
-                bytes,
-                inbound_permit: None,
-                decode_admission: Some(decode_admission),
-            }
-        }
-
-        fn take(&mut self) -> Vec<u8> {
-            std::mem::take(&mut self.bytes)
-        }
-
-        fn enter_decode_admission(&self) -> Option<DecodeResourceAdmissionScopeV1> {
-            self.decode_admission
-                .as_ref()
-                .map(DecodeResourceAdmissionV1::enter)
-        }
-    }
-
-    impl std::ops::Deref for ScrubbedBytes {
-        type Target = Vec<u8>;
-
-        fn deref(&self) -> &Self::Target {
-            &self.bytes
-        }
-    }
-
-    impl std::ops::DerefMut for ScrubbedBytes {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.bytes
-        }
-    }
-
-    impl fmt::Debug for ScrubbedBytes {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ScrubbedBytes")
-                .field("len", &self.bytes.len())
-                .field("inbound_budgeted", &self.inbound_permit.is_some())
-                .field("decode_budgeted", &self.decode_admission.is_some())
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl PartialEq for ScrubbedBytes {
-        fn eq(&self, other: &Self) -> bool {
-            self.bytes == other.bytes
-        }
-    }
-
-    impl Eq for ScrubbedBytes {}
-
-    impl Drop for ScrubbedBytes {
-        fn drop(&mut self) {
-            self.bytes.fill(0);
-            let _ = std::hint::black_box(&self.bytes);
-        }
-    }
-
-    struct ScrubbedReadChunk([u8; 64 * 1024]);
-
-    impl std::ops::Deref for ScrubbedReadChunk {
-        type Target = [u8; 64 * 1024];
-
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    impl std::ops::DerefMut for ScrubbedReadChunk {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.0
-        }
-    }
-
-    impl Drop for ScrubbedReadChunk {
-        fn drop(&mut self) {
-            self.0.fill(0);
-            let _ = std::hint::black_box(&self.0);
-        }
-    }
-
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct BrokerFrameV1 {
-        magic: [u8; 8],
-        version: u16,
-        kind: u8,
-        body: Vec<u8>,
-    }
-
-    impl fmt::Debug for BrokerFrameV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("BrokerFrameV1")
-                .field("version", &self.version)
-                .field("kind", &self.kind)
-                .field("body_len", &self.body.len())
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl Drop for BrokerFrameV1 {
-        fn drop(&mut self) {
-            self.body.fill(0);
-            let _ = std::hint::black_box(&self.body);
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderBindingWireV1 {
-        slot: u16,
-        handle: String,
-        revision: Option<u64>,
-        policy_digest: Option<[u8; 32]>,
-        stream_token_signer_public_key: Option<[u8; 32]>,
-        appeal_finance_signer_binding: Option<AppealFinanceSignerBindingWireV1>,
-        appeal_finance_checkpoint_binding: Option<AppealFinanceCheckpointBindingWireV1>,
-        appeal_finance_checkpoint_max_bytes: Option<u64>,
-        pop_credential_runtime_binding: Option<PopCredentialRuntimeBindingWireV1>,
-        por_replay_archive_binding: Option<sorafs_node::PorFinalizedReplayArchiveBindingV1>,
-        por_replay_archive_proof_limits: Option<PorReplayArchiveProofLimitsWireV1>,
-        potr_runtime_binding: Option<PotrRuntimeBindingWireV1>,
-        native_signer_binding: Option<NativeTransactionSignerBindingWireV1>,
-        governance_request_auth_public_key: Option<[u8; 32]>,
-        governance_request_auth_max_body_bytes: Option<u64>,
-        provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>,
-        provider_ingest_source_limits: Option<ProviderIngestSourceLimitsWireV1>,
-        provider_ingest_checkpoint_max_bytes: Option<u64>,
-        provider_ingest_max_signed_transaction_bytes: Option<u64>,
-        evidence_viewer_webauthn_binding: Option<EvidenceViewerWebAuthnBindingWireV1>,
-        evidence_viewer_grant_ttl_ms: Option<u64>,
-        evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>,
-        evidence_viewer_checkpoint_max_bytes: Option<u64>,
-        evidence_viewer_archive_id: Option<[u8; 32]>,
-        evidence_viewer_archive_public_key: Option<[u8; 32]>,
-        evidence_viewer_archive_max_bytes: Option<u64>,
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct AppealFinanceSignerBindingWireV1 {
-        authority: iroha_data_model::account::AccountId,
-        public_key: iroha_crypto::PublicKey,
-        valid_from_block_height: u64,
-        revoked_at_block_height: Option<u64>,
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct AppealFinanceCheckpointBindingWireV1 {
-        public_key: iroha_crypto::PublicKey,
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopCredentialRuntimeBindingWireV1 {
-        issuer_policy_digest: [u8; 32],
-        issuer_id: String,
-        issuer_hsm_key_id: String,
-        issuer_public_key: [u8; 32],
-        enrollment_recipient_key_id: String,
-        wallet_wrapping_key_id: String,
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PorReplayArchiveProofLimitsWireV1 {
-        max_successor_receipts: u32,
-        max_successor_proof_bytes: u64,
-    }
-
-    impl From<crate::runtime_provider_registry::PorReplayArchiveProofLimitsV1>
-        for PorReplayArchiveProofLimitsWireV1
-    {
-        fn from(limits: crate::runtime_provider_registry::PorReplayArchiveProofLimitsV1) -> Self {
-            Self {
-                max_successor_receipts: limits.max_successor_receipts,
-                max_successor_proof_bytes: limits.max_successor_proof_bytes,
-            }
-        }
-    }
-
-    impl From<&crate::runtime_provider_registry::PopCredentialRuntimeBindingV1>
-        for PopCredentialRuntimeBindingWireV1
-    {
-        fn from(binding: &crate::runtime_provider_registry::PopCredentialRuntimeBindingV1) -> Self {
-            Self {
-                issuer_policy_digest: binding.issuer_policy_digest,
-                issuer_id: binding.issuer_id.clone(),
-                issuer_hsm_key_id: binding.issuer_hsm_key_id.clone(),
-                issuer_public_key: binding.issuer_public_key,
-                enrollment_recipient_key_id: binding.enrollment_recipient_key_id.clone(),
-                wallet_wrapping_key_id: binding.wallet_wrapping_key_id.clone(),
-            }
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PotrAdmissionPolicyBindingWireV1 {
-        provider_id: [u8; 32],
-        policy_identity: [u8; 32],
-        policy_digest: [u8; 32],
-        policy_sequence: u64,
-        finalized_height: u64,
-        finalized_block_hash: [u8; 32],
-        admission_envelope_digest: [u8; 32],
-    }
-
-    impl PotrAdmissionPolicyBindingWireV1 {
-        fn to_binding(self) -> sorafs_node::PotrAdmissionPolicyBindingV1 {
-            sorafs_node::PotrAdmissionPolicyBindingV1 {
-                provider_id: self.provider_id,
-                policy_identity: self.policy_identity,
-                policy_digest: self.policy_digest,
-                policy_sequence: self.policy_sequence,
-                finalized_height: self.finalized_height,
-                finalized_block_hash: self.finalized_block_hash,
-                admission_envelope_digest: self.admission_envelope_digest,
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PotrRuntimeBindingWireV1 {
-        gateway_handle: String,
-        gateway_signer_id: [u8; 32],
-        gateway_revision: u64,
-        gateway_policy_digest: [u8; 32],
-        provider_handle: String,
-        provider_signer_id: [u8; 32],
-        provider_revision: u64,
-        provider_policy_digest: [u8; 32],
-        gateway_public_key: [u8; 32],
-        reader_id: [u8; 32],
-        source_id: [u8; 32],
-        resolver_id: [u8; 32],
-        baseline_admission_policy: PotrAdmissionPolicyBindingWireV1,
-    }
-
-    impl From<&iroha_config::parameters::actual::SorafsPotrRuntimeBinding>
-        for PotrRuntimeBindingWireV1
-    {
-        fn from(binding: &iroha_config::parameters::actual::SorafsPotrRuntimeBinding) -> Self {
-            let admission = &binding.baseline_admission_policy;
-            Self {
-                gateway_handle: binding.gateway_signer.handle.clone(),
-                gateway_signer_id: binding.gateway_signer.signer_id,
-                gateway_revision: binding.gateway_signer.revision,
-                gateway_policy_digest: binding.gateway_signer.policy_digest,
-                provider_handle: binding.provider_signer.handle.clone(),
-                provider_signer_id: binding.provider_signer.signer_id,
-                provider_revision: binding.provider_signer.revision,
-                provider_policy_digest: binding.provider_signer.policy_digest,
-                gateway_public_key: binding.gateway_public_key,
-                reader_id: binding.reader_id,
-                source_id: binding.source_id,
-                resolver_id: binding.resolver_id,
-                baseline_admission_policy: PotrAdmissionPolicyBindingWireV1 {
-                    provider_id: admission.provider_id,
-                    policy_identity: admission.policy_identity,
-                    policy_digest: admission.policy_digest,
-                    policy_sequence: admission.policy_sequence,
-                    finalized_height: admission.finalized_height,
-                    finalized_block_hash: admission.finalized_block_hash,
-                    admission_envelope_digest: admission.admission_envelope_digest,
-                },
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct NativeTransactionSignerBindingWireV1 {
-        role: u8,
-        authority: iroha_data_model::account::AccountId,
-        public_key: iroha_crypto::PublicKey,
-    }
-
-    const SORACLOUD_RUNTIME_SIGNER_ROLE_WIRE_V1: u8 = 5;
-
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct EvidenceViewerWebAuthnBindingWireV1 {
-        rp_id: String,
-        allowed_origins: Vec<String>,
-        challenge_ttl_ms: u64,
-    }
-
-    impl From<&EvidenceViewerWebAuthnBindingV1> for EvidenceViewerWebAuthnBindingWireV1 {
-        fn from(binding: &EvidenceViewerWebAuthnBindingV1) -> Self {
-            Self {
-                rp_id: binding.rp_id.clone(),
-                allowed_origins: binding.allowed_origins.clone(),
-                challenge_ttl_ms: binding.challenge_ttl_ms,
-            }
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSourceLimitsWireV1 {
-        operation_timeout_ms: u64,
-        max_content_bytes: u64,
-        max_source_providers: u32,
-        max_concurrent_streams: u32,
-    }
-
-    impl From<ProviderIngestSourceLimitsV1> for ProviderIngestSourceLimitsWireV1 {
-        fn from(limits: ProviderIngestSourceLimitsV1) -> Self {
-            Self {
-                operation_timeout_ms: limits.operation_timeout_ms,
-                max_content_bytes: limits.max_content_bytes,
-                max_source_providers: limits.max_source_providers,
-                max_concurrent_streams: limits.max_concurrent_streams,
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSignerBindingWireV1 {
-        runtime_handle: String,
-        adapter_revision: u64,
-        signer_policy_id: [u8; 32],
-        signer_policy_revision: u64,
-        signer_policy_predecessor_digest: Option<[u8; 32]>,
-        signer_policy_digest: [u8; 32],
-        algorithm: u8,
-        public_key: Vec<u8>,
-    }
-
-    impl ProviderIngestSignerBindingWireV1 {
-        fn try_from_binding(
-            binding: &sorafs_node::ProviderIngestCompletionSignerBindingV1,
-        ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
-            let slot = IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner;
-            binding
-                .validate()
-                .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
-            let (algorithm, public_key) = binding
-                .qualification
-                .public_key
-                .try_to_bytes()
-                .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
-            let algorithm = provider_ingest_algorithm_to_wire(algorithm)
-                .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
-            if public_key.is_empty() || public_key.len() > MAX_PROVIDER_INGEST_PUBLIC_KEY_BYTES_V1 {
-                return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
-            }
-            Ok(Self {
-                runtime_handle: binding.runtime_handle.clone(),
-                adapter_revision: binding.qualification.adapter_revision,
-                signer_policy_id: binding.qualification.signer_policy.policy_id,
-                signer_policy_revision: binding.qualification.signer_policy.revision,
-                signer_policy_predecessor_digest: binding
-                    .qualification
-                    .signer_policy
-                    .predecessor_digest,
-                signer_policy_digest: binding.qualification.signer_policy.policy_digest,
-                algorithm,
-                public_key: public_key.to_vec(),
-            })
-        }
-
-        fn to_binding(
-            &self,
-        ) -> Result<sorafs_node::ProviderIngestCompletionSignerBindingV1, BrokerError> {
-            let algorithm =
-                provider_ingest_algorithm_from_wire(self.algorithm).ok_or(BrokerError::Protocol)?;
-            if self.runtime_handle.is_empty()
-                || self.runtime_handle.len() > MAX_PROVIDER_HANDLE_BYTES_V1
-                || self.runtime_handle.as_bytes().contains(&0)
-                || self.adapter_revision == 0
-                || self.signer_policy_id == [0; 32]
-                || self.signer_policy_revision == 0
-                || self.signer_policy_digest == [0; 32]
-                || self.public_key.is_empty()
-                || self.public_key.len() > MAX_PROVIDER_INGEST_PUBLIC_KEY_BYTES_V1
-            {
-                return Err(BrokerError::BindingMismatch);
-            }
-            let public_key = iroha_crypto::PublicKey::from_bytes(algorithm, &self.public_key)
-                .map_err(|_| BrokerError::BindingMismatch)?;
-            let binding = sorafs_node::ProviderIngestCompletionSignerBindingV1::new(
-                self.runtime_handle.clone(),
-                sorafs_node::ProviderIngestCompletionSignerQualificationV1::new(
-                    self.adapter_revision,
-                    iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
-                        policy_id: self.signer_policy_id,
-                        revision: self.signer_policy_revision,
-                        predecessor_digest: self.signer_policy_predecessor_digest,
-                        policy_digest: self.signer_policy_digest,
-                    },
-                    algorithm,
-                    public_key,
-                ),
-            );
-            binding
-                .validate()
-                .map_err(|_| BrokerError::BindingMismatch)?;
-            Ok(binding)
-        }
-    }
-
-    const fn provider_ingest_algorithm_to_wire(algorithm: iroha_crypto::Algorithm) -> Option<u8> {
-        match algorithm {
-            iroha_crypto::Algorithm::Ed25519 => Some(1),
-            iroha_crypto::Algorithm::MlDsa => Some(2),
-            _ => None,
-        }
-    }
-
-    const fn provider_ingest_algorithm_from_wire(wire: u8) -> Option<iroha_crypto::Algorithm> {
-        match wire {
-            1 => Some(iroha_crypto::Algorithm::Ed25519),
-            2 => Some(iroha_crypto::Algorithm::MlDsa),
-            _ => None,
-        }
-    }
+    use primitives::*;
 
     const fn native_transaction_signer_role_to_wire(
         role: iroha_torii::SorafsNativeTransactionSignerRoleV1,
@@ -2739,6 +919,27 @@ mod protocol {
         .map_err(|_| BrokerError::BindingMismatch)
     }
 
+    fn soracloud_hf_credential_binding_from_wire(
+        binding: &ProviderBindingWireV1,
+    ) -> Result<crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1, BrokerError>
+    {
+        if binding.slot
+            != IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id()
+        {
+            return Err(BrokerError::BindingMismatch);
+        }
+        crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1::try_new(
+            binding.handle.clone(),
+            crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1::new(
+                binding.revision.ok_or(BrokerError::BindingMismatch)?,
+                binding.policy_digest.ok_or(BrokerError::BindingMismatch)?,
+                true,
+                false,
+            ),
+        )
+        .map_err(|_| BrokerError::BindingMismatch)
+    }
+
     impl ProviderBindingWireV1 {
         fn try_from_binding(
             binding: &IrohaRuntimeProviderBindingV1,
@@ -2822,6 +1023,8 @@ mod protocol {
                 evidence_viewer_grant_ttl_ms: binding.evidence_viewer_grant_ttl_ms(),
                 evidence_viewer_receipt_signer_public_key: binding
                     .evidence_viewer_receipt_signer_public_key(),
+                evidence_viewer_transparency_publisher_public_key: binding
+                    .evidence_viewer_transparency_publisher_public_key(),
                 evidence_viewer_checkpoint_max_bytes: binding
                     .evidence_viewer_checkpoint_max_bytes(),
                 evidence_viewer_archive_id: binding.evidence_viewer_archive_id(),
@@ -3039,6 +1242,7 @@ mod protocol {
                 || !iroha_config::parameters::is_production_runtime_handle(
                     &exact.wallet_wrapping_key_id,
                 )
+                || exact.enrollment_recipient_public_key_digest == [0; 32]
                 || exact.issuer_public_key == [0; 32]
                 || iroha_crypto::ed25519_parse_public_key(&exact.issuer_public_key).is_err()
                 || binding.stream_token_signer_public_key.is_some()
@@ -3148,12 +1352,16 @@ mod protocol {
             native_transaction_signer_role_for_slot(binding.slot).is_some();
         let soracloud_runtime_signer =
             binding.slot == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
+        let soracloud_hf_credential = binding.slot
+            == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
         let moderation_transaction_signer =
             binding.slot == IrohaRuntimeProviderSlotV1::ModerationTransactionSigner.wire_id();
         let moderation_delivery_boundary = binding.slot
             == IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff.wire_id()
             || binding.slot == IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id()
             || binding.slot == IrohaRuntimeProviderSlotV1::ModerationPanelNotification.wire_id();
+        let moderation_checkpoint =
+            binding.slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id();
         let moderation_quarantine =
             binding.slot == IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id();
         let provider_ingest_resolver = binding.slot
@@ -3178,9 +1386,14 @@ mod protocol {
             binding.slot == IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id();
         let evidence_archive =
             binding.slot == IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id();
+        let evidence_transparency_publisher = binding.slot
+            == IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher.wire_id();
         let has_evidence_metadata = binding.evidence_viewer_webauthn_binding.is_some()
             || binding.evidence_viewer_grant_ttl_ms.is_some()
             || binding.evidence_viewer_receipt_signer_public_key.is_some()
+            || binding
+                .evidence_viewer_transparency_publisher_public_key
+                .is_some()
             || binding.evidence_viewer_checkpoint_max_bytes.is_some()
             || binding.evidence_viewer_archive_id.is_some()
             || binding.evidence_viewer_archive_public_key.is_some()
@@ -3226,6 +1439,7 @@ mod protocol {
             || reputation_retention
             || billing_runtime
             || gateway_runtime
+            || soracloud_hf_credential
         {
             if binding.native_signer_binding.is_some()
                 || binding.governance_request_auth_public_key.is_some()
@@ -3281,7 +1495,8 @@ mod protocol {
             || evidence_receipt_signer
             || evidence_erasure
             || evidence_checkpoint
-            || evidence_archive)
+            || evidence_archive
+            || evidence_transparency_publisher)
             && has_evidence_metadata
         {
             return Err(BrokerError::BindingMismatch);
@@ -3291,7 +1506,8 @@ mod protocol {
             || evidence_receipt_signer
             || evidence_erasure
             || evidence_checkpoint
-            || evidence_archive)
+            || evidence_archive
+            || evidence_transparency_publisher)
             && has_provider_ingest_metadata
         {
             return Err(BrokerError::BindingMismatch);
@@ -3299,6 +1515,7 @@ mod protocol {
         if moderation_quarantine
             || moderation_transaction_signer
             || moderation_delivery_boundary
+            || moderation_checkpoint
             || governance_signer
             || governance_request_auth
             || governance_checkpoint
@@ -3416,6 +1633,9 @@ mod protocol {
                 })
                 || binding.evidence_viewer_grant_ttl_ms.is_some()
                 || binding.evidence_viewer_receipt_signer_public_key.is_some()
+                || binding
+                    .evidence_viewer_transparency_publisher_public_key
+                    .is_some()
                 || binding.evidence_viewer_checkpoint_max_bytes.is_some()
                 || binding.evidence_viewer_archive_id.is_some()
                 || binding.evidence_viewer_archive_public_key.is_some()
@@ -3434,6 +1654,9 @@ mod protocol {
                     > sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_SESSION_TTL_MS_V1
                 || binding.evidence_viewer_webauthn_binding.is_some()
                 || binding.evidence_viewer_receipt_signer_public_key.is_some()
+                || binding
+                    .evidence_viewer_transparency_publisher_public_key
+                    .is_some()
                 || binding.evidence_viewer_checkpoint_max_bytes.is_some()
                 || binding.evidence_viewer_archive_id.is_some()
                 || binding.evidence_viewer_archive_public_key.is_some()
@@ -3455,6 +1678,9 @@ mod protocol {
                 .is_err()
                 || binding.evidence_viewer_webauthn_binding.is_some()
                 || binding.evidence_viewer_grant_ttl_ms.is_some()
+                || binding
+                    .evidence_viewer_transparency_publisher_public_key
+                    .is_some()
                 || binding.evidence_viewer_checkpoint_max_bytes.is_some()
                 || binding.evidence_viewer_archive_id.is_some()
                 || binding.evidence_viewer_archive_public_key.is_some()
@@ -3481,6 +1707,9 @@ mod protocol {
                 || binding.evidence_viewer_webauthn_binding.is_some()
                 || binding.evidence_viewer_grant_ttl_ms.is_some()
                 || binding.evidence_viewer_receipt_signer_public_key.is_some()
+                || binding
+                    .evidence_viewer_transparency_publisher_public_key
+                    .is_some()
                 || binding.evidence_viewer_archive_id.is_some()
                 || binding.evidence_viewer_archive_public_key.is_some()
                 || binding.evidence_viewer_archive_max_bytes.is_some()
@@ -3513,7 +1742,32 @@ mod protocol {
                 || binding.evidence_viewer_webauthn_binding.is_some()
                 || binding.evidence_viewer_grant_ttl_ms.is_some()
                 || binding.evidence_viewer_receipt_signer_public_key.is_some()
+                || binding
+                    .evidence_viewer_transparency_publisher_public_key
+                    .is_some()
                 || binding.evidence_viewer_checkpoint_max_bytes.is_some()
+            {
+                return Err(BrokerError::BindingMismatch);
+            }
+            return Ok(());
+        }
+        if evidence_transparency_publisher {
+            let public_key = binding
+                .evidence_viewer_transparency_publisher_public_key
+                .ok_or(BrokerError::BindingMismatch)?;
+            if public_key == [0; 32]
+                || iroha_crypto::PublicKey::from_bytes(
+                    iroha_crypto::Algorithm::Ed25519,
+                    &public_key,
+                )
+                .is_err()
+                || binding.evidence_viewer_webauthn_binding.is_some()
+                || binding.evidence_viewer_grant_ttl_ms.is_some()
+                || binding.evidence_viewer_receipt_signer_public_key.is_some()
+                || binding.evidence_viewer_checkpoint_max_bytes.is_some()
+                || binding.evidence_viewer_archive_id.is_some()
+                || binding.evidence_viewer_archive_public_key.is_some()
+                || binding.evidence_viewer_archive_max_bytes.is_some()
             {
                 return Err(BrokerError::BindingMismatch);
             }
@@ -3702,6 +1956,62 @@ mod protocol {
     struct SoracloudProvenanceSignRequestWireV1 {
         purpose: u8,
         preimage: Vec<u8>,
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct SoracloudHfAuthenticatedInferenceRequestWireV1 {
+        url: String,
+        content_type: String,
+        accept: Option<String>,
+        body: Vec<u8>,
+        maximum_response_bytes: u64,
+    }
+
+    impl fmt::Debug for SoracloudHfAuthenticatedInferenceRequestWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("SoracloudHfAuthenticatedInferenceRequestWireV1")
+                .field("url_len", &self.url.len())
+                .field("content_type_len", &self.content_type.len())
+                .field("has_accept", &self.accept.is_some())
+                .field("body_len", &self.body.len())
+                .field("maximum_response_bytes", &self.maximum_response_bytes)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for SoracloudHfAuthenticatedInferenceRequestWireV1 {
+        fn drop(&mut self) {
+            self.body.fill(0);
+            let _ = std::hint::black_box(&self.body);
+        }
+    }
+
+    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
+    struct SoracloudHfAuthenticatedInferenceResponseWireV1 {
+        status: u16,
+        content_type: Option<String>,
+        content_encoding: Option<String>,
+        body: Vec<u8>,
+    }
+
+    impl fmt::Debug for SoracloudHfAuthenticatedInferenceResponseWireV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("SoracloudHfAuthenticatedInferenceResponseWireV1")
+                .field("status", &self.status)
+                .field("has_content_type", &self.content_type.is_some())
+                .field("has_content_encoding", &self.content_encoding.is_some())
+                .field("body_len", &self.body.len())
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl Drop for SoracloudHfAuthenticatedInferenceResponseWireV1 {
+        fn drop(&mut self) {
+            self.body.fill(0);
+            let _ = std::hint::black_box(&self.body);
+        }
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
@@ -7696,6 +6006,8 @@ mod protocol {
                 || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerErasure.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id()
+                || slot
+                    == IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher.wire_id()
         );
         if !evidence_slot
             && (observed.evidence_viewer_receipt_signer_public_key.is_some()
@@ -7738,7 +6050,10 @@ mod protocol {
                 || slot == IrohaRuntimeProviderSlotV1::ModerationTransactionSigner.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id()
-                || slot == IrohaRuntimeProviderSlotV1::ModerationPanelNotification.wire_id() =>
+                || slot == IrohaRuntimeProviderSlotV1::ModerationPanelNotification.wire_id()
+                || slot
+                    == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
+                        .wire_id() =>
             {
                 if observed.signer_metadata.is_some()
                     || observed.moderation_quarantine_active_key_id.is_some()
@@ -7966,7 +6281,11 @@ mod protocol {
             slot if slot == IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerErasure.wire_id()
-                || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id() =>
+                || slot == IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id()
+                || slot
+                    == IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
+                        .wire_id()
+                || slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id() =>
             {
                 if observed.signer_metadata.is_some()
                     || observed.moderation_quarantine_active_key_id.is_some()
@@ -8814,6 +7133,7 @@ mod protocol {
             exact.issuer_hsm_key_id.clone(),
             exact.issuer_public_key,
             exact.enrollment_recipient_key_id.clone(),
+            exact.enrollment_recipient_public_key_digest,
             exact.wallet_wrapping_key_id.clone(),
         )
         .map_err(|_| BrokerError::BindingMismatch)
@@ -8889,11 +7209,17 @@ mod protocol {
         {
             return Err(BrokerError::Rejected);
         }
-        iroha_crypto::HybridSecretKey::from_bytes(
+        let enrollment_recipient_secret = iroha_crypto::HybridSecretKey::from_bytes(
             result.enrollment_x25519_secret,
             &result.enrollment_mlkem_secret,
         )
         .map_err(|_| BrokerError::Rejected)?;
+        if sorafs_node::pop_credentials::pop_enrollment_recipient_public_key_digest_v1(
+            enrollment_recipient_secret.public(),
+        ) != exact.enrollment_recipient_public_key_digest
+        {
+            return Err(BrokerError::Rejected);
+        }
         iroha_crypto::HybridSecretKey::from_bytes(
             result.wallet_x25519_secret,
             &result.wallet_mlkem_secret,
@@ -9763,8 +8089,14 @@ mod protocol {
             }
             OPERATION_EVIDENCE_VIEWER_CHECKPOINT_LOAD_V1
             | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1
+            | OPERATION_MODERATION_CHECKPOINT_LOAD_V1
+            | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
             | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
-            | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1 => EVIDENCE_BULK_DECODE_POLICY_V1,
+            | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1
+            | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1
+            | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1 => {
+                EVIDENCE_BULK_DECODE_POLICY_V1
+            }
             OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1
             | OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1
             | OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
@@ -9773,6 +8105,7 @@ mod protocol {
             | OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1
             | OPERATION_GATEWAY_COMPLIANCE_RESOLVE_V1
             | OPERATION_GATEWAY_COMPLIANCE_FETCH_V1 => OPAQUE_BLOB_DECODE_POLICY_V1,
+            OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1 => SORACLOUD_HF_DECODE_POLICY_V1,
             _ => STANDARD_DECODE_POLICY_V1,
         }
     }
@@ -9785,6 +8118,9 @@ mod protocol {
             }
             OPERATION_NATIVE_TRANSACTION_SIGN_V1 => MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
             OPERATION_SORACLOUD_PROVENANCE_SIGN_V1 => MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1,
+            OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1 => {
+                MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
+            }
             OPERATION_STREAM_TOKEN_SIGN_V1 => MAX_STREAM_TOKEN_FRAME_BYTES_V1,
             OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1 => {
                 MAX_APPEAL_FINANCE_TRANSACTION_FRAME_BYTES_V1
@@ -9859,8 +8195,14 @@ mod protocol {
             | OPERATION_EVIDENCE_VIEWER_ERASE_V1 => MAX_EVIDENCE_VIEWER_CONTROL_FRAME_BYTES_V1,
             OPERATION_EVIDENCE_VIEWER_CHECKPOINT_LOAD_V1
             | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1
+            | OPERATION_MODERATION_CHECKPOINT_LOAD_V1
+            | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
             | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
-            | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1 => MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+            | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1
+            | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1
+            | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1 => {
+                MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
+            }
             OPERATION_REPUTATION_RETENTION_LOAD_V1
             | OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1 => {
                 MAX_REPUTATION_RETENTION_FRAME_BYTES_V1
@@ -9909,6 +8251,9 @@ mod protocol {
         let semantic_limit = operation_semantic_frame_limit(operation);
         let broker_limit = match operation {
             OPERATION_SIGN_V1 => MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+            OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1 => {
+                MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
+            }
             OPERATION_SEALED_LOAD_V1
             | OPERATION_SEALED_COMPARE_AND_SWAP_V1
             | OPERATION_SEALED_DELETE_V1 => MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1,
@@ -9923,8 +8268,14 @@ mod protocol {
             }
             OPERATION_EVIDENCE_VIEWER_CHECKPOINT_LOAD_V1
             | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1
+            | OPERATION_MODERATION_CHECKPOINT_LOAD_V1
+            | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
             | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
-            | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1 => MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+            | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1
+            | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1
+            | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1 => {
+                MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
+            }
             OPERATION_REPUTATION_JOURNAL_SUPPORTS_AUTHORITY_V1
             | OPERATION_REPUTATION_JOURNAL_SUBMIT_V1
             | OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
@@ -9965,6 +8316,7 @@ mod protocol {
                 | OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1
                 | OPERATION_NATIVE_TRANSACTION_SIGN_V1
                 | OPERATION_SORACLOUD_PROVENANCE_SIGN_V1
+                | OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1
                 | OPERATION_STREAM_TOKEN_SIGN_V1
                 | OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1
                 | OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1
@@ -10020,8 +8372,12 @@ mod protocol {
                 | OPERATION_EVIDENCE_VIEWER_ERASE_V1
                 | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_LOAD_V1
                 | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1
+                | OPERATION_MODERATION_CHECKPOINT_LOAD_V1
+                | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
                 | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
                 | OPERATION_EVIDENCE_VIEWER_ARCHIVE_READ_V1
+                | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1
+                | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1
                 | OPERATION_REPUTATION_RETENTION_LOAD_V1
                 | OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1
                 | OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1
@@ -10300,6 +8656,42 @@ mod protocol {
         Ok(())
     }
 
+    fn validate_evidence_viewer_transparency_head_body(
+        body: &sorafs_node::evidence_viewer::transparency_producer::
+            EvidenceViewerTransparencyHeadBodyV1,
+        binding: &ProviderBindingWireV1,
+    ) -> Result<(), BrokerError> {
+        let lineage_is_valid = match body.generation {
+            1 => body.predecessor_head_digest.is_none(),
+            2.. => body
+                .predecessor_head_digest
+                .is_some_and(|digest| digest != [0; 32]),
+            0 => false,
+        };
+        if body.version
+            != sorafs_node::evidence_viewer::transparency_producer::
+                EVIDENCE_VIEWER_TRANSPARENCY_HEAD_VERSION_V1
+            || !lineage_is_valid
+            || body.operation_id == [0; 32]
+            || body.source_projection_digest == [0; 32]
+            || body.source_page_limit == 0
+            || body.source_page_limit > 1_024
+            || body.publisher_handle != binding.handle
+            || Some(body.publisher_revision) != binding.revision
+            || Some(body.publisher_policy_digest) != binding.policy_digest
+            || Some(body.publisher_public_key)
+                != binding.evidence_viewer_transparency_publisher_public_key
+            || iroha_crypto::PublicKey::from_bytes(
+                iroha_crypto::Algorithm::Ed25519,
+                &body.publisher_public_key,
+            )
+            .is_err()
+        {
+            return Err(BrokerError::Rejected);
+        }
+        Ok(())
+    }
+
     fn evidence_viewer_checkpoint_record_limit(
         binding: &ProviderBindingWireV1,
     ) -> Result<usize, BrokerError> {
@@ -10398,6 +8790,83 @@ mod protocol {
             return Err(BrokerError::Rejected);
         }
         Ok(())
+    }
+
+    fn moderation_checkpoint_record_limit() -> usize {
+        usize::try_from(
+            sorafs_node::moderation_orchestrator::MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1,
+        )
+        .unwrap_or(usize::MAX)
+        .saturating_add(16 * 1024)
+    }
+
+    fn decode_moderation_checkpoint_record(
+        bytes: &[u8],
+        binding: &ProviderBindingWireV1,
+    ) -> Result<sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1, BrokerError>
+    {
+        let record = decode_canonical::<
+            sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1,
+        >(bytes, moderation_checkpoint_record_limit())?;
+        let qualification =
+            sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
+                binding.revision.ok_or(BrokerError::BindingMismatch)?,
+                binding.policy_digest.ok_or(BrokerError::BindingMismatch)?,
+            );
+        if !record.has_valid_provider_envelope(
+            &binding.handle,
+            qualification,
+            sorafs_node::moderation_orchestrator::MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1,
+        ) {
+            return Err(BrokerError::Rejected);
+        }
+        Ok(record)
+    }
+
+    fn validate_moderation_checkpoint_successor(
+        current: Option<&sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1>,
+        expected_revision: Option<[u8; 32]>,
+        next: &sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1,
+    ) -> Result<(), BrokerError> {
+        if current.map(|record| record.revision) != expected_revision {
+            return Err(BrokerError::Conflict);
+        }
+        let monotonic = match current {
+            None => {
+                next.checkpoint_generation == 0
+                    && next.predecessor_revision.is_none()
+                    && next.predecessor_checkpoint_digest.is_none()
+            }
+            Some(previous) => {
+                previous
+                    .checkpoint_generation
+                    .checked_add(1)
+                    .is_some_and(|generation| generation == next.checkpoint_generation)
+                    && next.namespace_digest == previous.namespace_digest
+                    && next.predecessor_revision == Some(previous.revision)
+                    && next.predecessor_checkpoint_digest == Some(previous.checkpoint_digest)
+            }
+        };
+        if !monotonic {
+            return Err(BrokerError::Rejected);
+        }
+        Ok(())
+    }
+
+    fn moderation_checkpoint_backend_error(
+        error: sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1,
+    ) -> BrokerError {
+        match error {
+            sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1::Unavailable => {
+                BrokerError::Unavailable
+            }
+            sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1::Rejected => {
+                BrokerError::Rejected
+            }
+            sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1::Ambiguous => {
+                BrokerError::Ambiguous
+            }
+        }
     }
 
     fn verify_evidence_viewer_ed25519_signature(
@@ -10623,10 +9092,16 @@ mod protocol {
         let evidence_erasure_slot = IrohaRuntimeProviderSlotV1::EvidenceViewerErasure.wire_id();
         let evidence_checkpoint_slot =
             IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id();
+        let moderation_checkpoint_slot =
+            IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id();
         let evidence_archive_slot =
             IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id();
+        let evidence_transparency_publisher_slot =
+            IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher.wire_id();
         let soracloud_runtime_signer_slot =
             IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
+        let soracloud_hf_credential_slot =
+            IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
         match (request.binding.slot, request.operation) {
             (slot, OPERATION_QUALIFY_V1)
                 if slot == moderation_quarantine_slot
@@ -10662,6 +9137,7 @@ mod protocol {
                     || slot == billing_acknowledgement_authority_slot
                     || slot == billing_epoch_witness_store_slot
                     || slot == soracloud_runtime_signer_slot
+                    || slot == soracloud_hf_credential_slot
                     || native_transaction_signer_role_for_slot(slot).is_some() =>
             {
                 decode_canonical::<()>(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
@@ -11045,6 +9521,23 @@ mod protocol {
                     &sign.preimage,
                 )
                 .map_err(|_| BrokerError::Rejected)?;
+            }
+            (slot, OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1)
+                if slot == soracloud_hf_credential_slot =>
+            {
+                let mut wire = decode_canonical::<SoracloudHfAuthenticatedInferenceRequestWireV1>(
+                    &request.payload,
+                    MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
+                )?;
+                crate::soracloud_hf_credential::
+                    SoracloudHfAuthenticatedInferenceRequestV1::try_new(
+                        std::mem::take(&mut wire.url),
+                        std::mem::take(&mut wire.content_type),
+                        wire.accept.take(),
+                        std::mem::take(&mut wire.body),
+                        wire.maximum_response_bytes,
+                    )
+                    .map_err(|_| BrokerError::Rejected)?;
             }
             (slot, OPERATION_STREAM_TOKEN_SIGN_V1) if slot == stream_token_slot => {
                 let signing = decode_canonical::<SignRequestWireV1>(
@@ -11537,7 +10030,9 @@ mod protocol {
                     || slot == evidence_receipt_signer_slot
                     || slot == evidence_erasure_slot
                     || slot == evidence_checkpoint_slot
-                    || slot == evidence_archive_slot =>
+                    || slot == moderation_checkpoint_slot
+                    || slot == evidence_archive_slot
+                    || slot == evidence_transparency_publisher_slot =>
             {
                 decode_canonical::<()>(&request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)?;
             }
@@ -11662,6 +10157,24 @@ mod protocol {
                 }
                 decode_evidence_viewer_checkpoint_record(&compare.next_record, &request.binding)?;
             }
+            (slot, OPERATION_MODERATION_CHECKPOINT_LOAD_V1)
+                if slot == moderation_checkpoint_slot =>
+            {
+                decode_canonical::<()>(&request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)?;
+            }
+            (slot, OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1)
+                if slot == moderation_checkpoint_slot =>
+            {
+                let compare = decode_canonical::<
+                    EvidenceViewerCheckpointCompareAndSwapRequestWireV1,
+                >(
+                    &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
+                )?;
+                if compare.expected_revision == Some([0; 32]) {
+                    return Err(BrokerError::Rejected);
+                }
+                decode_moderation_checkpoint_record(&compare.next_record, &request.binding)?;
+            }
             (slot, OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1)
                 if slot == evidence_archive_slot =>
             {
@@ -11692,6 +10205,22 @@ mod protocol {
                 if read.operation_id == [0; 32] {
                     return Err(BrokerError::Rejected);
                 }
+            }
+            (slot, OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1)
+                if slot == evidence_transparency_publisher_slot =>
+            {
+                decode_canonical::<()>(&request.payload, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)?;
+            }
+            (slot, OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1)
+                if slot == evidence_transparency_publisher_slot =>
+            {
+                let body = decode_canonical::<
+                    sorafs_node::evidence_viewer::transparency_producer::
+                        EvidenceViewerTransparencyHeadBodyV1,
+                >(
+                    &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
+                )?;
+                validate_evidence_viewer_transparency_head_body(&body, &request.binding)?;
             }
             _ => return Err(BrokerError::BindingMismatch),
         }
@@ -11796,6 +10325,7 @@ mod protocol {
                     | OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1
                     | OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1
                     | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1
+                    | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
                     | OPERATION_PRIVACY_RELEASE_ANCHOR_COMPARE_AND_SET_V1
                     | OPERATION_TRANSPARENCY_LEADER_LEASE_ACQUIRE_V1
                     | OPERATION_TRANSPARENCY_LEADER_LEASE_RENEW_V1
@@ -11828,7 +10358,9 @@ mod protocol {
                     | OPERATION_EVIDENCE_VIEWER_GRANT_REVOKE_V1
                     | OPERATION_EVIDENCE_VIEWER_ERASE_V1
                     | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1
+                    | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
                     | OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1
+                    | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1
                     | OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1
                     | OPERATION_POP_RUNTIME_RESOLVE_V1
                     | OPERATION_POP_REGISTRY_SUBMIT_V1
@@ -11911,6 +10443,36 @@ mod protocol {
                         .verify(exact.public_key(), &sign.preimage)
                         .map_err(|_| BrokerError::Protocol)?;
                 }
+                OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1 => {
+                    if request.binding.slot
+                        != IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
+                            .wire_id()
+                    {
+                        return Err(BrokerError::BindingMismatch);
+                    }
+                    let maximum_response_bytes = {
+                        let request_wire =
+                            decode_canonical::<SoracloudHfAuthenticatedInferenceRequestWireV1>(
+                                &request.payload,
+                                MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
+                            )?;
+                        request_wire.maximum_response_bytes
+                    };
+                    let mut response_wire = decode_canonical::<
+                        SoracloudHfAuthenticatedInferenceResponseWireV1,
+                    >(
+                        result, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
+                    )?;
+                    crate::soracloud_hf_credential::
+                        SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+                            response_wire.status,
+                            response_wire.content_type.take(),
+                            response_wire.content_encoding.take(),
+                            std::mem::take(&mut response_wire.body),
+                            maximum_response_bytes,
+                        )
+                        .map_err(|_| BrokerError::Protocol)?;
+                }
                 OPERATION_QUALIFY_V1
                     if request.binding.slot
                         == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id() =>
@@ -11923,6 +10485,21 @@ mod protocol {
                         || Some(qualification.policy_digest) != request.binding.policy_digest
                         || !qualification.active
                         || qualification.test_only
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
+                }
+                OPERATION_QUALIFY_V1
+                    if request.binding.slot
+                        == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
+                            .wire_id() =>
+                {
+                    let qualification = decode_canonical::<QualificationResultWireV1>(
+                        result,
+                        MAX_OPERATION_FRAME_BYTES_V1,
+                    )?;
+                    if Some(qualification.revision) != request.binding.revision
+                        || Some(qualification.policy_digest) != request.binding.policy_digest
                     {
                         return Err(BrokerError::Protocol);
                     }
@@ -12818,7 +11395,9 @@ mod protocol {
                 }
                 OPERATION_EVIDENCE_VIEWER_GRANT_VERIFY_V1
                 | OPERATION_EVIDENCE_VIEWER_GRANT_REVOKE_V1
-                | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
+                | OPERATION_EVIDENCE_VIEWER_CHECKPOINT_COMPARE_AND_SWAP_V1
+                | OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1
+                | OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1 => {
                     decode_canonical::<()>(result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)?;
                 }
                 OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1 => {
@@ -12860,6 +11439,16 @@ mod protocol {
                             .map_err(|_| BrokerError::Protocol)?;
                     }
                 }
+                OPERATION_MODERATION_CHECKPOINT_LOAD_V1 => {
+                    let record = decode_canonical::<Option<Vec<u8>>>(
+                        result,
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                    )?;
+                    if let Some(record) = record {
+                        decode_moderation_checkpoint_record(&record, &request.binding)
+                            .map_err(|_| BrokerError::Protocol)?;
+                    }
+                }
                 OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1 => {
                     let signed = decode_canonical::<SignResultWireV1>(
                         result,
@@ -12897,6 +11486,24 @@ mod protocol {
                             || readback.canonical_artifact.len() > max_bytes
                             || readback.signature == [0; 64]
                         {
+                            return Err(BrokerError::Protocol);
+                        }
+                    }
+                }
+                OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1 => {
+                    let head = decode_canonical::<
+                        Option<
+                            sorafs_node::evidence_viewer::transparency_producer::
+                                EvidenceViewerSignedTransparencyHeadV1,
+                        >,
+                    >(result, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)?;
+                    if let Some(head) = head {
+                        validate_evidence_viewer_transparency_head_body(
+                            &head.body,
+                            &request.binding,
+                        )
+                        .map_err(|_| BrokerError::Protocol)?;
+                        if head.signature == [0; 64] || head.head_digest == [0; 32] {
                             return Err(BrokerError::Protocol);
                         }
                     }
@@ -14097,6 +12704,26 @@ mod protocol {
                     .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
                 }
                 slot if slot
+                    == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
+                        .wire_id() =>
+                {
+                    let exact =
+                        soracloud_hf_credential_binding_from_wire(binding).map_err(server_error)?;
+                    crate::soracloud_hf_credential::
+                        qualify_soracloud_hf_inference_credential_provider_v1(
+                            exact,
+                            Arc::clone(
+                                backends
+                                    .soracloud_hf_inference_credential_provider
+                                    .as_ref()
+                                    .ok_or(
+                                        RuntimeProviderBrokerServerErrorV1::BackendSetMismatch,
+                                    )?,
+                            ),
+                        )
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                }
+                slot if slot
                     == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id() =>
                 {
                     let source = backends
@@ -14366,6 +12993,13 @@ mod protocol {
                         return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
                     }
                 }
+                slot if slot == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id() => {
+                    let store = backends
+                        .moderation_checkpoint_store
+                        .as_ref()
+                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    qualify_moderation_runtime_backend(binding, store.as_ref())?;
+                }
                 slot if slot
                     == IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id() =>
                 {
@@ -14401,6 +13035,39 @@ mod protocol {
                     }
                     evidence_viewer_archive_id = Some(archive_id);
                     evidence_viewer_archive_public_key = Some(public_key);
+                }
+                slot if slot
+                    == IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
+                        .wire_id() =>
+                {
+                    let publisher = backends
+                        .evidence_viewer_transparency_publisher
+                        .as_ref()
+                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    let qualification = publisher
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    let public_key = publisher.public_key();
+                    if publisher.handle() != binding.handle
+                        || !qualification_matches(
+                            binding,
+                            qualification.revision(),
+                            qualification.policy_digest(),
+                        )
+                        || Some(public_key)
+                            != binding.evidence_viewer_transparency_publisher_public_key
+                    {
+                        return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                    }
+                    let requalification = publisher
+                        .qualification()
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
+                    if publisher.handle() != binding.handle
+                        || requalification != qualification
+                        || publisher.public_key() != public_key
+                    {
+                        return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                    }
                 }
                 _ => return Err(RuntimeProviderBrokerServerErrorV1::UnsupportedRole),
             }
@@ -14583,10 +13250,19 @@ mod protocol {
                         == backends.evidence_viewer_erasure.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore)
                         == backends.evidence_viewer_checkpoint_store.is_some()
+                    && requested(IrohaRuntimeProviderSlotV1::ModerationCheckpointStore)
+                        == backends.moderation_checkpoint_store.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive)
                         == backends.evidence_viewer_compaction_archive.is_some()
+                    && requested(IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher)
+                        == backends.evidence_viewer_transparency_publisher.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner)
-                        == backends.soracloud_runtime_mutation_signer.is_some();
+                        == backends.soracloud_runtime_mutation_signer.is_some()
+                    && requested(
+                        IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider,
+                    ) == backends
+                        .soracloud_hf_inference_credential_provider
+                        .is_some();
             if !exact_backend_set {
                 return Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch);
             }
@@ -14954,6 +13630,58 @@ mod protocol {
             .map_err(soracloud_runtime_signer_qualification_error)
         }
 
+        fn soracloud_hf_credential_qualification_error(
+            error: crate::soracloud_hf_credential::
+                SoracloudHfCredentialProviderQualificationErrorV1,
+        ) -> BrokerError {
+            use crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationErrorV1 as Error;
+
+            match error {
+                Error::ProviderUnavailable => BrokerError::Unavailable,
+                Error::InvalidProviderHandle
+                | Error::InvalidProviderQualification
+                | Error::ProviderInactive
+                | Error::TestProviderRejected
+                | Error::HandleMismatch
+                | Error::RevisionMismatch
+                | Error::PolicyDigestMismatch
+                | Error::ProviderDrift => BrokerError::StaleOrRevoked,
+            }
+        }
+
+        fn qualified_soracloud_hf_credential_provider(
+            state: &BrokerServerStateV1,
+            binding: &ProviderBindingWireV1,
+        ) -> Result<
+            Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>,
+            BrokerError,
+        > {
+            let exact = soracloud_hf_credential_binding_from_wire(binding)?;
+            crate::soracloud_hf_credential::qualify_soracloud_hf_inference_credential_provider_v1(
+                exact,
+                Arc::clone(
+                    state
+                        .backends
+                        .soracloud_hf_inference_credential_provider
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?,
+                ),
+            )
+            .map_err(soracloud_hf_credential_qualification_error)
+        }
+
+        fn soracloud_hf_credential_operation_error(
+            error: crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
+        ) -> BrokerError {
+            use crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1 as Error;
+
+            match error {
+                Error::Unavailable => BrokerError::Unavailable,
+                Error::Refused | Error::InvalidResponse => BrokerError::Rejected,
+                Error::QualificationChanged => BrokerError::StaleOrRevoked,
+            }
+        }
+
         fn map_soracloud_runtime_signing_error(
             error: crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1,
         ) -> BrokerError {
@@ -15211,10 +13939,16 @@ mod protocol {
             let evidence_erasure_slot = IrohaRuntimeProviderSlotV1::EvidenceViewerErasure.wire_id();
             let evidence_checkpoint_slot =
                 IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore.wire_id();
+            let moderation_checkpoint_slot =
+                IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id();
             let evidence_archive_slot =
                 IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive.wire_id();
+            let evidence_transparency_publisher_slot =
+                IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher.wire_id();
             let soracloud_runtime_signer_slot =
                 IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
+            let soracloud_hf_credential_slot =
+                IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
 
             let result = match (request.binding.slot, request.operation) {
                 (slot, OPERATION_QUALIFY_V1) if slot == moderation_quarantine_slot => {
@@ -15381,6 +14115,20 @@ mod protocol {
                         MAX_OPERATION_FRAME_BYTES_V1,
                     )
                 }
+                (slot, OPERATION_QUALIFY_V1) if slot == soracloud_hf_credential_slot => {
+                    let provider =
+                        qualified_soracloud_hf_credential_provider(state, &request.binding)?;
+                    let qualification = provider
+                        .qualification()
+                        .map_err(|_| BrokerError::Unavailable)?;
+                    encode_canonical(
+                        &QualificationResultWireV1 {
+                            revision: qualification.revision(),
+                            policy_digest: qualification.policy_digest(),
+                        },
+                        MAX_OPERATION_FRAME_BYTES_V1,
+                    )
+                }
                 (slot, OPERATION_QUALIFY_V1)
                     if slot == governance_signer_slot
                         || slot == privacy_cycle_prf_slot
@@ -15422,7 +14170,9 @@ mod protocol {
                         || slot == evidence_receipt_signer_slot
                         || slot == evidence_erasure_slot
                         || slot == evidence_checkpoint_slot
-                        || slot == evidence_archive_slot =>
+                        || slot == moderation_checkpoint_slot
+                        || slot == evidence_archive_slot
+                        || slot == evidence_transparency_publisher_slot =>
                 {
                     let qualification = qualification_from_binding(&request.binding)?;
                     encode_canonical(
@@ -17915,6 +16665,37 @@ mod protocol {
                     encode_canonical(&signature, MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1)
                         .map_err(|_| BrokerError::Ambiguous)
                 }
+                (slot, OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1)
+                    if slot == soracloud_hf_credential_slot =>
+                {
+                    let mut wire = decode_canonical::<
+                        SoracloudHfAuthenticatedInferenceRequestWireV1,
+                    >(
+                        &request.payload, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
+                    )?;
+                    let provider_request = crate::soracloud_hf_credential::
+                        SoracloudHfAuthenticatedInferenceRequestV1::try_new(
+                            std::mem::take(&mut wire.url),
+                            std::mem::take(&mut wire.content_type),
+                            wire.accept.take(),
+                            std::mem::take(&mut wire.body),
+                            wire.maximum_response_bytes,
+                        )
+                        .map_err(|_| BrokerError::Rejected)?;
+                    let provider =
+                        qualified_soracloud_hf_credential_provider(state, &request.binding)?;
+                    let response = provider
+                        .execute_authenticated(&provider_request)
+                        .map_err(soracloud_hf_credential_operation_error)?;
+                    let response_wire = SoracloudHfAuthenticatedInferenceResponseWireV1 {
+                        status: response.status(),
+                        content_type: response.content_type().map(ToOwned::to_owned),
+                        content_encoding: response.content_encoding().map(ToOwned::to_owned),
+                        body: response.into_body(),
+                    };
+                    encode_canonical(&response_wire, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1)
+                        .map_err(|_| BrokerError::Ambiguous)
+                }
                 (slot, OPERATION_SIGN_V1) if slot == governance_signer_slot => {
                     let sign = decode_canonical::<SignRequestWireV1>(
                         &request.payload,
@@ -19004,6 +17785,91 @@ mod protocol {
                     .map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                 }
+                (slot, OPERATION_MODERATION_CHECKPOINT_LOAD_V1)
+                    if slot == moderation_checkpoint_slot =>
+                {
+                    let store = state
+                        .backends
+                        .moderation_checkpoint_store
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let record = store
+                        .load_latest()
+                        .map_err(moderation_checkpoint_backend_error)?;
+                    let record = record
+                        .map(|record| {
+                            let bytes =
+                                encode_canonical(&record, moderation_checkpoint_record_limit())?;
+                            decode_moderation_checkpoint_record(&bytes, &request.binding)?;
+                            Ok(bytes)
+                        })
+                        .transpose()?;
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )?;
+                    encode_canonical(&record, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
+                }
+                (slot, OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1)
+                    if slot == moderation_checkpoint_slot =>
+                {
+                    let compare = decode_canonical::<
+                        EvidenceViewerCheckpointCompareAndSwapRequestWireV1,
+                    >(
+                        &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
+                    )?;
+                    let next = decode_moderation_checkpoint_record(
+                        &compare.next_record,
+                        &request.binding,
+                    )?;
+                    let store = state
+                        .backends
+                        .moderation_checkpoint_store
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let current = store
+                        .load_latest()
+                        .map_err(moderation_checkpoint_backend_error)?;
+                    if let Some(current) = current.as_ref() {
+                        let bytes =
+                            encode_canonical(current, moderation_checkpoint_record_limit())?;
+                        decode_moderation_checkpoint_record(&bytes, &request.binding)
+                            .map_err(|_| BrokerError::Protocol)?;
+                    }
+                    validate_moderation_checkpoint_successor(
+                        current.as_ref(),
+                        compare.expected_revision,
+                        &next,
+                    )?;
+                    store
+                        .compare_and_swap_latest(compare.expected_revision, &next)
+                        .map_err(|error| {
+                            match error {
+                            sorafs_node::moderation_orchestrator::
+                                ModerationCheckpointStoreExternalErrorV1::Rejected => {
+                                BrokerError::Conflict
+                            }
+                            sorafs_node::moderation_orchestrator::
+                                ModerationCheckpointStoreExternalErrorV1::Unavailable
+                            | sorafs_node::moderation_orchestrator::
+                                ModerationCheckpointStoreExternalErrorV1::Ambiguous => {
+                                BrokerError::Ambiguous
+                            }
+                        }
+                        })?;
+                    let readback = store.load_latest().map_err(|_| BrokerError::Ambiguous)?;
+                    if readback.as_ref() != Some(&next) {
+                        return Err(BrokerError::Ambiguous);
+                    }
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)?;
+                    encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
+                }
                 (slot, OPERATION_EVIDENCE_VIEWER_ARCHIVE_INSTALL_V1)
                     if slot == evidence_archive_slot =>
                 {
@@ -19108,6 +17974,86 @@ mod protocol {
                         request.provider_metadata_digest,
                     )?;
                     encode_canonical(&readback, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
+                }
+                (slot, OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1)
+                    if slot == evidence_transparency_publisher_slot =>
+                {
+                    let publisher = state
+                        .backends
+                        .evidence_viewer_transparency_publisher
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let head = publisher.load_head().map_err(|error| {
+                        match error {
+                            sorafs_node::evidence_viewer::transparency_producer::
+                                EvidenceViewerTransparencyPublisherExternalErrorV1::Unavailable
+                            | sorafs_node::evidence_viewer::transparency_producer::
+                                EvidenceViewerTransparencyPublisherExternalErrorV1::Backpressure
+                            | sorafs_node::evidence_viewer::transparency_producer::
+                                EvidenceViewerTransparencyPublisherExternalErrorV1::Ambiguous => {
+                                BrokerError::Unavailable
+                            }
+                            sorafs_node::evidence_viewer::transparency_producer::
+                                EvidenceViewerTransparencyPublisherExternalErrorV1::Rejected => {
+                                BrokerError::Rejected
+                            }
+                        }
+                    })?;
+                    if let Some(head) = head.as_ref() {
+                        validate_evidence_viewer_transparency_head_body(
+                            &head.body,
+                            &request.binding,
+                        )?;
+                        if head.signature == [0; 64] || head.head_digest == [0; 32] {
+                            return Err(BrokerError::Rejected);
+                        }
+                    }
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )?;
+                    encode_canonical(&head, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
+                }
+                (slot, OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1)
+                    if slot == evidence_transparency_publisher_slot =>
+                {
+                    let body = decode_canonical::<
+                        sorafs_node::evidence_viewer::transparency_producer::
+                            EvidenceViewerTransparencyHeadBodyV1,
+                    >(
+                        &request.payload, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
+                    )?;
+                    validate_evidence_viewer_transparency_head_body(&body, &request.binding)?;
+                    let publisher = state
+                        .backends
+                        .evidence_viewer_transparency_publisher
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let publish_result = publisher.compare_and_publish(&body);
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)?;
+                    publish_result.map_err(|error| match error {
+                            sorafs_node::evidence_viewer::transparency_producer::
+                                EvidenceViewerTransparencyPublisherExternalErrorV1::Rejected => {
+                                BrokerError::Rejected
+                            }
+                            sorafs_node::evidence_viewer::transparency_producer::
+                                EvidenceViewerTransparencyPublisherExternalErrorV1::Unavailable
+                            | sorafs_node::evidence_viewer::transparency_producer::
+                                EvidenceViewerTransparencyPublisherExternalErrorV1::Backpressure => {
+                                BrokerError::Unavailable
+                            }
+                            sorafs_node::evidence_viewer::transparency_producer::
+                                EvidenceViewerTransparencyPublisherExternalErrorV1::Ambiguous => {
+                                BrokerError::Ambiguous
+                            }
+                        })?;
+                    encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                 }
                 _ => Err(BrokerError::BindingMismatch),
             };
@@ -19812,11 +18758,11 @@ mod protocol {
                 Ok(metadata) => metadata,
                 Err(_) => {
                     drop(listener);
-                    // TODO: replace this fail-safe staging leak if the
-                    // supported platforms gain a descriptor-relative Unix
-                    // socket bind or unlink-if-identity-matches primitive.
-                    // Without an observed identity, unlinking this pathname
-                    // could remove a substituted entry.
+                    // V1 cleanup is identity-conservative: without an observed
+                    // device/inode identity, this pathname is never unlinked.
+                    // Closing the listener, failing startup, and retaining the
+                    // unpredictable staging entry for operator inspection is
+                    // safer than removing a same-UID substituted entry.
                     return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
                 }
             };
@@ -20173,10 +19119,14 @@ mod protocol {
                 lifecycle.request_shutdown();
                 drop(listener);
                 session_controls.shutdown_all();
-                // TODO: add a deadline/cancellation contract to every
-                // synchronous provider trait before advertising a bounded
-                // shutdown duration; transport shutdown cannot preempt an
-                // adapter call already executing on a blocking thread.
+                // V1 shutdown is completion-safe, not time-bounded: transport
+                // shutdown wakes idle sessions and prevents new operations,
+                // then the broker joins every call admitted before the
+                // lifecycle transition. Synchronous provider traits expose no
+                // uniform cancellation primitive, so deployment adapters must
+                // enforce their configured external-call deadlines. Detaching
+                // a blocking worker here could let a mutating provider call
+                // outlive endpoint cleanup and a subsequent broker restart.
                 while let Some(joined) = sessions.join_next().await {
                     match joined {
                         Ok((session_token, _session_result)) => {
@@ -20215,6 +19165,8 @@ mod protocol {
         struct BrokerSession {
             connection: Mutex<BrokerConnection>,
             chain_id: String,
+            endpoint: EndpointPolicy,
+            requested_catalog: Vec<ProviderBindingWireV1>,
         }
 
         fn connect_broker_connection(
@@ -20281,14 +19233,31 @@ mod protocol {
                 requested_catalog: Vec<ProviderBindingWireV1>,
             ) -> Result<(Arc<Self>, Vec<ProviderObservationWireV1>), BrokerError> {
                 let (connection, observations) =
-                    connect_broker_connection(policy, chain_id, requested_catalog, None)?;
+                    connect_broker_connection(policy, chain_id, requested_catalog.clone(), None)?;
                 Ok((
                     Arc::new(Self {
                         connection: Mutex::new(connection),
                         chain_id: chain_id.to_owned(),
+                        endpoint: policy.clone(),
+                        requested_catalog,
                     }),
                     observations,
                 ))
+            }
+
+            fn reconnect(&self) -> Result<(), BrokerError> {
+                let (connection, _) = connect_broker_connection(
+                    &self.endpoint,
+                    &self.chain_id,
+                    self.requested_catalog.clone(),
+                    None,
+                )?;
+                let mut current = self
+                    .connection
+                    .lock()
+                    .map_err(|_| BrokerError::Unavailable)?;
+                *current = connection;
+                Ok(())
             }
 
             fn poison(&self) {
@@ -21990,6 +20959,8 @@ mod protocol {
                 && supplied.issuer_hsm_key_id() == exact.issuer_hsm_key_id
                 && supplied.issuer_public_key() == exact.issuer_public_key
                 && supplied.enrollment_recipient_key_id() == exact.enrollment_recipient_key_id
+                && supplied.enrollment_recipient_public_key_digest()
+                    == exact.enrollment_recipient_public_key_digest
                 && supplied.wallet_wrapping_key_id() == exact.wallet_wrapping_key_id
         }
 
@@ -24618,6 +23589,182 @@ mod protocol {
         }
 
         #[derive(Clone)]
+        struct SoracloudHfCredentialBrokerProvider {
+            session: Arc<BrokerSession>,
+            binding: ProviderBindingWireV1,
+            metadata_digest: [u8; 32],
+            exact_binding: crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1,
+        }
+
+        impl fmt::Debug for SoracloudHfCredentialBrokerProvider {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter
+                    .debug_struct("SoracloudHfCredentialBrokerProvider")
+                    .field("handle", &self.exact_binding.handle())
+                    .finish_non_exhaustive()
+            }
+        }
+
+        impl SoracloudHfCredentialBrokerProvider {
+            fn live_qualification(
+                &self,
+            ) -> Result<
+                crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1,
+                BrokerError,
+            > {
+                let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)?;
+                let result = self.session.call(
+                    &self.binding,
+                    self.metadata_digest,
+                    OPERATION_QUALIFY_V1,
+                    payload,
+                    false,
+                )?;
+                let qualification = decode_scrubbed_canonical::<QualificationResultWireV1>(
+                    &result,
+                    MAX_OPERATION_FRAME_BYTES_V1,
+                )
+                .inspect_err(|_| self.session.poison())?;
+                let expected = self.exact_binding.qualification();
+                let projected =
+                    soracloud_hf_credential_binding_from_wire(&self.binding).map_err(|error| {
+                        self.session.poison();
+                        error
+                    })?;
+                if qualification.revision != expected.revision()
+                    || qualification.policy_digest != expected.policy_digest()
+                    || projected != self.exact_binding
+                {
+                    self.session.poison();
+                    return Err(BrokerError::StaleOrRevoked);
+                }
+                Ok(expected)
+            }
+
+            fn probe_error(
+                &self,
+                error: BrokerError,
+            ) -> crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1
+            {
+                use crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1 as Error;
+
+                match error {
+                    BrokerError::Unavailable => Error::Unavailable,
+                    BrokerError::Rejected => Error::Refused,
+                    BrokerError::BindingMismatch
+                    | BrokerError::StaleOrRevoked
+                    | BrokerError::Protocol
+                    | BrokerError::Conflict
+                    | BrokerError::Ambiguous => {
+                        self.session.poison();
+                        Error::Refused
+                    }
+                }
+            }
+
+            fn operation_error(
+                &self,
+                error: BrokerError,
+            ) -> crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1
+            {
+                use crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1 as Error;
+
+                match error {
+                    BrokerError::Unavailable => Error::Unavailable,
+                    BrokerError::Rejected => Error::Refused,
+                    BrokerError::BindingMismatch | BrokerError::StaleOrRevoked => {
+                        self.session.poison();
+                        Error::QualificationChanged
+                    }
+                    BrokerError::Protocol | BrokerError::Conflict | BrokerError::Ambiguous => {
+                        self.session.poison();
+                        Error::InvalidResponse
+                    }
+                }
+            }
+        }
+
+        impl crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1
+            for SoracloudHfCredentialBrokerProvider
+        {
+            fn handle(&self) -> &str {
+                self.exact_binding.handle()
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<
+                crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1,
+                crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1,
+            > {
+                self.live_qualification()
+                    .map_err(|error| self.probe_error(error))
+            }
+
+            fn check_readiness(
+                &self,
+            ) -> Result<(), crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1>
+            {
+                self.live_qualification()
+                    .map(|_| ())
+                    .map_err(|error| self.probe_error(error))
+            }
+
+            fn execute_authenticated(
+                &self,
+                request: &crate::soracloud_hf_credential::
+                    SoracloudHfAuthenticatedInferenceRequestV1,
+            ) -> Result<
+                crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1,
+                crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
+            > {
+                self.live_qualification()
+                    .map_err(|error| self.operation_error(error))?;
+                let wire = SoracloudHfAuthenticatedInferenceRequestWireV1 {
+                    url: request.url().to_owned(),
+                    content_type: request.content_type().to_owned(),
+                    accept: request.accept().map(ToOwned::to_owned),
+                    body: request.body().to_vec(),
+                    maximum_response_bytes: request.maximum_response_bytes(),
+                };
+                let payload = encode_canonical(&wire, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1)
+                    .map_err(|error| self.operation_error(error))?;
+                let result = self
+                    .session
+                    .call(
+                        &self.binding,
+                        self.metadata_digest,
+                        OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1,
+                        payload,
+                        false,
+                    )
+                    .map_err(|error| self.operation_error(error))?;
+                let mut response = decode_scrubbed_canonical::<
+                    SoracloudHfAuthenticatedInferenceResponseWireV1,
+                >(
+                    &result, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
+                )
+                .map_err(|error| self.operation_error(error))?;
+                let response = crate::soracloud_hf_credential::
+                    SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+                        response.status,
+                        response.content_type.take(),
+                        response.content_encoding.take(),
+                        std::mem::take(&mut response.body),
+                        request.maximum_response_bytes(),
+                    )
+                    .map_err(|_| {
+                        self.session.poison();
+                        crate::soracloud_hf_credential::
+                            SoracloudHfCredentialProviderOperationErrorV1::InvalidResponse
+                    })?;
+                self.live_qualification()
+                    .map_err(|error| self.operation_error(error))?;
+                Ok(response)
+            }
+        }
+
+        #[derive(Clone)]
         struct GovernanceDagBrokerSigner {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
@@ -25071,6 +24218,31 @@ mod protocol {
                 | BrokerError::BindingMismatch => {
                     sorafs_node::evidence_viewer::
                         EvidenceViewerCheckpointStoreExternalErrorV1::Rejected
+                }
+            }
+        }
+
+        fn evidence_viewer_transparency_publisher_error(
+            error: BrokerError,
+        ) -> sorafs_node::evidence_viewer::transparency_producer::
+            EvidenceViewerTransparencyPublisherExternalErrorV1
+        {
+            match error {
+                BrokerError::Ambiguous => {
+                    sorafs_node::evidence_viewer::transparency_producer::
+                        EvidenceViewerTransparencyPublisherExternalErrorV1::Ambiguous
+                }
+                BrokerError::Unavailable => {
+                    sorafs_node::evidence_viewer::transparency_producer::
+                        EvidenceViewerTransparencyPublisherExternalErrorV1::Unavailable
+                }
+                BrokerError::Rejected
+                | BrokerError::Conflict
+                | BrokerError::StaleOrRevoked
+                | BrokerError::Protocol
+                | BrokerError::BindingMismatch => {
+                    sorafs_node::evidence_viewer::transparency_producer::
+                        EvidenceViewerTransparencyPublisherExternalErrorV1::Rejected
                 }
             }
         }
@@ -25535,6 +24707,131 @@ mod protocol {
             }
         }
 
+        fn moderation_checkpoint_error(
+            error: BrokerError,
+        ) -> sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1
+        {
+            match error {
+                BrokerError::Ambiguous => sorafs_node::moderation_orchestrator::
+                    ModerationCheckpointStoreExternalErrorV1::Ambiguous,
+                BrokerError::Unavailable => sorafs_node::moderation_orchestrator::
+                    ModerationCheckpointStoreExternalErrorV1::Unavailable,
+                BrokerError::Rejected
+                | BrokerError::Conflict
+                | BrokerError::StaleOrRevoked
+                | BrokerError::Protocol
+                | BrokerError::BindingMismatch => sorafs_node::moderation_orchestrator::
+                    ModerationCheckpointStoreExternalErrorV1::Rejected,
+            }
+        }
+
+        #[derive(Clone, Debug)]
+        struct ModerationCheckpointBrokerStore {
+            provider: EvidenceViewerBrokerProvider,
+        }
+
+        impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
+            for ModerationCheckpointBrokerStore
+        {
+            fn handle(&self) -> &str {
+                self.provider.handle()
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<
+                sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1,
+                sorafs_node::moderation_orchestrator::ModerationRuntimeProviderReadinessErrorV1,
+            > {
+                self.provider
+                    .live_qualification()
+                    .map(|qualification| {
+                        sorafs_node::moderation_orchestrator::
+                            ModerationRuntimeProviderQualificationV1::new(
+                                qualification.revision(),
+                                qualification.policy_digest(),
+                            )
+                    })
+                    .map_err(|error| {
+                        match error {
+                        BrokerError::Unavailable | BrokerError::Ambiguous => {
+                            sorafs_node::moderation_orchestrator::
+                                ModerationRuntimeProviderReadinessErrorV1::Unavailable
+                        }
+                        BrokerError::Rejected
+                        | BrokerError::Conflict
+                        | BrokerError::StaleOrRevoked
+                        | BrokerError::Protocol
+                        | BrokerError::BindingMismatch => {
+                            sorafs_node::moderation_orchestrator::
+                                ModerationRuntimeProviderReadinessErrorV1::Rejected
+                        }
+                    }
+                    })
+            }
+        }
+
+        impl sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1
+            for ModerationCheckpointBrokerStore
+        {
+            fn load_latest(
+                &self,
+            ) -> Result<
+                Option<sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1>,
+                sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1,
+            > {
+                let result = self
+                    .provider
+                    .call_sensitive(
+                        OPERATION_MODERATION_CHECKPOINT_LOAD_V1,
+                        &(),
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                        false,
+                    )
+                    .map_err(moderation_checkpoint_error)?;
+                let record = self
+                    .provider
+                    .decode_sensitive::<Option<Vec<u8>>>(
+                        &result,
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                    )
+                    .map_err(moderation_checkpoint_error)?;
+                record
+                    .map(|record| {
+                        decode_moderation_checkpoint_record(&record, &self.provider.binding)
+                            .map_err(moderation_checkpoint_error)
+                    })
+                    .transpose()
+            }
+
+            fn compare_and_swap_latest(
+                &self,
+                expected_revision: Option<[u8; 32]>,
+                next: &sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1,
+            ) -> Result<
+                (),
+                sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1,
+            > {
+                let next_record = encode_canonical(next, moderation_checkpoint_record_limit())
+                    .map_err(moderation_checkpoint_error)?;
+                let result = self
+                    .provider
+                    .call_sensitive(
+                        OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                        &EvidenceViewerCheckpointCompareAndSwapRequestWireV1 {
+                            expected_revision,
+                            next_record,
+                        },
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                        true,
+                    )
+                    .map_err(moderation_checkpoint_error)?;
+                self.provider
+                    .decode_sensitive::<()>(&result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
+                    .map_err(moderation_checkpoint_error)
+            }
+        }
+
         #[derive(Clone, Debug)]
         struct EvidenceViewerBrokerCompactionArchive {
             provider: EvidenceViewerBrokerProvider,
@@ -25624,6 +24921,124 @@ mod protocol {
                                 }
                         })
                     })
+            }
+        }
+
+        #[derive(Clone, Debug)]
+        struct EvidenceViewerBrokerTransparencyPublisher {
+            provider: EvidenceViewerBrokerProvider,
+            public_key: [u8; 32],
+        }
+
+        impl sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderV1
+            for EvidenceViewerBrokerTransparencyPublisher
+        {
+            fn handle(&self) -> &str {
+                self.provider.handle()
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<
+                sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderQualificationV1,
+                sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1,
+            > {
+                match self.provider.live_qualification() {
+                    Ok(qualification) => Ok(qualification),
+                    Err(BrokerError::Unavailable) => {
+                        self.provider
+                            .session
+                            .reconnect()
+                            .map_err(evidence_viewer_readiness_error)?;
+                        self.provider
+                            .live_qualification()
+                            .map_err(evidence_viewer_readiness_error)
+                    }
+                    Err(error) => Err(evidence_viewer_readiness_error(error)),
+                }
+            }
+        }
+
+        impl sorafs_node::evidence_viewer::transparency_producer::
+            EvidenceViewerTransparencyPublisherV1 for EvidenceViewerBrokerTransparencyPublisher
+        {
+            fn public_key(&self) -> [u8; 32] {
+                self.public_key
+            }
+
+            fn load_head(
+                &self,
+            ) -> Result<
+                Option<
+                    sorafs_node::evidence_viewer::transparency_producer::
+                        EvidenceViewerSignedTransparencyHeadV1,
+                >,
+                sorafs_node::evidence_viewer::transparency_producer::
+                    EvidenceViewerTransparencyPublisherExternalErrorV1,
+            > {
+                let call = || {
+                    self.provider.call_sensitive(
+                        OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1,
+                        &(),
+                        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                        false,
+                    )
+                };
+                let result = match call() {
+                    Ok(result) => result,
+                    Err(BrokerError::Unavailable) => {
+                        self.provider
+                            .session
+                            .reconnect()
+                            .map_err(evidence_viewer_transparency_publisher_error)?;
+                        call().map_err(evidence_viewer_transparency_publisher_error)?
+                    }
+                    Err(error) => return Err(evidence_viewer_transparency_publisher_error(error)),
+                };
+                self.provider
+                    .decode_sensitive::<
+                        Option<
+                            sorafs_node::evidence_viewer::transparency_producer::
+                                EvidenceViewerSignedTransparencyHeadV1,
+                        >,
+                    >(&result, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
+                    .map_err(evidence_viewer_transparency_publisher_error)
+            }
+
+            fn compare_and_publish(
+                &self,
+                body: &sorafs_node::evidence_viewer::transparency_producer::
+                    EvidenceViewerTransparencyHeadBodyV1,
+            ) -> Result<
+                (),
+                sorafs_node::evidence_viewer::transparency_producer::
+                    EvidenceViewerTransparencyPublisherExternalErrorV1,
+            > {
+                let result = match self
+                    .provider
+                    .call_sensitive(
+                        OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1,
+                        body,
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+                        true,
+                    )
+                {
+                    Ok(result) => result,
+                    Err(error @ (BrokerError::Ambiguous | BrokerError::Unavailable)) => {
+                        // Never replay a mutation whose delivery is uncertain.
+                        // A fresh authenticated session is established only so
+                        // the producer can requalify and load the authoritative
+                        // signed head.
+                        let _reconnect_result = self.provider.session.reconnect();
+                        return Err(evidence_viewer_transparency_publisher_error(error));
+                    }
+                    Err(error) => {
+                        return Err(evidence_viewer_transparency_publisher_error(error));
+                    }
+                };
+                self.provider
+                    .decode_sensitive::<()>(&result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
+                    .map_err(evidence_viewer_transparency_publisher_error)
             }
         }
 
@@ -29357,6 +28772,23 @@ mod protocol {
                             dependencies.with_soracloud_runtime_mutation_signer(signer);
                     }
                     slot if slot
+                        == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
+                            .wire_id() =>
+                    {
+                        let exact_binding =
+                            soracloud_hf_credential_binding_from_wire(binding)
+                                .map_err(registry_error)?;
+                        let provider = Arc::new(SoracloudHfCredentialBrokerProvider {
+                            session: Arc::clone(&session),
+                            binding: binding.clone(),
+                            metadata_digest: observation.metadata_digest,
+                            exact_binding,
+                        });
+                        provider.live_qualification().map_err(registry_error)?;
+                        dependencies = dependencies
+                            .with_soracloud_hf_inference_credential_provider(provider);
+                    }
+                    slot if slot
                         == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource
                             .wire_id() =>
                     {
@@ -29564,6 +28996,22 @@ mod protocol {
                             dependencies.with_sorafs_evidence_viewer_checkpoint_store(store);
                     }
                     slot if slot
+                        == IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id() =>
+                    {
+                        let store = Arc::new(ModerationCheckpointBrokerStore {
+                            provider: EvidenceViewerBrokerProvider {
+                                session: Arc::clone(&session),
+                                binding: binding.clone(),
+                                metadata_digest: observation.metadata_digest,
+                            },
+                        });
+                        sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1::
+                            qualification(store.as_ref())
+                            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)?;
+                        dependencies =
+                            dependencies.with_sorafs_moderation_checkpoint_store(store);
+                    }
+                    slot if slot
                         == IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive
                             .wire_id() =>
                     {
@@ -29588,6 +29036,28 @@ mod protocol {
                             .map_err(registry_error)?;
                         dependencies =
                             dependencies.with_sorafs_evidence_viewer_compaction_archive(archive);
+                    }
+                    slot if slot
+                        == IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher
+                            .wire_id() =>
+                    {
+                        let public_key = binding
+                            .evidence_viewer_transparency_publisher_public_key
+                            .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
+                        let publisher = Arc::new(EvidenceViewerBrokerTransparencyPublisher {
+                            provider: EvidenceViewerBrokerProvider {
+                                session: Arc::clone(&session),
+                                binding: binding.clone(),
+                                metadata_digest: observation.metadata_digest,
+                            },
+                            public_key,
+                        });
+                        publisher
+                            .provider
+                            .live_qualification()
+                            .map_err(registry_error)?;
+                        dependencies = dependencies
+                            .with_sorafs_evidence_viewer_transparency_publisher(publisher);
                     }
                     _ => {
                         return Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution);
@@ -29778,6 +29248,74 @@ mod protocol {
                 "authority://sorafs/billing/acknowledgement-primary";
             const SERVER_TEST_BILLING_EPOCH_STORE_HANDLE: &str =
                 "sealed-cas://sorafs/billing/epoch-witness-primary";
+            const SERVER_TEST_EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE: &str =
+                "transparency://sorafs/evidence-viewer/publisher-primary";
+
+            #[derive(Debug, Default)]
+            struct ServerTestEvidenceTransparencyPublisher {
+                compare_calls: AtomicU64,
+            }
+
+            impl sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderV1
+                for ServerTestEvidenceTransparencyPublisher
+            {
+                fn handle(&self) -> &str {
+                    SERVER_TEST_EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE
+                }
+
+                fn qualification(
+                    &self,
+                ) -> Result<
+                    sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderQualificationV1,
+                    sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1,
+                > {
+                    Ok(
+                        sorafs_node::evidence_viewer::
+                            EvidenceViewerRuntimeProviderQualificationV1::new(
+                                7,
+                                TEST_POLICY_DIGEST,
+                            ),
+                    )
+                }
+            }
+
+            impl sorafs_node::evidence_viewer::transparency_producer::
+                EvidenceViewerTransparencyPublisherV1
+                for ServerTestEvidenceTransparencyPublisher
+            {
+                fn public_key(&self) -> [u8; 32] {
+                    TEST_SIGNER_KEY
+                }
+
+                fn load_head(
+                    &self,
+                ) -> Result<
+                    Option<
+                        sorafs_node::evidence_viewer::transparency_producer::
+                            EvidenceViewerSignedTransparencyHeadV1,
+                    >,
+                    sorafs_node::evidence_viewer::transparency_producer::
+                        EvidenceViewerTransparencyPublisherExternalErrorV1,
+                > {
+                    Ok(None)
+                }
+
+                fn compare_and_publish(
+                    &self,
+                    _body: &sorafs_node::evidence_viewer::transparency_producer::
+                        EvidenceViewerTransparencyHeadBodyV1,
+                ) -> Result<
+                    (),
+                    sorafs_node::evidence_viewer::transparency_producer::
+                        EvidenceViewerTransparencyPublisherExternalErrorV1,
+                > {
+                    self.compare_calls.fetch_add(1, Ordering::AcqRel);
+                    Err(
+                        sorafs_node::evidence_viewer::transparency_producer::
+                            EvidenceViewerTransparencyPublisherExternalErrorV1::Ambiguous,
+                    )
+                }
+            }
 
             #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
             struct NestedDecodeBudgetProbeV1 {
@@ -32592,6 +32130,61 @@ mod protocol {
                 )
             }
 
+            fn evidence_transparency_publisher_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
+                IrohaRuntimeProviderBindingsV1::
+                    qualified_evidence_viewer_transparency_publisher_for_test(
+                        "server-test-chain",
+                        SERVER_TEST_EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE,
+                        7,
+                        TEST_POLICY_DIGEST,
+                        TEST_SIGNER_KEY,
+                    )
+            }
+
+            fn evidence_transparency_test_body()
+            -> sorafs_node::evidence_viewer::transparency_producer::
+            EvidenceViewerTransparencyHeadBodyV1{
+                sorafs_node::evidence_viewer::transparency_producer::
+                    EvidenceViewerTransparencyHeadBodyV1 {
+                        version: sorafs_node::evidence_viewer::transparency_producer::
+                            EVIDENCE_VIEWER_TRANSPARENCY_HEAD_VERSION_V1,
+                        generation: 1,
+                        predecessor_head_digest: None,
+                        operation_id: [0x81; 32],
+                        source_checkpoint_anchor:
+                            sorafs_node::evidence_viewer::EvidenceViewerSignedCheckpointAnchorV1 {
+                                version: sorafs_node::evidence_viewer::
+                                    EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1,
+                                checkpoint_generation: 1,
+                                predecessor_checkpoint_revision: None,
+                                predecessor_checkpoint_digest: None,
+                                checkpoint_digest: [0x82; 32],
+                                receipt_count: 0,
+                                chain_head: None,
+                                compaction_archive_head_digest: None,
+                                checkpoint_store_handle:
+                                    "sealed://sorafs/evidence-viewer/checkpoint-primary".to_owned(),
+                                checkpoint_store_revision: 9,
+                                checkpoint_store_policy_digest: [0x83; 32],
+                                signer_handle:
+                                    "hsm://sorafs/evidence-viewer/receipts-primary".to_owned(),
+                                signer_public_key: TEST_SIGNER_KEY,
+                                signature: [0x84; 64],
+                            },
+                        source_compaction_archive_head: None,
+                        source_predecessor: None,
+                        source_page_limit: 256,
+                        source_has_more: false,
+                        receipt_cursor: None,
+                        source_projection_digest: [0x85; 32],
+                        publisher_handle:
+                            SERVER_TEST_EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE.to_owned(),
+                        publisher_revision: 7,
+                        publisher_policy_digest: TEST_POLICY_DIGEST,
+                        publisher_public_key: TEST_SIGNER_KEY,
+                    }
+            }
+
             fn request_auth_server_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
                 IrohaRuntimeProviderBindingsV1::qualified_governance_request_auth_for_test(
                     "server-test-chain",
@@ -34219,6 +33812,7 @@ mod protocol {
                     evidence_viewer_webauthn_binding: None,
                     evidence_viewer_grant_ttl_ms: None,
                     evidence_viewer_receipt_signer_public_key: None,
+                    evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
@@ -34276,6 +33870,7 @@ mod protocol {
                     issuer_hsm_key_id: "pkcs11:pop/issuer:primary".to_owned(),
                     issuer_public_key: server_test_request_auth_public_key(),
                     enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
+                    enrollment_recipient_public_key_digest: [0x82; 32],
                     wallet_wrapping_key_id: "kms:pop/wallet:primary".to_owned(),
                 });
                 binding
@@ -34486,6 +34081,7 @@ mod protocol {
                     evidence_viewer_webauthn_binding: None,
                     evidence_viewer_grant_ttl_ms: None,
                     evidence_viewer_receipt_signer_public_key: None,
+                    evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
@@ -34517,6 +34113,7 @@ mod protocol {
                     evidence_viewer_webauthn_binding: None,
                     evidence_viewer_grant_ttl_ms: None,
                     evidence_viewer_receipt_signer_public_key: None,
+                    evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
@@ -34548,6 +34145,7 @@ mod protocol {
                     evidence_viewer_webauthn_binding: None,
                     evidence_viewer_grant_ttl_ms: None,
                     evidence_viewer_receipt_signer_public_key: None,
+                    evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
@@ -34576,6 +34174,10 @@ mod protocol {
                         binding.evidence_viewer_archive_public_key = Some(TEST_SIGNER_KEY);
                         binding.evidence_viewer_archive_max_bytes =
                             Some(64 * 1024 * 1024 + 16 * 1024);
+                    }
+                    IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher => {
+                        binding.evidence_viewer_transparency_publisher_public_key =
+                            Some(TEST_SIGNER_KEY);
                     }
                     IrohaRuntimeProviderSlotV1::EvidenceViewerErasure => {}
                     _ => panic!("not an evidence-viewer slot"),
@@ -35013,6 +34615,7 @@ mod protocol {
                     evidence_viewer_webauthn_binding: None,
                     evidence_viewer_grant_ttl_ms: None,
                     evidence_viewer_receipt_signer_public_key: None,
+                    evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
@@ -35108,6 +34711,15 @@ mod protocol {
                     Some(MAX_BROKER_EVIDENCE_VIEWER_BULK_BYTES_V1 as u64 + 1);
                 assert_eq!(
                     validate_wire_binding(&evidence_archive),
+                    Err(BrokerError::BindingMismatch)
+                );
+                let mut evidence_publisher = evidence_viewer_binding(
+                    IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher,
+                );
+                assert_eq!(validate_wire_binding(&evidence_publisher), Ok(()));
+                evidence_publisher.evidence_viewer_transparency_publisher_public_key = None;
+                assert_eq!(
+                    validate_wire_binding(&evidence_publisher),
                     Err(BrokerError::BindingMismatch)
                 );
 
@@ -36469,6 +36081,7 @@ mod protocol {
                     evidence_viewer_webauthn_binding: None,
                     evidence_viewer_grant_ttl_ms: None,
                     evidence_viewer_receipt_signer_public_key: None,
+                    evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
@@ -39161,6 +38774,60 @@ mod protocol {
             }
 
             #[test]
+            fn soracloud_hf_inference_broker_is_bounded_and_redacts_payloads() {
+                assert_eq!(
+                    operation_frame_limit(OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1),
+                    MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
+                );
+                assert_eq!(
+                    operation_decode_policy(OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1),
+                    SORACLOUD_HF_DECODE_POLICY_V1
+                );
+
+                let request_wire = SoracloudHfAuthenticatedInferenceRequestWireV1 {
+                    url: "https://router.huggingface.co/models/example?private-query-value"
+                        .to_owned(),
+                    content_type: "application/json".to_owned(),
+                    accept: Some("application/json".to_owned()),
+                    body: b"private-hf-model-input".to_vec(),
+                    maximum_response_bytes: 1024,
+                };
+                let request = validated_test_operation(
+                    plain_runtime_binding(
+                        IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider,
+                        "kms://soracloud/hf-inference-primary",
+                    ),
+                    OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1,
+                    encode_canonical(&request_wire, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1)
+                        .expect("encode bounded HF inference request"),
+                );
+                let response_wire = SoracloudHfAuthenticatedInferenceResponseWireV1 {
+                    status: 200,
+                    content_type: Some("application/json".to_owned()),
+                    content_encoding: None,
+                    body: b"private-hf-model-output".to_vec(),
+                };
+                let response = operation_response(
+                    &request,
+                    STATUS_OK_V1,
+                    encode_canonical(&response_wire, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1)
+                        .expect("encode bounded HF inference response"),
+                );
+                assert_eq!(validate_operation_response(&request, &response), Ok(()));
+
+                for rendered in [
+                    format!("{request_wire:?}"),
+                    format!("{request:?}"),
+                    format!("{response_wire:?}"),
+                    format!("{response:?}"),
+                ] {
+                    assert!(!rendered.contains("private-hf-model-input"));
+                    assert!(!rendered.contains("private-hf-model-output"));
+                    assert!(!rendered.contains("private-query-value"));
+                }
+            }
+
+            #[test]
             fn reputation_retention_slot_is_exact_bounded_and_backend_symmetric() {
                 let catalog = reputation_retention_server_test_catalog();
                 assert!(matches!(
@@ -39675,6 +39342,16 @@ mod protocol {
                     .push('\n');
                 assert_eq!(
                     validate_wire_binding(&substituted_pop),
+                    Err(BrokerError::BindingMismatch)
+                );
+                let mut missing_enrollment_key_digest = pop.clone();
+                missing_enrollment_key_digest
+                    .pop_credential_runtime_binding
+                    .as_mut()
+                    .expect("PoP exact metadata")
+                    .enrollment_recipient_public_key_digest = [0; 32];
+                assert_eq!(
+                    validate_wire_binding(&missing_enrollment_key_digest),
                     Err(BrokerError::BindingMismatch)
                 );
                 let mut confused_acme = acme.clone();
@@ -42077,6 +41754,7 @@ mod protocol {
                     IrohaRuntimeProviderSlotV1::EvidenceViewerErasure,
                     IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore,
                     IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive,
+                    IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher,
                 ] {
                     let binding = evidence_viewer_binding(slot);
                     assert_eq!(validate_wire_binding(&binding), Ok(()), "{slot:?}");
@@ -42132,6 +41810,62 @@ mod protocol {
             }
 
             #[test]
+            fn evidence_transparency_ambiguity_reconnects_for_readback_without_replay() {
+                let catalog = evidence_transparency_publisher_test_catalog();
+                let backend = Arc::new(ServerTestEvidenceTransparencyPublisher::default());
+                let (_directory, policy, shutdown, server) = start_native_signer_server(
+                    catalog.clone(),
+                    RuntimeProviderBrokerBackendsV1::new()
+                        .with_evidence_viewer_transparency_publisher(backend.clone()),
+                );
+                let dependencies =
+                    resolve(&catalog, &policy).expect("resolve transparency-publisher proxy");
+                let publisher = dependencies
+                    .sorafs_evidence_viewer_transparency_publisher
+                    .as_ref()
+                    .expect("resolved transparency publisher");
+
+                assert_eq!(
+                    publisher.compare_and_publish(&evidence_transparency_test_body()),
+                    Err(
+                        sorafs_node::evidence_viewer::transparency_producer::
+                            EvidenceViewerTransparencyPublisherExternalErrorV1::Ambiguous,
+                    )
+                );
+                assert_eq!(
+                    backend.compare_calls.load(Ordering::Acquire),
+                    1,
+                    "an ambiguous mutation must never be replayed"
+                );
+                assert_eq!(
+                    publisher
+                        .qualification()
+                        .expect("requalify over the fresh broker session"),
+                    sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderQualificationV1::new(
+                        7,
+                        TEST_POLICY_DIGEST
+                    ),
+                );
+                assert_eq!(
+                    publisher.load_head(),
+                    Ok(None),
+                    "fresh authoritative readback must remain available"
+                );
+                assert_eq!(
+                    backend.compare_calls.load(Ordering::Acquire),
+                    1,
+                    "qualification and readback must not replay the mutation"
+                );
+
+                drop(dependencies);
+                shutdown.request_shutdown();
+                server
+                    .join()
+                    .expect("join transparency-publisher broker")
+                    .expect("transparency-publisher broker exits cleanly");
+            }
+
+            #[test]
             fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
                 let webauthn =
                     evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn);
@@ -42149,12 +41883,38 @@ mod protocol {
                 let archive = evidence_viewer_binding(
                     IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive,
                 );
+                let publisher = evidence_viewer_binding(
+                    IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher,
+                );
                 for operation in 40..=50 {
                     assert!(operation_is_known(operation));
                     assert!(
                         operation_frame_limit(operation) <= MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
                     );
                 }
+                for operation in [
+                    OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1,
+                    OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1,
+                ] {
+                    assert!(operation_is_known(operation));
+                    assert_eq!(
+                        operation_frame_limit(operation),
+                        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1
+                    );
+                }
+                assert_eq!(
+                    broker_error_status(BrokerError::Ambiguous),
+                    Some((STATUS_AMBIGUOUS_V1, true)),
+                    "mutation ambiguity must retire the authenticated session"
+                );
+                let qualify_publisher = validated_test_operation(
+                    publisher,
+                    OPERATION_QUALIFY_V1,
+                    encode_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
+                        .expect("encode transparency-publisher qualification"),
+                );
+                validate_operation_request(&qualify_publisher)
+                    .expect("transparency publisher supports only its qualified slot");
 
                 let now_unix_ms = u64::try_from(
                     std::time::SystemTime::now()
@@ -42399,6 +42159,7 @@ mod protocol {
                     evidence_viewer_webauthn_binding: None,
                     evidence_viewer_grant_ttl_ms: None,
                     evidence_viewer_receipt_signer_public_key: None,
+                    evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
@@ -42462,6 +42223,7 @@ mod protocol {
                     evidence_viewer_webauthn_binding: None,
                     evidence_viewer_grant_ttl_ms: None,
                     evidence_viewer_receipt_signer_public_key: None,
+                    evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
@@ -42521,6 +42283,7 @@ mod protocol {
                     evidence_viewer_webauthn_binding: None,
                     evidence_viewer_grant_ttl_ms: None,
                     evidence_viewer_receipt_signer_public_key: None,
+                    evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,
@@ -42624,6 +42387,7 @@ mod protocol {
                     evidence_viewer_webauthn_binding: None,
                     evidence_viewer_grant_ttl_ms: None,
                     evidence_viewer_receipt_signer_public_key: None,
+                    evidence_viewer_transparency_publisher_public_key: None,
                     evidence_viewer_checkpoint_max_bytes: None,
                     evidence_viewer_archive_id: None,
                     evidence_viewer_archive_public_key: None,

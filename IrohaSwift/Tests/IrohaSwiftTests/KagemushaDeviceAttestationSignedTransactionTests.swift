@@ -129,10 +129,31 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
             )
         )
 
-        let substitutedEnvelope = try makeEnvelope(marker: "expected", signatureByte: 0x34)
+        let substitutedSignature = try makeEnvelope(
+            marker: "expected",
+            signatureByte: 0x34
+        )
+        XCTAssertEqual(
+            substitutedSignature.envelope.transactionHash,
+            fixture.envelope.transactionHash
+        )
+        XCTAssertNotEqual(
+            substitutedSignature.envelope.norito,
+            fixture.envelope.norito
+        )
+
+        let substitutedEnvelope = try makeEnvelope(
+            marker: "expected",
+            signatureByte: 0x34,
+            nonce: 8
+        )
         XCTAssertEqual(
             substitutedEnvelope.registration.canonicalRegistrationId,
             fixture.registration.canonicalRegistrationId
+        )
+        XCTAssertNotEqual(
+            substitutedEnvelope.envelope.transactionHash,
+            fixture.envelope.transactionHash
         )
         XCTAssertThrowsError(
             try KagemushaDeviceAttestationSignedTransaction(
@@ -151,7 +172,8 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
     private func makeEnvelope(
         marker: String,
         signatureByte: UInt8,
-        feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil)
+        feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil),
+        nonce: UInt32 = 7
     ) throws -> (
         registration: KagemushaDeviceAttestationRegistration,
         envelope: SignedTransactionEnvelope
@@ -168,7 +190,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
                 registration: registration,
                 feePayment: feePayment,
                 ttlMs: 60_000,
-                nonce: 7,
+                nonce: nonce,
                 metadata: ["purpose": .string("crash-safe-replay")]
             )
         )

@@ -1,10 +1,11 @@
 //! PDP manifest structure and reference binding validation tests.
 
 use ed25519_dalek::SigningKey;
+use norito::core::NoritoSerialize;
 use sorafs_manifest::{
     ChunkingProfileV1, ProfileId,
     pdp::{
-        PDP_MAX_MERKLE_PATH_DEPTH_V1, PDP_PROOF_VERSION_V1, PdpChallengeV1,
+        HashAlgorithmV1, PDP_MAX_MERKLE_PATH_DEPTH_V1, PDP_PROOF_VERSION_V1, PdpChallengeV1,
         PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
         PdpEd25519SignatureV1, PdpMerkleTreeV1, PdpProofV1, PdpProofValidationError, PdpSampleV1,
         PdpSignatureVerificationError, sign_pdp_proof_ed25519_v1,
@@ -101,6 +102,31 @@ fn resign(proof: &mut PdpProofV1, signing_key: &SigningKey) {
 #[test]
 fn commitment_validation_succeeds() {
     fixture().commitment.validate().expect("commitment valid");
+}
+
+#[test]
+fn fresh_commitment_roundtrip_preserves_explicit_hash_algorithm_tag() {
+    let commitment = fixture().commitment;
+    let bytes = norito::to_bytes(&commitment).expect("encode fresh commitment");
+    let decoded: PdpCommitmentV1 =
+        norito::decode_from_bytes(&bytes).expect("decode fresh commitment");
+    assert_eq!(decoded, commitment);
+
+    let mut algorithm_payload = Vec::new();
+    HashAlgorithmV1::Blake3_256
+        .serialize(&mut algorithm_payload)
+        .expect("encode bare hash algorithm");
+    assert_eq!(algorithm_payload, 1_u32.to_le_bytes());
+    assert_eq!(
+        norito::core::decode_field_canonical::<HashAlgorithmV1>(&algorithm_payload)
+            .expect("decode canonical hash algorithm")
+            .0,
+        HashAlgorithmV1::Blake3_256
+    );
+    assert!(
+        norito::core::decode_field_canonical::<HashAlgorithmV1>(&0_u32.to_le_bytes()).is_err(),
+        "legacy enum tag 0 must remain rejected"
+    );
 }
 
 #[test]

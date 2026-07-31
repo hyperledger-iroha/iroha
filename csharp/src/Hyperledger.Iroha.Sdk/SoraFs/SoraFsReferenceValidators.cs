@@ -258,7 +258,7 @@ public static class SoraFsReferenceValidators
     private const string LibraryName = "connect_norito_bridge";
     private const int Ed25519PrivateKeyBytes = 32;
     private const string ErrorsDocument =
-        "docs/portal/docs/sorafs/reference-sdk/errors.md";
+        "https://docs.iroha.tech/";
     private static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,
         throwOnInvalidBytes: true);

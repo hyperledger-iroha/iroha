@@ -14,8 +14,8 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn ministry_agenda_validate_example_passes() {
     let root = workspace_root();
-    let proposal = root.join("docs/examples/ministry/agenda_proposal_example.json");
-    let registry = root.join("docs/examples/ministry/agenda_duplicate_registry.json");
+    let proposal = root.join("fixtures/documentation/ministry/agenda_proposal_example.json");
+    let registry = root.join("fixtures/documentation/ministry/agenda_duplicate_registry.json");
 
     let mut cmd = cargo_bin_cmd!("xtask");
     cmd.current_dir(&root);
@@ -33,8 +33,8 @@ fn ministry_agenda_validate_example_passes() {
 #[test]
 fn ministry_agenda_duplicate_conflict_is_reported() {
     let root = workspace_root();
-    let base_proposal = root.join("docs/examples/ministry/agenda_proposal_example.json");
-    let registry = root.join("docs/examples/ministry/agenda_duplicate_registry.json");
+    let base_proposal = root.join("fixtures/documentation/ministry/agenda_proposal_example.json");
+    let registry = root.join("fixtures/documentation/ministry/agenda_duplicate_registry.json");
     let mut payload: Value =
         serde_json::from_str(&fs::read_to_string(&base_proposal).expect("read proposal"))
             .expect("parse proposal");

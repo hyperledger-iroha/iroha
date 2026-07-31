@@ -27,8 +27,10 @@ use super::v2_core::{
     EFFECTIVE_LOCK_TRACE_SERVICE, EffectiveLockTraceProjection, EventTag,
     ExactBodyCompletionOwnership, MAX_EFFECTS_PER_STEP,
     ProductionIngressIdentityAndClassTraceProjection, SERVICE_CLASS_COMPLETION, SERVICE_CLASS_NONE,
-    SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS, ScheduleState, ScheduledWork,
+    ProductionIngressReservationMaterializationTraceProjection, SERVICE_CLASS_NORMAL,
+    SERVICE_CLASS_PROGRESS, ScheduleState, ScheduledWork,
     check_production_body_service_effective_lock_transition, check_production_ingress_transition,
+    check_production_ingress_reservation_materialization_transition,
     classify_exact_body_completion_ownership, select_bounded_service_class,
 };
 use iroha_data_model::block::consensus_v2 as wire;
@@ -88,17 +90,14 @@ impl RuntimeLifecycleOrdinalSource {
             .ok_or_else(|| "Sumeragi v2 lifecycle ordinal source returned no owner".to_owned())
     }
 
-    /// Return whether two handles share the same actor-global ordinal source.
-    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.next, &other.next)
-    }
-
-    fn reserve_range(&self, count: usize) -> Result<(Option<u128>, Option<u128>), String> {
-        let mut next = self.lock_next()?;
+    fn prospective_range(
+        next: Option<u128>,
+        count: usize,
+    ) -> Result<(Option<u128>, Option<u128>), String> {
         if count == 0 {
-            return Ok((None, *next));
+            return Ok((None, next));
         }
-        let first = (*next).ok_or_else(|| {
+        let first = next.ok_or_else(|| {
             "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
         })?;
         let offset = u128::try_from(count - 1)
@@ -109,8 +108,56 @@ impl RuntimeLifecycleOrdinalSource {
         let successor = last.checked_add(1).ok_or_else(|| {
             "Sumeragi v2 actor-global lifecycle admission ordinal exhausted".to_owned()
         })?;
-        *next = Some(successor);
         Ok((Some(first), Some(successor)))
+    }
+
+    /// Hold the actor-global source while a prospective FIFO owner is fully
+    /// checked and committed to its local ingress.
+    ///
+    /// The source advances only after `commit` returns successfully. Holding
+    /// the same mutex across the closure prevents another actor from taking
+    /// the prospective range between identity validation and local commit.
+    fn with_checked_reservation<T>(
+        &self,
+        count: usize,
+        commit: impl FnOnce(u128, u128) -> Result<T, EnqueueError>,
+    ) -> Result<T, EnqueueError> {
+        if count == 0 {
+            return Err(EnqueueError::FailClosed);
+        }
+        let mut next = self.lock_next().map_err(|_| EnqueueError::FailClosed)?;
+        let (first, successor) =
+            Self::prospective_range(*next, count).map_err(|_| EnqueueError::FailClosed)?;
+        let first = first.ok_or(EnqueueError::FailClosed)?;
+        let successor = successor.ok_or(EnqueueError::FailClosed)?;
+        let committed = commit(first, successor)?;
+        *next = Some(successor);
+        Ok(committed)
+    }
+
+    /// Hold the source at one already-minted successor while a reservation is
+    /// materialized without allocating another ordinal.
+    fn with_checked_current<T>(
+        &self,
+        commit: impl FnOnce(u128) -> Result<T, EnqueueError>,
+    ) -> Result<T, EnqueueError> {
+        let next = self.lock_next().map_err(|_| EnqueueError::FailClosed)?;
+        let current = (*next).ok_or(EnqueueError::FailClosed)?;
+        commit(current)
+    }
+
+    /// Return whether two handles share the same actor-global ordinal source.
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.next, &other.next)
+    }
+
+    fn reserve_range(&self, count: usize) -> Result<(Option<u128>, Option<u128>), String> {
+        let mut next = self.lock_next()?;
+        let reserved = Self::prospective_range(*next, count)?;
+        if count != 0 {
+            *next = reserved.1;
+        }
+        Ok(reserved)
     }
 
     /// Advance a live source past a high-watermark restored by another owner.
@@ -2121,56 +2168,95 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let dormant_replacement = self.dormant_local_fifo_replacement(&command)?;
         self.validate_preassigned_lifecycle_owner(&command, &[])?;
         self.check_capacity_change(command.class, usize::from(dormant_replacement.is_some()), 1)?;
-        let (first_ordinal, ordinal_successor) = self.reserve_admission_ordinal_range(1)?;
-        command.admission_ordinal = first_ordinal;
-        if command
-            .lifecycle_ordinal
-            .is_some_and(|ordinal| first_ordinal.is_none_or(|physical| ordinal >= physical))
-        {
-            return Err(EnqueueError::FailClosed);
-        }
-        if command.lifecycle_ordinal.is_none() {
-            command.lifecycle_ordinal = first_ordinal;
-        }
-        let lifecycle_ordinal = command.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
-        if !command
-            .causal_origin
-            .bind_lifecycle_ordinal(lifecycle_ordinal)
-        {
-            return Err(EnqueueError::FailClosed);
-        }
-        let incoming_tag = command.tag;
-        let incoming_class = command.class.service_code();
-        let queue_len_before = u64::try_from(self.commands.len())
-            .expect("bounded runtime ingress length is representable as u64");
-        let queue_len_after = queue_len_before
-            .checked_add(1)
-            .ok_or(EnqueueError::FailClosed)?;
-        let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
-            incoming_height: incoming_tag.height(),
-            incoming_view: incoming_tag.view(),
-            incoming_generation: incoming_tag.generation().get(),
-            incoming_class,
-            stored_height: command.tag.height(),
-            stored_view: command.tag.view(),
-            stored_generation: command.tag.generation().get(),
-            stored_class: command.class.service_code(),
-            queue_len_before,
-            queue_len_after,
-            queue_capacity: u64::try_from(self.config.capacity)
-                .expect("bounded runtime ingress capacity is representable as u64"),
-        };
-        let checked_transition =
-            check_production_ingress_transition(ingress_trace).ok_or(EnqueueError::FailClosed)?;
-        let _authorized_transition = checked_transition.into_projection();
-        if let Some(reservation) = dormant_replacement
-            && !self.dormant_local_fifo_reservations.remove(&reservation)
-        {
-            return Err(EnqueueError::FailClosed);
-        }
-        self.next_admission_ordinal = ordinal_successor;
-        self.commands.push_back(command);
-        Ok(())
+        self.with_checked_admission_ordinal_range(
+            1,
+            move |ingress, admission_ordinal, successor| {
+                command.admission_ordinal = Some(admission_ordinal);
+                if command
+                    .lifecycle_ordinal
+                    .is_some_and(|ordinal| ordinal >= admission_ordinal)
+                {
+                    return Err(EnqueueError::FailClosed);
+                }
+                if command.lifecycle_ordinal.is_none() {
+                    command.lifecycle_ordinal = Some(admission_ordinal);
+                }
+                let lifecycle_ordinal =
+                    command.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
+                if !command
+                    .causal_origin
+                    .bind_lifecycle_ordinal(lifecycle_ordinal)
+                {
+                    return Err(EnqueueError::FailClosed);
+                }
+                let incoming_tag = command.tag;
+                let incoming_class = command.class.service_code();
+                let occupied_before = ingress
+                    .commands
+                    .len()
+                    .checked_add(usize::from(ingress.reserved_body_available.is_some()))
+                    .ok_or(EnqueueError::FailClosed)?;
+                let queue_len_before = u64::try_from(occupied_before)
+                    .expect("bounded runtime ingress length is representable as u64");
+                let queue_len_after = queue_len_before
+                    .checked_add(1)
+                    .ok_or(EnqueueError::FailClosed)?;
+                let dormant_reservations_before =
+                    u64::try_from(ingress.active_dormant_local_fifo_reservation_count()?)
+                        .map_err(|_| EnqueueError::FailClosed)?;
+                let (dormant_reservations_after, dormant_owner_ordinal) =
+                    if let Some(reservation) = dormant_replacement.as_ref() {
+                        if !ingress
+                            .dormant_local_fifo_reservations
+                            .contains(reservation)
+                        {
+                            return Err(EnqueueError::FailClosed);
+                        }
+                        (
+                            dormant_reservations_before
+                                .checked_sub(1)
+                                .ok_or(EnqueueError::FailClosed)?,
+                            reservation.admission_ordinal,
+                        )
+                    } else {
+                        (dormant_reservations_before, 0)
+                    };
+                let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
+                    incoming_height: incoming_tag.height(),
+                    incoming_view: incoming_tag.view(),
+                    incoming_generation: incoming_tag.generation().get(),
+                    incoming_class,
+                    stored_height: command.tag.height(),
+                    stored_view: command.tag.view(),
+                    stored_generation: command.tag.generation().get(),
+                    stored_class: command.class.service_code(),
+                    queue_len_before,
+                    queue_len_after,
+                    queue_capacity: u64::try_from(ingress.config.capacity)
+                        .expect("bounded runtime ingress capacity is representable as u64"),
+                    ordinal_source_before: admission_ordinal,
+                    physical_admission_ordinal: admission_ordinal,
+                    lifecycle_ordinal,
+                    ordinal_source_after: successor,
+                    dormant_reservations_before,
+                    dormant_reservations_after,
+                    dormant_owner_ordinal,
+                    ordinal_minted: true,
+                };
+                let checked_transition = check_production_ingress_transition(ingress_trace)
+                    .ok_or(EnqueueError::FailClosed)?;
+                let _authorized_transition = checked_transition.into_projection();
+
+                // Infallible commit tail: the source mutex remains held until the
+                // exact dormant replacement and queue publication both complete.
+                if let Some(reservation) = dormant_replacement.as_ref() {
+                    let removed = ingress.dormant_local_fifo_reservations.remove(reservation);
+                    debug_assert!(removed);
+                }
+                ingress.commands.push_back(command);
+                Ok(())
+            },
+        )
     }
 
     fn enqueue_completion_batch(
@@ -2192,100 +2278,169 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             deduplicated.push(command);
         }
         let mut commands = deduplicated;
-        let mut dormant_replacements = BTreeSet::new();
-        for command in &commands {
-            if let Some(reservation) = self.dormant_local_fifo_replacement(command)?
-                && !dormant_replacements.insert(reservation)
-            {
-                return Err(EnqueueError::FailClosed);
-            }
+        let dormant_replacements = commands
+            .iter()
+            .map(|command| self.dormant_local_fifo_replacement(command))
+            .collect::<Result<Vec<_>, _>>()?;
+        let unique_dormant_replacements = dormant_replacements
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if unique_dormant_replacements.len() != dormant_replacements.iter().flatten().count() {
+            return Err(EnqueueError::FailClosed);
         }
         for (index, command) in commands.iter().enumerate() {
             self.validate_preassigned_lifecycle_owner(command, &commands[..index])?;
         }
         self.check_capacity_change(
             CommandClass::Completion,
-            dormant_replacements.len(),
+            unique_dormant_replacements.len(),
             commands.len(),
         )?;
-        let (first_ordinal, ordinal_successor) =
-            self.reserve_admission_ordinal_range(commands.len())?;
-        if let Some(first_ordinal) = first_ordinal {
-            for (offset, command) in commands.iter_mut().enumerate() {
-                let offset = u128::try_from(offset)
-                    .expect("bounded runtime batch length is representable as u128");
-                command.admission_ordinal = Some(
-                    first_ordinal
+        if commands.is_empty() {
+            return Ok(());
+        }
+        let command_count = commands.len();
+        self.with_checked_admission_ordinal_range(
+            command_count,
+            move |ingress, first_ordinal, ordinal_successor| {
+                for (offset, command) in commands.iter_mut().enumerate() {
+                    let offset = u128::try_from(offset).map_err(|_| EnqueueError::FailClosed)?;
+                    let physical_ordinal = first_ordinal
                         .checked_add(offset)
-                        .expect("admission ordinal range was preflighted"),
-                );
-                if command.lifecycle_ordinal.is_some_and(|ordinal| {
-                    command
-                        .admission_ordinal
-                        .is_none_or(|physical| ordinal >= physical)
-                }) {
-                    return Err(EnqueueError::FailClosed);
+                        .ok_or(EnqueueError::FailClosed)?;
+                    command.admission_ordinal = Some(physical_ordinal);
+                    if command
+                        .lifecycle_ordinal
+                        .is_some_and(|ordinal| ordinal >= physical_ordinal)
+                    {
+                        return Err(EnqueueError::FailClosed);
+                    }
+                    if command.lifecycle_ordinal.is_none() {
+                        command.lifecycle_ordinal = Some(physical_ordinal);
+                    }
+                    let lifecycle_ordinal =
+                        command.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
+                    if !command
+                        .causal_origin
+                        .bind_lifecycle_ordinal(lifecycle_ordinal)
+                    {
+                        return Err(EnqueueError::FailClosed);
+                    }
                 }
-                if command.lifecycle_ordinal.is_none() {
-                    command.lifecycle_ordinal = command.admission_ordinal;
+
+                let occupied_at_start = ingress
+                    .commands
+                    .len()
+                    .checked_add(usize::from(ingress.reserved_body_available.is_some()))
+                    .ok_or(EnqueueError::FailClosed)?;
+                let queue_len_at_start = u64::try_from(occupied_at_start)
+                    .expect("bounded runtime ingress length is representable as u64");
+                let dormant_count_at_start =
+                    u64::try_from(ingress.active_dormant_local_fifo_reservation_count()?)
+                        .map_err(|_| EnqueueError::FailClosed)?;
+                let mut checked_transitions = Vec::with_capacity(commands.len());
+                let mut removed_dormant = 0_u64;
+                for (offset, (command, dormant_replacement)) in
+                    commands.iter().zip(dormant_replacements.iter()).enumerate()
+                {
+                    let incoming_tag = command.tag;
+                    let incoming_class = command.class.service_code();
+                    let queue_offset =
+                        u64::try_from(offset).map_err(|_| EnqueueError::FailClosed)?;
+                    let ordinal_offset =
+                        u128::try_from(offset).map_err(|_| EnqueueError::FailClosed)?;
+                    let physical_ordinal = first_ordinal
+                        .checked_add(ordinal_offset)
+                        .ok_or(EnqueueError::FailClosed)?;
+                    let source_after = physical_ordinal
+                        .checked_add(1)
+                        .ok_or(EnqueueError::FailClosed)?;
+                    let queue_len_before = queue_len_at_start
+                        .checked_add(queue_offset)
+                        .ok_or(EnqueueError::FailClosed)?;
+                    let queue_len_after = queue_len_before
+                        .checked_add(1)
+                        .ok_or(EnqueueError::FailClosed)?;
+                    let dormant_reservations_before = dormant_count_at_start
+                        .checked_sub(removed_dormant)
+                        .ok_or(EnqueueError::FailClosed)?;
+                    let (dormant_reservations_after, dormant_owner_ordinal) =
+                        if let Some(reservation) = dormant_replacement {
+                            if !ingress
+                                .dormant_local_fifo_reservations
+                                .contains(reservation)
+                            {
+                                return Err(EnqueueError::FailClosed);
+                            }
+                            removed_dormant = removed_dormant
+                                .checked_add(1)
+                                .ok_or(EnqueueError::FailClosed)?;
+                            (
+                                dormant_reservations_before
+                                    .checked_sub(1)
+                                    .ok_or(EnqueueError::FailClosed)?,
+                                reservation.admission_ordinal,
+                            )
+                        } else {
+                            (dormant_reservations_before, 0)
+                        };
+                    let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
+                        incoming_height: incoming_tag.height(),
+                        incoming_view: incoming_tag.view(),
+                        incoming_generation: incoming_tag.generation().get(),
+                        incoming_class,
+                        stored_height: command.tag.height(),
+                        stored_view: command.tag.view(),
+                        stored_generation: command.tag.generation().get(),
+                        stored_class: command.class.service_code(),
+                        queue_len_before,
+                        queue_len_after,
+                        queue_capacity: u64::try_from(ingress.config.capacity)
+                            .expect("bounded runtime ingress capacity is representable as u64"),
+                        ordinal_source_before: physical_ordinal,
+                        physical_admission_ordinal: physical_ordinal,
+                        lifecycle_ordinal: command
+                            .lifecycle_ordinal
+                            .ok_or(EnqueueError::FailClosed)?,
+                        ordinal_source_after: source_after,
+                        dormant_reservations_before,
+                        dormant_reservations_after,
+                        dormant_owner_ordinal,
+                        ordinal_minted: true,
+                    };
+                    checked_transitions.push(
+                        check_production_ingress_transition(ingress_trace)
+                            .ok_or(EnqueueError::FailClosed)?
+                            .into_projection(),
+                    );
                 }
-                let lifecycle_ordinal =
-                    command.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
-                if !command
-                    .causal_origin
-                    .bind_lifecycle_ordinal(lifecycle_ordinal)
+                if ordinal_successor
+                    != first_ordinal
+                        .checked_add(
+                            u128::try_from(command_count).map_err(|_| EnqueueError::FailClosed)?,
+                        )
+                        .ok_or(EnqueueError::FailClosed)?
+                    || unique_dormant_replacements.iter().any(|reservation| {
+                        !ingress
+                            .dormant_local_fifo_reservations
+                            .contains(reservation)
+                    })
                 {
                     return Err(EnqueueError::FailClosed);
                 }
-            }
-        }
-        let queue_len_at_start = u64::try_from(self.commands.len())
-            .expect("bounded runtime ingress length is representable as u64");
-        let mut checked_transitions = Vec::with_capacity(commands.len());
-        for (offset, command) in commands.iter().enumerate() {
-            let incoming_tag = command.tag;
-            let incoming_class = command.class.service_code();
-            let offset = u64::try_from(offset).map_err(|_| EnqueueError::FailClosed)?;
-            let queue_len_before = queue_len_at_start
-                .checked_add(offset)
-                .ok_or(EnqueueError::FailClosed)?;
-            let queue_len_after = queue_len_before
-                .checked_add(1)
-                .ok_or(EnqueueError::FailClosed)?;
-            let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
-                incoming_height: incoming_tag.height(),
-                incoming_view: incoming_tag.view(),
-                incoming_generation: incoming_tag.generation().get(),
-                incoming_class,
-                stored_height: command.tag.height(),
-                stored_view: command.tag.view(),
-                stored_generation: command.tag.generation().get(),
-                stored_class: command.class.service_code(),
-                queue_len_before,
-                queue_len_after,
-                queue_capacity: u64::try_from(self.config.capacity)
-                    .expect("bounded runtime ingress capacity is representable as u64"),
-            };
-            checked_transitions.push(
-                check_production_ingress_transition(ingress_trace)
-                    .ok_or(EnqueueError::FailClosed)?
-                    .into_projection(),
-            );
-        }
-        if dormant_replacements
-            .iter()
-            .any(|reservation| !self.dormant_local_fifo_reservations.contains(reservation))
-        {
-            return Err(EnqueueError::FailClosed);
-        }
-        for reservation in dormant_replacements {
-            let removed = self.dormant_local_fifo_reservations.remove(&reservation);
-            debug_assert!(removed);
-        }
-        self.next_admission_ordinal = ordinal_successor;
-        self.commands.extend(commands);
-        drop(checked_transitions);
-        Ok(())
+                drop(checked_transitions);
+
+                // Infallible commit tail under the ordinal-source mutex.
+                for reservation in &unique_dormant_replacements {
+                    let removed = ingress.dormant_local_fifo_reservations.remove(reservation);
+                    debug_assert!(removed);
+                }
+                ingress.commands.extend(commands);
+                Ok(())
+            },
+        )
     }
 
     fn reserve_admission_ordinal_range(
@@ -2298,6 +2453,24 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .map_err(|_| EnqueueError::FailClosed)?;
         self.next_admission_ordinal = reserved.1;
         Ok(reserved)
+    }
+
+    /// Atomically validate and publish one or more physical FIFO owners.
+    ///
+    /// The closure runs while the shared ordinal source is locked. It must put
+    /// every fallible check before its local-state commit tail; only a
+    /// successful return advances both the diagnostic mirror and the source.
+    fn with_checked_admission_ordinal_range<T>(
+        &mut self,
+        count: usize,
+        commit: impl FnOnce(&mut Self, u128, u128) -> Result<T, EnqueueError>,
+    ) -> Result<T, EnqueueError> {
+        let lifecycle_ordinals = self.lifecycle_ordinals.clone();
+        lifecycle_ordinals.with_checked_reservation(count, |first, successor| {
+            let committed = commit(self, first, successor)?;
+            self.next_admission_ordinal = Some(successor);
+            Ok(committed)
+        })
     }
 
     /// Reserve one actor-global ordinal for a non-FIFO lifecycle root.
@@ -2335,6 +2508,17 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             class: command.class,
         };
         if self.dormant_local_fifo_reservations.contains(&expected) {
+            if self
+                .reserved_body_available
+                .as_ref()
+                .and_then(|reservation| reservation.dormant_replacement.as_ref())
+                == Some(&expected)
+            {
+                // The unpublished body token is already the physical alias of
+                // this dormant slot. Only its exact materialization may remove
+                // the backing record.
+                return Err(EnqueueError::FailClosed);
+            }
             return Ok(Some(expected));
         }
         if self
@@ -2413,10 +2597,30 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     }
 
     fn occupied_with_dormant_reservations(&self) -> Result<usize, EnqueueError> {
+        let dormant = self.active_dormant_local_fifo_reservation_count()?;
         self.commands
             .len()
             .checked_add(usize::from(self.reserved_body_available.is_some()))
-            .and_then(|occupied| occupied.checked_add(self.dormant_local_fifo_reservations.len()))
+            .and_then(|occupied| occupied.checked_add(dormant))
+            .ok_or(EnqueueError::FailClosed)
+    }
+
+    /// Count dormant FIFO owners which are not already represented by the
+    /// exact unpublished body token. The aliased backing record remains in the
+    /// set for retry identity, but cannot consume a second capacity slot.
+    fn active_dormant_local_fifo_reservation_count(&self) -> Result<usize, EnqueueError> {
+        let aliased = self
+            .reserved_body_available
+            .as_ref()
+            .and_then(|reservation| reservation.dormant_replacement.as_ref());
+        if let Some(aliased) = aliased
+            && !self.dormant_local_fifo_reservations.contains(aliased)
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.dormant_local_fifo_reservations
+            .len()
+            .checked_sub(usize::from(aliased.is_some()))
             .ok_or(EnqueueError::FailClosed)
     }
 
@@ -2837,6 +3041,10 @@ pub(crate) struct BodyAvailableReservation {
     lifecycle_ordinal: Option<u128>,
     causal_origin: Option<RuntimeCandidateCausalOrigin>,
     restored_producer_stage: Option<u8>,
+    /// Exact restart-dormant capacity backing aliased by this unpublished
+    /// token. It remains installed until materialization so an ordinary abort
+    /// cannot orphan or recreate the old producer stage.
+    dormant_replacement: Option<RuntimeDormantLocalFifoReservation>,
 }
 
 impl BodyAvailableReservation {
@@ -2862,6 +3070,7 @@ impl BodyAvailableReservation {
             lifecycle_ordinal: Some(admission_ordinal),
             causal_origin: Some(causal_origin),
             restored_producer_stage: None,
+            dormant_replacement: None,
         })
     }
 
@@ -2887,6 +3096,7 @@ impl BodyAvailableReservation {
                 None,
             )),
             restored_producer_stage: None,
+            dormant_replacement: None,
         }
     }
 
@@ -2900,6 +3110,7 @@ impl BodyAvailableReservation {
             lifecycle_ordinal: None,
             causal_origin: None,
             restored_producer_stage: None,
+            dormant_replacement: None,
         }
     }
 
@@ -3640,46 +3851,66 @@ impl BoundedIngress<AdapterCommand> {
         if occupied_after_commit > self.config.capacity {
             return Err(EnqueueError::Full);
         }
-        let (first_ordinal, ordinal_successor) = self.reserve_admission_ordinal_range(1)?;
-        let admission_ordinal = first_ordinal.ok_or(EnqueueError::FailClosed)?;
         let queue_len_before = u64::try_from(self.commands.len().saturating_sub(conflicting))
             .map_err(|_| EnqueueError::FailClosed)?;
         let queue_len_after = queue_len_before
             .checked_add(1)
             .ok_or(EnqueueError::FailClosed)?;
-        let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
-            incoming_height: tag.height(),
-            incoming_view: tag.view(),
-            incoming_generation: tag.generation().get(),
-            incoming_class: CommandClass::Completion.service_code(),
-            stored_height: tag.height(),
-            stored_view: tag.view(),
-            stored_generation: tag.generation().get(),
-            stored_class: CommandClass::Completion.service_code(),
-            queue_len_before,
-            queue_len_after,
-            queue_capacity: u64::try_from(self.config.capacity)
-                .map_err(|_| EnqueueError::FailClosed)?,
-        };
-        let checked_transition =
-            check_production_ingress_transition(ingress_trace).ok_or(EnqueueError::FailClosed)?;
-        let _authorized_transition = checked_transition.into_projection();
-        let mut reservation = BodyAvailableReservation::reserved_with_admission_ordinal(
-            tag,
-            manifest,
-            admission_ordinal,
-        )?;
-        if let Some(owner) = owner {
-            if !owner.validate_exact() {
-                return Err(EnqueueError::FailClosed);
-            }
-            reservation.lifecycle_ordinal = Some(owner.lifecycle_ordinal());
-            reservation.causal_origin = Some(owner.causal_origin().clone());
-        }
-        reservation.restored_producer_stage = restored_producer_stage;
-        self.next_admission_ordinal = ordinal_successor;
-        self.reserved_body_available = Some(reservation.clone());
-        Ok(reservation)
+        let queue_capacity =
+            u64::try_from(self.config.capacity).map_err(|_| EnqueueError::FailClosed)?;
+        self.with_checked_admission_ordinal_range(
+            1,
+            move |ingress, admission_ordinal, ordinal_successor| {
+                let mut reservation = BodyAvailableReservation::reserved_with_admission_ordinal(
+                    tag,
+                    manifest,
+                    admission_ordinal,
+                )?;
+                if let Some(owner) = owner {
+                    if !owner.validate_exact() {
+                        return Err(EnqueueError::FailClosed);
+                    }
+                    reservation.lifecycle_ordinal = Some(owner.lifecycle_ordinal());
+                    reservation.causal_origin = Some(owner.causal_origin().clone());
+                }
+                reservation.restored_producer_stage = restored_producer_stage;
+                let lifecycle_ordinal = reservation
+                    .lifecycle_ordinal
+                    .ok_or(EnqueueError::FailClosed)?;
+                let dormant_reservations =
+                    u64::try_from(ingress.dormant_local_fifo_reservations.len())
+                        .map_err(|_| EnqueueError::FailClosed)?;
+                let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
+                    incoming_height: tag.height(),
+                    incoming_view: tag.view(),
+                    incoming_generation: tag.generation().get(),
+                    incoming_class: CommandClass::Completion.service_code(),
+                    stored_height: tag.height(),
+                    stored_view: tag.view(),
+                    stored_generation: tag.generation().get(),
+                    stored_class: CommandClass::Completion.service_code(),
+                    queue_len_before,
+                    queue_len_after,
+                    queue_capacity,
+                    ordinal_source_before: admission_ordinal,
+                    physical_admission_ordinal: admission_ordinal,
+                    lifecycle_ordinal,
+                    ordinal_source_after: ordinal_successor,
+                    dormant_reservations_before: dormant_reservations,
+                    dormant_reservations_after: dormant_reservations,
+                    dormant_owner_ordinal: 0,
+                    ordinal_minted: true,
+                };
+                let checked_transition = check_production_ingress_transition(ingress_trace)
+                    .ok_or(EnqueueError::FailClosed)?;
+                let _authorized_transition = checked_transition.into_projection();
+
+                // Infallible reservation commit while the source remains
+                // locked; a rejected owner or gate cannot burn an ordinal.
+                ingress.reserved_body_available = Some(reservation.clone());
+                Ok(reservation)
+            },
+        )
     }
 
     fn commit_canonical_body_available(
@@ -3692,58 +3923,81 @@ impl BoundedIngress<AdapterCommand> {
         if self.reserved_body_available.as_ref() != Some(&reservation) {
             return Err(EnqueueError::FailClosed);
         }
-        let mut command = TaggedCommand::new(
-            reservation.tag(),
-            CommandClass::Completion,
-            AdapterCommand::BodyAvailable {
-                manifest: reservation.manifest.clone(),
-            },
-            Instant::now(),
-        );
-        command.admission_ordinal = reservation.admission_ordinal;
-        command.lifecycle_ordinal = reservation.lifecycle_ordinal;
-        command.restored_producer_stage = reservation.restored_producer_stage;
-        command.causal_origin = reservation
-            .causal_origin
-            .clone()
-            .expect("new body reservation retains its causal root");
-        let incoming_tag = command.tag;
-        let incoming_class = command.class.service_code();
-        let retained_len = self
-            .commands
-            .iter()
-            .filter(|queued| {
-                !queued
-                    .command
-                    .is_authenticated_proposal_conflicting_with(reservation.manifest())
-            })
-            .count();
-        let queue_len_before = u64::try_from(retained_len)
-            .expect("bounded runtime ingress length is representable as u64");
-        let queue_len_after = queue_len_before
-            .checked_add(1)
-            .expect("bounded runtime ingress length cannot overflow u64");
-        let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
-            incoming_height: incoming_tag.height(),
-            incoming_view: incoming_tag.view(),
-            incoming_generation: incoming_tag.generation().get(),
-            incoming_class,
-            stored_height: command.tag.height(),
-            stored_view: command.tag.view(),
-            stored_generation: command.tag.generation().get(),
-            stored_class: command.class.service_code(),
-            queue_len_before,
-            queue_len_after,
-            queue_capacity: u64::try_from(self.config.capacity)
-                .expect("bounded runtime ingress capacity is representable as u64"),
-        };
-        let checked_transition = check_production_ingress_transition(ingress_trace)
-            .expect("Sumeragi v2 canonical body prospective ingress must pass its gate");
-        let _authorized_transition = checked_transition.into_projection();
-        self.reserved_body_available = None;
-        self.discard_proposals_conflicting_with(reservation.manifest());
-        self.commands.push_back(command);
-        Ok(())
+        let lifecycle_ordinals = self.lifecycle_ordinals.clone();
+        lifecycle_ordinals.with_checked_current(move |source_current| {
+            let mut command = TaggedCommand::new(
+                reservation.tag(),
+                CommandClass::Completion,
+                AdapterCommand::BodyAvailable {
+                    manifest: reservation.manifest.clone(),
+                },
+                Instant::now(),
+            );
+            command.admission_ordinal = reservation.admission_ordinal;
+            command.lifecycle_ordinal = reservation.lifecycle_ordinal;
+            command.restored_producer_stage = reservation.restored_producer_stage;
+            command.causal_origin = reservation
+                .causal_origin
+                .clone()
+                .ok_or(EnqueueError::FailClosed)?;
+            let physical_admission_ordinal = reservation
+                .admission_ordinal
+                .ok_or(EnqueueError::FailClosed)?;
+            let lifecycle_ordinal = reservation
+                .lifecycle_ordinal
+                .ok_or(EnqueueError::FailClosed)?;
+            let incoming_tag = command.tag;
+            let incoming_class = command.class.service_code();
+            let retained_len = self
+                .commands
+                .iter()
+                .filter(|queued| {
+                    !queued
+                        .command
+                        .is_authenticated_proposal_conflicting_with(reservation.manifest())
+                })
+                .count();
+            let queue_len_before = u64::try_from(retained_len)
+                .expect("bounded runtime ingress length is representable as u64");
+            let queue_len_after = queue_len_before
+                .checked_add(1)
+                .expect("bounded runtime ingress length cannot overflow u64");
+            let dormant_reservations =
+                u64::try_from(self.dormant_local_fifo_reservations.len())
+                    .map_err(|_| EnqueueError::FailClosed)?;
+            let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
+                incoming_height: incoming_tag.height(),
+                incoming_view: incoming_tag.view(),
+                incoming_generation: incoming_tag.generation().get(),
+                incoming_class,
+                stored_height: command.tag.height(),
+                stored_view: command.tag.view(),
+                stored_generation: command.tag.generation().get(),
+                stored_class: command.class.service_code(),
+                queue_len_before,
+                queue_len_after,
+                queue_capacity: u64::try_from(self.config.capacity)
+                    .expect("bounded runtime ingress capacity is representable as u64"),
+                ordinal_source_before: source_current,
+                physical_admission_ordinal,
+                lifecycle_ordinal,
+                ordinal_source_after: source_current,
+                dormant_reservations_before: dormant_reservations,
+                dormant_reservations_after: dormant_reservations,
+                dormant_owner_ordinal: 0,
+                ordinal_minted: false,
+            };
+            let checked_transition = check_production_ingress_transition(ingress_trace)
+                .ok_or(EnqueueError::FailClosed)?;
+            let _authorized_transition = checked_transition.into_projection();
+
+            // Materialization does not mint another owner; keep the source
+            // locked through the infallible reserved-slot replacement.
+            self.reserved_body_available = None;
+            self.discard_proposals_conflicting_with(reservation.manifest());
+            self.commands.push_back(command);
+            Ok(())
+        })
     }
 
     fn abort_canonical_body_available(&mut self, reservation: BodyAvailableReservation) {
@@ -10326,6 +10580,116 @@ mod tests {
     }
 
     #[test]
+    fn checked_admission_reservation_rejection_preserves_and_reuses_the_owner() {
+        let source = RuntimeLifecycleOrdinalSource::after_high_watermark(40);
+        let rejected: Result<(), EnqueueError> =
+            source.with_checked_reservation(1, |first, successor| {
+                assert_eq!(first, 41);
+                assert_eq!(successor, 42);
+                Err(EnqueueError::FailClosed)
+            });
+        assert_eq!(rejected, Err(EnqueueError::FailClosed));
+        assert_eq!(
+            source
+                .next_ordinal_for_test()
+                .expect("inspect source after rejected checked reservation"),
+            Some(41),
+            "a rejected checked admission cannot burn its prospective owner"
+        );
+
+        let admitted = source
+            .with_checked_reservation(1, |first, successor| Ok((first, successor)))
+            .expect("retry commits the same prospective owner");
+        assert_eq!(admitted, (41, 42));
+        assert_eq!(
+            source
+                .next_ordinal_for_test()
+                .expect("inspect source after committed retry"),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn checked_ingress_rejection_preserves_dormant_owner_until_exact_retry() {
+        let owner_tag = tag(0);
+        let lifecycle_key = Hash::new(b"checked rejection dormant owner");
+        let source = RuntimeLifecycleOrdinalSource::after_high_watermark(1);
+        let mut ingress = BoundedIngress::with_lifecycle_ordinals(
+            RuntimeQueueConfig::new(4, 1, 1),
+            source.clone(),
+        );
+        let dormant = RuntimeDormantLocalFifoReservation::completion(lifecycle_key, 1, 9);
+        ingress
+            .install_dormant_local_fifo_reservations(vec![dormant.clone()])
+            .expect("install one exact restart-dormant owner");
+        let mirror_before = ingress.next_admission_ordinal;
+
+        let rejected: Result<(), EnqueueError> =
+            ingress.with_checked_admission_ordinal_range(1, |checked_ingress, first, successor| {
+                assert_eq!((first, successor), (2, 3));
+                assert!(
+                    checked_ingress
+                        .dormant_local_fifo_reservations
+                        .contains(&dormant)
+                );
+                Err(EnqueueError::FailClosed)
+            });
+        assert_eq!(rejected, Err(EnqueueError::FailClosed));
+        assert_eq!(ingress.next_admission_ordinal, mirror_before);
+        assert!(ingress.dormant_local_fifo_reservations.contains(&dormant));
+        assert!(ingress.commands.is_empty());
+        assert_eq!(
+            source
+                .next_ordinal_for_test()
+                .expect("inspect source after rejected dormant replacement"),
+            Some(2)
+        );
+
+        ingress
+            .enqueue(restored_fake_command(
+                owner_tag,
+                CommandClass::Completion,
+                FakeCommand::record(1),
+                lifecycle_key,
+                1,
+                9,
+            ))
+            .expect("exact retry reuses and commits the rejected prospective ordinal");
+        assert!(ingress.dormant_local_fifo_reservations.is_empty());
+        assert_eq!(ingress.commands.len(), 1);
+        assert_eq!(ingress.commands[0].admission_ordinal, Some(2));
+        assert_eq!(ingress.commands[0].lifecycle_ordinal, Some(1));
+        assert_eq!(ingress.next_admission_ordinal, Some(3));
+        assert_eq!(
+            source
+                .next_ordinal_for_test()
+                .expect("inspect source after exact dormant retry"),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn checked_admission_reservation_exhaustion_never_enters_commit() {
+        let source = RuntimeLifecycleOrdinalSource::after_high_watermark(u128::MAX - 1);
+        let commit_called = std::cell::Cell::new(false);
+        for _ in 0..2 {
+            let result: Result<(), EnqueueError> = source.with_checked_reservation(1, |_, _| {
+                commit_called.set(true);
+                Ok(())
+            });
+            assert_eq!(result, Err(EnqueueError::FailClosed));
+            assert_eq!(
+                source
+                    .next_ordinal_for_test()
+                    .expect("inspect exhausted checked source"),
+                Some(u128::MAX),
+                "exhaustion and retry must preserve the last prospective value"
+            );
+        }
+        assert!(!commit_called.get());
+    }
+
+    #[test]
     fn admission_ordinal_exhaustion_fails_runtime_closed() {
         let start = Instant::now();
         let owner_tag = tag(0);
@@ -10348,6 +10712,12 @@ mod tests {
             runtime.ingress.commands[0].admission_ordinal,
             Some(u128::MAX - 1)
         );
+        let next_before_rejection = runtime.ingress.next_admission_ordinal;
+        let source_before_rejection = runtime
+            .ingress
+            .lifecycle_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect source before exhausted FIFO admission");
         assert_eq!(
             enqueue_fake(
                 &mut runtime,
@@ -10358,6 +10728,20 @@ mod tests {
             Err(EnqueueError::FailClosed)
         );
         assert!(runtime.fail_closed);
+        assert_eq!(runtime.ingress.commands.len(), 1);
+        assert_eq!(
+            runtime.ingress.next_admission_ordinal,
+            next_before_rejection
+        );
+        assert_eq!(
+            runtime
+                .ingress
+                .lifecycle_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect source after exhausted FIFO admission"),
+            source_before_rejection,
+            "failed FIFO admission cannot advance either ordinal representation"
+        );
     }
 
     #[test]

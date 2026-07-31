@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import shutil
 from pathlib import Path
@@ -20,7 +19,7 @@ CONTRACT_FIXTURE_PATHS = (
     "crates/iroha_torii/src/lib.rs",
     "crates/irohad/src/main.rs",
     "xtask/src/sorafs.rs",
-    "docs/source/sorafs_gateway_tls_automation.md",
+    "specs/sorafs_gateway_tls_automation.md",
 )
 
 
@@ -38,7 +37,7 @@ def test_repository_runtime_acme_contract_is_fail_closed() -> None:
 
 def test_gateway_handbook_withdraws_instead_of_using_certificate_fallback() -> None:
     handbook = (
-        REPO_ROOT / "docs/source/sorafs_gateway_deployment_handbook.md"
+        REPO_ROOT / "specs/sorafs_gateway_deployment_handbook.md"
     ).read_text(encoding="utf-8")
 
     assert "sorafs-gateway tls renew" not in handbook
@@ -82,7 +81,7 @@ def test_guard_rejects_fake_renewal_and_stale_docs(tmp_path: Path) -> None:
     text = text.replace(marker, "fn fake() { AcmeAutomation::new(); }\n\n" + marker)
     xtask.write_text(text, encoding="utf-8")
 
-    doc = root / "docs/source/sorafs_gateway_tls_automation.md"
+    doc = root / "specs/sorafs_gateway_tls_automation.md"
     doc.write_text(
         doc.read_text(encoding="utf-8")
         + "\nProduction ACME clients remain available for validated accounts.\n",
@@ -91,61 +90,6 @@ def test_guard_rejects_fake_renewal_and_stale_docs(tmp_path: Path) -> None:
     failures = MODULE.check_contract(root)
     assert any(item.startswith("xtask:placeholder-renewal:") for item in failures)
     assert any(":stale-claim:" in item for item in failures)
-
-
-def test_guard_accepts_traceable_generated_translation_stub(tmp_path: Path) -> None:
-    root = tmp_path / "repo"
-    copy_contract_fixture(root)
-
-    canonical = root / "docs/source/sorafs_gateway_tls_automation.md"
-    source_hash = hashlib.sha256(canonical.read_bytes()).hexdigest()
-    localized = canonical.with_name("sorafs_gateway_tls_automation.ja.md")
-    localized.write_text(
-        "<!-- Auto-generated stub for Japanese (ja) translation. "
-        "Replace this content with the full translation. -->\n\n"
-        "---\n"
-        "lang: ja\n"
-        "direction: ltr\n"
-        "source: docs/source/sorafs_gateway_tls_automation.md\n"
-        "status: needs-translation\n"
-        "generator: scripts/sync_docs_i18n.py\n"
-        f"source_hash: {source_hash}\n"
-        'source_last_modified: "2026-07-25T00:00:00+00:00"\n'
-        "translation_last_reviewed: null\n"
-        "---\n\n"
-        "# Translation In Progress\n",
-        encoding="utf-8",
-    )
-
-    assert MODULE.check_contract(root) == []
-
-
-def test_guard_rejects_malformed_generated_translation_stub(tmp_path: Path) -> None:
-    root = tmp_path / "repo"
-    copy_contract_fixture(root)
-
-    canonical = root / "docs/source/sorafs_gateway_tls_automation.md"
-    source_hash = hashlib.sha256(canonical.read_bytes()).hexdigest()
-    localized = canonical.with_name("sorafs_gateway_tls_automation.ja.md")
-    localized.write_text(
-        "<!-- Auto-generated stub for Japanese (ja) translation. "
-        "Replace this content with the full translation. -->\n\n"
-        "---\n"
-        "lang: ja\n"
-        "direction: ltr\n"
-        "source: docs/source/wrong.md\n"
-        "status: needs-translation\n"
-        "generator: scripts/sync_docs_i18n.py\n"
-        f"source_hash: {source_hash}\n"
-        'source_last_modified: "2026-07-25T00:00:00+00:00"\n'
-        "translation_last_reviewed: null\n"
-        "---\n\n"
-        "# Translation In Progress\n",
-        encoding="utf-8",
-    )
-
-    failures = MODULE.check_contract(root)
-    assert any(item.endswith(":generated-stub-metadata") for item in failures)
 
 
 def test_guard_rejects_missing_daemon_runtime_forwarding(tmp_path: Path) -> None:

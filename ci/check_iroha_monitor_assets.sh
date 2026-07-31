@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 
-EXPECTED_DIR="${ROOT_DIR}/docs/source/images/iroha_monitor_demo"
+EXPECTED_DIR="${ROOT_DIR}/specs/images/iroha_monitor_demo"
 CAPTURE_SCRIPT="${ROOT_DIR}/scripts/iroha_monitor_demo.sh"
 OUT_DIR=$(mktemp -d)
 trap 'rm -rf "${OUT_DIR}"' EXIT
@@ -55,12 +55,12 @@ for name in "${FILES[@]}"; do
     fi
 done
 
-if ! grep -q "iroha_monitor_demo_overview.svg" "${ROOT_DIR}/docs/source/iroha_monitor.md"; then
-    echo "docs/source/iroha_monitor.md must reference iroha_monitor_demo_overview.svg" >&2
+if ! grep -q "iroha_monitor_demo_overview.svg" "${ROOT_DIR}/specs/iroha_monitor.md"; then
+    echo "specs/iroha_monitor.md must reference iroha_monitor_demo_overview.svg" >&2
     exit 1
 fi
-if ! grep -q "iroha_monitor_demo_pipeline.svg" "${ROOT_DIR}/docs/source/iroha_monitor.md"; then
-    echo "docs/source/iroha_monitor.md must reference iroha_monitor_demo_pipeline.svg" >&2
+if ! grep -q "iroha_monitor_demo_pipeline.svg" "${ROOT_DIR}/specs/iroha_monitor.md"; then
+    echo "specs/iroha_monitor.md must reference iroha_monitor_demo_pipeline.svg" >&2
     exit 1
 fi
 

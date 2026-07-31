@@ -4,7 +4,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 
 if [[ "$#" -eq 0 ]]; then
-  set -- docs/source/references/prometheus.rules.sumeragi_vrf.yml
+  set -- specs/references/prometheus.rules.sumeragi_vrf.yml
 fi
 
 RULES_FILES=("$@")

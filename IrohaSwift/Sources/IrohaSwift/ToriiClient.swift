@@ -8998,7 +8998,7 @@ public struct ToriiConfidentialAssetPolicy: Decodable, Sendable {
 
 public struct ToriiNodeCapabilities: Decodable, Sendable {
     /// Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
-    public static let expectedDataModelVersion = 3
+    public static let expectedDataModelVersion = 4
     /// Must match `<SignedTransaction as NoritoSerialize>::schema_hash()` on the node.
     public static let expectedSignedTransactionSchemaHashHex = "7ab5ff9c572efb316deac478f19209c5"
     public let abiVersion: Int

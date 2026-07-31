@@ -29,8 +29,8 @@ use sorafs_node::{
         EvidenceViewerLegalHoldV1, EvidenceViewerManifestV1, EvidenceViewerReceiptCursorV1,
         EvidenceViewerReceiptKindV1, EvidenceViewerRetentionRecordV1, EvidenceViewerRoleV1,
         EvidenceViewerSessionRequestV1, EvidenceViewerSignedCheckpointAnchorV1,
-        EvidenceViewerSignedReceiptV1, EvidenceViewerTransparencyProjectionV1,
-        OpaqueEvidenceViewerSecretV1,
+        EvidenceViewerSignedCompactionArchiveHeadV1, EvidenceViewerSignedReceiptV1,
+        EvidenceViewerTransparencyProjectionV1, OpaqueEvidenceViewerSecretV1,
     },
 };
 
@@ -1264,6 +1264,19 @@ fn receipt_cursor_value(cursor: EvidenceViewerReceiptCursorV1) -> Value {
 fn checkpoint_anchor_value(anchor: &EvidenceViewerSignedCheckpointAnchorV1) -> Value {
     object([
         ("version", u64::from(anchor.version).into()),
+        ("checkpoint_generation", anchor.checkpoint_generation.into()),
+        (
+            "predecessor_checkpoint_revision_hex",
+            anchor
+                .predecessor_checkpoint_revision
+                .map_or(Value::Null, |digest| hex::encode(digest).into()),
+        ),
+        (
+            "predecessor_checkpoint_digest_hex",
+            anchor
+                .predecessor_checkpoint_digest
+                .map_or(Value::Null, |digest| hex::encode(digest).into()),
+        ),
         (
             "checkpoint_digest_hex",
             hex::encode(anchor.checkpoint_digest).into(),
@@ -1273,12 +1286,93 @@ fn checkpoint_anchor_value(anchor: &EvidenceViewerSignedCheckpointAnchorV1) -> V
             "chain_head",
             anchor.chain_head.map_or(Value::Null, receipt_cursor_value),
         ),
+        (
+            "compaction_archive_head_digest_hex",
+            anchor
+                .compaction_archive_head_digest
+                .map_or(Value::Null, |digest| hex::encode(digest).into()),
+        ),
+        (
+            "checkpoint_store_handle",
+            anchor.checkpoint_store_handle.clone().into(),
+        ),
+        (
+            "checkpoint_store_revision",
+            anchor.checkpoint_store_revision.into(),
+        ),
+        (
+            "checkpoint_store_policy_digest_hex",
+            hex::encode(anchor.checkpoint_store_policy_digest).into(),
+        ),
         ("signer_handle", anchor.signer_handle.clone().into()),
         (
             "signer_public_key_hex",
             hex::encode(anchor.signer_public_key).into(),
         ),
         ("signature_hex", hex::encode(anchor.signature).into()),
+    ])
+}
+
+fn compaction_archive_head_value(head: &EvidenceViewerSignedCompactionArchiveHeadV1) -> Value {
+    object([
+        ("version", u64::from(head.version).into()),
+        ("generation", head.generation.into()),
+        (
+            "predecessor_head_digest_hex",
+            head.predecessor_head_digest
+                .map_or(Value::Null, |digest| hex::encode(digest).into()),
+        ),
+        (
+            "predecessor_operation_id_hex",
+            head.predecessor_operation_id
+                .map_or(Value::Null, |digest| hex::encode(digest).into()),
+        ),
+        ("operation_id_hex", hex::encode(head.operation_id).into()),
+        (
+            "source_checkpoint_generation",
+            head.source_checkpoint_generation.into(),
+        ),
+        (
+            "source_checkpoint_revision_hex",
+            hex::encode(head.source_checkpoint_revision).into(),
+        ),
+        (
+            "source_checkpoint_anchor",
+            checkpoint_anchor_value(&head.source_checkpoint_anchor),
+        ),
+        (
+            "compacted_through_unix_ms",
+            head.compacted_through_unix_ms.into(),
+        ),
+        ("maximum_records", u64::from(head.maximum_records).into()),
+        ("challenge_count", u64::from(head.challenge_count).into()),
+        ("session_count", u64::from(head.session_count).into()),
+        (
+            "compacted_payload_digest_hex",
+            hex::encode(head.compacted_payload_digest).into(),
+        ),
+        ("archive_handle", head.archive_handle.clone().into()),
+        ("archive_revision", head.archive_revision.into()),
+        (
+            "archive_policy_digest_hex",
+            hex::encode(head.archive_policy_digest).into(),
+        ),
+        ("archive_id_hex", hex::encode(head.archive_id).into()),
+        (
+            "archive_public_key_hex",
+            hex::encode(head.archive_public_key).into(),
+        ),
+        ("signer_handle", head.signer_handle.clone().into()),
+        (
+            "signer_public_key_hex",
+            hex::encode(head.signer_public_key).into(),
+        ),
+        ("signature_hex", hex::encode(head.signature).into()),
+        ("head_digest_hex", hex::encode(head.head_digest).into()),
+        (
+            "archive_signature_hex",
+            hex::encode(head.archive_signature).into(),
+        ),
     ])
 }
 
@@ -1308,6 +1402,13 @@ fn audit_projection_response(projection: &EvidenceViewerTransparencyProjectionV1
             (
                 "checkpoint_anchor",
                 checkpoint_anchor_value(&projection.checkpoint_anchor),
+            ),
+            (
+                "compaction_archive_head",
+                projection
+                    .compaction_archive_head
+                    .as_ref()
+                    .map_or(Value::Null, compaction_archive_head_value),
             ),
             (
                 "predecessor",
@@ -1888,13 +1989,21 @@ mod tests {
             version: 1,
             checkpoint_anchor: EvidenceViewerSignedCheckpointAnchorV1 {
                 version: 1,
+                checkpoint_generation: 9,
+                predecessor_checkpoint_revision: Some([0xE8; 32]),
+                predecessor_checkpoint_digest: Some([0xC6; 32]),
                 checkpoint_digest: [0xC7; 32],
                 receipt_count: 9,
                 chain_head: Some(cursor),
+                compaction_archive_head_digest: None,
+                checkpoint_store_handle: "sealed-cas:production-evidence-checkpoint".to_owned(),
+                checkpoint_store_revision: 3,
+                checkpoint_store_policy_digest: [0xA7; 32],
                 signer_handle: "pkcs11:production-evidence-checkpoint".to_owned(),
                 signer_public_key: [0xB7; 32],
                 signature: [0x97; 64],
             },
+            compaction_archive_head: None,
             predecessor: Some(cursor),
             page_limit: 17,
             receipts: Vec::new(),
@@ -1943,10 +2052,19 @@ mod tests {
             .and_then(Value::as_object)
             .expect("signed checkpoint anchor");
         let checkpoint_digest_hex = hex::encode([0xC7; 32]);
+        assert_eq!(
+            anchor.get("checkpoint_generation").and_then(Value::as_u64),
+            Some(9)
+        );
         assert_eq!(anchor.get("receipt_count").and_then(Value::as_u64), Some(9));
         assert_eq!(
             anchor.get("checkpoint_digest_hex").and_then(Value::as_str),
             Some(checkpoint_digest_hex.as_str())
+        );
+        assert!(
+            value
+                .get("compaction_archive_head")
+                .is_some_and(Value::is_null)
         );
         assert!(
             value
@@ -1976,9 +2094,16 @@ mod tests {
             retention_count: 1,
             checkpoint_anchor: EvidenceViewerSignedCheckpointAnchorV1 {
                 version: 1,
+                checkpoint_generation: 4,
+                predecessor_checkpoint_revision: Some([0xE3; 32]),
+                predecessor_checkpoint_digest: Some([0xC3; 32]),
                 checkpoint_digest: [0xC4; 32],
                 receipt_count: 4,
                 chain_head: Some(cursor),
+                compaction_archive_head_digest: None,
+                checkpoint_store_handle: "sealed-cas:production-evidence-checkpoint".to_owned(),
+                checkpoint_store_revision: 3,
+                checkpoint_store_policy_digest: [0xA4; 32],
                 signer_handle: "pkcs11:production-evidence-checkpoint".to_owned(),
                 signer_public_key: [0xB4; 32],
                 signature: [0x94; 64],

@@ -68,7 +68,7 @@ Hardening` roadmap line items and will be updated as decisions land.
 - `make gost-bench` wraps the script (pass `GOST_BENCH_ARGS="--tolerance 0.25"` etc.); use
   `make gost-bench-update` to rebaseline (`scripts/update_gost_baseline.sh` is a convenience helper).
   `make gost-dudect` runs the constant-time timing guard in isolation. The full workflow is captured in
-  `docs/source/crypto/gost_performance.md`.
+  `specs/crypto/gost_performance.md`.
 - Streebog (`0.11.0-rc.2`) is mirrored under `vendor/streebog` and patched into the workspace so the
   build no longer depends on crates.io for the hash implementation. Update the mirror when RustCrypto
   publishes a stable `0.11.x` release.
@@ -84,7 +84,8 @@ Hardening` roadmap line items and will be updated as decisions land.
   Use the `--seed` flag (32 bytes for 256-bit curves, 64 bytes for 512-bit curves) when you
   need deterministic regeneration; otherwise rely on the default OS randomness.
 - When wiring the keys into genesis manifests or `iroha_config`, encode them as multihash
-  strings (see `docs/genesis.md` for examples such as `gost3410-2012-256-paramset-a:<hex>`).
+  strings (see the [public genesis reference](https://docs.iroha.tech/reference/genesis.html)
+  for examples such as `gost3410-2012-256-paramset-a:<hex>`).
   Downstream services such as Torii and the CLI pick the algorithm from the multihash prefix.
 - Keep `/dev/urandom` (or the platform equivalent) available on validator hosts. The signer
   hedges the deterministic HMAC-Streebog nonce with `scalar_len` bytes from `OsRng`; if the

@@ -32,6 +32,7 @@
   ],
   "replication_orders": [
     {
+      "assignment_revision": 1,
       "assignments": [
         {
           "provider_id_hex": "5151515151515151515151515151515151515151515151515151515151515151",
@@ -55,19 +56,43 @@
       "order_id_hex": "4444444444444444444444444444444444444444444444444444444444444444",
       "provider_completions": [
         {
+          "assignment_revision": 1,
           "completed_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
           "completion_epoch": 25,
-          "provider_id_hex": "5151515151515151515151515151515151515151515151515151515151515151"
+          "expected_owner": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
+          "finalized_block_hash_hex": "b7c84fdc9dd84229bc0fcaf7606d8153c8815aa499e5fa7b402fec016254e0ad",
+          "finalized_height": 1,
+          "provider_id_hex": "5151515151515151515151515151515151515151515151515151515151515151",
+          "signer_policy_digest_hex": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "signer_policy_id_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "signer_policy_predecessor_digest_hex": null,
+          "signer_policy_revision": 1
         },
         {
+          "assignment_revision": 1,
           "completed_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
           "completion_epoch": 25,
-          "provider_id_hex": "5252525252525252525252525252525252525252525252525252525252525252"
+          "expected_owner": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
+          "finalized_block_hash_hex": "b7c84fdc9dd84229bc0fcaf7606d8153c8815aa499e5fa7b402fec016254e0ad",
+          "finalized_height": 1,
+          "provider_id_hex": "5252525252525252525252525252525252525252525252525252525252525252",
+          "signer_policy_digest_hex": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "signer_policy_id_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "signer_policy_predecessor_digest_hex": null,
+          "signer_policy_revision": 1
         },
         {
+          "assignment_revision": 1,
           "completed_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
           "completion_epoch": 25,
-          "provider_id_hex": "5353535353535353535353535353535353535353535353535353535353535353"
+          "expected_owner": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
+          "finalized_block_hash_hex": "b7c84fdc9dd84229bc0fcaf7606d8153c8815aa499e5fa7b402fec016254e0ad",
+          "finalized_height": 1,
+          "provider_id_hex": "5353535353535353535353535353535353535353535353535353535353535353",
+          "signer_policy_digest_hex": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "signer_policy_id_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "signer_policy_predecessor_digest_hex": null,
+          "signer_policy_revision": 1
         }
       ],
       "sla_ingest_deadline_secs": 86400,

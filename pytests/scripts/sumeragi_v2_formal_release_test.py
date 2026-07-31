@@ -71,12 +71,12 @@ def _fixture(
     gate.write_text(
         f"""#!/usr/bin/env bash
 set -euo pipefail
-mkdir -p docs/formal/sumeragi_v2 target/formal/sumeragi_v2
+mkdir -p formal/sumeragi_v2 target/formal/sumeragi_v2
 case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
   fail) exit 73 ;;
   pass|no-marker|duplicate-marker)
     printf '%s\n' '{{"machine_checked_completion":true}}' \
-      >docs/formal/sumeragi_v2/proof_coverage.json
+      >formal/sumeragi_v2/proof_coverage.json
     printf '%s\n' '{{"backend_verification":true}}' \
       >target/formal/sumeragi_v2/proof_evidence.json
     printf '%s\n' '{{"backend_verification":true}}' \
@@ -630,7 +630,7 @@ def test_restart_locked_fetch_order_mutation_is_release_gated_and_pinned() -> No
         in runner
     )
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     model = (formal_dir / "SumeragiV2RestartLockedFetchOrderMutation.tla").read_text(
         encoding="utf-8"
     )
@@ -707,7 +707,7 @@ def test_persist_install_generation_mutation_is_release_gated_and_pinned() -> No
         in runner
     )
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     model = (
         formal_dir / "SumeragiV2PersistInstallGenerationMutation.tla"
     ).read_text(encoding="utf-8")
@@ -786,7 +786,7 @@ def test_persist_install_validation_mutation_is_release_gated_and_pinned() -> No
         in runner
     )
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     model = (
         formal_dir / "SumeragiV2PersistInstallValidationMutation.tla"
     ).read_text(encoding="utf-8")
@@ -863,7 +863,7 @@ def test_apply_authority_mutation_is_release_gated_and_pinned() -> None:
         in runner
     )
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     model = (
         formal_dir / "SumeragiV2ApplyAuthorityMutation.tla"
     ).read_text(encoding="utf-8")
@@ -939,7 +939,7 @@ def test_replay_locked_body_carrier_mutation_is_release_gated_and_pinned() -> No
     )
     assert '"State 4: <FinishResponsiveReplay"' in runner
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     model = (
         formal_dir / "SumeragiV2ReplayLockedBodyCarrierMutation.tla"
     ).read_text(encoding="utf-8")
@@ -1009,7 +1009,7 @@ def test_certificate_ref_recovery_mutation_is_release_gated_and_pinned() -> None
         in runner
     )
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     model = (
         formal_dir / "SumeragiV2CertificateRefRecoveryMutation.tla"
     ).read_text(encoding="utf-8")
@@ -1081,7 +1081,7 @@ def test_certified_response_source_lineage_mutation_is_release_gated_and_pinned(
         in runner
     )
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     model = (
         formal_dir / "SumeragiV2CertifiedResponseSourceLineageMutation.tla"
     ).read_text(encoding="utf-8")
@@ -1168,7 +1168,7 @@ def test_certified_response_identity_separation_mutation_is_release_gated_and_pi
     assert runner.count('"State 2: <ProcessResponse"') == 2
     assert runner.count('\'/\\ lastAttempt = "Honest"\'') == 2
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     model = (
         formal_dir
         / "SumeragiV2CertifiedResponseIdentitySeparationMutation.tla"
@@ -1330,7 +1330,7 @@ def test_ingress_causal_freshness_mutation_is_release_gated_and_pinned() -> None
         "2 states generated, 2 distinct states found, 0 states left on queue."
     ) == 2
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     fixed = (formal_dir / "ingress_causal_freshness_fixed.cfg").read_text(
         encoding="utf-8"
     )
@@ -1395,7 +1395,7 @@ def test_historical_discovery_occurrence_rank_is_release_gated_and_pinned() -> N
     ):
         assert runner.count(required) == 1
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     for config_name, count_occurrences in (
         ("historical_discovery_occurrence_rank_fixed.cfg", "TRUE"),
         ("historical_discovery_plain_minimum_bug.cfg", "FALSE"),

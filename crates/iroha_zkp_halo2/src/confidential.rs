@@ -13,7 +13,7 @@ const NULLIFIER_DST: &[u8] = b"iroha:conf:nullifier:v1";
 /// Derive a canonical 32-byte nullifier from the nullifier key `nk`,
 /// per-note randomness `rho`, the asset identifier, and the chain id.
 ///
-/// Inputs follow the design captured in `docs/source/confidential_assets.md`.
+/// Inputs follow the design captured in `specs/confidential_assets.md`.
 /// All callers must supply the *canonical* UTF-8 representations for the asset
 /// identifier and chain id (matching the values hashed into block headers).
 ///

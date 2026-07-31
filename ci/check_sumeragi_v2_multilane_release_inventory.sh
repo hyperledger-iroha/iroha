@@ -114,7 +114,7 @@ require_exact_token \
   "readonly native_amx_grouped_parity_harness=\"${grouped_parity_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=280"
+  "readonly expected_multilane_focus_test_count=302"
 require_exact_token \
   "$release_runner" \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
@@ -155,7 +155,7 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 50"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 280"
+  "_G_UNIT_TEST_COUNT = 302"
 require_exact_token \
   "$release_receipt_writer" \
   "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
@@ -291,8 +291,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "877ec0909ecfb9c22118b9b976ec87d7"
-    "09e3d8d012cb2d693c8465524405fee5"
+    "1873bbd68c9736db1991842c5f34b0ff"
+    "4b98460567a76649619d256d4e510700"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -445,8 +445,8 @@ for block in source_sealed_blocks:
         reject(f"source-sealed command/evidence block {label} is missing or duplicated")
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 104,
-    "required_multilane_queue_journal_focus_tests": 119,
+    "required_multilane_core_focus_tests": 108,
+    "required_multilane_queue_journal_focus_tests": 137,
     "required_multilane_config_lib_focus_tests": 3,
     "required_multilane_config_runtime_focus_tests": 2,
     "required_multilane_config_fixtures_focus_tests": 2,
@@ -489,9 +489,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 280 or len(set(all_focus_entries)) != 280:
+if len(all_focus_entries) != 302 or len(set(all_focus_entries)) != 302:
     reject(
-        "multilane focus-test arrays must contain 280 globally distinct tests; "
+        "multilane focus-test arrays must contain 302 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -501,14 +501,14 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        104,
+        108,
         "--lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        119,
+        137,
         "--lib",
     ),
     (
@@ -573,7 +573,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 280 count is not published exactly once")
+        reject("G-UNIT expected 302 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -1166,4 +1166,4 @@ if [[ "$(grep -Fxc -- "    env \"\${ENV_VARS[@]}\" IROHA_MULTILANE_RELEASE_MODE=
   exit 1
 fi
 
-echo "[multilane-release-inventory] 82 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 39 modules, exact 280/280 G-UNIT (104 core, 119 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 82 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 39 modules, exact 302/302 G-UNIT (108 core, 137 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"

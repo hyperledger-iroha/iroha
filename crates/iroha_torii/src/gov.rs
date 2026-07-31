@@ -2,7 +2,7 @@
 #![allow(unexpected_cfgs)]
 //!
 //! This module hosts minimal DTOs and handlers for governance endpoints
-//! described in `gov.md` and `docs/source/contract_deployment.md`.
+//! described in `gov.md` and `specs/contract_deployment.md`.
 //! Handlers validate inputs, build instruction skeletons, and reject legacy
 //! `private_key` payloads so callers must submit locally signed transactions.
 //!

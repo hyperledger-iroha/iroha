@@ -44933,7 +44933,7 @@ fn sorafs_reference_invalid_pdp_kind_buffer(
             sorafs_reference_json_buffer_from_bytes(rendered.into_bytes())
         }
         Err(_) => sorafs_reference_json_buffer_from_bytes(
-            b"{\"status\":\"Error\",\"code\":\"SFS-FFI-001\",\"category\":\"internal\",\"message\":\"unsupported PDP selector\",\"action\":\"Use a supported PDP selector.\",\"docs_url\":\"docs/portal/docs/sorafs/reference-sdk/errors.md\",\"telemetry_tags\":[\"sorafs.reference.ffi\",\"sorafs.reference.code.SFS-FFI-001\"],\"context\":[],\"inputs\":[],\"version\":1,\"generated_at\":0}\n".to_vec(),
+            b"{\"status\":\"Error\",\"code\":\"SFS-FFI-001\",\"category\":\"internal\",\"message\":\"unsupported PDP selector\",\"action\":\"Use a supported PDP selector.\",\"docs_url\":\"https://docs.iroha.tech/\",\"telemetry_tags\":[\"sorafs.reference.ffi\",\"sorafs.reference.code.SFS-FFI-001\"],\"context\":[],\"inputs\":[],\"version\":1,\"generated_at\":0}\n".to_vec(),
         ),
     }
 }

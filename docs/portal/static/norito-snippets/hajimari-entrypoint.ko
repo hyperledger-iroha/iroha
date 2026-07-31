@@ -1,6 +1,0 @@
-// Canonical 始まり declaration.
-誓約 HajimariExample {
-    始まり() {
-        debug::info("Hello from hajimari");
-    }
-}

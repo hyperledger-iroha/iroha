@@ -1967,9 +1967,12 @@ def check(overrides: dict[str, str] | None = None) -> None:
                 '"src/**/*.so"',
                 '"src/**/*.dylib"',
                 '"src/**/*.pyd"',
+                '"src/**/__pycache__/**"',
+                '"src/**/*.pyc"',
+                '"src/**/*.pyo"',
             )
         ),
-        "privacy Python wheel policy must exclude checkout-native artifacts from mixed-project inputs",
+        "privacy Python wheel policy must exclude checkout-native and bytecode artifacts from mixed-project inputs",
         errors,
     )
     for rejected_environment_name in (

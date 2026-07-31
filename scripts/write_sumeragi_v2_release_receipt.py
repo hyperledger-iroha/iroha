@@ -181,8 +181,7 @@ _IDENTITY_KEYS = {
 _FORMAL_FINAL_MARKER = (
     "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
     "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
-    "recovery/ownership mutations, bounded TLC, trace replay, and production "
-    "Verus"
+    "recovery/ownership mutations, bounded TLC, trace replay, and production Verus"
 )
 _SCALING_REPORT_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.validation.v1"
 _SCALING_SAFE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -225,7 +224,7 @@ _APALACHE_LAYOUT_ONLY_RESULTS = (
         "inflight-first-release-layout",
         "SumeragiV2InFlightFirstRelease",
         "inflight_first_release_fixed.cfg",
-        "10",
+        "18",
     ),
 )
 _APALACHE_RESULTS = (
@@ -355,20 +354,20 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "command",
 )
 _PRODUCTION_TEST_COUNT = 806
-_G_UNIT_TEST_COUNT = 280
+_G_UNIT_TEST_COUNT = 302
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        104,
+        108,
         "lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        119,
+        137,
         "lib",
     ),
     (
@@ -624,6 +623,7 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "python/iroha_torii_client/native_amx.py",
     "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
     "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/scripts/build-dist.mjs",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
@@ -659,8 +659,8 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "java/iroha_android/gradlew",
     "java/iroha_android/gradle/wrapper/gradle-wrapper.jar",
     "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
-    "docs/portal/static/openapi/torii.json",
-    "docs/portal/static/openapi/versions/current/torii.json",
+    "artifacts/openapi/torii.json",
+    "artifacts/openapi/versions/current/torii.json",
 )
 _JS_STATUS_TESTS = (
     "getSumeragiStatusTyped validates and normalizes authoritative v2 status",
@@ -1185,7 +1185,6 @@ class DirectoryContract:
 
 def _snapshot_contract(snapshot: EvidenceSnapshot) -> PathContract:
     """Discard retained bytes while preserving the exact opened-file identity."""
-
     return PathContract(
         path=snapshot.path,
         sha256=snapshot.sha256,
@@ -1248,7 +1247,6 @@ def _read_signature_archive(
     maximum_bytes: int,
 ) -> dict[str, Any]:
     """Read one archived inode without following a link or accepting a race."""
-
     if not path.is_absolute() or Path(os.path.abspath(path)) != path:
         raise ReceiptError(f"{name} path must be absolute and normalized")
     try:
@@ -1341,7 +1339,6 @@ def _read_evidence_snapshot(
     retain_bytes: bool = True,
 ) -> EvidenceSnapshot | PathContract:
     """Capture one bounded regular file with closed pathname semantics."""
-
     if not path.is_absolute() or Path(os.path.abspath(path)) != path:
         raise ReceiptError(f"{name} path must be absolute and normalized")
     try:
@@ -1447,7 +1444,6 @@ def _bounded_evidence_snapshot(
     executable: bool = False,
 ) -> EvidenceSnapshot:
     """Capture one bounded evidence file and retain the exact validated bytes."""
-
     try:
         snapshot = _read_evidence_snapshot(
             path,
@@ -1478,7 +1474,6 @@ def _bounded_path_contract(
     executable: bool = False,
 ) -> PathContract:
     """Hash one bounded evidence file without retaining its full contents."""
-
     contract = _read_evidence_snapshot(
         path,
         name,
@@ -1496,7 +1491,6 @@ def _bounded_path_contract(
 
 def _decode_lf_text(snapshot: EvidenceSnapshot, name: str) -> str:
     """Decode one exact, bounded, NUL-free LF-only text snapshot."""
-
     data = snapshot.data
     if not data.endswith(b"\n") or b"\r" in data or b"\0" in data:
         raise ReceiptError(f"{name} is not canonical LF-only text")

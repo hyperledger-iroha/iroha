@@ -4,7 +4,7 @@
   "category": "validation",
   "message": "CancelAssetLock expected_remaining_amount must be greater than zero",
   "action": "Submit the exact positive remaining quantity from fresh committed escrow state.",
-  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "docs_url": "https://docs.iroha.tech/",
   "telemetry_tags": [
     "sorafs.reference.appeal_finance",
     "sorafs.reference.code.SFS-VAL-001"

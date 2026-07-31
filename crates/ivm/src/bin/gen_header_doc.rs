@@ -1,4 +1,4 @@
-//! Generate or check header policy sections in `docs/source/ivm_header*.md`.
+//! Generate or check header policy sections in `specs/ivm_header*.md`.
 //! Usage:
 //!   cargo run -p ivm --bin gen_header_doc -- --write
 //!   cargo run -p ivm --bin gen_header_doc -- --check
@@ -7,10 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod support;
 
-use support::{
-    EXPECTED_DOC_LOCALES, GeneratedOutput, exact_localized_markdown_paths, parse_generation_mode,
-    sync_generated_outputs,
-};
+use support::{GeneratedOutput, parse_generation_mode, sync_generated_outputs};
 
 const LAYOUT_BEGIN: &str = "<!-- BEGIN GENERATED HEADER LAYOUT -->";
 const LAYOUT_END: &str = "<!-- END GENERATED HEADER LAYOUT -->";
@@ -57,15 +54,8 @@ fn render_header_policy_markdown() -> String {
     md
 }
 
-fn header_doc_paths(source_dir: &Path) -> Result<Vec<PathBuf>, String> {
-    header_doc_paths_for(source_dir, EXPECTED_DOC_LOCALES)
-}
-
-fn header_doc_paths_for(
-    source_dir: &Path,
-    expected_locales: &[&str],
-) -> Result<Vec<PathBuf>, String> {
-    exact_localized_markdown_paths(source_dir, "ivm_header", true, expected_locales)
+fn header_doc_paths(source_dir: &Path) -> Vec<PathBuf> {
+    vec![source_dir.join("ivm_header.md")]
 }
 
 fn replace_generated_section(
@@ -146,14 +136,13 @@ fn main() {
         .parent()
         .and_then(|p| p.parent())
         .expect("workspace root")
-        .join("docs/source");
+        .join("specs");
     let layout = render_header_layout_markdown();
     let expected_layout = format!("{LAYOUT_BEGIN}\n{layout}{LAYOUT_END}");
     let table = render_header_policy_markdown();
     let expected_policy = format!("{POLICY_BEGIN}\n{table}{POLICY_END}");
 
-    let paths = header_doc_paths(&source_dir)
-        .unwrap_or_else(|error| panic!("discover IVM header documents: {error}"));
+    let paths = header_doc_paths(&source_dir);
     let outputs = prepare_header_outputs(&paths, &expected_layout, &expected_policy)
         .unwrap_or_else(|error| panic!("render IVM header documents: {error}"));
     let regenerate_command = "cargo run --locked -p ivm --bin gen_header_doc -- --write";
@@ -172,29 +161,11 @@ mod tests {
     };
 
     use super::{
-        LAYOUT_BEGIN, LAYOUT_END, POLICY_BEGIN, POLICY_END, header_doc_paths_for,
-        prepare_header_outputs, render_header_document,
+        LAYOUT_BEGIN, LAYOUT_END, POLICY_BEGIN, POLICY_END, prepare_header_outputs,
+        render_header_document,
     };
 
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
-    #[test]
-    fn localized_policy_replacement_preserves_surrounding_prose_and_hashes() {
-        let prefix = "---\nlang: ja\n---\n\n翻訳された説明\n\n";
-        let suffix = "\n\n<!-- BEGIN GENERATED ABI HASHES -->\nkeep-hash\n<!-- END GENERATED ABI HASHES -->\n\n追記\n";
-        let current = format!("{prefix}{POLICY_BEGIN}\nstale\n{POLICY_END}{suffix}");
-        let expected_policy = format!("{POLICY_BEGIN}\ncanonical\n{POLICY_END}");
-        let expected = format!("{prefix}{expected_policy}{suffix}");
-
-        let rendered = render_header_document(&current, false, "unused", &expected_policy)
-            .expect("replace localized policy");
-        assert_eq!(rendered, expected);
-        assert_eq!(
-            render_header_document(&rendered, false, "unused", &expected_policy)
-                .expect("idempotent localized replacement"),
-            rendered
-        );
-    }
 
     #[test]
     fn english_header_replaces_layout_and_policy() {
@@ -233,43 +204,15 @@ mod tests {
     }
 
     #[test]
-    fn header_document_discovery_is_sorted() {
-        let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let source_dir = std::env::temp_dir().join(format!(
-            "ivm-header-doc-generator-{}-{unique}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&source_dir).expect("create source directory");
-        for name in ["ivm_header.zh-hant.md", "ivm_header.md", "ivm_header.am.md"] {
-            fs::write(source_dir.join(name), "test").expect("write header document");
-        }
-        fs::write(source_dir.join("ivm_header_notes.md"), "ignore")
-            .expect("write unrelated document");
-
-        let paths = header_doc_paths_for(&source_dir, &["am", "zh-hant"])
-            .expect("discover header documents");
-        assert_eq!(
-            paths,
-            [
-                source_dir.join("ivm_header.am.md"),
-                source_dir.join("ivm_header.md"),
-                source_dir.join("ivm_header.zh-hant.md"),
-            ]
-        );
-
-        fs::remove_dir_all(source_dir).expect("remove temporary directory");
-    }
-
-    #[test]
-    fn late_localized_marker_failure_does_not_publish_earlier_document() {
+    fn late_marker_failure_does_not_publish_earlier_document() {
         let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let source_dir = std::env::temp_dir().join(format!(
             "ivm-header-doc-late-failure-{}-{unique}",
             std::process::id()
         ));
         fs::create_dir_all(&source_dir).expect("create source directory");
-        let first = source_dir.join("ivm_header.am.md");
-        let second = source_dir.join("ivm_header.zh-hant.md");
+        let first = source_dir.join("first.md");
+        let second = source_dir.join("second.md");
         fs::write(&first, format!("{POLICY_BEGIN}\nstale\n{POLICY_END}\n"))
             .expect("write first document");
         fs::write(&second, "missing policy markers\n").expect("write malformed later document");

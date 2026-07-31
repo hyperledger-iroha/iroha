@@ -1,6 +1,9 @@
 # Reviewed SF-11 reference SDK release evidence collection arguments.
 # The runner only verifies existing payload-free JSON artifacts; collect them
 # from the release pipeline and downstream package jobs before running this plan.
+# Supply the reviewed deployment's supply-chain source root, public provenance
+# trust tuple, and independently administered topology trust tuple for the same
+# deployment context.
 # Run with:
 #   python3 scripts/run_sorafs_reference_sdk_release_evidence.py \
 #     @scripts/examples/sorafs_reference_sdk_release_collection.args.example \
@@ -20,4 +23,14 @@
 --min-release-targets 5
 --min-downstream-packages 6
 --max-smoke-duration-secs 1800
+--supply-chain-source-root /var/tmp/sorafs/reference-sdk-supply-chain-source
+--provenance-certificate-identity https://github.com/hyperledger/iroha/.github/workflows/sorafs-cli-release.yml@refs/tags/sorafs-cli-v1.0.0
+--provenance-oidc-issuer https://token.actions.githubusercontent.com
+--provenance-verification-public-key-hex 1111111111111111111111111111111111111111111111111111111111111111
 --topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json
+--topology-qualification-envelope artifacts/sorafs/production-readiness/l1-topology-qualification.envelope.json
+--topology-qualification-verification-public-key-hex 2222222222222222222222222222222222222222222222222222222222222222
+--topology-qualification-signer-identity sorafs-production-topology-qualification-hsm
+--topology-qualification-signer-key-revision 1
+--topology-qualification-signer-policy-digest-hex 3333333333333333333333333333333333333333333333333333333333333333
+--max-topology-qualification-review-age-secs 1209600

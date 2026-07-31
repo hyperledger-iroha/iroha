@@ -130,7 +130,7 @@ pub use proof_outcome_forwarder::{
     PROOF_OUTCOME_OUTBOX_DEFAULT_MAX_ATTEMPTS_V1, PROOF_OUTCOME_OUTBOX_MAX_SCAN_ITEMS_V1,
     ProofOutcomeDeadLetterReasonV1, ProofOutcomeDeadLetterV1, ProofOutcomeDeliveryStateV1,
     ProofOutcomeEnqueueResultV1, ProofOutcomeOutbox, ProofOutcomeOutboxError,
-    ProofOutcomeOutboxPolicyV1, ProofOutcomePendingDeliveryV1,
+    ProofOutcomeOutboxPolicyV1, ProofOutcomePendingDeliveryV1, potr_proof_outcome_operation_id_v1,
 };
 pub use provider_ingest_outbox::{
     FinalizedProviderIngestAuthorizationV1, PROVIDER_INGEST_OUTBOX_FILE_V1,
@@ -384,6 +384,7 @@ use iroha_telemetry::metrics::{
     global_or_default, global_sorafs_gc_otel, global_sorafs_reconciliation_otel,
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
+#[cfg(test)]
 use norito::json::Value as JsonValue;
 use orderbook_transaction_forwarder::{
     ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1, OrderbookOperationV1,
@@ -27073,7 +27074,6 @@ mod tests {
     #[test]
     fn node_handle_plan_por_challenges_handles_vrf_and_forced() {
         use std::collections::HashMap;
-
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
 

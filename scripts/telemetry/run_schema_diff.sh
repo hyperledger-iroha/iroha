@@ -30,8 +30,8 @@ Examples:
   scripts/telemetry/run_schema_diff.sh \
     --android-config configs/android_telemetry.json \
     --rust-config configs/rust_telemetry.json \
-    --policy-out docs/source/sdk/android/readiness/schema_diffs/$(date +%Y%m%d)-policy.json \
-    --out docs/source/sdk/android/readiness/schema_diffs/$(date +%Y%m%d).json
+    --policy-out specs/sdk/android/readiness/schema_diffs/$(date +%Y%m%d)-policy.json \
+    --out specs/sdk/android/readiness/schema_diffs/$(date +%Y%m%d).json
 EOF
 }
 
@@ -44,7 +44,7 @@ POLICY_OUT=""
 METRICS_OUT=""
 TEXTFILE_DIR=""
 MARKDOWN_OUT=""
-DEFAULT_OUT_DIR="docs/source/sdk/android/readiness/schema_diffs"
+DEFAULT_OUT_DIR="specs/sdk/android/readiness/schema_diffs"
 DEFAULT_METRICS_PATH="artifacts/android/telemetry/schema_diff.prom"
 TIMESTAMP="$(date -u +%Y%m%d)"
 

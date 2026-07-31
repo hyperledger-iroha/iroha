@@ -2,23 +2,49 @@
 
 use super::*;
 
+#[cfg(test)]
 type TypeName = fn() -> &'static str;
 
 /// One built-in instruction's Rust type and path-independent wire identity.
 #[derive(Clone, Copy)]
 pub(super) struct BuiltInWireId {
+    #[cfg(test)]
+    pub(super) type_label: &'static str,
+    #[cfg(test)]
     pub(super) type_name: TypeName,
+    #[cfg(test)]
     pub(super) wire_id: &'static str,
+    #[cfg(test)]
+    pub(super) governance_only: bool,
     apply: Registrar,
+}
+
+macro_rules! built_in_wire_id_with_scope {
+    ($ty:ty => $wire_id:literal, governance_only = $governance_only:literal) => {
+        BuiltInWireId {
+            #[cfg(test)]
+            type_label: stringify!($ty),
+            #[cfg(test)]
+            type_name: std::any::type_name::<$ty>,
+            #[cfg(test)]
+            wire_id: $wire_id,
+            #[cfg(test)]
+            governance_only: $governance_only,
+            apply: |registry| registry.remap_wire_id::<$ty>($wire_id),
+        }
+    };
 }
 
 macro_rules! built_in_wire_id {
     ($ty:ty => $wire_id:literal) => {
-        BuiltInWireId {
-            type_name: std::any::type_name::<$ty>,
-            wire_id: $wire_id,
-            apply: |registry| registry.remap_wire_id::<$ty>($wire_id),
-        }
+        built_in_wire_id_with_scope!($ty => $wire_id, governance_only = false)
+    };
+}
+
+#[cfg(feature = "governance")]
+macro_rules! governance_wire_id {
+    ($ty:ty => $wire_id:literal) => {
+        built_in_wire_id_with_scope!($ty => $wire_id, governance_only = true)
     };
 }
 
@@ -343,39 +369,39 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(confidential::SetPoseidonParamsLifecycle => "iroha_data_model::isi::confidential::SetPoseidonParamsLifecycle"),
     built_in_wire_id!(ministry::SubmitAgendaProposal => "iroha_data_model::isi::ministry::SubmitAgendaProposal"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::ProposeDeployContract => "iroha_data_model::isi::governance::ProposeDeployContract"),
+    governance_wire_id!(governance::ProposeDeployContract => "iroha_data_model::isi::governance::ProposeDeployContract"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::ProposeRuntimeUpgradeProposal => "iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal"),
+    governance_wire_id!(governance::ProposeRuntimeUpgradeProposal => "iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::ProposeSccpRouteGovernance => "iroha_data_model::isi::governance::ProposeSccpRouteGovernance"),
+    governance_wire_id!(governance::ProposeSccpRouteGovernance => "iroha_data_model::isi::governance::ProposeSccpRouteGovernance"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::ProposeValidationFeePolicy => "iroha_data_model::isi::governance::ProposeValidationFeePolicy"),
+    governance_wire_id!(governance::ProposeValidationFeePolicy => "iroha_data_model::isi::governance::ProposeValidationFeePolicy"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::ProposeValidationFeePayoutLifecycle => "iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle"),
+    governance_wire_id!(governance::ProposeValidationFeePayoutLifecycle => "iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::CastZkBallot => "iroha_data_model::isi::governance::CastZkBallot"),
+    governance_wire_id!(governance::CastZkBallot => "iroha_data_model::isi::governance::CastZkBallot"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::CastPlainBallot => "iroha_data_model::isi::governance::CastPlainBallot"),
+    governance_wire_id!(governance::CastPlainBallot => "iroha_data_model::isi::governance::CastPlainBallot"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::SlashGovernanceLock => "iroha_data_model::isi::governance::SlashGovernanceLock"),
+    governance_wire_id!(governance::SlashGovernanceLock => "iroha_data_model::isi::governance::SlashGovernanceLock"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::RestituteGovernanceLock => "iroha_data_model::isi::governance::RestituteGovernanceLock"),
+    governance_wire_id!(governance::RestituteGovernanceLock => "iroha_data_model::isi::governance::RestituteGovernanceLock"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::EnactReferendum => "iroha_data_model::isi::governance::EnactReferendum"),
+    governance_wire_id!(governance::EnactReferendum => "iroha_data_model::isi::governance::EnactReferendum"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::FinalizeReferendum => "iroha_data_model::isi::governance::FinalizeReferendum"),
+    governance_wire_id!(governance::FinalizeReferendum => "iroha_data_model::isi::governance::FinalizeReferendum"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::ApproveGovernanceProposal => "iroha_data_model::isi::governance::ApproveGovernanceProposal"),
+    governance_wire_id!(governance::ApproveGovernanceProposal => "iroha_data_model::isi::governance::ApproveGovernanceProposal"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::CastParliamentBallot => "iroha_data_model::isi::governance::CastParliamentBallot"),
+    governance_wire_id!(governance::CastParliamentBallot => "iroha_data_model::isi::governance::CastParliamentBallot"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::PersistCouncilForEpoch => "iroha_data_model::isi::governance::PersistCouncilForEpoch"),
+    governance_wire_id!(governance::PersistCouncilForEpoch => "iroha_data_model::isi::governance::PersistCouncilForEpoch"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::RecordCitizenServiceOutcome => "iroha_data_model::isi::governance::RecordCitizenServiceOutcome"),
+    governance_wire_id!(governance::RecordCitizenServiceOutcome => "iroha_data_model::isi::governance::RecordCitizenServiceOutcome"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::RegisterCitizen => "iroha_data_model::isi::governance::RegisterCitizen"),
+    governance_wire_id!(governance::RegisterCitizen => "iroha_data_model::isi::governance::RegisterCitizen"),
     #[cfg(feature = "governance")]
-    built_in_wire_id!(governance::UnregisterCitizen => "iroha_data_model::isi::governance::UnregisterCitizen"),
+    governance_wire_id!(governance::UnregisterCitizen => "iroha_data_model::isi::governance::UnregisterCitizen"),
     built_in_wire_id!(runtime_upgrade::ProposeRuntimeUpgrade => "iroha.runtime_upgrade.propose"),
     built_in_wire_id!(runtime_upgrade::ActivateRuntimeUpgrade => "iroha.runtime_upgrade.activate"),
     built_in_wire_id!(runtime_upgrade::CancelRuntimeUpgrade => "iroha.runtime_upgrade.cancel"),

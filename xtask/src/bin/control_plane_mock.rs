@@ -28,8 +28,8 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:18080";
-const DEFAULT_OPENAPI: &str = "docs/source/soranet/control_plane_openapi.yaml";
-const DEFAULT_RBAC: &str = "docs/source/soranet/control_plane_rbac.yaml";
+const DEFAULT_OPENAPI: &str = "specs/soranet/control_plane_openapi.yaml";
+const DEFAULT_RBAC: &str = "specs/soranet/control_plane_rbac.yaml";
 
 #[derive(Clone)]
 struct MockState {

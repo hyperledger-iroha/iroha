@@ -470,33 +470,7 @@ impl ProofOutcomeOutbox {
         receipt: &PotrReceiptV1,
         admission_envelope_digest: [u8; 32],
     ) -> Result<ProofOutcomeEnqueueResultV1, ProofOutcomeOutboxError> {
-        receipt
-            .validate()
-            .map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
-        if admission_envelope_digest == [0; 32] {
-            return Err(ProofOutcomeOutboxError::InvalidSubmission);
-        }
-        let receipt_payload = receipt
-            .signed_receipt_bytes()
-            .map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
-        let outcome_digest = receipt
-            .signed_receipt_digest()
-            .map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
-        let identity_digest = receipt
-            .request_scope_digest()
-            .map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
-        self.enqueue(PreparedDelivery {
-            kind: ProofOutcomeKindV1::Potr,
-            identity_digest,
-            outcome_digest,
-            provider_id: ProviderId::new(receipt.provider_id),
-            manifest_digest: ManifestDigest::new(receipt.manifest_digest),
-            admission_envelope_digest,
-            submission: SorafsProofOutcomeSubmissionV1::Potr(SorafsPotrProofOutcomeSubmissionV1 {
-                receipt_payload,
-                admission_envelope_digest,
-            }),
-        })
+        self.enqueue(prepare_potr_delivery(receipt, admission_envelope_digest)?)
     }
 
     /// Return pending entries in stable sequence order.
@@ -948,6 +922,56 @@ struct PreparedDelivery {
     manifest_digest: ManifestDigest,
     admission_envelope_digest: [u8; 32],
     submission: SorafsProofOutcomeSubmissionV1,
+}
+
+fn prepare_potr_delivery(
+    receipt: &PotrReceiptV1,
+    admission_envelope_digest: [u8; 32],
+) -> Result<PreparedDelivery, ProofOutcomeOutboxError> {
+    receipt
+        .validate()
+        .map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
+    if admission_envelope_digest == [0; 32] {
+        return Err(ProofOutcomeOutboxError::InvalidSubmission);
+    }
+    let receipt_payload = receipt
+        .signed_receipt_bytes()
+        .map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
+    let outcome_digest = receipt
+        .signed_receipt_digest()
+        .map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
+    let identity_digest = receipt
+        .request_scope_digest()
+        .map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
+    Ok(PreparedDelivery {
+        kind: ProofOutcomeKindV1::Potr,
+        identity_digest,
+        outcome_digest,
+        provider_id: ProviderId::new(receipt.provider_id),
+        manifest_digest: ManifestDigest::new(receipt.manifest_digest),
+        admission_envelope_digest,
+        submission: SorafsProofOutcomeSubmissionV1::Potr(SorafsPotrProofOutcomeSubmissionV1 {
+            receipt_payload,
+            admission_envelope_digest,
+        }),
+    })
+}
+
+/// Derive the canonical durable outbox operation identity for one governed
+/// final PoTR receipt.
+///
+/// Exactly-once handoff clients use this value to authenticate the
+/// acknowledgement returned by the proof-outcome outbox.
+///
+/// # Errors
+///
+/// Rejects an invalid receipt, a zero admission-envelope digest, or canonical
+/// encoding failure.
+pub fn potr_proof_outcome_operation_id_v1(
+    receipt: &PotrReceiptV1,
+    admission_envelope_digest: [u8; 32],
+) -> Result<[u8; 32], ProofOutcomeOutboxError> {
+    operation_id(&prepare_potr_delivery(receipt, admission_envelope_digest)?)
 }
 
 impl PreparedDelivery {
@@ -1751,6 +1775,11 @@ mod tests {
             .enqueue_potr(&receipt, [6; 32])
             .unwrap()
             .operation_id();
+        assert_eq!(
+            operation,
+            potr_proof_outcome_operation_id_v1(&receipt, [6; 32])
+                .expect("canonical PoTR operation identity")
+        );
         let claimed = outbox.claim_for_signing(operation, cursor(1, 1)).unwrap();
         let transaction = signed_transaction(&claimed, 8);
         let hash = outbox

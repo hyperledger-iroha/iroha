@@ -55,6 +55,17 @@ EXPECTED_DIAGNOSTIC_CLASSES = (
     "foundational_predecessor_mismatch",
     "foundational_signature_invalid",
 )
+EXPECTED_AGGREGATE_CONTRACT_ERRORS = (
+    (
+        "ai_prescreen aggregate foundational lane digest must match "
+        "required row sha256",
+    ),
+    (),
+    (),
+    (),
+    (),
+    (),
+)
 
 
 def write_promotion_args(root: Path) -> Path:
@@ -160,7 +171,51 @@ def test_closed_mutation_matrix_is_exact() -> None:
     assert tuple(case.diagnostic_class for case in MODULE.MUTATION_CASES) == (
         EXPECTED_DIAGNOSTIC_CLASSES
     )
+    assert tuple(
+        case.expected_aggregate_contract_errors
+        for case in MODULE.MUTATION_CASES
+    ) == EXPECTED_AGGREGATE_CONTRACT_ERRORS
     assert len(MODULE.MUTATION_BY_ID) == 6
+
+
+def test_aggregate_contract_errors_are_exactly_case_bound() -> None:
+    tampered = MODULE.MUTATION_CASES[0]
+    expected = tampered.expected_aggregate_contract_errors
+    summary_errors = [tampered.diagnostic_fragment, *expected]
+
+    assert MODULE._aggregate_contract_matches_case(
+        tampered,
+        summary_errors,
+        expected,
+    )
+    assert not MODULE._aggregate_contract_matches_case(
+        tampered,
+        summary_errors,
+        (),
+    )
+    assert not MODULE._aggregate_contract_matches_case(
+        tampered,
+        summary_errors,
+        (*expected, "unexpected aggregate contract drift"),
+    )
+    assert not MODULE._aggregate_contract_matches_case(
+        tampered,
+        [tampered.diagnostic_fragment],
+        expected,
+    )
+    assert not MODULE._aggregate_contract_matches_case(
+        tampered,
+        [*summary_errors, *expected],
+        expected,
+    )
+
+    clean = MODULE.MUTATION_CASES[1]
+    assert MODULE._aggregate_contract_matches_case(clean, [], ())
+    assert not MODULE._aggregate_contract_matches_case(
+        clean,
+        [],
+        ("unexpected aggregate contract drift",),
+    )
 
 
 def test_tamper_mutation_changes_only_json_encoding() -> None:

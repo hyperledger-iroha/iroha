@@ -19,11 +19,11 @@ from typing import Any
 
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
-FORMAL_RELATIVE = Path("docs/formal/sumeragi_v2")
+FORMAL_RELATIVE = Path("formal/sumeragi_v2")
 BINDINGS_FILENAME = "multilane_source_bindings.json"
 PROOF_COVERAGE_RELATIVE = FORMAL_RELATIVE / "proof_coverage.json"
 CLOSURE_LEDGER_RELATIVE = Path(
-    "docs/source/sumeragi_v2_multilane_closure_ledger.md"
+    "specs/sumeragi_v2_multilane_closure_ledger.md"
 )
 APALACHE_RUNNER_RELATIVE = Path(
     "scripts/formal/run_sumeragi_v2_multilane_apalache.sh"
@@ -117,44 +117,87 @@ INFLIGHT_LAYOUT_TEST = Path(
     "pytests/scripts/sumeragi_v2_multilane_models_test.py"
 )
 INFLIGHT_LAYOUT_EVIDENCE = Path(
-    "docs/formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md"
+    "formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md"
 )
 INFLIGHT_LAYOUT_REQUIRED_INVARIANTS = (
     "FirstReleaseTypeInvariant",
     "MLPayloadSchemaV2CarriesExactAdmissionPreimage",
     "MLValidatorCarrierOwnership",
-    "MLPutBatchV4BeforeReservationV5",
+    "MLSelectedQueuePlanV4ConjunctionBeforeReservationV5",
     "MLReservationV5BeforeKuraActive",
     "MLKuraActiveBeforeExecutionInput",
-    "MLExecutionInputBeforeReady",
-    "MLCrashPrefixLossFree",
+    "MLExecutionInputBeforeReadyAuthorization",
+    "MLReadyAuthorizationBeforeLocalSignature",
+    "MLLocalSignaturesBeforeDurableReadyQc",
+    "MLCrashDurableFactsRecoverable",
+    "MLVolatileSessionLostOnCrash",
     "MLCommitAndReleaseRetainExactScope",
+    "MLLaneCommitBeforeAtomicWsvCarrierApplication",
     "MLExactlyOnceCarrierApplication",
-    "MLQueuePlanV4PutBatchBound4096",
+    "MLPostCarrierCommitCleanupOrder",
+    "MLReleasePrefixesRecoverable",
+    "MLReleaseStageOrder",
+    "MLQueuePlanV4SelectedConjunctionBound4096",
+)
+INFLIGHT_LAYOUT_REQUIRED_ACTIONS = (
+    "SelectQueuePlanV4Conjunction",
+    "FsyncReservationV5",
+    "ActivateKura",
+    "PersistExecutionInput",
+    "AuthorizeReady",
+    "SignReady",
+    "PersistReadyQc",
+    "Crash",
+    "Recover",
+    "LaneCommit",
+    "ApplyCarrier",
+    "PersistReservationCommitted",
+    "PersistPlanTombstone",
+    "ForgetReservationCommit",
+    "PersistKuraRetirement",
+    "AdvanceReleasePendingPrefix",
+    "PrepareReservationRelease",
+    "AdvanceReleasedPrefix",
+    "CompleteReservationRelease",
+    "RestoreReleasedFifo",
+    "ForgetReservationRelease",
+    "RepairPostCarrierEvidence",
 )
 INFLIGHT_LAYOUT_MUTATIONS = (
     (
-        "inflight_first_release_reservation_before_put_batch_bug.cfg",
-        "MLPutBatchV4BeforeReservationV5",
+        "inflight_first_release_reservation_before_selected_queue_plan_bug.cfg",
+        "MLSelectedQueuePlanV4ConjunctionBeforeReservationV5",
     ),
     (
         "inflight_first_release_kura_before_reservation_bug.cfg",
         "MLReservationV5BeforeKuraActive",
     ),
     (
-        "inflight_first_release_ready_before_input_bug.cfg",
-        "MLExecutionInputBeforeReady",
+        "inflight_first_release_ready_authorization_before_input_bug.cfg",
+        "MLExecutionInputBeforeReadyAuthorization",
+    ),
+    (
+        "inflight_first_release_ready_signature_before_authorization_bug.cfg",
+        "MLReadyAuthorizationBeforeLocalSignature",
+    ),
+    (
+        "inflight_first_release_ready_qc_before_signatures_bug.cfg",
+        "MLLocalSignaturesBeforeDurableReadyQc",
     ),
     (
         "inflight_first_release_crash_drops_durable_bug.cfg",
-        "MLCrashPrefixLossFree",
+        "MLCrashDurableFactsRecoverable",
+    ),
+    (
+        "inflight_first_release_crash_retains_volatile_body_bug.cfg",
+        "MLVolatileSessionLostOnCrash",
     ),
     (
         "inflight_first_release_payload_conflict_bug.cfg",
         "MLPayloadSchemaV2CarriesExactAdmissionPreimage",
     ),
     (
-        "inflight_first_release_commit_scope_conflict_bug.cfg",
+        "inflight_first_release_lane_commit_scope_conflict_bug.cfg",
         "MLCommitAndReleaseRetainExactScope",
     ),
     (
@@ -166,12 +209,47 @@ INFLIGHT_LAYOUT_MUTATIONS = (
         "MLExactlyOnceCarrierApplication",
     ),
     (
-        "inflight_first_release_oversize_put_batch_bug.cfg",
-        "MLQueuePlanV4PutBatchBound4096",
+        "inflight_first_release_reservation_commit_before_carrier_bug.cfg",
+        "MLPostCarrierCommitCleanupOrder",
+    ),
+    (
+        "inflight_first_release_plan_tombstone_before_reservation_commit_bug.cfg",
+        "MLPostCarrierCommitCleanupOrder",
+    ),
+    (
+        "inflight_first_release_forget_commit_before_plan_tombstone_bug.cfg",
+        "MLPostCarrierCommitCleanupOrder",
+    ),
+    (
+        "inflight_first_release_release_pending_before_retirement_bug.cfg",
+        "MLReleaseStageOrder",
+    ),
+    (
+        "inflight_first_release_release_prepare_before_pending_bug.cfg",
+        "MLReleaseStageOrder",
+    ),
+    (
+        "inflight_first_release_released_claims_before_prepare_bug.cfg",
+        "MLReleaseStageOrder",
+    ),
+    (
+        "inflight_first_release_release_complete_before_released_bug.cfg",
+        "MLReleaseStageOrder",
+    ),
+    (
+        "inflight_first_release_forget_release_before_fifo_bug.cfg",
+        "MLReleaseStageOrder",
+    ),
+    (
+        "inflight_first_release_oversize_selected_queue_plan_bug.cfg",
+        "MLQueuePlanV4SelectedConjunctionBound4096",
     ),
 )
 INFLIGHT_LAYOUT_FORBIDDEN_TOKENS = (
     "LaneExecutablePayloadV3",
+    "PutBatchV4",
+    "MLPutBatchV4BeforeReservationV5",
+    "MLQueuePlanV4PutBatchBound4096",
     "QueuePlanV5",
     "QueuePlan V5",
     "queuePlanV5",
@@ -184,6 +262,66 @@ INFLIGHT_LAYOUT_FORBIDDEN_TOKENS = (
     "MLPayloadV3CarriesExactAdmissionPreimage",
     "MLPutBatchV5BeforeReservationV9",
     "MLReservationV9BeforeKuraActive",
+)
+INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "CheckedReplayAuthorizationDomain::clone",
+        (
+            "self.0.clone()",
+            "Arc::clone(&self.0)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::apply_checked_transition",
+        (
+            "self.clone()",
+            "Clone::clone(self)",
+            "(*self).clone()",
+            "self.to_owned()",
+            "ToOwned::to_owned(self)",
+            "candidate.transition_semantics(",
+            "*self = candidate",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_release_batch",
+        ("remove_live_unchecked",),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_commit",
+        ("remove_live_unchecked",),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_prune",
+        ("remove_live_unchecked",),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_complete_release",
+        ("remove_live_unchecked",),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::remove_preflighted_live",
+        (
+            "expect(",
+            "unwrap(",
+            "panic!(",
+            "unreachable!(",
+        ),
+    ),
 )
 INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
     (
@@ -275,6 +413,394 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         ),
     ),
     (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "CheckedReplayAuthorizationDomain::clone",
+        (
+            "fn clone(&self) -> Self",
+            "Self::default()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "CheckedReplayAuthorizationDomain::authorizes",
+        (
+            "fn authorizes(&self, authorization: &Arc<()>) -> bool",
+            "Arc::ptr_eq(&self.0, authorization)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "CheckedReplayStateShape",
+        (
+            "live: usize",
+            "committed: usize",
+            "release_barriers: usize",
+            "completed_releases: usize",
+            "ownership: usize",
+            "fifo_ordinals: usize",
+            "live_lane_incarnations: usize",
+            "next_order: u64",
+            "CheckedReplayStateShape {\n"
+            "    live: usize,\n"
+            "    committed: usize,\n"
+            "    release_barriers: usize,\n"
+            "    completed_releases: usize,\n"
+            "    ownership: usize,\n"
+            "    fifo_ordinals: usize,\n"
+            "    live_lane_incarnations: usize,\n"
+            "    next_order: u64,\n"
+            "}",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::checked_shape",
+        (
+            "live: self.live.len()",
+            "committed: self.committed.len()",
+            "release_barriers: self.release_barriers.len()",
+            "completed_releases: self.completed_releases.len()",
+            "ownership: self.ownership.len()",
+            "fifo_ordinals: self.fifo_ordinals.len()",
+            "live_lane_incarnations: self.live_by_lane_incarnation.len()",
+            "next_order: self.next_order",
+            "CheckedReplayStateShape {\n"
+            "            live: self.live.len(),\n"
+            "            committed: self.committed.len(),\n"
+            "            release_barriers: self.release_barriers.len(),\n"
+            "            completed_releases: self.completed_releases.len(),\n"
+            "            ownership: self.ownership.len(),\n"
+            "            fifo_ordinals: self.fifo_ordinals.len(),\n"
+            "            live_lane_incarnations: self.live_by_lane_incarnation.len(),\n"
+            "            next_order: self.next_order,\n"
+            "        }",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "PreparedReservationJournalTransition",
+        (
+            "authorization_domain: Arc<()>",
+            "frame_digest: Hash",
+            "maximum_owned_transactions: usize",
+            "expected_generation: u64",
+            "next_generation: u64",
+            "expected_shape: CheckedReplayStateShape",
+            "expected_state_identity: Hash",
+            "resulting_state_identity: Hash",
+            "owner_transition_count: usize",
+            "owner_transition_coverage_identity: Hash",
+            "owner_transitions:",
+            "Vec<CheckedProductionTransition<ProductionInFlightReservationTransitionProjection>>",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::prepare_checked_transition",
+        (
+            "validate_frame_cardinality(frame, maximum)?",
+            "self.transition_semantics(frame, maximum, false)?",
+            ".checked_add(1)",
+            "checked_transition_frame_digest(frame)?",
+            "self.check_in_flight_transition(frame, maximum)?",
+            "checked_transition_coverage_identity(&owner_transitions)?",
+            "resulting_checked_state_identity(",
+            "authorization_domain: self.authorization_domain.authorization()",
+            "expected_shape: self.checked_shape()",
+            "expected_state_identity: self.checked_state_identity",
+            "owner_transition_count: owner_transitions.len()",
+            "owner_transitions",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::check_in_flight_transition",
+        (
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT,\n"
+            "                        key,\n"
+            "                        release_digest,\n"
+            "                        self.ownership.get(&hash).copied(),\n"
+            "                        candidate.ownership.get(&hash).copied(),",
+            "let after = before.or(Some(DurableReservationOwnership::Live(key)));",
+            "IN_FLIGHT_RESERVATION_ACTION_RESERVE",
+            "IN_FLIGHT_RESERVATION_ACTION_RESERVE,\n"
+            "                        key,\n"
+            "                        None,\n"
+            "                        before,\n"
+            "                        after,",
+            "let after = if before == Some(DurableReservationOwnership::Live(*key)) {\n"
+            "                        None\n"
+            "                    } else {\n"
+            "                        before\n"
+            "                    };",
+            "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT",
+            "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT,\n"
+            "                        *key,\n"
+            "                        None,\n"
+            "                        before,\n"
+            "                        after,",
+            "Some(DurableReservationOwnership::Committed(*key))",
+            "IN_FLIGHT_RESERVATION_ACTION_COMMIT",
+            "IN_FLIGHT_RESERVATION_ACTION_COMMIT,\n"
+            "                    *key,\n"
+            "                    None,\n"
+            "                    before,\n"
+            "                    Some(DurableReservationOwnership::Committed(*key)),",
+            "let after = if before == Some(DurableReservationOwnership::Committed(*key)) {\n"
+            "                    None\n"
+            "                } else {\n"
+            "                    before\n"
+            "                };",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT,\n"
+            "                    *key,\n"
+            "                    None,\n"
+            "                    before,\n"
+            "                    after,",
+            "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED",
+            "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED,\n"
+            "                        before.key(),\n"
+            "                        None,\n"
+            "                        Some(before),\n"
+            "                        None,",
+            "Some(DurableReservationOwnership::Live(existing)) if existing == *key => {\n"
+            "                            Some(DurableReservationOwnership::Prepared {\n"
+            "                                key: *key,\n"
+            "                                barrier_digest: release_digest,\n"
+            "                            })\n"
+            "                        }",
+            "owner @ (DurableReservationOwnership::Prepared { .. }\n"
+            "                            | DurableReservationOwnership::Completed { .. })",
+            "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE",
+            "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE,\n"
+            "                        *key,\n"
+            "                        Some(release_digest),\n"
+            "                        before,\n"
+            "                        after,",
+            "Some(DurableReservationOwnership::Prepared {\n"
+            "                            key: existing,\n"
+            "                            barrier_digest,\n"
+            "                        }) if existing == key && barrier_digest == release_digest => {\n"
+            "                            Some(DurableReservationOwnership::Completed {\n"
+            "                                key,\n"
+            "                                barrier_digest: release_digest,\n"
+            "                            })\n"
+            "                        }",
+            "Some(owner @ DurableReservationOwnership::Completed { .. }) => Some(owner)",
+            "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE",
+            "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE,\n"
+            "                        key,\n"
+            "                        Some(release_digest),\n"
+            "                        before,\n"
+            "                        after,",
+            "let has_completion = self.completed_releases.contains_key(&release_digest);",
+            "let after = if has_completion\n"
+            "                        && before\n"
+            "                            == Some(DurableReservationOwnership::Completed {\n"
+            "                                key: *key,\n"
+            "                                barrier_digest: release_digest,\n"
+            "                            }) {\n"
+            "                        None\n"
+            "                    } else {\n"
+            "                        before\n"
+            "                    };",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE,\n"
+            "                        *key,\n"
+            "                        Some(release_digest),\n"
+            "                        before,\n"
+            "                        after,",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::apply_checked_transition",
+        (
+            "checked_transition_frame_digest(frame)? != prepared.frame_digest",
+            "maximum != prepared.maximum_owned_transactions",
+            ".authorizes(&prepared.authorization_domain)",
+            "self.transition_generation != prepared.expected_generation",
+            "self.checked_shape() != prepared.expected_shape",
+            "self.checked_state_identity != prepared.expected_state_identity",
+            "prepared.expected_generation.checked_add(1)",
+            "prepared.owner_transition_count != prepared.owner_transitions.len()",
+            "checked_transition_coverage_identity(&prepared.owner_transitions)?",
+            "resulting_checked_state_identity(",
+            "self.transition_semantics(frame, maximum, false)?;",
+            "let current_owner_transitions = self.check_in_flight_transition(frame, maximum)?;",
+            "current_owner_transitions.len() != prepared.owner_transition_count",
+            ".map(|checked| checked.accepted_projection())",
+            "for checked in current_owner_transitions",
+            "for checked in prepared.owner_transitions",
+            "checked.into_projection()",
+            "self.transition_semantics(frame, maximum, true)?;",
+            "self.transition_generation = prepared.next_generation;",
+            "self.checked_state_identity = prepared.resulting_state_identity;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_release_batch",
+        (
+            "let mut removals = Vec::new();",
+            ".push(self.validate_live_secondary_indexes(key.signed_transaction_hash, *key)?)",
+            "if apply {",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_commit",
+        (
+            "key.validate().map_err(invalid_data)?;",
+            "let owner = self.ownership.get(&key.signed_transaction_hash).copied();",
+            "reservation commit conflicts with a different live reservation identity",
+            "reservation commit conflicts with an existing commit barrier",
+            "reservation commit overlaps an ordered release claim",
+            "reservation commit requires an exact live reservation",
+            "let live_removal = match owner",
+            "Some(self.validate_live_secondary_indexes(key.signed_transaction_hash, existing)?)",
+            "let needs_commit = !matches!(",
+            "self.ensure_owner_capacity(0, maximum)?;",
+            "self.order_range(if needs_commit { 1 } else { 0 })?;",
+            "if !apply {",
+            "if let Some(record) = &live_removal",
+            "self.remove_preflighted_live(record);",
+            "self.committed.insert(",
+            "DurableReservationOwnership::Committed(key)",
+            "self.next_order = next_order;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_prune",
+        (
+            ".live_by_lane_incarnation",
+            ".get(&lane)",
+            "let mut removals = Vec::with_capacity(hashes.len());",
+            "Some(DurableReservationOwnership::Live(key))",
+            "key.lane_id == lane_id && key.lane_incarnation == lane_incarnation",
+            "removals.push(self.validate_live_secondary_indexes(hash, key)?);",
+            "if apply {",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_complete_release",
+        (
+            "let mut removals = Vec::with_capacity(completion.ordered_records.len());",
+            "let live_record = self.validate_live_secondary_indexes(hash, record.key)?;",
+            "if live_record != *record",
+            "removals.push(live_record);",
+            "self.order_range(1)?;",
+            "if apply {",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+            "DurableReservationOwnership::Completed",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::validate_live_secondary_indexes",
+        (
+            "fn validate_live_secondary_indexes(",
+            ") -> io::Result<LaneQueueReservationRecordV5>",
+            "expected_key.signed_transaction_hash != hash",
+            "live reservation index key differs from the exact reservation hash",
+            ".live",
+            ".get(&hash)",
+            "live reservation index has no exact record",
+            "record.value.key != expected_key",
+            "self.fifo_ordinals.get(&record.value.fifo_order.ordinal) != Some(&hash)",
+            ".live_by_lane_incarnation",
+            ".get(&lane)",
+            ".is_some_and(|hashes| hashes.contains(&hash))",
+            "Ok(record.value.clone())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::remove_preflighted_live",
+        (
+            "fn remove_preflighted_live(&mut self, record: &LaneQueueReservationRecordV5)",
+            "debug_assert_eq!(self.live.get(&hash).map(|entry| &entry.value), Some(record));",
+            "self.fifo_ordinals.get(&record.fifo_order.ordinal)",
+            "debug_assert!(",
+            "self.live_by_lane_incarnation",
+            "self.live.remove(&hash);",
+            "self.fifo_ordinals.remove(&record.fifo_order.ordinal);",
+            "self.ownership.remove(&hash);",
+            ".get_mut(&lane)",
+            "hashes.remove(&hash);",
+            "if remove_lane {",
+            "self.live_by_lane_incarnation.remove(&lane);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::append_durable",
+        (
+            "lane reservation journal is poisoned after a failed durability boundary",
+            "self.verify_cached_storage_unchanged()",
+            "lane reservation bootstrap and snapshots cannot be appended as runtime operations",
+            ".prepare_checked_transition(frame, self.limits.max_owned_transactions)?",
+            "encode_frame_with_limit(frame, self.limits.max_frame_payload_bytes)?",
+            "self.preflight_append_end(&encoded)?",
+            "self.append_staged(&encoded, expected_end, prepared)",
+            "if let Err(error) = self.replay_state.apply_checked_transition(",
+            "replay instead of panicking or attempting an in-process retry.",
+            "self.poisoned = true;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::compact_if_needed",
+        (
+            "let snapshot = canonical_snapshot(",
+            "let mut compacted_replay_state = IndexedReservationReplayState::default();",
+            "validate_snapshot_frame(frame, self.limits)?;",
+            ".prepare_checked_transition(frame, self.limits.max_owned_transactions)",
+            "let canonical_replay = replay_path(&self.path, self.limits)?;",
+            "lane reservation compaction input does not match the exact durable journal state",
+            "persist_atomic_replacement(&tmp, &self.path)",
+            "tmp_file.sync_all()",
+            "self.parent.sync_all()",
+            "compacted_replay_state.apply_checked_transition(",
+            "The replacement is already durable. Keep the previous",
+            "self.replay_state = compacted_replay_state;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "fn",
+        "check_production_in_flight_reservation_transition",
+        (
+            "production_in_flight_reservation_transition_kernel(projection)",
+            "Some(CheckedProductionTransition { projection })",
+            "None",
+        ),
+    ),
+    (
         "crates/iroha_core/src/queue.rs",
         "fn",
         "reserve_transactions_for_lane_bounded",
@@ -341,6 +867,274 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
 )
 INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = (
     (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "CheckedReplayStateShape",
+        (
+            "live: usize",
+            "committed: usize",
+            "release_barriers: usize",
+            "completed_releases: usize",
+            "ownership: usize",
+            "fifo_ordinals: usize",
+            "live_lane_incarnations: usize",
+            "next_order: u64",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::checked_shape",
+        (
+            "live: self.live.len()",
+            "committed: self.committed.len()",
+            "release_barriers: self.release_barriers.len()",
+            "completed_releases: self.completed_releases.len()",
+            "ownership: self.ownership.len()",
+            "fifo_ordinals: self.fifo_ordinals.len()",
+            "live_lane_incarnations: self.live_by_lane_incarnation.len()",
+            "next_order: self.next_order",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "struct",
+        "PreparedReservationJournalTransition",
+        (
+            "authorization_domain: Arc<()>",
+            "frame_digest: Hash",
+            "maximum_owned_transactions: usize",
+            "expected_generation: u64",
+            "next_generation: u64",
+            "expected_shape: CheckedReplayStateShape",
+            "expected_state_identity: Hash",
+            "resulting_state_identity: Hash",
+            "owner_transition_count: usize",
+            "owner_transition_coverage_identity: Hash",
+            "owner_transitions:",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::prepare_checked_transition",
+        (
+            "validate_frame_cardinality(frame, maximum)?",
+            "self.transition_semantics(frame, maximum, false)?",
+            ".checked_add(1)",
+            "checked_transition_frame_digest(frame)?",
+            "self.check_in_flight_transition(frame, maximum)?",
+            "checked_transition_coverage_identity(&owner_transitions)?",
+            "let resulting_state_identity = resulting_checked_state_identity(",
+            "Ok(PreparedReservationJournalTransition {",
+            "authorization_domain: self.authorization_domain.authorization()",
+            "expected_shape: self.checked_shape()",
+            "expected_state_identity: self.checked_state_identity",
+            "owner_transition_count: owner_transitions.len()",
+            "owner_transitions",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::apply_checked_transition",
+        (
+            "checked_transition_frame_digest(frame)? != prepared.frame_digest",
+            "maximum != prepared.maximum_owned_transactions",
+            ".authorizes(&prepared.authorization_domain)",
+            "self.transition_generation != prepared.expected_generation",
+            "self.checked_shape() != prepared.expected_shape",
+            "self.checked_state_identity != prepared.expected_state_identity",
+            "prepared.expected_generation.checked_add(1)",
+            "prepared.owner_transition_count != prepared.owner_transitions.len()",
+            "checked_transition_coverage_identity(&prepared.owner_transitions)?",
+            "resulting_checked_state_identity(",
+            "self.transition_semantics(frame, maximum, false)?;",
+            "let current_owner_transitions = self.check_in_flight_transition(frame, maximum)?;",
+            "current_owner_transitions.len() != prepared.owner_transition_count",
+            ".map(|checked| checked.accepted_projection())",
+            "for checked in current_owner_transitions",
+            "for checked in prepared.owner_transitions",
+            "checked.into_projection()",
+            "self.transition_semantics(frame, maximum, true)?;",
+            "self.transition_generation = prepared.next_generation;",
+            "self.checked_state_identity = prepared.resulting_state_identity;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::check_in_flight_transition",
+        (
+            "LaneQueueReservationJournalFrameV5::Snapshot {",
+            "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
+            "self.ownership.get(&hash).copied()",
+            "candidate.ownership.get(&hash).copied()",
+            "LaneQueueReservationJournalFrameV5::PutBatch(records) => {",
+            "let after = before.or(Some(DurableReservationOwnership::Live(key)));",
+            "IN_FLIGHT_RESERVATION_ACTION_RESERVE",
+            "LaneQueueReservationJournalFrameV5::ReleaseBatch(keys) => {",
+            "let after = if before == Some(DurableReservationOwnership::Live(*key)) {",
+            "IN_FLIGHT_RESERVATION_ACTION_RELEASE_DIRECT",
+            "LaneQueueReservationJournalFrameV5::Commit(key) => {",
+            "IN_FLIGHT_RESERVATION_ACTION_COMMIT",
+            "Some(DurableReservationOwnership::Committed(*key))",
+            "LaneQueueReservationJournalFrameV5::ForgetCommit(key) => {",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_COMMIT",
+            "LaneQueueReservationJournalFrameV5::Prune {",
+            "IN_FLIGHT_RESERVATION_ACTION_PRUNE_RETIRED",
+            "LaneQueueReservationJournalFrameV5::PrepareRelease(barrier) => {",
+            "IN_FLIGHT_RESERVATION_ACTION_PREPARE_RELEASE",
+            "LaneQueueReservationJournalFrameV5::CompleteRelease(completion) => {",
+            "IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE",
+            "LaneQueueReservationJournalFrameV5::ForgetRelease(barrier) => {",
+            "IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_release_batch",
+        (
+            "let mut removals = Vec::new();",
+            ".push(self.validate_live_secondary_indexes(key.signed_transaction_hash, *key)?)",
+            "if apply {",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_commit",
+        (
+            "key.validate().map_err(invalid_data)?;",
+            "let owner = self.ownership.get(&key.signed_transaction_hash).copied();",
+            "reservation commit requires an exact live reservation",
+            "let live_removal = match owner",
+            "Some(self.validate_live_secondary_indexes(key.signed_transaction_hash, existing)?)",
+            "let needs_commit = !matches!(",
+            "self.ensure_owner_capacity(0, maximum)?;",
+            "self.order_range(if needs_commit { 1 } else { 0 })?;",
+            "if !apply {",
+            "if let Some(record) = &live_removal",
+            "self.remove_preflighted_live(record);",
+            "self.committed.insert(",
+            "DurableReservationOwnership::Committed(key)",
+            "self.next_order = next_order;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_prune",
+        (
+            ".live_by_lane_incarnation",
+            ".get(&lane)",
+            "let mut removals = Vec::with_capacity(hashes.len());",
+            "key.lane_id == lane_id && key.lane_incarnation == lane_incarnation",
+            "removals.push(self.validate_live_secondary_indexes(hash, key)?);",
+            "if apply {",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::transition_complete_release",
+        (
+            "let mut removals = Vec::with_capacity(completion.ordered_records.len());",
+            "let live_record = self.validate_live_secondary_indexes(hash, record.key)?;",
+            "if live_record != *record",
+            "removals.push(live_record);",
+            "self.order_range(1)?;",
+            "if apply {",
+            "self.release_barriers.remove(&digest);",
+            "for record in &removals",
+            "self.remove_preflighted_live(record);",
+            "self.completed_releases.insert(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::validate_live_secondary_indexes",
+        (
+            "expected_key.signed_transaction_hash != hash",
+            ".live",
+            ".get(&hash)",
+            "record.value.key != expected_key",
+            "self.fifo_ordinals.get(&record.value.fifo_order.ordinal) != Some(&hash)",
+            "let lane = (expected_key.lane_id, expected_key.lane_incarnation);",
+            ".live_by_lane_incarnation",
+            ".get(&lane)",
+            ".is_some_and(|hashes| hashes.contains(&hash))",
+            "Ok(record.value.clone())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "IndexedReservationReplayState::remove_preflighted_live",
+        (
+            "debug_assert_eq!(self.live.get(&hash).map(|entry| &entry.value), Some(record));",
+            "debug_assert_eq!(",
+            "debug_assert!(",
+            "self.live.remove(&hash);",
+            "self.fifo_ordinals.remove(&record.fifo_order.ordinal);",
+            "self.ownership.remove(&hash);",
+            ".get_mut(&lane)",
+            "hashes.remove(&hash);",
+            "if remove_lane {",
+            "self.live_by_lane_incarnation.remove(&lane);",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::append_durable",
+        (
+            ".prepare_checked_transition(frame, self.limits.max_owned_transactions)?",
+            "encode_frame_with_limit(frame, self.limits.max_frame_payload_bytes)?",
+            "self.preflight_append_end(&encoded)?",
+            "self.append_staged(&encoded, expected_end, prepared)",
+            "if let Err(error) = self.replay_state.apply_checked_transition(",
+            "replay instead of panicking or attempting an in-process retry.",
+            "self.poisoned = true;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal.rs",
+        "method",
+        "LaneQueueReservationJournal::compact_if_needed",
+        (
+            "let snapshot = canonical_snapshot(",
+            "let mut compacted_replay_state = IndexedReservationReplayState::default();",
+            "validate_snapshot_frame(frame, self.limits)?;",
+            ".prepare_checked_transition(frame, self.limits.max_owned_transactions)",
+            "let canonical_replay = replay_path(&self.path, self.limits)?;",
+            "lane reservation compaction input does not match the exact durable journal state",
+            "persist_atomic_replacement(&tmp, &self.path)",
+            "tmp_file.sync_all()",
+            "self.parent.sync_all()",
+            "compacted_replay_state.apply_checked_transition(",
+            "The replacement is already durable. Keep the previous",
+            "self.poisoned = true;",
+            "self.replay_state = compacted_replay_state;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "fn",
+        "check_production_in_flight_reservation_transition",
+        (
+            "production_in_flight_reservation_transition_kernel(projection)",
+            "Some(CheckedProductionTransition { projection })",
+            "None",
+        ),
+    ),
+    (
         "crates/iroha_core/src/queue.rs",
         "fn",
         "reserve_transactions_for_lane_bounded",
@@ -393,6 +1187,19 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
         ),
     ),
     (
+        "crates/iroha_core/src/queue/reservation_journal_recovery_tests.rs",
+        (
+            "fn post_sync_append_publication_failure_is_poisoned_and_replayed_on_reopen()",
+            "fn post_sync_compaction_publication_failure_is_poisoned_and_replayed_on_reopen()",
+            "fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_barrier()",
+            "fn prepared_checked_transition_is_bound_to_frame_and_state_generation()",
+            "fn prepared_checked_transition_rejects_same_generation_cross_state_substitution()",
+            "fn prepared_checked_transition_binds_exact_ordered_owner_token_coverage()",
+            "fn checked_transition_result_identity_and_candidate_application_are_atomic()",
+            "fn checked_transition_generation_overflow_is_rejected_without_mutation()",
+        ),
+    ),
+    (
         "scripts/formal/run_sumeragi_v2_tlc.sh",
         (
             'readonly INFLIGHT_FIRST_RELEASE_RUNNER="${REPO_ROOT}/scripts/formal/'
@@ -407,6 +1214,7 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
             '"inflight-first-release-layout"',
             '"SumeragiV2InFlightFirstRelease"',
             '"inflight_first_release_fixed.cfg"',
+            '"inflight_first_release_fixed.cfg",\n        "18",',
             "*_APALACHE_REFINEMENT_RESULTS",
             "*_APALACHE_LAYOUT_ONLY_RESULTS",
         ),
@@ -415,6 +1223,7 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
         "pytests/scripts/sumeragi_v2_release_receipt_test.py",
         (
             'canonical.replace("result_count\\t5", "result_count\\t4", 1)',
+            '"inflight_first_release_fixed.cfg\\t18\\tNoError\\t"',
             '"result\\tinflight-first-release-refinement\\t"',
             '"is not exact source-bound NoError evidence"',
         ),
@@ -580,6 +1389,7 @@ EXPECTED_RELEASE_INVARIANT_SOURCE_PATHS = {
     "ML-MUT-API-01": (
         "crates/iroha_core/src/state.rs",
         "crates/iroha_torii/src/routing.rs",
+        "crates/iroha_torii/src/tests/routing.rs",
     ),
     "ML-MUT-API-02": (
         "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
@@ -608,6 +1418,663 @@ FORBIDDEN_PRODUCTION_TOKENS = {
         "reconcile_lane_reservation_ownership",
     ): ("merge_ledger_all_entries",),
 }
+NATIVE_PREPUBLICATION_MODULE = "SumeragiV2NativeApplicationEvidence"
+NATIVE_PREPUBLICATION_BINDINGS = (
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "repair_native_amx_participant_application_evidence",
+        (
+            "prune_lock.lock",
+            "ensure_prune_recovery_not_required",
+            "native_amx_participant_application_evidence_for_block_under_publication_guard",
+            "block, true",
+            "persist_native_amx_participant_application_evidence_under_publication_guard",
+            "NativeAmxParticipantApplicationPublicationMode::PostWsvRepair",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "prepublish_native_amx_participant_application_evidence",
+        (
+            "prune_lock.lock",
+            "ensure_prune_recovery_not_required",
+            "native_amx_participant_application_evidence_for_block_under_publication_guard",
+            "block, false",
+            "persist_native_amx_participant_application_evidence_under_publication_guard",
+            "NativeAmxParticipantApplicationPublicationMode::PreWsv",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "enum",
+        "NativeAmxParticipantApplicationPublicationMode",
+        ("PreWsv", "PostWsvRepair"),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "NativeAmxParticipantApplicationPublicationMode::requires_post_apply_metadata",
+        ("matches!(self, Self::PostWsvRepair)",),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "NativeAmxParticipantApplicationPublicationMode::permits_retention_cleanup",
+        ("matches!(self, Self::PostWsvRepair)",),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "persist_native_amx_participant_application_evidence_under_publication_guard",
+        (
+            "get_durable_block_hash",
+            "plan.application_block_height",
+            "plan.application_block_hash",
+            "plan.manifest_leaf_count",
+            "mode.permits_retention_cleanup()",
+            "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+            "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
+            "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+            "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
+            "mode.requires_post_apply_metadata()",
+            "NativeAmxParticipantApplicationPrepublicationToken::from_plan",
+            "if permit_cleanup",
+            "cleanup_native_amx_participant_application_evidence_under_publication_guard",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+        (
+            "ensure_prune_recovery_not_required",
+            "get_durable_block_hash",
+            "require_active_lane_incarnation",
+            "native_amx_evidence_namespace_for_entry",
+            "permit_retention_cleanup",
+            "require_native_amx_evidence_prune_intent_absent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "publish_native_amx_evidence_file_locked",
+            "NativeAmxEvidenceKind::Manifest",
+            "STRICT_INIT_MAX_BLOCK_BYTES",
+            "progress_mutation_namespace_unchanged",
+            "native_amx_evidence_tracked_bytes_locked",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
+        (
+            "manifest_artifact_hash",
+            "native_amx_participant_receipt_matches_manifest_leaf",
+            "require_active_lane_artifact",
+            "native_amx_evidence_namespace_for_entry",
+            "permit_retention_cleanup",
+            "require_native_amx_evidence_prune_intent_absent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "publish_native_amx_evidence_file_locked",
+            "NativeAmxEvidenceKind::Receipt",
+            "progress_mutation_namespace_unchanged",
+            "native_amx_evidence_tracked_bytes_locked",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+        (
+            "manifest_artifact_hash",
+            "native_amx_participant_receipt_matches_manifest_leaf",
+            "get_durable_block_hash",
+            "require_active_lane_artifact",
+            "native_amx_evidence_namespace_for_entry",
+            "permit_retention_cleanup",
+            "require_native_amx_evidence_prune_intent_absent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "read_native_amx_participant_application_receipt_from_paths_locked",
+            "persist_native_amx_participant_receipt_latest_index_locked",
+            "progress_mutation_namespace_unchanged",
+            "native_amx_evidence_tracked_bytes_locked",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
+        (
+            "require_active_lane_artifact",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "read_native_amx_participant_application_receipt_from_paths_locked",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "require_post_apply_metadata",
+            "native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards",
+            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
+            "latest.matches_receipt",
+            "latest.matches_manifest",
+            "progress_mutation_namespace_unchanged",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "cleanup_native_amx_participant_application_evidence_under_publication_guard",
+        (
+            "require_active_lane_artifact",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "latest.matches_receipt",
+            "prune_native_amx_evidence_pairs_locked",
+            "native_amx_evidence_tracked_bytes_locked",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "method",
+        "V2ApplyService::validate_and_apply",
+        (
+            "NativeAmxApplicationManifestV1::from_result_bearing_block",
+            "execution_commitment_from_witness",
+            "store_block",
+            "store_v2_finality_artifact",
+            "prepublish_native_amx_participant_application_evidence",
+            "token.authenticates",
+            "apply_without_execution_with_verified_v2_finality",
+            "state_block.commit",
+        ),
+    ),
+)
+NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "method",
+        "V2ApplyService::validate_and_apply",
+        (
+            ".store_v2_finality_artifact(artifact)",
+            ".prepublish_native_amx_participant_application_evidence(",
+            "!token.authenticates(committed_block.as_ref(), &native_amx_manifest, artifact)",
+            ".apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology)",
+            "state_block.commit().map_err",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "persist_native_amx_participant_application_evidence_under_publication_guard",
+        (
+            "self.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(",
+            "self.write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(",
+            "self.write_native_amx_participant_receipt_latest_index_under_publication_guard(",
+            "self.authenticate_native_amx_participant_application_prepublication_under_publication_guard(",
+            "let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan",
+            "if permit_cleanup {",
+            "self.cleanup_native_amx_participant_application_evidence_under_publication_guard(",
+        ),
+    ),
+)
+NATIVE_PREPUBLICATION_RETENTION_WRITERS = (
+    "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+    "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
+    "write_native_amx_participant_receipt_latest_index_under_publication_guard",
+)
+QUEUE_PLAN_STARTUP_REPLAY_MODULE = "SumeragiV2QueuePlanAdmissionRegistry"
+QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "method",
+        "QueuePlanJournalReplay::into_verified_records",
+        (
+            "self.verify_snapshot_content()?",
+            "std::mem::take(&mut self.live_positions)",
+            "live.ownership_position",
+            "self.verify_snapshot_storage()?",
+            "record.claim_digest()",
+            "record.entrypoint_hash != entrypoint_hash",
+            "record.plan_digest() != live.plan_digest",
+            "claim_digest != live.claim_digest",
+            "verified.push(record)",
+            "Ok(verified)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "method",
+        "QueuePlanJournal::remove_all_live_exact_atomic_strict_durable",
+        (
+            "remove_many_exact_atomic_strict_durable_inner(removals, true)?",
+            "Ok(())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "method",
+        "QueuePlanJournal::remove_many_exact_atomic_strict_durable_inner",
+        (
+            "self.ensure_healthy()?",
+            "removals.len() > self.limits.max_live_records",
+            "QueuePlanJournalFrameV4::RemoveBatch(requested.clone())",
+            "prepare_replay_with_removed_entrypoints(Some(&entrypoints))",
+            "if require_all_live",
+            "live_removals.len() != requested.len()",
+            "QueuePlanJournalExactRemoveResult::Removed",
+            "atomic live-removal batch contains an already-absent target",
+            "QueuePlanJournalFrameV4::RemoveBatch(live_removals.clone())",
+            "self.compact(true)?",
+            "if compacted != (outcomes.clone(), live_removals.clone())",
+            "self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)",
+            "self.sync_all_raw(SyncPhase::General)?",
+            "Ok(outcomes)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::ensure_plan_journal_replay_startup_shape_locked",
+        (
+            "self.txs.is_empty()",
+            "self.materialized_active_len() == 0",
+            "self.materialized_retained_bytes() == 0",
+            "self.tx_hashes.is_empty()",
+            "self.queued_count.load(Ordering::Acquire) == 0",
+            "self.routing_decisions.is_empty()",
+            "self.routing_plans.is_empty()",
+            "self.durable_plan_claims.is_empty()",
+            "self.tx_encoded_len.is_empty()",
+            "self.tx_gas_cost.is_empty()",
+            "self.tx_enqueued_at_ms.is_empty()",
+            "self.queued_tx_enqueued_at_ms.is_empty()",
+            "self.queued_age_ring.lock().is_empty()",
+            "self.removed_hashes.is_empty()",
+            "self.txs_per_user.is_empty()",
+            "fee_admission_reservations",
+            "self.expiry_ring.lock().is_empty()",
+            "self.expiry_ring_members.is_empty()",
+            "self.tx_gossip.is_empty()",
+            "self.tx_teu.is_empty()",
+            "lane_teu_pending",
+            "dataspace_teu_pending",
+            "only exact durable reservation FIFO identities may pre-exist",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::plan_journal_replay_reservation_shape_locked",
+        (
+            "store.durable_owned_hashes().collect::<HashSet<_>>()",
+            ".filter(|hash| !self.txs.contains_key(hash))",
+            "expected_missing_payload_hashes != store.missing_payload_hashes",
+            "missing_reservation_payload_count",
+            "store.missing_payload_hashes.len()",
+            "store.live_by_hash.values().chain(",
+            "completed_releases",
+            "record.validate()",
+            ".insert(hash, record.fifo_order)",
+            "multiple durable FIFO owners",
+            "durable_owned_hashes",
+            "durable_fifo_orders",
+            "missing_payload_hashes: store.missing_payload_hashes.clone()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::prepare_plan_journal_replay_locked",
+        (
+            "self.ensure_plan_journal_replay_startup_shape_locked()?",
+            "self.plan_journal_replay_reservation_shape_locked()?",
+            "journal_hashes.len() != records.len()",
+            ".is_subset(&journal_hashes)",
+            "let replay_observed_at = self.time_source.get_unix_time();",
+            "AcceptedTransaction::accept_entrypoint_at_time",
+            "accepted.hash_as_entrypoint() != entrypoint_hash",
+            "restored_reservation_fifo_order_for_identity",
+            "reservation_shape.durable_owned_hashes.contains(&hash)",
+            "restored_fifo_order.is_some()",
+            "state_view.transactions.get(&hash).is_some()",
+            "recorded_global_admission_identity",
+            "queue_plan_admission_registry_match",
+            "QueuePlanAdmissionRegistryMatch::Conflict",
+            "global_registry_match.is_none()",
+            "self.is_expired_at_with_enqueue_timestamp(",
+            "replay_observed_at",
+            "!has_durable_reservation_owner",
+            "resolve_routing_plan_for_queue_admission(",
+            "durable_plan_claim_context_revalidates_in_view",
+            "QueueAdmissionPreparationMode::AtomicJournalReplay",
+            "transaction_selection_durability_faulted()",
+            "self.active_len()",
+            "self.retained_bytes()",
+            "projected_active > self.capacity.get()",
+            "projected_retained > self.max_retained_bytes.get()",
+            "projected > self.capacity_per_user.get()",
+            ".reserve(admission.hash, reservation)",
+            "orphaned FIFO identity",
+            "reservation FIFO anchors disagree with authenticated journal order",
+            "anchors.len() != reservation_shape.durable_fifo_orders.len()",
+            "final_fifo.len() > self.tx_hashes.capacity()",
+            "terminal_removals",
+            "Ok(PreparedQueuePlanReplay {",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::apply_plan_journal_replay_locked",
+        (
+            "terminal_removals: _",
+            "*self.fee_admission_reservations.lock() = fee_reservations;",
+            "*self.next_fifo_ordinal.lock() = next_fifo_ordinal;",
+            "self.fifo_order_by_hash.insert(hash, fifo_order);",
+            "self.txs.insert(hash, Arc::clone(&tx_arc));",
+            "self.track_active_transaction();",
+            "self.routing_decisions.insert(hash, routing_decision);",
+            "self.routing_plans.insert(hash, routing_plan.clone());",
+            "self.durable_plan_claims.insert(hash, claim.clone());",
+            "self.track_expiry_hash(hash);",
+            "notifications.push(QueueAdmissionNotification {",
+            "self.apply_per_user_tx_count_increments(per_user_increments);",
+            "self.reconcile_missing_reservation_payloads_locked(&mut store);",
+            "self.replace_fifo_locked(&final_fifo);",
+            "(summary, notifications)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::replay_plan_journal",
+        (
+            "self.plan_journal_install_lock.lock()",
+            "self.lane_reservation_transition_lock.lock()",
+            "state.lock_lane_lifecycle_work_admission()",
+            "state.state_view_generation()",
+            "let state_view = state.view();",
+            "self.ensure_plan_journal_replay_startup_shape_locked()?",
+            "self.sync_nexus_routing_with_view(&state_view);",
+            "let mut journal_guard = self.plan_journal.lock();",
+            "let queue_guard = self.push_remove_lock.lock();",
+            "let records = journal.prepare_replay()?.into_verified_records()?;",
+            "let expected_record_claims = records",
+            "self.prepare_plan_journal_replay_locked(",
+            "let observed_record_claims = journal",
+            "if observed_record_claims != expected_record_claims",
+            "let terminal_removals = prepared.terminal_removals.clone();",
+            "remove_all_live_exact_atomic_strict_durable(&terminal_removals)",
+            "self.mark_plan_journal_durability_fault",
+            "self.apply_plan_journal_replay_locked(prepared)",
+            "self.publish_admission_notifications(&notifications);",
+            "self.publish_backpressure_state(self.active_len(), backpressure_telemetry);",
+            "status::set_tx_queue_pressure(self.pressure_snapshot());",
+            "Ok(summary)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::finalize_plan_journal_startup_recovery",
+        (
+            "self.finalize_completed_releases(None)",
+            ".map_err(std::io::Error::other)",
+        ),
+    ),
+    (
+        "crates/irohad/src/main.rs",
+        "method",
+        "Iroha::start_with_runtime_deps",
+        (
+            "install_lane_reservation_journal(",
+            "install_plan_journal(",
+            "replay_plan_journal(&state)",
+            "finalize_plan_journal_startup_recovery()",
+            "IrohaNetwork::start_with_crypto(",
+        ),
+    ),
+)
+QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "method",
+        "QueuePlanJournalReplay::into_verified_records",
+        (
+            "self.verify_snapshot_content()?;",
+            "std::mem::take(&mut self.live_positions)",
+            "ordered.sort_unstable_by_key",
+            "for (entrypoint_hash, live) in ordered {",
+            "self.verify_snapshot_storage()?;",
+            "let claim_digest = record.claim_digest()",
+            "if record.entrypoint_hash != entrypoint_hash",
+            "verified.push(record);",
+            "self.verify_snapshot_content()?;",
+            "Ok(verified)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "method",
+        "QueuePlanJournal::remove_many_exact_atomic_strict_durable_inner",
+        (
+            "let (outcomes, live_removals) =",
+            "if require_all_live",
+            "atomic live-removal batch contains an already-absent target",
+            "if live_removals.is_empty()",
+            "let encoded = encode_frame(",
+            "self.ensure_append_capacity(encoded.len())",
+            "self.compact(true)?;",
+            "let compacted =",
+            "if compacted != (outcomes.clone(), live_removals.clone())",
+            "self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)",
+            "self.sync_all_raw(SyncPhase::General)?;",
+            "Ok(outcomes)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::prepare_plan_journal_replay_locked",
+        (
+            "self.ensure_plan_journal_replay_startup_shape_locked()?;",
+            "self.plan_journal_replay_reservation_shape_locked()?;",
+            "let journal_hashes = records",
+            "let replay_observed_at = self.time_source.get_unix_time();",
+            "for record in records {",
+            "AcceptedTransaction::accept_entrypoint_at_time(",
+            "restored_reservation_fifo_order_for_identity(",
+            "if state_view.transactions.get(&hash).is_some()",
+            "let global_registry_match =",
+            "self.is_expired_at_with_enqueue_timestamp(",
+            "resolve_routing_plan_for_queue_admission(",
+            "prepare_checked_for_enqueue(",
+            "if self.transaction_selection_durability_faulted()",
+            "let mut projected_active = self.active_len();",
+            "let mut fifo_orders =",
+            "let anchors = pending_admissions",
+            "Ok(PreparedQueuePlanReplay {",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::apply_plan_journal_replay_locked",
+        (
+            "*self.fee_admission_reservations.lock() = fee_reservations;",
+            "*self.next_fifo_ordinal.lock() = next_fifo_ordinal;",
+            "for replayed in admissions {",
+            "self.fifo_order_by_hash.insert(hash, fifo_order);",
+            "self.txs.insert(hash, Arc::clone(&tx_arc));",
+            "self.durable_plan_claims.insert(hash, claim.clone());",
+            "notifications.push(QueueAdmissionNotification {",
+            "self.apply_per_user_tx_count_increments(per_user_increments);",
+            "self.reconcile_missing_reservation_payloads_locked(&mut store);",
+            "self.replace_fifo_locked(&final_fifo);",
+            "(summary, notifications)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::replay_plan_journal",
+        (
+            "self.plan_journal_install_lock.lock()",
+            "self.lane_reservation_transition_lock.lock()",
+            "state.lock_lane_lifecycle_work_admission()",
+            "let state_view = state.view();",
+            "self.ensure_plan_journal_replay_startup_shape_locked()?;",
+            "self.sync_nexus_routing_with_view(&state_view);",
+            "let mut journal_guard = self.plan_journal.lock();",
+            "let queue_guard = self.push_remove_lock.lock();",
+            "let records = journal.prepare_replay()?.into_verified_records()?;",
+            "let expected_record_claims = records",
+            "let prepared = self.prepare_plan_journal_replay_locked(",
+            "let observed_record_claims = journal",
+            ".prepare_replay()?",
+            ".into_verified_records()?",
+            "if observed_record_claims != expected_record_claims",
+            "let terminal_removals = prepared.terminal_removals.clone();",
+            "remove_all_live_exact_atomic_strict_durable(&terminal_removals)",
+            "self.apply_plan_journal_replay_locked(prepared)",
+            "self.publish_admission_notifications(&notifications);",
+            "Ok(summary)",
+        ),
+    ),
+    (
+        "crates/irohad/src/main.rs",
+        "method",
+        "Iroha::start_with_runtime_deps",
+        (
+            "install_lane_reservation_journal(",
+            "install_plan_journal(",
+            "replay_plan_journal(&state)",
+            "finalize_plan_journal_startup_recovery()",
+            "IrohaNetwork::start_with_crypto(",
+        ),
+    ),
+)
+QUEUE_PLAN_STARTUP_REPLAY_FORBIDDEN_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::apply_plan_journal_replay_locked",
+        (
+            "?",
+            "Result<",
+            "return Err(",
+            "expect(",
+            "unwrap(",
+            "panic!(",
+            "unreachable!(",
+        ),
+    ),
+)
+QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_MARKER = (
+    "let (summary, notifications) = self.apply_plan_journal_replay_locked(prepared);"
+)
+QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_FORBIDDEN_TOKENS = (
+    "?",
+    "return Err(",
+    ".map_err(",
+    "expect(",
+    "unwrap(",
+    "panic!(",
+    "unreachable!(",
+)
+QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
+    (
+        "crates/iroha_core/src/queue/journal.rs",
+        "exact_atomic_live_tombstone_batch_rejects_retry_before_append",
+        (
+            "remove_all_live_exact_atomic_strict_durable(",
+            "expect_err(",
+            "io::ErrorKind::InvalidData",
+            "the startup publication form must reject a mixed absent and live batch",
+            "the all-live precondition must reject a mixed batch before append",
+            "rejecting a mixed batch must retain its still-live member",
+            "the all-live precondition must reject before another frame is appended",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/plan_journal_replay_tests.rs",
+        "materialized_replay_rejects_later_record_corruption_before_any_callback",
+        (
+            ".get_mut(&second_key)",
+            ".for_each_record(",
+            "expect_err(",
+            "callbacks, 0",
+            "a valid earlier record must remain private when a later record is corrupt",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "queue_plan_journal_replay_retains_current_admission_rejection_and_fails_startup",
+        (
+            "expect_err(\"a current admission failure must abort startup\")",
+            "failed current admission",
+            "assert_eq!(replay_queue.active_len(), 0);",
+            "live_record_count()",
+            "without publishing or tombstoning a prefix",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "queue_plan_journal_replay_rejects_aggregate_per_user_overflow_without_prefix",
+        (
+            "capacity_per_user = nonzero!(1_usize)",
+            "aggregate per-user overflow must reject the complete replay",
+            "std::io::ErrorKind::PermissionDenied",
+            "assert_eq!(replay_queue.active_len(), 0);",
+            "live_record_count()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "queue_plan_journal_replay_rejects_orphaned_startup_fifo_identity",
+        (
+            "fifo_order_by_hash.insert(orphan, fifo_order)",
+            "an unowned startup FIFO identity must fail closed",
+            "orphaned FIFO identity",
+            "Some(fifo_order)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/lane_reservation_tests.rs",
+        "reservation_restart_fits_ordinary_fifo_around_middle_anchor",
+        (
+            "install_lane_reservation_journal(&reservation_path",
+            "replay_plan_journal(&state)",
+            "Some(u64::try_from(index)",
+            "release_lane_reservations_in_order(&[reserved_key])",
+            "restart replay must preserve A/B/C",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_recovery_tests.rs",
+        "committed_state_with_live_reservation_retains_sole_plan_payload_source",
+        (
+            "canonically committed while queue or reservation ownership remains live",
+            "assert!(queue.txs.is_empty());",
+            "missing_reservation_payload_count",
+            "live_record_count()",
+            "must not tombstone the only payload source",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_recovery_tests.rs",
+        "expired_live_reservation_replays_payload_without_fifo_or_tombstone",
+        (
+            "transaction_time_to_live: Duration::from_millis(1)",
+            "time_handle.advance(Duration::from_millis(2));",
+            "materialize expired payload under its durable reservation owner",
+            "tombstoned_expired: 0",
+            "assert_eq!(queue.queued_len(), 0);",
+            "must not tombstone the sole payload source",
+        ),
+    ),
+)
 
 
 def _regular_file(path: Path, label: str, errors: list[str]) -> bool:
@@ -982,8 +2449,15 @@ def _extract_rust_binding_items(
     owner, method = symbol.split("::", 1)
     if not owner or not method:
         return ()
+    # Bind both inherent methods (`impl Owner`) and trait methods
+    # (`impl Trait for Owner`). The latter is required for capability-bearing
+    # implementations such as `CheckedReplayAuthorizationDomain::clone`;
+    # treating that method as an unscoped `fn clone` would allow an unrelated
+    # implementation in the same file to satisfy the binding.
     impl_re = re.compile(
-        rf"(?m)^[ \t]*impl[ \t]+{re.escape(owner)}[ \t]*(?=\{{)"
+        rf"(?m)^[ \t]*impl[ \t]+(?:"
+        rf"{re.escape(owner)}|[^{{\n]+[ \t]+for[ \t]+{re.escape(owner)}"
+        rf")[ \t]*(?=\{{)"
     )
     method_re = re.compile(
         RUST_DECLARATION_TEMPLATES["fn"].format(symbol=re.escape(method))
@@ -1012,6 +2486,7 @@ def _validate_mutation_runner(
         errors.append(f"multilane TLC mutation runner must be executable: {runner}")
     source = runner.read_text(encoding="utf-8")
     normalized = source.replace("\\\n", " ")
+    compact = " ".join(normalized.split())
     call_re = re.compile(
         r'run_mutant\s+[a-z0-9-]+\s+"?\$[A-Z_]+"?\s+'
         r"(multilane_[a-z0-9_]+_bug\.cfg)\s+([A-Za-z0-9_]+)"
@@ -1037,14 +2512,19 @@ def _validate_mutation_runner(
             "multilane source-binding ledger"
         )
     required_once = (
+        'source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"',
         '[[ "$status" -ne 12 ]]',
-        'grep -Fq "Invariant ${invariant} is violated."',
+        'local invariant_marker="Error: Invariant ${invariant} is violated."',
+        'sumeragi_v2_tlc_assert_exact_line "$name" "$log" "$invariant_marker"',
+        'sumeragi_v2_tlc_assert_exact_line "$name" "$log" '
+        '"Error: The behavior up to this point is:"',
+        'sumeragi_v2_tlc_assert_terminal "$name" "$log"',
         'grep -Fq "TLC2 Version 2.19"',
         f"[tlc] all {len(expected)} multilane mutations produced their exact "
         "named counterexamples; no deductive proof status was changed",
     )
     for token in required_once:
-        count = source.count(token)
+        count = compact.count(token)
         if count != 1:
             errors.append(
                 f"{runner}: mutation runner contract must contain {token!r} "
@@ -1132,8 +2612,8 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   inflight-first-release-layout \\
   "$INFLIGHT_FIRST_RELEASE_MODULE" \\
   inflight_first_release_fixed.cfg \\
-  10 \\
-  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLPutBatchV4BeforeReservationV5, MLReservationV5BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReady, MLCrashPrefixLossFree, MLCommitAndReleaseRetainExactScope, MLExactlyOnceCarrierApplication, MLQueuePlanV4PutBatchBound4096\"""",
+  18 \\
+  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLSelectedQueuePlanV4ConjunctionBeforeReservationV5, MLReservationV5BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReadyAuthorization, MLReadyAuthorizationBeforeLocalSignature, MLLocalSignaturesBeforeDurableReadyQc, MLCrashDurableFactsRecoverable, MLVolatileSessionLostOnCrash, MLCommitAndReleaseRetainExactScope, MLLaneCommitBeforeAtomicWsvCarrierApplication, MLExactlyOnceCarrierApplication, MLPostCarrierCommitCleanupOrder, MLReleasePrefixesRecoverable, MLReleaseStageOrder, MLQueuePlanV4SelectedConjunctionBound4096\"""",
     )
     for call in expected_calls:
         if source.count(call) != 1:
@@ -1182,15 +2662,26 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_queue_plan_guard_drop_deletes_durable_owner_bug.cfg",
         "multilane_queue_plan_execution_without_exact_binding_bug.cfg",
         "multilane_queue_plan_duplicate_execution_bug.cfg",
-        "inflight_first_release_reservation_before_put_batch_bug.cfg",
+        "inflight_first_release_reservation_before_selected_queue_plan_bug.cfg",
         "inflight_first_release_kura_before_reservation_bug.cfg",
-        "inflight_first_release_ready_before_input_bug.cfg",
+        "inflight_first_release_ready_authorization_before_input_bug.cfg",
+        "inflight_first_release_ready_signature_before_authorization_bug.cfg",
+        "inflight_first_release_ready_qc_before_signatures_bug.cfg",
         "inflight_first_release_crash_drops_durable_bug.cfg",
+        "inflight_first_release_crash_retains_volatile_body_bug.cfg",
         "inflight_first_release_payload_conflict_bug.cfg",
-        "inflight_first_release_commit_scope_conflict_bug.cfg",
+        "inflight_first_release_lane_commit_scope_conflict_bug.cfg",
         "inflight_first_release_release_scope_conflict_bug.cfg",
         "inflight_first_release_duplicate_apply_bug.cfg",
-        "inflight_first_release_oversize_put_batch_bug.cfg",
+        "inflight_first_release_reservation_commit_before_carrier_bug.cfg",
+        "inflight_first_release_plan_tombstone_before_reservation_commit_bug.cfg",
+        "inflight_first_release_forget_commit_before_plan_tombstone_bug.cfg",
+        "inflight_first_release_release_pending_before_retirement_bug.cfg",
+        "inflight_first_release_release_prepare_before_pending_bug.cfg",
+        "inflight_first_release_released_claims_before_prepare_bug.cfg",
+        "inflight_first_release_release_complete_before_released_bug.cfg",
+        "inflight_first_release_forget_release_before_fifo_bug.cfg",
+        "inflight_first_release_oversize_selected_queue_plan_bug.cfg",
     ):
         if forbidden in source:
             errors.append(
@@ -1269,7 +2760,7 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
             "| Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |",
             "| autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |",
             "| QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |",
-            "| in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 10 |",
+            "| in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 18 |",
             "not independent ledger rows, TLAPS evidence",
             "cross-tool proof evidence",
             "changes no proof-ledger status",
@@ -1573,6 +3064,377 @@ def _rust_binding_item(
     return items[0]
 
 
+def _validate_native_prepublication_contract(
+    root: Path, models: Any, errors: list[str]
+) -> None:
+    """Bind Native participant frontier publication to its durable phase order."""
+
+    if not isinstance(models, list):
+        return
+    native_models = [
+        model
+        for model in models
+        if isinstance(model, dict)
+        and model.get("module") == NATIVE_PREPUBLICATION_MODULE
+    ]
+    if len(native_models) != 1:
+        errors.append(
+            "Native prepublication source contract requires exactly one "
+            f"{NATIVE_PREPUBLICATION_MODULE} model"
+        )
+        return
+    production_symbols = native_models[0].get("production_symbols")
+    if not isinstance(production_symbols, list):
+        return
+
+    for relative, kind, symbol, expected_tokens in NATIVE_PREPUBLICATION_BINDINGS:
+        matches = [
+            binding
+            for binding in production_symbols
+            if isinstance(binding, dict)
+            and binding.get("path") == relative
+            and binding.get("kind") == kind
+            and binding.get("symbol") == symbol
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{NATIVE_PREPUBLICATION_MODULE}: reviewed prepublication "
+                f"binding {relative}!{symbol} must occur exactly once, "
+                f"found {len(matches)}"
+            )
+            continue
+        actual_tokens = matches[0].get("required_tokens")
+        if (
+            not isinstance(actual_tokens, list)
+            or tuple(actual_tokens) != expected_tokens
+        ):
+            errors.append(
+                f"{NATIVE_PREPUBLICATION_MODULE}: reviewed prepublication "
+                f"tokens changed for {relative}!{symbol}"
+            )
+
+    binding_items: dict[tuple[str, str, str], str] = {}
+    for relative, kind, symbol, tokens in NATIVE_PREPUBLICATION_BINDINGS:
+        item = _rust_binding_item(
+            root,
+            relative,
+            kind,
+            symbol,
+            "Native prepublication production binding",
+            errors,
+        )
+        if item is None:
+            continue
+        binding_items[(relative, kind, symbol)] = item
+        for token in tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: Native prepublication item {symbol} "
+                    f"is missing source-bound token {token!r}"
+                )
+
+    for relative, kind, symbol, tokens in (
+        NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS
+    ):
+        item = binding_items.get((relative, kind, symbol))
+        if item is None:
+            item = _rust_binding_item(
+                root,
+                relative,
+                kind,
+                symbol,
+                "ordered Native prepublication source binding",
+                errors,
+            )
+        if item is None:
+            continue
+        cursor = -1
+        for token in tokens:
+            count = item.count(token)
+            position = item.find(token, cursor + 1)
+            if count != 1 or position < 0:
+                errors.append(
+                    f"{root / relative}: ordered Native prepublication item "
+                    f"{symbol} must contain exactly one ordered token "
+                    f"{token!r}, found {count}"
+                )
+                break
+            cursor = position
+
+    kura_relative = "crates/iroha_core/src/kura.rs"
+    persist_key = (
+        kura_relative,
+        "fn",
+        "persist_native_amx_participant_application_evidence_under_publication_guard",
+    )
+    persist_item = binding_items.get(persist_key)
+    if persist_item is not None:
+        normalized = " ".join(persist_item.split())
+        phase_snippets = (
+            "for (manifest, _) in &plan.artifacts { "
+            "self.write_native_amx_participant_application_manifest_artifact_"
+            "with_retention_policy_under_publication_guard( "
+            "manifest, permit_cleanup, )?; }",
+            "for (manifest, receipt) in &plan.artifacts { "
+            "self.write_native_amx_participant_application_receipt_artifact_"
+            "only_with_retention_policy_under_publication_guard( "
+            "receipt, manifest, permit_cleanup, )?; }",
+            "for (manifest, receipt) in &plan.artifacts { "
+            "self.write_native_amx_participant_receipt_latest_index_"
+            "under_publication_guard( "
+            "receipt, manifest, permit_cleanup, )?; }",
+            "if permit_cleanup { for (_, receipt) in &plan.artifacts { "
+            "self.cleanup_native_amx_participant_application_evidence_"
+            "under_publication_guard( receipt, )?; } }",
+        )
+        for snippet in phase_snippets:
+            if snippet not in normalized:
+                errors.append(
+                    f"{root / kura_relative}: Native prepublication phase "
+                    "loops must remain manifest-all, receipt-all, latest-all, "
+                    "read-back-authenticated, then cleanup-only-after-WSV"
+                )
+                break
+
+    expected_mode_methods = {
+        "NativeAmxParticipantApplicationPublicationMode::requires_post_apply_metadata": (
+            "const fn requires_post_apply_metadata(self) -> bool { "
+            "matches!(self, Self::PostWsvRepair) }"
+        ),
+        "NativeAmxParticipantApplicationPublicationMode::permits_retention_cleanup": (
+            "const fn permits_retention_cleanup(self) -> bool { "
+            "matches!(self, Self::PostWsvRepair) }"
+        ),
+    }
+    for symbol, expected in expected_mode_methods.items():
+        item = binding_items.get((kura_relative, "method", symbol))
+        if item is not None and " ".join(item.split()) != expected:
+            errors.append(
+                f"{root / kura_relative}: {symbol} must authorize only "
+                "PostWsvRepair"
+            )
+
+    retention_guard = (
+        "if !permit_retention_cleanup { "
+        "self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?; "
+        "}"
+    )
+    for symbol in NATIVE_PREPUBLICATION_RETENTION_WRITERS:
+        item = binding_items.get((kura_relative, "fn", symbol))
+        if item is None:
+            continue
+        normalized = " ".join(item.split())
+        if normalized.count(retention_guard) != 1:
+            errors.append(
+                f"{root / kura_relative}: Native prepublication writer {symbol} "
+                "must fail closed on retention state before PostWsvRepair"
+            )
+        for forbidden in (
+            "cleanup_native_amx_participant_application_evidence_under_publication_guard(",
+            "prune_native_amx_evidence_pairs_locked(",
+        ):
+            if forbidden in item:
+                errors.append(
+                    f"{root / kura_relative}: Native prepublication writer "
+                    f"{symbol} contains forbidden pre-WSV cleanup {forbidden!r}"
+                )
+
+    prepublish_item = binding_items.get(
+        (
+            kura_relative,
+            "fn",
+            "prepublish_native_amx_participant_application_evidence",
+        )
+    )
+    if prepublish_item is not None:
+        for forbidden in (
+            "NativeAmxParticipantApplicationPublicationMode::PostWsvRepair",
+            "cleanup_native_amx_participant_application_evidence_under_publication_guard(",
+            "prune_native_amx_evidence_pairs_locked(",
+        ):
+            if forbidden in prepublish_item:
+                errors.append(
+                    f"{root / kura_relative}: pre-WSV Native publication "
+                    f"contains forbidden cleanup/repair token {forbidden!r}"
+                )
+
+    repair_item = binding_items.get(
+        (
+            kura_relative,
+            "fn",
+            "repair_native_amx_participant_application_evidence",
+        )
+    )
+    if (
+        repair_item is not None
+        and "NativeAmxParticipantApplicationPublicationMode::PreWsv"
+        in repair_item
+    ):
+        errors.append(
+            f"{root / kura_relative}: post-WSV Native repair must not use "
+            "PreWsv publication mode"
+        )
+
+
+def _validate_queue_plan_startup_replay_contract(
+    root: Path, models: Any, errors: list[str]
+) -> None:
+    """Bind QueuePlan startup replay to one atomic durable publication seam."""
+
+    if not isinstance(models, list):
+        return
+    queue_models = [
+        model
+        for model in models
+        if isinstance(model, dict)
+        and model.get("module") == QUEUE_PLAN_STARTUP_REPLAY_MODULE
+    ]
+    if len(queue_models) != 1:
+        errors.append(
+            "QueuePlan startup replay source contract requires exactly one "
+            f"{QUEUE_PLAN_STARTUP_REPLAY_MODULE} model"
+        )
+        return
+    production_symbols = queue_models[0].get("production_symbols")
+    if not isinstance(production_symbols, list):
+        return
+
+    for relative, kind, symbol, expected_tokens in (
+        QUEUE_PLAN_STARTUP_REPLAY_BINDINGS
+    ):
+        matches = [
+            binding
+            for binding in production_symbols
+            if isinstance(binding, dict)
+            and binding.get("path") == relative
+            and binding.get("kind") == kind
+            and binding.get("symbol") == symbol
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{QUEUE_PLAN_STARTUP_REPLAY_MODULE}: reviewed startup replay "
+                f"binding {relative}!{symbol} must occur exactly once, "
+                f"found {len(matches)}"
+            )
+            continue
+        actual_tokens = matches[0].get("required_tokens")
+        if not isinstance(actual_tokens, list) or tuple(actual_tokens) != expected_tokens:
+            errors.append(
+                f"{QUEUE_PLAN_STARTUP_REPLAY_MODULE}: reviewed startup replay "
+                f"tokens changed for {relative}!{symbol}"
+            )
+
+    binding_items: dict[tuple[str, str, str], str] = {}
+    for relative, kind, symbol, tokens in QUEUE_PLAN_STARTUP_REPLAY_BINDINGS:
+        item = _rust_binding_item(
+            root,
+            relative,
+            kind,
+            symbol,
+            "QueuePlan startup replay production binding",
+            errors,
+        )
+        if item is None:
+            continue
+        binding_items[(relative, kind, symbol)] = item
+        for token in tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: QueuePlan startup replay item {symbol} "
+                    f"is missing source-bound token {token!r}"
+                )
+
+    for relative, kind, symbol, tokens in (
+        QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS
+    ):
+        item = binding_items.get((relative, kind, symbol))
+        if item is None:
+            item = _rust_binding_item(
+                root,
+                relative,
+                kind,
+                symbol,
+                "ordered QueuePlan startup replay source binding",
+                errors,
+            )
+        if item is None:
+            continue
+        cursor = -1
+        for token in tokens:
+            position = item.find(token, cursor + 1)
+            if position < 0:
+                errors.append(
+                    f"{root / relative}: ordered QueuePlan startup replay item "
+                    f"{symbol} is missing or reorders token {token!r}"
+                )
+                break
+            cursor = position
+
+    for relative, kind, symbol, tokens in (
+        QUEUE_PLAN_STARTUP_REPLAY_FORBIDDEN_SOURCE_CHECKS
+    ):
+        item = binding_items.get((relative, kind, symbol))
+        if item is None:
+            item = _rust_binding_item(
+                root,
+                relative,
+                kind,
+                symbol,
+                "infallible QueuePlan startup replay source binding",
+                errors,
+            )
+        if item is None:
+            continue
+        for token in tokens:
+            if token in item:
+                errors.append(
+                    f"{root / relative}: QueuePlan startup replay item {symbol} "
+                    f"contains forbidden fallible/panicking token {token!r}"
+                )
+
+    replay_key = (
+        "crates/iroha_core/src/queue.rs",
+        "method",
+        "Queue::replay_plan_journal",
+    )
+    replay_item = binding_items.get(replay_key)
+    if replay_item is not None:
+        marker_offset = replay_item.find(QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_MARKER)
+        if marker_offset < 0:
+            errors.append(
+                f"{root / replay_key[0]}: QueuePlan replay is missing its exact "
+                "atomic in-memory apply boundary"
+            )
+        else:
+            post_apply = replay_item[
+                marker_offset + len(QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_MARKER) :
+            ]
+            for token in QUEUE_PLAN_STARTUP_REPLAY_POST_APPLY_FORBIDDEN_TOKENS:
+                if token in post_apply:
+                    errors.append(
+                        f"{root / replay_key[0]}: QueuePlan replay contains "
+                        f"fallible/panicking token {token!r} after atomic apply"
+                    )
+
+    for relative, symbol, tokens in QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS:
+        item = _rust_binding_item(
+            root,
+            relative,
+            "fn",
+            symbol,
+            "QueuePlan startup replay static negative-control test",
+            errors,
+        )
+        if item is None:
+            continue
+        for token in tokens:
+            if token not in item:
+                errors.append(
+                    f"{root / relative}: QueuePlan startup replay test {symbol} "
+                    f"is missing negative-control token {token!r}"
+                )
+
+
 def _validate_inflight_layout_contract(
     root: Path,
     formal_dir: Path,
@@ -1587,19 +3449,22 @@ def _validate_inflight_layout_contract(
         "positive_config",
         "runner",
         "evidence",
+        "required_actions",
         "required_invariants",
         "mutations",
         "production_symbols",
         "ordered_source_checks",
+        "forbidden_source_checks",
         "source_checks",
         "forbidden_tokens",
     }
     if not isinstance(contract, dict) or set(contract) != expected_keys:
         errors.append(
             "in-flight layout contract must contain exactly claim, module, "
-            "positive_config, runner, evidence, required_invariants, mutations, "
-            "production_symbols, ordered_source_checks, source_checks, and "
-            "forbidden_tokens"
+            "positive_config, runner, evidence, required_actions, "
+            "required_invariants, mutations, production_symbols, "
+            "ordered_source_checks, forbidden_source_checks, source_checks, "
+            "and forbidden_tokens"
         )
         return
     expected_scalars = {
@@ -1614,6 +3479,16 @@ def _validate_inflight_layout_contract(
             errors.append(
                 f"in-flight layout contract {field} must equal {expected!r}"
             )
+
+    required_actions = contract.get("required_actions")
+    if (
+        not isinstance(required_actions, list)
+        or tuple(required_actions) != INFLIGHT_LAYOUT_REQUIRED_ACTIONS
+    ):
+        errors.append(
+            "in-flight layout contract actions differ from the exact reviewed "
+            "current-semantics inventory"
+        )
 
     required_invariants = contract.get("required_invariants")
     if (
@@ -1649,7 +3524,7 @@ def _validate_inflight_layout_contract(
     if tuple(actual_mutations) != INFLIGHT_LAYOUT_MUTATIONS:
         errors.append(
             "in-flight layout mutation mapping differs from the exact reviewed "
-            "nine-control corpus"
+            "twenty-control corpus"
         )
 
     production_symbols = contract.get("production_symbols")
@@ -1688,7 +3563,7 @@ def _validate_inflight_layout_contract(
     if tuple(actual_bindings) != INFLIGHT_LAYOUT_PRODUCTION_BINDINGS:
         errors.append(
             "in-flight production bindings differ from the exact reviewed "
-            "payload/queue/Kura layout contract"
+            "payload/queue/Kura/replay-state layout contract"
         )
 
     ordered_source_checks = contract.get("ordered_source_checks")
@@ -1727,7 +3602,53 @@ def _validate_inflight_layout_contract(
     if tuple(actual_ordered) != INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS:
         errors.append(
             "in-flight ordered source checks differ from the exact reviewed "
-            "durability/publication order contract"
+            "validation/durability/publication order contract"
+        )
+
+    forbidden_source_checks = contract.get("forbidden_source_checks")
+    actual_forbidden_source_checks: list[
+        tuple[str, str, str, tuple[str, ...]]
+    ] = []
+    if not isinstance(forbidden_source_checks, list):
+        errors.append("in-flight forbidden_source_checks must be an array")
+    else:
+        for check in forbidden_source_checks:
+            if not isinstance(check, dict) or set(check) != {
+                "path",
+                "kind",
+                "symbol",
+                "forbidden_tokens",
+            }:
+                errors.append(
+                    "each forbidden in-flight source check must contain only "
+                    "path, kind, symbol, and forbidden_tokens"
+                )
+                continue
+            relative = check.get("path")
+            kind = check.get("kind")
+            symbol = check.get("symbol")
+            tokens = check.get("forbidden_tokens")
+            if (
+                not _nonempty_string(relative)
+                or kind not in RUST_BINDING_KINDS
+                or not _nonempty_string(symbol)
+                or not isinstance(tokens, list)
+                or not tokens
+                or not all(_nonempty_string(token) for token in tokens)
+                or len(tokens) != len(set(tokens))
+            ):
+                errors.append(f"malformed forbidden in-flight source check {check!r}")
+                continue
+            actual_forbidden_source_checks.append(
+                (relative, kind, symbol, tuple(tokens))
+            )
+    if (
+        tuple(actual_forbidden_source_checks)
+        != INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS
+    ):
+        errors.append(
+            "in-flight forbidden source checks differ from the exact reviewed "
+            "bounded-application/capability contract"
         )
 
     source_checks = contract.get("source_checks")
@@ -1789,6 +3710,16 @@ def _validate_inflight_layout_contract(
                 f"{module_path}: layout-only kernel must not declare a production "
                 "refinement obligation"
             )
+        for action in INFLIGHT_LAYOUT_REQUIRED_ACTIONS:
+            declaration_re = re.compile(
+                TLA_DECLARATION_TEMPLATE.format(symbol=re.escape(action))
+            )
+            count = len(tuple(declaration_re.finditer(module_source)))
+            if count != 1:
+                errors.append(
+                    f"{module_path}: current-semantics action {action} must be "
+                    f"declared exactly once, found {count}"
+                )
         for invariant in INFLIGHT_LAYOUT_REQUIRED_INVARIANTS:
             declaration_re = re.compile(
                 TLA_DECLARATION_TEMPLATE.format(symbol=re.escape(invariant))
@@ -1856,20 +3787,33 @@ def _validate_inflight_layout_contract(
         if runner_calls != INFLIGHT_LAYOUT_MUTATIONS:
             errors.append(
                 f"{runner_path}: mutation calls differ from the exact reviewed "
-                "nine-control corpus"
+                "twenty-control corpus"
             )
+        compact_runner_source = " ".join(
+            runner_source.replace("\\\n", " ").split()
+        )
         for token in (
-            "\nrun_positive\n",
+            'source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"',
             '[[ "$status" -ne 12 ]]',
-            'grep -Fq "Invariant ${invariant} is violated."',
+            'local invariant_marker="Error: Invariant ${invariant} is violated."',
+            'sumeragi_v2_tlc_assert_exact_line "$config" "$log" '
+            '"$invariant_marker"',
+            'sumeragi_v2_tlc_assert_exact_line "$config" "$log" '
+            '"Error: The behavior up to this point is:"',
+            'sumeragi_v2_tlc_assert_terminal "$config" "$log"',
             "bounded abstract evidence only; no production refinement claim",
         ):
-            count = runner_source.count(token)
+            count = compact_runner_source.count(token)
             if count != 1:
                 errors.append(
                     f"{runner_path}: fail-closed runner token {token!r} must occur "
                     f"exactly once, found {count}"
                 )
+        if runner_source.count("\nrun_positive\n") != 1:
+            errors.append(
+                f"{runner_path}: fail-closed runner must invoke the positive "
+                "model exactly once"
+            )
 
     evidence_path = root / INFLIGHT_LAYOUT_EVIDENCE
     evidence_source: str | None = None
@@ -1882,6 +3826,11 @@ def _validate_inflight_layout_contract(
             "`LANE_EXECUTABLE_PAYLOAD_VERSION_V2`",
             "QueuePlan journal V4",
             "reservation journal V5",
+            "selected-batch conjunction",
+            "READY signature",
+            "atomic WSV carrier application",
+            "four-stage release",
+            "twenty `_bug.cfg`",
             "`layout_only_no_transition_refinement`",
             "production-refinement theorem",
             "total projection theorem",
@@ -1902,6 +3851,10 @@ def _validate_inflight_layout_contract(
             "`LaneExecutablePayloadV1`",
             "QueuePlan journal V4",
             "reservation journal V5",
+            "selected-batch",
+            "READY authorization/signature/QC",
+            "post-carrier",
+            "four-stage",
             "`layout_only_no_transition_refinement`",
             "total transition projection is not implemented",
         ):
@@ -1973,6 +3926,26 @@ def _validate_inflight_layout_contract(
                 break
             cursor = position
 
+    for relative, kind, symbol, tokens in INFLIGHT_LAYOUT_FORBIDDEN_SOURCE_CHECKS:
+        item = binding_items.get((relative, kind, symbol))
+        if item is None:
+            item = _rust_binding_item(
+                root,
+                relative,
+                kind,
+                symbol,
+                "forbidden in-flight production source binding",
+                errors,
+            )
+        if item is None:
+            continue
+        for token in tokens:
+            if token in item:
+                errors.append(
+                    f"{root / relative}: in-flight production item {symbol} "
+                    f"contains forbidden source-bound token {token!r}"
+                )
+
     for relative, tokens in INFLIGHT_LAYOUT_SOURCE_CHECKS:
         path = root / relative
         if not _regular_file(path, "in-flight whole-file source binding", errors):
@@ -2016,8 +3989,8 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
             "multilane binding ledger must contain exactly schema_version, "
             "closure_mutations, inflight_first_release_layout_contract, and models",
         )
-    if ledger.get("schema_version") != 3:
-        errors.append("multilane binding ledger schema_version must equal 3")
+    if ledger.get("schema_version") != 4:
+        errors.append("multilane binding ledger schema_version must equal 4")
     models = ledger.get("models")
     if not isinstance(models, list) or len(models) != 4:
         errors.append("multilane binding ledger must contain exactly four models")
@@ -2032,6 +4005,8 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         )
     for model in models:
         _validate_model(root, formal_dir, model, errors)
+    _validate_native_prepublication_contract(root, models, errors)
+    _validate_queue_plan_startup_replay_contract(root, models, errors)
     _validate_inflight_layout_contract(
         root,
         formal_dir,

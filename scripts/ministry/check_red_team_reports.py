@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-DEFAULT_TEMPLATE = Path("docs/source/ministry/reports/moderation_red_team_template.md")
-DEFAULT_REPORTS_DIR = Path("docs/source/ministry/reports")
+DEFAULT_TEMPLATE = Path("specs/ministry/reports/moderation_red_team_template.md")
+DEFAULT_REPORTS_DIR = Path("specs/ministry/reports")
 PLACEHOLDER_PATTERN = re.compile(r"<[^>]+>")
 
 

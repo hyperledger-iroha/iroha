@@ -1,0 +1,12 @@
+{
+  "schema": 2,
+  "normative_grammar": "specs/kotodama_grammar.md",
+  "source_roots": [
+    "docs",
+    "specs"
+  ],
+  "source_documents": [
+    "specs/kotodama_grammar.md",
+    "specs/kotodama_examples.md"
+  ]
+}

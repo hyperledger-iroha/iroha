@@ -1,9 +1,5 @@
 //! Finalized-chain SoraFS moderation orchestration.
 //!
-//! This module deliberately owns no moderation consensus state. It submits the
-//! native moderation ISIs and maintains only a bounded, rebuildable projection
-//! of one finalized ledger snapshot plus durable delivery state. The projection
-//! may be discarded and reconstructed from the finalized snapshot reader.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -54,6 +50,19 @@ use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use sorafs_manifest::pop_credentials::{POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopMembershipProofV1};
 use thiserror::Error;
 
+#[path = "moderation_orchestrator/checkpoint_store.rs"]
+mod checkpoint_store;
+#[path = "moderation_orchestrator/terminal_handoff.rs"]
+mod terminal_handoff;
+pub use checkpoint_store::{
+    MODERATION_CHECKPOINT_STORE_RECORD_VERSION_V1, ModerationCheckpointStoreExternalErrorV1,
+    ModerationCheckpointStoreRecordV1, ModerationCheckpointStoreV1,
+};
+use terminal_handoff::{
+    retained_terminal_finalization_cursor, terminal_finalization_event_matches_outcome,
+    terminal_handoff_id, validate_retained_terminal_handoff,
+};
+
 pub use iroha_data_model::sorafs::moderation_ledger::{
     MODERATION_FINALIZED_SNAPSHOT_VERSION_V1, ModerationFinalizedAppealViewV1,
     ModerationFinalizedCaseViewV1, ModerationFinalizedCursorV1, ModerationFinalizedEventCursorV1,
@@ -62,9 +71,10 @@ pub use iroha_data_model::sorafs::moderation_ledger::{
 
 /// Checkpoint schema version.
 ///
-/// Version four adds generation-fenced leases for every external collaborator
-/// call. Earlier pre-release state is intentionally rejected instead of migrated.
-pub const MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1: u16 = 4;
+/// Version five chain-binds the complete checkpoint and terminal handoff
+/// identities, and pins each handoff to the exact `CaseFinalized` block. Earlier
+/// pre-release state is intentionally rejected instead of migrated.
+pub const MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1: u16 = 5;
 /// Hard ceiling for one canonical native moderation instruction.
 pub const MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 /// Hard ceiling for one persisted orchestrator checkpoint.
@@ -631,8 +641,12 @@ fn map_runtime_provider_qualification_error(
 /// Bounds, provider bindings, and durable path for one moderation orchestrator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationOrchestratorConfigV1 {
-    /// Absolute private checkpoint path.
+    /// Absolute private local checkpoint-cache path.
     pub checkpoint_path: PathBuf,
+    /// Governed identity of the authoritative sealed checkpoint store.
+    pub checkpoint_store_handle: String,
+    /// Exact checkpoint-store adapter and public-policy qualification.
+    pub expected_checkpoint_store_qualification: ModerationRuntimeProviderQualificationV1,
     /// Maximum appeals and activated cases retained in the projection.
     pub max_cases: usize,
     /// Maximum finalized events retained in one projection.
@@ -707,6 +721,10 @@ impl ModerationOrchestratorConfigV1 {
             ));
         }
         for (handle, qualification) in [
+            (
+                self.checkpoint_store_handle.as_str(),
+                self.expected_checkpoint_store_qualification,
+            ),
             (
                 self.transaction_signer_handle.as_str(),
                 self.expected_transaction_signer_qualification,
@@ -1077,7 +1095,7 @@ pub enum ModerationTerminalHandoffKindV1 {
 /// Payload-free terminal handoff derived only from finalized ledger state.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationTerminalHandoffV1 {
-    /// Stable sink-specific handoff identity.
+    /// Stable sink-specific handoff identity bound to the exact ledger chain.
     pub handoff_id: [u8; 32],
     /// Destination.
     pub kind: ModerationTerminalHandoffKindV1,
@@ -1087,7 +1105,7 @@ pub struct ModerationTerminalHandoffV1 {
     pub round_id: String,
     /// Canonical digest of the authoritative terminal outcome.
     pub outcome_digest: [u8; 32],
-    /// Finalized anchor proving the outcome.
+    /// Exact finalized block that committed the terminal event.
     pub finalized_cursor: ModerationFinalizedCursorV1,
 }
 
@@ -1286,6 +1304,8 @@ pub enum ModerationPanelNotificationFinalizeOutcomeV1 {
 /// Runtime-only dependencies.
 #[derive(Clone)]
 pub struct ModerationOrchestratorDepsV1 {
+    /// Deployment-owned sealed, predecessor-bound monotonic checkpoint authority.
+    pub checkpoint_store: Arc<dyn ModerationCheckpointStoreV1>,
     /// HSM transaction submitter.
     pub submitter: Arc<dyn ModerationTransactionSubmitterV1>,
     /// Finalized ledger snapshot reader.
@@ -1302,6 +1322,7 @@ impl fmt::Debug for ModerationOrchestratorDepsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ModerationOrchestratorDepsV1")
+            .field("checkpoint_store", &"<runtime-only>")
             .field("submitter", &"<runtime-only>")
             .field("snapshot_reader", &"<runtime-only>")
             .field("settlement_sink", &"<runtime-only>")
@@ -1548,6 +1569,7 @@ impl fmt::Debug for QualifiedModerationPanelNotificationSinkV1 {
 }
 
 struct QualifiedModerationOrchestratorDepsV1 {
+    checkpoint_store: checkpoint_store::QualifiedModerationCheckpointStoreV1,
     submitter: QualifiedModerationTransactionSubmitterV1,
     snapshot_reader: Arc<dyn ModerationFinalizedSnapshotReaderV1>,
     settlement_sink: QualifiedModerationTerminalHandoffSinkV1,
@@ -1561,12 +1583,18 @@ impl QualifiedModerationOrchestratorDepsV1 {
         deps: ModerationOrchestratorDepsV1,
     ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
         let ModerationOrchestratorDepsV1 {
+            checkpoint_store,
             submitter,
             snapshot_reader,
             settlement_sink,
             publication_sink,
             panel_notification_sink,
         } = deps;
+        let checkpoint_store = checkpoint_store::QualifiedModerationCheckpointStoreV1::try_new(
+            &config.checkpoint_store_handle,
+            config.expected_checkpoint_store_qualification,
+            checkpoint_store,
+        )?;
         let submitter = QualifiedModerationTransactionSubmitterV1::try_new(config, submitter)?;
         let settlement_sink = QualifiedModerationTerminalHandoffSinkV1::try_new(
             &config.settlement_handoff_handle,
@@ -1584,6 +1612,7 @@ impl QualifiedModerationOrchestratorDepsV1 {
             panel_notification_sink,
         )?;
         Ok(Self {
+            checkpoint_store,
             submitter,
             snapshot_reader,
             settlement_sink,
@@ -1597,6 +1626,7 @@ impl fmt::Debug for QualifiedModerationOrchestratorDepsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("QualifiedModerationOrchestratorDepsV1")
+            .field("checkpoint_store", &self.checkpoint_store)
             .field("submitter", &self.submitter)
             .field("snapshot_reader", &"<local-committed-state-view>")
             .field("settlement_sink", &self.settlement_sink)
@@ -1828,6 +1858,7 @@ struct StoredPanelNotificationV1 {
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationOrchestratorCheckpointV1 {
     version: u16,
+    chain_id: String,
     generation: u64,
     panel_notification_clock_unix_ms: u64,
     panel_notification_scanned_cursor: Option<ModerationFinalizedEventCursorV1>,
@@ -1891,34 +1922,13 @@ impl PreparedExternalWorkV1 {
     }
 }
 
-impl Default for ModerationOrchestratorCheckpointV1 {
-    fn default() -> Self {
-        let mut state = Self {
-            version: MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1,
-            generation: 0,
-            panel_notification_clock_unix_ms: 0,
-            panel_notification_scanned_cursor: None,
-            panel_notification_outbox_digest: [0; 32],
-            finalized_snapshot: None,
-            finalized_snapshot_digest: None,
-            operations: Vec::new(),
-            outbox: Vec::new(),
-            dead_letters: Vec::new(),
-            pending_handoffs: Vec::new(),
-            completed_handoffs: Vec::new(),
-            panel_notifications: Vec::new(),
-        };
-        refresh_panel_notification_outbox_digest(&mut state);
-        state
-    }
-}
-
 /// Finalized-chain moderation orchestrator.
 pub struct ModerationOrchestratorV1 {
     config: ModerationOrchestratorConfigV1,
     chain_id: iroha_data_model::ChainId,
     deps: QualifiedModerationOrchestratorDepsV1,
     state: Mutex<ModerationOrchestratorCheckpointV1>,
+    checkpoint_record: Mutex<ModerationCheckpointStoreRecordV1>,
     durability_faulted: AtomicBool,
 }
 
@@ -1937,7 +1947,7 @@ impl fmt::Debug for ModerationOrchestratorV1 {
 }
 
 impl ModerationOrchestratorV1 {
-    /// Open an orchestrator from a private bounded checkpoint.
+    /// Open an orchestrator from an authoritative sealed checkpoint and private bounded cache.
     ///
     /// # Errors
     ///
@@ -1962,42 +1972,26 @@ impl ModerationOrchestratorV1 {
                 "moderation submitter chain id must be non-empty and canonical".to_owned(),
             ));
         }
-        ensure_secure_parent(&config.checkpoint_path)?;
-        let mut state =
-            match read_bounded_file(&config.checkpoint_path, config.checkpoint_max_bytes)? {
-                None => ModerationOrchestratorCheckpointV1::default(),
-                Some(bytes) => {
-                    let limits = checkpoint_decode_limits(config.checkpoint_max_bytes)?;
-                    let checkpoint = decode_from_bytes_with_limits::<
-                        ModerationOrchestratorCheckpointV1,
-                    >(&bytes, limits)
-                    .map_err(|error| {
-                        ModerationOrchestratorError::CheckpointCorrupt(format!(
-                            "decode checkpoint: {error}"
-                        ))
-                    })?;
-                    let canonical = norito::to_bytes(&checkpoint).map_err(|error| {
-                        ModerationOrchestratorError::CheckpointCorrupt(format!(
-                            "re-encode checkpoint: {error}"
-                        ))
-                    })?;
-                    if canonical != bytes {
-                        return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                            "checkpoint is not canonical Norito".to_owned(),
-                        ));
-                    }
-                    checkpoint
-                }
-            };
-        validate_checkpoint(&state, &config, &chain_id)?;
+        let (mut state, mut checkpoint_record) = checkpoint_store::open_authoritative_checkpoint(
+            &config,
+            &chain_id,
+            &deps.checkpoint_store,
+        )?;
         if recover_external_work_after_restart(&mut state) {
-            persist_checkpoint(&config, &chain_id, &mut state)?;
+            checkpoint_store::persist_authoritative_checkpoint(
+                &config,
+                &chain_id,
+                &deps.checkpoint_store,
+                &mut checkpoint_record,
+                &mut state,
+            )?;
         }
         Ok(Self {
             config,
             chain_id,
             deps,
             state: Mutex::new(state),
+            checkpoint_record: Mutex::new(checkpoint_record),
             durability_faulted: AtomicBool::new(false),
         })
     }
@@ -2752,7 +2746,17 @@ impl ModerationOrchestratorV1 {
         if self.durability_faulted.load(Ordering::Acquire) {
             return Err(ModerationOrchestratorError::DurabilityFaulted);
         }
-        if let Err(error) = persist_checkpoint(&self.config, &self.chain_id, state) {
+        let mut checkpoint_record = self
+            .checkpoint_record
+            .lock()
+            .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?;
+        if let Err(error) = checkpoint_store::persist_authoritative_checkpoint(
+            &self.config,
+            &self.chain_id,
+            &self.deps.checkpoint_store,
+            &mut checkpoint_record,
+            state,
+        ) {
             self.durability_faulted.store(true, Ordering::Release);
             return Err(error);
         }
@@ -3848,23 +3852,32 @@ impl ModerationOrchestratorV1 {
                 ))
             })?;
             let outcome_digest = domain_hash(ACTION_DIGEST_DOMAIN_V1, &[&outcome_bytes]);
-            for kind in [
+            let handoff_ids = [
                 ModerationTerminalHandoffKindV1::Settlement,
                 ModerationTerminalHandoffKindV1::Publication,
-            ] {
-                let kind_byte = match kind {
-                    ModerationTerminalHandoffKindV1::Settlement => 0_u8,
-                    ModerationTerminalHandoffKindV1::Publication => 1_u8,
-                };
-                let handoff_id = domain_hash(
-                    HANDOFF_ID_DOMAIN_V1,
-                    &[
-                        &[kind_byte],
-                        outcome.case_id.as_bytes(),
-                        outcome.round_id.as_bytes(),
-                        &outcome_digest,
-                    ],
-                );
+            ]
+            .map(|kind| {
+                (
+                    kind,
+                    terminal_handoff_id(
+                        &self.chain_id,
+                        kind,
+                        &outcome.case_id,
+                        &outcome.round_id,
+                        outcome_digest,
+                    ),
+                )
+            });
+            if handoff_ids.iter().all(|(_, handoff_id)| {
+                completed.contains(handoff_id) || pending.contains(handoff_id)
+            }) {
+                continue;
+            }
+            let finalized_cursor = retained_terminal_finalization_cursor(snapshot, outcome)
+                .map_err(|error| {
+                    ModerationOrchestratorError::InvalidFinalizedSnapshot(error.to_owned())
+                })?;
+            for (kind, handoff_id) in handoff_ids {
                 if !completed.contains(&handoff_id) && !pending.contains(&handoff_id) {
                     additions.push(StoredHandoffV1 {
                         handoff: ModerationTerminalHandoffV1 {
@@ -3873,7 +3886,7 @@ impl ModerationOrchestratorV1 {
                             case_id: outcome.case_id.clone(),
                             round_id: outcome.round_id.clone(),
                             outcome_digest,
-                            finalized_cursor: snapshot.anchor(),
+                            finalized_cursor,
                         },
                         attempts: 0,
                         work_generation: 0,
@@ -5019,6 +5032,22 @@ fn validate_panel_notification_source_provenance(
                     ));
                 }
             }
+            SorafsModerationLedgerEventKind::CaseFinalized => {
+                let outcome = snapshot
+                    .case(case_id, round_id)
+                    .and_then(|case| case.outcome.as_ref())
+                    .ok_or_else(|| {
+                        ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "finalization event has no authoritative terminal outcome".to_owned(),
+                        )
+                    })?;
+                if !terminal_finalization_event_matches_outcome(event, outcome) {
+                    return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                        "finalization event provenance differs from the authoritative outcome"
+                            .to_owned(),
+                    ));
+                }
+            }
             SorafsModerationLedgerEventKind::PolicyActivated
             | SorafsModerationLedgerEventKind::AppealSubmitted
             | SorafsModerationLedgerEventKind::EligibilityRegistered
@@ -5028,8 +5057,7 @@ fn validate_panel_notification_source_provenance(
             | SorafsModerationLedgerEventKind::CommitAccepted
             | SorafsModerationLedgerEventKind::ChallengeRaised
             | SorafsModerationLedgerEventKind::ChallengeResolved
-            | SorafsModerationLedgerEventKind::RevealAccepted
-            | SorafsModerationLedgerEventKind::CaseFinalized => {}
+            | SorafsModerationLedgerEventKind::RevealAccepted => {}
         }
     }
     Ok(())
@@ -5199,6 +5227,11 @@ fn validate_checkpoint(
     if state.version != MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1 {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
             "unsupported checkpoint version".to_owned(),
+        ));
+    }
+    if state.chain_id != chain_id.as_str() {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "checkpoint chain binding differs from the qualified runtime".to_owned(),
         ));
     }
     if state.operations.len() > config.max_idempotency_records
@@ -5459,6 +5492,11 @@ fn validate_checkpoint(
         ));
     }
     for entry in &state.pending_handoffs {
+        validate_retained_terminal_handoff(
+            &entry.handoff,
+            state.finalized_snapshot.as_ref(),
+            chain_id,
+        )?;
         let valid_claim = match entry.work_claim.as_ref() {
             None => true,
             Some(claim) => {
@@ -5637,41 +5675,6 @@ fn validate_checkpoint(
                 }
             }
         }
-    }
-    Ok(())
-}
-
-fn persist_checkpoint(
-    config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
-    state: &mut ModerationOrchestratorCheckpointV1,
-) -> Result<(), ModerationOrchestratorError> {
-    state.generation = state
-        .generation
-        .checked_add(1)
-        .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
-    refresh_panel_notification_outbox_digest(state);
-    validate_checkpoint(state, config, chain_id)?;
-    let bytes = norito::to_bytes(state).map_err(|error| {
-        ModerationOrchestratorError::CheckpointIo(format!("encode checkpoint: {error}"))
-    })?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > config.checkpoint_max_bytes {
-        return Err(ModerationOrchestratorError::ResourceExhausted {
-            resource: "checkpoint bytes",
-            limit: usize::try_from(config.checkpoint_max_bytes).unwrap_or(usize::MAX),
-        });
-    }
-    write_atomic(&config.checkpoint_path, &bytes)?;
-    let persisted = read_bounded_file(&config.checkpoint_path, config.checkpoint_max_bytes)?
-        .ok_or_else(|| {
-            ModerationOrchestratorError::CheckpointDurabilityUncertain(
-                "checkpoint disappeared after atomic rename".to_owned(),
-            )
-        })?;
-    if persisted != bytes {
-        return Err(ModerationOrchestratorError::CheckpointDurabilityUncertain(
-            "checkpoint bytes changed after atomic rename".to_owned(),
-        ));
     }
     Ok(())
 }
@@ -7313,12 +7316,27 @@ pub enum ModerationOrchestratorError {
     /// A prior checkpoint failure made the in-memory state unsafe to reuse.
     #[error("moderation orchestrator is fail-stopped after a checkpoint failure")]
     DurabilityFaulted,
+    /// The authoritative checkpoint store was unavailable.
+    #[error("moderation authoritative checkpoint store is unavailable")]
+    CheckpointStoreUnavailable,
+    /// The authoritative checkpoint result could not be resolved.
+    #[error("moderation authoritative checkpoint result is ambiguous")]
+    CheckpointStoreAmbiguous,
+    /// Another replica committed a different successor.
+    #[error("moderation checkpoint writer was fenced by another replica")]
+    CheckpointStoreFenced,
+    /// The sealed store returned a malformed or equivocal record.
+    #[error("moderation authoritative checkpoint store equivocated")]
+    CheckpointStoreEquivocation,
     /// Durable generation overflowed.
     #[error("moderation checkpoint generation overflow")]
     GenerationOverflow,
     /// In-memory state lock is poisoned.
     #[error("moderation orchestrator state lock is poisoned")]
     StateLockPoisoned,
+    /// In-memory authoritative-record lock is poisoned.
+    #[error("moderation orchestrator checkpoint record lock is poisoned")]
+    CheckpointStoreLockPoisoned,
 }
 
 #[cfg(test)]
@@ -7367,6 +7385,7 @@ mod tests {
     const STRICT_INGRESS_HANDLE: &str = "moderation-ingress-primary";
     const HANDOFF_PROVIDER_HANDLE: &str = "moderation-handoff-primary";
     const PANEL_NOTIFICATION_PROVIDER_HANDLE: &str = "moderation-notification-primary";
+    const CHECKPOINT_STORE_HANDLE: &str = "sealed-cas:moderation-checkpoint-primary";
     const TRANSACTION_SIGNER_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
         ModerationRuntimeProviderQualificationV1::new(1, [0xA1; 32]);
     const STRICT_INGRESS_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
@@ -7375,6 +7394,8 @@ mod tests {
         ModerationRuntimeProviderQualificationV1::new(1, [0xA3; 32]);
     const PANEL_NOTIFICATION_PROVIDER_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
         ModerationRuntimeProviderQualificationV1::new(1, [0xA4; 32]);
+    const CHECKPOINT_STORE_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(7, [0xA7; 32]);
 
     #[derive(Debug)]
     struct MockRuntimeProvider {
@@ -7434,12 +7455,14 @@ mod tests {
     #[derive(Debug)]
     struct MockSnapshotReader {
         snapshot: Mutex<ModerationFinalizedLedgerSnapshotV1>,
+        checkpoint_store: Arc<MockCheckpointStore>,
     }
 
     impl MockSnapshotReader {
         fn new(snapshot: ModerationFinalizedLedgerSnapshotV1) -> Self {
             Self {
                 snapshot: Mutex::new(snapshot),
+                checkpoint_store: Arc::new(MockCheckpointStore::default()),
             }
         }
 
@@ -8534,6 +8557,8 @@ mod tests {
         let canonical_temp = temp.path().canonicalize().expect("canonical tempdir");
         ModerationOrchestratorConfigV1 {
             checkpoint_path: canonical_temp.join(name),
+            checkpoint_store_handle: CHECKPOINT_STORE_HANDLE.to_owned(),
+            expected_checkpoint_store_qualification: CHECKPOINT_STORE_QUALIFICATION,
             max_cases: 64,
             max_events: 256,
             max_outbox_entries: 16,
@@ -8747,41 +8772,6 @@ mod tests {
     }
 
     #[test]
-    fn terminal_handoff_policy_drift_after_delivery_is_ambiguous() {
-        let inner = Arc::new(MockHandoffSink::default());
-        let sink: Arc<dyn ModerationTerminalHandoffSinkV1> = Arc::new(DriftingHandoffSink {
-            inner: Arc::clone(&inner),
-            qualification_after_delivery: ModerationRuntimeProviderQualificationV1::new(
-                2, [0xB3; 32],
-            ),
-        });
-        let qualified = QualifiedModerationTerminalHandoffSinkV1::try_new(
-            HANDOFF_PROVIDER_HANDLE,
-            HANDOFF_PROVIDER_QUALIFICATION,
-            sink,
-        )
-        .expect("initially qualified handoff");
-        let handoff = ModerationTerminalHandoffV1 {
-            handoff_id: [0x61; 32],
-            kind: ModerationTerminalHandoffKindV1::Settlement,
-            case_id: "case-1".to_owned(),
-            round_id: "round-1".to_owned(),
-            outcome_digest: [0x62; 32],
-            finalized_cursor: ModerationFinalizedCursorV1 {
-                height: 11,
-                block_hash: [0x63; 32],
-            },
-        };
-
-        assert_eq!(
-            qualified.deliver(&handoff),
-            Err(ModerationHandoffFailureV1::Ambiguous)
-        );
-        assert_eq!(inner.calls(), 1);
-        assert_eq!(inner.delivered(), vec![handoff.handoff_id]);
-    }
-
-    #[test]
     fn canonical_committed_event_sequence_must_be_contiguous() {
         let temp = TempDir::new().expect("tempdir");
         let config = config(&temp, "event-sequence.bin");
@@ -8853,6 +8843,7 @@ mod tests {
         submitter: Arc<MockSubmitter>,
     ) -> ModerationOrchestratorDepsV1 {
         ModerationOrchestratorDepsV1 {
+            checkpoint_store: reader.checkpoint_store.clone(),
             submitter,
             snapshot_reader: reader,
             settlement_sink: Arc::new(MockHandoffSink::default()),
@@ -9214,6 +9205,7 @@ mod tests {
             ModerationOrchestratorV1::open(
                 config(&temp, "reentrant-collaborators.norito"),
                 ModerationOrchestratorDepsV1 {
+                    checkpoint_store: Arc::new(MockCheckpointStore::default()),
                     submitter: Arc::new(ProbedSubmitter {
                         inner: Arc::clone(&submitter),
                         probe: Arc::clone(&probe),
@@ -9267,6 +9259,7 @@ mod tests {
             ModerationOrchestratorV1::open(
                 config(&temp, "blocking-duplicate-workers.norito"),
                 ModerationOrchestratorDepsV1 {
+                    checkpoint_store: Arc::new(MockCheckpointStore::default()),
                     submitter: blocking.clone(),
                     snapshot_reader: reader,
                     settlement_sink: Arc::new(MockHandoffSink::default()),
@@ -10566,6 +10559,7 @@ mod tests {
         let publication = Arc::new(MockHandoffSink::default());
         let checkpoint = config(&temp, "handoff-crash-after-effect.norito");
         let runtime_deps = || ModerationOrchestratorDepsV1 {
+            checkpoint_store: reader.checkpoint_store.clone(),
             submitter: submitter.clone(),
             snapshot_reader: reader.clone(),
             settlement_sink: settlement.clone(),
@@ -10629,6 +10623,7 @@ mod tests {
         let settlement_sink = Arc::new(MockHandoffSink::default());
         let publication_sink = Arc::new(MockHandoffSink::default());
         let runtime_deps = || ModerationOrchestratorDepsV1 {
+            checkpoint_store: reader.checkpoint_store.clone(),
             submitter: submitter.clone(),
             snapshot_reader: reader.clone(),
             settlement_sink: settlement_sink.clone(),
@@ -10939,6 +10934,7 @@ mod tests {
         let orchestrator = ModerationOrchestratorV1::open(
             config(&temp, "panel-qualified-sink.norito"),
             ModerationOrchestratorDepsV1 {
+                checkpoint_store: Arc::new(MockCheckpointStore::default()),
                 submitter: Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
                 snapshot_reader: Arc::new(MockSnapshotReader::new(snapshot)),
                 settlement_sink: Arc::new(MockHandoffSink::default()),
@@ -11523,7 +11519,7 @@ mod tests {
             Err(ModerationOrchestratorError::CheckpointCorrupt(_))
         ));
 
-        for version in [2, 3] {
+        for version in [2, 3, 4] {
             let mut old_checkpoint = decode_from_bytes_with_limits::<
                 ModerationOrchestratorCheckpointV1,
             >(&original, limits)
@@ -11687,6 +11683,7 @@ mod tests {
         let checkpoint_path = bounds.checkpoint_path.clone();
         let orchestrator =
             ModerationOrchestratorV1::open(bounds, deps(reader, submitter)).expect("orchestrator");
+        std::fs::remove_file(&checkpoint_path).expect("remove checkpoint cache");
         std::os::unix::fs::symlink(
             checkpoint_path.with_extension("untrusted-target"),
             &checkpoint_path,
@@ -11704,4 +11701,7 @@ mod tests {
         );
         assert!(orchestrator.snapshot().is_none());
     }
+
+    include!("moderation_orchestrator/terminal_handoff_tests.rs");
+    include!("moderation_orchestrator/checkpoint_store_tests.rs");
 }

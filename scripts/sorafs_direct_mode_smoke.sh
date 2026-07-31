@@ -179,7 +179,7 @@ Required:
 Optional:
   --config PATH                   Config file with key=value entries (plan, manifest_id, provider,
                                   policy, output, summary, workspace, cli).
-  --policy PATH                   Orchestrator policy JSON (defaults to docs/examples/...).
+  --policy PATH                   Orchestrator policy JSON (defaults to fixtures/documentation/...).
   --output PATH                   Output payload path (default: <workspace>/artifacts/sorafs_direct_mode/payload.bin).
   --summary PATH                  JSON summary path (default: alongside output).
   --adoption-report PATH          Adoption report path (default: alongside summary).
@@ -195,7 +195,7 @@ Config file format:
   plan=relative/or/absolute/path.json
   manifest_id=hexstring
   provider=name=...,provider-id=...,gateway-key=...,base-url=https://gateway.example/,stream-token=...
-  policy=docs/examples/sorafs_direct_mode_policy.json
+  policy=fixtures/documentation/sorafs_direct_mode_policy.json
   output=artifacts/sorafs_direct_mode/payload.bin
   summary=artifacts/sorafs_direct_mode/fetch_summary.json
   workspace=/path/to/repo
@@ -373,7 +373,7 @@ if [[ ! "$manifest_id" =~ ^[0-9a-f]{64}$ ]]; then
   exit 1
 fi
 
-policy_path="${policy_path:-${workspace}/docs/examples/sorafs_direct_mode_policy.json}"
+policy_path="${policy_path:-${workspace}/fixtures/documentation/sorafs_direct_mode_policy.json}"
 policy_path="$(abs_path "$policy_path")"
 if [[ ! -f "$policy_path" ]]; then
   echo "error: orchestrator policy JSON not found at ${policy_path}" >&2

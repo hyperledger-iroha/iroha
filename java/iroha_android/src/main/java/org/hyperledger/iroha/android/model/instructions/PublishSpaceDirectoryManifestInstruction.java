@@ -9,7 +9,7 @@ import java.util.Objects;
  * Typed builder for the {@code PublishSpaceDirectoryManifest} instruction.
  *
  * <p>The manifest payload is stored as canonical JSON so Android callers can reuse the same
- * fixtures and workflow described in {@code docs/space-directory.md} without inventing bespoke
+ * fixtures and workflow described in {@code specs/space_directory.md} without inventing bespoke
  * encodings.
  */
 public final class PublishSpaceDirectoryManifestInstruction implements InstructionTemplate {

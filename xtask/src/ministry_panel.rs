@@ -419,7 +419,7 @@ mod parse_tests {
         SortitionSummary {
             format_version: 1,
             algorithm: "agenda-sortition-blake3-v1".into(),
-            roster_path: "docs/examples/ministry/agenda_council_roster.json".into(),
+            roster_path: "fixtures/documentation/ministry/agenda_council_roster.json".into(),
             roster_digest: SortitionDigestSummary {
                 blake3_hex: "7c6f6cbfbcb8eec595655ffb5f84355a84772b65d741f6a53fb966ab0c4b5858"
                     .into(),
@@ -480,7 +480,7 @@ mod parse_tests {
                 proposal_id: "AC-2026-001".into(),
                 action: "add-to-denylist".into(),
                 total_targets: 1,
-                source_path: "docs/examples/ministry/agenda_proposal_example.json".into(),
+                source_path: "fixtures/documentation/ministry/agenda_proposal_example.json".into(),
                 hash_families: vec![HashFamilyImpact {
                     hash_family: "blake3-256".into(),
                     targets: 1,
