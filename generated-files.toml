@@ -99,6 +99,7 @@ check = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --check"
 name = "kotodama-v1-policy-regions"
 kind = "regions"
 outputs = [
+  "crates/iroha_data_model/src/smart_contract/entrypoint.rs",
   "crates/ivm_abi/src/access_hints.rs",
   "crates/kotodama_lang/src/semantic.rs",
   "specs/kotodama_grammar.md",
@@ -217,6 +218,7 @@ outputs = [
 generator = "cargo run --locked -p ivm --bin ivm_fixture_export -- --write"
 generator_sources = [
   "crates/ivm/src/bin/ivm_fixture_export.rs",
+  "crates/ivm/src/bin/ivm_predecoder_export.rs",
   "crates/ivm/src/prebuilt_fixtures.rs",
   "crates/ivm/src/predecoder_fixtures.rs",
 ]

@@ -77,7 +77,11 @@ def test_final_policy_pins_quantity_without_an_abi_tombstone() -> None:
     assert "quantity" in policy.active_source_types
     assert "Quantity" not in policy.active_source_types
     assert "Amount" in policy.retired_numeric_type_spellings
+    assert policy.forbidden_source_identifiers == ("Amount",)
     assert "amount" in policy.ordinary_value_identifiers
+    assert set(policy.forbidden_source_identifiers).isdisjoint(
+        policy.ordinary_value_identifiers
+    )
     assert policy.numeric_suffix_fixits == ("amt", "qty")
     assert {schema.source_type for schema in policy.numeric_schemas} == {
         "int",
@@ -154,12 +158,36 @@ def test_declaration_reserved_extras_drift_fails_closed(tmp_path: Path) -> None:
         MODULE.load_policy(tmp_path)
 
 
+def test_forbidden_source_identifier_drift_fails_closed(tmp_path: Path) -> None:
+    _copy_generator_inputs(tmp_path)
+    policy_path = tmp_path / MODULE.DEFAULT_POLICY
+    raw = json.loads(policy_path.read_text(encoding="utf-8"))
+    raw["forbidden_source_identifiers"] = ["amount"]
+    policy_path.write_text(
+        json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        MODULE.GenerationError,
+        match="must contain only exact uppercase Amount",
+    ):
+        MODULE.load_policy(tmp_path)
+
+
 def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
     root = MODULE.REPOSITORY_ROOT
     policy = MODULE.load_policy(root)
     grammar = MODULE.load_lexical_grammar(root, policy)
     semantic_policy = MODULE.render_semantic_policy(policy)
     assert "V1_DECLARATION_RESERVED_EXTRA_NAMES" in semantic_policy
+    assert "pub(crate) const V1_FORBIDDEN_SOURCE_IDENTIFIERS" in semantic_policy
+    assert "pub use" not in semantic_policy
+    data_model_policy = MODULE.render_data_model_identifier_policy(policy)
+    assert "const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS" in data_model_policy
+    assert "pub const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS" not in data_model_policy
+    assert '&["Amount"]' in data_model_policy
+    assert '"amount",' not in data_model_policy
     for intrinsic in (
         "is_some",
         "is_none",
@@ -185,6 +213,7 @@ def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
     ):
         assert f'"{intrinsic}",' in rust_policy
     assert '"__kotodama_link_"' in rust_policy
+    assert '"Amount",' not in rust_policy
     assert '"amount",' not in rust_policy
     assert '"誓約",' not in rust_policy
 
@@ -230,7 +259,7 @@ def test_repository_generated_outputs_are_current_and_complete() -> None:
     outputs = MODULE.render_outputs(MODULE.REPOSITORY_ROOT, policy)
 
     assert tuple(outputs) == MODULE.GENERATED_TARGETS
-    assert len(outputs) == 17
+    assert len(outputs) == 18
     assert MODULE.apply_outputs(MODULE.REPOSITORY_ROOT, outputs, check=True) == 0
 
 
@@ -317,27 +346,38 @@ def test_missing_or_duplicate_markers_fail_closed() -> None:
         )
 
 
-def test_sdk_validator_policy_is_contextual_and_descriptor_owned() -> None:
+def test_sdk_validator_policy_forbids_exact_amount_globally() -> None:
     root = MODULE.REPOSITORY_ROOT
     policy = MODULE.load_policy(root)
+    grammar = MODULE.load_lexical_grammar(root, policy)
+    assert policy.forbidden_source_identifiers == ("Amount",)
     assert "amount" in policy.retired_numeric_type_spellings
     assert "amount" in policy.ordinary_value_identifiers
+    assert "Amount" not in MODULE._declaration_names(policy)
 
-    javascript = (root / MODULE.JAVASCRIPT_IDENTIFIER_PATHS[0]).read_text()
+    javascript = MODULE._javascript_validator_policy(policy, grammar)
+    assert "const FORBIDDEN_SOURCE_IDENTIFIER_SET" in javascript
+    assert "export const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS" not in javascript
+    assert '"Amount",' in javascript
     assert "KOTODAMA_V1_RETIRED_TYPE_NAMES" in javascript
-    assert "typeDeclaration = false" in javascript
     assert "NUMERIC_TYPE_KEYWORD_SET" not in javascript
+    public_declarations = javascript.split(
+        "export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([",
+        1,
+    )[1].split("]);", 1)[0]
+    assert '"Amount",' not in public_declarations
 
-    python = (root / MODULE.PYTHON_MANIFEST_PATH).read_text()
+    python = MODULE._python_validator_policy(policy, grammar)
     for spelling in policy.retired_numeric_type_spellings:
         assert f'"{spelling}",' in python
-    assert "type_declaration: bool = False" in python
+    assert '"Amount",' in python
+    assert '"amount",' in python
 
-    for path in (
-        MODULE.KOTLIN_MANIFEST_PATH,
-        MODULE.JAVA_MANIFEST_PATH,
-        MODULE.SWIFT_MANIFEST_PATH,
-        MODULE.CSHARP_MANIFEST_PATH,
+    for rendered in (
+        MODULE._kotlin_validator_policy(policy, grammar),
+        MODULE._java_validator_policy(policy, grammar),
+        MODULE._swift_validator_policy(policy, grammar),
+        MODULE._csharp_validator_policy(policy, grammar),
     ):
-        text = (root / path).read_text()
-        assert "retiredNumericTypeNames" in text or "RETIRED_NUMERIC_TYPE_NAMES" in text or "RetiredNumericTypeNames" in text
+        assert '"Amount",' in rendered
+        assert '"amount",' in rendered

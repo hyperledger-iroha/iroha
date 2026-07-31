@@ -1118,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn retired_type_words_remain_valid_value_and_entrypoint_names() {
+    fn contextual_retired_type_words_remain_valid_value_and_entrypoint_names() {
         let source = "seiyaku ValueNames { \
             view fn amount(quantity money) -> quantity { \
                 let quantity number = money; \
@@ -1130,7 +1130,7 @@ mod tests {
                 source,
                 source_name: Some("value-names.ko"),
             })
-            .expect("retired type words must remain ordinary value names");
+            .expect("contextual retired type words must remain ordinary value names");
         let entrypoints = output
             .manifest
             .entrypoints
@@ -1144,10 +1144,10 @@ mod tests {
                 source: "module RetiredType { struct Amount { int value; } }",
                 source_name: Some("retired-type.ko"),
             })
-            .expect_err("a retired scalar spelling must remain reserved as a type declaration");
+            .expect_err("exact `Amount` must be forbidden in every identifier context");
         assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "E_RESERVED_DECLARATION"
-                && diagnostic.message.contains("type `Amount`")
+            diagnostic.code == "E_FORBIDDEN_SOURCE_IDENTIFIER"
+                && diagnostic.message.contains("identifier `Amount`")
         }));
     }
 
@@ -1161,8 +1161,8 @@ mod tests {
             })
             .expect_err("a retired numeric type must not identify a deployable seiyaku");
         assert!(contract_diagnostics.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "E_RESERVED_DECLARATION"
-                && diagnostic.message.contains("source unit `Amount`")
+            diagnostic.code == "E_FORBIDDEN_SOURCE_IDENTIFIER"
+                && diagnostic.message.contains("identifier `Amount`")
         }));
 
         let module_diagnostics = session
@@ -1662,6 +1662,16 @@ mod tests {
             fix_text(retired_amount, retired_amount_diagnostic),
             ("Amount", "quantity")
         );
+
+        let forbidden_identifier = "seiyaku C { fn quantity_value(int Amount) -> int { Amount } }";
+        let forbidden_identifier_error = reject(forbidden_identifier);
+        let forbidden_identifier_diagnostic =
+            diagnostic(&forbidden_identifier_error, "E_FORBIDDEN_SOURCE_IDENTIFIER");
+        assert_eq!(
+            primary_text(forbidden_identifier, forbidden_identifier_diagnostic),
+            "Amount"
+        );
+        assert!(forbidden_identifier_diagnostic.fix.is_none());
 
         for (retired_suffix, spelling, replacement) in [
             (

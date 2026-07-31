@@ -2,6 +2,7 @@
 //! Usage:
 //!   cargo run -p ivm --bin gen_syscalls_doc -- --write
 //!   cargo run -p ivm --bin gen_syscalls_doc -- --check
+//!   cargo run -p ivm --bin gen_syscalls_doc -- --write --root /tmp/ivm-doc-stage
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -11,7 +12,7 @@ use std::{
 
 mod support;
 
-use support::{GeneratedOutput, parse_generation_mode as parse_mode, sync_generated_outputs};
+use support::{GeneratedOutput, parse_generation_options, sync_generated_outputs};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED SYSCALLS -->";
 const END: &str = "<!-- END GENERATED SYSCALLS -->";
@@ -788,21 +789,29 @@ fn prepare_exact_outputs(
         .collect()
 }
 
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("workspace root")
+        .to_path_buf()
+}
+
 fn main() {
-    let mode = match parse_mode(std::env::args().skip(1)) {
-        Ok(mode) => mode,
+    let options = match parse_generation_options(std::env::args().skip(1), workspace_root()) {
+        Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(2);
         }
     };
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let path = PathBuf::from(manifest_dir).join("docs/syscalls.md");
+    let manifest_dir = options.root.join("crates/ivm");
+    let path = manifest_dir.join("docs/syscalls.md");
     let text = fs::read_to_string(&path).expect("read syscalls.md");
 
     // The explicit spec is the canonical source for ABI signatures and gas
     // documentation. Heuristic defaults are diagnostic suggestions only.
-    let spec_path = PathBuf::from(manifest_dir).join("spec/syscalls.toml");
+    let spec_path = manifest_dir.join("spec/syscalls.toml");
     let spec = fs::read_to_string(&spec_path).expect("read canonical syscall spec");
     let map = parse_syscall_spec(&spec).unwrap_or_else(|error| {
         panic!(
@@ -892,8 +901,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let abi_syscall_golden_path =
-        PathBuf::from(manifest_dir).join("tests/abi_syscall_list_golden.rs");
+    let abi_syscall_golden_path = manifest_dir.join("tests/abi_syscall_list_golden.rs");
     let abi_syscall_golden_text =
         fs::read_to_string(&abi_syscall_golden_path).expect("read ABI syscall-list golden test");
     let abi_syscall_golden_section =
@@ -917,7 +925,7 @@ fn main() {
         }
     };
 
-    let abi_src_dir = PathBuf::from(manifest_dir).join("../ivm_abi/src");
+    let abi_src_dir = options.root.join("crates/ivm_abi/src");
     let code_path = abi_src_dir.join("syscalls_doc_gen.rs");
     let gas_code_path = abi_src_dir.join("gas_spec.rs");
     let regenerate_command = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --write";
@@ -928,7 +936,7 @@ fn main() {
         (abi_syscall_golden_path, rendered_abi_syscall_golden),
     ])
     .unwrap_or_else(|error| panic!("prepare generated syscall outputs: {error}"));
-    let updated = sync_generated_outputs(&outputs, mode, regenerate_command)
+    let updated = sync_generated_outputs(&outputs, options.mode, regenerate_command)
         .unwrap_or_else(|error| panic!("{error}"));
     for output_path in updated {
         eprintln!("updated: {}", output_path.display());
@@ -945,7 +953,7 @@ mod tests {
 
     use super::support::GenerationMode as Mode;
     use super::{
-        ABI_SYSCALL_GOLDEN_BEGIN, ABI_SYSCALL_GOLDEN_END, BEGIN, END, parse_mode,
+        ABI_SYSCALL_GOLDEN_BEGIN, ABI_SYSCALL_GOLDEN_END, BEGIN, END, parse_generation_options,
         parse_syscall_spec, prepare_exact_outputs, render_abi_syscall_golden_section, render_docs,
         replace_generated_section, rewrite_gas_tokens, sync_generated_outputs, validate_gas_prose,
     };
@@ -973,12 +981,31 @@ mod tests {
     }
 
     #[test]
-    fn command_mode_is_explicit_and_unambiguous() {
-        assert_eq!(parse_mode(["--check".to_owned()]), Ok(Mode::Check));
-        assert_eq!(parse_mode(["--write".to_owned()]), Ok(Mode::Write));
-        assert!(parse_mode(Vec::new()).is_err());
-        assert!(parse_mode(["--check".to_owned(), "--write".to_owned()]).is_err());
-        assert!(parse_mode(["--no-code".to_owned()]).is_err());
+    fn command_mode_and_staged_root_are_explicit_and_unambiguous() {
+        let default_root = std::path::PathBuf::from("/workspace");
+        let check =
+            parse_generation_options(["--check".to_owned()], &default_root).expect("check options");
+        assert_eq!(check.mode, Mode::Check);
+        assert_eq!(check.root, default_root);
+
+        let write = parse_generation_options(
+            [
+                "--write".to_owned(),
+                "--root".to_owned(),
+                "/staged/repository".to_owned(),
+            ],
+            "/workspace",
+        )
+        .expect("staged write options");
+        assert_eq!(write.mode, Mode::Write);
+        assert_eq!(write.root, std::path::Path::new("/staged/repository"));
+
+        assert!(parse_generation_options(Vec::new(), "/workspace").is_err());
+        assert!(
+            parse_generation_options(["--check".to_owned(), "--write".to_owned()], "/workspace",)
+                .is_err()
+        );
+        assert!(parse_generation_options(["--no-code".to_owned()], "/workspace").is_err());
     }
 
     fn valid_spec_row(number: &str) -> String {

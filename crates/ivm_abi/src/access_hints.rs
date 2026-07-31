@@ -6,7 +6,9 @@
 
 use core::fmt;
 
-use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
+use iroha_data_model::smart_contract::{
+    entrypoint::is_canonical_kotodama_identifier, manifest::DynamicAccessHint,
+};
 
 // BEGIN GENERATED: kotodama-v1-dynamic-access-policy
 /// Maximum number of keys a single V1 dynamic-access hint may cover.
@@ -107,6 +109,7 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "is_err",
     "unwrap_or",
     "unwrap_err_or",
+    "Amount",
 ];
 /// Exact compiler-owned prefixes forbidden for state declarations.
 pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1: &[&str] = &["__kotodama_link_"];
@@ -147,6 +150,7 @@ pub fn is_canonical_dynamic_state_identifier_v1(name: &str) -> bool {
     let has_identifier_shape = matches!(bytes.next(), Some(first) if first == b'_' || first.is_ascii_alphabetic())
         && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric());
     has_identifier_shape
+        && is_canonical_kotodama_identifier(name)
         && !DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1.contains(&name)
         && !DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1
             .iter()
@@ -213,6 +217,11 @@ mod tests {
             !DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1.contains(&"amount"),
             "ordinary business identifiers must remain legal state names"
         );
+        assert!(
+            !DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1.contains(&"Amount"),
+            "globally forbidden source identifiers must not become ABI tombstones"
+        );
+        assert!(!is_canonical_dynamic_state_identifier_v1("Amount"));
         for key_type in DYNAMIC_ACCESS_HINT_KEY_TYPES_V1 {
             for bound_kind in DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1 {
                 validate_dynamic_access_hint_v1(&hint(
@@ -241,6 +250,7 @@ mod tests {
             "state:int",
             "state:is_some",
             "state:unwrap_or",
+            "state:Amount",
             "state:__kotodama_link_x",
             "State:Orders",
             "ledger:Orders",

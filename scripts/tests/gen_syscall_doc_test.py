@@ -104,13 +104,56 @@ class PublicConstantParserTests(unittest.TestCase):
 
 
 class PublicationTests(unittest.TestCase):
-    def test_command_mode_is_exactly_one_known_argument(self) -> None:
-        self.assertFalse(MODULE.parse_mode(("--write",)))
-        self.assertTrue(MODULE.parse_mode(("--check",)))
-        for arguments in ((), ("--write", "--check"), ("--unknown",)):
+    def test_command_options_require_one_mode_and_at_most_one_output(self) -> None:
+        self.assertEqual(
+            MODULE.parse_args(("--write",)),
+            MODULE.GeneratorOptions(check=False, output=MODULE.DEFAULT_OUTPUT),
+        )
+        self.assertEqual(
+            MODULE.parse_args(("--output", "stage/generated.md", "--check")),
+            MODULE.GeneratorOptions(
+                check=True,
+                output=Path("stage/generated.md"),
+            ),
+        )
+        self.assertEqual(
+            MODULE.parse_args(("--write", "--output", "/tmp/generated.md")),
+            MODULE.GeneratorOptions(
+                check=False,
+                output=Path("/tmp/generated.md"),
+            ),
+        )
+        for arguments in (
+            (),
+            ("--output", "generated.md"),
+            ("--write", "--check"),
+            ("--write", "--write"),
+            ("--write", "--output"),
+            ("--write", "--output", ""),
+            ("--write", "--output", "--check"),
+            ("--write", "--output", "first.md", "--output", "second.md"),
+            ("--unknown",),
+        ):
             with self.subTest(arguments=arguments):
                 with self.assertRaises(ValueError):
-                    MODULE.parse_mode(arguments)
+                    MODULE.parse_args(arguments)
+
+    def test_command_writes_and_checks_only_the_explicit_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "generated.md"
+            self.assertEqual(
+                MODULE.main(("--write", "--output", str(output))),
+                0,
+            )
+            expected = output.read_bytes()
+            self.assertGreater(len(expected), 0)
+            self.assertEqual(
+                MODULE.main(("--check", "--output", str(output))),
+                0,
+            )
+            self.assertEqual(output.read_bytes(), expected)
+            self.assertEqual([entry.name for entry in root.iterdir()], ["generated.md"])
 
     def test_canonical_check_is_nonmutating_and_write_is_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
