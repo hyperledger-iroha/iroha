@@ -1,0 +1,24 @@
+{
+  "id": "sorafs/node-client-protocol",
+  "title": "SoraFS Node ↔ Client Protocol",
+  "description": "This guide summarises the canonical protocol definition in",
+  "source": "@site/docs/sorafs/node-client-protocol.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/node-client-protocol",
+  "permalink": "/next/sorafs/node-client-protocol",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/node-client-protocol.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "Dispute & Revocation Runbook",
+    "permalink": "/next/sorafs/dispute-revocation-runbook"
+  },
+  "next": {
+    "title": "Node Implementation Plan",
+    "permalink": "/next/sorafs/node-plan"
+  }
+}

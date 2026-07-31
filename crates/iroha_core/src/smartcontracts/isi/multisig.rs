@@ -7374,7 +7374,7 @@ seiyaku TriggerDispatch {
 
               state StateMap<Name, bytes> Requests_requested_by_actor;
               state StateMap<Name, AccountId> ToAccount;
-              state StateMap<Name, quantity> Amount;
+              state StateMap<Name, quantity> amount_by_request;
               state StateMap<Name, int> ProposalStatus;
               state StateMap<Name, int> CreatedAtMs;
               state StateMap<Name, int> ExpiresAtMs;
@@ -7400,7 +7400,7 @@ seiyaku TriggerDispatch {
 
                 Requests_requested_by_actor[request_id] = requested_by_actor;
                 ToAccount[request_id] = to_account_id;
-                Amount[request_id] = amount;
+                amount_by_request[request_id] = amount;
                 ProposalStatus[request_id] = 1;
                 CreatedAtMs[request_id] = created_at_ms;
                 ExpiresAtMs[request_id] = expires_at_ms;

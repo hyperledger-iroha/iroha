@@ -230,7 +230,7 @@ public enum KagemushaRecursiveSpend {
         "step-ep.verifying-key.krv4",
         "step-ep.bootstrap-witness.krv4",
     ]
-    public static let absoluteMaximumProofPairBytesV4: UInt32 = 256 * 1024
+    public static let absoluteMaximumProofPairBytesV4: UInt32 = 384 * 1024
     public static let maximumProofSteps: UInt32 = 128
     /// Maximum size of one streamed `KRV4KEY` artifact.
     public static let artifactMaximumStreamedFileBytesV4: UInt64 = 5 * 1024 * 1024 * 1024

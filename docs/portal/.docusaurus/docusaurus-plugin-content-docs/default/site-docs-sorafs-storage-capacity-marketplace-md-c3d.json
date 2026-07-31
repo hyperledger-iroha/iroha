@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/storage-capacity-marketplace",
+  "title": "SoraFS Storage Capacity Marketplace",
+  "description": "SF-2c plan for the capacity marketplace, replication orders, telemetry, and governance hooks.",
+  "source": "@site/docs/sorafs/storage-capacity-marketplace.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/storage-capacity-marketplace",
+  "permalink": "/next/sorafs/storage-capacity-marketplace",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/storage-capacity-marketplace.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "storage-capacity-marketplace",
+    "title": "SoraFS Storage Capacity Marketplace",
+    "sidebar_label": "Capacity Marketplace",
+    "description": "SF-2c plan for the capacity marketplace, replication orders, telemetry, and governance hooks."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "SoraFS Provider Advert Rollout Plan",
+    "permalink": "/next/sorafs/provider-advert-rollout"
+  },
+  "next": {
+    "title": "Capacity Simulation Runbook",
+    "permalink": "/next/sorafs/capacity-simulation"
+  }
+}

@@ -13945,6 +13945,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "true",
         "var",
         "view",
+        "Amount",
     ]
     private static let reservedDeclarationIdentifiers: Set<String> = [
         "int",
@@ -13997,6 +13998,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "is_err",
         "unwrap_or",
         "unwrap_err_or",
+        "Amount",
     ]
     private static let retiredNumericTypeNames: Set<String> = [
         "i8",
@@ -14804,7 +14806,7 @@ public struct ToriiContractTriggerCallback: Codable, Sendable, Equatable {
     }
 
     fileprivate var isCanonical: Bool {
-        (namespace.map { isExactContractManifestString($0) } ?? true)
+        (namespace.map { isExactContractManifestString($0) && $0 != "Amount" } ?? true)
             && ToriiEntrypointValueTypeV1.isCanonicalEntrypointName(entrypoint)
     }
 
@@ -14881,6 +14883,7 @@ public struct ToriiContractTriggerDescriptor: Codable, Sendable, Equatable {
 
     private var isCanonical: Bool {
         isExactContractManifestString(id)
+            && id != "Amount"
             && isCanonicalContractManifestBase64(filterBase64)
             && (authority.map(Self.isCanonicalAuthority) ?? true)
             && callback.isCanonical

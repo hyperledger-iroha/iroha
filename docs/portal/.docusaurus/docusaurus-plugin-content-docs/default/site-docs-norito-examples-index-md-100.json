@@ -1,0 +1,24 @@
+{
+  "id": "norito/examples/index",
+  "title": "index",
+  "description": "---",
+  "source": "@site/docs/norito/examples/index.md",
+  "sourceDirName": "norito/examples",
+  "slug": "/norito/examples/",
+  "permalink": "/next/norito/examples/",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/norito/examples/index.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "Norito Try-It Console",
+    "permalink": "/next/norito/try-it-console"
+  },
+  "next": {
+    "title": "SoraFS Quickstart",
+    "permalink": "/next/sorafs/quickstart"
+  }
+}

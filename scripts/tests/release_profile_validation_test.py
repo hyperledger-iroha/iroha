@@ -426,8 +426,6 @@ def test_root_dockerfile_workflows_require_digest_pinned_base_refs() -> None:
         "publish_dev.yml": 1,
         "publish.yml": 3,
         "pr_docker_compose.yml": 1,
-        # Taira builds once, then smokes and pushes that exact loaded image.
-        "publish_taira_validator.yml": 1,
         # One additional custom build uses Dockerfile.musl.
         "publish_custom.yml": 2,
     }
@@ -540,7 +538,6 @@ def test_release_build_workflow_containers_use_validated_digest_refs() -> None:
         "publish.yml",
         "publish_custom.yml",
         "publish_dev.yml",
-        "publish_taira_validator.yml",
     ):
         source = (
             REPO_ROOT / ".github" / "workflows" / name
@@ -550,6 +547,14 @@ def test_release_build_workflow_containers_use_validated_digest_refs() -> None:
         assert "IROHA_CI_IMAGE: ${{ vars.IROHA_CI_IMAGE }}" in source
         assert '--builder "$IROHA_CI_IMAGE"' in source
         assert '--runtime "$IROHA_CI_IMAGE"' in source
+
+    taira = (
+        REPO_ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
+    ).read_text(encoding="utf-8")
+    assert "container:" not in taira
+    assert "docker/build-push-action@" not in taira
+    assert "runs-on: [self-hosted, Linux, ARM64, iroha2]" in taira
+    assert "runs-on: [self-hosted, macOS, ARM64, taira-release]" in taira
 
 
 def test_fastpq_repro_builder_rejects_mutable_or_missing_base_refs(

@@ -12,7 +12,9 @@ canonical manifest inside that archive closes its inventory over:
 
 * one signed native Linux/aarch64 exact-12 privacy authority tuple and its
   rollout archive; and
-* one fresh macOS/arm64 receipt proving an exact four-peer cohort.
+* one fresh macOS/arm64 receipt proving an exact four-peer cohort and binding
+  the deployable reset-manifest, validator binary, supervisor, and four config
+  byte identities.
 
 Both targets must bind the same full source commit, Cargo.lock digest, and
 canonical workspace-source-manifest digest.  Signatures are verified only by
@@ -27,7 +29,6 @@ import hashlib
 import json
 import os
 import re
-import stat
 import sys
 import tarfile
 import tempfile
@@ -113,6 +114,14 @@ LINUX_AUTHORITY_FILES = (
     "release_manifest.json.pub",
     "release_manifest.json.sig",
 )
+FINAL_ARCHIVE_DIRECTORIES = frozenset(
+    {
+        "linux",
+        "linux/authority",
+        "linux/authority/artifacts",
+        "macos",
+    }
+)
 
 PEER_COUNT = 4
 MAX_RECEIPT_LIFETIME_SECONDS = 60 * 60
@@ -140,9 +149,7 @@ class SourceIdentity:
         return {
             "cargo_lock_sha256": self.cargo_lock_sha256,
             "commit": self.commit,
-            "workspace_source_manifest_sha256": (
-                self.workspace_source_manifest_sha256
-            ),
+            "workspace_source_manifest_sha256": (self.workspace_source_manifest_sha256),
         }
 
 
@@ -152,13 +159,20 @@ class ExtractedFile:
     size: int
 
 
+@dataclass(frozen=True)
+class ReplayLedgerSnapshot:
+    """Canonical replay-ledger bytes and the stable file identity they came from."""
+
+    consumed_receipt_ids: tuple[str, ...]
+    file: StableFile
+    payload: bytes
+
+
 def _fail(message: str) -> NoReturn:
     raise TairaRolloutAdmissionError(message)
 
 
-def _exact_fields(
-    value: Mapping[str, object], expected: set[str], label: str
-) -> None:
+def _exact_fields(value: Mapping[str, object], expected: set[str], label: str) -> None:
     if set(value) != expected:
         missing = sorted(expected - set(value))
         extra = sorted(set(value) - expected)
@@ -190,7 +204,13 @@ def _canonical_object(payload: bytes, label: str) -> dict[str, object]:
         value = load_json_object(payload, label)
     except ReleaseArtifactError as exc:
         raise TairaRolloutAdmissionError(str(exc)) from exc
-    if canonical_json_bytes(value) != payload:
+    try:
+        canonical = canonical_json_bytes(value)
+    except (TypeError, ValueError) as exc:
+        raise TairaRolloutAdmissionError(
+            f"{label} contains a value outside canonical JSON: {exc}"
+        ) from exc
+    if canonical != payload:
         _fail(f"{label} is not canonical deterministic JSON")
     return value
 
@@ -240,7 +260,26 @@ def compute_macos_receipt_id(receipt_without_id: Mapping[str, object]) -> str:
     return digest.hexdigest()
 
 
-def _load_replay_ledger(path: Path) -> tuple[set[str], StableFile]:
+def canonical_replay_ledger_bytes(consumed_receipt_ids: Sequence[str]) -> bytes:
+    """Render the sole canonical first-release replay-ledger representation."""
+
+    consumed = [
+        _sha256(value, "consumed receipt ID") for value in consumed_receipt_ids
+    ]
+    if consumed != sorted(set(consumed)):
+        _fail("replay ledger receipt IDs must be unique and canonically sorted")
+    return canonical_json_bytes(
+        {
+            "consumed_receipt_ids": consumed,
+            "schema": REPLAY_LEDGER_SCHEMA,
+            "schema_version": REPLAY_LEDGER_SCHEMA_VERSION,
+        }
+    )
+
+
+def load_replay_ledger(path: Path) -> ReplayLedgerSnapshot:
+    """Load one stable canonical replay ledger without consuming a receipt."""
+
     try:
         info, payload = stable_read_path(path, max_size=MAX_JSON_BYTES)
     except ReleaseArtifactError as exc:
@@ -255,17 +294,18 @@ def _load_replay_ledger(path: Path) -> tuple[set[str], StableFile]:
     )
     if ledger["schema"] != REPLAY_LEDGER_SCHEMA:
         _fail("replay ledger schema identifier is unsupported")
-    if ledger["schema_version"] != REPLAY_LEDGER_SCHEMA_VERSION:
+    if (
+        _integer(ledger["schema_version"], "replay ledger schema version", minimum=1)
+        != REPLAY_LEDGER_SCHEMA_VERSION
+    ):
         _fail("replay ledger schema version is unsupported")
     raw_ids = ledger["consumed_receipt_ids"]
     if not isinstance(raw_ids, list):
         _fail("replay ledger consumed_receipt_ids must be an array")
-    consumed = [
-        _sha256(value, "consumed receipt ID") for value in raw_ids
-    ]
-    if consumed != sorted(set(consumed)):
-        _fail("replay ledger receipt IDs must be unique and canonically sorted")
-    return set(consumed), info
+    consumed = [_sha256(value, "consumed receipt ID") for value in raw_ids]
+    if canonical_replay_ledger_bytes(consumed) != payload:
+        _fail("replay ledger is not the sole canonical first-release representation")
+    return ReplayLedgerSnapshot(tuple(consumed), info, payload)
 
 
 def _validate_point(value: object, label: str) -> tuple[int, str]:
@@ -302,13 +342,19 @@ def _validate_macos_receipt(
             "schema_version",
             "source",
             "start",
+            "reset_manifest_sha256",
+            "supervisor_sha256",
             "validator_binary_sha256",
+            "validator_config_sha256",
         },
         "macOS four-peer receipt",
     )
     if receipt["schema"] != MACOS_RECEIPT_SCHEMA:
         _fail("macOS receipt schema identifier is unsupported")
-    if receipt["schema_version"] != MACOS_RECEIPT_SCHEMA_VERSION:
+    if (
+        _integer(receipt["schema_version"], "macOS receipt schema version", minimum=1)
+        != MACOS_RECEIPT_SCHEMA_VERSION
+    ):
         _fail("macOS receipt schema version is unsupported")
 
     receipt_id = _sha256(receipt["receipt_id"], "macOS receipt ID")
@@ -349,6 +395,22 @@ def _validate_macos_receipt(
     validator_sha = _sha256(
         receipt["validator_binary_sha256"], "macOS validator binary digest"
     )
+    supervisor_sha = _sha256(
+        receipt["supervisor_sha256"], "macOS supervisor digest"
+    )
+    reset_manifest_sha = _sha256(
+        receipt["reset_manifest_sha256"], "macOS reset-manifest digest"
+    )
+    config_digests = receipt["validator_config_sha256"]
+    expected_config_names = {
+        f"taira-validator-{number}" for number in range(1, PEER_COUNT + 1)
+    }
+    if not isinstance(config_digests, dict) or set(config_digests) != expected_config_names:
+        _fail("macOS receipt must bind the exact four validator config digests")
+    normalized_config_digests = {
+        name: _sha256(config_digests[name], f"macOS {name} config digest")
+        for name in sorted(expected_config_names)
+    }
     restart_generation = _sha256(
         receipt["restart_generation"], "macOS restart generation"
     )
@@ -370,21 +432,29 @@ def _validate_macos_receipt(
                 "restart_proof",
                 "source_commit",
                 "validator_binary_sha256",
+                "validator_config_sha256",
             },
             f"macOS receipt peer {expected_number}",
         )
         expected_label = f"taira-validator-{expected_number}"
-        if peer["number"] != expected_number or peer["label"] != expected_label:
-            _fail("macOS receipt peer rows must be ordered exact peers 1 through 4")
         if (
-            peer["final_height"] != end_height
-            or peer["final_block_hash"] != end_hash
+            _integer(
+                peer["number"],
+                f"macOS receipt peer {expected_number} number",
+                minimum=1,
+            )
+            != expected_number
+            or peer["label"] != expected_label
         ):
+            _fail("macOS receipt peer rows must be ordered exact peers 1 through 4")
+        if peer["final_height"] != end_height or peer["final_block_hash"] != end_hash:
             _fail("every macOS peer must report the exact common final block")
         if peer["source_commit"] != source.commit:
             _fail("every macOS peer must report the exact common source commit")
         if peer["validator_binary_sha256"] != validator_sha:
             _fail("every macOS peer must report the exact validator binary")
+        if peer["validator_config_sha256"] != normalized_config_digests[expected_label]:
+            _fail("every macOS peer must report its exact validator config")
         if peer["restart_proof"] != "passed":
             _fail("every macOS peer must carry a passed restart proof")
 
@@ -392,8 +462,11 @@ def _validate_macos_receipt(
         "end_block_hash": end_hash,
         "end_height": end_height,
         "receipt_id": receipt_id,
+        "reset_manifest_sha256": reset_manifest_sha,
         "restart_generation": restart_generation,
+        "supervisor_sha256": supervisor_sha,
         "validator_binary_sha256": validator_sha,
+        "validator_config_sha256": normalized_config_digests,
     }
 
 
@@ -468,8 +541,20 @@ def _extract_final_archive(
                         seen.add(name)
                         relative_parts = PurePosixPath(name).parts[1:]
                         if member.isdir():
+                            if member.size != 0:
+                                _fail(
+                                    "candidate archive directories must have zero size"
+                                )
                             if not relative_parts:
                                 continue
+                            relative_directory = PurePosixPath(
+                                *relative_parts
+                            ).as_posix()
+                            if relative_directory not in FINAL_ARCHIVE_DIRECTORIES:
+                                _fail(
+                                    "candidate archive contains a directory outside "
+                                    "its exact first-release layout"
+                                )
                             (destination / Path(*relative_parts)).mkdir(
                                 mode=0o700, parents=True, exist_ok=True
                             )
@@ -561,7 +646,10 @@ def _validate_admission_manifest(
     )
     if manifest["schema"] != ADMISSION_SCHEMA:
         _fail("admission manifest schema identifier is unsupported")
-    if manifest["schema_version"] != ADMISSION_SCHEMA_VERSION:
+    if (
+        _integer(manifest["schema_version"], "admission schema version", minimum=1)
+        != ADMISSION_SCHEMA_VERSION
+    ):
         _fail("admission manifest schema version is unsupported")
     source = _source_identity(manifest["source"], "admission manifest source")
     _require_source(source, expected_source, "admission manifest")
@@ -575,9 +663,7 @@ def _validate_admission_manifest(
         "admission manifest trust",
     )
     if trust != {
-        "release_manifest_verifier_sha256": (
-            trusted_release_manifest_verifier_sha256
-        ),
+        "release_manifest_verifier_sha256": (trusted_release_manifest_verifier_sha256),
         "signer_fingerprint_sha256": trusted_signing_fingerprint,
     }:
         _fail("admission manifest trust roots differ from independent pins")
@@ -646,12 +732,8 @@ def _validate_admission_manifest(
         _fail("admission archive does not contain the exact first-release inventory")
     return {
         "linux_archive_path": archive_path,
-        "linux_authority_manifest_sha256": linux[
-            "authority_manifest_sha256"
-        ],
-        "linux_native_verifier_sha256": linux[
-            "authority_native_verifier_sha256"
-        ],
+        "linux_authority_manifest_sha256": linux["authority_manifest_sha256"],
+        "linux_native_verifier_sha256": linux["authority_native_verifier_sha256"],
     }
 
 
@@ -791,8 +873,7 @@ def _verify_closed_linux_authority(
         row
         for row in evidence
         if isinstance(row, dict)
-        and row.get("path")
-        == taira_release_authority.EVIDENCE_PATHS["cargo_lock"]
+        and row.get("path") == taira_release_authority.EVIDENCE_PATHS["cargo_lock"]
     ]
     if len(cargo_rows) != 1:
         _fail("nested exact-12 authority must bind exactly one Cargo.lock")
@@ -844,6 +925,10 @@ def _extract_linux_evidence(archive_path: Path, destination: Path) -> None:
                             _fail(f"nested Linux archive repeats member {name!r}")
                         seen.add(name)
                         if member.isdir():
+                            if member.size != 0:
+                                _fail(
+                                    "nested Linux archive directories must have zero size"
+                                )
                             if name in expected:
                                 _fail("nested Linux evidence must be a regular file")
                             continue
@@ -998,6 +1083,16 @@ def verify_admission(
 ) -> dict[str, object]:
     """Verify the complete dual-target candidate without applying it."""
 
+    expected_source = SourceIdentity(
+        commit=_commit(expected_source.commit, "expected source commit"),
+        cargo_lock_sha256=_sha256(
+            expected_source.cargo_lock_sha256, "expected Cargo.lock digest"
+        ),
+        workspace_source_manifest_sha256=_sha256(
+            expected_source.workspace_source_manifest_sha256,
+            "expected workspace-source-manifest digest",
+        ),
+    )
     expected_receipt_id = _sha256(expected_receipt_id, "expected receipt ID")
     trusted_signing_fingerprint = _sha256(
         trusted_signing_fingerprint, "trusted signing fingerprint"
@@ -1014,14 +1109,17 @@ def verify_admission(
     release_manifest_verifier_path = Path(
         os.path.abspath(release_manifest_verifier_path)
     )
-    if len(
-        {
-            archive_path,
-            authority_dir,
-            replay_ledger_path,
-            release_manifest_verifier_path,
-        }
-    ) != 4:
+    if (
+        len(
+            {
+                archive_path,
+                authority_dir,
+                replay_ledger_path,
+                release_manifest_verifier_path,
+            }
+        )
+        != 4
+    ):
         _fail("archive, authority, replay ledger, and verifier paths must be distinct")
 
     try:
@@ -1043,12 +1141,16 @@ def verify_admission(
             trusted_release_manifest_verifier_sha256
         ),
     )
-    consumed, replay_ledger_state = _load_replay_ledger(replay_ledger_path)
+    replay_ledger = load_replay_ledger(replay_ledger_path)
     current_time = int(time.time()) if now_unix is None else now_unix
     _integer(current_time, "current Unix time")
 
     with tempfile.TemporaryDirectory(prefix="taira-rollout-admission-") as raw_temp:
-        root = Path(raw_temp)
+        # macOS exposes its temporary root through ``/var`` -> ``/private/var``.
+        # The shared artifact helpers intentionally reject every symlink path
+        # component, so pin the physical directory created by tempfile before
+        # any descriptor-anchored reads or writes.
+        root = Path(raw_temp).resolve(strict=True)
         actual_inventory = _extract_final_archive(archive_path, archive_info, root)
         admission_info = actual_inventory.get(ADMISSION_MANIFEST_PATH)
         if admission_info is None:
@@ -1082,7 +1184,7 @@ def verify_admission(
             receipt_payload,
             expected_source=expected_source,
             expected_receipt_id=expected_receipt_id,
-            consumed_receipt_ids=consumed,
+            consumed_receipt_ids=set(replay_ledger.consumed_receipt_ids),
             now_unix=current_time,
         )
 
@@ -1090,9 +1192,7 @@ def verify_admission(
         nested = _verify_closed_linux_authority(
             root,
             expected_source=expected_source,
-            expected_manifest_sha256=str(
-                admission["linux_authority_manifest_sha256"]
-            ),
+            expected_manifest_sha256=str(admission["linux_authority_manifest_sha256"]),
             expected_native_verifier_sha256=str(
                 admission["linux_native_verifier_sha256"]
             ),
@@ -1110,6 +1210,14 @@ def verify_admission(
             trusted_signing_fingerprint=trusted_signing_fingerprint,
             native_verifier_sha256=str(nested["native_verifier_sha256"]),
         )
+        try:
+            nested_inventory = scan_inventory_paths(root / LINUX_AUTHORITY_DIRECTORY)
+        except ReleaseArtifactError as exc:
+            raise TairaRolloutAdmissionError(
+                f"cannot recheck nested Linux authority inventory: {exc}"
+            ) from exc
+        if nested_inventory != sorted(LINUX_AUTHORITY_FILES):
+            _fail("nested Linux authority inventory changed during verification")
 
         for relative, extracted in actual_inventory.items():
             try:
@@ -1118,16 +1226,21 @@ def verify_admission(
                 raise TairaRolloutAdmissionError(
                     f"cannot recheck extracted candidate {relative!r}: {exc}"
                 ) from exc
-            if (
-                rechecked.sha256 != extracted.sha256
-                or rechecked.size != extracted.size
-            ):
+            if rechecked.sha256 != extracted.sha256 or rechecked.size != extracted.size:
                 _fail(f"extracted candidate {relative!r} changed during verification")
 
     if stable_hash_path(archive_path) != archive_info:
         _fail("candidate archive changed during admission verification")
     _recheck_files(authority_dir, final_authority_state, "final authority file")
-    if stable_hash_path(replay_ledger_path) != replay_ledger_state:
+    try:
+        final_inventory = scan_inventory_paths(authority_dir)
+    except ReleaseArtifactError as exc:
+        raise TairaRolloutAdmissionError(
+            f"cannot recheck final authority inventory: {exc}"
+        ) from exc
+    if final_inventory != list(FINAL_AUTHORITY_FILES):
+        _fail("final authority inventory changed during verification")
+    if stable_hash_path(replay_ledger_path) != replay_ledger.file:
         _fail("replay ledger changed during admission verification")
 
     return {
@@ -1138,14 +1251,17 @@ def verify_admission(
         "macos_end_height": receipt["end_height"],
         "peer_count": PEER_COUNT,
         "receipt_id": receipt["receipt_id"],
+        "reset_manifest_sha256": receipt["reset_manifest_sha256"],
         "release_manifest_sha256": final_verification["manifest_sha256"],
-        "release_manifest_verifier_sha256": (
-            trusted_release_manifest_verifier_sha256
-        ),
+        "release_manifest_verifier_sha256": (trusted_release_manifest_verifier_sha256),
         "schema": VERIFICATION_SCHEMA,
         "schema_version": VERIFICATION_SCHEMA_VERSION,
         "signer_fingerprint_sha256": trusted_signing_fingerprint,
         "source": expected_source.as_dict(),
+        "restart_generation": receipt["restart_generation"],
+        "supervisor_sha256": receipt["supervisor_sha256"],
+        "validator_binary_sha256": receipt["validator_binary_sha256"],
+        "validator_config_sha256": receipt["validator_config_sha256"],
         "verified": True,
     }
 

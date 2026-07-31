@@ -1,0 +1,29 @@
+{
+  "id": "devportal/security-hardening",
+  "title": "Security hardening & pen-test checklist",
+  "description": "Harden the developer portal before exposing the Try it sandbox outside the lab.",
+  "source": "@site/docs/devportal/security-hardening.md",
+  "sourceDirName": "devportal",
+  "slug": "/devportal/security-hardening",
+  "permalink": "/next/devportal/security-hardening",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/security-hardening.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "security-hardening",
+    "title": "Security hardening & pen-test checklist",
+    "sidebar_label": "Security hardening",
+    "description": "Harden the developer portal before exposing the Try it sandbox outside the lab."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Preview Integrity Plan",
+    "permalink": "/next/devportal/preview-integrity-plan"
+  },
+  "next": {
+    "title": "Observability",
+    "permalink": "/next/devportal/observability"
+  }
+}

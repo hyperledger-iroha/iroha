@@ -3392,7 +3392,7 @@ mod tests {
         let second_output_commitment =
             derive_note_commitment_v1(&second_output_note).expect("second output commitment");
         let recipient_public_key =
-            ivm_private_recipient_public_key_v1([0x95; 32]).expect("second recipient public key");
+            ivm_private_recipient_public_key_v1(&[0x95; 32]).expect("second recipient public key");
         let second_encrypted_output = encrypt_ivm_private_wallet_note_v1(
             &mut StdRng::seed_from_u64(0x49_50_4e_45_02),
             value.statement.pool_id,

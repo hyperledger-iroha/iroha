@@ -1,0 +1,20 @@
+{
+  "id": "sorafs/repair-plan",
+  "title": "SoraFS Repair Automation & Auditor API",
+  "description": "Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.",
+  "source": "@site/docs/sorafs/repair-plan.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/repair-plan",
+  "permalink": "/next/sorafs/repair-plan",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/repair-plan.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "repair-plan",
+    "title": "SoraFS Repair Automation & Auditor API",
+    "sidebar_label": "Repair Automation",
+    "description": "Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation."
+  }
+}

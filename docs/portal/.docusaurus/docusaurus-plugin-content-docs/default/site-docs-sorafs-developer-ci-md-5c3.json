@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/developer-ci",
+  "title": "SoraFS CI Recipes",
+  "description": "Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.",
+  "source": "@site/docs/sorafs/developer-ci.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/developer-ci",
+  "permalink": "/next/sorafs/developer-ci",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/developer-ci.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "developer-ci",
+    "title": "SoraFS CI Recipes",
+    "sidebar_label": "CI Recipes",
+    "description": "Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Direct-Mode Fallback Pack",
+    "permalink": "/next/sorafs/direct-mode-pack"
+  },
+  "next": {
+    "title": "Deployment Notes",
+    "permalink": "/next/sorafs/developer-deployment"
+  }
+}

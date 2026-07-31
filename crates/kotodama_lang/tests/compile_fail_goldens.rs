@@ -371,6 +371,14 @@ const CASES: &[CompileFailCase] = &[
         line: 2,
     },
     CompileFailCase {
+        name: "dynamic-json-parse",
+        source: "seiyaku DynamicJsonParse {\nfn decode(string raw) -> Json { Json::parse(raw) }\n}",
+        phase: DiagnosticPhase::Semantic,
+        code: "E_JSON_LITERAL_REQUIRED",
+        message: "Json::parse requires a direct string literal so native JSON is validated at compile time",
+        line: 2,
+    },
+    CompileFailCase {
         name: "malformed-decimal",
         source: "seiyaku MalformedDecimal {\nfn value() -> decimal { 1. }\n}",
         phase: DiagnosticPhase::Lex,
@@ -400,6 +408,14 @@ const CASES: &[CompileFailCase] = &[
         phase: DiagnosticPhase::Parse,
         code: "E_RETIRED_NUMERIC_TYPE",
         message: "numeric type `Amount` is not part of Kotodama V1; use `quantity`",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "forbidden-amount-identifier",
+        source: "seiyaku RejectedAmountIdentifier {\nfn value(int Amount) { }\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "E_FORBIDDEN_SOURCE_IDENTIFIER",
+        message: "source identifier `Amount` is not part of Kotodama V1; choose a different identifier (lowercase `amount` remains available)",
         line: 2,
     },
     CompileFailCase {
@@ -635,6 +651,12 @@ fn public_session_enforces_json_parse_arguments_in_trigger_metadata() {
             DiagnosticPhase::Semantic,
             "K2003",
             "Json::parse expects one argument",
+        ),
+        (
+            "Json::parse(value: dynamic)",
+            DiagnosticPhase::Semantic,
+            "E_JSON_LITERAL_REQUIRED",
+            "Json::parse requires a direct string literal so native JSON is validated at compile time",
         ),
         (
             r#"json("{}")"#,

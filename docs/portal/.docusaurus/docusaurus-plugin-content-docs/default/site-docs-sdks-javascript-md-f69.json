@@ -1,0 +1,28 @@
+{
+  "id": "sdks/javascript",
+  "title": "JavaScript SDK quickstart",
+  "description": "Build transactions, stream events, and drive Connect previews with `@iroha/iroha-js`.",
+  "source": "@site/docs/sdks/javascript.md",
+  "sourceDirName": "sdks",
+  "slug": "/sdks/javascript",
+  "permalink": "/next/sdks/javascript",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sdks/javascript.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "JavaScript SDK quickstart",
+    "description": "Build transactions, stream events, and drive Connect previews with `@iroha/iroha-js`.",
+    "slug": "/sdks/javascript"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Android Telemetry",
+    "permalink": "/next/sdks/android-telemetry"
+  },
+  "next": {
+    "title": "Governance & ISO bridge examples",
+    "permalink": "/next/sdks/javascript/governance-iso-examples"
+  }
+}

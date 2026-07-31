@@ -1,0 +1,26 @@
+{
+  "id": "sorafs/provider-advert-rollout",
+  "title": "SoraFS Provider Advert Rollout Plan",
+  "description": "Adapted from docs/source/sorafs/provideradvertrollout.md.",
+  "source": "@site/docs/sorafs/provider-advert-rollout.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/provider-advert-rollout",
+  "permalink": "/next/sorafs/provider-advert-rollout",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/provider-advert-rollout.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "SoraFS Provider Advert Rollout Plan"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Multi-Source Provider Adverts & Scheduling",
+    "permalink": "/next/sorafs/provider-advert-multisource"
+  },
+  "next": {
+    "title": "Capacity Marketplace",
+    "permalink": "/next/sorafs/storage-capacity-marketplace"
+  }
+}

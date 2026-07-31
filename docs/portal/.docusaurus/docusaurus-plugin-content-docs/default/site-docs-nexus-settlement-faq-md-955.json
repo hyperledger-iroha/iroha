@@ -1,0 +1,28 @@
+{
+  "id": "nexus/nexus-settlement-faq",
+  "title": "Settlement FAQ",
+  "description": "Operator-facing answers covering settlement routing, XOR conversion, telemetry, and audit evidence.",
+  "source": "@site/docs/nexus/settlement-faq.md",
+  "sourceDirName": "nexus",
+  "slug": "/nexus/nexus-settlement-faq",
+  "permalink": "/next/nexus/nexus-settlement-faq",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/nexus/settlement-faq.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "nexus-settlement-faq",
+    "title": "Settlement FAQ",
+    "description": "Operator-facing answers covering settlement routing, XOR conversion, telemetry, and audit evidence."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Confidential Gas Calibration Ledger",
+    "permalink": "/next/nexus/confidential-gas-calibration"
+  },
+  "next": {
+    "title": "Governance App API — Endpoints (Draft)",
+    "permalink": "/next/governance/api"
+  }
+}

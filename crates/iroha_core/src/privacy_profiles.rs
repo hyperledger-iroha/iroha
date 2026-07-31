@@ -131,8 +131,9 @@ use crate::privacy_engines::{
     orchard::{
         ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1,
         ORCHARD_MAX_ACTIONS_V1 as ORCHARD_ENGINE_MAX_ACTIONS_V1,
-        ORCHARD_POST_NU6_3_CIRCUIT_DESCRIPTION_SHA256_V1, ORCHARD_UPSTREAM_CRATE_VERSION_V1,
-        ORCHARD_UPSTREAM_REVISION_V1, orchard_authorization_wire_size_v1, orchard_empty_root_v1,
+        ORCHARD_POST_NU6_3_CIRCUIT_DESCRIPTION_SHA256_V1, ORCHARD_PROVER_RANDOMNESS_POLICY_V1,
+        ORCHARD_UPSTREAM_CRATE_VERSION_V1, ORCHARD_UPSTREAM_REVISION_V1,
+        orchard_authorization_wire_size_v1, orchard_empty_root_v1,
     },
     pq_masp::{
         air::PQ_MASP_AGGREGATE_AIR_DESCRIPTOR_V1,
@@ -610,6 +611,16 @@ pub(crate) fn compiled_zk_x509_profile_material_v1()
 
 fn compiled_ivm_private_note_profile_v1()
 -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    compiled_ivm_private_note_profile_v1_with_randomness_policies(
+        TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
+        CURVE_PROVER_RANDOMNESS_POLICY_V1,
+    )
+}
+
+fn compiled_ivm_private_note_profile_v1_with_randomness_policies(
+    proof_randomness_policy: &[u8],
+    wallet_randomness_policy: &[u8],
+) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
     let profile_digest =
         proof_managed_note_stark_profile_digest_v1(IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1);
@@ -632,6 +643,9 @@ fn compiled_ivm_private_note_profile_v1()
         || profile_digest != IVM_PRIVATE_NOTE_STARK_PROFILE_DIGEST_V1
         || IVM_PRIVATE_NOTE_STARK_KAT_PROOF_SHA256_V1 == [0; 32]
         || validate_ivm_private_note_stark_profile_v1().is_err()
+        || !IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1
+            .windows(CURVE_PROVER_RANDOMNESS_POLICY_V1.len())
+            .any(|window| window == CURVE_PROVER_RANDOMNESS_POLICY_V1)
     {
         return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
     }
@@ -681,7 +695,8 @@ fn compiled_ivm_private_note_profile_v1()
             IVM_PRIVATE_NOTE_PROTOCOL_LABEL_V1,
             IVM_PRIVATE_NOTE_PARAMETER_SET_LABEL_V1,
             IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1,
-            TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
+            proof_randomness_policy,
+            wallet_randomness_policy,
             IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1,
             IVM_PRIVATE_NOTE_AGGREGATE_AIR_DESCRIPTOR_V1,
             PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
@@ -714,7 +729,8 @@ fn compiled_ivm_private_note_profile_v1()
             IVM_PRIVATE_NOTE_VERIFIED_EFFECT_SCHEMA_V1,
             IVM_PRIVATE_NOTE_WALLET_CIPHERTEXT_SCHEMA_V1,
             IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1,
-            TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
+            proof_randomness_policy,
+            wallet_randomness_policy,
             IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1,
             IVM_PRIVATE_NOTE_AGGREGATE_AIR_DESCRIPTOR_V1,
             PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
@@ -747,7 +763,8 @@ fn compiled_ivm_private_note_profile_v1()
             IVM_PRIVATE_NOTE_VERIFIED_EFFECT_SCHEMA_V1,
             IVM_PRIVATE_NOTE_WALLET_CIPHERTEXT_SCHEMA_V1,
             IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1,
-            TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
+            proof_randomness_policy,
+            wallet_randomness_policy,
             IVM_PRIVATE_NOTE_HASH_PROFILE_DESCRIPTOR_V1,
             IVM_PRIVATE_NOTE_AGGREGATE_AIR_DESCRIPTOR_V1,
             PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
@@ -1004,6 +1021,12 @@ fn compiled_pq_masp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
 }
 
 fn compiled_fcmp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    compiled_fcmp_profile_v1_with_randomness_policy(CURVE_PROVER_RANDOMNESS_POLICY_V1)
+}
+
+fn compiled_fcmp_profile_v1_with_randomness_policy(
+    randomness_policy: &[u8],
+) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1;
     let native_input_limit = u32::try_from(FCMP_MAX_INPUTS_NATIVE_V1)
         .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
@@ -1111,6 +1134,7 @@ fn compiled_fcmp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivac
             FCMP_BP_PLUS_UPSTREAM_REVISION_V1.as_bytes(),
             &FCMP_BP_PLUS_GENERATOR_DIGEST_V1,
             FCMP_COMPILED_PROFILE_DESCRIPTOR_V1,
+            randomness_policy,
             &FCMP_PROOF_WIRE_MAGIC_V1,
             &PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1,
             FCMP_WALLET_CIPHERTEXT_SCHEMA_V1,
@@ -1145,6 +1169,7 @@ fn compiled_fcmp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivac
             FCMP_VERIFIED_EFFECT_SCHEMA_V1,
             FCMP_WALLET_CIPHERTEXT_SCHEMA_V1,
             FCMP_COMPILED_PROFILE_DESCRIPTOR_V1,
+            randomness_policy,
             &compiled_profile_digest,
             &FCMP_NATIVE_KAT_WIRE_SHA256_V1,
             &FCMP_NATIVE_KAT_PUBLIC_SHA256_V1,
@@ -1176,6 +1201,7 @@ fn compiled_fcmp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivac
             FCMP_VERIFIED_EFFECT_SCHEMA_V1,
             FCMP_WALLET_CIPHERTEXT_SCHEMA_V1,
             FCMP_COMPILED_PROFILE_DESCRIPTOR_V1,
+            randomness_policy,
             &compiled_profile_digest,
             &parameter_id,
             &parameter_digest,
@@ -1214,6 +1240,16 @@ fn compiled_fcmp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivac
 
 fn compiled_orchard_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1>
 {
+    compiled_orchard_profile_v1_with_randomness_policies(
+        TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
+        ORCHARD_PROVER_RANDOMNESS_POLICY_V1,
+    )
+}
+
+fn compiled_orchard_profile_v1_with_randomness_policies(
+    source_randomness_policy: &[u8],
+    bridge_randomness_policy: &[u8],
+) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::OrchardHalo2ActionsV1;
     if ORCHARD_ENGINE_MAX_ACTIONS_V1
         != usize::try_from(ORCHARD_MODEL_MAX_ACTIONS_V1)
@@ -1275,6 +1311,8 @@ fn compiled_orchard_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             ORCHARD_PROTOCOL_LABEL_V1,
             ORCHARD_PARAMETER_SET_LABEL_V1,
             ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1,
+            source_randomness_policy,
+            bridge_randomness_policy,
             ORCHARD_UPSTREAM_CRATE_VERSION_V1.as_bytes(),
             ORCHARD_UPSTREAM_REVISION_V1.as_bytes(),
             ORCHARD_POST_NU6_3_CIRCUIT_DESCRIPTION_SHA256_V1.as_bytes(),
@@ -1292,6 +1330,8 @@ fn compiled_orchard_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             ORCHARD_PARAMETER_SET_LABEL_V1,
             ORCHARD_PROOF_WIRE_LABEL_V1,
             ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1,
+            source_randomness_policy,
+            bridge_randomness_policy,
             PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1,
             ORCHARD_FRONTIER_SCHEMA_V1,
             ORCHARD_VERIFIED_EFFECT_SCHEMA_V1,
@@ -1313,6 +1353,8 @@ fn compiled_orchard_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
             ORCHARD_PARAMETER_SET_LABEL_V1,
             ORCHARD_PROOF_WIRE_LABEL_V1,
             ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1,
+            source_randomness_policy,
+            bridge_randomness_policy,
             PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_V1,
             ORCHARD_FRONTIER_SCHEMA_V1,
             ORCHARD_VERIFIED_EFFECT_SCHEMA_V1,
@@ -3175,6 +3217,46 @@ mod tests {
     }
 
     #[test]
+    fn ivm_private_note_profile_binds_distinct_proof_and_wallet_randomness_policies() {
+        let exact = compiled_ivm_private_note_profile_v1().expect("compiled IVM profile");
+        assert_ne!(
+            TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
+            CURVE_PROVER_RANDOMNESS_POLICY_V1
+        );
+        assert!(
+            IVM_PRIVATE_NOTE_ENGINE_DESCRIPTOR_V1
+                .windows(CURVE_PROVER_RANDOMNESS_POLICY_V1.len())
+                .any(|window| window == CURVE_PROVER_RANDOMNESS_POLICY_V1)
+        );
+
+        let mut changed_proof_policy = TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1.to_vec();
+        changed_proof_policy[0] ^= 1;
+        let mut changed_wallet_policy = CURVE_PROVER_RANDOMNESS_POLICY_V1.to_vec();
+        changed_wallet_policy[0] ^= 1;
+        for changed in [
+            compiled_ivm_private_note_profile_v1_with_randomness_policies(
+                &changed_proof_policy,
+                CURVE_PROVER_RANDOMNESS_POLICY_V1,
+            )
+            .expect("structurally valid proof-policy mutation"),
+            compiled_ivm_private_note_profile_v1_with_randomness_policies(
+                TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
+                &changed_wallet_policy,
+            )
+            .expect("structurally valid wallet-policy mutation"),
+        ] {
+            assert_eq!(changed.parameter_id, exact.parameter_id);
+            assert_ne!(changed.parameter_digest, exact.parameter_digest);
+            assert_ne!(changed.verifier_digest, exact.verifier_digest);
+            assert_eq!(
+                changed.statement_schema_digest,
+                exact.statement_schema_digest
+            );
+            assert_ne!(changed.engine_manifest_digest, exact.engine_manifest_digest);
+        }
+    }
+
+    #[test]
     fn ivm_private_note_and_pq_masp_profiles_are_exact_bounded_and_mutation_closed() {
         let cases = [
             (
@@ -3219,17 +3301,17 @@ mod tests {
             let expected_bindings = match protocol_id {
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
                     "b5db09ae42957802c502855459a102ba8e829bfb86a0356691455de0a08fbec0".to_owned(),
-                    "a91198203920addcee43c135991ab8aa5da4e754ec5734697d6420df9e64a419".to_owned(),
-                    "af9af7e5711d1e76c14ce5aad56c37c231c7bc71fbec74bae38dab79d329f742".to_owned(),
+                    "a665cfcbea5576a1cf533997e575ebd49957ce320c483c019e784f8fc93457e1".to_owned(),
+                    "5f2214526473a3b617e09c43dd9f48795f11d7f169bb645e76ce0693b0483abb".to_owned(),
                     "b30e388a3f3dbb6d2e93aa8c53a5df355238b763d6c3fcd766f7d0c3f0afca5f".to_owned(),
-                    "7ed130ea5c9cd8408ca013c47223127b217b9241ed40e88ad96c56c8b4701c24".to_owned(),
+                    "99158955397f0aa94c2bae5285cb2e6f7602506366e6f583a6797ffaa77874d1".to_owned(),
                 ),
                 PrivacyProtocolIdV1::PqMaspStarkV0 => (
                     "10a8697291331061099a6c67eaeac3bc29f77aea951f2f2ad55ca29d0f816951".to_owned(),
-                    "14857f987de8018f58860891bc27f7d0afbb6ea7bf323b448e9d04d4a899350a".to_owned(),
-                    "298a364e57066614068ac19f107ec4e197c9f461638069f0c79305663cb1d171".to_owned(),
+                    "120ad9e6f616fdd05168a2dde5608654094a18b97bfc89ebedf86b7fbaf335b8".to_owned(),
+                    "6ca367a4a8be888d99e34f8539635961e055c10c76b8926eb916b58555c0ef37".to_owned(),
                     "4932c64b8f113632ba145e18ca5cc85496fbc96d103b19d712643348f3153727".to_owned(),
-                    "28e289780d4affc09c1bf5644a04ba5e393dfcf907c4db4ee244b3512c74b99b".to_owned(),
+                    "19902ea3ab96385d9d5cd5802bcd7a4b08183fca64b71e6bafd8c92e844dd89e".to_owned(),
                 ),
                 _ => unreachable!("the test covers only IVM private note and PQ-MASP"),
             };
@@ -3372,6 +3454,39 @@ mod tests {
         ] {
             assert_ne!(digest, [0; 32]);
         }
+        assert_eq!(
+            (
+                hex::encode(first.parameter_id.as_bytes()),
+                hex::encode(first.parameter_digest.as_bytes()),
+                hex::encode(first.verifier_digest.as_bytes()),
+                hex::encode(first.statement_schema_digest.as_bytes()),
+                hex::encode(first.engine_manifest_digest.as_bytes()),
+            ),
+            (
+                "8a24198f13ce0dbe0f4747874def956dc15ca98f9308c29ed678afddbe989a04".to_owned(),
+                "92ee53970444330e37716b98a9eb1c04d8e52eb1ffe08103fb2745cc1abc9a89".to_owned(),
+                "5e83f32ed7edf764e50fc8cebf5b4d8b75cb9e42a296965514b033d49dae4ac4".to_owned(),
+                "c1577ce5a4a22e089a2fd7547f7fea32b7b35808967149d0e7f96a2ecb8c4ba7".to_owned(),
+                "fb5e94756f9f234641b27899b7fd63bb48f3b5f92c24266d76e6d4de16231b27".to_owned(),
+            ),
+            "every consensus-critical FCMP++ binding is a pinned KAT",
+        );
+        let mut mutated_randomness_policy = CURVE_PROVER_RANDOMNESS_POLICY_V1.to_vec();
+        mutated_randomness_policy[0] ^= 1;
+        let policy_mutation =
+            compiled_fcmp_profile_v1_with_randomness_policy(&mutated_randomness_policy)
+                .expect("structurally valid FCMP++ policy mutation");
+        assert_eq!(policy_mutation.parameter_id, first.parameter_id);
+        assert_ne!(policy_mutation.parameter_digest, first.parameter_digest);
+        assert_ne!(policy_mutation.verifier_digest, first.verifier_digest);
+        assert_eq!(
+            policy_mutation.statement_schema_digest,
+            first.statement_schema_digest
+        );
+        assert_ne!(
+            policy_mutation.engine_manifest_digest,
+            first.engine_manifest_digest
+        );
 
         let valid = fcmp_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact FCMP++ activation");
@@ -3481,10 +3596,10 @@ mod tests {
             ),
             (
                 "c27b9c1fd4fcb0f157fbd2b5c4894ef0c78b15acf0c450512051c8dee8b69380".to_owned(),
-                "6b2e9413651da7016a210401a2d545e275373733a28f2f208df171c836109a01".to_owned(),
-                "2141432471871df1563779e8b17068bce6c4425daba58780757aeb327bd3ece7".to_owned(),
+                "bfc9ca1f8ebb1973832be82566946d0713bddaeccdd88937427a376ad6a96ec9".to_owned(),
+                "7e4b05295311d3758e8facc0b68a365fbeac957af9153646867258198539532d".to_owned(),
                 "9c7c4f65128a4d924955b8b0fb6bfcc56ec34d14224ddfefebe32771c19a9e54".to_owned(),
-                "3024cce608156ab0b8f7e2f20f7ba698083afc2606f6f756d65e256c054ddb73".to_owned(),
+                "588a0496f64fd6b4ea3c292db0f713c3c4325b33198cc5e2a99240730302504d".to_owned(),
             ),
             "every consensus-critical Bootle/Lantern binding is a pinned KAT"
         );
@@ -3569,7 +3684,7 @@ mod tests {
             bootle_lantern_parameter_digest_v1(&public_parameter_seed, &sampling_profile_digest);
         assert_eq!(
             hex::encode(governed),
-            "6b2e9413651da7016a210401a2d545e275373733a28f2f208df171c836109a01"
+            "bfc9ca1f8ebb1973832be82566946d0713bddaeccdd88937427a376ad6a96ec9"
         );
         for index in 0..sampling_profile_digest.len() {
             let mut mutated_sampling_profile_digest = sampling_profile_digest;
@@ -3617,6 +3732,46 @@ mod tests {
         ] {
             assert_ne!(digest, [0; 32]);
         }
+        let mut mutated_source_policy = TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1.to_vec();
+        mutated_source_policy[0] ^= 1;
+        let mut mutated_bridge_policy = ORCHARD_PROVER_RANDOMNESS_POLICY_V1.to_vec();
+        mutated_bridge_policy[0] ^= 1;
+        for (label, source_policy, bridge_policy) in [
+            (
+                "source",
+                mutated_source_policy.as_slice(),
+                ORCHARD_PROVER_RANDOMNESS_POLICY_V1,
+            ),
+            (
+                "bridge",
+                TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
+                mutated_bridge_policy.as_slice(),
+            ),
+        ] {
+            let policy_mutation =
+                compiled_orchard_profile_v1_with_randomness_policies(source_policy, bridge_policy)
+                    .expect("structurally valid Orchard policy mutation");
+            assert_eq!(
+                policy_mutation.parameter_id, first.parameter_id,
+                "{label} policy changed the parameter family"
+            );
+            assert_ne!(
+                policy_mutation.parameter_digest, first.parameter_digest,
+                "{label} policy was not parameter-bound"
+            );
+            assert_ne!(
+                policy_mutation.verifier_digest, first.verifier_digest,
+                "{label} policy was not verifier-bound"
+            );
+            assert_eq!(
+                policy_mutation.statement_schema_digest, first.statement_schema_digest,
+                "{label} policy changed the statement schema"
+            );
+            assert_ne!(
+                policy_mutation.engine_manifest_digest, first.engine_manifest_digest,
+                "{label} policy was not engine-manifest-bound"
+            );
+        }
         assert_eq!(
             (
                 hex::encode(first.parameter_id.as_bytes()),
@@ -3627,10 +3782,10 @@ mod tests {
             ),
             (
                 "8d5a2946c58314ac12d2968ffe9e8e0c672e3bbceefaaefad6a87420ea7dd212".to_owned(),
-                "aa008163fb2d43ea4364c6f6e9ad12361e89c7f4047924c42a16d7d8c18ee050".to_owned(),
-                "d4fedf49e4313bf519b2fcf1f3210799235be2e3915d5726e51987ebec3c7f8a".to_owned(),
+                "b27b73d59151415e21b158c75ed9371cccd795655b604e4a6b53db621660b66e".to_owned(),
+                "c788016923d55e5455f3114735999f3c01f06aac8e7af2ce2bed4968b29800ea".to_owned(),
                 "0412d379f8cbf01109d994bc74f148a13e38fc64350308597c047a0e6ec95fd9".to_owned(),
-                "c60b3b4a3b45233d44b26023e7b99573c173f8f402deda689b45a7755bd4952b".to_owned(),
+                "25f22d98c4f37d513361402fa5730caf214d097b624b2abd848dd932da39751e".to_owned(),
             ),
             "every consensus-critical Orchard profile binding is a pinned KAT"
         );
@@ -3702,11 +3857,11 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "cf32aca36ab39d7cfb8bcb067c0f01cc001a6ef050796b75c4fbf2a7a66e130c".to_owned(),
-                "794ece3421e2706532c2aa958725450ba07645bf9ca524ee9b9651e5c1a47ee0".to_owned(),
-                "0ebd9d4b1ad1c957957e177eebb9c7f760a981e2dc2f5067fb00d3ddcc5c589c".to_owned(),
+                "7f6efa99b249c5a95d2828338ffd533bd3e2e3cb8748f9bef984d34783cd727c".to_owned(),
+                "eccf8e390650afa055dd617a18094f064eea06b1a9116fe9d6443d2f8ffb184f".to_owned(),
+                "c6862c2f31dd4121b92af8fb272580101cc79344aea739a1b90f6cf8501b7509".to_owned(),
                 "fc01374c09dc173e7c184f790fb959c495457ee8490eb3b18b48a802e5aa1d4e".to_owned(),
-                "088b8f9b2412b31c767828e4d6fccada75d0cc54a874892cdf93d79be5f32fc5".to_owned(),
+                "a94a0f8cfa1762a38921c47777c1c8ce22a82f0e9bb8ebf0857f51347ed73531".to_owned(),
             )
         );
     }
@@ -3817,9 +3972,9 @@ mod tests {
             (
                 "46f7ad54bea00ede651f6895b58d166a93865da537d6f7a44888cd68f55bdfae".to_owned(),
                 "929a32210be24aa1f71e801b78b6009d385d9a222c1442a700bf641b63219fbb".to_owned(),
-                "85e5cb4a60932d0bc373b4e52fd900f0c956e9a3a999b4d9d6e88458b4331214".to_owned(),
+                "7f52240335ce4bfdb0422f449c639646dd886d1cefa686d59fc035dc10fd810b".to_owned(),
                 "909f50519c111b8ce1e708a66c4501e8d43773a6cae9f0c79c78143fa397e523".to_owned(),
-                "939ba6d01ffaf04e2b5ddba31439d57ac236acd31157022492ac30b128354098".to_owned(),
+                "e3ab9be14be5bc33cf810fcbc5124a6126ab98f43cd23275cb1db53237b52e54".to_owned(),
             )
         );
     }
@@ -3950,7 +4105,7 @@ mod tests {
                 "3d79fe744741f956cb589f45774f922b849cf93833e6a9ebdedf1f815f1b7b44".to_owned(),
                 "9b1a285d43ddc306b4d9ca6eac525b49b073f7d281ecf94299730613f683aa13".to_owned(),
                 "32c038ab076bf2cab61bb15ffd07675e64b6849fce6e935252160b640d11b5c4".to_owned(),
-                "855766c81849609718f904759124bec2e22b18ea98552aa434455c25002aaa52".to_owned(),
+                "5464e209f243f68189a84fad74e435aa78653d2fdd3458601787daf5479a45b0".to_owned(),
             )
         );
     }
@@ -3988,7 +4143,7 @@ mod tests {
                 "ca09d19ed5f3bb56ba7432a67b7ad14697c4874ab7870ea53441e4df0624bd7b".to_owned(),
                 "aa352369f2a1fd0c9377414a2721728c35a95a4bc72497118e75c765edacd99e".to_owned(),
                 "080aaf7d1f9d44c5dad6a5adc393034715fbf428d1dd1e5b59e33808c110aa96".to_owned(),
-                "284e6ff1eb14d6f87d1cb3ec7262b4b2b74915d48e508deafc9805827cc2a1d9".to_owned(),
+                "a74d8f690da89d50b9950e6d3496179f98bc6e60b71ec11e408c908aad73a81b".to_owned(),
             )
         );
     }
@@ -4032,7 +4187,7 @@ mod tests {
                 "56c9d07c283889a824768299b65dd69e2b6befbd123434be8571d21b32b0794b".to_owned(),
                 "89fe6e1c19c8b4851bf33b66479fba2d747943442009679c8618158165fad76e".to_owned(),
                 "7b87a8f64c9345e3ce13c2f4ce02a183e3806a8d2cea0faf7b6b0a00491aed28".to_owned(),
-                "e7ff429e2e87bdab2e6c09626513f1698708a57c329fdfc2a102c4b77425550d".to_owned(),
+                "ae3bf287b0c3c0f8c3163db10a06f037f79e3a5967ed6a84eadb054cc809d95a".to_owned(),
                 "424603d0ab5f57eed76aa365ec100cb4ac583e10dc801727363b6e188f5edd27".to_owned(),
             )
         );
@@ -4079,36 +4234,35 @@ mod tests {
                 "cf6bb53805e982444751db072c04d8b52dd9e14712cb90bbf23f68bbf2650c82".to_owned(),
                 "568b14a31a7d3531d9978ca780b792e1134449a48906d598dc1da7a021498cee".to_owned(),
                 "f45032acceaf4b65e5afe114ca1f87fde477a73040e07c60a2c99e831f4cdc63".to_owned(),
-                "f7a5a9108ddd78f595689fcaba010b34b1d38e213eb69cb00295bec06b8077e5".to_owned(),
+                "dc956bd48147c665b35adf727cf6f57f38d6757e6d9bbac097010e202f63418b".to_owned(),
             )
         );
     }
 
     #[test]
-    #[ignore = "operator-only KAT regeneration after an intentional Vega profile change"]
-    fn print_vega_compiled_profile_tuple() {
-        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("compiled Vega profile");
-        for (label, digest) in [
-            ("VEGA_PARAMETER_ID_V1", profile.parameter_id.as_bytes()),
-            (
-                "VEGA_PARAMETER_DIGEST_V1",
-                profile.parameter_digest.as_bytes(),
-            ),
-            (
-                "VEGA_VERIFIER_DIGEST_V1",
-                profile.verifier_digest.as_bytes(),
-            ),
-            (
-                "VEGA_STATEMENT_SCHEMA_DIGEST_V1",
-                profile.statement_schema_digest.as_bytes(),
-            ),
-            (
-                "VEGA_ENGINE_MANIFEST_DIGEST_V1",
-                profile.engine_manifest_digest.as_bytes(),
-            ),
-        ] {
-            eprintln!("{label}={}", hex::encode(digest));
+    #[ignore = "operator-only KAT regeneration after an intentional compiled-profile change"]
+    fn print_all_compiled_profile_tuples() {
+        for protocol_id in PrivacyProtocolIdV1::ALL {
+            let profile = if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+                compiled_zk_x509_profile_material_v1()
+            } else {
+                compiled_privacy_profile_v1(protocol_id)
+            }
+            .unwrap_or_else(|error| {
+                panic!(
+                    "compiled profile for {}: {error}",
+                    protocol_id.canonical_label()
+                )
+            });
+            eprintln!(
+                "{}={}|{}|{}|{}|{}",
+                protocol_id.canonical_label(),
+                hex::encode(profile.parameter_id.as_bytes()),
+                hex::encode(profile.parameter_digest.as_bytes()),
+                hex::encode(profile.verifier_digest.as_bytes()),
+                hex::encode(profile.statement_schema_digest.as_bytes()),
+                hex::encode(profile.engine_manifest_digest.as_bytes()),
+            );
         }
     }
 
@@ -4505,6 +4659,23 @@ mod tests {
     fn zk_x509_compiled_activation_is_complete_and_immutable() {
         let candidate =
             compiled_zk_x509_profile_material_v1().expect("release candidate profile material");
+        assert_eq!(
+            (
+                hex::encode(candidate.parameter_id.as_bytes()),
+                hex::encode(candidate.parameter_digest.as_bytes()),
+                hex::encode(candidate.verifier_digest.as_bytes()),
+                hex::encode(candidate.statement_schema_digest.as_bytes()),
+                hex::encode(candidate.engine_manifest_digest.as_bytes()),
+            ),
+            (
+                "1ef8a47c6314a4a91e4446086b8c0c7110879e7770b441c663c1c398d5ea518b".to_owned(),
+                "19c064109579bf83809043cec4e1ea9744af3486251e5253911f4d87634999ff".to_owned(),
+                "4a7f1f34a569d9b5cedc137e12df012eee740dd32dbf2dff375b7f1b08766c0c".to_owned(),
+                "f228f0d842277d2df246a1e6aa66880726a617d669e176efa37ad5a106bc7f60".to_owned(),
+                "709883293be4fb2c89740490724394990c8f4d600c2b8e0a41a9539bd2211fdb".to_owned(),
+            ),
+            "every consensus-critical zk-X.509 binding is a pinned KAT",
+        );
         let valid = zk_x509_activation();
         validate_compiled_privacy_activation_against_profile_v1(&valid, &candidate)
             .expect("exact release-pinned zk-X.509 activation");

@@ -1,0 +1,29 @@
+{
+  "id": "devportal/reviewer-onboarding",
+  "title": "Preview reviewer onboarding",
+  "description": "Process and checklists for enrolling reviewers in the docs portal public preview.",
+  "source": "@site/docs/devportal/reviewer-onboarding.md",
+  "sourceDirName": "devportal",
+  "slug": "/devportal/reviewer-onboarding",
+  "permalink": "/next/devportal/reviewer-onboarding",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/reviewer-onboarding.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "reviewer-onboarding",
+    "title": "Preview reviewer onboarding",
+    "sidebar_label": "Reviewer onboarding",
+    "description": "Process and checklists for enrolling reviewers in the docs portal public preview."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "W3 summary",
+    "permalink": "/next/devportal/preview-feedback/w3/preview-feedback-w3-summary"
+  },
+  "next": {
+    "title": "Preview invite playbook",
+    "permalink": "/next/devportal/public-preview-invite"
+  }
+}

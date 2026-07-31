@@ -1,0 +1,29 @@
+{
+  "id": "sorafs/developer-deployment",
+  "title": "SoraFS Deployment Notes",
+  "description": "Checklist for promoting the SoraFS pipeline from CI to production.",
+  "source": "@site/docs/sorafs/developer-deployment.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/developer-deployment",
+  "permalink": "/next/sorafs/developer-deployment",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/developer-deployment.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "developer-deployment",
+    "title": "SoraFS Deployment Notes",
+    "sidebar_label": "Deployment Notes",
+    "description": "Checklist for promoting the SoraFS pipeline from CI to production."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "CI Recipes",
+    "permalink": "/next/sorafs/developer-ci"
+  },
+  "next": {
+    "title": "Orchestrator Configuration",
+    "permalink": "/next/sorafs/orchestrator-config"
+  }
+}

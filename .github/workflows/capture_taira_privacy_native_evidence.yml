@@ -389,7 +389,7 @@ jobs:
             "$TAIRA_EVIDENCE_ROOT/provenance/zk-x509-readiness-certificates.before.rs"
           echo "TAIRA_BOOTSTRAP_SOURCE_SHA256=$bootstrap_source_sha" >>"$GITHUB_ENV"
 
-      - name: Build and attest the zero-pin static capture runner
+      - name: Run fail-fast installer, soundness, and deterministic KAT gates
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -398,6 +398,78 @@ jobs:
             mktemp -d "${RUNNER_TEMP}/taira-privacy-bootstrap-target.XXXXXXXXXX"
           )"
           bootstrap_target="$(cd "$bootstrap_target" && pwd -P)"
+
+          printf '%s\n' \
+            'PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider pytests/scripts/install_taira_privacy_native_expectations_test.py' \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/pre-capture-installer-test-command.txt"
+          PYTHONDONTWRITEBYTECODE=1 \
+            python3 -m pytest \
+              -q \
+              -p no:cacheprovider \
+              pytests/scripts/install_taira_privacy_native_expectations_test.py \
+            2>&1 | tee \
+              "$TAIRA_EVIDENCE_ROOT/provenance/pre-capture-installer-tests.log"
+
+          printf '%s\n' \
+            'CARGO_BUILD_JOBS=1 RAYON_NUM_THREADS=4 RUST_MIN_STACK=8388608 cargo test --locked --release -p iroha_core --lib --features privacy-release-evidence privacy_engines::zk_x509::profile::readiness_certificates::tests::installed_soundness_pin_matches_the_current_compiled_profile -- --exact --nocapture --test-threads=1' \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/pre-capture-soundness-test-command.txt"
+          CARGO_TARGET_DIR="$bootstrap_target" \
+            CARGO_BUILD_JOBS=1 \
+            RAYON_NUM_THREADS=4 \
+            RUST_MIN_STACK=8388608 \
+            cargo test \
+              --locked \
+              --release \
+              -p iroha_core \
+              --lib \
+              --features privacy-release-evidence \
+              privacy_engines::zk_x509::profile::readiness_certificates::tests::installed_soundness_pin_matches_the_current_compiled_profile \
+              -- \
+              --exact \
+              --nocapture \
+              --test-threads=1 \
+            2>&1 | tee \
+              "$TAIRA_EVIDENCE_ROOT/provenance/pre-capture-soundness-test.log"
+
+          printf '%s\n' \
+            'CARGO_BUILD_JOBS=1 RAYON_NUM_THREADS=4 RUST_MIN_STACK=8388608 cargo test --locked --release -p iroha_core --lib --features privacy-release-evidence privacy_release_evidence::zk_x509::release_kat_tests::positive_release_stage_is_the_sole_kat_producer -- --ignored --exact --nocapture --test-threads=1' \
+            >"$TAIRA_EVIDENCE_ROOT/provenance/pre-capture-kat-test-command.txt"
+          CARGO_TARGET_DIR="$bootstrap_target" \
+            CARGO_BUILD_JOBS=1 \
+            RAYON_NUM_THREADS=4 \
+            RUST_MIN_STACK=8388608 \
+            cargo test \
+              --locked \
+              --release \
+              -p iroha_core \
+              --lib \
+              --features privacy-release-evidence \
+              privacy_release_evidence::zk_x509::release_kat_tests::positive_release_stage_is_the_sole_kat_producer \
+              -- \
+              --ignored \
+              --exact \
+              --nocapture \
+              --test-threads=1 \
+            2>&1 | tee \
+              "$TAIRA_EVIDENCE_ROOT/provenance/pre-capture-kat-test.log"
+
+          test "$(
+            python3 -I -S scripts/compute_workspace_source_manifest.py \
+              --root "$GITHUB_WORKSPACE"
+          )" = "$TAIRA_BOOTSTRAP_SOURCE_SHA256"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+          echo "TAIRA_BOOTSTRAP_TARGET=$bootstrap_target" >>"$GITHUB_ENV"
+
+      - name: Build and attest the zero-pin static capture runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          bootstrap_target="$TAIRA_BOOTSTRAP_TARGET"
+          if [[ ! -d "$bootstrap_target" || -L "$bootstrap_target" ]]; then
+            echo "bootstrap target is not an owned directory" >&2
+            exit 1
+          fi
           printf '%s\n' \
             'CARGO_BUILD_JOBS=1 cargo rustc --locked --release -p iroha_test_network --bin taira_privacy_release_runner --features privacy-release-evidence -- -C target-feature=+crt-static' \
             >"$TAIRA_EVIDENCE_ROOT/provenance/bootstrap-build-command.txt"

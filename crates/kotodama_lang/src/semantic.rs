@@ -118,6 +118,8 @@ pub const V1_DECLARATION_RESERVED_EXTRA_NAMES: &[&str] = &[
     "unwrap_or",
     "unwrap_err_or",
 ];
+/// Exact identifier spellings forbidden in every source position.
+pub(crate) const V1_FORBIDDEN_SOURCE_IDENTIFIERS: &[&str] = &["Amount"];
 /// Exact canonical scalar types permitted as durable StateMap keys.
 pub const V1_STATE_MAP_KEY_TYPE_NAMES: &[&str] = &[
     "int",
@@ -150,8 +152,9 @@ pub const V1_DYNAMIC_ACCESS_SCHEDULER_AUTHORITATIVE: bool = false;
 ///
 /// Keeping these names unavailable to source-unit identities and declared
 /// types prevents authenticated metadata from reinterpreting a known retired
-/// type spelling. They remain ordinary names in value and function namespaces,
-/// including entrypoints.
+/// type spelling. Except for exact spellings in
+/// `V1_FORBIDDEN_SOURCE_IDENTIFIERS`, they remain ordinary names in value and
+/// function namespaces, including entrypoints.
 pub const V1_RETIRED_NUMERIC_TYPE_NAMES: &[&str] = &[
     "i8",
     "i16",
@@ -278,6 +281,7 @@ pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
         || V1_SOURCE_TYPE_NAMES.contains(&name)
         || V1_DECLARATION_RESERVED_EXTRA_NAMES.contains(&name)
+        || V1_FORBIDDEN_SOURCE_IDENTIFIERS.contains(&name)
         || (is_function && name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
@@ -286,9 +290,9 @@ pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
 /// Return whether a declared source type collides with an active or retired
 /// compiler-owned type spelling.
 ///
-/// Retired scalar spellings remain forbidden in type position, but they do
-/// not poison the value namespace: names such as `amount`, `money`, and
-/// `number` are ordinary parameters, locals, functions, and entrypoints.
+/// Retired scalar spellings remain forbidden in type position. Except for the
+/// exact globally forbidden source identifiers, names such as `amount`, `money`,
+/// and `number` remain ordinary parameters, locals, functions, and entrypoints.
 pub fn is_reserved_source_type_declaration(name: &str) -> bool {
     is_reserved_source_declaration(name, false) || V1_RETIRED_NUMERIC_TYPE_NAMES.contains(&name)
 }
@@ -4424,6 +4428,9 @@ fn trigger_metadata_from_entries(
     Ok(metadata)
 }
 
+const JSON_LITERAL_REQUIRED_MESSAGE: &str =
+    "Json::parse requires a direct string literal so native JSON is validated at compile time";
+
 fn parse_json_literal(raw: &str) -> Result<json::Value, SemanticError> {
     json::parse_value(raw).map_err(|error| match error {
         json::Error::DuplicateField { field } => SemanticError {
@@ -4513,8 +4520,8 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
             }
             let Expr::String(raw) = plan.ordered[0].kind() else {
                 return Err(SemanticError {
-                    code: "E_TRIGGER_METADATA_VALUE",
-                    message: "Json::parse(...) metadata values must be a string literal".into(),
+                    code: "E_JSON_LITERAL_REQUIRED",
+                    message: JSON_LITERAL_REQUIRED_MESSAGE.into(),
                 });
             };
             parse_json_literal(raw)?
@@ -7544,11 +7551,14 @@ fn analyze_surface_builtin_call(
                     message: format!("{name} expects string"),
                 });
             }
-            if constructor == PointerConstructor::Json
-                && let ExprKind::String(raw) = arg_typed[0].kind()
-                && let Err(error) = parse_json_literal(raw)
-            {
-                return Err(error);
+            if constructor == PointerConstructor::Json {
+                let ExprKind::String(raw) = arg_typed[0].kind() else {
+                    return Err(SemanticError {
+                        code: "E_JSON_LITERAL_REQUIRED",
+                        message: JSON_LITERAL_REQUIRED_MESSAGE.into(),
+                    });
+                };
+                parse_json_literal(raw)?;
             }
             Ok(TypedExpr {
                 expr: ExprKind::Call {
@@ -12766,6 +12776,17 @@ fn analyze_expr_expected_inner(
                 }
             }
             let args = argument_plan.ordered.as_slice();
+            if matches!(
+                Builtin::from_name(&name),
+                Some(Builtin::PointerConstructor(PointerConstructor::Json))
+            ) && args.len() == 1
+                && !matches!(args[0].kind(), Expr::String(_))
+            {
+                return Err(SemanticError {
+                    code: "E_JSON_LITERAL_REQUIRED",
+                    message: JSON_LITERAL_REQUIRED_MESSAGE.into(),
+                });
+            }
             if let Some(builtin) = Builtin::from_name(&name)
                 && matches!(
                     builtin,
@@ -15938,7 +15959,7 @@ mod tests {
     }
 
     #[test]
-    fn retired_numeric_spellings_are_reserved_only_for_declared_types() {
+    fn exact_amount_is_globally_retired_while_other_numeric_names_are_contextual() {
         const EXPECTED: &[&str] = &[
             "i8",
             "i16",
@@ -15968,37 +15989,37 @@ mod tests {
             "number",
         ];
         assert_eq!(V1_RETIRED_NUMERIC_TYPE_NAMES, EXPECTED);
+        assert_eq!(V1_FORBIDDEN_SOURCE_IDENTIFIERS, &["Amount"]);
         for name in EXPECTED {
             assert!(
                 is_reserved_source_type_declaration(name),
                 "retired numeric type `{name}` must remain reserved for declared types"
             );
-            assert!(
-                !is_reserved_source_declaration(name, false),
-                "retired numeric type `{name}` must remain available in the value namespace"
+            let globally_forbidden = *name == "Amount";
+            assert_eq!(
+                is_reserved_source_declaration(name, false),
+                globally_forbidden,
+                "unexpected value-namespace policy for retired numeric type `{name}`"
             );
-            assert!(
-                !is_reserved_source_declaration(name, true),
-                "retired numeric type `{name}` must remain available in the function namespace"
+            assert_eq!(
+                is_reserved_source_declaration(name, true),
+                globally_forbidden,
+                "unexpected function-namespace policy for retired numeric type `{name}`"
             );
         }
     }
 
     #[test]
     fn retired_numeric_spellings_are_rejected_as_source_unit_identities() {
-        for (source, name) in [
-            ("seiyaku Amount { view fn run() {} }", "Amount"),
-            ("module i64 { fn run() {} }", "i64"),
-        ] {
-            let program = parse(source).expect("retired source-unit identity parses");
-            let error = analyze(&program)
-                .expect_err("retired numeric spelling must not identify a source unit");
-            assert_eq!(error.code, "E_RESERVED_DECLARATION");
-            assert_eq!(
-                error.message,
-                format!("source unit `{name}` uses a compiler-reserved name")
-            );
-        }
+        let program = parse("module i64 { fn run() {} }")
+            .expect("contextual retired source-unit identity parses");
+        let error = analyze(&program)
+            .expect_err("retired numeric spelling must not identify a source unit");
+        assert_eq!(error.code, "E_RESERVED_DECLARATION");
+        assert_eq!(
+            error.message,
+            "source unit `i64` uses a compiler-reserved name"
+        );
     }
 
     #[test]
@@ -16305,14 +16326,30 @@ mod tests {
     }
 
     #[test]
-    fn json_parse_accepts_dynamic_string_inputs() {
-        let program = parse(
+    fn json_parse_requires_a_direct_literal_but_native_json_remains_typed() {
+        for source in [
             r#"fn decode(string raw) -> Json {
                 Json::parse(raw)
             }"#,
+            r#"const string RAW = "{}";
+            fn decode() -> Json { Json::parse(RAW) }"#,
+            r#"fn decode() -> Json {
+                let string raw = "{}";
+                Json::parse(value: raw)
+            }"#,
+        ] {
+            let dynamic = analyze_error(source);
+            assert_eq!(dynamic.code, "E_JSON_LITERAL_REQUIRED", "{source}");
+            assert_eq!(dynamic.message, JSON_LITERAL_REQUIRED_MESSAGE, "{source}");
+        }
+
+        let native = parse(
+            r#"fn decode(string raw) -> Json {
+                json { amount: raw, typed: 7 }
+            }"#,
         )
-        .expect("dynamic Json::parse source should parse");
-        analyze(&program).expect("dynamic Json::parse string input should remain legal");
+        .expect("lowercase typed native JSON source should parse");
+        analyze(&native).expect("lowercase typed native JSON must remain available");
     }
 
     #[test]
@@ -19799,8 +19836,8 @@ seiyaku UnshieldAmount {{
             ),
             (
                 "Json::parse(value: dynamic)",
-                "E_TRIGGER_METADATA_VALUE",
-                "Json::parse(...) metadata values must be a string literal",
+                "E_JSON_LITERAL_REQUIRED",
+                JSON_LITERAL_REQUIRED_MESSAGE,
             ),
             (
                 r#"json("{}")"#,

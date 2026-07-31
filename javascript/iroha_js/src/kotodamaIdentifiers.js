@@ -33,6 +33,11 @@ export const KOTODAMA_V1_KEYWORDS = Object.freeze([
   "view",
 ]);
 
+// Exact spellings forbidden in every Kotodama V1 identifier position.
+const FORBIDDEN_SOURCE_IDENTIFIER_SET = new Set([
+  "Amount",
+]);
+
 /** Names reserved for non-type source declarations. */
 export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "int",
@@ -85,6 +90,7 @@ export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "is_err",
   "unwrap_or",
   "unwrap_err_or",
+  "Amount",
 ]);
 
 /** Retired numeric spellings reserved only for types and source units. */
@@ -143,7 +149,10 @@ export const KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS = Object.freeze([
 /** Maximum number of keys one V1 dynamic-access hint may project. */
 export const KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS = 64;
 
-const KEYWORD_SET = new Set(KOTODAMA_V1_KEYWORDS);
+const KEYWORD_SET = new Set([
+  ...KOTODAMA_V1_KEYWORDS,
+  ...FORBIDDEN_SOURCE_IDENTIFIER_SET,
+]);
 const DECLARATION_RESERVED_SET = new Set(KOTODAMA_V1_DECLARATION_RESERVED);
 const RETIRED_TYPE_SET = new Set(KOTODAMA_V1_RETIRED_TYPE_NAMES);
 const KOTODAMA_V1_STATE_MAP_KEY_TYPE_SET = new Set(

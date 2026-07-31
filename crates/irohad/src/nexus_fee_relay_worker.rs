@@ -553,7 +553,7 @@ impl NexusFeeRelayWorker {
             .view()
             .world()
             .smart_contract_state()
-            .get(&key)
+            .get(key.as_ref())
             .is_some())
     }
 
@@ -873,7 +873,7 @@ impl NexusFeeRelayWorker {
         ))
         .wrap_err("parse verified fee sponsor vault allocation state key")?;
         let view = self.state.view();
-        let Some(payload) = view.world().smart_contract_state().get(&key) else {
+        let Some(payload) = view.world().smart_contract_state().get(key.as_ref()) else {
             return Ok(None);
         };
         decode_verified_allocation_record(payload).map(Some)
@@ -1670,6 +1670,43 @@ mod tests {
         assert!(
             !prune_durable_worker_state(&mut durable, 2),
             "already-bounded state must not trigger another checkpoint rewrite"
+        );
+    }
+
+    #[test]
+    fn verified_worker_records_use_state_path_keys() {
+        let envelope = sample_envelope([0x40; 32]);
+        let relay_key_text = envelope.relay_ref().relay_state_key();
+        let relay_key = StatePath::from_str(&relay_key_text).expect("valid relay state path");
+        assert_eq!(relay_key.as_ref(), relay_key_text);
+
+        let allocation = sample_allocation_work(7, DurableWorkStatus::Pending);
+        let allocation_key_text = VerifiedFeeSponsorVaultAllocation::state_key_for(
+            &allocation.program_id,
+            &allocation.asset_definition_id,
+            &allocation.lease_id,
+        );
+        let allocation_key =
+            StatePath::from_str(&allocation_key_text).expect("valid allocation state path");
+        assert_eq!(allocation_key.as_ref(), allocation_key_text);
+
+        let records = BTreeMap::from([
+            (relay_key.clone(), vec![0xA5]),
+            (allocation_key.clone(), vec![0x5A]),
+        ]);
+        assert_eq!(
+            records
+                .get(&relay_key)
+                .expect("stored relay record")
+                .as_slice(),
+            &[0xA5]
+        );
+        assert_eq!(
+            records
+                .get(&allocation_key)
+                .expect("stored allocation record")
+                .as_slice(),
+            &[0x5A]
         );
     }
 

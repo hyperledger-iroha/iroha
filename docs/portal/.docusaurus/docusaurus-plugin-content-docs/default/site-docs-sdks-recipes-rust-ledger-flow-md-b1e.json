@@ -1,0 +1,28 @@
+{
+  "id": "sdks/recipes/rust-ledger-flow",
+  "title": "Rust ledger flow recipe",
+  "description": "Use the Rust SDK to register an asset, mint supply, transfer it, and query balances against the default single-peer network.",
+  "source": "@site/docs/sdks/recipes/rust-ledger-flow.md",
+  "sourceDirName": "sdks/recipes",
+  "slug": "/sdks/recipes/rust-ledger-flow",
+  "permalink": "/next/sdks/recipes/rust-ledger-flow",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sdks/recipes/rust-ledger-flow.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Rust ledger flow recipe",
+    "description": "Use the Rust SDK to register an asset, mint supply, transfer it, and query balances against the default single-peer network.",
+    "slug": "/sdks/recipes/rust-ledger-flow"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Governance & ISO bridge examples",
+    "permalink": "/next/sdks/javascript/governance-iso-examples"
+  },
+  "next": {
+    "title": "Python ledger flow recipe",
+    "permalink": "/next/sdks/recipes/python-ledger-flow"
+  }
+}

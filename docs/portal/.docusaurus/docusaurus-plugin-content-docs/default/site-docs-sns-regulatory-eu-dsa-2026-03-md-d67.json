@@ -1,0 +1,43 @@
+{
+  "id": "sns/regulatory/regulatory-eu-dsa-2026-03",
+  "title": "EU DSA Hosting & Transparency Guidance – Intake Memo",
+  "description": "Regulatory intake memo covering EU Digital Services Act hosting and transparency duties for SNS suffixes.",
+  "source": "@site/docs/sns/regulatory/eu-dsa-2026-03.md",
+  "sourceDirName": "sns/regulatory",
+  "slug": "/sns/regulatory/regulatory-eu-dsa-2026-03",
+  "permalink": "/next/sns/regulatory/regulatory-eu-dsa-2026-03",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sns/regulatory/eu-dsa-2026-03.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "regulatory-eu-dsa-2026-03",
+    "title": "EU DSA Hosting & Transparency Guidance – Intake Memo",
+    "sidebar_label": "EU DSA (Mar 2026)",
+    "description": "Regulatory intake memo covering EU Digital Services Act hosting and transparency duties for SNS suffixes.",
+    "jurisdiction": "EU",
+    "regulation": "Digital Services Act (EU) – Article 24/37 updates (2026-03-11 bulletin)",
+    "suffix_scope": [
+      ".sora",
+      ".nexus",
+      ".dao"
+    ],
+    "owners": {
+      "guardian": "guardian-board",
+      "rapporteur": "gov-council-seat-4",
+      "steward_ack": "sora-foundation-suffix-ops"
+    },
+    "status": "recorded",
+    "cycle": "2026-03"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Local → Global Address Toolkit",
+    "permalink": "/next/sns/local-to-global-toolkit"
+  },
+  "next": {
+    "title": "Nexus SDK quickstarts",
+    "permalink": "/next/sdks/nexus-quickstarts"
+  }
+}

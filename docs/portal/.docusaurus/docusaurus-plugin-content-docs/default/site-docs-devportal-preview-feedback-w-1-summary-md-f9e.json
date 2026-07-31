@@ -1,0 +1,29 @@
+{
+  "id": "devportal/preview-feedback/w1/preview-feedback-w1-summary",
+  "title": "W1 partner feedback & exit summary",
+  "description": "Findings, actions, and exit evidence for the partner/Torii integrator preview wave.",
+  "source": "@site/docs/devportal/preview-feedback/w1/summary.md",
+  "sourceDirName": "devportal/preview-feedback/w1",
+  "slug": "/devportal/preview-feedback/w1/preview-feedback-w1-summary",
+  "permalink": "/next/devportal/preview-feedback/w1/preview-feedback-w1-summary",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/preview-feedback/w1/summary.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "preview-feedback-w1-summary",
+    "title": "W1 partner feedback & exit summary",
+    "sidebar_label": "W1 summary",
+    "description": "Findings, actions, and exit evidence for the partner/Torii integrator preview wave."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "W1 feedback log",
+    "permalink": "/next/devportal/preview-feedback/w1/preview-feedback-w1-log"
+  },
+  "next": {
+    "title": "W2 plan",
+    "permalink": "/next/devportal/preview-feedback/w2/preview-feedback-w2-plan"
+  }
+}

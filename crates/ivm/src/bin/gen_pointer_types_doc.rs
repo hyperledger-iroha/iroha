@@ -2,12 +2,13 @@
 //! Usage:
 //!   cargo run -p ivm --bin gen_pointer_types_doc -- --write
 //!   cargo run -p ivm --bin gen_pointer_types_doc -- --check
+//!   cargo run -p ivm --bin gen_pointer_types_doc -- --write --root /tmp/ivm-doc-stage
 
 use std::path::PathBuf;
 
 mod support;
 
-use support::{GeneratedOutput, parse_generation_mode, sync_generated_outputs};
+use support::{GeneratedOutput, parse_generation_options, sync_generated_outputs};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED POINTER TYPES -->";
 const END: &str = "<!-- END GENERATED POINTER TYPES -->";
@@ -96,24 +97,26 @@ fn prepare_generated_block_outputs(
         .collect()
 }
 
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("workspace root")
+        .to_path_buf()
+}
+
 fn main() {
-    let mode = match parse_generation_mode(std::env::args().skip(1)) {
-        Ok(mode) => mode,
+    let options = match parse_generation_options(std::env::args().skip(1), workspace_root()) {
+        Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(2);
         }
     };
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let path_pointer = PathBuf::from(manifest_dir).join("docs/pointer_abi.md");
-    let workspace_root = PathBuf::from(manifest_dir)
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("workspace root")
-        .to_path_buf();
-    let path_ivm_md = workspace_root.join("ivm.md");
-    let path_pointer_type_golden =
-        PathBuf::from(manifest_dir).join("tests/pointer_type_ids_golden.rs");
+    let manifest_dir = options.root.join("crates/ivm");
+    let path_pointer = manifest_dir.join("docs/pointer_abi.md");
+    let path_ivm_md = options.root.join("ivm.md");
+    let path_pointer_type_golden = manifest_dir.join("tests/pointer_type_ids_golden.rs");
 
     // Render expected table
     let table = ivm::render_pointer_types_markdown_table();
@@ -134,7 +137,7 @@ fn main() {
         .unwrap_or_else(|error| panic!("render pointer type golden: {error}")),
     );
     let regenerate_command = "cargo run --locked -p ivm --bin gen_pointer_types_doc -- --write";
-    let updated = sync_generated_outputs(&outputs, mode, regenerate_command)
+    let updated = sync_generated_outputs(&outputs, options.mode, regenerate_command)
         .unwrap_or_else(|error| panic!("{error}"));
     for path in updated {
         eprintln!("updated: {}", path.display());

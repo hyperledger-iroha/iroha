@@ -16,7 +16,7 @@ use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
 };
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::privacy_engines::prover_randomness::{
     CURVE_PROVER_RANDOMNESS_POLICY_V1, HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
@@ -497,7 +497,7 @@ impl SignedMagnitudeV1 {
 
 /// Domain-separated deterministic expansion of one caller-provided seed.
 pub(crate) struct ProofRandomnessV1 {
-    seed: [u8; 32],
+    seed: Zeroizing<[u8; 32]>,
     stream: u64,
 }
 
@@ -526,11 +526,11 @@ impl ProofRandomnessV1 {
             ProverRandomnessErrorV1::Unavailable => SamplingErrorV1::RandomnessUnavailable,
             ProverRandomnessErrorV1::Unhealthy => SamplingErrorV1::RandomnessHealthCheckFailed,
         })?;
-        let mut seed = [0_u8; 32];
+        let mut seed = Zeroizing::new([0_u8; 32]);
         checked_rng
-            .try_fill_bytes(&mut seed)
+            .try_fill_bytes(seed.as_mut())
             .map_err(|_| SamplingErrorV1::RandomnessUnavailable)?;
-        if seed == [0; 32] || seed.iter().all(|byte| *byte == seed[0]) {
+        if *seed == [0; 32] || seed.iter().all(|byte| *byte == seed[0]) {
             seed.zeroize();
             return Err(SamplingErrorV1::RandomnessHealthCheckFailed);
         }
@@ -545,14 +545,17 @@ impl ProofRandomnessV1 {
         if seed == [0; 32] || seed.iter().all(|byte| *byte == seed[0]) {
             return Err(SamplingErrorV1::RandomnessHealthCheckFailed);
         }
-        Ok(Self { seed, stream: 0 })
+        Ok(Self {
+            seed: Zeroizing::new(seed),
+            stream: 0,
+        })
     }
 
     /// Fill bytes from a separately framed SHAKE256 stream.
     pub(crate) fn fill_bytes(&mut self, domain: &[u8], output: &mut [u8]) {
         let mut state = Shake256::default();
         absorb_frame(&mut state, RANDOMNESS_DOMAIN_V1);
-        absorb_frame(&mut state, &self.seed);
+        absorb_frame(&mut state, self.seed.as_slice());
         absorb_frame(&mut state, domain);
         absorb_frame(&mut state, &self.stream.to_be_bytes());
         self.stream = self

@@ -1,0 +1,29 @@
+{
+  "id": "devportal/norito-rpc-adoption",
+  "title": "Norito-RPC Adoption Schedule",
+  "description": "Cross-SDK rollout plan, evidence checklist, and automation hooks for roadmap item NRPC-4.",
+  "source": "@site/docs/devportal/norito-rpc-adoption.md",
+  "sourceDirName": "devportal",
+  "slug": "/devportal/norito-rpc-adoption",
+  "permalink": "/next/devportal/norito-rpc-adoption",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/devportal/norito-rpc-adoption.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "norito-rpc-adoption",
+    "title": "Norito-RPC Adoption Schedule",
+    "sidebar_label": "Norito-RPC adoption",
+    "description": "Cross-SDK rollout plan, evidence checklist, and automation hooks for roadmap item NRPC-4."
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Norito-RPC Overview",
+    "permalink": "/next/devportal/torii-rpc-overview"
+  },
+  "next": {
+    "title": "Preview Integrity Plan",
+    "permalink": "/next/devportal/preview-integrity-plan"
+  }
+}

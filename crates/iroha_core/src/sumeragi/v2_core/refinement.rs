@@ -5942,11 +5942,12 @@ macro_rules! enter_view_high_prepare_qc_control_identity_body {
                 || local.evidence_class == refinement_tag_value!(CERTIFICATE_EVIDENCE_LOCAL))
             && certificate_identity_same_material_body!(incoming, timeout_high)
             && (!incoming.present
-                || (if local.present && certificate_identity_same_material_body!(incoming, local) {
-                    incoming.evidence_class == refinement_tag_value!(CERTIFICATE_EVIDENCE_LOCAL)
-                } else {
-                    incoming.evidence_class == refinement_tag_value!(CERTIFICATE_EVIDENCE_INCOMING)
-                }))
+                || incoming.evidence_class
+                    == refinement_tag_value!(CERTIFICATE_EVIDENCE_INCOMING)
+                || (incoming.evidence_class
+                    == refinement_tag_value!(CERTIFICATE_EVIDENCE_LOCAL)
+                    && local.present
+                    && certificate_identity_same_material_body!(incoming, local)))
             && certificate_identity_equal_body!($projection.durable_highest_after, selected)
             && $projection.prepare_control_slot_present_after == selected.present
             && certificate_identity_equal_body!(

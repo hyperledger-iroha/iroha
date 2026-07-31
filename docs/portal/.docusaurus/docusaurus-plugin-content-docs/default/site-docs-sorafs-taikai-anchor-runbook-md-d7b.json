@@ -1,0 +1,24 @@
+{
+  "id": "sorafs/taikai-anchor-runbook",
+  "title": "Taikai Anchor Observability Runbook",
+  "description": "This portal copy mirrors the canonical runbook in",
+  "source": "@site/docs/sorafs/taikai-anchor-runbook.md",
+  "sourceDirName": "sorafs",
+  "slug": "/sorafs/taikai-anchor-runbook",
+  "permalink": "/next/sorafs/taikai-anchor-runbook",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/sorafs/taikai-anchor-runbook.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "docs",
+  "previous": {
+    "title": "SoraFS Capacity Reconciliation",
+    "permalink": "/next/sorafs/capacity-reconciliation"
+  },
+  "next": {
+    "title": "Taikai Monitoring Dashboards",
+    "permalink": "/next/sorafs/taikai-monitoring-dashboards"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "governance/api",
+  "title": "Governance App API — Endpoints (Draft)",
+  "description": "Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii can sign/submit transactions when authority and private_key are provided, otherwise clients build and submit to /transaction.",
+  "source": "@site/docs/governance/api.md",
+  "sourceDirName": "governance",
+  "slug": "/governance/api",
+  "permalink": "/next/governance/api",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/governance/api.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Governance App API — Endpoints (Draft)"
+  },
+  "sidebar": "docs",
+  "previous": {
+    "title": "Settlement FAQ",
+    "permalink": "/next/nexus/nexus-settlement-faq"
+  },
+  "next": {
+    "title": "Settlement ↔ ISO 20022",
+    "permalink": "/next/finance/settlement-iso-mapping"
+  }
+}

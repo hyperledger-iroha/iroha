@@ -1,0 +1,15 @@
+{
+  "id": "norito/examples/threshold-escrow",
+  "title": "threshold-escrow",
+  "description": "---",
+  "source": "@site/docs/norito/examples/threshold-escrow.md",
+  "sourceDirName": "norito/examples",
+  "slug": "/norito/examples/threshold-escrow",
+  "permalink": "/next/norito/examples/threshold-escrow",
+  "draft": false,
+  "unlisted": false,
+  "editUrl": "https://github.com/hyperledger-iroha/iroha/tree/master/docs/portal/docs/norito/examples/threshold-escrow.md",
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}
