@@ -1,6 +1,7 @@
 ---- MODULE SumeragiV2AsyncHistoricalRecoveryTemporalSupportProofs ----
 EXTENDS SumeragiV2AsyncHistoricalRecoveryTransportClosureProofs,
-        SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs
+        SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs,
+        SumeragiV2AsyncHistoricalCandidateProducerContinuationProofs
 
 (***************************************************************************
 Historical temporal support classification.
@@ -144,10 +145,18 @@ THEOREM HistoricalTemporalRunNodeIsNonstuttering ==
 BY Isa
    DEF PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
-       LocalAdmissionStep, IngressDrainStep,
+       LocalAdmissionStep, IngressDrainStep, EnqueueCandidate,
        SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        AsyncAllVars, AsyncSchedulerVars,
@@ -157,6 +166,8 @@ BY Isa
 THEOREM HistoricalTemporalProtectedOwnerEnablesFairRunner ==
   \A candidate:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ gst
     /\ HistoricalProtectedCandidateOwned(candidate)
     => ENABLED
@@ -165,6 +176,8 @@ THEOREM HistoricalTemporalProtectedOwnerEnablesFairRunner ==
 PROOF
   <1>1. ASSUME NEW candidate,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 gst,
                 HistoricalProtectedCandidateOwned(candidate)
          PROVE ENABLED
@@ -367,8 +380,16 @@ HistoricalTemporalStage3ServeEpisodeResidual(
   /\ AsyncProgressOwnershipInvariant
   /\ HistoricalTemporalStage3Pending(candidate, position)
   /\ ~HistoricalTemporalStage3AuxProgress(candidate, position, rank)
-  /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
-  /\ asyncRunnerPhase[candidate.node] = "Ingress"
+  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+        /\ asyncRunnerPhase[candidate.node] = "Ingress"
+     \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+          candidate.node)
+
+HistoricalTemporalStage3CandidateProducerContinuationReentry(
+    candidate, position, rank) ==
+  /\ HistoricalTemporalStage3AuxBlocked(candidate, position, rank)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+       candidate.node)
 
 HistoricalTemporalStage3FiniteServeEpisodeResidualProperty(
     specification) ==
@@ -399,6 +420,10 @@ THEOREM HistoricalTemporalStage3SameRunnerAuxOutcome ==
               candidate, position, rank)'
          \/ HistoricalTemporalStage3ServeEpisodeResidual(
               candidate, position, rank)'
+         \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  candidate.node)
+            /\ HistoricalTemporalStage3CandidateProducerContinuationReentry(
+                 candidate, position, rank)'
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
@@ -410,6 +435,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
    IsaT(600)
    DEF HistoricalTemporalStage3AuxProgress,
        HistoricalTemporalStage3ServeEpisodeResidual,
+       HistoricalTemporalStage3CandidateProducerContinuationReentry,
        HistoricalTemporalStage3AuxBlocked,
        HistoricalTemporalStage3Pending,
        HistoricalTemporalStage3RankExit,
@@ -429,6 +455,12 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -470,6 +502,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
    DEF HistoricalTemporalStage3AuxBlocked,
        HistoricalTemporalStage3AuxProgress,
        HistoricalTemporalStage3ServeEpisodeResidual,
+       HistoricalTemporalStage3CandidateProducerContinuationReentry,
        HistoricalTemporalStage3Pending,
        HistoricalTemporalStage3RankExit,
        HistoricalTemporalRankProgressExit,
@@ -488,6 +521,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
        PostGstRunHistoricalRecoveryNode,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -527,12 +562,16 @@ BY HistoricalTemporalStage3CarrierFacts,
 
 THEOREM HistoricalTemporalStage3EnablesFairRunner ==
   \A candidate, position:
-    HistoricalTemporalStage3Pending(candidate, position)
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ HistoricalTemporalStage3Pending(candidate, position)
       => ENABLED
            <<PostGstRunHistoricalRecoveryNode(
                candidate.node)>>_AsyncAllVars
 PROOF
   <1>1. ASSUME NEW candidate, NEW position,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 HistoricalTemporalStage3Pending(candidate, position)
          PROVE ENABLED
                  <<PostGstRunHistoricalRecoveryNode(
@@ -547,7 +586,7 @@ PROOF
              HistoricalRecoveryTarget
     <2>2. ENABLED
              PostGstRunHistoricalRecoveryNode(candidate.node)
-      BY <2>1, HistoricalRecoveryRunnerEnabledAfterGst
+      BY <1>1, <2>1, HistoricalRecoveryRunnerEnabledAfterGst
     <2>3. PostGstRunHistoricalRecoveryNode(candidate.node)
              => <<PostGstRunHistoricalRecoveryNode(
                     candidate.node)>>_AsyncAllVars
@@ -575,7 +614,9 @@ PROOF
                        candidate, position, rank)
                        ~> HistoricalTemporalStage3AuxProgress(
                             candidate, position, rank))
-    <2>1. /\ HistoricalTemporalStage3AuxBlocked(
+    <2>1. /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+           /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+             /\ HistoricalTemporalStage3AuxBlocked(
                candidate, position, rank)
              /\ ~(HistoricalTemporalStage3AuxProgress(
                     candidate, position, rank)
@@ -599,6 +640,8 @@ PROOF
                \/ HistoricalTemporalStage3ServeEpisodeResidual(
                     candidate, position, rank)'
       BY HistoricalTemporalStage3SameRunnerAuxOutcome
+         DEF HistoricalTemporalStage3ServeEpisodeResidual,
+             HistoricalTemporalStage3CandidateProducerContinuationReentry
     <2>3. HistoricalTemporalStage3AuxBlocked(
              candidate, position, rank)
              /\ [AsyncNext]_AsyncAllVars
@@ -610,11 +653,17 @@ PROOF
                     candidate, position, rank)'
       BY HistoricalTemporalStage3SameRunnerAuxOutcome,
          HistoricalTemporalStage3OtherStepUnlessAuxDescent, Isa
+         DEF HistoricalTemporalStage3CandidateProducerContinuationReentry
     <2>4. CASE candidate.node \in Responsive
       <3>1. AsyncSpecAt(initialContext)
-               => WF_AsyncAllVars(
-                    PostGstRunHistoricalRecoveryNode(candidate.node))
-        BY <2>4 DEF AsyncSpecAt, AsyncFairnessAt
+               => /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                  /\ []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                  /\ WF_AsyncAllVars(
+                       PostGstRunHistoricalRecoveryNode(candidate.node))
+        BY <2>4,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
+           DEF AsyncSpecAt, AsyncFairnessAt
       <3>2. AsyncSpecAt(initialContext)
                => (HistoricalTemporalStage3AuxBlocked(
                      candidate, position, rank)
@@ -823,8 +872,16 @@ HistoricalTemporalStage4ServeEpisodeResidual(
   /\ AsyncProgressOwnershipInvariant
   /\ HistoricalTemporalStage4Pending(candidate, position)
   /\ ~HistoricalTemporalStage4Progress(candidate, position, rank)
-  /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
-  /\ asyncRunnerPhase[candidate.node] = "Ingress"
+  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+        /\ asyncRunnerPhase[candidate.node] = "Ingress"
+     \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+          candidate.node)
+
+HistoricalTemporalStage4CandidateProducerContinuationReentry(
+    candidate, position, rank) ==
+  /\ HistoricalTemporalStage4BlockedAtRank(candidate, position, rank)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+       candidate.node)
 
 HistoricalTemporalStage4FiniteServeEpisodeResidualProperty(
     specification) ==
@@ -898,6 +955,10 @@ THEOREM HistoricalTemporalStage4SameRunnerProducesOutcome ==
               candidate, position, rank)'
          \/ HistoricalTemporalStage4ServeEpisodeResidual(
               candidate, position, rank)'
+         \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  candidate.node)
+            /\ HistoricalTemporalStage4CandidateProducerContinuationReentry(
+                 candidate, position, rank)'
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
    ProducerAdmissionRecordsCausalDebt,
@@ -914,6 +975,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
    IsaT(600)
    DEF HistoricalTemporalStage4Progress,
        HistoricalTemporalStage4ServeEpisodeResidual,
+       HistoricalTemporalStage4CandidateProducerContinuationReentry,
        HistoricalTemporalStage4BlockedAtRank,
        HistoricalTemporalStage4Pending,
        HistoricalTemporalRankProgressExit,
@@ -948,6 +1010,12 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        LocalSourceDistance, CandidateSequenceIndex,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -995,6 +1063,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
    DEF HistoricalTemporalStage4BlockedAtRank,
        HistoricalTemporalStage4Progress,
        HistoricalTemporalStage4ServeEpisodeResidual,
+       HistoricalTemporalStage4CandidateProducerContinuationReentry,
        HistoricalTemporalStage4Pending,
        HistoricalTemporalRankProgressExit,
        HistoricalTemporalStage4EpisodeRank,
@@ -1025,6 +1094,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SelectedCompletionQueueNonempty,
        PostGstRunHistoricalRecoveryNode,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -1089,6 +1160,7 @@ PROOF
       <3> QED BY <3>1, Isa
            DEF HistoricalTemporalStage4Progress,
                HistoricalTemporalStage4ServeEpisodeResidual,
+               HistoricalTemporalStage4CandidateProducerContinuationReentry,
                HistoricalTemporalStage4BlockedAtRank
     <2>4. CASE ~PostGstRunHistoricalRecoveryNode(candidate.node)
       <3>1. \/ HistoricalTemporalStage4BlockedAtRank(
@@ -1123,13 +1195,17 @@ BY HistoricalTemporalStage4CarrierFacts,
 
 THEOREM HistoricalTemporalStage4EnablesFairRunner ==
   \A candidate, position, rank:
-    HistoricalTemporalStage4BlockedAtRank(
-      candidate, position, rank)
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ HistoricalTemporalStage4BlockedAtRank(
+         candidate, position, rank)
       => ENABLED
            <<PostGstRunHistoricalRecoveryNode(
                candidate.node)>>_AsyncAllVars
 PROOF
   <1>1. ASSUME NEW candidate, NEW position, NEW rank,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 HistoricalTemporalStage4BlockedAtRank(
                   candidate, position, rank)
          PROVE ENABLED
@@ -1146,7 +1222,7 @@ PROOF
              HistoricalRecoveryTarget
     <2>2. ENABLED
              PostGstRunHistoricalRecoveryNode(candidate.node)
-      BY <2>1, HistoricalRecoveryRunnerEnabledAfterGst
+      BY <1>1, <2>1, HistoricalRecoveryRunnerEnabledAfterGst
     <2>3. PostGstRunHistoricalRecoveryNode(candidate.node)
              => <<PostGstRunHistoricalRecoveryNode(
                     candidate.node)>>_AsyncAllVars
@@ -1174,7 +1250,9 @@ PROOF
                        candidate, position, rank)
                        ~> HistoricalTemporalStage4Progress(
                             candidate, position, rank))
-    <2>1. /\ HistoricalTemporalStage4BlockedAtRank(
+    <2>1. /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+           /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+             /\ HistoricalTemporalStage4BlockedAtRank(
                candidate, position, rank)
              /\ ~(HistoricalTemporalStage4Progress(
                     candidate, position, rank)
@@ -1197,6 +1275,8 @@ PROOF
                \/ HistoricalTemporalStage4ServeEpisodeResidual(
                     candidate, position, rank)'
       BY HistoricalTemporalStage4SameRunnerProducesOutcome
+         DEF HistoricalTemporalStage4ServeEpisodeResidual,
+             HistoricalTemporalStage4CandidateProducerContinuationReentry
     <2>3. HistoricalTemporalStage4BlockedAtRank(
              candidate, position, rank)
              /\ [AsyncNext]_AsyncAllVars
@@ -1208,11 +1288,17 @@ PROOF
                     candidate, position, rank)'
       BY HistoricalTemporalStage4SameRunnerProducesOutcome,
          HistoricalTemporalStage4OtherStepUnlessProgress, Isa
+         DEF HistoricalTemporalStage4CandidateProducerContinuationReentry
     <2>4. CASE candidate.node \in Responsive
       <3>1. AsyncSpecAt(initialContext)
-               => WF_AsyncAllVars(
-                    PostGstRunHistoricalRecoveryNode(candidate.node))
-        BY <2>4 DEF AsyncSpecAt, AsyncFairnessAt
+               => /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                  /\ []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                  /\ WF_AsyncAllVars(
+                       PostGstRunHistoricalRecoveryNode(candidate.node))
+        BY <2>4,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
+           DEF AsyncSpecAt, AsyncFairnessAt
       <3>2. AsyncSpecAt(initialContext)
                => (HistoricalTemporalStage4BlockedAtRank(
                      candidate, position, rank)
@@ -1417,7 +1503,16 @@ HistoricalTemporalStage6PreAdmissionRunnerEpisodeResidual(
   /\ HistoricalTemporalStage6Pending(candidate, position)
   /\ ~HistoricalTemporalStage6PreAdmissionAuxProgress(
        candidate, position, rank)
-  /\ asyncRunnerPhase[candidate.node] \in {"Local", "Ingress"}
+  /\ \/ asyncRunnerPhase[candidate.node] \in {"Local", "Ingress"}
+     \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+          candidate.node)
+
+HistoricalTemporalStage6PreAdmissionCandidateProducerContinuationReentry(
+    candidate, position, rank) ==
+  /\ HistoricalTemporalStage6PreAdmissionBlockedAtAux(
+       candidate, position, rank)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+       candidate.node)
 
 HistoricalTemporalStage6PreAdmissionFiniteRunnerEpisodeResidualProperty(
     specification) ==
@@ -1549,6 +1644,10 @@ THEOREM HistoricalTemporalStage6PreAdmissionSameRunnerOutcome ==
               candidate, position, rank)'
          \/ HistoricalTemporalStage6PreAdmissionRunnerEpisodeResidual(
               candidate, position, rank)'
+         \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  candidate.node)
+            /\ HistoricalTemporalStage6PreAdmissionCandidateProducerContinuationReentry(
+                 candidate, position, rank)'
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
@@ -1561,6 +1660,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
    IsaT(600)
    DEF HistoricalTemporalStage6PreAdmissionAuxProgress,
        HistoricalTemporalStage6PreAdmissionRunnerEpisodeResidual,
+       HistoricalTemporalStage6PreAdmissionCandidateProducerContinuationReentry,
+       HistoricalTemporalStage6PreAdmissionCandidateProducerContinuationReentry,
        HistoricalTemporalStage6PreAdmissionBlockedAtAux,
        HistoricalTemporalStage6PreAdmissionGoal,
        HistoricalTemporalStage6OwedCausalReady,
@@ -1591,6 +1692,12 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncOutstandingWorkCount,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -1665,6 +1772,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -1714,12 +1823,16 @@ BY HistoricalTemporalStage6CarrierFacts,
 
 THEOREM HistoricalTemporalStage6EnablesFairRunner ==
   \A candidate, position:
-    HistoricalTemporalStage6Pending(candidate, position)
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ HistoricalTemporalStage6Pending(candidate, position)
       => ENABLED
            <<PostGstRunHistoricalRecoveryNode(
                candidate.node)>>_AsyncAllVars
 PROOF
   <1>1. ASSUME NEW candidate, NEW position,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 HistoricalTemporalStage6Pending(candidate, position)
          PROVE ENABLED
                  <<PostGstRunHistoricalRecoveryNode(
@@ -1734,7 +1847,7 @@ PROOF
              HistoricalRecoveryTarget
     <2>2. ENABLED
              PostGstRunHistoricalRecoveryNode(candidate.node)
-      BY <2>1, HistoricalRecoveryRunnerEnabledAfterGst
+      BY <1>1, <2>1, HistoricalRecoveryRunnerEnabledAfterGst
     <2>3. PostGstRunHistoricalRecoveryNode(candidate.node)
              => <<PostGstRunHistoricalRecoveryNode(
                     candidate.node)>>_AsyncAllVars
@@ -1762,7 +1875,9 @@ PROOF
                        candidate, position, rank)
                        ~> HistoricalTemporalStage6PreAdmissionAuxProgress(
                             candidate, position, rank))
-    <2>1. /\ HistoricalTemporalStage6PreAdmissionBlockedAtAux(
+    <2>1. /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+           /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+             /\ HistoricalTemporalStage6PreAdmissionBlockedAtAux(
                candidate, position, rank)
              /\ ~(HistoricalTemporalStage6PreAdmissionAuxProgress(
                     candidate, position, rank)
@@ -1786,6 +1901,8 @@ PROOF
                \/ HistoricalTemporalStage6PreAdmissionRunnerEpisodeResidual(
                     candidate, position, rank)'
       BY HistoricalTemporalStage6PreAdmissionSameRunnerOutcome
+         DEF HistoricalTemporalStage6PreAdmissionRunnerEpisodeResidual,
+             HistoricalTemporalStage6PreAdmissionCandidateProducerContinuationReentry
     <2>3. HistoricalTemporalStage6PreAdmissionBlockedAtAux(
              candidate, position, rank)
              /\ [AsyncNext]_AsyncAllVars
@@ -1797,11 +1914,17 @@ PROOF
                     candidate, position, rank)'
       BY HistoricalTemporalStage6PreAdmissionSameRunnerOutcome,
          HistoricalTemporalStage6PreAdmissionOtherStep, Isa
+         DEF HistoricalTemporalStage6PreAdmissionCandidateProducerContinuationReentry
     <2>4. CASE candidate.node \in Responsive
       <3>1. AsyncSpecAt(initialContext)
-               => WF_AsyncAllVars(
-                    PostGstRunHistoricalRecoveryNode(candidate.node))
-        BY <2>4 DEF AsyncSpecAt, AsyncFairnessAt
+               => /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                  /\ []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                  /\ WF_AsyncAllVars(
+                       PostGstRunHistoricalRecoveryNode(candidate.node))
+        BY <2>4,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
+           DEF AsyncSpecAt, AsyncFairnessAt
       <3>2. AsyncSpecAt(initialContext)
                => (HistoricalTemporalStage6PreAdmissionBlockedAtAux(
                      candidate, position, rank)
@@ -1911,7 +2034,15 @@ HistoricalTemporalStage6OwedRunnerEpisodeResidual(
   /\ HistoricalTemporalStage6OwedCausalReady(candidate, position)
   /\ ~HistoricalTemporalStage6OwedAuxProgress(
        candidate, position, rank)
-  /\ asyncRunnerPhase[candidate.node] \in {"Local", "Ingress"}
+  /\ \/ asyncRunnerPhase[candidate.node] \in {"Local", "Ingress"}
+     \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+          candidate.node)
+
+HistoricalTemporalStage6OwedCandidateProducerContinuationReentry(
+    candidate, position, rank) ==
+  /\ HistoricalTemporalStage6OwedBlockedAtAux(candidate, position, rank)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+       candidate.node)
 
 HistoricalTemporalStage6OwedFiniteRunnerEpisodeResidualProperty(
     specification) ==
@@ -1933,6 +2064,10 @@ THEOREM HistoricalTemporalStage6OwedSameRunnerOutcome ==
               candidate, position, rank)'
          \/ HistoricalTemporalStage6OwedRunnerEpisodeResidual(
               candidate, position, rank)'
+         \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  candidate.node)
+            /\ HistoricalTemporalStage6OwedCandidateProducerContinuationReentry(
+                 candidate, position, rank)'
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
@@ -1945,6 +2080,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
    IsaT(600)
    DEF HistoricalTemporalStage6OwedAuxProgress,
        HistoricalTemporalStage6OwedRunnerEpisodeResidual,
+       HistoricalTemporalStage6OwedCandidateProducerContinuationReentry,
+       HistoricalTemporalStage6OwedCandidateProducerContinuationReentry,
        HistoricalTemporalStage6OwedBlockedAtAux,
        HistoricalTemporalStage6OwedCausalReady,
        HistoricalTemporalStage6Pending,
@@ -1969,6 +2106,12 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncOutstandingWorkCount,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -2037,6 +2180,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -2094,7 +2239,9 @@ PROOF
                        candidate, position, rank)
                        ~> HistoricalTemporalStage6OwedAuxProgress(
                             candidate, position, rank))
-    <2>1. /\ HistoricalTemporalStage6OwedBlockedAtAux(
+    <2>1. /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+           /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+             /\ HistoricalTemporalStage6OwedBlockedAtAux(
                candidate, position, rank)
              /\ ~(HistoricalTemporalStage6OwedAuxProgress(
                     candidate, position, rank)
@@ -2119,6 +2266,8 @@ PROOF
                \/ HistoricalTemporalStage6OwedRunnerEpisodeResidual(
                     candidate, position, rank)'
       BY HistoricalTemporalStage6OwedSameRunnerOutcome
+         DEF HistoricalTemporalStage6OwedRunnerEpisodeResidual,
+             HistoricalTemporalStage6OwedCandidateProducerContinuationReentry
     <2>3. HistoricalTemporalStage6OwedBlockedAtAux(
              candidate, position, rank)
              /\ [AsyncNext]_AsyncAllVars
@@ -2130,11 +2279,17 @@ PROOF
                     candidate, position, rank)'
       BY HistoricalTemporalStage6OwedSameRunnerOutcome,
          HistoricalTemporalStage6OwedOtherStep, Isa
+         DEF HistoricalTemporalStage6OwedCandidateProducerContinuationReentry
     <2>4. CASE candidate.node \in Responsive
       <3>1. AsyncSpecAt(initialContext)
-               => WF_AsyncAllVars(
-                    PostGstRunHistoricalRecoveryNode(candidate.node))
-        BY <2>4 DEF AsyncSpecAt, AsyncFairnessAt
+               => /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                  /\ []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                  /\ WF_AsyncAllVars(
+                       PostGstRunHistoricalRecoveryNode(candidate.node))
+        BY <2>4,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
+           DEF AsyncSpecAt, AsyncFairnessAt
       <3>2. AsyncSpecAt(initialContext)
                => (HistoricalTemporalStage6OwedBlockedAtAux(
                      candidate, position, rank)
@@ -2249,8 +2404,17 @@ HistoricalTemporalStage6NonCompletionServeEpisodeResidual(
   /\ HistoricalTemporalStage6Pending(candidate, position)
   /\ ~HistoricalTemporalStage6NonCompletionProgress(
        candidate, position, rank)
-  /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
-  /\ asyncRunnerPhase[candidate.node] = "Ingress"
+  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+        /\ asyncRunnerPhase[candidate.node] = "Ingress"
+     \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+          candidate.node)
+
+HistoricalTemporalStage6NonCompletionCandidateProducerContinuationReentry(
+    candidate, position, rank) ==
+  /\ HistoricalTemporalStage6NonCompletionBlockedAtRank(
+       candidate, position, rank)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+       candidate.node)
 
 HistoricalTemporalStage6NonCompletionFiniteServeEpisodeResidualProperty(
     specification) ==
@@ -2272,6 +2436,10 @@ THEOREM HistoricalTemporalStage6NonCompletionSameRunnerOutcome ==
               candidate, position, rank)'
          \/ HistoricalTemporalStage6NonCompletionServeEpisodeResidual(
               candidate, position, rank)'
+         \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  candidate.node)
+            /\ HistoricalTemporalStage6NonCompletionCandidateProducerContinuationReentry(
+                 candidate, position, rank)'
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
@@ -2287,6 +2455,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
    IsaT(600)
    DEF HistoricalTemporalStage6NonCompletionProgress,
        HistoricalTemporalStage6NonCompletionServeEpisodeResidual,
+       HistoricalTemporalStage6NonCompletionCandidateProducerContinuationReentry,
+       HistoricalTemporalStage6NonCompletionCandidateProducerContinuationReentry,
        HistoricalTemporalStage6NonCompletionGoal,
        HistoricalTemporalStage6NonCompletionBlockedAtRank,
        HistoricalTemporalStage6NonCompletionCapacityBlocked,
@@ -2316,6 +2486,12 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CanEnqueueClass, AsyncQueueDepth, NodeQueueNonempty,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -2395,6 +2571,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -2453,7 +2631,9 @@ PROOF
                        candidate, position, rank)
                        ~> HistoricalTemporalStage6NonCompletionProgress(
                             candidate, position, rank))
-    <2>1. /\ HistoricalTemporalStage6NonCompletionBlockedAtRank(
+    <2>1. /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+           /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+             /\ HistoricalTemporalStage6NonCompletionBlockedAtRank(
                candidate, position, rank)
              /\ ~(HistoricalTemporalStage6NonCompletionProgress(
                     candidate, position, rank)
@@ -2478,6 +2658,8 @@ PROOF
                \/ HistoricalTemporalStage6NonCompletionServeEpisodeResidual(
                     candidate, position, rank)'
       BY HistoricalTemporalStage6NonCompletionSameRunnerOutcome
+         DEF HistoricalTemporalStage6NonCompletionServeEpisodeResidual,
+             HistoricalTemporalStage6NonCompletionCandidateProducerContinuationReentry
     <2>3. HistoricalTemporalStage6NonCompletionBlockedAtRank(
              candidate, position, rank)
              /\ [AsyncNext]_AsyncAllVars
@@ -2489,11 +2671,17 @@ PROOF
                     candidate, position, rank)'
       BY HistoricalTemporalStage6NonCompletionSameRunnerOutcome,
          HistoricalTemporalStage6NonCompletionOtherStep, Isa
+         DEF HistoricalTemporalStage6NonCompletionCandidateProducerContinuationReentry
     <2>4. CASE candidate.node \in Responsive
       <3>1. AsyncSpecAt(initialContext)
-               => WF_AsyncAllVars(
-                    PostGstRunHistoricalRecoveryNode(candidate.node))
-        BY <2>4 DEF AsyncSpecAt, AsyncFairnessAt
+               => /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                  /\ []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                  /\ WF_AsyncAllVars(
+                       PostGstRunHistoricalRecoveryNode(candidate.node))
+        BY <2>4,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
+           DEF AsyncSpecAt, AsyncFairnessAt
       <3>2. AsyncSpecAt(initialContext)
                => (HistoricalTemporalStage6NonCompletionBlockedAtRank(
                      candidate, position, rank)
@@ -2821,7 +3009,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CausalCandidates, TrackedWorkCandidates, CandidateScheduled,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       RunHistoricalServer, OpenHistoricalRecovery,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -3204,7 +3395,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncIoQueueDepth, AsyncOutstandingWorkCount,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       RunHistoricalServer, OpenHistoricalRecovery,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -3627,7 +3821,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ProducerCompletionCanAdmit, ProducerCompletionCanAdvance,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       RunHistoricalServer, OpenHistoricalRecovery,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -3726,6 +3923,8 @@ PROOF
                  AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
                  AsyncNonRunnerStep, RunNode,
                  RunHistoricalRecoveryNode, RunNodeWork,
+                 ResolveRunNodeCandidateProducerContinuation,
+                 AsyncSchedulerExceptCausalControlAndNodeService,
                  SerializedLocalPrecedesServeIngressStep,
                  SelectedLocalAdmissionAdvance,
                  AsyncServeIngressTargetOnlyTurn,
@@ -4410,7 +4609,10 @@ BY BusyPhaseOwnerPartitionObligation,
        CausalCandidates, TrackedWorkCandidates,
        CandidateConsumerCurrent, CommandDispatchable,
        CommandExecutionReady, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, LocalAdmissionStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       LocalAdmissionStep,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -4505,6 +4707,8 @@ BY BusyPhaseOwnerPartitionObligation,
        RequestsUniqueByNode, RequestNodeSet, NodeIdle,
        PendingNodes, SigningNodes, AllPendingRequests,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
@@ -4892,10 +5096,14 @@ PROOF
                   /\ asyncDeferredDrainOwed[candidate.node])
     <2>1. [](AsyncStrongTypeInvariant
               /\ AsyncProgressOwnershipInvariant
-              /\ AsyncDeferredHandoffOwnershipInvariant)
+              /\ AsyncDeferredHandoffOwnershipInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
-         AsyncSpecAlwaysDeferredHandoffOwnershipObligation, PTL
+         AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>2. (HistoricalTemporalStage2Owned(candidate)
              /\ ~NodeIdle(candidate.node))
              ~> HistoricalTemporalStage2BusyTerminationGoal(candidate)
@@ -4934,6 +5142,8 @@ PROOF
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunHistoricalRecoveryNode,
              RunHistoricalRecoveryNode, RunNodeWork,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
              SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AsyncServeIngressTargetOnlyTurn,
@@ -4992,10 +5202,14 @@ PROOF
       BY <1>1, HistoricalTemporalStage2IdleHandoffDrainRearmed
     <2>2. [](AsyncStrongTypeInvariant
               /\ AsyncProgressOwnershipInvariant
-              /\ AsyncDeferredHandoffOwnershipInvariant)
+              /\ AsyncDeferredHandoffOwnershipInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
-         AsyncSpecAlwaysDeferredHandoffOwnershipObligation, PTL
+         AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>3. (HistoricalTemporalStage2ExactIdleRetryPending(candidate)
               /\ asyncDeferredDrainOwed[candidate.node]
               /\ Stage2HandoffCursorDistance(candidate) = distance)
@@ -5034,6 +5248,8 @@ PROOF
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunHistoricalRecoveryNode,
              RunHistoricalRecoveryNode, RunNodeWork,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
              SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AsyncServeIngressTargetOnlyTurn,
@@ -5164,10 +5380,14 @@ PROOF
                  ~> HistoricalTemporalStage2HandoffProgressExit(candidate)
     <2>1. [](AsyncStrongTypeInvariant
               /\ AsyncProgressOwnershipInvariant
-              /\ AsyncDeferredHandoffOwnershipInvariant)
+              /\ AsyncDeferredHandoffOwnershipInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
-         AsyncSpecAlwaysDeferredHandoffOwnershipObligation, PTL
+         AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>2. [] [(\/ ~HistoricalTemporalStage2ExactIdleRetrySelected(
                        candidate)
                   \/ ~DeferredDrainStep(candidate.node)
@@ -5205,6 +5425,8 @@ PROOF
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunHistoricalRecoveryNode,
              RunHistoricalRecoveryNode, RunNodeWork,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
              SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AsyncServeIngressTargetOnlyTurn,
@@ -5283,11 +5505,15 @@ PROOF
     <2>1. [](AsyncStrongTypeInvariant
               /\ AsyncProgressOwnershipInvariant
               /\ AsyncDeferredHandoffOwnershipInvariant
-              /\ Stage2BusyKernelInvariant)
+              /\ Stage2BusyKernelInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
          AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
-         AsyncSpecAlwaysStage2BusyKernelObligation, PTL
+         AsyncSpecAlwaysStage2BusyKernelObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
          DEF Stage2BusyKernelProperty
     <2>2. (HistoricalTemporalStage2Owned(candidate)
              /\ ~NodeIdle(candidate.node))
@@ -5352,6 +5578,8 @@ PROOF
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunHistoricalRecoveryNode,
              RunHistoricalRecoveryNode, RunNodeWork,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
              SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AsyncServeIngressTargetOnlyTurn,
@@ -5441,6 +5669,8 @@ PROOF
              SerializedRuntimeStep,
              SerializedRuntimePrecedesServeIngressStep, RunNode,
              RunHistoricalRecoveryNode, RunNodeWork,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
              SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AsyncServeIngressTargetOnlyTurn,
@@ -5634,6 +5864,525 @@ BY DEF HistoricalTemporalFixedClockLeaves,
        HistoricalDiscoveryFixedClockConcreteServiceProperties
 
 (***************************************************************************
+Historical producer-continuation ingress-cut corridor.
+
+The target remains in the global durable continuation table while a physical
+Serve or leader-wire barrier owns the historical runner.  The immutable
+target ordinal freezes a finite logical leader-wire universe.  Dormant
+identities in that universe contribute two prepaid non-descent stages:
+reactivation retains the identity but allocates a fresh physical carrier and
+the current per-source predecessor snapshot, then Ingress drain consumes the
+second stage.  Fresh identities use the current shared high-watermark and
+cannot enter the old cut; terminal identities cannot resurrect after GST.
+For the positive target ordinal, the strict scheduler cut is exactly the
+Logical barrier cutoff `<= targetOrdinal - 1`; an equal-ordinal leader-wire
+carrier is the target lifecycle cell and coalesces instead of being charged.
+
+The inner continuation prefix already charges Candidate, Serve, and
+Reserved/Materialized continuation tokens.  The leader-wire stage budget is
+outside it, so admission or ingress-to-Candidate transfer cannot replenish
+the composite rank.  The physical dependency tail carries the existing
+earlier-carrier/frozen-prefix pair and explicit
+mode/capacity/runner/priority-selector/lane/source components.  Reaching a
+lower auxiliary rank is not target progress, and clearing the barrier is not
+target progress: the only exposed exit is the same framed continuation prefix
+becoming runner-eligible (or its independently proved strict prefix descent).
+***************************************************************************)
+
+HistoricalCandidateProducerContinuationIngressCutEpisodeRank(node, record) ==
+  AsyncCandidateProducerContinuationIngressBarrierRank(
+    node, record.ordinal)
+
+HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier ==
+  AsyncFrozenLeaderWireBarrierRankCarrier
+
+HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering ==
+  AsyncFrozenLeaderWireBarrierRankOrdering
+
+HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
+    node, record, status, budget, episodeRank) ==
+  /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+       node, record, status, budget)
+  /\ episodeRank
+       \in
+         HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier
+  /\ episodeRank =
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+         node, record)
+
+HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+    node, record, status, budget, episodeRank) ==
+  \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+       node, record, status, budget)
+  \/ HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible(
+       node, record, status, budget)
+  \/ \E lower \in
+       SetLessThan(
+         episodeRank,
+         HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering,
+         HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier):
+       HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
+         node, record, status, budget, lower)
+
+HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn(
+    node, targetOrdinal) ==
+  /\ AsyncLeaderWireIngressOwnsSharedPhysicalTurn(node)
+  /\ (AsyncLeaderWireEarliestPhysicalIngressRecord(node)).schedulerOrdinal
+       < targetOrdinal
+
+HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds ==
+  {"HistoricalRunner", "HistoricalIoWorker"}
+
+HistoricalCandidateProducerContinuationIngressCutFairOwner(
+    node, targetOrdinal) ==
+  IF HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn(
+       node, targetOrdinal)
+  THEN "HistoricalRunner"
+  ELSE IF AsyncCausalEpisodeIoOwnerRequired(node, targetOrdinal)
+       THEN "HistoricalIoWorker"
+       ELSE "HistoricalRunner"
+
+HistoricalCandidateProducerContinuationIngressCutFairAction(
+    node, ownerKind) ==
+  CASE ownerKind = "HistoricalRunner" ->
+         PostGstRunHistoricalRecoveryNode(node)
+    [] ownerKind = "HistoricalIoWorker" ->
+         PostGstServiceHistoricalRecoveryIoWorker(node)
+    [] OTHER -> FALSE
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutRankIsFinite ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"},
+     budget \in
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+         node, record, status, budget)
+      => HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+           node, record)
+           \in
+             HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier
+BY CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,
+   AsyncFrozenLeaderWireBarrierRankIsFinite, IsaT(600)
+   DEF HistoricalCandidateProducerContinuationIngressCutEpisodeRank,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier,
+       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
+       HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
+       AsyncCandidateProducerContinuationIngressBarrierRank,
+       AsyncFrozenLeaderWireBarrierModes
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutClassifiesPhysicalOwner ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"},
+     budget \in
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+         node, record, status, budget)
+      => /\ AsyncIngressSchedulerBarrierActive(node)
+         /\ AsyncEarliestIngressSchedulerOrdinal(node) < record.ordinal
+         /\ \/ HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn(
+                  node, record.ordinal)
+            \/ /\ AsyncServeIngressOwnsSharedPhysicalTurn(node)
+               /\ AsyncServeEarliestIngressSchedulerOrdinal(node)
+                    < record.ordinal
+         /\ HistoricalCandidateProducerContinuationIngressCutFairOwner(
+              node, record.ordinal)
+              \in
+                HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds
+BY AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn,
+   AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum,
+   AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler,
+   FS_CardinalityType, IsaT(1800)
+   DEF HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
+       HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
+       HistoricalCandidateProducerContinuationAtStatus,
+       HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn,
+       HistoricalCandidateProducerContinuationIngressCutFairOwner,
+       HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerMayPrecedeIngress,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncIngressSchedulerBarrierActive,
+       AsyncEarliestIngressSchedulerOrdinal,
+       AsyncLeaderWireIngressOwnsSharedPhysicalTurn,
+       AsyncServeIngressOwnsSharedPhysicalTurn
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExits ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"},
+     budget \in
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+         node, record, status, budget)
+    /\ [AsyncNext]_AsyncAllVars
+      => \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+               node, record, status, budget)'
+         \/ HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible(
+               node, record, status, budget)'
+         \/ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+               node, record, status, budget)'
+BY HistoricalCandidateProducerContinuationStepPersistsOrExits,
+   HistoricalCandidateProducerContinuationFrozenPrefixStepCannotReplenish,
+   AsyncCandidateProducerContinuationStatusIsMonotone,
+   IsaT(1800)
+   DEF HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
+       HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible,
+       HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
+       HistoricalCandidateProducerContinuationPrefixDescentGoal,
+       HistoricalCandidateProducerContinuationAtStatus,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncAllVars
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutStepIsGoalDescentOrFrame ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"},
+     budget \in
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+         node, record, status, budget)
+    /\ [AsyncNext]_AsyncAllVars
+      => \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+               node, record, status, budget)'
+         \/ HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible(
+               node, record, status, budget)'
+         \/ /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+                  node, record, status, budget)'
+            /\ <<HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+                    node, record)',
+                  HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+                    node, record)>>
+                 \in
+                   HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering
+         \/ /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+                  node, record, status, budget)'
+            /\ HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+                 node, record)'
+                 =
+               HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+                 node, record)
+BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExits,
+   CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,
+   CandidateProducerContinuationEqualOrdinalLeaderWireCoalescesTargetCell,
+   CandidateProducerContinuationFrozenPrefixStepCannotReplenish,
+   CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight,
+   CandidateProducerContinuationDormantLocalReplayChargeCannotAppearAtGst,
+   AsyncCandidateProducerContinuationStatusIsMonotone,
+   AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck,
+   AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor,
+   AsyncCandidateProducerSemanticHandoffRetirementRequiresAck,
+   AsyncServeIngressFrozenPredecessorPrefixNeverReplenishesOnDrain,
+   AsyncServeQueuedIdentityDepartureInstallsTombstone,
+   AsyncServeTombstonedIdentityCannotRequeueAtGst,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncIngressPhysicalHighWatermarkIsMonotone,
+   PostGstStepCannotCreateDormantLeaderWirePotential,
+   AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix,
+   LeaderWireIngressDrainNeverInventsRuntimeOwner,
+   RuntimeLeaderWireCannotRetireMerelyFromIngressPop,
+   RetireLeaderWireLifecycleRetainsTerminalTombstone,
+   ExactTicketTurnDecreasesDrainableIngressTurnReach,
+   ExhaustedIngressStepDecreasesDrainableIngressTurnReach,
+   LocalStepDecreasesDrainableIngressTurnReach,
+   SerializedLocalPredecessorDecreasesDrainableIngressTurnReach,
+   RuntimeStepDecreasesDrainableIngressTurnReach,
+   OlderRuntimeInterleaveDecreasesDrainableIngressTurnReach,
+   FS_CardinalityType, FS_Subset, IsaT(7200)
+   DEF HistoricalCandidateProducerContinuationIngressCutEpisodeRank,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering,
+       AsyncCandidateProducerContinuationIngressBarrierRank,
+       AsyncFrozenLeaderWireBarrierRank,
+       AsyncFrozenLeaderWireBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageTokens,
+       AsyncFrozenLeaderWireBarrierRemainingStage,
+       AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenLeaderWireBarrierTailRank,
+       AsyncFrozenLeaderWireIngressDependencyRank,
+       AsyncFrozenLeaderWireIngressRecords,
+       AsyncFrozenLeaderWireSelectedIngressRecord,
+       AsyncFrozenLeaderWireIngressRank,
+       AsyncFrozenLeaderWireIngressModeRank,
+       AsyncFrozenLeaderWireIngressCapacityRank,
+       AsyncFrozenLeaderWireIngressRunnerRank,
+       AsyncFrozenLeaderWireIngressPriorityRank,
+       AsyncFrozenLeaderWireIngressPriorityOwners,
+       AsyncFrozenLeaderWireIngressLanePosition,
+       AsyncFrozenLeaderWireIngressLaneIndices,
+       AsyncFrozenLeaderWireIngressSourcePosition,
+       AsyncCandidateProducerContinuationFrozenPrefixRank,
+       AsyncCandidateProducerContinuationFrozenProducerBudget,
+       AsyncCandidateProducerContinuationFrozenProducerTokens,
+       AsyncCandidateProducerContinuationFrozenCandidateTokens,
+       AsyncCandidateProducerContinuationFrozenCandidateOwners,
+       AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
+       AsyncCandidateProducerContinuationFrozenStatusTokens,
+       AsyncCandidateProducerContinuationFrozenRecords,
+       AsyncCandidateProducerContinuationFrozenPredecessorOrigins,
+       AsyncCausalEpisodeServeWorkBudget,
+       AsyncCausalEpisodeServeWorkTokens,
+       AsyncCausalEpisodeServeOccurrenceTokens,
+       AsyncCausalEpisodeServeIngressPrefixTokens,
+       AsyncCausalEpisodeServeIoPredecessorTokens,
+       AsyncCausalEpisodeServeReachDebt,
+       AsyncLeaderWirePhysicalIngressRank,
+       AsyncLeaderWireEarlierPhysicalOwners,
+       AsyncLeaderWireFrozenIngressPredecessorDebtSet,
+       AsyncLeaderWireLifecycleStateAfterIngressAdmission,
+       AsyncLeaderWireLifecycleRecordAfterIngressDrain,
+       AsyncLeaderWireLifecyclesAfterIngressDrain,
+       AsyncLeaderWireIngressPrefixSnapshot,
+       AsyncServeIngressAdmissionsAfterIngressDrain,
+       AsyncServeIngressAdmissionsWithout,
+       AsyncServeReservationsAfterIoService,
+       AsyncServeReservationsAfterIngressDrain,
+       ServiceIoWorkerWork, PopSelectedIngress,
+       DrainFairIngressSelected, DrainHistoricalIngressSelected,
+       LocalAdmissionStep, IngressDrainStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       AsyncNext, AsyncAllVars,
+       LexPairOrdering, OpToRel
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutSelectedOwnerIsEnabled ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"},
+     budget \in
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+         node, record, status, budget)
+      => LET owner ==
+               HistoricalCandidateProducerContinuationIngressCutFairOwner(
+                 node, record.ordinal)
+         IN /\ owner
+                  \in
+                    HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds
+            /\ ENABLED
+                 <<HistoricalCandidateProducerContinuationIngressCutFairAction(
+                     node, owner)>>_AsyncAllVars
+BY HistoricalCandidateProducerContinuationIngressCutClassifiesPhysicalOwner,
+   HistoricalRecoveryRunnerEnabledAfterGst,
+   HistoricalRecoveryIoWorkerEnabledAfterGst,
+   HistoricalTemporalQueuedIoServiceIsNonstuttering,
+   ENABLEDaxioms, IsaT(1800)
+   DEF HistoricalCandidateProducerContinuationIngressCutFairOwner,
+       HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds,
+       HistoricalCandidateProducerContinuationIngressCutFairAction,
+       HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn,
+       AsyncCausalEpisodeIoOwnerRequired,
+       AsyncCausalEpisodeServeIngressIdentities,
+       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
+       HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
+       HistoricalCandidateProducerContinuationAtStatus,
+       HistoricalRecoveryTarget,
+       PostGstServiceHistoricalRecoveryIoWorker,
+       ServiceHistoricalRecoveryIoWorker,
+       ServiceIoWorkerWork, AsyncAllVars
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutSelectedActionConsumesCell ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"},
+     budget \in
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+    LET owner ==
+          HistoricalCandidateProducerContinuationIngressCutFairOwner(
+            node, record.ordinal)
+    IN /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ AsyncCandidateServiceLifecycleInvariant
+       /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+           node, record, status, budget)
+       /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+       /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+       /\ <<HistoricalCandidateProducerContinuationIngressCutFairAction(
+               node, owner)>>_AsyncAllVars
+       => \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+                node, record, status, budget)'
+          \/ HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible(
+                node, record, status, budget)'
+          \/ /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+                   node, record, status, budget)'
+             /\ <<HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+                     node, record)',
+                   HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+                     node, record)>>
+                  \in
+                    HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering
+BY HistoricalCandidateProducerContinuationIngressCutStepIsGoalDescentOrFrame,
+   HistoricalCandidateProducerContinuationIngressCutClassifiesPhysicalOwner,
+   HistoricalCandidateProducerContinuationIngressCutSelectedOwnerIsEnabled,
+   ServiceIoWorkerDropsQueueDepth,
+   IsaT(3600)
+   DEF HistoricalCandidateProducerContinuationIngressCutFairAction,
+       HistoricalCandidateProducerContinuationIngressCutFairOwner,
+       HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn,
+       AsyncCausalEpisodeIoOwnerRequired,
+       PostGstRunHistoricalRecoveryNode,
+       PostGstServiceHistoricalRecoveryIoWorker,
+       ServiceIoWorkerWork, AsyncAllVars
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutOwnerPersistsInCell ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"},
+     budget \in
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+    LET owner ==
+          HistoricalCandidateProducerContinuationIngressCutFairOwner(
+            node, record.ordinal)
+        episodeRank ==
+          HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+            node, record)
+    IN /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+            node, record, status, budget)
+       /\ [AsyncNext]_AsyncAllVars
+       /\ HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+            node, record, status, budget)'
+       /\ HistoricalCandidateProducerContinuationIngressCutEpisodeRank(
+            node, record)' = episodeRank
+       => HistoricalCandidateProducerContinuationIngressCutFairOwner(
+            node, record.ordinal)' = owner
+BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExits,
+   CandidateProducerContinuationStrictLeaderWireCutMatchesLogicalBarrier,
+   AsyncServeQueuedIdentityDepartureInstallsTombstone,
+   AsyncServeTombstonedIdentityCannotRequeueAtGst,
+   PostGstStepCannotCreateDormantLeaderWirePotential,
+   IsaT(2400)
+   DEF HistoricalCandidateProducerContinuationIngressCutFairOwner,
+       HistoricalCandidateProducerContinuationIngressCutLeaderWireOwnsTurn,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRank,
+       AsyncCandidateProducerContinuationIngressBarrierRank,
+       AsyncFrozenLeaderWireBarrierRank,
+       AsyncFrozenLeaderWireBarrierStageBudget,
+       AsyncFrozenLeaderWireBarrierStageTokens,
+       AsyncFrozenLeaderWireBarrierRecords,
+       AsyncFrozenLeaderWireIngressRecords,
+       AsyncCausalEpisodeIoOwnerRequired,
+       AsyncCausalEpisodeServeIngressIdentities,
+       AsyncAllVars
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutOwnerUsesAsyncFairness ==
+  \A initialContext,
+     node \in Responsive,
+     ownerKind \in
+       HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds:
+    AsyncLiveSpecAt(initialContext)
+      => WF_AsyncAllVars(
+           HistoricalCandidateProducerContinuationIngressCutFairAction(
+             node, ownerKind))
+BY Isa
+   DEF HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds,
+       HistoricalCandidateProducerContinuationIngressCutFairAction,
+       AsyncLiveSpecAt, AsyncSpecAt, AsyncFairnessAt
+
+HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty(
+    specification) ==
+  specification
+    => \A node \in ValidatorIds,
+          record \in AsyncCandidateProducerContinuationRecordSet,
+          status \in {"Reserved", "Materialized"},
+          budget \in
+            AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+          episodeRank \in
+            HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier:
+         HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
+           node, record, status, budget, episodeRank)
+           ~> HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+                node, record, status, budget, episodeRank)
+
+THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRankStep ==
+  \A initialContext:
+    HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+   HistoricalCandidateProducerContinuationIngressCutRankIsFinite,
+   HistoricalCandidateProducerContinuationIngressCutSelectedOwnerIsEnabled,
+   HistoricalCandidateProducerContinuationIngressCutStepIsGoalDescentOrFrame,
+   HistoricalCandidateProducerContinuationIngressCutSelectedActionConsumesCell,
+   HistoricalCandidateProducerContinuationIngressCutOwnerPersistsInCell,
+   HistoricalCandidateProducerContinuationIngressCutOwnerUsesAsyncFairness,
+   AsyncLiveSpecProjectsAsyncSpec,
+   WF1, PTL, IsaT(2400)
+   DEF HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeGoal,
+       HistoricalCandidateProducerContinuationIngressCutFairOwner,
+       HistoricalCandidateProducerContinuationIngressCutFairAction,
+       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
+       HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
+       HistoricalCandidateProducerContinuationAtStatus,
+       AsyncLiveSpecAt
+
+HistoricalCandidateProducerContinuationIngressCutRankedClosureProperty(
+    specification) ==
+  specification
+    => \A node \in ValidatorIds,
+          record \in AsyncCandidateProducerContinuationRecordSet,
+          status \in {"Reserved", "Materialized"},
+          budget \in
+            AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+         HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual(
+           node, record, status, budget)
+           ~> \/ HistoricalCandidateProducerContinuationPrefixDescentGoal(
+                    node, record, status, budget)
+               \/ HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible(
+                    node, record, status, budget)
+
+THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRankedClosure ==
+  \A initialContext:
+    HistoricalCandidateProducerContinuationIngressCutRankedClosureProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRankStep,
+   HistoricalCandidateProducerContinuationIngressCutRankIsFinite,
+   AsyncFrozenLeaderWireBarrierRankOrderingIsWellFounded,
+   WellFoundedLeadsTo, PTL
+   DEF HistoricalCandidateProducerContinuationIngressCutRankedClosureProperty,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeGoal,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier
+
+THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutClosure ==
+  \A initialContext:
+    HistoricalCandidateProducerContinuationIngressCutClosureProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRankedClosure
+   DEF HistoricalCandidateProducerContinuationIngressCutClosureProperty,
+       HistoricalCandidateProducerContinuationIngressCutRankedClosureProperty
+
+THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationResolutionClosure ==
+  \A initialContext:
+    HistoricalCandidateProducerContinuationResolutionClosureProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutClosure,
+   HistoricalCandidateProducerContinuationIngressCutClosureClosesResolution
+
+(***************************************************************************
 Historical Candidate/Serve lifecycle bridge.
 
 This is proved directly from `AsyncNext`, rather than imported from the
@@ -5799,7 +6548,7 @@ HistoricalTemporalServeIdentityBudgetBridgeProperty(specification) ==
                    family \in AsyncServeLifecycleFamilies:
                AsyncServeLifecycleFamilyOwned(node, family)
                  => /\ Cardinality(
-                          AsyncServeFamilyReservationRecords(node, family)
+                          AsyncServeFamilyAdmissionRecords(node, family)
                             \cup
                           AsyncServeFamilyTombstoneRecords(node, family)) = 1
                     /\ AsyncServeFamilyOwnerIdentity(node, family)
@@ -5869,10 +6618,16 @@ THEOREM HistoricalTemporalInitEstablishesCandidateServiceTombstones ==
   \A initialContext:
     AsyncInitAt(initialContext)
       => AsyncCandidateServiceTombstoneLifecycleInvariant
-BY Isa
+BY AsyncInitEstablishesLeaderWireContinuationSharedOrdinalNoCollision,
+   Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
        AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateProducerSemanticHandoffCoverageInvariant,
+       AsyncCandidateLifecycleAdmissions,
+       AsyncInitialCandidateLifecycleAdmissions,
+       AsyncCandidateLifecycleAdmission,
        AsyncControlServiceStateTypeInvariant,
        AsyncCandidateServiceTombstones,
        AsyncCandidateServiceRecordsFor,
@@ -5888,6 +6643,8 @@ THEOREM HistoricalTemporalNextPreservesCandidateServiceTombstones ==
   /\ AsyncNext
   => AsyncCandidateServiceTombstoneLifecycleInvariant'
 BY AsyncNextPreservesControlServiceStateTypeInvariant,
+   AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision,
+   AsyncControlServiceTransitionPreservesSemanticHandoffCoverage,
    AsyncCandidateServicesThisStepIsSingleton,
    AsyncCandidateTerminalRetirementsThisStepIsSingleton,
    AsyncCandidateSuccessfulServiceInstallsTombstone,
@@ -5908,7 +6665,10 @@ BY AsyncNextPreservesControlServiceStateTypeInvariant,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       LocalAdmissionStep,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn, IngressDrainStep,

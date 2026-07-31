@@ -1488,10 +1488,14 @@ PROOF
     <2>1. AsyncSpecAt(initialContext)
              => [](AsyncStrongTypeInvariant
                     /\ AsyncProgressOwnershipInvariant
-                    /\ AsyncDeferredHandoffOwnershipInvariant)
+                    /\ AsyncDeferredHandoffOwnershipInvariant
+                    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
-         AsyncSpecAlwaysDeferredHandoffOwnershipObligation, PTL
+         AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>2. (ProtectedStage2Owned(candidate)
              /\ ~NodeIdle(candidate.node))
              ~> (ProtectedServiceOwnershipExit(candidate)
@@ -1585,10 +1589,14 @@ PROOF
     <2>2. AsyncSpecAt(initialContext)
              => [](AsyncStrongTypeInvariant
                     /\ AsyncProgressOwnershipInvariant
-                    /\ AsyncDeferredHandoffOwnershipInvariant)
+                    /\ AsyncDeferredHandoffOwnershipInvariant
+                    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
-         AsyncSpecAlwaysDeferredHandoffOwnershipObligation, PTL
+         AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>3. (Stage2ExactIdleRetryPending(candidate)
               /\ asyncDeferredDrainOwed[candidate.node]
               /\ Stage2HandoffCursorDistance(candidate) = distance)
@@ -1753,10 +1761,14 @@ PROOF
     <2>1. AsyncSpecAt(initialContext)
              => [](AsyncStrongTypeInvariant
                     /\ AsyncProgressOwnershipInvariant
-                    /\ AsyncDeferredHandoffOwnershipInvariant)
+                    /\ AsyncDeferredHandoffOwnershipInvariant
+                    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
-         AsyncSpecAlwaysDeferredHandoffOwnershipObligation, PTL
+         AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>2. [] [(\/ ~Stage2ExactIdleRetrySelected(candidate)
                   \/ ~DeferredDrainStep(candidate.node)
                   \/ Stage2HandoffProgressExit(candidate)')]_AsyncAllVars
@@ -2036,10 +2048,14 @@ PROOF
              => [](AsyncStrongTypeInvariant
                     /\ AsyncProgressOwnershipInvariant
                     /\ AsyncDeferredHandoffOwnershipInvariant
+                    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
                     /\ Stage2BusyKernelInvariant)
       BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
          AsyncSpecAlwaysProgressOwnershipInvariant,
-         AsyncSpecAlwaysDeferredHandoffOwnershipObligation, PTL
+         AsyncSpecAlwaysDeferredHandoffOwnershipObligation,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
          DEF Stage2BusyKernelProperty
     <2>2. (ProtectedStage2Owned(candidate)
              /\ ~NodeIdle(candidate.node))

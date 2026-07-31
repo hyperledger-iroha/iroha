@@ -6,7 +6,6 @@ set -euo pipefail
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
-readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?[0-9]+(ms|s)|([0-9]+d )?([0-9]+h )?[0-9]+min|([0-9]+d )?[0-9]+h|[0-9]+d) at \([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\)$'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly MODEL="SumeragiV2IndexedServiceActivationMutation.tla"
@@ -15,6 +14,7 @@ readonly UNJOINED_CLOCK_CONFIG="indexed_service_activation_unjoined_clock_bug.cf
 readonly FIXED_REENTRY_CONFIG="indexed_service_activation_reentry_fixed.cfg"
 readonly REENTRY_CONFIG="indexed_service_activation_reentry_bug.cfg"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if (($#)); then
   echo "usage: $0" >&2
@@ -84,7 +84,6 @@ run_tlc() {
   local expected_status="$3"
   local log="${run_dir}/${label}.log"
   local actual_status
-  local last_nonblank
   set +e
   (
     cd "$FORMAL_DIR"
@@ -98,18 +97,31 @@ run_tlc() {
     cat "$log" >&2
     exit 1
   fi
-  [[ "$(grep -Ec "$TLC_FINISHED_PATTERN" "$log" || true)" == 1 ]] || {
-    echo "${label} did not emit exactly one TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
-  last_nonblank="$(awk 'NF { line = $0 } END { print line }' "$log")"
-  grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank" || {
-    echo "${label} did not end at the TLC terminal marker" >&2
-    cat "$log" >&2
-    exit 1
-  }
+  if [[ "$expected_status" -eq 0 ]]; then
+    sumeragi_v2_tlc_assert_fixed_success "$label" "$log" "$actual_status"
+  else
+    sumeragi_v2_tlc_assert_nonzero_state_space "$label" "$log"
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  fi
   printf '%s\n' "$log"
+}
+
+assert_unique_primary_diagnostic() {
+  local label="$1"
+  local log="$2"
+  local marker="$3"
+  local primary_diagnostic_count
+  sumeragi_v2_tlc_assert_exact_line "$label" "$log" "$marker"
+  primary_diagnostic_count="$(
+    grep -Ec \
+      "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+      "$log" || true
+  )"
+  [[ "$primary_diagnostic_count" -eq 1 ]] || {
+    echo "${label} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+    cat "$log" >&2
+    exit 1
+  }
 }
 
 fixed_liveness_log="$(run_tlc fixed-activation "$FIXED_LIVENESS_CONFIG" 0)"
@@ -128,13 +140,14 @@ for log in "$fixed_liveness_log" "$fixed_reentry_log"; do
 done
 
 unjoined_clock_log="$(run_tlc unjoined-clock-owner "$UNJOINED_CLOCK_CONFIG" 13)"
-for marker in "Temporal properties were violated." "Stuttering"; do
-  grep -Fq "$marker" "$unjoined_clock_log" || {
-    echo "unjoined clock-owner lasso missed TLC marker: ${marker}" >&2
-    cat "$unjoined_clock_log" >&2
-    exit 1
-  }
-done
+assert_unique_primary_diagnostic \
+  "unjoined-clock-owner" "$unjoined_clock_log" \
+  "Error: Temporal properties were violated."
+grep -Fq "Stuttering" "$unjoined_clock_log" || {
+  echo "unjoined clock-owner lasso missed TLC marker: Stuttering" >&2
+  cat "$unjoined_clock_log" >&2
+  exit 1
+}
 if grep -Fq "Error: Invariant " "$unjoined_clock_log"; then
   echo "unjoined clock-owner lasso was misclassified as an invariant failure" >&2
   cat "$unjoined_clock_log" >&2
@@ -143,11 +156,11 @@ fi
 
 reentry_log="$(run_tlc restriction-reentry "$REENTRY_CONFIG" 12)"
 readonly REENTRY_INVARIANT_MARKER="Error: Invariant ActivationMembershipCoherence is violated."
-[[ "$(grep -Fxc "$REENTRY_INVARIANT_MARKER" "$reentry_log" || true)" == 1 ]] || {
-  echo "restriction re-entry missed the exact activation-coherence invariant" >&2
-  cat "$reentry_log" >&2
-  exit 1
-}
+assert_unique_primary_diagnostic \
+  "restriction-reentry" "$reentry_log" "$REENTRY_INVARIANT_MARKER"
+sumeragi_v2_tlc_assert_exact_line \
+  "restriction-reentry" "$reentry_log" \
+  "Error: The behavior up to this point is:"
 if grep -Fq "Temporal properties were violated." "$reentry_log"; then
   echo "restriction re-entry was misclassified as a liveness failure" >&2
   cat "$reentry_log" >&2

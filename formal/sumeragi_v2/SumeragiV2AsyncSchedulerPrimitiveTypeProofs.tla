@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncSchedulerPrimitiveTypeProofs ----
-EXTENDS SumeragiV2AsyncRankAndInitProofs
+EXTENDS SumeragiV2AsyncRankAndInitContinuationProofs
 
 (***************************************************************************
 Scheduler type preservation.  The first boundary records precisely which

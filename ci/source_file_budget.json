@@ -31,7 +31,6 @@
     "crates/iroha_core/src/privacy_engines/zk_x509/der_stark.rs": 5551,
     "crates/iroha_core/src/privacy_engines/zk_x509/p256_aggregate_adapter.rs": 8998,
     "crates/iroha_core/src/privacy_engines/zk_x509/p256_value_bus.rs": 5581,
-    "crates/iroha_core/src/privacy_engines/zk_x509/preprocessed_fixed.rs": 6539,
     "crates/iroha_core/src/privacy_engines/zk_x509/rfc5280_stark.rs": 13615,
     "crates/iroha_core/src/privacy_engines/zk_x509/sha_call_bus_stark.rs": 5722,
     "crates/iroha_core/src/privacy_engines/zk_x509/stark.rs": 23602,

@@ -1030,7 +1030,7 @@ THEOREM SerializedRuntimePreservesDecisionExactSourceRetention ==
     /\ DecisionFrontierUniquenessInvariant
     /\ DecisionTimeoutFrontierInvariant
     /\ DecisionExactSourceRetentionInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => DecisionExactSourceRetentionInvariant'
 BY SelectedExactFifoOwnerCannotDeferOrDiscard,
    SelectedExactDeferredOwnerCannotDiscard,
@@ -1072,7 +1072,10 @@ BY SelectedExactFifoOwnerCannotDeferOrDiscard,
        DecisionTimeoutFrontierInvariant,
        PendingInstallExcludesDecision,
        CommandSuccessorsScheduledAfter,
-       SerializedRuntimeStep, RuntimeStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       RuntimeStep,
        FifoRuntimeStep, DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep,
        DeferredRetransmitStep, DirectTimeoutStep,
@@ -1107,7 +1110,29 @@ BY LocalAdmissionPreservesDecisionExactSourceRetention,
    SerializedLocalPredecessorPreservesDecisionExactSourceRetention,
    IngressDrainPreservesDecisionExactSourceRetention,
    SerializedRuntimePreservesDecisionExactSourceRetention, Isa
-   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep
+   DEF RunNodeWork, SerializedRunnerRuntimeStep,
+       SerializedLocalPrecedesServeIngressStep,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedRuntimeCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionReady,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationConcreteSuccessorOwned,
+       AsyncCandidateProducerContinuationHandoffOwned,
+       AsyncCandidateProducerContinuationLocalReplayCarrier,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       EnqueueCandidate, CandidateScheduled, ScheduledCandidateSet,
+       AsyncRecoveryVars, SequenceSet, vars
 
 THEOREM AsyncRunnerPreservesDecisionExactSourceRetention ==
   /\ AsyncStrongTypeInvariant

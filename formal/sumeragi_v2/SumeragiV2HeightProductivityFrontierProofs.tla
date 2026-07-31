@@ -14,11 +14,14 @@ already-declared productive effect and preserves the production domains:
   * ordinary I/O remains archive-I/O-service scoped; and
   * historical recovery keeps its separate responsive/target corridor.
 
-The first concrete certificates close clock movement and the Local/Ingress
-parts of a responsive runner cycle.  The final reduction exposes the exact
-remaining reset-boundary state instead of asserting that a Runtime-to-Local
-phase reset, a blocked packet, or a same-rank protected action is productive.
-No theorem from SumeragiV2AsyncTemporalClosureProofs is imported.
+The first concrete certificates close clock movement and the unowned
+Local/Ingress parts of a responsive runner cycle.  A durable producer
+continuation may temporarily own that same serialized runner; its separately
+ranked finite episode is retained in the reset boundary rather than relabelled
+as RuntimeReach progress.  The final reduction exposes the exact remaining
+reset-boundary state instead of asserting that a Runtime-to-Local phase reset,
+a blocked packet, or a same-rank protected action is productive.  No theorem
+from SumeragiV2AsyncTemporalClosureProofs is imported.
 ***************************************************************************)
 
 ImmediateProductiveFairActionReady ==
@@ -157,20 +160,25 @@ PROOF
 Responsive Local/Ingress runner certificate.
 
 The concrete RunNode wrapper resets the node-service deadline, but the
-productive witness here is not that reset.  LocalAdmissionStep and
-IngressDrainStep already have strict RuntimeReachRank descent within the
-current runner cycle, including their blocked phase-advance arms.
+productive witness here is not that reset.  When no older producer
+continuation owns the runner, LocalAdmissionStep and IngressDrainStep already
+have strict RuntimeReachRank descent within the current runner cycle,
+including their blocked phase-advance arms.
 ***************************************************************************)
 
 THEOREM GstUndecidedResponsiveRunNodeIsEnabled ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ gst
     /\ ~NodeHasDecision(node)
     => ENABLED PostGstRunNode(node)
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 gst,
                 ~NodeHasDecision(node)
          PROVE ENABLED PostGstRunNode(node)
@@ -201,12 +209,15 @@ PROOF
 THEOREM LocalOrIngressPostGstRunNodeDecreasesRuntimeReach ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncStrongTypeInvariant
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
     /\ PostGstRunNode(node)
     => PostGstRuntimeReachDecreases
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 AsyncStrongTypeInvariant,
+                ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node),
                 asyncRunnerPhase[node] \in {"Local", "Ingress"},
                 PostGstRunNode(node)
          PROVE PostGstRuntimeReachDecreases
@@ -250,15 +261,22 @@ PROOF
 THEOREM GstUndecidedLocalOrIngressRunnerIsImmediatelyProductive ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ gst
     /\ ~NodeHasDecision(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
     => ImmediateProductiveFairActionReady
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 gst,
                 ~NodeHasDecision(node),
+                ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node),
                 asyncRunnerPhase[node] \in {"Local", "Ingress"}
          PROVE ImmediateProductiveFairActionReady
     <2>1. ENABLED PostGstRunNode(node)
@@ -307,12 +325,13 @@ BY Isa
 Residual frontier.
 
 Outside the two concrete certificates above, every undecided responsive
-voter is at the Runtime reset boundary and the clock has one exact blocking
-owner.  The existing protected-rank temporal theorems show that admitted work
-cannot starve, but they do not state that every Runtime successor immediately
-decreases a rank: an idle Runtime step resets RuntimeReachRank upward, and a
-fresh overdue packet can be capacity-blocked.  Those reachable action cases
-are therefore retained explicitly here.
+voter is either at the Runtime reset boundary or has an immutable producer
+continuation owning its runner, and the clock has one exact blocking owner.
+The existing protected-rank temporal theorems show that admitted work cannot
+starve, but they do not state that every Runtime successor or continuation
+episode immediately decreases RuntimeReachRank: an idle Runtime step resets
+that rank upward, and a fresh overdue packet can be capacity-blocked.  Those
+reachable action cases are therefore retained explicitly here.
 ***************************************************************************)
 
 HeightProductivityResetBoundary ==
@@ -322,16 +341,22 @@ HeightProductivityResetBoundary ==
   /\ PostGstClockBlockingOwnerExists
   /\ \A node \in AsyncCurrentResponsiveVoters:
        ~NodeHasDecision(node)
-         => asyncRunnerPhase[node] = "Runtime"
+         => \/ asyncRunnerPhase[node] = "Runtime"
+            \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                 node)
 
 THEOREM GstUndecidedStateHasImmediateProductivityOrResetBoundary ==
   /\ AsyncStrongTypeInvariant
+  /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+  /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
   /\ gst
   /\ ~ResponsiveNodesDecide
   => \/ ImmediateProductiveFairActionReady
      \/ HeightProductivityResetBoundary
 PROOF
   <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncCandidateProducerContinuationExternalCoverageInvariant,
+              AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
               gst,
               ~ResponsiveNodesDecide
          PROVE \/ ImmediateProductiveFairActionReady
@@ -346,9 +371,13 @@ PROOF
                        /\ ~NodeHasDecision(node)
                        /\ asyncRunnerPhase[node]
                             \in {"Local", "Ingress"}
+                       /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                            node)
         <4>1. PICK node \in AsyncCurrentResponsiveVoters:
                  /\ ~NodeHasDecision(node)
                  /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
+                 /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                      node)
           BY <3>2
         <4> QED BY <1>1, <4>1,
              GstUndecidedLocalOrIngressRunnerIsImmediatelyProductive
@@ -356,6 +385,8 @@ PROOF
                        /\ ~NodeHasDecision(node)
                        /\ asyncRunnerPhase[node]
                             \in {"Local", "Ingress"}
+                       /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                            node)
         <4>1. \A node \in AsyncCurrentResponsiveVoters:
                  asyncRunnerPhase[node]
                    \in {"Local", "Ingress", "Runtime"}
@@ -365,7 +396,9 @@ PROOF
                  AsyncRuntimeScalarTypeInvariant
         <4>2. \A node \in AsyncCurrentResponsiveVoters:
                  ~NodeHasDecision(node)
-                   => asyncRunnerPhase[node] = "Runtime"
+                   => \/ asyncRunnerPhase[node] = "Runtime"
+                      \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                           node)
           BY <3>3, <4>1, Isa
         <4> QED BY <1>1, <2>2, <3>1, <4>2
              DEF HeightProductivityResetBoundary
@@ -411,6 +444,12 @@ PROOF
         BY <2>1, AsyncLiveSpecProjectsAsyncSpec
       <3>2. []AsyncStrongTypeInvariant
         BY <3>1, AsyncSpecAlwaysStrongTypeInvariant
+      <3>2a. []AsyncCandidateProducerContinuationExternalCoverageInvariant
+        BY <3>1,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage
+      <3>2b. []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+        BY <3>1,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
       <3>3. [](gst => []gst)
         BY <3>1, AsyncSpecKeepsGstOnceSet
       <3>4. (AsyncStrongTypeInvariant
@@ -424,11 +463,12 @@ PROOF
                  /\ ~ResponsiveNodesDecide
                 => \/ ImmediateProductiveFairActionReady
                    \/ HeightProductivityResetBoundary)
-        BY GstUndecidedStateHasImmediateProductivityOrResetBoundary, PTL
+        BY <3>2a, <3>2b,
+           GstUndecidedStateHasImmediateProductivityOrResetBoundary, PTL
       <3>6. (gst /\ ~ResponsiveNodesDecide)
                  ~> (ImmediateProductiveFairActionReady
                        \/ ResponsiveNodesDecide)
-        BY <3>2, <3>4, <3>5, PTL
+        BY <3>2, <3>2a, <3>2b, <3>4, <3>5, PTL
       <3>7. [](gst
                  /\ ImmediateProductiveFairActionReady
                 => PostGstProductiveActionEnabled)

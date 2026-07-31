@@ -21,6 +21,7 @@ readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
 readonly CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
 else
@@ -67,6 +68,8 @@ run_mutant() {
   local config="$3"
   local invariant="$4"
   local log="$run_dir/${name}.log"
+  local invariant_marker="Error: Invariant ${invariant} is violated."
+  local primary_diagnostic_count
   set +e
   (
     cd "$FORMAL_DIR"
@@ -75,12 +78,26 @@ run_mutant() {
   ) >"$log" 2>&1
   local status=$?
   set -e
-  if [[ "$status" -ne 12 ]] ||
-    ! grep -Fq "Invariant ${invariant} is violated." "$log"; then
+  if [[ "$status" -ne 12 ]]; then
     echo "${name} did not produce the expected ${invariant} counterexample (status=${status})" >&2
     cat "$log" >&2
     exit 1
   fi
+  sumeragi_v2_tlc_assert_nonzero_state_space "$name" "$log"
+  sumeragi_v2_tlc_assert_exact_line "$name" "$log" "$invariant_marker"
+  sumeragi_v2_tlc_assert_exact_line \
+    "$name" "$log" "Error: The behavior up to this point is:"
+  primary_diagnostic_count="$(
+    grep -Ec \
+      "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+      "$log" || true
+  )"
+  [[ "$primary_diagnostic_count" -eq 1 ]] || {
+    echo "${name} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+    cat "$log" >&2
+    exit 1
+  }
+  sumeragi_v2_tlc_assert_terminal "$name" "$log"
   grep -Fq "TLC2 Version 2.19" "$log" || {
     echo "${name} did not run with the pinned TLC engine" >&2
     cat "$log" >&2

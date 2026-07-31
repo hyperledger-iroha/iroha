@@ -842,8 +842,21 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
 )
 
 
+TEST_SOURCE_COMPONENTS = {
+    "check_sorafs_ai_prescreen_rollout_evidence_test.py": (
+        "sorafs_ai_prescreen_live_evidence_cases.py",
+    ),
+    "check_sorafs_production_readiness_test.py": (
+        "sorafs_production_foundational_cases.py",
+    ),
+}
+
+
 def read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    source = path.read_text(encoding="utf-8")
+    for component_name in TEST_SOURCE_COMPONENTS.get(path.name, ()):
+        source += "\n" + path.with_name(component_name).read_text(encoding="utf-8")
+    return source
 
 
 def function_source(path: Path, function_name: str) -> str:

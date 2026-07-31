@@ -496,8 +496,10 @@ THEOREM HistoricalDiscoveryDueNodeModeHasEnabledExactFairAction ==
      sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier,
      owner,
      mode \in HistoricalDiscoveryTimedOwnerModeCarrier:
-    HistoricalDiscoveryDueNodeOwnerAtMode(
-      node, clockValue, sourceRank, owner, mode)
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ HistoricalDiscoveryDueNodeOwnerAtMode(
+         node, clockValue, sourceRank, owner, mode)
       => ENABLED
            <<HistoricalDiscoveryDueNodeModeFairAction(
                owner, mode)>>_AsyncAllVars
@@ -769,8 +771,12 @@ PROOF
                  ~>
                HistoricalDiscoveryDueNodeModeProgressGoal(
                  node, clockValue, sourceRank, owner, mode)
-    <2>1. []AsyncStrongTypeInvariant
-      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant
+    <2>1. [](/\ AsyncStrongTypeInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>2. [](HistoricalDiscoveryDueNodeOwnerAtMode(
                 node, clockValue, sourceRank, owner, mode)
               /\ ~HistoricalDiscoveryDueNodeModeProgressGoal(
@@ -1330,13 +1336,13 @@ HistoricalDiscoveryPacketConcreteActionKindCarrier ==
    "RunNode", "RunHistoricalRecovery", "RunHistoricalServer",
    "ServiceIo", "ServiceHistoricalIo"}
 
-HistoricalDiscoveryPacketConcreteAction(packet, actionKind) ==
+HistoricalDiscoveryPacketConcreteAction(packet, actionKind, actionSource) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
   IN CASE actionKind = "Admit" ->
-            PostGstAdmitHiddenPacket(recipient, source)
+            PostGstAdmitHiddenPacket(recipient, actionSource)
        [] actionKind = "AdmitHistorical" ->
-            PostGstAdmitHistoricalRecoveryPacket(recipient, source)
+            PostGstAdmitHistoricalRecoveryPacket(
+              recipient, actionSource)
        [] actionKind = "RunNode" ->
             PostGstRunNode(recipient)
        [] actionKind = "RunHistoricalRecovery" ->
@@ -1351,21 +1357,23 @@ HistoricalDiscoveryPacketConcreteAction(packet, actionKind) ==
 
 HistoricalDiscoveryPacketConcreteActionPending(
     node, clockValue, sourceRank, packet, known, budget,
-    dependencyRank, actionKind) ==
+    dependencyRank, actionKind, actionSource) ==
   /\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
        node, clockValue, sourceRank, packet, known, budget)
   /\ HistoricalDiscoveryPacketProducerIdentitySet(packet) = {}
   /\ dependencyRank = HistoricalDiscoveryPacketDependencyRank(packet)
   /\ dependencyRank \in HistoricalDiscoveryPacketDependencyCarrier
   /\ actionKind \in HistoricalDiscoveryPacketConcreteActionKindCarrier
+  /\ actionSource \in AsyncIngressSources
   /\ ENABLED
-       HistoricalDiscoveryPacketConcreteAction(packet, actionKind)
+       HistoricalDiscoveryPacketConcreteAction(
+         packet, actionKind, actionSource)
 
 (***************************************************************************
 Frozen exact-action witness.
 
 This is the action-valued form of the overdue-packet deadlock case split.
-Unlike `OverdueResponsivePacketEnablesConcreteCorridorProgress`, it does not
+Unlike `OverdueResponsivePacketEnablesConcreteProgress`, it does not
 forget which physical action is enabled behind an existential productive
 step.  The witness is exported as an ordinary quantified value so a temporal
 consumer can retain it across a handoff.  No `CHOOSE` is evaluated again in a
@@ -1380,6 +1388,8 @@ THEOREM HistoricalDiscoveryPacketTailHasFrozenConcreteAction ==
       \A packet, known, budget:
         /\ AsyncFrozenContextAt(initialContext)
         /\ PostGstReplayQuarantineExcluded
+        /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+        /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
         /\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
              node, clockValue, sourceRank, packet, known, budget)
         /\ HistoricalDiscoveryPacketProducerIdentitySet(packet) = {}
@@ -1387,9 +1397,10 @@ THEOREM HistoricalDiscoveryPacketTailHasFrozenConcreteAction ==
                  \in HistoricalDiscoveryPacketDependencyCarrier:
              \E actionKind
                   \in HistoricalDiscoveryPacketConcreteActionKindCarrier:
-               HistoricalDiscoveryPacketConcreteActionPending(
-                 node, clockValue, sourceRank, packet, known, budget,
-                 dependencyRank, actionKind)
+               \E actionSource \in AsyncIngressSources:
+                 HistoricalDiscoveryPacketConcreteActionPending(
+                   node, clockValue, sourceRank, packet, known, budget,
+                   dependencyRank, actionKind, actionSource)
 PROOF
   <1>1. ASSUME NEW initialContext \in ContextRecords,
                 NEW node \in Responsive,
@@ -1399,6 +1410,8 @@ PROOF
                 NEW packet, NEW known, NEW budget,
                 AsyncFrozenContextAt(initialContext),
                 PostGstReplayQuarantineExcluded,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
                   node, clockValue, sourceRank, packet, known, budget),
                 HistoricalDiscoveryPacketProducerIdentitySet(packet) = {}
@@ -1406,9 +1419,10 @@ PROOF
                    \in HistoricalDiscoveryPacketDependencyCarrier:
                  \E actionKind
                       \in HistoricalDiscoveryPacketConcreteActionKindCarrier:
-                   HistoricalDiscoveryPacketConcreteActionPending(
-                     node, clockValue, sourceRank, packet, known, budget,
-                     dependencyRank, actionKind)
+                   \E actionSource \in AsyncIngressSources:
+                     HistoricalDiscoveryPacketConcreteActionPending(
+                       node, clockValue, sourceRank, packet, known, budget,
+                       dependencyRank, actionKind, actionSource)
     <2> DEFINE Recipient == packet.item.envelope.recipient
     <2> DEFINE Source == packet.item.source
     <2> DEFINE Item == OldestDueSourcePacket(Recipient, Source).item
@@ -1489,53 +1503,90 @@ PROOF
           BY <2>2, <2>3, <3>2, Isa
              DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                  AsyncHistoricalRecoveryTypeInvariant
-        <4>2. IngressDepth(Recipient) > 0
-          BY <2>2, <2>3, <2>4, <2>7,
-             EmptyIngressAdmitsTypedPacket,
-             ZeroIngressDepthMeansEveryLaneEmpty, Isa
-             DEF DueIngressPacketCanEnter,
-                 DueIngressPacketCanCoalesce,
-                 IngressHasCoalescingOwner,
-                 IngressLane, SequenceSet, Item
-        <4>3. CASE HistoricalDrainableIngressIndices(Recipient) # {}
-          <5>1. ENABLED PostGstRunHistoricalServer(Recipient)
-            BY <1>1, <2>1, <3>2, <4>1, <4>3,
-               AppliedResponsiveHistoricalServerEnabledAfterGst
-          <5> QED BY <1>1, <2>5, <5>1, Isa
+        <4>2. CASE IngressDepth(Recipient) = 0
+          <5>1. OldestDueSourcePacket(Recipient, Source)
+                   \in OverdueResponsivePackets
+            BY <2>1, <2>2, <2>3, Isa
+               DEF OverdueResponsivePackets,
+                   AsyncPacketOwnsClockDeadline,
+                   DueSourcePackets, OldestDueSourcePacket
+          <5>2. \E actionSource \in AsyncIngressSources:
+                   ENABLED
+                     (PostGstAdmitHiddenPacket(
+                        Recipient, actionSource)
+                        \/ PostGstAdmitHistoricalRecoveryPacket(
+                             Recipient, actionSource))
+            BY <1>1, <2>3, <2>7, <3>2, <4>1, <4>2, <5>1,
+               EmptyAppliedOverduePacketExposesAdmission
+          <5> QED BY <1>1, <2>5, <5>2, ExpandENABLED, Isa
                DEF HistoricalDiscoveryPacketConcreteActionPending,
                    HistoricalDiscoveryPacketConcreteAction,
                    HistoricalDiscoveryPacketConcreteActionKindCarrier,
-                   Recipient
-        <4>4. CASE HistoricalDrainableIngressIndices(Recipient) = {}
-          <5>1. AsyncIoQueueDepth(Recipient) > 0
-            BY <2>2, <2>3, <4>2, <4>4,
-               NonemptyUndrainableHistoricalIngressHasIoWork
-          <5>2. Recipient \in AsyncArchiveIoServiceNodes
-            BY <2>1, <3>2, <4>1, Isa
-               DEF AsyncArchiveIoServiceNodes,
-                   AsyncResponsiveAppliedArchiveServers,
-                   AsyncResponsiveOnlineArchiveServers,
-                   AsyncResponsiveArchiveServers
-          <5>3. ENABLED PostGstServiceIoWorker(Recipient)
-            BY <2>1, <5>1, <5>2,
-               AsyncStrongTypeProjectsAsyncType,
-               QueuedIoEnablesPostGstService
-          <5> QED BY <1>1, <2>5, <5>3, Isa
-               DEF HistoricalDiscoveryPacketConcreteActionPending,
-                   HistoricalDiscoveryPacketConcreteAction,
-                   HistoricalDiscoveryPacketConcreteActionKindCarrier,
-                   Recipient
-        <4> QED BY <4>3, <4>4
+                   Recipient, Source
+        <4>3. CASE IngressDepth(Recipient) > 0
+          <5>1. CASE HistoricalDrainableIngressIndices(Recipient) # {}
+            <6>1. ENABLED PostGstRunHistoricalServer(Recipient)
+              BY <1>1, <2>1, <3>2, <4>1, <5>1,
+                 AppliedResponsiveHistoricalServerEnabledAfterGst
+            <6> QED BY <1>1, <2>5, <6>1, Isa
+                 DEF HistoricalDiscoveryPacketConcreteActionPending,
+                     HistoricalDiscoveryPacketConcreteAction,
+                     HistoricalDiscoveryPacketConcreteActionKindCarrier,
+                     Recipient
+          <5>2. CASE HistoricalDrainableIngressIndices(Recipient) = {}
+            <6>1. AsyncIoQueueDepth(Recipient) > 0
+              BY <2>2, <2>3, <4>3, <5>2,
+                 NonemptyUndrainableHistoricalIngressHasIoWork
+            <6>2. Recipient \in AsyncArchiveIoServiceNodes
+              BY <2>1, <3>2, <4>1, Isa
+                 DEF AsyncArchiveIoServiceNodes,
+                     AsyncResponsiveAppliedArchiveServers,
+                     AsyncResponsiveOnlineArchiveServers,
+                     AsyncResponsiveArchiveServers
+            <6>3. ENABLED PostGstServiceIoWorker(Recipient)
+              BY <2>1, <6>1, <6>2,
+                 AsyncStrongTypeProjectsAsyncType,
+                 QueuedIoEnablesPostGstService
+            <6> QED BY <1>1, <2>5, <6>3, Isa
+                 DEF HistoricalDiscoveryPacketConcreteActionPending,
+                     HistoricalDiscoveryPacketConcreteAction,
+                     HistoricalDiscoveryPacketConcreteActionKindCarrier,
+                     Recipient
+          <5> QED BY <5>1, <5>2
+        <4> QED BY <2>2, <4>2, <4>3, SMT
       <3> QED BY <3>1, <3>2
     <2> QED BY <2>6, <2>7
   <1> QED BY <1>1
+
+HistoricalDiscoveryCandidateExactRunnerActionKindCarrier ==
+  {"RunNode", "RunHistoricalRecovery", "RunHistoricalServer"}
+
+HistoricalDiscoveryCandidateExactRunnerKindForMode(ownerMode) ==
+  IF ownerMode = 0
+  THEN "RunHistoricalServer"
+  ELSE IF ownerMode = 1
+       THEN "RunHistoricalRecovery"
+       ELSE "RunNode"
+
+HistoricalDiscoveryCandidateExactRunnerAction(packet, runnerKind) ==
+  LET recipient == packet.item.envelope.recipient
+  IN CASE runnerKind = "RunNode" -> PostGstRunNode(recipient)
+       [] runnerKind = "RunHistoricalRecovery" ->
+            PostGstRunHistoricalRecoveryNode(recipient)
+       [] runnerKind = "RunHistoricalServer" ->
+            PostGstRunHistoricalServer(recipient)
+       [] OTHER -> FALSE
 
 HistoricalDiscoveryCandidateExactPhysicalIdentity(candidate) ==
   [exactCandidate |-> ExactAsyncCandidateIdentity(candidate),
    serviceIdentity |-> AsyncCandidateServiceIdentity(candidate),
    lifecycleStage |->
      AsyncCandidateServiceStageForKind(candidate.kind),
-   lifecycleOrdinal |-> AsyncCandidateLifecycleOrdinal(candidate)]
+   lifecycleOrdinal |-> AsyncCandidateLifecycleOrdinal(candidate),
+   ownerMode |-> HistoricalDiscoveryTimedOwnerMode(candidate.node),
+   runnerKind |->
+     HistoricalDiscoveryCandidateExactRunnerKindForMode(
+       HistoricalDiscoveryTimedOwnerMode(candidate.node))]
 
 HistoricalDiscoveryPacketCandidateExactPhysicalIdentitySet(packet) ==
   {HistoricalDiscoveryCandidateExactPhysicalIdentity(candidate):
@@ -1557,6 +1608,15 @@ HistoricalDiscoveryCandidateFrozenPhysicalCoordinates(
   /\ identity.lifecycleStage =
        AsyncCandidateServiceStageForKind(candidate.kind)
   /\ identity.lifecycleOrdinal = occurrenceRank[2][2]
+  /\ identity.ownerMode
+       \in HistoricalDiscoveryTimedOwnerModeCarrier
+  /\ identity.ownerMode =
+       HistoricalDiscoveryTimedOwnerMode(candidate.node)
+  /\ identity.runnerKind
+       \in HistoricalDiscoveryCandidateExactRunnerActionKindCarrier
+  /\ identity.runnerKind =
+       HistoricalDiscoveryCandidateExactRunnerKindForMode(
+         identity.ownerMode)
 
 HistoricalDiscoveryCandidateExactActionOwnerAtRank(
     node, clockValue, sourceRank, packet, known, budget,
@@ -1583,7 +1643,9 @@ HistoricalDiscoveryCandidateExactActionOwnerAtRank(
      /\ HistoricalDiscoveryCandidateFrozenPhysicalCoordinates(
           identity, candidate, occurrenceRank)
      /\ candidate.node = recipient
-     /\ ENABLED PostGstRunHistoricalRecoveryNode(recipient)
+     /\ ENABLED
+          HistoricalDiscoveryCandidateExactRunnerAction(
+            packet, identity.runnerKind)
 
 HistoricalDiscoveryCandidateIntroducedPhysicalIdentitySet(
     packet, physicalKnown) ==
@@ -1619,7 +1681,8 @@ HistoricalDiscoveryCandidateCausalWorkTokenSet(packet) ==
   {<<HistoricalDiscoveryCandidateExactPhysicalIdentity(candidate), token>>:
      candidate \in HistoricalDiscoveryPacketCandidateOwners(packet),
      token \in
-       1..AsyncCausalRemainingWorkWeight(candidate.kind)}
+       1..(AsyncCausalRemainingWorkWeight(candidate.kind)
+             * (HistoricalDiscoveryTimedOwnerMode(candidate.node) + 1))}
 
 HistoricalDiscoveryCandidateCausalWorkBudget(packet) ==
   Cardinality(HistoricalDiscoveryCandidateCausalWorkTokenSet(packet))
@@ -1629,13 +1692,15 @@ THEOREM HistoricalDiscoveryCandidateCausalWorkBudgetIsNatural ==
     AsyncStrongTypeInvariant
       => HistoricalDiscoveryCandidateCausalWorkBudget(packet) \in Nat
 BY AsyncCausalRemainingWorkWeightIsPositive,
+   HistoricalDiscoveryTimedOwnerHasFiniteMode,
    StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
    FS_Image, FS_Product, FS_Subset, FS_Interval,
    FS_CardinalityType, IsaT(240)
    DEF HistoricalDiscoveryCandidateCausalWorkBudget,
        HistoricalDiscoveryCandidateCausalWorkTokenSet,
        HistoricalDiscoveryPacketCandidateExactPhysicalIdentitySet,
-       HistoricalDiscoveryPacketCandidateOwners
+       HistoricalDiscoveryPacketCandidateOwners,
+       HistoricalDiscoveryTimedOwnerModeCarrier
 
 HistoricalDiscoveryCandidateEqualCountOwnerReplacementResidual(
     node, clockValue, sourceRank, packet, known, budget,
@@ -1892,6 +1957,8 @@ THEOREM HistoricalDiscoveryLiveCandidateHasExactActionOwner ==
             HistoricalDiscoveryPacketCandidateDebtWitness(packet)
       IN /\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
               node, clockValue, sourceRank, packet, known, budget)
+         /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+         /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
          /\ HistoricalDiscoveryPacketCandidateOwners(packet) # {}
          /\ <<"Candidate", candidate.causalOrigin>>
               \in HistoricalDiscoveryPacketFrozenKnownIdentitySet(
@@ -1903,19 +1970,32 @@ THEOREM HistoricalDiscoveryLiveCandidateHasExactActionOwner ==
 BY HistoricalDiscoveryLiveCandidateDebtHasExactFairOwner,
    HistoricalDiscoveryPacketOccurrenceDebtRanksInCarrier,
    ScheduledCandidateServiceRankInCarrier,
+   GstResponsiveUnappliedRunNodeIsEnabled,
    GstHistoricalRecoveryRunNodeIsEnabled,
+   GstHistoricalServerIsEnabled,
    FS_Image, Isa
    DEF HistoricalDiscoveryCandidateExactActionOwnerAtRank,
        HistoricalDiscoveryCandidateExactPhysicalRank,
        HistoricalDiscoveryCandidateExactPhysicalRankCarrier,
        HistoricalDiscoveryPacketCandidateExactPhysicalIdentitySet,
+       HistoricalDiscoveryCandidateExactPhysicalIdentity,
+       HistoricalDiscoveryCandidateFrozenPhysicalCoordinates,
+       HistoricalDiscoveryCandidateExactRunnerAction,
+       HistoricalDiscoveryCandidateExactRunnerActionKindCarrier,
+       HistoricalDiscoveryCandidateExactRunnerKindForMode,
+       HistoricalDiscoveryTimedOwnerMode,
+       HistoricalDiscoveryTimedOwnerModeCarrier,
        HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget,
        HistoricalDiscoveryFixedClockPending,
        AsyncCandidateServiceLifecycleInvariant,
        AsyncControlServiceStateTypeInvariant,
        AsyncCandidateLifecycleOrdinal,
        AsyncCandidateLifecycleRecordsFor,
-       HistoricalRecoveryTarget
+       HistoricalRecoveryTarget,
+       AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+       AsyncResponsiveAppliedArchiveServers,
+       AsyncResponsiveOnlineArchiveServers,
+       AsyncResponsiveArchiveServers
 
 THEOREM HistoricalDiscoveryLiveServeHasExactActionOwner ==
   \A node \in Responsive,
@@ -1960,8 +2040,10 @@ THEOREM HistoricalDiscoveryEpisodeHasKnownExactOwnerOrPacketTail ==
      clockValue \in Nat,
      sourceRank \in HistoricalDiscoveryFixedClockBlockerCarrier:
     \A packet, known, budget:
-      HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
-        node, clockValue, sourceRank, packet, known, budget)
+      /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+      /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      /\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
+           node, clockValue, sourceRank, packet, known, budget)
         => \/ HistoricalDiscoveryCandidateServeLifecycleGoal(
                 node, clockValue, sourceRank, packet, known, budget)
            \/ /\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
@@ -2026,10 +2108,11 @@ HistoricalDiscoveryPacketConcreteActionSelectionProperty(specification) ==
                          HistoricalDiscoveryPacketDependencyCarrier:
                          \E actionKind \in
                               HistoricalDiscoveryPacketConcreteActionKindCarrier:
-                           HistoricalDiscoveryPacketConcreteActionPending(
-                             node, clockValue, sourceRank,
-                             packet, known, budget,
-                             dependencyRank, actionKind))
+                           \E actionSource \in AsyncIngressSources:
+                             HistoricalDiscoveryPacketConcreteActionPending(
+                               node, clockValue, sourceRank,
+                               packet, known, budget,
+                               dependencyRank, actionKind, actionSource))
 
 HistoricalDiscoveryPacketConcreteActionServiceProperty(specification) ==
   specification
@@ -2043,12 +2126,14 @@ HistoricalDiscoveryPacketConcreteActionServiceProperty(specification) ==
                   HistoricalDiscoveryPacketDependencyCarrier:
                \A actionKind \in
                     HistoricalDiscoveryPacketConcreteActionKindCarrier:
-                 HistoricalDiscoveryPacketConcreteActionPending(
-                   node, clockValue, sourceRank,
-                   packet, known, budget, dependencyRank, actionKind)
-                   ~> HistoricalDiscoveryCandidateServeLifecycleGoal(
-                        node, clockValue, sourceRank,
-                        packet, known, budget)
+                 \A actionSource \in AsyncIngressSources:
+                   HistoricalDiscoveryPacketConcreteActionPending(
+                     node, clockValue, sourceRank,
+                     packet, known, budget, dependencyRank,
+                     actionKind, actionSource)
+                     ~> HistoricalDiscoveryCandidateServeLifecycleGoal(
+                          node, clockValue, sourceRank,
+                          packet, known, budget)
 
 HistoricalDiscoveryCandidateExactRunnerStepProperty(specification) ==
   specification
@@ -2264,12 +2349,20 @@ HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties(
 
 THEOREM HistoricalDiscoveryPhysicalKernelsDischargeLifecycleService ==
   \A specification:
-    HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties(
-      specification)
+    /\ (specification
+          => []AsyncCandidateProducerContinuationExternalCoverageInvariant)
+    /\ (specification
+          => []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
+    /\ HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties(
+         specification)
       => HistoricalDiscoveryCandidateServeLifecycleOwnerServiceProperty(
            specification)
 PROOF
   <1>1. ASSUME NEW specification,
+                specification
+                  => []AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                specification
+                  => []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties(
                   specification)
          PROVE HistoricalDiscoveryCandidateServeLifecycleOwnerServiceProperty(
@@ -2310,7 +2403,9 @@ PROOF
                           packet, known, budget,
                           identity, job, occurrenceRank,
                           workerKind, workerMode)
-          BY HistoricalDiscoveryEpisodeHasKnownExactOwnerOrPacketTail
+          BY <1>1,
+             HistoricalDiscoveryEpisodeHasKnownExactOwnerOrPacketTail,
+             PTL
         <4>2. (/\ HistoricalDiscoveryCandidateServeLifecycleEpisodeAtBudget(
                         node, clockValue, sourceRank,
                         packet, known, budget)
@@ -2551,8 +2646,12 @@ HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual(
 
 THEOREM HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves ==
   \A specification:
-    HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual(
-      specification)
+    /\ (specification
+          => []AsyncCandidateProducerContinuationExternalCoverageInvariant)
+    /\ (specification
+          => []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
+    /\ HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual(
+         specification)
       => /\ HistoricalDiscoveryFixedClockPacketServiceProperty(
                specification)
          /\ HistoricalDiscoveryCandidateServeIdentityBudgetProperty(
@@ -2578,6 +2677,8 @@ THEOREM AsyncSpecAndPacketCorridorResidualCloseFixedClockPrerequisites ==
       => HistoricalDiscoveryFixedClockTemporalPrerequisites(
            AsyncSpecAt(initialContext))
 BY AsyncSpecClosesHistoricalDiscoveryFixedClockNonPacketService,
+   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
    HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves,
    Isa
    DEF HistoricalDiscoveryFixedClockTemporalPrerequisites,

@@ -1309,7 +1309,12 @@
         "path": "crates/iroha_core/src/queue/reservation_journal.rs",
         "required_tokens": [
           "pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5;",
-          "legacy.fifo_order.version = LANE_QUEUE_RESERVATION_JOURNAL_VERSION - 1;",
+          "legacy.fifo_order.version = LANE_QUEUE_RESERVATION_JOURNAL_VERSION - 1;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal_recovery_tests.rs",
+        "required_tokens": [
           "fn post_sync_append_publication_failure_is_poisoned_and_replayed_on_reopen()",
           "fn post_sync_compaction_publication_failure_is_poisoned_and_replayed_on_reopen()",
           "fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_barrier()",

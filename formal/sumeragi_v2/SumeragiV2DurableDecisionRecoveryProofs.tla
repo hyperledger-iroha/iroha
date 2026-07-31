@@ -92,7 +92,7 @@ DurableDecisionRecoveryLifecycleTransition ==
   /\ \A node, qc:
        /\ DurableDecisionRecoveryAuthority(node, qc)
        /\ PreGstResponsiveRestart
-       => /\ generation'[node] = 0
+       => /\ generation'[node] = generation[node] + 1
           /\ DurableDecisionRecoveryAuthority(node, qc)'
           /\ DurableDecisionRecoveryExecutorCurrent(node)'
           /\ (DecisionRawHashRegistered(node, qc)
@@ -719,15 +719,15 @@ BY SMT
        DurableDecisionRecoveryExecutorCurrent,
        RestartDecisions, PreGstResponsiveCrash, Crash
 
-THEOREM ResponsiveRestartRebindsExactDurableDecisionAuthority ==
+THEOREM ResponsiveRestartAdvancesExactDurableDecisionAuthority ==
   \A node, qc:
     /\ TypeInvariant
     /\ DurableDecisionRecoveryAuthority(node, qc)
     /\ PreGstResponsiveRestart
-    => /\ generation'[node] = 0
+    => /\ generation'[node] = generation[node] + 1
        /\ DurableDecisionRecoveryAuthority(node, qc)'
        /\ DurableDecisionRecoveryExecutorCurrent(node)'
-BY RestartResetsSelectedGeneration, SMT
+BY RestartIncrementsSelectedGeneration, SMT
    DEF DurableDecisionRecoveryAuthority,
        DurableDecisionRecoveryExecutorCurrent,
        RestartDecisions, PreGstResponsiveRestart, Restart
@@ -809,7 +809,7 @@ PROOF
     <2>2. \A node, qc:
             /\ DurableDecisionRecoveryAuthority(node, qc)
             /\ PreGstResponsiveRestart
-            => /\ generation'[node] = 0
+            => /\ generation'[node] = generation[node] + 1
                /\ DurableDecisionRecoveryAuthority(node, qc)'
                /\ DurableDecisionRecoveryExecutorCurrent(node)'
                /\ (DecisionRawHashRegistered(node, qc)
@@ -820,18 +820,18 @@ PROOF
         <3>1. ASSUME NEW node, NEW qc,
                       DurableDecisionRecoveryAuthority(node, qc),
                       PreGstResponsiveRestart
-               PROVE /\ generation'[node] = 0
+               PROVE /\ generation'[node] = generation[node] + 1
                      /\ DurableDecisionRecoveryAuthority(node, qc)'
                      /\ DurableDecisionRecoveryExecutorCurrent(node)'
                      /\ (DecisionRawHashRegistered(node, qc)
                            <=> DecisionRawHashRegistered(node, qc)')
                      /\ (DecisionCertifiedRequestRegistered(node, qc)
                            <=> DecisionCertifiedRequestRegistered(node, qc)')
-          <4>1. /\ generation'[node] = 0
+          <4>1. /\ generation'[node] = generation[node] + 1
                  /\ DurableDecisionRecoveryAuthority(node, qc)'
                  /\ DurableDecisionRecoveryExecutorCurrent(node)'
             BY <1>1, <3>1,
-               ResponsiveRestartRebindsExactDurableDecisionAuthority
+               ResponsiveRestartAdvancesExactDurableDecisionAuthority
                DEF StrongInductiveInvariant, Safety
           <4>2. /\ (DecisionRawHashRegistered(node, qc)
                          <=> DecisionRawHashRegistered(node, qc)')

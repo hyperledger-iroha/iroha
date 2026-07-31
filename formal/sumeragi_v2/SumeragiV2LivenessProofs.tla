@@ -7,9 +7,11 @@ One-height liveness vocabulary and well-founded service measures.
 This module contains no second consensus relation and no favourable network
 step.  Safety and recovery properties remain statements over the unbounded
 `AsyncSpecAt(initialContext)`.  `AsyncLiveSpecAt(initialContext)` is exactly
-that same transition and fairness specification; it does not assume away a
-pending install at `MaxGeneration`.  Checked generation exhaustion therefore
-remains explicit liveness debt until ownership is redesigned.
+that same transition and fairness specification.  The live model instantiates
+both views and generations with mathematical `Nat`; checked exhaustion exists
+only in bounded TLC instances as a diagnostic mutation boundary.  Production
+physical nonexhaustion follows from strict same-view Prepare-rank ascent, not
+from an environmental finite-counter assumption.
 The asynchronous proof module records the exact release obligations over the
 concrete FIFO, fair-ingress, IO-worker, retransmission, and absolute-timeout
 actions; the proof ledger records their current mechanization status.

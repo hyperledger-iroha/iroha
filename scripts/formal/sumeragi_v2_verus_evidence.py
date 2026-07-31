@@ -75,6 +75,7 @@ REQUIRED_SOURCE_PATHS = (
     "crates/iroha_core/src/sumeragi/v2_core/scheduler.rs",
     "crates/iroha_core/src/sumeragi/v2_core/tests.rs",
     "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
+    "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
     "crates/iroha_core/src/sumeragi/v2_body_store.rs",
     "crates/iroha_core/src/sumeragi/v2_effects.rs",
     "crates/iroha_core/src/sumeragi/mod.rs",

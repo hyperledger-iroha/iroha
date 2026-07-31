@@ -1307,18 +1307,53 @@ BY FifoRuntimeCreatesValidationOnlyForRunner,
        DirectTimeoutStep, DirectRetransmitStep, IdleRuntimeStep,
        BeginTimeout, vars
 
+THEOREM ReplayRunNodeContinuationCreatesValidationOnlyForRunner ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    => NewValidationOwnedBy(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE NewValidationOwnedBy(node)
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <2>1, Isa
+         DEF NewValidationOwnedBy,
+             AsyncCandidateProducerContinuationExactLocalReplayStep, vars
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <2>2, Isa
+         DEF NewValidationOwnedBy,
+             AsyncCandidateProducerContinuationReplayTargetOnlyTurn, vars
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      <3>1. RuntimeStep(node)
+        BY <2>3, Isa
+           DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+               RuntimeStep
+      <3> QED BY <1>1, <3>1,
+           RuntimeStepCreatesValidationOnlyForRunner
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM RunNodeWorkCreatesValidationOnlyForRunner ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ RunNodeWork(node)
     => NewValidationOwnedBy(node)
-BY RuntimeStepCreatesValidationOnlyForRunner, IsaT(90)
+BY RuntimeStepCreatesValidationOnlyForRunner,
+   ReplayRunNodeContinuationCreatesValidationOnlyForRunner, IsaT(90)
    DEF NewValidationOwnedBy, RunNodeWork,
        LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        AdmitProducerCompletion, AdmitCausalHead,
        DrainFairIngressSelected, vars
 
@@ -1339,7 +1374,9 @@ THEOREM ClearedRecoveryPhaseExcludesRecoveryNodeRunner ==
 BY IsaT(60)
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        RunNodeWork, ResponsiveReplayQuarantined,
-       ResponsiveReplayDraining
+       ResponsiveReplayDraining,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode
 
 THEOREM RunNodeWorkPreservesRecoveryValidationClearing ==
   \A node \in ValidatorIds:
@@ -1505,8 +1542,8 @@ The three controller actions have different handoffs:
   * Crash makes the historical-Commit antecedent false by clearing the
     selected node's validation receipts, while durable Decision and locked
     Prepare sources acquire exact recovery authority.
-  * Restart resets both generation and recoveryGeneration to the fresh
-    process value together.  The
+  * Restart advances both generation and recoveryGeneration to the same fresh
+    process value.  The
     reachable clearing invariant prevents the framed old receipt set from
     becoming current merely because the generation changed.
   * Replay leaves the historical-Commit antecedent false.  A unique durable
@@ -1638,7 +1675,7 @@ THEOREM ResponsiveRestartPreservesDurableDecisionProgress ==
   /\ AsyncDurableDecisionProgressWitness
   /\ PreGstResponsiveRestart
   => AsyncDurableDecisionProgressWitness'
-BY ResponsiveRestartRebindsExactDurableDecisionAuthority, IsaT(150)
+BY ResponsiveRestartAdvancesExactDurableDecisionAuthority, IsaT(150)
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        StrongInductiveInvariant, Safety, TypeInvariant,
        AsyncDurableDecisionProgressWitness,

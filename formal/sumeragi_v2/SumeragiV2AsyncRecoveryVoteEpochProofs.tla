@@ -11,8 +11,11 @@ conjuncts in one invariant makes the final temporal proof an ordinary
 Init/Next induction rather than an implicit reachability claim.
 
 Replay tracks the exact ingress-admission owner read by `RunNodeWork`.
-Restart also clears the node's Serve reservations, but reservation emptiness
-is not an enabledness gate and is therefore not added as a stronger premise.
+Restart independently revalidates every unsealed active-height Serve
+lifecycle and persists its typed terminal before replay becomes visible.
+Consequently replay observes neither a physical Serve carrier nor requester-
+dependent Dormant/AwaitingRetry debt; the monotone lifecycle and scheduler
+high-watermarks remain retained.
 ***************************************************************************)
 
 AsyncRecoveryExecutionInvariant ==
@@ -1015,6 +1018,14 @@ BY IsaT(1200)
        AsyncSchedulerExceptServiceActivation,
        AsyncNonCrashStep, AsyncRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
        RunHistoricalServer, HistoricalIdleStep,
        AsyncNonRunnerStep, AsyncSetGST, AsyncTick,
        AsyncNonClockVars, OpenHistoricalRecovery,
@@ -1047,12 +1058,27 @@ BY IsaT(1200)
        AsyncIoVars, AsyncDeferredVars,
        AsyncLocalAdmissionVars, vars
 
+THEOREM AsyncInitEstablishesLeaderWireIngressCarrierOwnership ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => AsyncLeaderWireIngressCarrierOwnershipInvariant
+BY FS_CardinalityType, Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
+       AsyncLeaderWireIngressCarrierOwnershipInvariant,
+       AsyncLeaderWireIngressCarrierCoordinates,
+       AsyncLeaderWireLifecycleIngressProtected,
+       AsyncLeaderWireAdmissionMatchesRecord,
+       AsyncLeaderWireLifecycleIdentityDerivable,
+       AsyncChunkExactLifecycleCoordinatesRetained,
+       IngressLane, IngressLaneDepth
+
 AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ AsyncControlServiceStateTypeInvariant
   /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+  /\ AsyncLeaderWireIngressCarrierOwnershipInvariant
   /\ ReceivedTimeoutVotePoolInvariant
   /\ AsyncRecoveryTypeInvariant
   /\ AsyncRestartAuthorityInvariant
@@ -1093,10 +1119,16 @@ PROOF
              AsyncNextCertifiedResponseClaimOrdinal,
              AsyncCandidateServiceTombstones,
              AsyncNextCandidateServiceOrdinal,
-             AsyncCandidateServiceTombstoneSet
+             AsyncCandidateServiceTombstoneSet,
+             AsyncCandidateProducerContinuationLifecycleCoverageInvariant,
+             AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn,
+             AsyncCandidateProducerContinuationLifecycleCoveredIn
     <2>3a. AsyncCertifiedResponseClaimIngressOwnershipInvariant
       BY <1>1, EmptyCertifiedResponseClaimHasIngressOwnership
          DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit
+    <2>3d. AsyncLeaderWireIngressCarrierOwnershipInvariant
+      BY <1>1,
+         AsyncInitEstablishesLeaderWireIngressCarrierOwnership
     <2>4. ReceivedTimeoutVotePoolInvariant
       BY <1>1, AsyncInitEstablishesTimeoutPoolInvariant
     <2>5. /\ AsyncRecoveryTypeInvariant
@@ -1118,8 +1150,8 @@ PROOF
              AsyncGstRecoveryPhaseInvariant
     <2>7. AsyncSerializedBusyKernelInvariant
       BY <1>1, AsyncInitEstablishesSerializedBusyKernelInvariant
-    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3c, <2>4, <2>5,
-                <2>6, <2>7
+    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3c, <2>3d, <2>4,
+                <2>5, <2>6, <2>7
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -1158,6 +1190,7 @@ PROOF
            /\ AsyncSchedulerTypeInvariant
            /\ AsyncControlServiceStateTypeInvariant
            /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+           /\ AsyncLeaderWireIngressCarrierOwnershipInvariant
            /\ ReceivedTimeoutVotePoolInvariant
            /\ AsyncRecoveryTypeInvariant
            /\ AsyncRestartAuthorityInvariant
@@ -1187,6 +1220,13 @@ PROOF
       BY <1>1, <2>1,
          CertifiedResponseClaimIngressOwnershipStutter
          DEF AsyncAllVars, AsyncSchedulerVars
+    <2>4c. AsyncLeaderWireIngressCarrierOwnershipInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars,
+             AsyncLeaderWireIngressCarrierOwnershipInvariant,
+             AsyncLeaderWireIngressCarrierCoordinates,
+             AsyncChunkExactLifecycleCoordinatesRetained,
+             IngressLane
     <2>5. ReceivedTimeoutVotePoolInvariant'
       BY <1>1, <2>1,
          AsyncAllVarsStutterPreservesTimeoutPoolInvariant
@@ -1210,8 +1250,8 @@ PROOF
     <2>8. AsyncSerializedBusyKernelInvariant'
       BY <2>1, <2>2,
          CoreVarsStutterPreservesSerializedBusyKernelInvariant
-    <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>5, <2>6, <2>7,
-                <2>8
+    <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5, <2>6,
+                <2>7, <2>8
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -1861,7 +1901,23 @@ BY RestartSignatureReplayCommandsAreSignatures,
    RestartReplayReplayingCandidateShape,
    SMTT(180), Isa
    DEF AsyncRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, LocalAdmissionStep, AdmitProducerCompletion,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       ResponsiveReplayQuarantined,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       LocalAdmissionStep, AdmitProducerCompletion,
        AdmitCausalHead, IngressDrainStep, DrainFairIngressSelected,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
@@ -1906,12 +1962,14 @@ BY RestartSignatureReplayCommandsAreSignatures,
        SequenceSet, vars
 
 (***************************************************************************
-Replay entry removes every exact-Serve ingress admission owned by the
-recovering node.  The only transition which can add such an admission is
-`AdmitHiddenPacket`; replay quarantine excludes the recovering node from that
-action.  Drain and receiver-close transitions only transform or remove
-existing admission records.  The lemmas below make that transition audit
-explicit before the execution invariant consumes it.
+Replay entry removes every active exact-Serve ingress selector owner for the
+recovering node.  Durable undrained waiters remain only as dormant debt;
+physically drained lifecycles have no old scheduler ticket, and volatile
+policy-rejection occurrences are discarded.  The only transition which can
+add an active admission is `AdmitHiddenPacket`; replay quarantine excludes the
+recovering node from that action.  Drain and receiver-close transitions only
+transform or remove existing active records.  The lemmas below make that
+transition audit explicit before the execution invariant consumes it.
 ***************************************************************************)
 THEOREM ServeIngressAdmissionStutterPreservesOwnerIdentities ==
   \A owner:
@@ -2020,12 +2078,30 @@ BY ReplayingNetworkStepPreservesEmptyRecoveryIngressOwners,
        AsyncIoVars, AsyncServeIngressAdmissionVars,
        AsyncRecoveryVars
 
+THEOREM ReplayRunNodeContinuationPreservesEmptyServeIngressOwners ==
+  \A owner, node:
+    /\ AsyncServeIngressLifecycleOwnerIdentities(owner) = {}
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    => AsyncServeIngressLifecycleOwnerIdentities(owner)' = {}
+BY ServeIngressAdmissionStutterPreservesOwnerIdentities, IsaT(180)
+   DEF ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncIoTimeoutLifecycleRetirementTransition,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       AsyncIoVars, AsyncServeIngressAdmissionVars,
+       AsyncServeLifecycleVars, AsyncDeferredVars,
+       AsyncLocalAdmissionVars, vars
+
 THEOREM RunNodeWorkPreservesEmptyServeIngressOwners ==
   \A owner, node:
     /\ AsyncServeIngressLifecycleOwnerIdentities(owner) = {}
     /\ RunNodeWork(node)
     => AsyncServeIngressLifecycleOwnerIdentities(owner)' = {}
 BY PopSelectedIngressDoesNotCreateServeIngressOwners,
+   ReplayRunNodeContinuationPreservesEmptyServeIngressOwners,
    ServeIngressAdmissionStutterPreservesOwnerIdentities,
    IsaT(300)
    DEF RunNodeWork, LocalAdmissionStep,
@@ -2036,6 +2112,8 @@ BY PopSelectedIngressDoesNotCreateServeIngressOwners,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        AsyncIoVars, AsyncServeIngressAdmissionVars,
        AsyncServeLifecycleVars, AsyncDeferredVars,
        AsyncLocalAdmissionVars, vars
@@ -2273,6 +2351,33 @@ BY Isa
    DEF RunHistoricalServer, DrainHistoricalIngressSelected,
        HistoricalIdleStep, vars
 
+THEOREM ReplayRunNodeContinuationLeavesOutstandingTags ==
+  \A node:
+    ReplayRunNodeCandidateProducerContinuation(node)
+      => UNCHANGED asyncOutstandingTags
+PROOF
+  <1>1. ASSUME NEW node,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE UNCHANGED asyncOutstandingTags
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <2>1, Isa
+         DEF AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <2>2, Isa
+         DEF AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             AsyncSchedulerExceptCausalControlRunnerAndNodeService
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      BY <2>3, DeferredDrainStepLeavesOutstandingTags,
+         FifoRuntimeStepLeavesOutstandingTags, Isa
+         DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM RunNodeWorkOutstandingTagsFrame ==
   \A node:
     /\ AsyncTypeInvariant
@@ -2292,6 +2397,14 @@ PROOF
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncTransportTypeInvariant,
              AsyncTransportClockTypeInvariant
+    <2>1r. CASE
+              ResolveRunNodeCandidateProducerContinuation(node)
+      BY <2>1r, Isa
+         DEF ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService
+    <2>1p. CASE
+              ReplayRunNodeCandidateProducerContinuation(node)
+      BY <2>1p, ReplayRunNodeContinuationLeavesOutstandingTags
     <2>2. CASE LocalAdmissionStep(node)
       BY <2>2, LocalAdmissionStepLeavesOutstandingTags
     <2>3. CASE IngressDrainStep(node)
@@ -2322,7 +2435,8 @@ PROOF
       BY <2>5, Isa DEF AsyncServeIngressTargetOnlyTurn, vars
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <2>6, SerializedLocalPredecessorLeavesOutstandingTags
-    <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>6
+    <2> QED BY <1>1, <2>1r, <2>1p, <2>2, <2>3, <2>4, <2>5,
+                 <2>6
          DEF RunNodeWork
   <1> QED BY <1>1
 
@@ -2577,12 +2691,15 @@ THEOREM ReplayingSerializedRuntimePreservesRecoveryCandidateFreshness ==
     /\ asyncRecoveryPhase = "Replaying"
     /\ UNCHANGED AsyncRecoveryControlVars
     /\ (SerializedRuntimeStep(node)
-          \/ SerializedRuntimePrecedesServeIngressStep(node))
+          \/ SerializedRuntimePrecedesServeIngressStep(node)
+          \/ AsyncCandidateProducerContinuationExactRuntimeReplayStep(node))
     => SequenceSet(asyncRecoveryReplayQueue)' \cap
          ResponsiveReplayScheduledCandidates(asyncRecoveryNode)' = {}
 BY HeadTailProperties, SequenceSetAfterAppend, SMTT(45), Isa
    DEF SerializedRuntimeStep,
-       SerializedRuntimePrecedesServeIngressStep, RuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       RuntimeStep,
        DeferredDrainStep, FifoRuntimeStep,
        DeferredTagStep, DeferredTimeoutStep,
        DeferredRetransmitStep, DirectTimeoutStep,
@@ -2631,6 +2748,85 @@ BY HeadTailProperties, SequenceSetAfterAppend, SMTT(45), Isa
        AsyncCandidateWithIdentity, CandidateConsumerCurrent,
        SequenceSet, AsyncRecoveryControlVars, vars
 
+THEOREM ReplayingContinuationExactLocalReplayDoesNotCreateRecoveryCandidate ==
+  \A node:
+    /\ AsyncTypeInvariant
+    /\ AsyncRecoveryTypeInvariant
+    /\ asyncRecoveryPhase = "Replaying"
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    /\ AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+    => ResponsiveReplayScheduledCandidates(asyncRecoveryNode)'
+         \subseteq
+           ResponsiveReplayScheduledCandidates(asyncRecoveryNode)
+BY SequenceSetAfterAppend, SMTT(45), Isa
+   DEF ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuations,
+       AsyncCandidateProducerContinuationRecordSet,
+       AsyncCandidateProducerContinuationRecord,
+       ResponsiveReplayQuarantined,
+       EnqueueCandidate,
+       ResponsiveReplayScheduledCandidates,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, CandidateScheduled,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncRecoveryTypeInvariant, AsyncCommandQueueOwnership,
+       SequenceSet, vars
+
+THEOREM ReplayingReplayRunNodeContinuationPreservesRecoveryCandidateFreshness ==
+  \A node:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncRecoveryTypeInvariant
+    /\ AsyncRecoveryExecutionInvariant
+    /\ asyncRecoveryPhase = "Replaying"
+    /\ UNCHANGED AsyncRecoveryControlVars
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    => SequenceSet(asyncRecoveryReplayQueue)' \cap
+         ResponsiveReplayScheduledCandidates(asyncRecoveryNode)' = {}
+PROOF
+  <1>1. ASSUME NEW node,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                AsyncRecoveryTypeInvariant,
+                AsyncRecoveryExecutionInvariant,
+                asyncRecoveryPhase = "Replaying",
+                UNCHANGED AsyncRecoveryControlVars,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE SequenceSet(asyncRecoveryReplayQueue)' \cap
+                 ResponsiveReplayScheduledCandidates(
+                   asyncRecoveryNode)' = {}
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <1>1, <2>1,
+         ReplayingContinuationExactLocalReplayDoesNotCreateRecoveryCandidate,
+         Isa
+         DEF AsyncRecoveryExecutionInvariant,
+             AsyncRecoveryControlVars, AsyncRecoveryVars
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <1>1, <2>2, Isa
+         DEF AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             AsyncRecoveryExecutionInvariant,
+             ResponsiveReplayScheduledCandidates,
+             QueuedCandidates, DeferredCandidates, CausalCandidates,
+             TrackedWorkCandidates,
+             AsyncRecoveryControlVars, AsyncRecoveryVars, SequenceSet, vars
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      BY <1>1, <2>3,
+         ReplayingSerializedRuntimePreservesRecoveryCandidateFreshness
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM ReplayingRunNodeWorkPreservesRecoveryCandidateFreshness ==
   \A node:
     /\ StrongInductiveInvariant
@@ -2646,11 +2842,14 @@ BY ReplayingLocalAdmissionDoesNotCreateRecoveryCandidate,
    ReplayingSerializedLocalPredecessorDoesNotCreateRecoveryCandidate,
    ReplayingIngressDrainDoesNotCreateRecoveryCandidate,
    ReplayingSerializedRuntimePreservesRecoveryCandidateFreshness,
+   ReplayingReplayRunNodeContinuationPreservesRecoveryCandidateFreshness,
    Isa
    DEF RunNodeWork, SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        AsyncRecoveryExecutionInvariant,
        AsyncRecoveryControlVars, AsyncRecoveryVars, vars
 
@@ -2775,12 +2974,23 @@ PROOF
          PROVE asyncOutstandingTags'[node] = {}
     <2>1. asyncOutstandingTags[node] = {}
       BY <1>1 DEF AsyncRecoveryExecutionInvariant
-    <2>1a. \/ LocalAdmissionStep(node)
+    <2>1a. \/ ResolveRunNodeCandidateProducerContinuation(node)
+            \/ ReplayRunNodeCandidateProducerContinuation(node)
+            \/ LocalAdmissionStep(node)
             \/ IngressDrainStep(node)
             \/ SerializedRunnerRuntimeStep(node)
             \/ SerializedLocalPrecedesServeIngressStep(node)
             \/ AsyncServeIngressTargetOnlyTurn(node)
       BY <1>1, RunNodeWorkConcreteActionCaseSplit
+    <2>1r. CASE
+              ResolveRunNodeCandidateProducerContinuation(node)
+      BY <2>1, <2>1r, Isa
+         DEF ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService
+    <2>1p. CASE
+              ReplayRunNodeCandidateProducerContinuation(node)
+      BY <2>1, <2>1p,
+         ReplayRunNodeContinuationLeavesOutstandingTags
     <2>2. CASE LocalAdmissionStep(node)
       BY <2>1, <2>2, LocalAdmissionStepLeavesOutstandingTags
     <2>3. CASE IngressDrainStep(node)
@@ -2795,7 +3005,8 @@ PROOF
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <2>1, <2>6,
          SerializedLocalPredecessorLeavesOutstandingTags
-    <2> QED BY <2>1a, <2>2, <2>3, <2>4, <2>5, <2>6
+    <2> QED BY <2>1a, <2>1r, <2>1p, <2>2, <2>3, <2>4, <2>5,
+                 <2>6
   <1> QED BY <1>1
 
 THEOREM ReplayingRunNodeWorkPreservesRecoveryTags ==
@@ -2881,14 +3092,23 @@ THEOREM ResetNodeSchedulerForRestartSetsOutstandingTags ==
            [asyncOutstandingTags EXCEPT ![node] = {}]
 BY DEF ResetNodeSchedulerForRestart
 
-THEOREM ResetNodeSchedulerForRestartClearsServeIngressOwners ==
+THEOREM ResetNodeSchedulerForRestartDischargesServeIngressDebt ==
   \A node, replay:
     ResetNodeSchedulerForRestart(node, replay)
-      => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
-BY Isa
-   DEF ResetNodeSchedulerForRestart,
-       AsyncServeIngressAdmissionsWithoutNode,
-       AsyncServeIngressLifecycleOwnerIdentities,
+      => /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+         /\ AsyncServeOffQueueReservations(node)' = {}
+         /\ \A admission \in asyncServeAdmissions:
+              admission.node = node
+                => \E terminal \in asyncServeTombstones':
+                     /\ terminal.node = admission.node
+                     /\ terminal.identity = admission.identity
+                     /\ terminal.family = admission.family
+                     /\ terminal.view = admission.view
+                     /\ terminal.ordinal = admission.ordinal
+BY SameHeightRestartDischargesEveryLocalServeLifecycle,
+   SameHeightRestartPreservesServeHighWatermarks,
+   Isa
+   DEF AsyncServeIngressLifecycleOwnerIdentities,
        AsyncServeIngressAdmissionIdentities
 
 THEOREM UniqueReplayTailPreservesUniqueValues ==
@@ -3118,7 +3338,8 @@ PROOF
       BY <1>1, Isa DEF PreGstResponsiveReplay
     <2>6b. AsyncServeIngressLifecycleOwnerIdentities(
               asyncRecoveryNode)' = {}
-      BY <2>3, ResetNodeSchedulerForRestartClearsServeIngressOwners
+      BY <2>3,
+         ResetNodeSchedulerForRestartDischargesServeIngressDebt
     <2>6a. SequenceHasUniqueValues(asyncRecoveryReplayQueue')
       <3> DEFINE Node == asyncRecoveryNode
       <3> DEFINE Signatures == RestartSignatureReplay(Node)
@@ -3500,6 +3721,7 @@ THEOREM AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType ==
   /\ AsyncNext
   => AsyncControlServiceStateTypeInvariant'
 BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
+   AsyncControlServiceTransitionPreservesCandidateProducerContinuationLifecycleCoverage,
    AsyncCandidateLifecycleDistinctNewRootsReceiveDistinctOwnership,
    AsyncCandidateLifecycleHighWatermarkAdvancesByFullFreshSet,
    AsyncServeIngressSharedHighWatermarkAdvancesByFreshTickets,
@@ -3600,6 +3822,9 @@ BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
        AsyncOrderedScheduledOriginsForNodeAfter,
        AsyncFirstScheduledOriginIndexAfter,
        AsyncControlServiceStateTypeInvariant,
+       AsyncCandidateProducerContinuationLifecycleCoverageInvariant,
+       AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn,
+       AsyncCandidateProducerContinuationLifecycleCoveredIn,
        AsyncControlServiceRecordSet,
        AsyncControlServiceRecord,
        AsyncControlServiceSlots,
@@ -3663,6 +3888,56 @@ PROOF
          AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType
   <1> QED BY <1>1
 
+THEOREM AsyncNextPreservesLeaderWireIngressCarrierOwnership ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncNext
+  => AsyncLeaderWireIngressCarrierOwnershipInvariant'
+BY AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut,
+   AdmitDormantLeaderWireRetainsLifecycleTokenAndFrozenPrefix,
+   AtomicDormantLeaderWireAdmissionConsumesRealPacketWithFreshCarrier,
+   AsyncUnboundChunkAdmissionDoesNotMintLeaderWireLifecycle,
+   CoalescedDueLeaderWireLifecycleRetryPreservesFrozenOwner,
+   LeaderWireIngressDrainNeverInventsRuntimeOwner,
+   RuntimeLeaderWireCannotRetireMerelyFromIngressPop,
+   RetireLeaderWireLifecycleRetainsTerminalTombstone,
+   LeaderWireIgnoredOrServicedLastConsumerTerminalizesAtomically,
+   AsyncDormantLeaderWireReactivationConsumesPhysicalNotLifecycleOrdinal,
+   LeaderWireIngressAdmissionRefinesLifecycleTransition,
+   LeaderWireIngressDrainRefinesLifecycleTransition,
+   LeaderWireLastConsumerRefinesLifecycleTransition,
+   LeaderWireTerminalRetirementRefinesLifecycleTransition,
+   LeaderWireRestartReopenRefinesLifecycleTransition,
+   FS_CardinalityType, FS_Subset, IsaT(7200)
+   DEF AsyncStrongTypeInvariant,
+       AsyncLeaderWireIngressCarrierOwnershipInvariant,
+       AsyncLeaderWireIngressCarrierCoordinates,
+       AsyncLeaderWireLifecycleIngressProtected,
+       AsyncLeaderWireAdmissionMatchesRecord,
+       AsyncLeaderWireLifecycleIdentityDerivable,
+       AsyncChunkExactLifecycleCoordinatesRetained,
+       AsyncLeaderWireLifecycleTransition,
+       AsyncLeaderWireLifecycleIngressAdmissionTransition,
+       AsyncLeaderWireLifecycleIngressDrainTransition,
+       AsyncLeaderWireLifecycleConsumerTransition,
+       AsyncLeaderWireLifecycleTerminalTransition,
+       AsyncLeaderWireLifecycleRestartTransition,
+       AsyncLeaderWireLifecycleStateAfterIngressAdmission,
+       AsyncLeaderWireLifecycleRecordAfterIngressDrain,
+       AsyncLeaderWireLifecyclesAfterIngressDrain,
+       AsyncLeaderWireLifecycleStateAfterConsumerStep,
+       AsyncLeaderWireLifecycleRecordAfterRestart,
+       AsyncLeaderWireLifecyclesAfterRestart,
+       RetireLeaderWireLifecycleSlot,
+       AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket,
+       PopSelectedIngress, DrainFairIngressSelected,
+       DrainHistoricalIngressSelected,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, AsyncNetworkStep, AsyncFaultStep,
+       AsyncAllVars, AsyncSchedulerVars, IngressLane
+
 THEOREM AsyncNextPreservesStrongTypeInvariant ==
   AsyncStrongTypeInvariant /\ AsyncNext
     => AsyncStrongTypeInvariant'
@@ -3688,6 +3963,8 @@ PROOF
     <2>2f. AsyncSerializedBusyKernelInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2g. AsyncCertifiedResponseClaimIngressOwnershipInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2j. AsyncLeaderWireIngressCarrierOwnershipInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2h. AsyncControlServiceStateTypeInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
@@ -3726,8 +4003,11 @@ PROOF
     <2>11. AsyncCertifiedResponseClaimIngressOwnershipInvariant'
       BY <1>1, <2>2, <2>2g,
          AsyncNextPreservesCertifiedResponseClaimIngressOwnershipInvariant
+    <2>12. AsyncLeaderWireIngressCarrierOwnershipInvariant'
+      BY <1>1, <2>2j,
+         AsyncNextPreservesLeaderWireIngressCarrierOwnership
     <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>5, <2>6, <2>7,
-                <2>8, <2>9, <2>10, <2>11
+                <2>8, <2>9, <2>10, <2>11, <2>12
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -4218,689 +4498,5 @@ PROOF
          DEF SelectedRequest, SelectedVote, LockCommitWal
     <2> QED BY <2>7
   <1> QED BY <1>1
-
-(***************************************************************************
-The imported historical-lock witness begins only after the locked body has
-been durably validated.  Keep the earlier certified-body pipeline visible as
-a separate, source-neutral obligation.  A scheduled occurrence counts only
-for the current consumer epoch; an outstanding request retains one concrete
-QcRecord and is matched to the source by its full stable Prepare reference.
-Exact wire authentication and exact WAL bytes remain cross-tool obligations;
-the reference quotient itself is explicit above.  This invariant is specified
-below but intentionally not added to the proved progress bundle: preservation
-across every fetch/serve/ingress/store/validate transition remains proof debt.
-***************************************************************************)
-
-HistoricalLockedSemanticPrepareAuthority(node, qc, authorityQc) ==
-  /\ HistoricalLockedPrepareSource(node, authorityQc)
-  /\ authorityQc.context = qc.context
-  /\ authorityQc.view = qc.view
-  /\ authorityQc.subject = qc.subject
-
-HistoricalLockedCertifiedRequestMatches(node, qc, request) ==
-  /\ request.kind = "CertifiedRequest"
-  /\ request.source = node
-  /\ request.envelope.height = qc.context.height
-  /\ request.envelope.view = qc.view
-  /\ request.envelope.subject = qc.subject
-  /\ \E authorityQc \in prepareQCs:
-       /\ HistoricalLockedSemanticPrepareAuthority(
-            node, qc, authorityQc)
-       /\ request.envelope.recipient
-            \in authorityQc.signers \ {node}
-
-HistoricalLockedCertifiedResponseMatches(node, qc, item) ==
-  /\ item.kind = "CertifiedResponse"
-  /\ item.envelope.recipient = node
-  /\ item.envelope.height = qc.context.height
-  /\ item.envelope.view = qc.view
-  /\ item.envelope.subject = qc.subject
-  /\ \E authorityQc \in prepareQCs:
-       /\ HistoricalLockedSemanticPrepareAuthority(
-            node, qc, authorityQc)
-       /\ item.source \in authorityQc.signers
-
-HistoricalLockedBodyPipelineCandidate(node, qc, candidate) ==
-  /\ candidate \in AsyncCandidateSet
-  /\ candidate.class = "Completion"
-  /\ candidate.node = node
-  /\ candidate.height = qc.context.height
-  /\ candidate.view = qc.view
-  /\ candidate.subject = qc.subject
-  /\ candidate.kind \in
-       {"FetchBody", "RequestCertifiedBody", "FetchCertifiedBody",
-        "StoreBody", "ValidateBody"}
-  /\ CASE candidate.kind \in {"FetchBody", "RequestCertifiedBody"} ->
-            /\ candidate.item = NoAsyncItem
-            /\ candidate.evidence \in prepareQCs
-            /\ HistoricalLockedSemanticPrepareAuthority(
-                 node, qc, candidate.evidence)
-       [] candidate.kind = "FetchCertifiedBody" ->
-            HistoricalLockedCertifiedResponseMatches(
-              node, qc, candidate.item)
-       [] OTHER -> TRUE
-  /\ CandidateConsumerCurrent(candidate)
-  /\ CandidateScheduled(candidate)
-
-HistoricalLockedBodyRecoveryAuthority(node, qc) ==
-  /\ asyncRecoveryPhase
-       \in {"RestartRequired", "ReplayRequired", "Replaying"}
-  /\ asyncRecoveryNode = node
-  /\ generation[node] = asyncRecoveryGeneration
-  /\ HistoricalLockedPrepareSource(node, qc)
-
-HistoricalLockedCertifiedRequestActive(node, qc) ==
-  \E request \in asyncActiveRequests:
-    HistoricalLockedCertifiedRequestMatches(node, qc, request)
-
-HistoricalLockedBodyPipelineKindOwned(node, qc, kind) ==
-  \E candidate \in AsyncCandidateSet:
-    /\ candidate.kind = kind
-    /\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate)
-
-HistoricalLockedBodyFetchOwned(node, qc) ==
-  HistoricalLockedBodyPipelineKindOwned(node, qc, "FetchBody")
-
-HistoricalLockedBodyRequestOwned(node, qc) ==
-  HistoricalLockedBodyPipelineKindOwned(
-    node, qc, "RequestCertifiedBody")
-
-HistoricalLockedBodyCertifiedFetchOwned(node, qc) ==
-  HistoricalLockedBodyPipelineKindOwned(
-    node, qc, "FetchCertifiedBody")
-
-HistoricalLockedBodyStoreOwned(node, qc) ==
-  /\ BodyRecord(node, qc.context, qc.view, qc.subject)
-       \in availableBodies
-  /\ HistoricalLockedBodyPipelineKindOwned(node, qc, "StoreBody")
-
-HistoricalLockedBodyValidateOwned(node, qc) ==
-  /\ BodyHeldBy(durableBodies, node, qc.context, qc.view, qc.subject)
-  /\ HistoricalLockedBodyPipelineKindOwned(node, qc, "ValidateBody")
-
-HistoricalLockedBodyServeOwned(node, qc) ==
-  \E server \in ValidatorIds:
-    \E job \in SequenceSet(asyncIoQueues[server]):
-      /\ job \in AsyncServeJobSet
-      /\ HistoricalLockedCertifiedRequestMatches(
-           node, qc, job.candidate.item)
-
-HistoricalLockedBodyResponseInFlight(node, qc) ==
-  \E item \in AsyncNetworkItems:
-    /\ HistoricalLockedCertifiedResponseMatches(node, qc, item)
-    /\ \/ \E packet \in asyncTransport: packet.item = item
-       \/ \E source \in AsyncIngressSources:
-            item \in SequenceSet(IngressLane(node, source))
-
-HistoricalLockedBodyRestartAuthority(node, qc) ==
-  AsyncHistoricalLockRestartAuthority(node, qc)
-    \in asyncHistoricalLockRestartAuthorities
-
-(***************************************************************************
-Validation is the terminal boundary of the ordinary body-recovery cone, not
-an unconditional promise to cast a late historical Commit.  If the exact
-lock remains eligible for its old-round Commit, the existing progress-witness
-invariant must already own that Commit continuation.  A higher conflicting
-Prepare legitimately fences the late Commit, but it does not undo the durable
-validation which the later locked-body reproposal obligation consumes.
-***************************************************************************)
-
-HistoricalLockedBodyValidated(node, qc) ==
-  /\ BodyHeldBy(durableBodies, node, qc.context, qc.view, qc.subject)
-  /\ BodyValidatedBy(validatedBodies, node, qc.context, qc.view,
-                      generation[node], qc.subject)
-
-HistoricalLockedBodyRecoveryTerminal(node, qc) ==
-  /\ HistoricalLockedBodyValidated(node, qc)
-  /\ \/ HistoricalLockedCommitRecoveryWitness(node, qc)
-     \/ ~HistoricalLockedPrepareForCommit(node, qc)
-
-HistoricalLockedBodyRecoveryStage(node, qc) ==
-  \/ HistoricalLockedBodyRecoveryTerminal(node, qc)
-  \/ HistoricalLockedCommitRecoveryWitness(node, qc)
-  \/ HistoricalLockedBodyRecoveryAuthority(node, qc)
-  \/ HistoricalLockedCertifiedRequestActive(node, qc)
-  \/ HistoricalLockedBodyRestartAuthority(node, qc)
-  \/ HistoricalLockedBodyFetchOwned(node, qc)
-  \/ HistoricalLockedBodyRequestOwned(node, qc)
-  \/ HistoricalLockedBodyCertifiedFetchOwned(node, qc)
-  \/ HistoricalLockedBodyStoreOwned(node, qc)
-  \/ HistoricalLockedBodyValidateOwned(node, qc)
-
-HistoricalLockedBodyRecoveryStageInvariant ==
-  \A node \in AsyncCurrentResponsiveVoters, qc \in prepareQCs:
-    HistoricalLockedPrepareSource(node, qc)
-      => HistoricalLockedBodyRecoveryStage(node, qc)
-
-HistoricalLockedBodyRecoveryProperty(specification) ==
-  specification => []HistoricalLockedBodyRecoveryStageInvariant
-
-THEOREM HistoricalLockRestartAuthorityEstablishesRecoveryStage ==
-  \A node \in ValidatorIds, qc \in prepareQCs:
-    HistoricalLockedBodyRestartAuthority(node, qc)
-      => HistoricalLockedBodyRecoveryStage(node, qc)
-BY DEF HistoricalLockedBodyRecoveryStage
-
-THEOREM HistoricalLockRestartAuthorityRetirementRequiresExactFetch ==
-  \A authority \in asyncHistoricalLockRestartAuthorities:
-    /\ AsyncHistoricalLockRestartAuthorityTransition
-    /\ HistoricalLockRestartAuthoritySourceAfter(authority)
-    /\ authority \notin asyncHistoricalLockRestartAuthorities'
-    => HistoricalLockRestartExactCurrentFetchOwnerAfter(authority)
-BY Isa
-   DEF AsyncHistoricalLockRestartAuthorityTransition,
-       ResponsiveCrashRecoveryRegistration,
-       HistoricalLockRestartAuthoritySourceAfter,
-       HistoricalLockRestartExactCurrentFetchOwnerAfter
-
-THEOREM HistoricalLockRestartAuthoritySurvivesGenerationAndReplayReset ==
-  \A authority \in asyncHistoricalLockRestartAuthorities:
-    /\ AsyncHistoricalLockRestartAuthorityTransition
-    /\ HistoricalLockRestartAuthoritySourceAfter(authority)
-    /\ ~HistoricalLockRestartExactCurrentFetchOwnerAfter(authority)
-    => authority \in asyncHistoricalLockRestartAuthorities'
-BY Isa
-   DEF AsyncHistoricalLockRestartAuthorityTransition,
-       ResponsiveCrashRecoveryRegistration,
-       HistoricalLockRestartAuthoritySourceAfter,
-       HistoricalLockRestartExactCurrentFetchOwnerAfter
-
-THEOREM ResponsiveCrashRegistersExactHistoricalLockProjection ==
-  \A node \in ValidatorIds, qc \in prepareQCs:
-    /\ PreGstResponsiveCrash(node)
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ AsyncNext
-    => AsyncHistoricalLockRestartAuthority(node, qc)
-         \in asyncHistoricalLockRestartAuthorities'
-BY Isa
-   DEF AsyncNext, AsyncHistoricalLockRestartAuthorityTransition,
-       ResponsiveCrashRecoveryRegistration,
-       ResponsiveCrashHistoricalLockRestartAuthorities,
-       HistoricalLockRestartAuthoritySourceKernel,
-       HistoricalLockedPrepareSource,
-       HistoricalLockedPrepareRecoveryProvenance,
-       InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
-       NoDecisionForNode, PreGstResponsiveCrash
-
-(***************************************************************************
-Action-by-action ownership handoffs for the ordinary historical locked-body
-cone.  `HistoricalLockedBodyRuntimeExecutes` names only a successful removal
-from one of the two serialized reducer carriers; a blocked command remains in
-its exact runtime/deferred owner and is handled by the preservation lemmas
-below.  The request and response selectors name the actual fair-ingress item,
-and Serve ownership names the remote signer's queue rather than the requesting
-validator's queue.
-***************************************************************************)
-
-HistoricalLockedBodySourceRetired(node, qc) ==
-  ~HistoricalLockedPrepareSource(node, qc)
-
-HistoricalLockedBodyRuntimeExecutes(candidate) ==
-  /\ [AsyncNext]_AsyncAllVars
-  /\ \/ /\ candidate = NextNodeCommand(candidate.node)
-           /\ FifoRuntimeStep(candidate.node)
-           /\ CommandDispatchable(candidate)
-     \/ /\ DeferredQueueNonempty(candidate.node)
-           /\ candidate = NextDeferredCommand(candidate.node)
-           /\ DeferredDrainStep(candidate.node)
-           /\ DeferredHandoffAllowsExecution(candidate.node, candidate)
-
-HistoricalLockedCertifiedRequestSelected(server, node, qc) ==
-  /\ asyncIngressReady[server] # <<>>
-  /\ DrainableIngressIndices(server) # {}
-  /\ HistoricalLockedCertifiedRequestMatches(
-       node, qc,
-       SelectedIngressItemAt(
-         server, FirstDrainableIngressIndex(server)))
-
-HistoricalLockedCertifiedResponseSelected(node, qc) ==
-  /\ asyncIngressReady[node] # <<>>
-  /\ DrainableIngressIndices(node) # {}
-  /\ HistoricalLockedCertifiedResponseMatches(
-       node, qc,
-       SelectedIngressItemAt(
-         node, FirstDrainableIngressIndex(node)))
-
-HistoricalLockedBodyServeHeadOwned(server, node, qc) ==
-  /\ AsyncIoQueueDepth(server) > 0
-  /\ Head(asyncIoQueues[server]) \in AsyncServeJobSet
-  /\ HistoricalLockedCertifiedRequestMatches(
-       node, qc, Head(asyncIoQueues[server]).candidate.item)
-
-THEOREM HistoricalLockedFetchExecutionHandsOff ==
-  \A node \in ValidatorIds, qc \in prepareQCs,
-     candidate \in AsyncCandidateSet:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ candidate.kind = "FetchBody"
-    /\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate)
-    /\ HistoricalLockedBodyRuntimeExecutes(candidate)
-    => \/ HistoricalLockedBodySourceRetired(node, qc)'
-       \/ HistoricalLockedCertifiedRequestActive(node, qc)'
-       \/ HistoricalLockedBodyValidateOwned(node, qc)'
-       \/ HistoricalLockedBodyRecoveryTerminal(node, qc)'
-BY IsaT(180)
-   DEF HistoricalLockedBodyRuntimeExecutes,
-       HistoricalLockedBodyPipelineCandidate,
-       HistoricalLockedSemanticPrepareAuthority,
-       HistoricalLockedBodySourceRetired,
-       HistoricalLockedCertifiedRequestActive,
-       HistoricalLockedCertifiedRequestMatches,
-       HistoricalLockedBodyValidateOwned,
-       HistoricalLockedBodyPipelineKindOwned,
-       HistoricalLockedBodyRecoveryTerminal,
-       HistoricalLockedBodyValidated,
-       ExecuteDecisionFetch, PublishCertifiedRequests,
-       CertifiedRequestOutbox, CommandSuccessors,
-       FreshCommandSuccessors, FreshCandidateSequence,
-       AppendCausalSuccessors, FifoRuntimeStep, DeferredDrainStep,
-       HistoricalLockedPrepareSource, CertifiedBodyRecoveryAuthority,
-       CandidateScheduled, CandidateConsumerCurrent,
-       AsyncAllVars
-
-THEOREM HistoricalLockedRequestExecutionHandsOff ==
-  \A node \in ValidatorIds, qc \in prepareQCs,
-     candidate \in AsyncCandidateSet:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ candidate.kind = "RequestCertifiedBody"
-    /\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate)
-    /\ HistoricalLockedBodyRuntimeExecutes(candidate)
-    => \/ HistoricalLockedBodySourceRetired(node, qc)'
-       \/ HistoricalLockedCertifiedRequestActive(node, qc)'
-       \/ HistoricalLockedBodyRecoveryTerminal(node, qc)'
-BY IsaT(180)
-   DEF HistoricalLockedBodyRuntimeExecutes,
-       HistoricalLockedBodyPipelineCandidate,
-       HistoricalLockedSemanticPrepareAuthority,
-       HistoricalLockedBodySourceRetired,
-       HistoricalLockedCertifiedRequestActive,
-       HistoricalLockedCertifiedRequestMatches,
-       HistoricalLockedBodyRecoveryTerminal,
-       HistoricalLockedBodyValidated,
-       ExecuteRequestCertifiedBody, PublishCertifiedRequests,
-       CertifiedRequestOutbox, FifoRuntimeStep, DeferredDrainStep,
-       HistoricalLockedPrepareSource, CertifiedBodyRecoveryAuthority,
-       CandidateScheduled, CandidateConsumerCurrent,
-       AsyncAllVars
-
-THEOREM HistoricalLockedCertifiedFetchExecutionHandsOff ==
-  \A node \in ValidatorIds, qc \in prepareQCs,
-     candidate \in AsyncCandidateSet:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ candidate.kind = "FetchCertifiedBody"
-    /\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate)
-    /\ HistoricalLockedBodyRuntimeExecutes(candidate)
-    => \/ HistoricalLockedBodySourceRetired(node, qc)'
-       \/ HistoricalLockedBodyStoreOwned(node, qc)'
-       \/ HistoricalLockedBodyRecoveryTerminal(node, qc)'
-BY IsaT(180)
-   DEF HistoricalLockedBodyRuntimeExecutes,
-       HistoricalLockedBodyPipelineCandidate,
-       HistoricalLockedCertifiedResponseMatches,
-       HistoricalLockedSemanticPrepareAuthority,
-       HistoricalLockedBodySourceRetired,
-       HistoricalLockedBodyStoreOwned,
-       HistoricalLockedBodyPipelineKindOwned,
-       HistoricalLockedBodyRecoveryTerminal,
-       HistoricalLockedBodyValidated,
-       ExecuteRegularCommand, RegularCoreCommand,
-       FetchCertifiedBody, CommandSuccessors,
-       FreshCommandSuccessors, FreshCandidateSequence,
-       AppendCausalSuccessors, FifoRuntimeStep, DeferredDrainStep,
-       HistoricalLockedPrepareSource, CandidateScheduled,
-       CandidateConsumerCurrent, AsyncAllVars
-
-THEOREM HistoricalLockedStoreExecutionHandsOff ==
-  \A node \in ValidatorIds, qc \in prepareQCs,
-     candidate \in AsyncCandidateSet:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ candidate.kind = "StoreBody"
-    /\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate)
-    /\ HistoricalLockedBodyRuntimeExecutes(candidate)
-    => \/ HistoricalLockedBodySourceRetired(node, qc)'
-       \/ HistoricalLockedBodyValidateOwned(node, qc)'
-       \/ HistoricalLockedBodyRecoveryTerminal(node, qc)'
-BY IsaT(180)
-   DEF HistoricalLockedBodyRuntimeExecutes,
-       HistoricalLockedBodyPipelineCandidate,
-       HistoricalLockedBodySourceRetired,
-       HistoricalLockedBodyValidateOwned,
-       HistoricalLockedBodyPipelineKindOwned,
-       HistoricalLockedBodyRecoveryTerminal,
-       HistoricalLockedBodyValidated,
-       ExecuteRegularCommand, RegularCoreCommand, StoreBody,
-       CommandSuccessors, FreshCommandSuccessors,
-       FreshCandidateSequence, AppendCausalSuccessors,
-       FifoRuntimeStep, DeferredDrainStep,
-       HistoricalLockedPrepareSource, CandidateScheduled,
-       CandidateConsumerCurrent, AsyncAllVars
-
-THEOREM HistoricalLockedValidateExecutionHandsOff ==
-  \A node \in ValidatorIds, qc \in prepareQCs,
-     candidate \in AsyncCandidateSet:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ candidate.kind = "ValidateBody"
-    /\ HistoricalLockedBodyPipelineCandidate(node, qc, candidate)
-    /\ HistoricalLockedBodyRuntimeExecutes(candidate)
-    => \/ HistoricalLockedBodySourceRetired(node, qc)'
-       \/ HistoricalLockedBodyRecoveryTerminal(node, qc)'
-       \/ HistoricalLockedCommitRecoveryWitness(node, qc)'
-BY IsaT(180)
-   DEF HistoricalLockedBodyRuntimeExecutes,
-       HistoricalLockedBodyPipelineCandidate,
-       HistoricalLockedBodySourceRetired,
-       HistoricalLockedBodyRecoveryTerminal,
-       HistoricalLockedBodyValidated,
-       HistoricalLockedCommitRecoveryWitness,
-       ExecuteRegularCommand, RegularCoreCommand, ValidateLockedBody,
-       CommandSuccessors, FreshCommandSuccessors,
-       FreshCandidateSequence, AppendCausalSuccessors,
-       FifoRuntimeStep, DeferredDrainStep,
-       HistoricalLockedPrepareSource,
-       HistoricalLockedPrepareForCommit,
-       CandidateScheduled, CandidateConsumerCurrent,
-       AsyncAllVars
-
-THEOREM HistoricalLockedRequestIngressHandsOffToRemoteServe ==
-  \A server, node \in ValidatorIds, qc \in prepareQCs:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ HistoricalLockedCertifiedRequestActive(node, qc)
-    /\ HistoricalLockedCertifiedRequestSelected(server, node, qc)
-    /\ [AsyncNext]_AsyncAllVars
-    /\ IngressDrainStep(server)
-    => /\ HistoricalLockedCertifiedRequestActive(node, qc)'
-       /\ HistoricalLockedBodyServeOwned(node, qc)'
-BY IsaT(180)
-   DEF HistoricalLockedCertifiedRequestSelected,
-       HistoricalLockedCertifiedRequestActive,
-       HistoricalLockedCertifiedRequestMatches,
-       HistoricalLockedBodyServeOwned,
-       IngressDrainStep, DrainFairIngressSelected,
-       CertifiedRequestAuthorized, AsyncIoCertifiedServeJob,
-       CandidateConsumerCurrent, SequenceSet,
-       AsyncAllVars
-
-THEOREM HistoricalLockedServeExecutionPublishesResponse ==
-  \A server, node \in ValidatorIds, qc \in prepareQCs:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ HistoricalLockedCertifiedRequestActive(node, qc)
-    /\ HistoricalLockedBodyServeHeadOwned(server, node, qc)
-    /\ CertifiedServeCanRespond(
-         server, Head(asyncIoQueues[server]).candidate.item)
-    /\ [AsyncNext]_AsyncAllVars
-    /\ ServiceIoWorkerWork(server)
-    => /\ HistoricalLockedCertifiedRequestActive(node, qc)'
-       /\ HistoricalLockedBodyResponseInFlight(node, qc)'
-BY IsaT(180)
-   DEF HistoricalLockedBodyServeHeadOwned,
-       HistoricalLockedCertifiedRequestActive,
-       HistoricalLockedCertifiedRequestMatches,
-       HistoricalLockedBodyResponseInFlight,
-       HistoricalLockedCertifiedResponseMatches,
-       HistoricalLockedSemanticPrepareAuthority,
-       ServiceIoWorkerWork, CertifiedServeCanRespond,
-       CertifiedResponseItem, PublishEphemeralItems,
-       PacketsForItems, AsyncAllVars
-
-THEOREM HistoricalLockedResponseIngressHandsOffToCertifiedFetch ==
-  \A node \in ValidatorIds, qc \in prepareQCs:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ HistoricalLockedCertifiedRequestActive(node, qc)
-    /\ HistoricalLockedCertifiedResponseSelected(node, qc)
-    /\ [AsyncNext]_AsyncAllVars
-    /\ IngressDrainStep(node)
-    => \/ HistoricalLockedBodySourceRetired(node, qc)'
-       \/ HistoricalLockedBodyCertifiedFetchOwned(node, qc)'
-       \/ HistoricalLockedBodyRecoveryTerminal(node, qc)'
-BY IsaT(180)
-   DEF HistoricalLockedCertifiedResponseSelected,
-       HistoricalLockedCertifiedRequestActive,
-       HistoricalLockedCertifiedRequestMatches,
-       HistoricalLockedCertifiedResponseMatches,
-       HistoricalLockedSemanticPrepareAuthority,
-       HistoricalLockedBodySourceRetired,
-       HistoricalLockedBodyCertifiedFetchOwned,
-       HistoricalLockedBodyPipelineKindOwned,
-       HistoricalLockedBodyPipelineCandidate,
-       HistoricalLockedBodyRecoveryTerminal,
-       HistoricalLockedBodyValidated,
-       IngressDrainStep, DrainFairIngressSelected,
-       CertifiedResponseAuthorized, MatchingCertifiedRequests,
-       CertifiedResponseCandidate, CandidateScheduled,
-       CandidateConsumerCurrent, AsyncAllVars
-
-THEOREM HistoricalLockedPrepareSourceRetiresOnlyLegitimately ==
-  \A node \in ValidatorIds, qc \in prepareQCs:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ [AsyncNext]_AsyncAllVars
-    /\ HistoricalLockedBodySourceRetired(node, qc)'
-    => \/ NodeHasDecision(node)'
-       \/ lockRank[node]' > qc.view
-       \/ lockSubject[node]' # qc.subject
-BY IsaT(180)
-   DEF HistoricalLockedBodySourceRetired,
-       HistoricalLockedPrepareSource,
-       HistoricalLockedPrepareRecoveryProvenance,
-       InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
-       NoDecisionForNode, AsyncNext, AsyncNonCrashStep,
-       AsyncRunnerStep, AsyncNonRunnerStep, AsyncAllVars
-
-(***************************************************************************
-Preservation closes two different proof cases.  An existing durable source
-must retain its current owner or take one of the concrete handoffs above.  A
-new source can arise only when the reducer durably installs the selected TC
-lock (which atomically appends its semantic FetchBody owner) or persists the
-old-round Commit intent (which is already terminal).  Keeping those cases
-separate prevents a proof from assuming the source in the pre-state and then
-vacuously ignoring the install transition which creates it.
-***************************************************************************)
-
-THEOREM HistoricalLockedPersistInstallEstablishesSemanticFetch ==
-  \A node \in ValidatorIds, qc \in prepareQCs,
-     command \in AsyncCandidateSet:
-    /\ AsyncStrongTypeInvariant
-    /\ command.kind = "PersistInstallTC"
-    /\ command.node = node
-    /\ HistoricalLockedBodyRuntimeExecutes(command)
-    /\ HistoricalLockedPrepareSource(node, qc)'
-    => \/ HistoricalLockedBodyFetchOwned(node, qc)'
-       \/ HistoricalLockedCommitRecoveryWitness(node, qc)'
-       \/ HistoricalLockedBodyRecoveryTerminal(node, qc)'
-BY IsaT(240)
-   DEF HistoricalLockedBodyRuntimeExecutes,
-       HistoricalLockedBodyFetchOwned,
-       HistoricalLockedBodyPipelineKindOwned,
-       HistoricalLockedBodyPipelineCandidate,
-       HistoricalLockedSemanticPrepareAuthority,
-       HistoricalLockedCommitRecoveryWitness,
-       HistoricalLockedBodyRecoveryTerminal,
-       HistoricalLockedBodyValidated,
-       ExecutePersistInstall, PersistInstallTC,
-       InstallResultingLockedPrepareQCs,
-       InstallLockedFetchSuccessor,
-       InstallLockedFetchSuccessors,
-       InstallCommitSignSuccessors, InstallCommandSuccessors,
-       CommandSuccessors, FreshCommandSuccessors,
-       FreshCandidateSequence, AppendCausalSuccessors,
-       CandidateScheduled, CandidateConsumerCurrent,
-       HistoricalLockedPrepareSource,
-       HistoricalLockedPrepareRecoveryProvenance,
-       AsyncAllVars
-
-THEOREM HistoricalLockedPersistCommitEstablishesTerminalWitness ==
-  \A node \in ValidatorIds, qc \in prepareQCs,
-     command \in AsyncCandidateSet:
-    /\ AsyncStrongTypeInvariant
-    /\ command.kind = "PersistLockCommit"
-    /\ command.node = node
-    /\ command.view = qc.view
-    /\ command.subject = qc.subject
-    /\ HistoricalLockedBodyRuntimeExecutes(command)
-    /\ HistoricalLockedPrepareSource(node, qc)'
-    => HistoricalLockedCommitRecoveryWitness(node, qc)'
-BY IsaT(180)
-   DEF HistoricalLockedBodyRuntimeExecutes,
-       HistoricalLockedCommitRecoveryWitness,
-       ExecuteRegularCommand, RegularCoreCommand,
-       PersistLockCommit, ExactLockedCommitIntents,
-       HistoricalLockedPrepareSource,
-       CandidateScheduled, AsyncAllVars
-
-THEOREM HistoricalLockedBodyExistingSourceStepPreservation ==
-  \A node \in ValidatorIds, qc \in prepareQCs:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ HistoricalLockedBodyRecoveryStage(node, qc)
-    /\ [AsyncNext]_AsyncAllVars
-    => \/ HistoricalLockedBodySourceRetired(node, qc)'
-       \/ HistoricalLockedBodyRecoveryStage(node, qc)'
-BY HistoricalLockedFetchExecutionHandsOff,
-   HistoricalLockedRequestExecutionHandsOff,
-   HistoricalLockedCertifiedFetchExecutionHandsOff,
-   HistoricalLockedStoreExecutionHandsOff,
-   HistoricalLockedValidateExecutionHandsOff,
-   HistoricalLockedRequestIngressHandsOffToRemoteServe,
-   HistoricalLockedServeExecutionPublishesResponse,
-   HistoricalLockedResponseIngressHandsOffToCertifiedFetch,
-   HistoricalLockRestartAuthorityRetirementRequiresExactFetch,
-   HistoricalLockRestartAuthoritySurvivesGenerationAndReplayReset,
-   ResponsiveCrashRegistersExactHistoricalLockProjection,
-   IsaT(300)
-   DEF HistoricalLockedBodyRecoveryStage,
-       HistoricalLockedBodyRecoveryTerminal,
-       HistoricalLockedBodyValidated,
-       HistoricalLockedCertifiedRequestActive,
-       HistoricalLockedBodyRestartAuthority,
-       HistoricalLockedBodyFetchOwned,
-       HistoricalLockedBodyRequestOwned,
-       HistoricalLockedBodyCertifiedFetchOwned,
-       HistoricalLockedBodyStoreOwned,
-       HistoricalLockedBodyValidateOwned,
-       HistoricalLockedBodyPipelineKindOwned,
-       HistoricalLockedBodyPipelineCandidate,
-       HistoricalLockedBodySourceRetired,
-       HistoricalLockedCommitRecoveryWitness,
-       AsyncNext, AsyncNonCrashStep,
-       AsyncRunnerStep, AsyncNonRunnerStep,
-       RunNode, RunHistoricalRecoveryNode, RunNodeWork,
-       SerializedRuntimeStep,
-       SerializedRuntimePrecedesServeIngressStep,
-       SerializedLocalPrecedesServeIngressStep,
-       SelectedLocalAdmissionAdvance,
-       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
-       RunHistoricalServer, OpenHistoricalRecovery,
-       DirectCommitCertificateDiscoveryStep,
-       DirectHistoricalCommitCertificateDiscoveryStep,
-       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
-       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
-       AsyncNetworkStep, AdmitIngressPacket, AsyncFaultStep,
-       PreGstCrash, PreGstResponsiveCrash, PreGstResponsiveRestart,
-       PreGstResponsiveReplay, DriveResponsiveReplayHead,
-       FinishResponsiveReplay, RearmResponsiveRecovery,
-       AsyncTick, AsyncAllVars
-
-THEOREM HistoricalLockedBodyNewSourceStepEstablishment ==
-  \A node \in ValidatorIds, qc \in prepareQCs:
-    /\ AsyncStrongTypeInvariant
-    /\ ~HistoricalLockedPrepareSource(node, qc)
-    /\ [AsyncNext]_AsyncAllVars
-    /\ HistoricalLockedPrepareSource(node, qc)'
-    => HistoricalLockedBodyRecoveryStage(node, qc)'
-BY HistoricalLockedPersistInstallEstablishesSemanticFetch,
-   HistoricalLockedPersistCommitEstablishesTerminalWitness,
-   IsaT(300)
-   DEF HistoricalLockedBodyRecoveryStage,
-       HistoricalLockedBodyRecoveryTerminal,
-       HistoricalLockedBodyValidated,
-       HistoricalLockedCommitRecoveryWitness,
-       HistoricalLockedBodyFetchOwned,
-       HistoricalLockedBodyPipelineKindOwned,
-       HistoricalLockedBodyPipelineCandidate,
-       HistoricalLockedSemanticPrepareAuthority,
-       HistoricalLockedPrepareSource,
-       HistoricalLockedPrepareRecoveryProvenance,
-       InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
-       AsyncNext, AsyncNonCrashStep,
-       AsyncRunnerStep, AsyncNonRunnerStep,
-       RunNode, RunHistoricalRecoveryNode, RunNodeWork,
-       SerializedRuntimeStep,
-       SerializedRuntimePrecedesServeIngressStep,
-       SerializedLocalPrecedesServeIngressStep,
-       SelectedLocalAdmissionAdvance,
-       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
-       FifoRuntimeStep, DeferredDrainStep,
-       AsyncAllVars
-
-THEOREM AsyncInitEstablishesHistoricalLockedBodyRecoveryStage ==
-  \A initialContext:
-    AsyncInitAt(initialContext)
-      => HistoricalLockedBodyRecoveryStageInvariant
-BY IsaT(120)
-   DEF AsyncInitAt, AsyncBaseInitAt,
-       HistoricalLockedBodyRecoveryStageInvariant,
-       HistoricalLockedPrepareSource,
-       HistoricalLockedPrepareRecoveryProvenance,
-       InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
-       NoDecisionForNode
-
-THEOREM AsyncBracketPreservesHistoricalLockedBodyRecoveryStage ==
-  /\ AsyncStrongTypeInvariant
-  /\ HistoricalLockedBodyRecoveryStageInvariant
-  /\ [AsyncNext]_AsyncAllVars
-  => HistoricalLockedBodyRecoveryStageInvariant'
-PROOF
-  <1>1. ASSUME AsyncStrongTypeInvariant,
-              HistoricalLockedBodyRecoveryStageInvariant,
-              [AsyncNext]_AsyncAllVars
-         PROVE HistoricalLockedBodyRecoveryStageInvariant'
-    <2>1. AsyncCurrentResponsiveVoters'
-             = AsyncCurrentResponsiveVoters
-      BY <1>1, Isa
-         DEF AsyncNext, AsyncCurrentResponsiveVoters,
-             CurrentVoters, CurrentEpoch, AsyncAllVars
-    <2>2. ASSUME NEW node \in AsyncCurrentResponsiveVoters',
-                  NEW qc \in prepareQCs',
-                  HistoricalLockedPrepareSource(node, qc)'
-           PROVE HistoricalLockedBodyRecoveryStage(node, qc)'
-      <3>1. qc \in prepareQCs
-        BY <1>1, <2>2, Isa
-           DEF AsyncNext, AsyncAllVars
-      <3>2. CASE HistoricalLockedPrepareSource(node, qc)
-        <4>1. HistoricalLockedBodyRecoveryStage(node, qc)
-          BY <1>1, <2>1, <2>2, <3>2, <3>1
-             DEF HistoricalLockedBodyRecoveryStageInvariant
-        <4>2. \/ HistoricalLockedBodySourceRetired(node, qc)'
-               \/ HistoricalLockedBodyRecoveryStage(node, qc)'
-          BY <1>1, <3>1, <3>2, <4>1,
-             HistoricalLockedBodyExistingSourceStepPreservation
-        <4>3. ~HistoricalLockedBodySourceRetired(node, qc)'
-          BY <2>2 DEF HistoricalLockedBodySourceRetired
-        <4> QED BY <4>2, <4>3
-      <3>3. CASE ~HistoricalLockedPrepareSource(node, qc)
-        BY <1>1, <2>2, <3>1, <3>3,
-           HistoricalLockedBodyNewSourceStepEstablishment
-      <3> QED BY <3>2, <3>3
-    <2> QED BY <2>2
-         DEF HistoricalLockedBodyRecoveryStageInvariant
-  <1> QED BY <1>1
-THEOREM HistoricalHigherConflictValidationIsTerminal ==
-  \A node \in AsyncCurrentResponsiveVoters, qc \in prepareQCs:
-    /\ HistoricalLockedPrepareSource(node, qc)
-    /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
-    /\ BodyValidatedBy(validatedBodies, node, context, qc.view,
-                       generation[node], qc.subject)
-    /\ ~NoHigherConflictingPrepareKnown(node, qc)
-      => /\ HistoricalLockedBodyRecoveryTerminal(node, qc)
-         /\ HistoricalLockedBodyRecoveryStage(node, qc)
-BY DEF HistoricalLockedBodyRecoveryTerminal,
-       HistoricalLockedBodyRecoveryStage
 
 =============================================================================

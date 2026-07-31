@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncTimeoutKernelProofs ----
-EXTENDS SumeragiV2AsyncInstallRunnerProofs
+EXTENDS SumeragiV2AsyncInstallRunnerContinuationProofs
 
 (***************************************************************************
 Timeout-certificate progress boundary.
@@ -740,6 +740,35 @@ PROOF
          DEF RuntimeStep
   <1> QED BY <1>1
 
+THEOREM ChangedReplayRunNodeContinuationExecutesCommand ==
+  \A node:
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    /\ receivedTimeoutVotes' # receivedTimeoutVotes
+    => \E command: ExecuteCommand(command)
+PROOF
+  <1>1. ASSUME NEW node,
+                ReplayRunNodeCandidateProducerContinuation(node),
+                receivedTimeoutVotes' # receivedTimeoutVotes
+         PROVE \E command: ExecuteCommand(command)
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <1>1, <2>1, Isa
+         DEF AsyncCandidateProducerContinuationExactLocalReplayStep, vars
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <1>1, <2>2, Isa
+         DEF AsyncCandidateProducerContinuationReplayTargetOnlyTurn, vars
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      <3>1. RuntimeStep(node)
+        BY <2>3, Isa
+           DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+               RuntimeStep
+      <3> QED BY <1>1, <3>1, ChangedRuntimeStepExecutesCommand
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM ChangedRunNodeWorkExecutesCommand ==
   \A node:
     (RunNodeWork(node)
@@ -750,6 +779,14 @@ PROOF
               RunNodeWork(node),
               receivedTimeoutVotes' # receivedTimeoutVotes
          PROVE \E command: ExecuteCommand(command)
+    <2>0. CASE
+            ResolveRunNodeCandidateProducerContinuation(node)
+      BY <1>1, <2>0, Isa
+         DEF ResolveRunNodeCandidateProducerContinuation, vars
+    <2>0p. CASE
+             ReplayRunNodeCandidateProducerContinuation(node)
+      BY <1>1, <2>0p,
+         ChangedReplayRunNodeContinuationExecutesCommand
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1, Isa
          DEF LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
@@ -774,7 +811,8 @@ PROOF
          DEF SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AdmitProducerCompletion, AdmitCausalHead, vars
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+    <2> QED BY <1>1, <2>0, <2>0p, <2>1, <2>2, <2>3, <2>4,
+                 <2>5
          DEF RunNodeWork
   <1> QED BY <1>1
 

@@ -41,6 +41,11 @@ def canonical_contract() -> dict:
     return copy.deepcopy(ledger["inflight_first_release_layout_contract"])
 
 
+def canonical_models() -> list[dict]:
+    ledger = json.loads(BINDINGS.read_text(encoding="utf-8"))
+    return copy.deepcopy(ledger["models"])
+
+
 def copy_layout_fixture(tmp_path: Path, module, contract: dict) -> None:
     """Copy every file consumed by the isolated layout-contract validator."""
 
@@ -175,6 +180,17 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
             "MLPayloadV3CarriesExactAdmissionPreimage",
         ),
         (
+            Path("scripts/formal/run_sumeragi_v2_inflight_first_release.sh"),
+            'local invariant_marker="Error: Invariant ${invariant} is violated."',
+            'local invariant_marker="Invariant ${invariant} is violated."',
+        ),
+        (
+            Path("scripts/formal/run_sumeragi_v2_inflight_first_release.sh"),
+            'sumeragi_v2_tlc_assert_exact_line \\\n'
+            '    "$config" "$log" "$invariant_marker"',
+            'grep -Fq "$invariant_marker" "$log"',
+        ),
+        (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
             '"inflight_first_release_fixed.cfg",\n        "18",',
             '"inflight_first_release_fixed.cfg",\n        "17",',
@@ -194,6 +210,54 @@ def test_inflight_layout_contract_rejects_semantic_drift(
     copy_layout_fixture(tmp_path, module, contract)
     replace_once(tmp_path / relative, old, new)
     assert validate_fixture(tmp_path, module, contract)
+
+
+def copy_mutation_runner_fixture(tmp_path: Path, module) -> Path:
+    relative = module.TLC_MUTATION_RUNNER_RELATIVE
+    destination = tmp_path / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_DIR / relative, destination)
+    return destination
+
+
+def validate_mutation_runner_fixture(tmp_path: Path, module) -> tuple[str, ...]:
+    errors: list[str] = []
+    module._validate_mutation_runner(tmp_path, canonical_models(), errors)
+    return tuple(errors)
+
+
+def test_multilane_mutation_runner_accepts_shared_exact_line_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    copy_mutation_runner_fixture(tmp_path, module)
+    assert validate_mutation_runner_fixture(tmp_path, module) == ()
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            'local invariant_marker="Error: Invariant ${invariant} is violated."',
+            'local invariant_marker="Invariant ${invariant} is violated."',
+        ),
+        (
+            'sumeragi_v2_tlc_assert_exact_line "$name" "$log" "$invariant_marker"',
+            'grep -Fq "$invariant_marker" "$log"',
+        ),
+        (
+            'sumeragi_v2_tlc_assert_terminal "$name" "$log"',
+            'grep -Fq "Finished in" "$log"',
+        ),
+    ),
+)
+def test_multilane_mutation_runner_rejects_weakened_result_contract(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    module = load_checker()
+    runner = copy_mutation_runner_fixture(tmp_path, module)
+    replace_once(runner, old, new)
+    assert validate_mutation_runner_fixture(tmp_path, module)
 
 
 def test_inflight_layout_contract_rejects_durability_order_drift(
@@ -866,7 +930,10 @@ def test_inflight_layout_contract_rejects_capability_restart_test_name_drift(
     module = load_checker()
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
-    path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/queue/reservation_journal_recovery_tests.rs"
+    )
     test_name = (
         "fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_"
         "restore_commit_barrier()"

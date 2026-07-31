@@ -1724,6 +1724,9 @@ pub struct Kura {
     /// Test hook for forcing the next Sumeragi v2 finality sidecar write to fail.
     #[cfg(test)]
     fail_next_v2_finality_write: AtomicBool,
+    /// Test hook for forcing the next pre-WSV Native AMX evidence publication to fail.
+    #[cfg(test)]
+    fail_next_native_amx_prepublication: AtomicBool,
     /// Counts actual v2 finality BLS verification passes for cache tests.
     #[cfg(test)]
     v2_finality_crypto_verifications: AtomicUsize,
@@ -4670,6 +4673,8 @@ impl Kura {
             #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
             #[cfg(test)]
+            fail_next_native_amx_prepublication: AtomicBool::new(false),
+            #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
             #[cfg(test)]
             startup_replay_historical_payload_reads: AtomicUsize::new(0),
@@ -4972,6 +4977,8 @@ impl Kura {
             primary_relabel_paused: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_native_amx_prepublication: AtomicBool::new(false),
             #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
             #[cfg(test)]
@@ -22647,6 +22654,41 @@ impl Kura {
         self.sync_native_amx_evidence_namespace(namespace, "Native AMX evidence prune intent")
     }
 
+    fn require_native_amx_evidence_prune_intent_absent_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<()> {
+        let directory = namespace.data_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                "Native AMX evidence namespace has no directory",
+            )
+        })?;
+        let max_bytes = self.native_amx_evidence_prune_intent_max_bytes();
+        for (name, kind) in [
+            (
+                NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE,
+                "Native AMX evidence prune intent",
+            ),
+            (
+                NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE,
+                "Native AMX evidence prune-intent temporary",
+            ),
+        ] {
+            let path = directory.join(name);
+            if self
+                .read_bound_regular_file_bytes_locked(namespace, &path, max_bytes, kind)?
+                .is_some()
+            {
+                return Err(Error::PruneIntentConflict(
+                    "pre-WSV Native AMX publication cannot complete or overlap retention cleanup"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn complete_native_amx_evidence_prune_intent_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -25011,6 +25053,11 @@ impl Kura {
 
     pub(crate) fn fail_next_v2_finality_write_for_tests(&self) {
         self.fail_next_v2_finality_write
+            .store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn fail_next_native_amx_prepublication_for_tests(&self) {
+        self.fail_next_native_amx_prepublication
             .store(true, Ordering::Relaxed);
     }
 
@@ -27392,6 +27439,64 @@ struct NativeAmxParticipantReceiptLatestIndexV2 {
     manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
 }
 
+/// Exact in-memory attestation that every separate-participant frontier in one
+/// canonical carrier has crossed the pre-WSV durable publication boundary.
+///
+/// This token is deliberately not a wire or persistence layout. It can only be
+/// constructed after Kura has read back the exact manifest, receipt, and
+/// latest-index bytes under the publication guards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeAmxParticipantApplicationPrepublicationToken {
+    application_block_height: u64,
+    application_block_hash: HashOf<BlockHeader>,
+    executed_block_wire_hash: Hash,
+    finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    manifest_root: Hash,
+    manifest_leaf_count: u32,
+    identities: Vec<NativeAmxParticipantApplicationPrepublicationIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeAmxParticipantApplicationPrepublicationIdentity {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    participant_height: u64,
+    manifest_leaf_hash: HashOf<NativeAmxApplicationManifestLeafV1>,
+    manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
+    receipt_artifact_hash: HashOf<NativeAmxParticipantApplicationReceiptArtifact>,
+    latest_index_artifact_hash: HashOf<NativeAmxParticipantReceiptLatestIndexV2>,
+}
+
+struct NativeAmxParticipantApplicationEvidencePlan {
+    application_block_height: u64,
+    application_block_hash: HashOf<BlockHeader>,
+    executed_block_wire_hash: Hash,
+    finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    manifest_root: Hash,
+    manifest_leaf_count: u32,
+    artifacts: Vec<(
+        NativeAmxParticipantApplicationManifestArtifactV1,
+        NativeAmxParticipantApplicationReceiptArtifact,
+    )>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeAmxParticipantApplicationPublicationMode {
+    PreWsv,
+    PostWsvRepair,
+}
+
+impl NativeAmxParticipantApplicationPublicationMode {
+    const fn requires_post_apply_metadata(self) -> bool {
+        matches!(self, Self::PostWsvRepair)
+    }
+
+    const fn permits_retention_cleanup(self) -> bool {
+        matches!(self, Self::PostWsvRepair)
+    }
+}
+
 /// Startup-only classification for a retained Native AMX participant receipt.
 ///
 /// Runtime readers never accept either pending state: they continue to require
@@ -27495,6 +27600,116 @@ impl NativeAmxParticipantApplicationReceiptArtifact {
 
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
         norito::encode_canonical(self)
+    }
+}
+
+impl NativeAmxParticipantApplicationPrepublicationIdentity {
+    fn from_artifacts(
+        manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
+        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+    ) -> Option<Self> {
+        let latest = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(receipt);
+        if receipt.manifest_artifact_hash != HashOf::new(manifest)
+            || receipt.finality_artifact_hash != manifest.finality_artifact_hash
+            || !latest.matches_manifest(manifest)
+        {
+            return None;
+        }
+        let leaf = &manifest.leaf;
+        Some(Self {
+            lane_id: leaf.lane_id,
+            dataspace_id: leaf.dataspace_id,
+            lane_incarnation: leaf.lane_incarnation,
+            participant_height: leaf.participant_height,
+            manifest_leaf_hash: HashOf::new(leaf),
+            manifest_artifact_hash: HashOf::new(manifest),
+            receipt_artifact_hash: HashOf::new(receipt),
+            latest_index_artifact_hash: HashOf::new(&latest),
+        })
+    }
+}
+
+impl NativeAmxParticipantApplicationPrepublicationToken {
+    fn from_plan(
+        plan: &NativeAmxParticipantApplicationEvidencePlan,
+        identities: Vec<NativeAmxParticipantApplicationPrepublicationIdentity>,
+    ) -> Option<Self> {
+        if usize::try_from(plan.manifest_leaf_count).ok() != Some(identities.len()) {
+            return None;
+        }
+        Some(Self {
+            application_block_height: plan.application_block_height,
+            application_block_hash: plan.application_block_hash,
+            executed_block_wire_hash: plan.executed_block_wire_hash,
+            finality_artifact_hash: plan.finality_artifact_hash,
+            manifest_root: plan.manifest_root,
+            manifest_leaf_count: plan.manifest_leaf_count,
+            identities,
+        })
+    }
+
+    /// Verify that this read-back token covers exactly the canonical manifest
+    /// which will stage Native participant frontiers in State.
+    #[must_use]
+    pub(crate) fn authenticates(
+        &self,
+        block: &SignedBlock,
+        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+        finality: &V2FinalityArtifact,
+    ) -> bool {
+        let Ok(executed_block_wire_hash) = block.executed_block_wire_hash() else {
+            return false;
+        };
+        let execution = &finality.commit_qc.execution_commitment;
+        if self.application_block_height != block.header().height().get()
+            || self.application_block_hash != block.hash()
+            || self.executed_block_wire_hash != executed_block_wire_hash
+            || self.finality_artifact_hash != HashOf::new(finality)
+            || self.manifest_root != manifest.root()
+            || self.manifest_leaf_count != manifest.count()
+            || finality.block_hash != block.hash()
+            || execution.native_amx_application_manifest_version
+                != iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION
+            || execution.native_amx_application_manifest_root != manifest.root()
+            || execution.native_amx_application_manifest_count != manifest.count()
+            || execution.executed_block_wire_hash != executed_block_wire_hash
+        {
+            return false;
+        }
+
+        let mut expected = Vec::with_capacity(manifest.entries().len());
+        for (index, entry) in manifest.entries().iter().enumerate() {
+            let Ok(leaf_index) = u32::try_from(index) else {
+                return false;
+            };
+            let Some(proof) = manifest.proof(leaf_index) else {
+                return false;
+            };
+            let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
+                version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+                leaf: entry.leaf.clone(),
+                leaf_index,
+                proof,
+                manifest_root: manifest.root(),
+                manifest_leaf_count: manifest.count(),
+                finality_artifact_hash: self.finality_artifact_hash,
+            };
+            let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
+                entry,
+                HashOf::new(&manifest_artifact),
+                self.finality_artifact_hash,
+            );
+            let Some(identity) =
+                NativeAmxParticipantApplicationPrepublicationIdentity::from_artifacts(
+                    &manifest_artifact,
+                    &receipt,
+                )
+            else {
+                return false;
+            };
+            expected.push(identity);
+        }
+        self.identities == expected
     }
 }
 
@@ -35706,12 +35921,7 @@ impl Kura {
         &self,
         block: &SignedBlock,
         require_post_apply_metadata: bool,
-    ) -> Result<
-        Vec<(
-            NativeAmxParticipantApplicationManifestArtifactV1,
-            NativeAmxParticipantApplicationReceiptArtifact,
-        )>,
-    > {
+    ) -> Result<NativeAmxParticipantApplicationEvidencePlan> {
         let application_block_height = block.header().height().get();
         let application_block_hash = block.hash();
         let height = usize::try_from(application_block_height)
@@ -35832,7 +36042,15 @@ impl Kura {
             }
             evidence.push((manifest_artifact, receipt));
         }
-        Ok(evidence)
+        Ok(NativeAmxParticipantApplicationEvidencePlan {
+            application_block_height,
+            application_block_hash,
+            executed_block_wire_hash: native_manifest.executed_block_wire_hash(),
+            finality_artifact_hash,
+            manifest_root: native_manifest.root(),
+            manifest_leaf_count: native_manifest.count(),
+            artifacts: evidence,
+        })
     }
 
     fn validate_native_amx_post_apply_metadata_under_publication_guard(
@@ -35871,6 +36089,40 @@ impl Kura {
         Ok(())
     }
 
+    /// Publish and read back every Native AMX participant frontier before WSV
+    /// can stage or commit the corresponding State transition.
+    ///
+    /// This path intentionally authenticates only the durable canonical block
+    /// and v2 finality boundary. The WSV checkpoint/commit-manifest join does
+    /// not exist yet. Retention cleanup is forbidden until the post-WSV repair
+    /// pass validates that join.
+    pub(crate) fn prepublish_native_amx_participant_application_evidence(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<NativeAmxParticipantApplicationPrepublicationToken> {
+        #[cfg(test)]
+        if self
+            .fail_next_native_amx_prepublication
+            .swap(false, Ordering::Relaxed)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "injected pre-WSV Native AMX evidence publication failure",
+            ));
+        }
+        let _publication_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let plan = self
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                block, false,
+            )?;
+        self.persist_native_amx_participant_application_evidence_under_publication_guard(
+            block,
+            &plan,
+            NativeAmxParticipantApplicationPublicationMode::PreWsv,
+        )
+    }
+
     /// Repair Native AMX evidence after WSV commit and its Kura metadata join.
     ///
     /// Startup repair requires and revalidates the exact checkpoint and commit
@@ -35882,47 +36134,90 @@ impl Kura {
     ) -> Result<usize> {
         let _publication_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
-        let artifacts = self
+        let plan = self
             .native_amx_participant_application_evidence_for_block_under_publication_guard(
                 block, true,
             )?;
-        self.persist_native_amx_participant_application_evidence_under_publication_guard(
-            block, artifacts,
-        )
+        let persisted = plan.artifacts.len();
+        let _ = self.persist_native_amx_participant_application_evidence_under_publication_guard(
+            block,
+            &plan,
+            NativeAmxParticipantApplicationPublicationMode::PostWsvRepair,
+        )?;
+        Ok(persisted)
     }
 
     fn persist_native_amx_participant_application_evidence_under_publication_guard(
         &self,
         block: &SignedBlock,
-        artifacts: Vec<(
-            NativeAmxParticipantApplicationManifestArtifactV1,
-            NativeAmxParticipantApplicationReceiptArtifact,
-        )>,
-    ) -> Result<usize> {
+        plan: &NativeAmxParticipantApplicationEvidencePlan,
+        mode: NativeAmxParticipantApplicationPublicationMode,
+    ) -> Result<NativeAmxParticipantApplicationPrepublicationToken> {
         let canonical_height = usize::try_from(block.header().height().get())
             .ok()
             .and_then(NonZeroUsize::new);
         if canonical_height.and_then(|height| self.get_durable_block_hash(height))
             != Some(block.hash())
+            || plan.application_block_height != block.header().height().get()
+            || plan.application_block_hash != block.hash()
+            || usize::try_from(plan.manifest_leaf_count).ok() != Some(plan.artifacts.len())
         {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
-                "Native AMX application block changed before evidence publication",
+                "Native AMX application block or manifest changed before evidence publication",
             ));
         }
-        for (manifest, _) in &artifacts {
-            self.write_native_amx_participant_application_manifest_artifact_under_publication_guard(
+        let permit_cleanup = mode.permits_retention_cleanup();
+
+        // Publication order is consensus-significant for crash recovery:
+        // every manifest, then every receipt, then every exact latest pointer.
+        for (manifest, _) in &plan.artifacts {
+            self.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
                 manifest,
+                permit_cleanup,
             )?;
         }
-        let mut persisted = 0_usize;
-        for (manifest, receipt) in artifacts {
-            self.write_native_amx_participant_application_receipt_artifact_under_publication_guard(
-                &receipt, &manifest,
+        for (manifest, receipt) in &plan.artifacts {
+            self.write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(
+                receipt,
+                manifest,
+                permit_cleanup,
             )?;
-            persisted = persisted.saturating_add(1);
         }
-        Ok(persisted)
+        for (manifest, receipt) in &plan.artifacts {
+            self.write_native_amx_participant_receipt_latest_index_under_publication_guard(
+                receipt,
+                manifest,
+                permit_cleanup,
+            )?;
+        }
+
+        let mut identities = Vec::with_capacity(plan.artifacts.len());
+        for (manifest, receipt) in &plan.artifacts {
+            identities.push(
+                self.authenticate_native_amx_participant_application_prepublication_under_publication_guard(
+                    manifest,
+                    receipt,
+                    mode.requires_post_apply_metadata(),
+                )?,
+            );
+        }
+        let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(plan, identities)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX prepublication token does not cover the exact manifest",
+                )
+            })?;
+
+        if permit_cleanup {
+            for (_, receipt) in &plan.artifacts {
+                self.cleanup_native_amx_participant_application_evidence_under_publication_guard(
+                    receipt,
+                )?;
+            }
+        }
+        Ok(token)
     }
 
     /// Validate a Native AMX manifest without acquiring locks.
@@ -35965,9 +36260,21 @@ impl Kura {
         self.get_durable_block_hash(height) == Some(leaf.application_block_hash)
     }
 
+    #[cfg(test)]
     fn write_native_amx_participant_application_manifest_artifact_under_publication_guard(
         &self,
         artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
+    ) -> Result<()> {
+        self.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
+            artifact,
+            true,
+        )
+    }
+
+    fn write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
+        &self,
+        artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
+        permit_retention_cleanup: bool,
     ) -> Result<()> {
         Self::validate_native_amx_participant_application_manifest_artifact(artifact).map_err(
             |message| Self::invalid_lane_artifact_error(self.store_root.clone(), message),
@@ -36004,7 +36311,11 @@ impl Kura {
         let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
-        self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+        if permit_retention_cleanup {
+            self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+        } else {
+            self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;
+        }
         self.recover_native_amx_evidence_publication_temp_locked(&entry, &namespace)?;
         self.discard_native_amx_latest_index_temp_locked(&namespace)?;
         let payload = artifact.encode_framed()?;
@@ -36185,10 +36496,30 @@ impl Kura {
             == Some(artifact.application_block_hash)
     }
 
+    #[cfg(test)]
     fn write_native_amx_participant_application_receipt_artifact_under_publication_guard(
         &self,
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
         manifest_artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
+    ) -> Result<()> {
+        self.write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(
+            artifact,
+            manifest_artifact,
+            true,
+        )?;
+        self.write_native_amx_participant_receipt_latest_index_under_publication_guard(
+            artifact,
+            manifest_artifact,
+            true,
+        )?;
+        self.cleanup_native_amx_participant_application_evidence_under_publication_guard(artifact)
+    }
+
+    fn write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(
+        &self,
+        artifact: &NativeAmxParticipantApplicationReceiptArtifact,
+        manifest_artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
+        permit_retention_cleanup: bool,
     ) -> Result<()> {
         Self::validate_native_amx_participant_application_receipt_artifact(artifact).map_err(
             |message| Self::invalid_lane_artifact_error(self.store_root.clone(), message),
@@ -36232,17 +36563,17 @@ impl Kura {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
-        let latest_index_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
-            &entry,
-            &self.store_root,
-        );
         let dir = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
         let _guard = self.sidecar_lock.lock();
         let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
-        self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+        if permit_retention_cleanup {
+            self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+        } else {
+            self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;
+        }
         self.recover_native_amx_evidence_publication_temp_locked(&entry, &namespace)?;
         self.discard_native_amx_latest_index_temp_locked(&namespace)?;
         let manifest_path = Self::native_amx_application_manifest_path_for_entry(
@@ -36293,6 +36624,108 @@ impl Kura {
                 "Native AMX receipt directory changed during durable publication",
             ));
         }
+        let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        self.update_disk_usage_delta(before_bytes, after_bytes);
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    fn write_native_amx_participant_receipt_latest_index_under_publication_guard(
+        &self,
+        artifact: &NativeAmxParticipantApplicationReceiptArtifact,
+        manifest_artifact: &NativeAmxParticipantApplicationManifestArtifactV1,
+        permit_retention_cleanup: bool,
+    ) -> Result<()> {
+        Self::validate_native_amx_participant_application_receipt_artifact(artifact).map_err(
+            |message| Self::invalid_lane_artifact_error(self.store_root.clone(), message),
+        )?;
+        if artifact.manifest_artifact_hash != HashOf::new(manifest_artifact)
+            || artifact.finality_artifact_hash != manifest_artifact.finality_artifact_hash
+            || !Self::native_amx_participant_receipt_matches_manifest_leaf(
+                artifact,
+                &manifest_artifact.leaf,
+            )
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX latest-index publication differs from its manifest/receipt pair",
+            ));
+        }
+        self.ensure_prune_recovery_not_required()?;
+        let descriptor = &artifact.participant_proposal.descriptor;
+        let canonical_height = usize::try_from(artifact.application_block_height)
+            .ok()
+            .and_then(NonZeroUsize::new);
+        if canonical_height.and_then(|height| self.get_durable_block_hash(height))
+            != Some(artifact.application_block_hash)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX latest-index canonical block changed before persistence",
+            ));
+        }
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        self.require_active_lane_artifact(&entry, descriptor)?;
+        let latest_index_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &self.store_root,
+        );
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        if permit_retention_cleanup {
+            self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+        } else {
+            self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;
+        }
+        self.recover_native_amx_evidence_publication_temp_locked(&entry, &namespace)?;
+        self.discard_native_amx_latest_index_temp_locked(&namespace)?;
+
+        let participant_height = descriptor.lane_block_height;
+        let manifest_path = Self::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &self.store_root,
+            participant_height,
+        );
+        let receipt_path = Self::native_amx_participant_receipt_path_for_entry(
+            &entry,
+            &self.store_root,
+            participant_height,
+        );
+        let durable_manifest = self
+            .read_native_amx_participant_application_manifest_from_paths_locked(
+                &entry,
+                participant_height,
+                &manifest_path,
+                &namespace,
+            )
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    manifest_path.clone(),
+                    "Native AMX latest-index publication requires its exact durable manifest",
+                )
+            })?;
+        let durable_receipt = self
+            .read_native_amx_participant_application_receipt_from_paths_locked(
+                &entry,
+                participant_height,
+                &receipt_path,
+                &namespace,
+            )
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    receipt_path.clone(),
+                    "Native AMX latest-index publication requires its exact durable receipt",
+                )
+            })?;
+        if durable_manifest != *manifest_artifact || durable_receipt != *artifact {
+            return Err(Self::invalid_lane_artifact_error(
+                latest_index_path,
+                "Native AMX latest-index publication pair differs from durable evidence",
+            ));
+        }
         self.persist_native_amx_participant_receipt_latest_index_locked(
             &entry,
             artifact,
@@ -36303,6 +36736,156 @@ impl Kura {
             return Err(Self::invalid_lane_artifact_error(
                 latest_index_path,
                 "Native AMX receipt namespace changed during latest-index publication",
+            ));
+        }
+        let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        self.update_disk_usage_delta(before_bytes, after_bytes);
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    fn authenticate_native_amx_participant_application_prepublication_under_publication_guard(
+        &self,
+        expected_manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
+        expected_receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+        require_post_apply_metadata: bool,
+    ) -> Result<NativeAmxParticipantApplicationPrepublicationIdentity> {
+        let descriptor = &expected_receipt.participant_proposal.descriptor;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        self.require_active_lane_artifact(&entry, descriptor)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
+        let participant_height = descriptor.lane_block_height;
+        let manifest_path = Self::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &self.store_root,
+            participant_height,
+        );
+        let receipt_path = Self::native_amx_participant_receipt_path_for_entry(
+            &entry,
+            &self.store_root,
+            participant_height,
+        );
+        let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &self.store_root,
+        );
+        let durable_manifest = self
+            .read_native_amx_participant_application_manifest_from_paths_locked(
+                &entry,
+                participant_height,
+                &manifest_path,
+                &namespace,
+            )
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    manifest_path,
+                    "Native AMX prepublication manifest read-back is unavailable",
+                )
+            })?;
+        let durable_receipt = self
+            .read_native_amx_participant_application_receipt_from_paths_locked(
+                &entry,
+                participant_height,
+                &receipt_path,
+                &namespace,
+            )
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    receipt_path,
+                    "Native AMX prepublication receipt read-back is unavailable",
+                )
+            })?;
+        let latest = self
+            .decode_bound_native_amx_participant_receipt_latest_index_locked(
+                &entry,
+                &latest_path,
+                &namespace,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    latest_path.clone(),
+                    "Native AMX prepublication latest-index read-back is unavailable",
+                )
+            })?;
+        let evidence_matches = if require_post_apply_metadata {
+            self.native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
+                &durable_receipt,
+                &durable_manifest,
+            )
+        } else {
+            Self::validate_native_amx_participant_application_receipt_artifact(&durable_receipt)
+                .is_ok()
+                && durable_receipt.manifest_artifact_hash == HashOf::new(&durable_manifest)
+                && durable_receipt.finality_artifact_hash
+                    == durable_manifest.finality_artifact_hash
+                && Self::native_amx_participant_receipt_matches_manifest_leaf(
+                    &durable_receipt,
+                    &durable_manifest.leaf,
+                )
+                && self
+                    .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
+                        &durable_manifest,
+                    )
+        };
+        if durable_manifest != *expected_manifest
+            || durable_receipt != *expected_receipt
+            || !latest.matches_receipt(&durable_receipt)
+            || !latest.matches_manifest(&durable_manifest)
+            || !evidence_matches
+            || !Self::progress_mutation_namespace_unchanged(&namespace)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                latest_path,
+                "Native AMX prepublication read-back does not authenticate the exact frontier",
+            ));
+        }
+        NativeAmxParticipantApplicationPrepublicationIdentity::from_artifacts(
+            &durable_manifest,
+            &durable_receipt,
+        )
+        .ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX prepublication identity projection failed",
+            )
+        })
+    }
+
+    fn cleanup_native_amx_participant_application_evidence_under_publication_guard(
+        &self,
+        artifact: &NativeAmxParticipantApplicationReceiptArtifact,
+    ) -> Result<()> {
+        let descriptor = &artifact.participant_proposal.descriptor;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        self.require_active_lane_artifact(&entry, descriptor)?;
+        let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &self.store_root,
+        );
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        let latest = self
+            .decode_bound_native_amx_participant_receipt_latest_index_locked(
+                &entry,
+                &latest_path,
+                &namespace,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    latest_path.clone(),
+                    "Native AMX cleanup requires its exact latest index",
+                )
+            })?;
+        if !latest.matches_receipt(artifact) {
+            return Err(Self::invalid_lane_artifact_error(
+                latest_path,
+                "Native AMX cleanup latest index differs from the applied frontier",
             ));
         }
         self.prune_native_amx_evidence_pairs_locked(&entry, &namespace)?;
@@ -37084,9 +37667,16 @@ impl Kura {
                     "Native AMX startup evidence namespace changed during reconstruction",
                 ));
             }
-            // Prune only after every retained artifact and its authenticated
-            // evidence join passed the immutable startup scan above.
-            self.prune_native_amx_evidence_pairs_locked(&entry, &namespace)?;
+            // A prepublished tip intentionally has no post-WSV metadata yet.
+            // Keep the previous complete pair until State replay commits that
+            // tip and the normal repair path authenticates the full join.
+            if expected_startup_evidence.is_none_or(|evidence| {
+                evidence == NativeAmxParticipantReceiptStartupEvidence::DurablyApplied
+            }) {
+                self.prune_native_amx_evidence_pairs_locked(&entry, &namespace)?;
+            } else {
+                self.inventory_native_amx_evidence_files_locked(&namespace, true)?;
+            }
             let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
             self.update_disk_usage_delta(before_bytes, after_bytes);
         }
@@ -49522,4 +50112,133 @@ mod tests {
     include!("kura/tests/11_roster_and_progress_sidecars.rs");
     include!("kura/tests/12_sidecar_index_and_pruning.rs");
     include!("kura/tests/13_manifests_and_fsync.rs");
+
+    #[test]
+    fn native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup() {
+        let temp_dir = TempDir::new().expect("prepublication retention Kura directory");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.roster_sidecar_retention =
+            NonZeroUsize::new(1).expect("one-record Native evidence retention");
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) =
+            Kura::new(&config, &lane_config).expect("initialize prepublication retention Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("prepublication primary lane entry");
+        let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2]);
+        let newest_receipt = receipts
+            .last()
+            .expect("newest prepublication receipt")
+            .clone();
+        let old_manifest_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+        let old_receipt_path =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+        let newest_manifest_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 2);
+        let newest_receipt_path =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 2);
+        let evidence_directory = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root));
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .expect("bind prepublication Native evidence namespace");
+        let newest_manifest = kura
+            .read_native_amx_participant_application_manifest_from_paths_locked(
+                &entry,
+                2,
+                &newest_manifest_path,
+                &namespace,
+            )
+            .expect("read newest prepublication manifest");
+        drop(namespace);
+
+        std::fs::remove_file(&newest_manifest_path)
+            .expect("remove newest manifest before replaying prepublication");
+        std::fs::remove_file(&newest_receipt_path)
+            .expect("remove newest receipt before replaying prepublication");
+        sync_dir(&evidence_directory).expect("sync prepublication evidence removal");
+        let checkpoint = kura
+            .wsv_checkpoint(1)
+            .expect("read fixture checkpoint")
+            .expect("fixture checkpoint exists");
+        let finality = kura
+            .v2_finality_artifact(1)
+            .expect("read fixture finality")
+            .expect("fixture finality exists");
+        kura.remove_commit_manifest_without_binding_for_tests(1)
+            .expect("remove post-apply commit manifest");
+        kura.remove_wsv_checkpoint_without_binding_for_tests(1)
+            .expect("remove post-apply WSV checkpoint");
+
+        {
+            let _publication_guard = kura.prune_lock.lock();
+            kura.write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard(
+                &newest_manifest,
+                false,
+            )
+            .expect("prepublish newest Native manifest without cleanup");
+            kura.write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard(
+                &newest_receipt,
+                &newest_manifest,
+                false,
+            )
+            .expect("prepublish newest Native receipt without cleanup");
+            kura.write_native_amx_participant_receipt_latest_index_under_publication_guard(
+                &newest_receipt,
+                &newest_manifest,
+                false,
+            )
+            .expect("prepublish newest Native latest index without cleanup");
+            kura.authenticate_native_amx_participant_application_prepublication_under_publication_guard(
+                &newest_manifest,
+                &newest_receipt,
+                false,
+            )
+            .expect("authenticate pre-WSV evidence without post-apply metadata");
+        }
+        assert!(
+            old_manifest_path.exists() && old_receipt_path.exists(),
+            "retention=1 must preserve the previous complete pair before WSV commit"
+        );
+
+        kura.store_wsv_checkpoint(
+            1,
+            newest_receipt.application_block_hash,
+            checkpoint.state_hash,
+        )
+        .expect("restore post-apply WSV checkpoint");
+        kura.store_commit_manifest(
+            CommitManifest::new(
+                1,
+                newest_receipt.application_block_hash,
+                None,
+                None,
+                checkpoint.state_hash,
+                None,
+            )
+            .with_authenticated_v2_commit_authority(&finality),
+        )
+        .expect("restore authenticated post-apply commit manifest");
+        {
+            let _publication_guard = kura.prune_lock.lock();
+            kura.authenticate_native_amx_participant_application_prepublication_under_publication_guard(
+                &newest_manifest,
+                &newest_receipt,
+                true,
+            )
+            .expect("reauthenticate Native evidence against post-WSV metadata");
+            kura.cleanup_native_amx_participant_application_evidence_under_publication_guard(
+                &newest_receipt,
+            )
+            .expect("perform post-WSV Native evidence cleanup");
+        }
+        assert!(
+            !old_manifest_path.exists() && !old_receipt_path.exists(),
+            "post-WSV cleanup may enforce retention after the exact join is authenticated"
+        );
+        assert!(
+            newest_manifest_path.exists() && newest_receipt_path.exists(),
+            "cleanup must retain the exact newest prepublished evidence"
+        );
+    }
 }

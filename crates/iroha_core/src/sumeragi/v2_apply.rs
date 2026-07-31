@@ -1521,6 +1521,35 @@ impl V2ApplyService {
         } else {
             None
         };
+        let native_amx_prepublication = if store_block {
+            Some(
+                self.kura
+                    .prepublish_native_amx_participant_application_evidence(
+                        committed_block.as_ref(),
+                    )
+                    .map_err(|error| {
+                        V2ApplyError::committed_recovery_required(
+                            "pre-WSV Native AMX participant evidence publication",
+                            &error,
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+        if native_amx_prepublication.as_ref().is_some_and(|token| {
+            !token.authenticates(committed_block.as_ref(), &native_amx_manifest, artifact)
+        }) {
+            return Err(V2ApplyError::committed_recovery_required(
+                "pre-WSV Native AMX participant evidence publication",
+                &"read-back token differs from the canonical Native application manifest",
+            ));
+        }
+
+        // `apply_without_execution_with_verified_v2_finality` stages the
+        // Native participant frontiers in the State overlay. Do not construct
+        // that overlay until every canonical manifest leaf has a durable,
+        // read-back-authenticated manifest/receipt/latest-index triple.
         let commit_topology = context
             .roster
             .iter()
@@ -4850,6 +4879,59 @@ mod tests {
             durable_wire,
             "an exact retry must preserve the complete canonical Kura wire"
         );
+    });
+
+    v2_apply_test!(native_amx_prepublication_failure_leaves_wsv_unchanged, {
+        let fixture = ApplyFixture::new();
+        let baseline_state_hash =
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        fixture.kura.fail_next_native_amx_prepublication_for_tests();
+        let mut store = fixture.reopen_body_store();
+        let error = fixture
+            .execute(&mut store)
+            .expect_err("inject Native evidence publication failure before WSV staging");
+        assert!(matches!(
+            &error,
+            V2ApplyError::CommittedRecoveryRequired {
+                stage: "pre-WSV Native AMX participant evidence publication",
+                ..
+            }
+        ));
+        assert!(error.requires_restart_recovery());
+        assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            baseline_state_hash,
+            "prepublication failure must not leak the validated State overlay"
+        );
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
+        assert!(
+            fixture
+                .kura
+                .v2_finality_artifact(fixture.context.height)
+                .expect("read pre-WSV finality")
+                .is_some(),
+            "durable finality must precede Native evidence prepublication"
+        );
+        assert!(
+            fixture
+                .kura
+                .wsv_checkpoint(fixture.context.height)
+                .expect("read absent pre-WSV checkpoint")
+                .is_none()
+        );
+        assert!(
+            fixture
+                .kura
+                .commit_manifest(fixture.context.height)
+                .expect("read absent pre-WSV commit manifest")
+                .is_none()
+        );
+
+        fixture
+            .execute(&mut store)
+            .expect("retry exact carrier after prepublication failure");
+        fixture.assert_complete();
     });
 
     v2_apply_test!(restart_recovers_kura_lane_body_written_before_wsv_commit, {

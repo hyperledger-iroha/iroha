@@ -705,6 +705,47 @@ PROOF
     <2> QED BY <2>1, <2>2, <2>3, <2>4
   <1> QED BY <1>1
 
+THEOREM ReplayRunNodeContinuationHasCommitSourceTransition ==
+  \A node:
+    ReplayRunNodeCandidateProducerContinuation(node)
+      => \/ UNCHANGED CommitCoreSourceProjection
+         \/ \E command: ExecuteSignVote(command)
+         \/ \E request \in pendingLockCommit:
+              PersistLockCommitSourceTransition(request)
+         \/ \E request \in pendingInstallTC:
+              PersistInstallCommitSourceTransition(request)
+PROOF
+  <1>1. ASSUME NEW node,
+                ReplayRunNodeCandidateProducerContinuation(node)
+         PROVE \/ UNCHANGED CommitCoreSourceProjection
+               \/ \E command: ExecuteSignVote(command)
+               \/ \E request \in pendingLockCommit:
+                    PersistLockCommitSourceTransition(request)
+               \/ \E request \in pendingInstallTC:
+                    PersistInstallCommitSourceTransition(request)
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <2>1, Isa
+         DEF AsyncCandidateProducerContinuationExactLocalReplayStep,
+             CommitCoreSourceProjection, ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems, vars
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <2>2, Isa
+         DEF AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             CommitCoreSourceProjection, ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems, vars
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      <3>1. RuntimeStep(node)
+        BY <2>3, Isa
+           DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+               RuntimeStep
+      <3> QED BY <3>1, RuntimeStepHasCommitSourceTransition
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM RunNodeWorkHasCommitSourceTransition ==
   \A node:
     RunNodeWork(node)
@@ -722,6 +763,14 @@ PROOF
                     PersistLockCommitSourceTransition(request)
                \/ \E request \in pendingInstallTC:
                     PersistInstallCommitSourceTransition(request)
+    <2>0. CASE
+            ResolveRunNodeCandidateProducerContinuation(node)
+      BY <2>0, Isa
+         DEF ResolveRunNodeCandidateProducerContinuation,
+             CommitCoreSourceProjection, vars
+    <2>0p. CASE
+             ReplayRunNodeCandidateProducerContinuation(node)
+      BY <2>0p, ReplayRunNodeContinuationHasCommitSourceTransition
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1, Isa
          DEF LocalAdmissionStep, AdmitProducerCompletion,
@@ -756,7 +805,8 @@ PROOF
              CommitCoreSourceProjection,
              ResponsiveCommitSignRequests,
              ResponsiveRetainedCommitItems, vars
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+    <2> QED BY <1>1, <2>0, <2>0p, <2>1, <2>2, <2>3, <2>4,
+                 <2>5
          DEF RunNodeWork
   <1> QED BY <1>1
 
@@ -2751,6 +2801,26 @@ BY PersistDecisionRecoveryUsesBodyStateCompletion,
        AsyncEnterIndexedServiceActivation, AsyncActivateServiceNode,
        AsyncServiceActivationFrameVars,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedRuntimeCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionReady,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationConcreteSuccessorOwned,
+       AsyncCandidateProducerContinuationHandoffOwned,
+       AsyncCandidateProducerContinuationLocalReplayCarrier,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       AsyncIoTimeoutLifecycleRetirementTransition,
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
        ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
@@ -2759,7 +2829,8 @@ BY PersistDecisionRecoveryUsesBodyStateCompletion,
        PreGstCrash, PreGstResponsiveCrash, PreGstResponsiveRestart,
        PreGstResponsiveReplay, DriveResponsiveReplayHead,
        FinishResponsiveReplay, RearmResponsiveRecovery,
-       LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       LocalAdmissionStep, IngressDrainStep, SerializedRunnerRuntimeStep,
+       SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        AsyncServeIngressTargetOnlyTurn,
        RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
@@ -2768,6 +2839,7 @@ BY PersistDecisionRecoveryUsesBodyStateCompletion,
        ExecuteApply, ExecuteCoreDelivery, ExecuteChunkDelivery,
        AppendCausalSuccessors, FreshCommandSuccessors,
        FreshCandidateSequence, CommandSuccessors,
+       EnqueueCandidate,
        PersistDecisionRecoverySuccessor, PersistDecisionRecoveryKind,
        PersistDecisionBody, PersistDecisionValidationHeld,
        PersistDecisionRequest, PersistDecisionRequests,
@@ -2891,6 +2963,26 @@ BY HistoricalLockedValidateExecutionHandsOff,
        AsyncEnterIndexedServiceActivation, AsyncActivateServiceNode,
        AsyncServiceActivationFrameVars,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedRuntimeCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionReady,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationConcreteSuccessorOwned,
+       AsyncCandidateProducerContinuationHandoffOwned,
+       AsyncCandidateProducerContinuationLocalReplayCarrier,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       AsyncIoTimeoutLifecycleRetirementTransition,
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
        ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
@@ -2899,13 +2991,15 @@ BY HistoricalLockedValidateExecutionHandsOff,
        PreGstCrash, PreGstResponsiveCrash, PreGstResponsiveRestart,
        PreGstResponsiveReplay, DriveResponsiveReplayHead,
        FinishResponsiveReplay, RearmResponsiveRecovery,
-       LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       LocalAdmissionStep, IngressDrainStep, SerializedRunnerRuntimeStep,
+       SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        AsyncServeIngressTargetOnlyTurn,
        RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
        ExecuteCommand, ExecuteRegularCommand, ExecutePersistInstall,
        AppendCausalSuccessors, FreshCommandSuccessors,
        FreshCandidateSequence, CommandSuccessors,
+       EnqueueCandidate,
        DrainFairIngressSelected, ResetNodeSchedulerForRestart,
        AsyncAllVars
 

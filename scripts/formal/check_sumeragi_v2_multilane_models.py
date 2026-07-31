@@ -1184,6 +1184,11 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
             "pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5;",
             "legacy.fifo_order.version = "
             "LANE_QUEUE_RESERVATION_JOURNAL_VERSION - 1;",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_journal_recovery_tests.rs",
+        (
             "fn post_sync_append_publication_failure_is_poisoned_and_replayed_on_reopen()",
             "fn post_sync_compaction_publication_failure_is_poisoned_and_replayed_on_reopen()",
             "fn runtime_commit_requires_live_owner_but_snapshot_recovery_may_restore_commit_barrier()",
@@ -1788,7 +1793,7 @@ QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/queue/journal.rs",
+        "crates/iroha_core/src/queue/plan_journal_replay_tests.rs",
         "materialized_replay_rejects_later_record_corruption_before_any_callback",
         (
             ".get_mut(&second_key)",
@@ -1831,7 +1836,7 @@ QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/queue.rs",
+        "crates/iroha_core/src/queue/lane_reservation_tests.rs",
         "reservation_restart_fits_ordinary_fifo_around_middle_anchor",
         (
             "install_lane_reservation_journal(&reservation_path",
@@ -1842,7 +1847,7 @@ QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/queue.rs",
+        "crates/iroha_core/src/queue/reservation_recovery_tests.rs",
         "committed_state_with_live_reservation_retains_sole_plan_payload_source",
         (
             "canonically committed while queue or reservation ownership remains live",
@@ -1853,7 +1858,7 @@ QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/queue.rs",
+        "crates/iroha_core/src/queue/reservation_recovery_tests.rs",
         "expired_live_reservation_replays_payload_without_fifo_or_tombstone",
         (
             "transaction_time_to_live: Duration::from_millis(1)",
@@ -2276,6 +2281,7 @@ def _validate_mutation_runner(
         errors.append(f"multilane TLC mutation runner must be executable: {runner}")
     source = runner.read_text(encoding="utf-8")
     normalized = source.replace("\\\n", " ")
+    compact = " ".join(normalized.split())
     call_re = re.compile(
         r'run_mutant\s+[a-z0-9-]+\s+"?\$[A-Z_]+"?\s+'
         r"(multilane_[a-z0-9_]+_bug\.cfg)\s+([A-Za-z0-9_]+)"
@@ -2301,14 +2307,19 @@ def _validate_mutation_runner(
             "multilane source-binding ledger"
         )
     required_once = (
+        'source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"',
         '[[ "$status" -ne 12 ]]',
-        'grep -Fq "Invariant ${invariant} is violated."',
+        'local invariant_marker="Error: Invariant ${invariant} is violated."',
+        'sumeragi_v2_tlc_assert_exact_line "$name" "$log" "$invariant_marker"',
+        'sumeragi_v2_tlc_assert_exact_line "$name" "$log" '
+        '"Error: The behavior up to this point is:"',
+        'sumeragi_v2_tlc_assert_terminal "$name" "$log"',
         'grep -Fq "TLC2 Version 2.19"',
         f"[tlc] all {len(expected)} multilane mutations produced their exact "
         "named counterexamples; no deductive proof status was changed",
     )
     for token in required_once:
-        count = source.count(token)
+        count = compact.count(token)
         if count != 1:
             errors.append(
                 f"{runner}: mutation runner contract must contain {token!r} "
@@ -3361,18 +3372,31 @@ def _validate_inflight_layout_contract(
                 f"{runner_path}: mutation calls differ from the exact reviewed "
                 "twenty-control corpus"
             )
+        compact_runner_source = " ".join(
+            runner_source.replace("\\\n", " ").split()
+        )
         for token in (
-            "\nrun_positive\n",
+            'source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"',
             '[[ "$status" -ne 12 ]]',
-            'grep -Fq "Invariant ${invariant} is violated."',
+            'local invariant_marker="Error: Invariant ${invariant} is violated."',
+            'sumeragi_v2_tlc_assert_exact_line "$config" "$log" '
+            '"$invariant_marker"',
+            'sumeragi_v2_tlc_assert_exact_line "$config" "$log" '
+            '"Error: The behavior up to this point is:"',
+            'sumeragi_v2_tlc_assert_terminal "$config" "$log"',
             "bounded abstract evidence only; no production refinement claim",
         ):
-            count = runner_source.count(token)
+            count = compact_runner_source.count(token)
             if count != 1:
                 errors.append(
                     f"{runner_path}: fail-closed runner token {token!r} must occur "
                     f"exactly once, found {count}"
                 )
+        if runner_source.count("\nrun_positive\n") != 1:
+            errors.append(
+                f"{runner_path}: fail-closed runner must invoke the positive "
+                "model exactly once"
+            )
 
     evidence_path = root / INFLIGHT_LAYOUT_EVIDENCE
     evidence_source: str | None = None

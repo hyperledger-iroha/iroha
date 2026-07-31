@@ -1014,6 +1014,56 @@ BY ExecuteCommandPreservesTimeoutViewOwnershipKernel,
        TimeoutOwnershipControlKinds,
        AsyncRecoveryControlVars, vars
 
+THEOREM ReplayRunNodeContinuationPreservesTimeoutViewOwnershipKernel ==
+  \A node:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ ReplayRunNodeCandidateProducerContinuation(node)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+PROOF
+  <1>1. ASSUME NEW node,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                DecisionFrontierUniquenessInvariant,
+                DecisionTimeoutFrontierInvariant,
+                TimeoutViewOwnershipKernelInvariant,
+                ReplayRunNodeCandidateProducerContinuation(node),
+                UNCHANGED AsyncRecoveryControlVars
+         PROVE TimeoutViewOwnershipKernelInvariant'
+    <2>1. CASE
+              AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      BY <1>1, <2>1, TimeoutViewOwnershipKernelProjectionFrame, Isa
+         DEF AsyncCandidateProducerContinuationExactLocalReplayStep,
+             TimeoutViewOwnershipKernelProjection,
+             TimeoutOwnershipRetainedItems,
+             TimeoutOwnershipRetainedItemsIn,
+             TimeoutOwnershipControlKinds,
+             AsyncRecoveryControlVars, vars
+    <2>2. CASE
+              AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+      BY <1>1, <2>2, TimeoutViewOwnershipKernelProjectionFrame, Isa
+         DEF AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             TimeoutViewOwnershipKernelProjection,
+             TimeoutOwnershipRetainedItems,
+             TimeoutOwnershipRetainedItemsIn,
+             TimeoutOwnershipControlKinds,
+             AsyncRecoveryControlVars, vars
+    <2>3. CASE
+              AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+      <3>1. RuntimeStep(node)
+        BY <2>3, Isa
+           DEF AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+               RuntimeStep
+      <3> QED BY <1>1, <3>1,
+           RuntimeStepPreservesTimeoutViewOwnershipKernel
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ReplayRunNodeCandidateProducerContinuation
+  <1> QED BY <1>1
+
 THEOREM RunNodeWorkPreservesTimeoutViewOwnershipKernel ==
   \A node:
     /\ AsyncStrongTypeInvariant
@@ -1025,6 +1075,7 @@ THEOREM RunNodeWorkPreservesTimeoutViewOwnershipKernel ==
     /\ UNCHANGED AsyncRecoveryControlVars
     => TimeoutViewOwnershipKernelInvariant'
 BY RuntimeStepPreservesTimeoutViewOwnershipKernel,
+   ReplayRunNodeContinuationPreservesTimeoutViewOwnershipKernel,
    TimeoutViewOwnershipKernelProjectionFrame,
    IsaT(600)
    DEF RunNodeWork, LocalAdmissionStep, IngressDrainStep,
@@ -1033,6 +1084,8 @@ BY RuntimeStepPreservesTimeoutViewOwnershipKernel,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        AdmitProducerCompletion,
        AdmitCausalHead, UpdateLocalAdmissionMetadata,
        RecordBlockedCausalDebt, DrainFairIngressSelected,

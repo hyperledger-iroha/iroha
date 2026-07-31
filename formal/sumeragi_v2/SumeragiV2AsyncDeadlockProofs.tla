@@ -1,5 +1,6 @@
 ---- MODULE SumeragiV2AsyncDeadlockProofs ----
-EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs
+EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs,
+        SumeragiV2AsyncCandidateProducerContinuationProofs
 
 (***************************************************************************
 Productive deadlock freedom includes concrete terminating local work.
@@ -94,6 +95,40 @@ OverdueTransportRuntimeInvocationDecreaseStep ==
     /\ RuntimeInvocationDebt(recipient)'
          < RuntimeInvocationDebt(recipient)
 
+RunnerCandidateProducerContinuationAtStatus(node, record, status) ==
+  /\ gst
+  /\ node \in AsyncCurrentResponsiveVoters
+                 \cup asyncHistoricalRecoveryTargets
+  /\ status \in {"Reserved", "Materialized"}
+  /\ record.status = status
+  /\ record
+       \in AsyncCandidateProducerContinuationResolutionRecordsForNode(node)
+
+HistoricalProducerContinuationLocalWorkDecreaseStep ==
+  \E node \in AsyncCurrentResponsiveVoters
+                 \cup asyncHistoricalRecoveryTargets,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"}:
+    /\ RunnerCandidateProducerContinuationAtStatus(
+         node, record, status)
+    /\ AsyncCandidateProducerContinuationTargetStatusExit(
+         record.identity, status)'
+
+HistoricalProducerContinuationReplayDebt(node) ==
+  IF /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+       /\ ~AsyncCandidateProducerContinuationRunnerResolutionReady(node)
+       /\ (AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(
+              node))
+            .sourceClass = "Local"
+  THEN IF asyncRunnerPhase[node] = "Local" THEN 1 ELSE 2
+  ELSE 0
+
+HistoricalProducerContinuationReplayLocalWorkDecreaseStep ==
+  \E node \in AsyncCurrentResponsiveVoters
+                 \cup asyncHistoricalRecoveryTargets:
+    HistoricalProducerContinuationReplayDebt(node)'
+      < HistoricalProducerContinuationReplayDebt(node)
+
 ResponsivePacketPairAt(initialContext, recipient, source) ==
   \/ /\ recipient \in AsyncVotersAt(initialContext)
         /\ source \in AsyncVotersAt(initialContext)
@@ -140,6 +175,8 @@ AsyncTerminatingLocalWorkDecreaseStep ==
   \/ Stage6PreAdmissionLocalWorkDecreaseStep
   \/ RunnerPrefixLocalWorkDecreaseStep
   \/ OverdueTransportRuntimeInvocationDecreaseStep
+  \/ HistoricalProducerContinuationLocalWorkDecreaseStep
+  \/ HistoricalProducerContinuationReplayLocalWorkDecreaseStep
   \/ IoDepthLocalWorkDecreaseStep
   \/ IngressDepthLocalWorkDecreaseStep
   \/ TransportOutstandingLocalWorkDecreaseStep
@@ -158,6 +195,8 @@ THEOREM AsyncTerminatingLocalWorkHasStrictWitness ==
        \/ Stage6PreAdmissionLocalWorkDecreaseStep
        \/ RunnerPrefixLocalWorkDecreaseStep
        \/ OverdueTransportRuntimeInvocationDecreaseStep
+       \/ HistoricalProducerContinuationLocalWorkDecreaseStep
+       \/ HistoricalProducerContinuationReplayLocalWorkDecreaseStep
        \/ IoDepthLocalWorkDecreaseStep
        \/ IngressDepthLocalWorkDecreaseStep
        \/ TransportOutstandingLocalWorkDecreaseStep
@@ -198,6 +237,80 @@ BY Isa
        RuntimeInvocationDebt, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        AsyncServeIngressTargetOnlyTurn
+
+THEOREM HistoricalRecoveryResolutionStrictlyDecreasesLocalWork ==
+  \A node \in AsyncCurrentResponsiveVoters
+                 \cup asyncHistoricalRecoveryTargets:
+    /\ AsyncTypeInvariant
+    /\ AsyncControlServiceSlotTransition
+    /\ gst
+    /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+    /\ AsyncCandidateProducerContinuationRunnerResolutionReady(node)
+    /\ (PostGstRunNode(node)
+          \/ PostGstRunHistoricalRecoveryNode(node))
+    => HistoricalProducerContinuationLocalWorkDecreaseStep
+BY CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner,
+   HistoricalCandidateProducerContinuationReadyTurnConsumesExactStage,
+   AsyncCurrentResponsiveVotersAreValidators,
+   HistoricalRecoveryTargetsAreValidators, IsaT(1200)
+   DEF HistoricalProducerContinuationLocalWorkDecreaseStep,
+       RunnerCandidateProducerContinuationAtStatus,
+       AsyncCandidateProducerContinuationSelectedForRunnerResolution,
+       AsyncCandidateProducerContinuationTargetStatusExit,
+       AsyncCandidateProducerContinuationStatusRank,
+       AsyncCandidateProducerContinuationRecordsForIdentity,
+       AsyncCandidateProducerContinuationRecordsForIdentityIn,
+       AsyncCandidateProducerContinuationRecordAfterStep,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerResolutionReady,
+       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuations,
+       AsyncCandidateProducerContinuationRecordSet,
+       PostGstRunNode, RunNode,
+       PostGstRunHistoricalRecoveryNode, RunHistoricalRecoveryNode,
+       RunNodeWork, ResolveRunNodeCandidateProducerContinuation,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncControlServiceStateTypeInvariant
+
+THEOREM HistoricalRecoveryExactReplayStrictlyDecreasesLocalWork ==
+  \A node \in AsyncCurrentResponsiveVoters
+                 \cup asyncHistoricalRecoveryTargets:
+    /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
+    /\ gst
+    /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionReady(node)
+    /\ (PostGstRunNode(node)
+          \/ PostGstRunHistoricalRecoveryNode(node))
+    => HistoricalProducerContinuationReplayLocalWorkDecreaseStep
+BY AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation,
+   AsyncCandidateProducerContinuationStoredCarrierMakesSelectedRecordReady,
+   AsyncCurrentResponsiveVotersAreValidators,
+   HistoricalRecoveryTargetsAreValidators, IsaT(1200)
+   DEF HistoricalProducerContinuationReplayLocalWorkDecreaseStep,
+       HistoricalProducerContinuationReplayDebt,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerResolutionReady,
+       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationRecordAfterStep,
+       AsyncCandidateProducerContinuations,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncControlServiceSlotTransition,
+       PostGstRunNode, RunNode,
+       PostGstRunHistoricalRecoveryNode
 
 THEOREM RunnerServiceStrictlyClearsDueGate ==
   \A node \in ValidatorIds:
@@ -277,12 +390,12 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-The ingress reservation is useful to deadlock freedom only after proving the
-converse needed by the full-ingress branch: a fresh typed packet cannot be
-rejected by an empty recipient.  Appending the first item consumes exactly
-one of that source's four (or, for the untrusted aggregate, two) protected
-slots.  Thus a rejected fresh packet witnesses existing recipient-local
-ingress work; this is not an assumption about nominal queue capacity.
+The physical-capacity converse is deliberately conditional on the semantic,
+reservation, lifecycle, and policy gates.  Appending the first item consumes
+exactly one of that source's four (or, for the untrusted aggregate, two)
+protected slots.  Thus a fresh packet whose nonphysical gates all allow
+admission cannot be rejected by an empty recipient.  A missing leader-wire
+reservation is handled separately below and is never called productive work.
 ***************************************************************************)
 
 THEOREM ZeroIngressDepthMeansEveryLaneEmpty ==
@@ -403,6 +516,17 @@ PROOF
          DEF After, IngressProtectedSlotCountAfterAdmission
   <1> QED BY <1>1
 
+IngressAdmissionPolicyAndOwnershipGatesAllow(item) ==
+  /\ ~AsyncControlServiceAdmissionCoalesced(item)
+  /\ ~AsyncControlServiceAdmissionBlockedByLivePredecessor(item)
+  /\ ~AsyncCandidateServicePacketRetired(item)
+  /\ ~AsyncCandidateStageRetired(item)
+  /\ AsyncLeaderWireAtomicAdmissionAllows(item)
+  /\ AsyncServeTransportAdmissionGateAllows(
+       item.envelope.recipient, item)
+  /\ CertifiedResponseFreshClaimGateAllows(item)
+  /\ AsyncUntrustedGenericCompletionGateAllows(item)
+
 THEOREM EmptyIngressAdmitsTypedPacket ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
     \A item:
@@ -411,6 +535,7 @@ THEOREM EmptyIngressAdmitsTypedPacket ==
       /\ item.envelope.recipient = recipient
       /\ item.source = source
       /\ IngressDepth(recipient) = 0
+      /\ IngressAdmissionPolicyAndOwnershipGatesAllow(item)
       => CanAdmitIngressItem(item)
 PROOF
   <1>1. ASSUME NEW recipient \in ValidatorIds,
@@ -420,7 +545,8 @@ PROOF
                 AsyncItemTyped(item),
                 item.envelope.recipient = recipient,
                 item.source = source,
-                IngressDepth(recipient) = 0
+                IngressDepth(recipient) = 0,
+                IngressAdmissionPolicyAndOwnershipGatesAllow(item)
          PROVE CanAdmitIngressItem(item)
     <2>1. IngressLane(recipient, source) = <<>>
       BY <1>1, ZeroIngressDepthMeansEveryLaneEmpty
@@ -453,7 +579,9 @@ PROOF
              IngressLaneHasTimeoutVoteIn,
              IngressLaneHasTransportCompletionIn,
              IngressLane, SequenceSet
-    <2> QED BY <2>4, <2>5 DEF CanAdmitIngressItem
+    <2> QED BY <1>1, <2>4, <2>5
+         DEF CanAdmitIngressItem,
+             IngressAdmissionPolicyAndOwnershipGatesAllow
   <1> QED BY <1>1
 
 THEOREM RejectedFreshPacketWitnessesExistingIngress ==
@@ -464,6 +592,7 @@ THEOREM RejectedFreshPacketWitnessesExistingIngress ==
       /\ item.envelope.recipient = recipient
       /\ item.source = source
       /\ item \notin SequenceSet(IngressLane(recipient, source))
+      /\ IngressAdmissionPolicyAndOwnershipGatesAllow(item)
       /\ ~CanAdmitIngressItem(item)
       => IngressDepth(recipient) > 0
 BY EmptyIngressAdmitsTypedPacket, SMT
@@ -1119,6 +1248,7 @@ PostStateHistoricalRecoveryRunnerEnvelope(node) ==
   /\ node \in up
   /\ ~NodeHasApplication(node)
   /\ ~ResponsiveReplayQuarantined(node)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
   /\ NodeServiceFrame(node)
   /\ PostStateHistoricalLockRestartNonCrashOuterFrame
 
@@ -1143,6 +1273,7 @@ HistoricalRecoveryRunnerCurrentGuard(node) ==
   /\ node \in up
   /\ ~NodeHasApplication(node)
   /\ ~ResponsiveReplayQuarantined(node)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
 
 (***************************************************************************
 Construct each local-runner successor from its exact scheduler guard.  This
@@ -1319,6 +1450,7 @@ DirectHistoricalRecoveryLocalProducerWitness(node) ==
   /\ node \in up
   /\ ~NodeHasApplication(node)
   /\ ~ResponsiveReplayQuarantined(node)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
   /\ NodeServiceFrame(node)
   /\ UNCHANGED up
   /\ UNCHANGED AsyncRecoveryControlVars
@@ -1349,6 +1481,7 @@ THEOREM DirectHistoricalRecoveryLocalProducerEnabled ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ ~ResponsiveReplayQuarantined(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Producer"
     /\ ENABLED DirectLocalProducerAdmissionStep(node)
@@ -1422,6 +1555,7 @@ THEOREM DirectHistoricalRecoveryLocalProducerCaller ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ ~ResponsiveReplayQuarantined(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Producer"
     /\ ENABLED LocalAdmissionStep(node)
@@ -1433,6 +1567,8 @@ PROOF
                 node \in up,
                 ~NodeHasApplication(node),
                 ~ResponsiveReplayQuarantined(node),
+                ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  node),
                 LocalAdmissionCanAdvance(node),
                 SelectedLocalSource(node) = "Producer",
                 ENABLED LocalAdmissionStep(node)
@@ -1504,6 +1640,7 @@ DirectHistoricalRecoveryLocalCausalDuplicateWitness(node) ==
   /\ node \in up
   /\ ~NodeHasApplication(node)
   /\ ~ResponsiveReplayQuarantined(node)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
   /\ NodeServiceFrame(node)
   /\ UNCHANGED up
   /\ UNCHANGED AsyncRecoveryControlVars
@@ -1536,6 +1673,7 @@ THEOREM DirectHistoricalRecoveryLocalCausalDuplicateEnabled ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ ~ResponsiveReplayQuarantined(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ CandidateInFlight(HeadCausalCandidate(node))
@@ -1611,6 +1749,7 @@ THEOREM DirectHistoricalRecoveryLocalCausalDuplicateCaller ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ ~ResponsiveReplayQuarantined(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ CandidateInFlight(HeadCausalCandidate(node))
@@ -1623,6 +1762,8 @@ PROOF
                 node \in up,
                 ~NodeHasApplication(node),
                 ~ResponsiveReplayQuarantined(node),
+                ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  node),
                 LocalAdmissionCanAdvance(node),
                 SelectedLocalSource(node) = "Causal",
                 CandidateInFlight(HeadCausalCandidate(node)),
@@ -1700,6 +1841,7 @@ DirectHistoricalRecoveryLocalCausalCompletionWitness(node) ==
   /\ node \in up
   /\ ~NodeHasApplication(node)
   /\ ~ResponsiveReplayQuarantined(node)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
   /\ NodeServiceFrame(node)
   /\ UNCHANGED up
   /\ UNCHANGED AsyncRecoveryControlVars
@@ -1733,6 +1875,7 @@ THEOREM DirectHistoricalRecoveryLocalCausalCompletionEnabled ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ ~ResponsiveReplayQuarantined(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -1810,6 +1953,7 @@ THEOREM DirectHistoricalRecoveryLocalCausalCompletionCaller ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ ~ResponsiveReplayQuarantined(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -1823,6 +1967,8 @@ PROOF
                 node \in up,
                 ~NodeHasApplication(node),
                 ~ResponsiveReplayQuarantined(node),
+                ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  node),
                 LocalAdmissionCanAdvance(node),
                 SelectedLocalSource(node) = "Causal",
                 ~CandidateInFlight(HeadCausalCandidate(node)),
@@ -1893,6 +2039,7 @@ DirectHistoricalRecoveryLocalCausalCommandWitness(node) ==
   /\ node \in up
   /\ ~NodeHasApplication(node)
   /\ ~ResponsiveReplayQuarantined(node)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
   /\ NodeServiceFrame(node)
   /\ UNCHANGED up
   /\ UNCHANGED AsyncRecoveryControlVars
@@ -1926,6 +2073,7 @@ THEOREM DirectHistoricalRecoveryLocalCausalCommandEnabled ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ ~ResponsiveReplayQuarantined(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -2002,6 +2150,7 @@ THEOREM DirectHistoricalRecoveryLocalCausalCommandCaller ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ ~ResponsiveReplayQuarantined(node)
+    /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -2015,6 +2164,8 @@ PROOF
                 node \in up,
                 ~NodeHasApplication(node),
                 ~ResponsiveReplayQuarantined(node),
+                ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                  node),
                 LocalAdmissionCanAdvance(node),
                 SelectedLocalSource(node) = "Causal",
                 ~CandidateInFlight(HeadCausalCandidate(node)),
@@ -2118,16 +2269,27 @@ PROOF
     <2> QED BY <2>2, <2>3
   <1> QED BY <1>1
 
-THEOREM HistoricalRecoveryRunnerEnabledAfterGst ==
+HistoricalRecoveryRunnerBlockedOnExternalContinuation(node) ==
+  /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionReady(node)
+  /\ (AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(node))
+       .sourceClass \in {"ConditionalTransport", "VolatileBody"}
+
+THEOREM HistoricalRecoveryRunnerEnabledOrAwaitsExternalContinuationAfterGst ==
   \A node \in asyncHistoricalRecoveryTargets:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ gst
-    => ENABLED PostGstRunHistoricalRecoveryNode(node)
+    => \/ ENABLED PostGstRunHistoricalRecoveryNode(node)
+       \/ HistoricalRecoveryRunnerBlockedOnExternalContinuation(node)
 PROOF
   <1>1. ASSUME NEW node \in asyncHistoricalRecoveryTargets,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 gst
-         PROVE ENABLED PostGstRunHistoricalRecoveryNode(node)
+         PROVE \/ ENABLED PostGstRunHistoricalRecoveryNode(node)
+                \/ HistoricalRecoveryRunnerBlockedOnExternalContinuation(
+                     node)
     <2>1a. AsyncTypeInvariant
       BY <1>1, AsyncStrongTypeProjectsAsyncType
     <2>1b. node \in ValidatorIds
@@ -2147,7 +2309,72 @@ PROOF
          DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
              AsyncSchedulerTypeInvariant,
              AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
-    <2>2. CASE asyncRunnerPhase[node] = "Local"
+    <2>1r. CASE
+              AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+      <3>1. CASE
+                AsyncCandidateProducerContinuationRunnerResolutionReady(node)
+        BY <1>1, <2>1r, <3>1, AutoUSE, ExpandENABLED, IsaT(300)
+           DEF PostGstRunHistoricalRecoveryNode,
+               RunHistoricalRecoveryNode, RunNodeWork,
+               ResolveRunNodeCandidateProducerContinuation,
+               AsyncSchedulerExceptCausalControlAndNodeService,
+               AsyncNonCrashOuterFrame, AsyncAllVars, AsyncSchedulerVars,
+               AsyncRecoveryVars, AsyncRecoveryControlVars,
+               AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars, vars
+      <3>2. CASE
+                /\ ~AsyncCandidateProducerContinuationRunnerResolutionReady(
+                       node)
+                /\ (AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(
+                       node)).sourceClass = "Local"
+        BY <1>1, <2>1r, <2>1b, <2>1c, <3>2,
+           AsyncCandidateProducerContinuationSelectedLocalReplayHasReservedCapacity,
+           AutoUSE, ExpandENABLED, IsaT(900)
+           DEF PostGstRunHistoricalRecoveryNode,
+               RunHistoricalRecoveryNode, RunNodeWork,
+               ReplayRunNodeCandidateProducerContinuation,
+               AsyncCandidateProducerContinuationExactLocalReplayStep,
+               AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+               AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+               AsyncCandidateProducerContinuationSelectedReplayRecord,
+               AsyncCandidateProducerContinuationExactReplayIdentity,
+               AsyncCandidateProducerContinuationSelectedLocalCandidate,
+               AsyncCandidateProducerContinuationRuntimeReplayCarrier,
+               AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+               AsyncCandidateProducerContinuationResolutionRecordsForNode,
+               AsyncCandidateProducerContinuations,
+               AsyncCandidateProducerContinuationRecordSet,
+               AsyncCandidateProducerContinuationRecord,
+               EnqueueCandidate,
+               AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+               AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+               AsyncNonCrashOuterFrame, AsyncAllVars, AsyncSchedulerVars,
+               AsyncRecoveryVars, AsyncRecoveryControlVars,
+               AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
+               AsyncConfiguration, vars
+      <3>3. CASE
+                /\ ~AsyncCandidateProducerContinuationRunnerResolutionReady(
+                       node)
+                /\ (AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(
+                       node)).sourceClass
+                     \in {"ConditionalTransport", "VolatileBody"}
+        BY <2>1r, <3>3
+           DEF HistoricalRecoveryRunnerBlockedOnExternalContinuation
+      <3> QED BY <1>1, <2>1a, <2>1r, <3>1, <3>2, <3>3, Isa
+           DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
+               AsyncSchedulerTypeInvariant,
+               AsyncControlServiceStateTypeInvariant,
+               AsyncCandidateProducerContinuationRunnerResolutionRequired,
+               AsyncCandidateProducerContinuationRunnerResolutionReady,
+               AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+               AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
+               AsyncCandidateProducerContinuationResolutionRecordsForNode,
+               AsyncCandidateProducerContinuationRecordSet,
+               AsyncCandidateProducerContinuationRecord,
+               AsyncCandidateProducerContinuationSourceClasses
+    <2>2. CASE
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node)
+              /\ asyncRunnerPhase[node] = "Local"
       <3>1. HistoricalRecoveryRunnerCurrentGuard(node)
         BY <1>1, <2>1c, <2>1d
            DEF HistoricalRecoveryRunnerCurrentGuard
@@ -2178,7 +2405,10 @@ PROOF
         <4> QED BY <4>3,
              EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact
       <3> QED BY <3>2, <3>3
-    <2>3. CASE asyncRunnerPhase[node] = "Ingress"
+    <2>3. CASE
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node)
+              /\ asyncRunnerPhase[node] = "Ingress"
       <3>1. ENABLED IngressDrainStep(node)
         BY <2>1b, <2>3, IngressDrainStepIsEnabled
       <3>2. ENABLED
@@ -2197,7 +2427,10 @@ PROOF
            DEF PostStateHistoricalRecoveryRunnerWitness
       <3> QED BY <3>3,
            EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact
-    <2>4. CASE asyncRunnerPhase[node] = "Runtime"
+    <2>4. CASE
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node)
+              /\ asyncRunnerPhase[node] = "Runtime"
       <3>1. ENABLED RuntimeServeSchedulerStep(node)
         BY <2>1b, <2>4, RuntimeServeSchedulerStepIsEnabled
       <3>2. ENABLED
@@ -2217,8 +2450,19 @@ PROOF
            DEF PostStateHistoricalRecoveryRunnerWitness
       <3> QED BY <3>3,
            EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact
-    <2> QED BY <2>1e, <2>2, <2>3, <2>4
+    <2> QED BY <2>1e, <2>1r, <2>2, <2>3, <2>4
   <1> QED BY <1>1
+
+THEOREM HistoricalRecoveryRunnerEnabledAfterGst ==
+  \A node \in asyncHistoricalRecoveryTargets:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ gst
+    => ENABLED PostGstRunHistoricalRecoveryNode(node)
+BY HistoricalRecoveryRunnerEnabledOrAwaitsExternalContinuationAfterGst,
+   ExternalCandidateProducerContinuationSelectionIsReady, Isa
+   DEF HistoricalRecoveryRunnerBlockedOnExternalContinuation
 
 THEOREM HistoricalRecoveryIoWorkerEnabledAfterGst ==
   \A node \in asyncHistoricalRecoveryTargets:
@@ -2466,6 +2710,43 @@ PROOF
       BY <1>1
          DEF PostGstRunNode, PostGstRunHistoricalRecoveryNode,
              RunNode, RunHistoricalRecoveryNode
+    <2>1r. CASE
+              AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                recipient)
+      <3>1. AsyncFairActionAt(initialContext)
+        BY <1>1, Isa
+           DEF AsyncFairActionAt,
+               PostGstRunNode, RunNode,
+               PostGstRunHistoricalRecoveryNode,
+               RunHistoricalRecoveryNode, HistoricalRecoveryTarget,
+               AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncHistoricalRecoveryTypeInvariant
+      <3>2. AsyncNext
+        BY <1>1, <3>1,
+           AsyncFairActionsRefineAsyncNextObligation
+           DEF AsyncTypeInvariant
+      <3>3. AsyncControlServiceSlotTransition
+        BY <3>2 DEF AsyncNext
+      <3>4. CASE
+                AsyncCandidateProducerContinuationRunnerResolutionReady(
+                  recipient)
+        <4>1. HistoricalProducerContinuationLocalWorkDecreaseStep
+          BY <1>1, <2>1, <2>1r, <3>3, <3>4,
+             HistoricalRecoveryResolutionStrictlyDecreasesLocalWork
+        <4> QED BY <1>1, <3>1, <4>1,
+             AsyncFairStrictStepIsParameterizedProductive
+             DEF AsyncTerminatingLocalWorkDecreaseStep
+      <3>5. CASE
+                ~AsyncCandidateProducerContinuationRunnerResolutionReady(
+                   recipient)
+        <4>1.
+          HistoricalProducerContinuationReplayLocalWorkDecreaseStep
+          BY <1>1, <2>1, <2>1r, <3>3, <3>5,
+             HistoricalRecoveryExactReplayStrictlyDecreasesLocalWork
+        <4> QED BY <1>1, <3>1, <4>1,
+             AsyncFairStrictStepIsParameterizedProductive
+             DEF AsyncTerminatingLocalWorkDecreaseStep
+      <3> QED BY <3>4, <3>5
     <2>2. CASE LocalAdmissionStep(recipient)
                     \/ IngressDrainStep(recipient)
                     \/ SerializedLocalPrecedesServeIngressStep(recipient)
@@ -2501,13 +2782,15 @@ PROOF
       <3> QED BY <1>1, <2>1, <3>1, <3>2,
            AsyncFairStrictStepIsParameterizedProductive
            DEF AsyncTerminatingLocalWorkDecreaseStep
-    <2> QED BY <2>1, <2>2, <2>3 DEF RunNodeWork
+    <2> QED BY <2>1, <2>1r, <2>2, <2>3 DEF RunNodeWork
   <1> QED BY <1>1
 
 THEOREM UnappliedPacketRecipientEnablesConcreteRunnerProgress ==
   \A initialContext \in ContextRecords,
      recipient \in ValidatorIds, source \in AsyncIngressSources:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ gst
     /\ recipient \in AsyncCurrentResponsiveVoters
@@ -2521,6 +2804,8 @@ PROOF
                 NEW recipient \in ValidatorIds,
                 NEW source \in AsyncIngressSources,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
                 gst,
@@ -2554,7 +2839,8 @@ PROOF
         BY <1>1, <2>3
       <3>2. ENABLED RunNode(recipient)
         BY <2>1, <3>1, <1>1,
-           ResponsiveUnappliedRunNodeIsEnabled
+           ResponsiveUnappliedRunNodeIsEnabled,
+           ExternalCandidateProducerContinuationSelectionIsReady
       <3>3. ENABLED PostGstRunNode(recipient)
         BY <1>1, <3>1, <3>2, EnabledRunNodeLiftsPostGst
       <3>4. PostGstRunNode(recipient)
@@ -2769,6 +3055,8 @@ PROOF
 THEOREM DueNodeServiceEnablesConcreteGateProgress ==
   \A initialContext \in ContextRecords, node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ PostGstReplayQuarantineExcluded
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ gst
@@ -2780,6 +3068,8 @@ PROOF
   <1>1. ASSUME NEW initialContext \in ContextRecords,
                 NEW node \in ValidatorIds,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 PostGstReplayQuarantineExcluded,
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
@@ -2831,7 +3121,8 @@ PROOF
       <3>3. CASE ~NodeHasApplication(node)
         <4>1. ENABLED RunNode(node)
           BY <2>1, <3>1, <3>3,
-             ResponsiveUnappliedRunNodeIsEnabled
+             <1>1, ResponsiveUnappliedRunNodeIsEnabled,
+             ExternalCandidateProducerContinuationSelectionIsReady
         <4>2. ENABLED PostGstRunNode(node)
           BY <1>1, <3>1, <4>1, EnabledRunNodeLiftsPostGst
         <4>3. PostGstRunNode(node)
@@ -2917,18 +3208,85 @@ PROOF
 
 (***************************************************************************
 The transport blocker is discharged at its authenticated recipient/source,
-never by selecting an unrelated undecided validator.  Exact duplicates take
-the coalescing admission branch.  A fresh admissible item takes the ordinary
-admission branch.  A fresh rejected item proves that recipient ingress is
-nonempty: an unapplied recipient advances its own three-phase runner; an
-applied recipient either drains a historical-safe item or, if every queued
-item is an authorized request blocked on the Serve reservation, services the
-nonempty I/O FIFO which is the exact admission blocker.
+never by selecting an unrelated undecided validator.  Exact duplicates and
+policy/tombstone exits take the admission branch.  A fresh item with every
+gate open takes the same atomic admission branch.  For a leader wire that
+single action validates the current/authenticated lifecycle slot and physical
+capacity, removes the exact packet, appends the lane occurrence, and publishes
+its immutable Ingress owner.  No separate scheduler-bookkeeping action exists.
 ***************************************************************************)
 
-THEOREM OverdueResponsivePacketEnablesConcreteCorridorProgress ==
+THEOREM EmptyAppliedOverduePacketExposesAdmission ==
+  \A initialContext \in ContextRecords,
+     recipient \in AsyncCurrentResponsiveVoters,
+     source \in AsyncIngressSources:
+    /\ AsyncStrongTypeInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+    /\ gst
+    /\ NodeHasApplication(recipient)
+    /\ DueSourcePackets(recipient, source) # {}
+    /\ LET packet == OldestDueSourcePacket(recipient, source)
+       IN /\ packet \in OverdueResponsivePackets
+          /\ IngressDepth(recipient) = 0
+          /\ ~DueIngressPacketCanEnter(recipient, source)
+    => \E actionSource \in AsyncIngressSources:
+         ENABLED
+           (PostGstAdmitHiddenPacket(recipient, actionSource)
+              \/ PostGstAdmitHistoricalRecoveryPacket(
+                   recipient, actionSource))
+BY AsyncStrongTypeProjectsAsyncType,
+   EmptyIngressAdmitsTypedPacket,
+   OldestDueSourcePacketFacts,
+   ExpandENABLED, IsaT(3600)
+   DEF DueIngressPacketCanEnter,
+       DueIngressPacketCanCoalesce,
+       IngressAdmissionPolicyAndOwnershipGatesAllow,
+       CanAdmitIngressItem,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       DropExactActiveLeaderWireRetry,
+       PostGstAdmitHiddenPacket,
+       PostGstAdmitHistoricalRecoveryPacket,
+       AsyncLeaderWireCurrentContextItem,
+       AsyncLeaderWireAdmissionAuthenticated,
+       AsyncLeaderWireAtomicAdmissionAllows,
+       AsyncLeaderWireLifecycleExactActive,
+       AsyncLeaderWireLifecycleSlotCanAdmit,
+       AsyncLeaderWireLifecycleStateAfterIngressAdmission,
+       IngressPacketPolicyRejected,
+       AsyncPacketOwnsClockDeadline,
+       OverdueResponsivePackets,
+       DueSourcePackets, AsyncAllVars
+
+THEOREM EmptyAppliedOverduePacketEnablesProgress ==
+  \A initialContext \in ContextRecords,
+     recipient \in AsyncCurrentResponsiveVoters,
+     source \in AsyncIngressSources:
+    /\ AsyncStrongTypeInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+    /\ gst
+    /\ NodeHasApplication(recipient)
+    /\ DueSourcePackets(recipient, source) # {}
+    /\ LET packet == OldestDueSourcePacket(recipient, source)
+       IN /\ packet \in OverdueResponsivePackets
+          /\ IngressDepth(recipient) = 0
+          /\ ~DueIngressPacketCanEnter(recipient, source)
+    => ENABLED PostGstProductiveStepWith(
+         AsyncTerminatingLocalWorkDecreaseStep)
+BY EmptyAppliedOverduePacketExposesAdmission,
+   AsyncStrongTypeProjectsAsyncType,
+   OverdueResponsivePacketUsesFairIngressPair,
+   PostGstIngressAdmissionIsConcreteTransportProgress,
+   ENABLEDaxioms, IsaT(600)
+   DEF ResponsivePacketPairAt
+
+THEOREM OverdueResponsivePacketEnablesConcreteProgress ==
   \A initialContext \in ContextRecords:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ PostGstReplayQuarantineExcluded
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ gst
@@ -2938,13 +3296,15 @@ THEOREM OverdueResponsivePacketEnablesConcreteCorridorProgress ==
 PROOF
   <1>1. ASSUME NEW initialContext \in ContextRecords,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 PostGstReplayQuarantineExcluded,
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
                 gst,
                 OverdueResponsivePackets # {}
          PROVE ENABLED PostGstProductiveStepWith(
-                 AsyncTerminatingLocalWorkDecreaseStep)
+                   AsyncTerminatingLocalWorkDecreaseStep)
     <2>1. AsyncTypeInvariant
       BY <1>1, AsyncStrongTypeProjectsAsyncType
     <2>2. PICK packet \in OverdueResponsivePackets: TRUE
@@ -2986,41 +3346,30 @@ PROOF
           BY <1>1, <2>1, <2>3, <3>3, Isa
              DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                  AsyncHistoricalRecoveryTypeInvariant
-        <4>2. IngressDepth(Recipient) > 0
-          <5>1. CASE IngressHasCoalescingOwner(Item)
-            <6>1. IngressResourceSource(Item) \in AsyncIngressSources
-              BY <2>4, Isa
-                 DEF AsyncItemTyped, AsyncIngressSources
-            <6>2. ASSUME IngressDepth(Recipient) = 0
-                   PROVE FALSE
-              <7>1. IngressLane(
-                       Recipient, IngressResourceSource(Item)) = <<>>
-                BY <2>1, <2>3, <6>1, <6>2,
-                   ZeroIngressDepthMeansEveryLaneEmpty
-              <7> QED BY <5>1, <7>1
-                   DEF IngressHasCoalescingOwner, SequenceSet,
-                       IngressLane
-            <6> QED BY <2>1, <6>2, SMT
-                 DEF AsyncTypeInvariant, TypeInvariant,
-                     AsyncSchedulerTypeInvariant,
-                     AsyncIngressTypeInvariant,
-                     AsyncIngressCapacityTypeInvariant
-          <5>2. CASE ~IngressHasCoalescingOwner(Item)
-            <6>1. ~CanAdmitIngressItem(Item)
-              BY <3>1, <5>2
-            <6> QED BY <2>1, <2>3, <2>4, <6>1,
-                 EmptyIngressAdmitsTypedPacket, SMT
+        <4>2. CASE IngressDepth(Recipient) = 0
+          <5>1. OldestDueSourcePacket(Recipient, Source)
+                   \in OverdueResponsivePackets
+            BY <1>1, <2>1, <2>2, <2>3, Isa
+               DEF OverdueResponsivePackets,
+                   AsyncPacketOwnsClockDeadline,
+                   DueSourcePackets, OldestDueSourcePacket
+          <5>2. ENABLED PostGstProductiveStepWith(
+                   AsyncTerminatingLocalWorkDecreaseStep)
+            BY <1>1, <2>3, <2>6, <3>3, <4>1, <4>2, <5>1,
+               EmptyAppliedOverduePacketEnablesProgress
+          <5> QED BY <5>2
+        <4>3. CASE IngressDepth(Recipient) > 0
+          <5>1. CASE HistoricalDrainableIngressIndices(Recipient) # {}
+            BY <1>1, <4>1, <3>3, <5>1,
+               AppliedDrainableRecipientEnablesConcreteIngressProgress
+          <5>2. CASE HistoricalDrainableIngressIndices(Recipient) = {}
+            <6>1. AsyncIoQueueDepth(Recipient) > 0
+              BY <2>1, <2>3, <4>3, <5>2,
+                 NonemptyUndrainableHistoricalIngressHasIoWork
+            <6> QED BY <1>1, <2>3, <6>1,
+                 DueIoServiceEnablesConcreteLocalProgress
           <5> QED BY <5>1, <5>2
-        <4>3. CASE HistoricalDrainableIngressIndices(Recipient) # {}
-          BY <1>1, <4>1, <3>3, <4>3,
-             AppliedDrainableRecipientEnablesConcreteIngressProgress
-        <4>4. CASE HistoricalDrainableIngressIndices(Recipient) = {}
-          <5>1. AsyncIoQueueDepth(Recipient) > 0
-            BY <2>1, <2>3, <4>2, <4>4,
-               NonemptyUndrainableHistoricalIngressHasIoWork
-          <5> QED BY <1>1, <2>3, <5>1,
-               DueIoServiceEnablesConcreteLocalProgress
-        <4> QED BY <4>3, <4>4
+        <4> QED BY <2>1, <4>2, <4>3, SMT
       <3> QED BY <3>2, <3>3
     <2> QED BY <2>5, <2>6
   <1> QED BY <1>1
@@ -3044,9 +3393,11 @@ BY Isa
        AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
        AsyncIoQueueDepth
 
-THEOREM PostGstUndecidedEnablesConcreteProductiveStepAt ==
+THEOREM PostGstUndecidedEnablesConcreteProductiveAt ==
   \A initialContext \in ContextRecords:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ PostGstReplayQuarantineExcluded
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ gst
@@ -3056,12 +3407,14 @@ THEOREM PostGstUndecidedEnablesConcreteProductiveStepAt ==
 PROOF
   <1>1. ASSUME NEW initialContext \in ContextRecords,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 PostGstReplayQuarantineExcluded,
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
                 gst, ~ResponsiveNodesDecide
          PROVE ENABLED PostGstProductiveStepWith(
-                 AsyncTerminatingLocalWorkDecreaseStep)
+                   AsyncTerminatingLocalWorkDecreaseStep)
     <2>1. AsyncTypeInvariant
       BY <1>1, AsyncStrongTypeProjectsAsyncType
     <2>2. PICK undecided \in AsyncCurrentResponsiveVoters:
@@ -3076,7 +3429,7 @@ PROOF
            DisabledPostGstTickHasConcreteBlocker
       <3>2. CASE OverdueResponsivePackets # {}
         BY <1>1, <3>2,
-           OverdueResponsivePacketEnablesConcreteCorridorProgress
+           OverdueResponsivePacketEnablesConcreteProgress
       <3>3. CASE \E node \in LocalRunnerServiceOwners:
                        asyncNodeServiceDeadlines[node] <= asyncNow
         <4>1. PICK serviceNode \in LocalRunnerServiceOwners:
@@ -3114,13 +3467,11 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-The Entry-38 candidate proof uses the parameterized productive-step property.
-The legacy one-argument base wrapper remains semantically identical to the old
-four-way predicate; this child supplies only strict, named terminating-local-
-work steps.  In particular, an applied voter reaches the historical-server
-gate through the proved post-GST quarantine exclusion rather than an assumed
-ordinary RunNode action.  The ledger remains `specified_unproved` until this
-entire dependency cone passes the pinned strict TLAPS release invocation.
+The Entry-38 candidate proof supplies only strict, named
+terminating-local-work steps.  Atomic Fair-ingress acceptance removes the
+packet in the same step that installs the leader-wire owner, so it is ordinary
+productive transport progress.  The ledger remains `specified_unproved` until
+this entire dependency cone passes the pinned strict TLAPS release invocation.
 ***************************************************************************)
 
 THEOREM DeadlockFreedomObligation ==
@@ -3135,8 +3486,13 @@ PROOF
                  ENABLED PostGstProductiveStepWith(
                    AsyncTerminatingLocalWorkDecreaseStep))
     <2>1. AsyncSpecAt(initialContext)
-             => []AsyncStrongTypeInvariant
-      BY AsyncSpecAlwaysStrongTypeInvariant
+             => [](AsyncStrongTypeInvariant
+                    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
+      BY AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+         PTL
     <2>2. AsyncSpecAt(initialContext)
              => []PostGstReplayQuarantineExcluded
       BY AsyncSpecAlwaysExcludesPostGstReplayQuarantine
@@ -3157,7 +3513,8 @@ PROOF
                     => ENABLED PostGstProductiveStepWith(
                          AsyncTerminatingLocalWorkDecreaseStep))
       BY <2>1, <2>2, <2>3, <2>5,
-         PostGstUndecidedEnablesConcreteProductiveStepAt, PTL
+         PostGstUndecidedEnablesConcreteProductiveAt,
+         PTL
     <2> QED BY <2>6
          DEF DeadlockFreedomWithLocalWorkProperty
   <1> QED BY <1>1

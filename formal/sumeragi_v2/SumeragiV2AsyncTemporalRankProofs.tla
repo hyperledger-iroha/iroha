@@ -2495,8 +2495,13 @@ CertifiedResponseClaimServeEpisodeResidual(node, rank) ==
   /\ gst
   /\ CertifiedResponseClaimRunnerOwned(node)
   /\ ~CertifiedResponseClaimAuxProgress(node, rank)
-  /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
-  /\ asyncRunnerPhase[node] = "Ingress"
+  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+        /\ asyncRunnerPhase[node] = "Ingress"
+     \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+
+CertifiedResponseClaimCandidateProducerContinuationReentry(node, rank) ==
+  /\ CertifiedResponseClaimBlockedAtAux(node, rank)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
 
 CertifiedResponseClaimFiniteServeEpisodeResidualProperty(specification) ==
   specification
@@ -3111,6 +3116,9 @@ THEOREM ClaimedResponseSameNodeRunProducesAuxOutcome ==
     /\ PostGstRunNode(node)
     => \/ CertifiedResponseClaimAuxStrictResult(node, rank)
        \/ CertifiedResponseClaimServeEpisodeResidual(node, rank)'
+       \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+          /\ CertifiedResponseClaimCandidateProducerContinuationReentry(
+               node, rank)'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW rank \in CertifiedResponseClaimAuxCarrier,
@@ -3118,8 +3126,47 @@ PROOF
                 PostGstRunNode(node)
          PROVE \/ CertifiedResponseClaimAuxStrictResult(node, rank)
                \/ CertifiedResponseClaimServeEpisodeResidual(node, rank)'
+               \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                        node)
+                  /\ CertifiedResponseClaimCandidateProducerContinuationReentry(
+                       node, rank)'
     <2>1. RunNode(node)
       BY <1>1 DEF PostGstRunNode
+    <2>1c. CASE
+              \/ ResolveRunNodeCandidateProducerContinuation(node)
+              \/ ReplayRunNodeCandidateProducerContinuation(node)
+      BY <1>1, <2>1c,
+         AsyncBracketNextPreservesStrongTypeInvariant,
+         CertifiedResponseClaimAuxRankInCarrier,
+         HeadTailProperties, SequenceSetAfterAppend, IsaT(900)
+         DEF CertifiedResponseClaimCandidateProducerContinuationReentry,
+             CertifiedResponseClaimAuxStrictResult,
+             CertifiedResponseClaimAuxProgress,
+             CertifiedResponseClaimServeEpisodeResidual,
+             CertifiedResponseClaimBlockedAtAux,
+             CertifiedResponseClaimAuxRank,
+             CertifiedResponseClaimCapacityDebt,
+             CertifiedResponseClaimBlockerRank,
+             CertifiedResponseClaimOpenBlockerRank,
+             CertifiedResponseClaimOpenDeferredRank,
+             CertifiedResponseClaimOpenTimeoutRank,
+             CertifiedResponseClaimOpenInnerRank,
+             CertifiedResponseClaimAuxOrdering,
+             CertifiedResponseClaimAuxCarrier,
+             CertifiedResponseClaimRunnerOwned,
+             CertifiedResponseClaimRunnerGoal,
+             CertifiedResponseClaimRetryReady,
+             CertifiedResponseClaimIngressRetryReady,
+             ReadyRunAuxRank, ReadyRunDeferredRank,
+             ReadyRunTimeoutRank, ReadyRunInnerRank,
+             ResolveRunNodeCandidateProducerContinuation,
+             ReplayRunNodeCandidateProducerContinuation,
+             AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+             EnqueueCandidate, CertifiedResponseClaimsAt,
+             CanEnqueueCertifiedResponse, CanEnqueueClass,
+             AsyncQueueDepth, AsyncAllVars
     <2>2. CASE LocalAdmissionStep(node)
       BY <1>1, <2>2, ClaimedResponseBlockedLocalDecreasesAux
     <2>3. CASE IngressDrainStep(node)
@@ -3133,7 +3180,7 @@ PROOF
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <1>1, <2>6,
          ClaimedResponseBlockedLocalPredecessorDecreasesAux
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+    <2> QED BY <2>1, <2>1c, <2>2, <2>3, <2>4, <2>5, <2>6,
          RunNodeWorkConcreteActionCaseSplit
          DEF RunNode
   <1> QED BY <1>1
@@ -3357,6 +3404,7 @@ PROOF
           BY <1>1, <2>2, <3>1, <4>1,
              ClaimedResponseSameNodeRunProducesAuxOutcome
              DEF CertifiedResponseClaimAuxStepResult, PostGstRunNode,
+                 CertifiedResponseClaimCandidateProducerContinuationReentry,
                  CertifiedResponseClaimBlockedAtAux
         <4>2. CASE ~RunNode(node)
           BY <1>1, <3>1, <4>2,
@@ -3371,6 +3419,7 @@ PROOF
           BY <1>1, <2>2, <3>3, <4>1,
              ClaimedResponseSameNodeRunProducesAuxOutcome
              DEF CertifiedResponseClaimAuxStepResult, PostGstRunNode,
+                 CertifiedResponseClaimCandidateProducerContinuationReentry,
                  CertifiedResponseClaimBlockedAtAux
         <4>2. CASE ~RunNode(node)
           BY <1>1, <3>3, <4>2,
@@ -3447,12 +3496,16 @@ PROOF
 THEOREM ClaimedResponseOwnerEnablesFairRunNode ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ gst
     /\ CertifiedResponseClaimRunnerOwned(node)
     => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 gst,
                 CertifiedResponseClaimRunnerOwned(node)
          PROVE ENABLED <<PostGstRunNode(node)>>_AsyncAllVars
@@ -3514,15 +3567,19 @@ PROOF
                  => (CertifiedResponseClaimBlockedAtAux(node, rank)
                        ~> CertifiedResponseClaimAuxProgress(node, rank))
     <2>1. AsyncSpecAt(initialContext)
-             => [](AsyncCurrentResponsiveVoters
-                    = AsyncVotersAt(initialContext))
-      BY AsyncSpecAlwaysUsesFixedResponsiveVoters
+             => /\ [](AsyncCurrentResponsiveVoters
+                       = AsyncVotersAt(initialContext))
+                /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                /\ []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      BY AsyncSpecAlwaysUsesFixedResponsiveVoters,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
     <2>2. /\ CertifiedResponseClaimBlockedAtAux(node, rank)
              /\ ~(CertifiedResponseClaimAuxProgress(node, rank)
                     \/ CertifiedResponseClaimServeEpisodeResidual(
                          node, rank))
             => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars
-      BY ClaimedResponseOwnerEnablesFairRunNode
+      BY <2>1, ClaimedResponseOwnerEnablesFairRunNode, PTL
          DEF CertifiedResponseClaimBlockedAtAux,
              CertifiedResponseClaimAuxProgress
     <2>3. /\ CertifiedResponseClaimBlockedAtAux(node, rank)
@@ -3533,7 +3590,9 @@ PROOF
             => \/ CertifiedResponseClaimAuxProgress(node, rank)'
                \/ CertifiedResponseClaimServeEpisodeResidual(node, rank)'
       BY ClaimedResponseSameNodeRunProducesAuxOutcome
-         DEF CertifiedResponseClaimAuxStrictResult
+         DEF CertifiedResponseClaimAuxStrictResult,
+             CertifiedResponseClaimServeEpisodeResidual,
+             CertifiedResponseClaimCandidateProducerContinuationReentry
     <2>4. CertifiedResponseClaimBlockedAtAux(node, rank)
               /\ [AsyncNext]_AsyncAllVars
             => CertifiedResponseClaimBlockedAtAux(node, rank)'
@@ -3945,13 +4004,17 @@ PROOF
                  => (CertifiedResponseClaimRetryAtRank(node, rank)
                        ~> CertifiedResponseClaimRetryProgress(node, rank))
     <2>1. AsyncSpecAt(initialContext)
-             => [](AsyncCurrentResponsiveVoters
-                    = AsyncVotersAt(initialContext))
-      BY AsyncSpecAlwaysUsesFixedResponsiveVoters
+             => /\ [](AsyncCurrentResponsiveVoters
+                       = AsyncVotersAt(initialContext))
+                /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                /\ []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      BY AsyncSpecAlwaysUsesFixedResponsiveVoters,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
     <2>2. /\ CertifiedResponseClaimRetryAtRank(node, rank)
              /\ ~CertifiedResponseClaimRetryProgress(node, rank)
             => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars
-      BY ClaimedResponseOwnerEnablesFairRunNode
+      BY <2>1, ClaimedResponseOwnerEnablesFairRunNode, PTL
          DEF CertifiedResponseClaimRetryAtRank,
              CertifiedResponseClaimRetryReady,
              CertifiedResponseClaimIngressRetryReady,
@@ -4209,12 +4272,16 @@ BY Isa
 THEOREM ProtectedOwnedCandidateEnablesFairRunNode ==
   \A candidate:
     /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ gst
     /\ ResponsiveProtectedCandidateOwned(candidate)
     => ENABLED <<PostGstRunNode(candidate.node)>>_AsyncAllVars
 PROOF
   <1>1. ASSUME NEW candidate,
                 AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
                 gst,
                 ResponsiveProtectedCandidateOwned(candidate)
          PROVE ENABLED <<PostGstRunNode(candidate.node)>>_AsyncAllVars
@@ -4311,8 +4378,15 @@ Stage4ServeEpisodeResidual(candidate, position, rank) ==
   /\ AsyncProgressOwnershipInvariant
   /\ ProtectedStage4Pending(candidate, position)
   /\ ~Stage4AuxProgress(candidate, position, rank)
-  /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
-  /\ asyncRunnerPhase[candidate.node] = "Ingress"
+  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+        /\ asyncRunnerPhase[candidate.node] = "Ingress"
+     \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+          candidate.node)
+
+Stage4CandidateProducerContinuationReentry(candidate, position, rank) ==
+  /\ ReadyBlockedAtAux(candidate, position, rank)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+       candidate.node)
 
 Stage4FiniteServeEpisodeResidualProperty(specification) ==
   specification
@@ -4704,6 +4778,10 @@ THEOREM Stage4SameNodeRunProducesAuxOutcome ==
     /\ PostGstRunNode(candidate.node)
     => \/ Stage4AuxStrictResult(candidate, position, rank)
        \/ Stage4ServeEpisodeResidual(candidate, position, rank)'
+       \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                candidate.node)
+          /\ Stage4CandidateProducerContinuationReentry(
+               candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW candidate,
                 NEW position,
@@ -4713,8 +4791,47 @@ PROOF
          PROVE \/ Stage4AuxStrictResult(candidate, position, rank)
                \/ Stage4ServeEpisodeResidual(
                     candidate, position, rank)'
+               \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                        candidate.node)
+                  /\ Stage4CandidateProducerContinuationReentry(
+                       candidate, position, rank)'
     <2>1. RunNode(candidate.node)
       BY <1>1 DEF PostGstRunNode
+    <2>1c. CASE
+              \/ ResolveRunNodeCandidateProducerContinuation(candidate.node)
+              \/ ReplayRunNodeCandidateProducerContinuation(candidate.node)
+      BY <1>1, <2>1c,
+         AsyncBracketNextPreservesStrongTypeInvariant,
+         AsyncBracketNextPreservesProgressOwnership,
+         ReadyRunAuxRankInCarrier, HeadTailProperties,
+         SequenceSetAfterAppend, IsaT(900)
+         DEF Stage4CandidateProducerContinuationReentry,
+             Stage4AuxStrictResult, Stage4AuxProgress,
+             Stage4ServeEpisodeResidual,
+             ReadyBlockedAtAux, ProtectedStage4Pending,
+             ReadyStage4Actionable, ProtectedOwnedAtServiceRank,
+             ProtectedRankProgressExit,
+             ProtectedServiceOwnershipExit,
+             ResponsiveProtectedCandidateOwned,
+             ProtectedCandidateOwned, CandidateServiceRank,
+             ServiceRankLess, ReadyRunAuxRank,
+             ReadyRunDeferredRank, ReadyRunTimeoutRank,
+             ReadyRunInnerRank, ReadyRunAuxOrdering,
+             ReadyRunAuxCarrier, ReadyRunDeferredOrdering,
+             ReadyRunDeferredCarrier, ReadyRunTimeoutOrdering,
+             ReadyRunTimeoutCarrier, ReadyRunInnerOrdering,
+             ReadyRunInnerCarrier, ReadyFifoDebt,
+             ReadyDeferredCount, ReadyTimeoutDebt,
+             ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+             ResolveRunNodeCandidateProducerContinuation,
+             ReplayRunNodeCandidateProducerContinuation,
+             AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+             EnqueueCandidate, CandidateScheduled, SequenceSet,
+             AsyncProgressOwnershipInvariant,
+             AsyncLogicalCandidateOwnershipInvariant,
+             AsyncOutstandingCarrierInvariant, AsyncAllVars
     <2>2. CASE LocalAdmissionStep(candidate.node)
       BY <1>1, <2>2, Stage4LocalAdmissionDecreasesAux
     <2>3. CASE IngressDrainStep(candidate.node)
@@ -4725,7 +4842,7 @@ PROOF
       BY <1>1, <2>5, Stage4TargetOnlyCreatesServeEpisodeOutcome
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(candidate.node)
       BY <1>1, <2>6, Stage4LocalPredecessorDecreasesAux
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+    <2> QED BY <2>1, <2>1c, <2>2, <2>3, <2>4, <2>5, <2>6,
          RunNodeWorkConcreteActionCaseSplit
          DEF RunNode
   <1> QED BY <1>1
@@ -4889,6 +5006,7 @@ PROOF
           BY <1>1, <2>2, <3>1, <4>1,
              Stage4SameNodeRunProducesAuxOutcome
              DEF Stage4AuxStepResult, PostGstRunNode,
+                 Stage4CandidateProducerContinuationReentry,
                  ReadyBlockedAtAux, ProtectedStage4Pending,
                  ProtectedOwnedAtServiceRank
         <4>2. CASE ~RunNode(candidate.node)
@@ -4904,6 +5022,7 @@ PROOF
           BY <1>1, <2>2, <3>3, <4>1,
              Stage4SameNodeRunProducesAuxOutcome
              DEF Stage4AuxStepResult, PostGstRunNode,
+                 Stage4CandidateProducerContinuationReentry,
                  ReadyBlockedAtAux, ProtectedStage4Pending,
                  ProtectedOwnedAtServiceRank
         <4>2. CASE ~RunNode(candidate.node)
@@ -5004,9 +5123,13 @@ PROOF
                        ~> Stage4AuxProgress(candidate, position, rank))
     <2>1. AsyncSpecAt(initialContext)
              => [](AsyncStrongTypeInvariant
-                    /\ AsyncProgressOwnershipInvariant)
+                    /\ AsyncProgressOwnershipInvariant
+                    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
       BY AsyncSpecAlwaysStrongTypeInvariant,
-         AsyncSpecAlwaysProgressOwnershipInvariant, PTL
+         AsyncSpecAlwaysProgressOwnershipInvariant,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>2. AsyncSpecAt(initialContext)
              => [](AsyncCurrentResponsiveVoters
                     = AsyncVotersAt(initialContext))
@@ -5017,7 +5140,7 @@ PROOF
                          candidate, position, rank))
             => ENABLED
                  <<PostGstRunNode(candidate.node)>>_AsyncAllVars
-      BY ProtectedOwnedCandidateEnablesFairRunNode
+      BY <2>1, ProtectedOwnedCandidateEnablesFairRunNode, PTL
          DEF ReadyBlockedAtAux, ProtectedStage4Pending,
              ProtectedOwnedAtServiceRank, Stage4AuxProgress
     <2>4. /\ ReadyBlockedAtAux(candidate, position, rank)
@@ -5029,7 +5152,9 @@ PROOF
                \/ Stage4ServeEpisodeResidual(
                     candidate, position, rank)'
       BY Stage4SameNodeRunProducesAuxOutcome
-         DEF Stage4AuxStrictResult
+         DEF Stage4AuxStrictResult,
+             Stage4ServeEpisodeResidual,
+             Stage4CandidateProducerContinuationReentry
     <2>5. ReadyBlockedAtAux(candidate, position, rank)
               /\ [AsyncNext]_AsyncAllVars
             => ReadyBlockedAtAux(candidate, position, rank)'

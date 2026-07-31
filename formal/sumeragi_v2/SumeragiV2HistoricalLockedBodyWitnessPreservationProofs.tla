@@ -1213,7 +1213,7 @@ THEOREM SerializedRuntimePreservesHistoricalLockedBodyLineageSourceRetention ==
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ HistoricalLockedBodyLineageSourceRetentionInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => HistoricalLockedBodyLineageSourceRetentionInvariant'
 BY SelectedHistoricalFifoOwnerPreservesOrReplacesSource,
    SelectedHistoricalDeferredOwnerPreservesOrReplacesSource,
@@ -1263,7 +1263,10 @@ BY SelectedHistoricalFifoOwnerPreservesOrReplacesSource,
        InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
        NoHigherConflictingPrepareKnown, RestartLockedPrepareQCs,
        CommandSuccessorsScheduledAfter,
-       SerializedRuntimeStep, RuntimeStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       RuntimeStep,
        FifoRuntimeStep, DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep,
        DeferredRetransmitStep, DirectTimeoutStep,
@@ -1293,7 +1296,29 @@ BY LocalAdmissionPreservesHistoricalLockedBodyLineageSourceRetention,
    IngressDrainPreservesHistoricalLockedBodyLineageSourceRetention,
    SerializedRuntimePreservesHistoricalLockedBodyLineageSourceRetention,
    Isa
-   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep
+   DEF RunNodeWork, SerializedRunnerRuntimeStep,
+       SerializedLocalPrecedesServeIngressStep,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedRuntimeCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionReady,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationConcreteSuccessorOwned,
+       AsyncCandidateProducerContinuationHandoffOwned,
+       AsyncCandidateProducerContinuationLocalReplayCarrier,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       EnqueueCandidate, CandidateScheduled, ScheduledCandidateSet,
+       AsyncRecoveryVars, SequenceSet, vars
 
 THEOREM RunNodePreservesHistoricalLockedBodyLineageSourceRetention ==
   \A node \in ValidatorIds:

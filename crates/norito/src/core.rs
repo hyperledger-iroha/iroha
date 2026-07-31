@@ -11806,43 +11806,5 @@ mod tests {
         reset_decode_state();
     }
 
-    #[test]
-    fn missing_ctx_string_and_str_decode() {
-        clear_payload_ctx();
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&2u64.to_le_bytes());
-        payload.extend_from_slice(b"ok");
-
-        let align =
-            core::mem::align_of::<Archived<String>>().max(core::mem::align_of::<Archived<&str>>());
-        let archive = crate::ArchiveSlice::new(&payload, align).expect("align payload");
-
-        let archived_string = unsafe { &*(archive.as_slice().as_ptr() as *const Archived<String>) };
-        let decoded = String::deserialize(archived_string);
-        assert_eq!(decoded, "ok");
-
-        clear_payload_ctx();
-        let archived_str = unsafe { &*(archive.as_slice().as_ptr() as *const Archived<&str>) };
-        let decoded = <&str as NoritoDeserialize>::deserialize(archived_str);
-        assert_eq!(decoded, "ok");
-    }
-
-    #[test]
-    fn aos_views_reject_oversize_field_len() {
-        reset_decode_state();
-        let _guard = DecodeFlagsGuard::enter_with_hint(0, 0);
-        let overflow = (usize::MAX as u128)
-            .checked_add(1)
-            .and_then(|value| u64::try_from(value).ok())
-            .unwrap_or(16);
-
-        let mut body = Vec::new();
-        body.extend_from_slice(&1u64.to_le_bytes());
-        body.push(crate::aos::AOS_FORMAT_VERSION);
-        body.extend_from_slice(&1u64.to_le_bytes());
-        body.extend_from_slice(&overflow.to_le_bytes());
-
-        let result = crate::columnar::view_aos_u64_str_bool(&body);
-        assert!(matches!(result, Err(Error::LengthMismatch)));
-    }
+    include!("core/core_tail_tests.rs");
 }

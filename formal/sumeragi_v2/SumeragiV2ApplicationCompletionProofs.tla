@@ -23,11 +23,12 @@ Two temporal facts are not present in those imported layers.  There is no
 theorem taking one exact active certified request through retransmission,
 packet admission, an applied archive server, and the route-neutral
 authenticated response into its exact FetchCertifiedBody owner.  There is
-also no unconditional global Stage-2 theorem which may erase checked InstallTC
-generation exhaustion.  `AsyncLiveSpecAt` is exactly `AsyncSpecAt`;
-`AsyncInstallGenerationBudget` is diagnostic only and supplies no temporal
-premise.  The Decision-local theorem instead excludes exhaustion for its exact
-node from the durable Decision source itself.
+also no finite-counter liveness premise: `AsyncLiveSpecAt` is exactly
+`AsyncSpecAt`, whose live generation domain is `Nat`.
+`AsyncInstallGenerationBudget` is diagnostic only for bounded TLC instances.
+Production physical nonexhaustion is derived from strict same-view
+Prepare-rank ascent; the Decision-local theorem below retains the corresponding
+finite-model safety specialization without supplying a temporal premise.
 
 `ExactDecisionStageServiceProperty` below is therefore the smallest exact
 missing temporal lemma.  It starts only after the already-proved source
@@ -90,12 +91,11 @@ BY ExactDecisionSourceProjectsPostGstServiceStage, Isa
        ExactDecisionServiceSource
 
 (***************************************************************************
-The generic Stage-2 budget is stronger than this pipeline needs.  A current
-durable Decision excludes a pending InstallTC at the same node, so an exact
-Decision owner can never be blocked by local generation exhaustion.  What is
-missing is the temporal Stage-2 specialization which threads this local fact
-through the existing Busy-owner rank; the model does not need or justify
-assuming the budget for unrelated validators.
+In a bounded diagnostic instance, a current durable Decision excludes a
+pending InstallTC at the same node, so an exact Decision owner cannot reach the
+checked boundary.  The theorem is a local safety specialization used through
+the existing Busy-owner rank; it is not a finite-counter liveness assumption
+for unrelated validators.
 ***************************************************************************)
 
 THEOREM ExactDecisionSourceExcludesLocalInstallExhaustion ==

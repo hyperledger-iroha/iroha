@@ -10,11 +10,33 @@ if (($#)); then
   exit 2
 fi
 
+readonly TLA2TOOLS_VERSION="1.7.4"
+readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/1.7.4/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
 readonly MODULE="SumeragiV2InFlightFirstRelease.tla"
-[[ -f "$TLA2TOOLS_JAR" ]] || { echo "missing TLA2Tools jar: $TLA2TOOLS_JAR" >&2; exit 1; }
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+[[ -f "$TLA2TOOLS_JAR" ]] || {
+  echo "pinned TLA2Tools v${TLA2TOOLS_VERSION} is required at ${TLA2TOOLS_JAR}" >&2
+  exit 1
+}
+actual_sha256="$(hash_file "$TLA2TOOLS_JAR")"
+[[ "$actual_sha256" == "$TLA2TOOLS_SHA256" ]] || {
+  echo "TLA2Tools checksum mismatch" >&2
+  echo "expected: ${TLA2TOOLS_SHA256}" >&2
+  echo "actual:   ${actual_sha256}" >&2
+  exit 1
+}
 
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java="${REPO_ROOT}/scripts/formal/resolve_java.sh"
@@ -30,9 +52,14 @@ common=("$JAVA_BIN" -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC -cleanup -w
 
 run_positive() {
   local log="$run_dir/fixed.log"
+  local status
+  set +e
   (cd "$FORMAL_DIR" && "${common[@]}" -metadir "$run_dir/fixed" \
     -config inflight_first_release_fixed.cfg "$MODULE") >"$log" 2>&1
+  status=$?
+  set -e
   cat "$log"
+  sumeragi_v2_tlc_assert_fixed_success "first-release-fixed" "$log" "$status"
   grep -Fqx "Model checking completed. No error has been found." "$log" || {
     echo "first-release fixed model did not complete successfully" >&2; exit 1; }
   echo "[tlc] first-release fixed: no bounded safety counterexample"
@@ -42,16 +69,34 @@ run_mutant() {
   local config="$1"
   local invariant="$2"
   local log="$run_dir/${config}.log"
+  local invariant_marker="Error: Invariant ${invariant} is violated."
+  local primary_diagnostic_count
   set +e
   (cd "$FORMAL_DIR" && "${common[@]}" -metadir "$run_dir/${config}" \
     -config "$config" "$MODULE") >"$log" 2>&1
   local status=$?
   set -e
-  if [[ "$status" -ne 12 ]] || ! grep -Fq "Invariant ${invariant} is violated." "$log"; then
+  if [[ "$status" -ne 12 ]]; then
     cat "$log" >&2
     echo "${config} did not produce ${invariant}" >&2
     exit 1
   fi
+  sumeragi_v2_tlc_assert_nonzero_state_space "$config" "$log"
+  sumeragi_v2_tlc_assert_exact_line \
+    "$config" "$log" "$invariant_marker"
+  sumeragi_v2_tlc_assert_exact_line \
+    "$config" "$log" "Error: The behavior up to this point is:"
+  primary_diagnostic_count="$(
+    grep -Ec \
+      "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" \
+      "$log" || true
+  )"
+  [[ "$primary_diagnostic_count" -eq 1 ]] || {
+    cat "$log" >&2
+    echo "${config} emitted ${primary_diagnostic_count} primary failure diagnostics" >&2
+    exit 1
+  }
+  sumeragi_v2_tlc_assert_terminal "$config" "$log"
   echo "[tlc] first-release mutation ${config}: ${invariant}"
 }
 

@@ -1122,12 +1122,21 @@ required_production_liveness_tests=(
   sumeragi::v2_core::reducer::source_link_tests::enter_view_effect_cannot_substitute_an_equal_reference_certificate
   sumeragi::authoritative_runtime_gate_tests::anonymous_and_authenticated_non_validator_sources_use_distinct_bounded_lanes
   sumeragi::evidence::tests::sumeragi_v2_equivocation_authenticates_vote_origin_and_execution
+  sumeragi::serviced_candidate_store::tests::leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots
   sumeragi::authoritative_runtime_gate_tests::byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_turns
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_completion_bound_overflow_fails_closed
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_completion_corridor_survives_ordinary_progress_and_timeout_saturation
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_completion_owner_is_source_isolated_and_queue_scoped
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_coalesces_semantic_request_and_attaches_independent_routes
   sumeragi::authoritative_runtime_gate_tests::alternate_reply_route_attaches_before_authenticated_source_lane_cap
+  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_required_serve_gate_precedes_open
+  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve
+  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn
+  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes
+  sumeragi::authoritative_runtime_gate_tests::restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire
+  sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_freezes_the_current_physical_source_prefix
+  sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_stays_behind_an_earlier_certified_request_carrier
+  sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance
@@ -1377,6 +1386,9 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::pending_work_producer_inventory_is_exhaustive_and_source_linked
   sumeragi::v2_effects::tests::reconciled_decision_rejects_same_round_subject_commitment_drift
   sumeragi::v2_effects::tests::runtime_step_dispatches_entire_effect_batch_before_returning
+  sumeragi::v2_effects::tests::effect_dispatch_consumes_leader_wire_terminal_created_while_batch_drains
+  sumeragi::v2_effects::tests::retained_live_retry_consumes_decision_retirement_terminal_same_cycle
+  sumeragi::v2_effects::tests::retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle
   sumeragi::v2_effects::tests::live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks
   sumeragi::v2_effects::tests::recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks
   sumeragi::v2_effects::tests::owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work_nonfatal
@@ -1461,6 +1473,10 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::progress_cursor_decision_preserves_outer_ingress_completion_until_apply
   sumeragi::v2_runtime::tests::decision_cleanup_preserves_unique_busy_deferred_completion
   sumeragi::v2_runtime::tests::decision_commitment_mismatch_fails_closed_before_retirement
+  sumeragi::v2_runtime::tests::decision_retirement_releases_queued_leader_wire_runtime_owner
+  sumeragi::v2_runtime::tests::lock_retirement_releases_busy_deferred_leader_wire_runtime_owner
+  sumeragi::v2_runtime::tests::production_authenticated_preflight_is_never_semantic_only_coalesce
+  sumeragi::v2_runtime::tests::semantic_only_authenticated_coalesce_fails_before_receipt_registration
   sumeragi::v2_runtime::tests::successor_activation_snapshot_requires_armed_live_clocks
   sumeragi::v2_runtime::tests::production_ingress_pop_uses_shared_selector_for_every_ready_mask
   sumeragi::v2_runtime::tests::network_admission_uses_exact_normal_and_progress_reservations
@@ -1477,11 +1493,21 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::runtime_merges_alternate_sources_for_one_semantic_request
   sumeragi::v2_runtime::tests::runtime_keeps_identical_wire_requests_from_distinct_semantic_origins_independent
   sumeragi::v2_runtime::tests::busy_deferred_request_merges_alternate_source_and_services_exact_carrier
+  sumeragi::v2_runtime::tests::busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation
+  sumeragi::v2_runtime::tests::dormant_local_fifo_metadata_rejects_wrong_stage_ordinal_and_capacity
+  sumeragi::v2_runtime::tests::later_same_semantic_fair_retry_retains_runtime_lifecycle_root
+  sumeragi::v2_runtime::tests::network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals
+  sumeragi::v2_runtime::tests::older_frozen_aggregate_carrier_rebases_queued_runtime_minimum
+  sumeragi::v2_runtime::tests::ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it
+  sumeragi::v2_runtime::tests::preassigned_batch_lifecycles_require_shared_mint_and_exact_root
+  sumeragi::v2_runtime::tests::restart_dormant_completion_batch_atomically_replaces_latent_slots
+  sumeragi::v2_runtime::tests::restart_dormant_local_fifo_reservation_survives_full_class_churn
   sumeragi::v2_transport::tests::reproposal_commit_qc_authenticates_its_exact_same_round_body
   sumeragi::v2_recovery::tests::all_hash_only_snapshot_recovers_exact_authenticated_successor
   sumeragi::v2_recovery::tests::finalized_tip_derives_one_idempotent_successor_context
   sumeragi::v2_recovery::tests::successor_rejects_foreign_same_height_predecessor_and_mismatched_receipt
   sumeragi::v2_runner::tests::same_tag_higher_lock_retires_all_local_proposal_owners
+  sumeragi::v2_runner::tests::fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry
   sumeragi::v2_runner::tests::reserved_lane_output_bypasses_unserviceable_head_without_losing_owner
   sumeragi::v2_runner::tests::runner_dispatch_preserves_durable_lane_certificate_reply_routes
   sumeragi::v2_runner::tests::runner_dispatch_preserves_certified_sidecar_chunk_reply_routes
@@ -1513,6 +1539,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::direct_close_ack_retains_reply_route_from_lane_through_worker
   sumeragi::v2_runner::tests::empty_drain_after_peek_is_restart_required_without_panicking
   sumeragi::v2_runner::tests::relayed_generation_hint_preserves_reply_route_from_lane_through_worker
+  sumeragi::v2_runner::tests::deferred_startup_producer_turn_is_retained_until_one_exclusive_claim
   sumeragi::v2_worker::tests::fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner
   sumeragi::v2_worker::tests::entered_view_accepts_same_view_higher_generation_supersession
   sumeragi::v2_worker::tests::invalid_fetch_consumer_rebind_fails_closed_without_consuming_owner
@@ -1535,6 +1562,47 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::auxiliary_completion_drain_is_batch_bounded
   sumeragi::v2_worker::tests::actor_backpressure_retains_exact_final_lane_commit_qc_post
   sumeragi::v2_worker::tests::actor_backpressure_retains_complete_merge_share_fanout
+  sumeragi::v2_worker::tests::exact_serve_predecessor_episode_services_older_local_without_admitting_later_io
+  sumeragi::v2_worker::tests::repeated_exact_serve_claims_close_all_older_sources_before_later_io
+  sumeragi::v2_worker::tests::exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
+  sumeragi::v2_worker::tests::fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers
+  sumeragi::v2_worker::tests::drained_exact_retransmission_gets_fresh_scheduler_ordinal
+  sumeragi::v2_worker::tests::fair_ingress_gate_overflow_closes_without_partial_admission
+  sumeragi::v2_worker::tests::fair_ingress_classifies_current_historical_future_and_unauthenticated_requests
+  sumeragi::v2_worker::tests::fair_ingress_rollover_retires_ticket_before_old_service_teardown
+  sumeragi::v2_worker::tests::selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle
+  sumeragi::v2_worker::tests::checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal
+  sumeragi::v2_worker::tests::dormant_exact_head_reattaches_after_saturated_fair_prefix_and_drains_frozen_predecessor
+  sumeragi::v2_worker::tests::dormant_serve_waiters_reattach_strictly_by_durable_scheduler_ordinal
+  sumeragi::v2_worker::tests::durable_raw_admission_restart_reuses_lifecycle_and_excludes_family_replacement
+  sumeragi::v2_worker::tests::durable_raw_higher_view_drop_retains_admitted_owner_and_displaced_terminal
+  sumeragi::v2_worker::tests::durable_raw_waiter_rejects_mutated_logical_lineage
+  sumeragi::v2_worker::tests::durable_serve_state_v4_rejects_v3_header_and_payload_layouts
+  sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity
+  sumeragi::v2_worker::tests::raw_admission_persistence_failure_rolls_back_logical_lineage
+  sumeragi::v2_worker::tests::fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission
+  sumeragi::v2_worker::tests::fair_ingress_full_prefix_materializes_exact_serve_before_later_churn
+  sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack
+  sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection
+  sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission
+  sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle
+  sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source
+  sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_retry_only_without_runnable_work
+  sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay
+  sumeragi::v2_worker::tests::durable_serve_seal_survives_post_before_physical_ack
+  sumeragi::v2_worker::tests::durable_serve_corruption_fails_closed_without_highwater_reset
+  sumeragi::v2_worker::tests::durable_serve_frame_bound_covers_max_layout_manifest_hashes
+  sumeragi::v2_worker::tests::durable_higher_view_abort_republishes_displaced_terminal_before_restart
+  sumeragi::v2_worker::tests::durable_higher_view_admission_crash_retains_lower_terminal_family
+  sumeragi::v2_worker::tests::durable_serve_restore_rejects_capacity_owner_swap_across_replacement
+  sumeragi::v2_worker::tests::durable_serve_state_is_pruned_only_with_successor_rollover_root
+  sumeragi::v2_worker::tests::certified_serve_future_slot_blocks_control_and_consensus_replenishment
+  sumeragi::v2_worker::tests::certified_serve_cross_relay_retry_replays_one_terminal_tombstone
+  sumeragi::v2_worker::tests::certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_owner
+  sumeragi::v2_worker::tests::certified_serve_observer_owner_contains_prepare_and_commit_subfamilies
+  sumeragi::v2_worker::tests::certified_serve_higher_view_abort_restores_terminal_high_watermark
+  sumeragi::v2_worker::tests::certified_serve_receiver_close_aborts_reserved_replacement_without_orphan
+  sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect
   sumeragi::v2_worker::tests::certified_serve_receiver_close_rolls_back_pending_capacity_replacement
   sumeragi::v2_worker::tests::certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement
   sumeragi::v2_worker::tests::certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement
@@ -1770,7 +1838,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=738
+readonly expected_production_liveness_test_count=806
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1792,7 +1860,7 @@ production_data_model_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# thirty-eight-module pre-network inventory.
+# thirty-nine-module pre-network inventory.
 production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
@@ -1870,7 +1938,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 738-test liveness inventory above. The later
+# not belong to the canonical 806-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2543,9 +2611,9 @@ if ! grep -Fqx -- \
   exit 1
 fi
 
-readonly expected_typed_rollover_formal_mutation_count=43
+readonly expected_typed_rollover_formal_mutation_count=45
 observed_typed_rollover_formal_mutation_count="$(
-  grep -Ec '^  "[a-z0-9-]+\|typed_rollover_handoff_[a-z0-9_]+_bug[.]cfg\|12\|\$\{INVARIANT_MARKER\}"$|^run_case repeated-handoff-after-restart-restore \\$' \
+  grep -Ec '^  "[a-z0-9-]+\|typed_rollover_handoff_[a-z0-9_]+_bug[.]cfg\|(12|13)\|\$\{(INVARIANT|TEMPORAL)_MARKER\}"$|^run_case repeated-handoff-after-restart-restore \\$' \
     scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh
 )"
 if ((observed_typed_rollover_formal_mutation_count
@@ -2554,9 +2622,9 @@ if ((observed_typed_rollover_formal_mutation_count
   exit 1
 fi
 if ! grep -Fqx -- \
-  'echo "[tlc] typed rollover-handoff fixed model and 43-mutant root-anchored V3 matrix passed"' \
+  'echo "[tlc] typed rollover-handoff repaired models and 45-mutant root-anchored V3 matrix passed"' \
   scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh; then
-  echo "typed rollover mutation runner lacks the exact 43-mutation completion contract" >&2
+  echo "typed rollover mutation runner lacks the exact 45-mutation completion contract" >&2
   exit 1
 fi
 
@@ -2571,6 +2639,7 @@ production_liveness_modules=(
   sumeragi::v2_core::wal::byte_lifecycle_tests
   sumeragi::v2_core::reducer::source_link_tests
   sumeragi::evidence::tests
+  sumeragi::serviced_candidate_store::tests
   sumeragi::v2::tests
   sumeragi::v2_body_store::tests
   sumeragi::v2_block_sync::tests
@@ -2611,6 +2680,7 @@ production_liveness_leg_ids=(
   production-v2-core-wal
   production-v2-core-source-link
   production-v2-equivocation-evidence
+  production-v2-leader-wire-lifecycle-store
   production-v2-adapter
   production-v2-body-store
   production-v2-block-sync
@@ -3188,15 +3258,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 proof_fidelity_pass_summary="$(
-  grep -Ec '^1728 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^1730 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 1728 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 1730 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 1728 \
+  preflight-proof-fidelity pytest 1730 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3212,15 +3282,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 formal_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 formal_launcher_pass_summary="$(
-  grep -Ec '^24 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$formal_launcher_contract_log" || true
+  grep -Ec '^26 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$formal_launcher_contract_log" || true
 )"
 if ((formal_launcher_pipeline_status[0] != 0 || formal_launcher_pipeline_status[1] != 0)) \
   || [[ "$formal_launcher_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 formal-launcher contract preflight did not run exactly 24 passing tests (pytest=${formal_launcher_pipeline_status[0]}, tee=${formal_launcher_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 formal-launcher contract preflight did not run exactly 26 passing tests (pytest=${formal_launcher_pipeline_status[0]}, tee=${formal_launcher_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-formal-launcher pytest 24 \
+  preflight-formal-launcher pytest 26 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${formal_launcher_contract_files[*]}" \
   "$formal_launcher_contract_log" \
   "${formal_launcher_pipeline_status[0]}" "${formal_launcher_pipeline_status[1]}"
@@ -3269,11 +3339,11 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 38 production modules + 9 G-UNIT groups + 2 data-model contracts
+  # 39 production modules + 9 G-UNIT groups + 2 data-model contracts
   # + 5 Taira contracts + 1 cross-SDK Rust leg + 1 Native AMX fixture check
   # + 6 grouped SDK parity legs + 2 status SDK legs + 11 contract preflights
   # + 6 final workspace-verification legs.
-  readonly expected_corridor_leg_count=81
+  readonly expected_corridor_leg_count=82
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1

@@ -1235,12 +1235,12 @@ Responsive historical body-existence witness.
 
 The requester is only required to be a typed validator.  It need not belong
 to `AsyncCurrentResponsiveVoters`.  This lemma uses quorum intersection only
-to prove that at least one responsive node durably holds the exact body: an
-honest CommitQC signer retained the body backing its intent.  It is not a
-response-authority restriction.  Any authenticated applied archive in the
-frozen roster may serve the exact hash-bound request, whether or not that
-archive signed the CommitQC.  The requester's missing local body proves that
-the particular existence witness selected here is a different node.
+to prove the exact V5 service authority: at least one responsive CommitQC
+signer durably holds the body backing its honest intent.  Full frozen-roster
+fanout ensures that this signer receives the request; a routed non-signer
+terminalizes `LocalRetentionAuthorityAbsent` and never signs a response.  The
+requester's missing local body proves that the selected signer is a different
+node.
 ***************************************************************************)
 
 THEOREM HistoricalDecisionRecoveryCertificateHasResponsiveRemoteBodySource ==
@@ -1343,10 +1343,10 @@ This source differs from `ExactDecisionServiceSource` only in executor
 ownership: the requester is the exact historical target and need not be a
 member of the frozen responsive voter set.  For this existence proof the
 serving archive selected below is the responsive CommitQC signer whose body
-retention follows from honest-intent soundness.  That witness choice does not
-narrow production authority: a different authenticated frozen-roster applied
-archive may answer the same exact request.  The requester consumes the
-response through its historical runner.
+retention follows from honest-intent soundness.  V5 response authority is
+exactly that signer/body intersection; other frozen-roster recipients close
+their local lifecycle with a typed negative.  The requester consumes the
+signer's response through its historical runner.
 ***************************************************************************)
 
 HistoricalExactDecisionServiceSource(node, qc) ==
@@ -3311,7 +3311,11 @@ PROOF
 (***************************************************************************
 Exact residual inventory.
 
-No theorem in this module asserts any operator in the inventory below.
+This generic one-height module deliberately declares the exact transport
+interfaces without importing product fairness.  The direct indexed product
+module `SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs` now
+instantiates every item below from fixed packet-action, historical-target
+runner, historical-server runner, and ordinary archive-I/O fairness.
 
   1. `HistoricalCommitArchiveRouteAvailabilityProperty` is a chain/Async
      refinement seam.  `HistoricalRecoverySourceReady` supplies an applied
@@ -3354,10 +3358,10 @@ No theorem in this module asserts any operator in the inventory below.
      transport leaves belongs to the separate historical-target reducer
      theorem; it is not archive transport fairness.
 
-TODO: instantiate these exact residual kernels from the direct indexed
-packet, historical-target runner, historical-server runner, and ordinary
-archive-I/O fairness clauses.  Do not replace them with aggregate
-target-to-Decision, all-responsive-joined, or application-liveness premises.
+The indexed instantiation retains exact context, request, certificate,
+subject, recipient, source, and lifecycle identities.  These declarations
+must not be replaced with aggregate target-to-Decision, all-responsive-joined,
+or application-liveness premises.
 ***************************************************************************)
 
 HistoricalCommitTransportResidualKernels(specification) ==

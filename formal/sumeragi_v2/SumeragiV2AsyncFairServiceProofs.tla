@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncFairServiceProofs ----
-EXTENDS SumeragiV2AsyncRecoveryVoteEpochProofs
+EXTENDS SumeragiV2AsyncRecoveryVoteEpochContinuationProofs
 
 THEOREM VoteDeliveryConsumesCurrentPoolEpoch ==
   \A envelope:
@@ -2331,6 +2331,7 @@ THEOREM EnabledLocalServeSchedulerLiftsToRunNode ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ RecoveryRunNodeGuard(node)
+    /\ ~AsyncCandidateProducerContinuationResolutionRequired(node)
     /\ ENABLED LocalServeSchedulerStep(node)
     => ENABLED RunNode(node)
 PROOF
@@ -2338,6 +2339,7 @@ PROOF
                 /\ node \in up
                 /\ ~NodeHasApplication(node)
                 /\ RecoveryRunNodeGuard(node)
+                /\ ~AsyncCandidateProducerContinuationResolutionRequired(node)
                 /\ ENABLED LocalServeSchedulerStep(node)
          PROVE ENABLED RunNode(node)
     <2>1. ENABLED LocalRunNodeStep(node)
@@ -2380,6 +2382,7 @@ THEOREM EnabledIngressDrainLiftsToRunNode ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ RecoveryRunNodeGuard(node)
+    /\ ~AsyncCandidateProducerContinuationResolutionRequired(node)
     /\ ENABLED IngressDrainStep(node)
     => ENABLED RunNode(node)
 PROOF
@@ -2387,6 +2390,7 @@ PROOF
                 /\ node \in up
                 /\ ~NodeHasApplication(node)
                 /\ RecoveryRunNodeGuard(node)
+                /\ ~AsyncCandidateProducerContinuationResolutionRequired(node)
                 /\ ENABLED IngressDrainStep(node)
          PROVE ENABLED RunNode(node)
     <2>1. ENABLED IngressRunNodeStep(node)
@@ -2417,6 +2421,7 @@ THEOREM EnabledRuntimeServeSchedulerLiftsToRunNode ==
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ RecoveryRunNodeGuard(node)
+    /\ ~AsyncCandidateProducerContinuationResolutionRequired(node)
     /\ ENABLED RuntimeServeSchedulerStep(node)
     => ENABLED RunNode(node)
 PROOF
@@ -2424,6 +2429,7 @@ PROOF
                 /\ node \in up
                 /\ ~NodeHasApplication(node)
                 /\ RecoveryRunNodeGuard(node)
+                /\ ~AsyncCandidateProducerContinuationResolutionRequired(node)
                 /\ ENABLED RuntimeServeSchedulerStep(node)
          PROVE ENABLED RunNode(node)
     <2>1. ENABLED RuntimeServeSchedulerRunNodeStep(node)
@@ -2489,20 +2495,30 @@ PROOF
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
 
-THEOREM ResponsiveUnappliedRunNodeIsEnabled ==
+ResponsiveRunNodeBlockedOnExternalContinuation(node) ==
+  /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionReady(node)
+  /\ (AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(node))
+       .sourceClass \in {"ConditionalTransport", "VolatileBody"}
+
+THEOREM ResponsiveUnappliedRunNodeEnabledOrAwaitsExternalContinuation ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncTypeInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ RecoveryRunNodeGuard(node)
-    => ENABLED RunNode(node)
+    => \/ ENABLED RunNode(node)
+       \/ ResponsiveRunNodeBlockedOnExternalContinuation(node)
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 /\ AsyncTypeInvariant
+                /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
                 /\ node \in up
                 /\ ~NodeHasApplication(node)
                 /\ RecoveryRunNodeGuard(node)
-         PROVE ENABLED RunNode(node)
+         PROVE \/ ENABLED RunNode(node)
+                \/ ResponsiveRunNodeBlockedOnExternalContinuation(node)
     <2>1. node \in ValidatorIds
       BY <1>1, AsyncCurrentResponsiveVotersAreValidators
          DEF AsyncTypeInvariant
@@ -2511,23 +2527,125 @@ PROOF
       BY <1>1, <2>1
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
-    <2>3. CASE asyncRunnerPhase[node] = "Local"
+    <2>3. CASE
+              AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+      <3>1. CASE
+                AsyncCandidateProducerContinuationRunnerResolutionReady(node)
+        BY <1>1, <2>1, <2>3, <3>1,
+           AutoUSE, ExpandENABLED, IsaT(300)
+           DEF RunNode, RunNodeWork,
+               ResolveRunNodeCandidateProducerContinuation,
+               AsyncSchedulerExceptCausalControlAndNodeService,
+               AsyncAllVars, AsyncSchedulerVars,
+               AsyncIoVars, AsyncDeferredVars,
+               AsyncLocalAdmissionVars, vars
+      <3>2. CASE
+                /\ ~AsyncCandidateProducerContinuationRunnerResolutionReady(
+                     node)
+                /\ (AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(
+                       node)).sourceClass = "Local"
+        BY <1>1, <2>1, <2>2, <2>3, <3>2,
+           AsyncCandidateProducerContinuationSelectedLocalReplayHasReservedCapacity,
+           AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum,
+           AutoUSE, ExpandENABLED, IsaT(900)
+           DEF RunNode, RunNodeWork,
+               ReplayRunNodeCandidateProducerContinuation,
+               AsyncCandidateProducerContinuationExactLocalReplayStep,
+               AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+               AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+               AsyncCandidateProducerContinuationSelectedReplayRecord,
+               AsyncCandidateProducerContinuationExactReplayIdentity,
+               AsyncCandidateProducerContinuationSelectedLocalCandidate,
+               AsyncCandidateProducerContinuationRuntimeReplayCarrier,
+               AsyncCandidateProducerContinuationRunnerResolutionRequired,
+               AsyncCandidateProducerContinuationRunnerResolutionReady,
+               AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+               AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
+               AsyncCandidateProducerContinuationRunnerMayPrecedeIngress,
+               AsyncCandidateProducerContinuationResolutionRecordsForNode,
+               AsyncCandidateProducerContinuations,
+               AsyncCandidateProducerContinuationRecordSet,
+               AsyncCandidateProducerContinuationRecord,
+               EnqueueCandidate,
+               AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+               AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+               AsyncAllVars, AsyncSchedulerVars,
+               AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
+               AsyncConfiguration, vars
+      <3>3. CASE
+                /\ ~AsyncCandidateProducerContinuationRunnerResolutionReady(
+                     node)
+                /\ (AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(
+                       node)).sourceClass
+                     \in {"ConditionalTransport", "VolatileBody"}
+        BY <2>3, <3>3
+           DEF ResponsiveRunNodeBlockedOnExternalContinuation
+      <3> QED BY <1>1, <2>1, <2>3, <3>1, <3>2, <3>3, Isa
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncControlServiceStateTypeInvariant,
+               AsyncCandidateProducerContinuationRunnerResolutionRequired,
+               AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+               AsyncCandidateProducerContinuationRunnerMayPrecedeIngress,
+               AsyncCandidateProducerContinuationResolutionRecordsForNode,
+               AsyncCandidateProducerContinuationRecordSet,
+               AsyncCandidateProducerContinuationRecord,
+               AsyncCandidateProducerContinuationSourceClasses
+    <2>4. CASE
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node)
+              /\ asyncRunnerPhase[node] = "Local"
       <3>1. ENABLED LocalServeSchedulerStep(node)
-        BY <2>1, <2>3, LocalServeSchedulerStepIsEnabled
-      <3> QED BY <1>1, <3>1,
+        BY <2>1, <2>4, LocalServeSchedulerStepIsEnabled
+      <3> QED BY <1>1, <2>4, <3>1,
            EnabledLocalServeSchedulerLiftsToRunNode
-    <2>4. CASE asyncRunnerPhase[node] = "Ingress"
+    <2>5. CASE
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node)
+              /\ asyncRunnerPhase[node] = "Ingress"
       <3>1. ENABLED IngressDrainStep(node)
-        BY <2>1, <2>4, IngressDrainStepIsEnabled
-      <3> QED BY <1>1, <3>1,
+        BY <2>1, <2>5, IngressDrainStepIsEnabled
+      <3> QED BY <1>1, <2>5, <3>1,
            EnabledIngressDrainLiftsToRunNode
-    <2>5. CASE asyncRunnerPhase[node] = "Runtime"
+    <2>6. CASE
+              /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                   node)
+              /\ asyncRunnerPhase[node] = "Runtime"
       <3>1. ENABLED RuntimeServeSchedulerStep(node)
-        BY <2>1, <2>5, RuntimeServeSchedulerStepIsEnabled
-      <3> QED BY <1>1, <3>1,
+        BY <2>1, <2>6, RuntimeServeSchedulerStepIsEnabled
+      <3> QED BY <1>1, <2>6, <3>1,
            EnabledRuntimeServeSchedulerLiftsToRunNode
-    <2> QED BY <2>2, <2>3, <2>4, <2>5
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6
   <1> QED BY <1>1
+
+THEOREM ResponsiveExternalContinuationSelectionIsReady ==
+  \A node \in ValidatorIds:
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
+    /\ (AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord(node))
+         .sourceClass \in {"ConditionalTransport", "VolatileBody"}
+      => AsyncCandidateProducerContinuationRunnerResolutionReady(node)
+BY Isa
+   DEF AsyncCandidateProducerContinuationExternalCoverageInvariant,
+       AsyncCandidateProducerContinuationRunnerResolutionReady,
+       AsyncCandidateProducerContinuationRunnerResolutionRequired,
+       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationRunnerSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationRunnerMayPrecedeIngress,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationDurableTerminal
+
+THEOREM ResponsiveUnappliedRunNodeIsEnabled ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ node \in up
+    /\ ~NodeHasApplication(node)
+    /\ RecoveryRunNodeGuard(node)
+    => ENABLED RunNode(node)
+BY ResponsiveUnappliedRunNodeEnabledOrAwaitsExternalContinuation,
+   ResponsiveExternalContinuationSelectionIsReady, Isa
+   DEF ResponsiveRunNodeBlockedOnExternalContinuation
 
 THEOREM AppliedNodeHasDecision ==
   \A node \in ValidatorIds:
@@ -2576,11 +2694,15 @@ PROOF
 
 THEOREM UndecidedResponsiveStateEnablesSchedulerAction ==
   /\ AsyncStrongTypeInvariant
+  /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+  /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
   /\ gst
   /\ ~ResponsiveNodesDecide
   => PostGstSchedulerActionEnabled
 PROOF
   <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncCandidateProducerContinuationExternalCoverageInvariant,
+              AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
               gst,
               ~ResponsiveNodesDecide
          PROVE PostGstSchedulerActionEnabled
@@ -2607,7 +2729,7 @@ PROOF
     <2>8. RecoveryRunNodeGuard(node)
       BY <2>7 DEF RecoveryRunNodeGuard
     <2>9. ENABLED RunNode(node)
-      BY <2>1, <2>3, <2>4, <2>6, <2>8,
+      BY <1>1, <2>1, <2>3, <2>4, <2>6, <2>8,
          ResponsiveUnappliedRunNodeIsEnabled
     <2>10. ENABLED PostGstRunNode(node)
       BY <1>1, <2>1, <2>9, EnabledRunNodeLiftsPostGst
@@ -3116,6 +3238,24 @@ PROOF
              CandidateScheduled, QueuedCandidates, DeferredCandidates,
              CausalCandidates, TrackedWorkCandidates,
              RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+             ResolveRunNodeCandidateProducerContinuation,
+             ReplayRunNodeCandidateProducerContinuation,
+             AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+             AsyncCandidateProducerContinuationExactReplayIdentity,
+             AsyncCandidateProducerContinuationSelectedLocalCandidate,
+             AsyncCandidateProducerContinuationSelectedRuntimeCandidate,
+             AsyncCandidateProducerContinuationSelectedReplayRecord,
+             AsyncCandidateProducerContinuationSelectedResolutionRecord,
+             AsyncCandidateProducerContinuationResolutionRequired,
+             AsyncCandidateProducerContinuationResolutionRecordsForNode,
+             ResponsiveReplayQuarantined,
+             AsyncSchedulerExceptCausalControlAndNodeService,
+             AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+             AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+             AsyncIoTimeoutLifecycleRetirementTransition,
+             EnqueueCandidate,
              SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
              DeferredDrainStep, DeferredTagStep, DirectTimeoutStep,
              DirectRetransmitStep, IdleRuntimeStep,
@@ -3137,6 +3277,24 @@ PROOF
              RestartLockedCommitIntents, NodeHasDecision,
              AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
              RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+             ResolveRunNodeCandidateProducerContinuation,
+             ReplayRunNodeCandidateProducerContinuation,
+             AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+             AsyncCandidateProducerContinuationExactReplayIdentity,
+             AsyncCandidateProducerContinuationSelectedLocalCandidate,
+             AsyncCandidateProducerContinuationSelectedRuntimeCandidate,
+             AsyncCandidateProducerContinuationSelectedReplayRecord,
+             AsyncCandidateProducerContinuationSelectedResolutionRecord,
+             AsyncCandidateProducerContinuationResolutionRequired,
+             AsyncCandidateProducerContinuationResolutionRecordsForNode,
+             ResponsiveReplayQuarantined,
+             AsyncSchedulerExceptCausalControlAndNodeService,
+             AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+             AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+             AsyncIoTimeoutLifecycleRetirementTransition,
+             EnqueueCandidate,
              SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
              DeferredDrainStep, DeferredTagStep, DirectTimeoutStep,
              DirectRetransmitStep, IdleRuntimeStep,
@@ -3356,15 +3514,20 @@ PROOF
 
 THEOREM ResponsiveReplayRunNodeEnabledWhileReplaying ==
   /\ AsyncStrongTypeInvariant
+  /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
   /\ AsyncRecoveryReplayingPending
   /\ ~NodeIdle(asyncRecoveryNode)
   => ENABLED <<ResponsiveReplayRunNode>>_AsyncAllVars
-BY ResponsiveUnappliedRunNodeIsEnabled, ExpandENABLED, Isa
+BY ResponsiveUnappliedRunNodeEnabledOrAwaitsExternalContinuation,
+   ExpandENABLED, Isa
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        AsyncRecoveryExecutionInvariant,
        AsyncRecoveryReplayingPending, ResponsiveReplayRunNode,
        RecoveryRunNodeGuard,
        ResponsiveReplayQuarantined, ResponsiveReplayDraining,
+       ResponsiveRunNodeBlockedOnExternalContinuation,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
        RunNode, RunNodeWork, AsyncAllVars,
        AsyncRecoveryVars
 
@@ -3449,6 +3612,9 @@ PROOF
                        ~> AsyncRecoveryRecoveredReady)
     <2>1. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
       BY AsyncSpecAlwaysStrongTypeInvariant
+    <2>1b. AsyncSpecAt(initialContext)
+               => []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      BY AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
     <2>1a. AsyncSpecAt(initialContext)
               => []ReplayTailCommitReadyInvariant
       BY ReplayTailCommitReadyInvariantObligation
@@ -3459,6 +3625,7 @@ PROOF
                \/ AsyncRecoveryRecoveredReady'
       BY AsyncRecoveryReplayingStep
     <2>3. /\ AsyncStrongTypeInvariant
+           /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
            /\ AsyncRecoveryReplayingPending
            /\ ~NodeIdle(asyncRecoveryNode)
           => ENABLED <<ResponsiveReplayRunNode>>_AsyncAllVars
@@ -3494,7 +3661,7 @@ PROOF
     <2>10. AsyncSpecAt(initialContext)
              => WF_AsyncAllVars(FinishResponsiveReplay)
       BY DEF AsyncSpecAt, AsyncFairnessAt
-    <2> QED BY <2>1, <2>1a, <2>2, <2>3, <2>4, <2>5, <2>6,
+    <2> QED BY <2>1, <2>1a, <2>1b, <2>2, <2>3, <2>4, <2>5, <2>6,
                 <2>7, <2>8, <2>9, <2>10,
                 RestartSignatureReplayProperties, SMTT(60), Isa, PTL
          DEF AsyncSpecAt, AsyncRecoveryReplayingPending,

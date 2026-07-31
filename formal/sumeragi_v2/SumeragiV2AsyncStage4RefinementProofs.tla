@@ -61,8 +61,16 @@ Stage4CapacityServeEpisodeResidual(candidate, position, rank) ==
   /\ AsyncProgressOwnershipInvariant
   /\ ProtectedStage4Pending(candidate, position)
   /\ ~Stage4CapacityProgress(candidate, position, rank)
-  /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
-  /\ asyncRunnerPhase[candidate.node] = "Ingress"
+  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+        /\ asyncRunnerPhase[candidate.node] = "Ingress"
+     \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+          candidate.node)
+
+Stage4CapacityCandidateProducerContinuationReentry(
+    candidate, position, rank) ==
+  /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+  /\ ~AsyncCandidateProducerContinuationRunnerResolutionRequired(
+       candidate.node)
 
 Stage4CapacityFiniteServeEpisodeResidualProperty(specification) ==
   specification
@@ -1469,6 +1477,10 @@ THEOREM Stage4CapacitySameNodeRunProducesOutcome ==
     /\ PostGstRunNode(candidate.node)
     => \/ Stage4CapacityStrictResult(candidate, position, rank)
        \/ Stage4CapacityServeEpisodeResidual(candidate, position, rank)'
+       \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                candidate.node)
+          /\ Stage4CapacityCandidateProducerContinuationReentry(
+               candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW candidate,
                 NEW position,
@@ -1478,8 +1490,43 @@ PROOF
          PROVE \/ Stage4CapacityStrictResult(candidate, position, rank)
                \/ Stage4CapacityServeEpisodeResidual(
                     candidate, position, rank)'
+               \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
+                        candidate.node)
+                  /\ Stage4CapacityCandidateProducerContinuationReentry(
+                       candidate, position, rank)'
     <2>1. RunNode(candidate.node)
       BY <1>1 DEF PostGstRunNode
+    <2>1c. CASE
+              \/ ResolveRunNodeCandidateProducerContinuation(candidate.node)
+              \/ ReplayRunNodeCandidateProducerContinuation(candidate.node)
+      BY <1>1, <2>1c,
+         AsyncBracketNextPreservesStrongTypeInvariant,
+         AsyncBracketNextPreservesProgressOwnership,
+         Stage4CapacityRankInCarrier, HeadTailProperties,
+         SequenceSetAfterAppend, IsaT(900)
+         DEF Stage4CapacityCandidateProducerContinuationReentry,
+             Stage4CapacityStrictResult, Stage4CapacityProgress,
+             Stage4CapacityServeEpisodeResidual,
+             Stage4CapacityBlockedAtRank, Stage4CapacityRank,
+             Stage4CapacityOrdering, Stage4CapacityCarrier,
+             Stage4CapacityGoal, ReadyStage4CausalCapacityBlocked,
+             ProtectedStage4Pending, ReadyStage4Actionable,
+             ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+             ProtectedServiceOwnershipExit,
+             ResponsiveProtectedCandidateOwned,
+             ProtectedCandidateOwned, CandidateServiceRank,
+             ServiceRankLess, CausalCommandCapacityDebt,
+             CausalHeadCommandLimit, ReadyRunAuxRank,
+             ResolveRunNodeCandidateProducerContinuation,
+             ReplayRunNodeCandidateProducerContinuation,
+             AsyncCandidateProducerContinuationExactLocalReplayStep,
+             AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+             AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+             EnqueueCandidate, CandidateScheduled,
+             CandidateInFlight, SequenceSet,
+             AsyncProgressOwnershipInvariant,
+             AsyncLogicalCandidateOwnershipInvariant,
+             AsyncOutstandingCarrierInvariant, AsyncAllVars
     <2>2. CASE LocalAdmissionStep(candidate.node)
       BY <1>1, <2>2, Stage4CapacityLocalAdmissionStrictlyProgresses
     <2>3. CASE IngressDrainStep(candidate.node)
@@ -1493,7 +1540,7 @@ PROOF
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(candidate.node)
       BY <1>1, <2>6,
          Stage4CapacityLocalPredecessorStrictlyProgresses
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+    <2> QED BY <2>1, <2>1c, <2>2, <2>3, <2>4, <2>5, <2>6,
          RunNodeWorkConcreteActionCaseSplit
          DEF RunNode
   <1> QED BY <1>1
@@ -1711,6 +1758,7 @@ PROOF
           BY <1>1, <2>2, <3>1, <4>1,
              Stage4CapacitySameNodeRunProducesOutcome
              DEF Stage4CapacityStepResult, PostGstRunNode,
+                 Stage4CapacityCandidateProducerContinuationReentry,
                  Stage4CapacityBlockedAtRank,
                  ReadyStage4CausalCapacityBlocked,
                  ProtectedStage4Pending, ProtectedOwnedAtServiceRank
@@ -1728,6 +1776,7 @@ PROOF
           BY <1>1, <2>2, <3>3, <4>1,
              Stage4CapacitySameNodeRunProducesOutcome
              DEF Stage4CapacityStepResult, PostGstRunNode,
+                 Stage4CapacityCandidateProducerContinuationReentry,
                  Stage4CapacityBlockedAtRank,
                  ReadyStage4CausalCapacityBlocked,
                  ProtectedStage4Pending, ProtectedOwnedAtServiceRank
@@ -1808,9 +1857,13 @@ PROOF
                             candidate, position, rank))
     <2>1. AsyncSpecAt(initialContext)
              => [](AsyncStrongTypeInvariant
-                    /\ AsyncProgressOwnershipInvariant)
+                    /\ AsyncProgressOwnershipInvariant
+                    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
       BY AsyncSpecAlwaysStrongTypeInvariant,
-         AsyncSpecAlwaysProgressOwnershipInvariant, PTL
+         AsyncSpecAlwaysProgressOwnershipInvariant,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
     <2>2. AsyncSpecAt(initialContext)
              => [](AsyncCurrentResponsiveVoters
                     = AsyncVotersAt(initialContext))
@@ -1822,7 +1875,7 @@ PROOF
                          candidate, position, rank))
             => ENABLED
                  <<PostGstRunNode(candidate.node)>>_AsyncAllVars
-      BY ProtectedOwnedCandidateEnablesFairRunNode
+      BY <2>1, ProtectedOwnedCandidateEnablesFairRunNode, PTL
          DEF Stage4CapacityBlockedAtRank,
              ReadyStage4CausalCapacityBlocked,
              ProtectedStage4Pending, ProtectedOwnedAtServiceRank,
@@ -1838,7 +1891,9 @@ PROOF
                \/ Stage4CapacityServeEpisodeResidual(
                     candidate, position, rank)'
       BY Stage4CapacitySameNodeRunProducesOutcome
-         DEF Stage4CapacityStrictResult
+         DEF Stage4CapacityStrictResult,
+             Stage4CapacityServeEpisodeResidual,
+             Stage4CapacityCandidateProducerContinuationReentry
     <2>5. Stage4CapacityBlockedAtRank(candidate, position, rank)
               /\ [AsyncNext]_AsyncAllVars
             => Stage4CapacityBlockedAtRank(
@@ -2285,14 +2340,18 @@ PROOF
                        ~> ProtectedRankProgressExit(
                             candidate, <<4, position>>))
     <2>1. AsyncSpecAt(initialContext)
-             => [](AsyncCurrentResponsiveVoters
-                    = AsyncVotersAt(initialContext))
-      BY AsyncSpecAlwaysUsesFixedResponsiveVoters
+             => /\ [](AsyncCurrentResponsiveVoters
+                       = AsyncVotersAt(initialContext))
+                /\ []AsyncCandidateProducerContinuationExternalCoverageInvariant
+                /\ []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+      BY AsyncSpecAlwaysUsesFixedResponsiveVoters,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity
     <2>2. /\ ProtectedStage4Actionable(candidate, position)
              /\ ~ProtectedRankProgressExit(candidate, <<4, position>>)
             => ENABLED
                  <<PostGstRunNode(candidate.node)>>_AsyncAllVars
-      BY ProtectedOwnedCandidateEnablesFairRunNode
+      BY <2>1, ProtectedOwnedCandidateEnablesFairRunNode, PTL
          DEF ProtectedStage4Actionable, ProtectedStage4Pending,
              ProtectedOwnedAtServiceRank
     <2>3. /\ ProtectedStage4Actionable(candidate, position)

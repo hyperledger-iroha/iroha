@@ -14,6 +14,7 @@ readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly MODEL="SumeragiV2ItemCarrierTypingMutation.tla"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
@@ -121,6 +122,7 @@ run_case() {
   shift 3
   local log="${run_dir}/${label}.log"
   local actual_status
+  local diagnostic_count
   set +e
   (
     cd "$FORMAL_DIR"
@@ -134,8 +136,36 @@ run_case() {
     cat "$log" >&2
     exit 1
   fi
+  if [[ "$expected_status" -eq 0 ]]; then
+    diagnostic_count="$(
+      grep -Ec \
+        '^[[:space:]]*(Error:|Deadlock reached([.]|$)|Temporal properties were violated[.]$)' \
+        "$log" || true
+    )"
+    [[ "$diagnostic_count" -eq 0 ]] || {
+      echo "${label} emitted ${diagnostic_count} failure diagnostics" >&2
+      cat "$log" >&2
+      exit 1
+    }
+    sumeragi_v2_tlc_assert_terminal "$label" "$log"
+  else
+    # This mutant fails while TLC evaluates the configured invariant, before
+    # initial-state generation and the normal terminal footer are available.
+    diagnostic_count="$(
+      grep -Ec \
+        '^[[:space:]]*(Error:|Deadlock reached([.]|$)|Temporal properties were violated[.]$)' \
+        "$log" || true
+    )"
+    [[ "$diagnostic_count" -eq 1 ]] || {
+      echo "${label} emitted ${diagnostic_count} configuration-time diagnostics" >&2
+      cat "$log" >&2
+      exit 1
+    }
+  fi
   for marker in "$@"; do
-    if ! grep -Fq "$marker" "$log"; then
+    if [[ "$expected_status" -eq 0 || "$marker" == "Error: "* ]]; then
+      sumeragi_v2_tlc_assert_exact_line "$label" "$log" "$marker"
+    elif ! grep -Fq "$marker" "$log"; then
       echo "${label} missed expected marker: ${marker}" >&2
       cat "$log" >&2
       exit 1
@@ -149,6 +179,6 @@ run_case fixed item_carrier_typing_fixed.cfg 0 \
   "Progress: 406 states checked."
 run_case loose-proposal-source \
   item_carrier_typing_loose_proposal_source.cfg 151 \
-  "The invariant of SelectedTypingImpliesCanonicalProposalCarrier is equal to FALSE"
+  "Error: The invariant of SelectedTypingImpliesCanonicalProposalCarrier is equal to FALSE"
 
 echo "[tlc] item/carrier typing mutation matrix passed"

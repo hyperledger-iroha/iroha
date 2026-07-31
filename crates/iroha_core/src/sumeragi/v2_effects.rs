@@ -23,8 +23,11 @@
 //!
 //! # Worker integration contract
 //!
-//! 1. Open the adapter/runtime, then call [`V2EffectExecutor::open`]. At height
-//!    one, retain the already-authenticated staged genesis with
+//! 1. Production opens [`V2BodyStore`] first, validates its recovery catalog
+//!    against the durable ingress gate, constructs the adapter/runtime, then
+//!    calls [`V2EffectExecutor::open_with_body_store`]. Tests and isolated
+//!    callers may use [`V2EffectExecutor::open`] as the combined wrapper. At
+//!    height one, retain the already-authenticated staged genesis with
 //!    [`V2EffectExecutor::install_authenticated_genesis_body`] before
 //!    dispatching startup effects. Move the returned [`V2BodyStore`] to the
 //!    storage/validation service thread. If
@@ -74,24 +77,24 @@ use std::{
 };
 
 use super::v2_core::{
-    CanonicalIdentityProjection, EFFECTIVE_LOCK_TRACE_OWNER, EFFECTIVE_LOCK_TRACE_RETIRE,
-    EffectiveLockTraceProjection, EquivocationKind, EventTag, ExactBodyOwnerProjection,
-    ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
-    IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER,
-    IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
-    IDENTITY_KIND_CONSENSUS_MESSAGE, IDENTITY_KIND_DURABLE_BODY_FRAME,
-    IDENTITY_KIND_EXECUTED_BLOCK_WIRE, IDENTITY_KIND_EXECUTION_COMMITMENT,
-    IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_QUORUM_CERTIFICATE,
-    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP,
-    ProductionDecisionIdentityProjection, ProductionDecisionRecoveryTraceProjection,
-    ProductionDurableBodyIdentityProjection, ProductionHistoricalBodyPipelineTraceProjection,
-    ProductionQuorumCertificateIdentityProjection, TagProjection,
+    CanonicalIdentityProjection, CheckedProductionTransition, EFFECTIVE_LOCK_TRACE_OWNER,
+    EFFECTIVE_LOCK_TRACE_RETIRE, EffectiveLockTraceProjection, EquivocationKind, EventTag,
+    ExactBodyOwnerProjection, ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT,
+    IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT,
+    IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
+    IDENTITY_KIND_CERTIFIED_BODY_REQUEST, IDENTITY_KIND_CONSENSUS_MESSAGE,
+    IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+    IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_PAYLOAD_MANIFEST,
+    IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP, ProductionDecisionIdentityProjection,
+    ProductionDecisionRecoveryTraceProjection, ProductionDurableBodyIdentityProjection,
+    ProductionHistoricalBodyPipelineTraceProjection, ProductionQuorumCertificateIdentityProjection,
+    TagProjection, check_production_body_capacity_retirement_effective_lock_transition,
+    check_production_body_ownership_effective_lock_transition,
     check_production_decision_recovery_transition,
     check_production_historical_body_pipeline_transition, exact_body_stage_is_owned,
     plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
     plan_exact_body_retirement_accounting,
-    production_body_capacity_retirement_preserves_effective_lock_kernel,
-    production_body_ownership_preserves_effective_lock_kernel,
 };
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
@@ -114,10 +117,10 @@ use super::{
     v2_chunks::{V2ChunkError, encode_payload},
     v2_recovery::PendingKuraApply,
     v2_runtime::{
-        BodyAvailableReservation, DecisionProposalRetirement, EnqueueError, NetworkIngressError,
-        RetiredBodyPipelineCompletions, RuntimeClockError, RuntimeEffectOwnership,
-        RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot, RuntimeStep,
-        SerializedV2Runtime,
+        BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
+        LeaderWireRuntimeTerminal, NetworkIngressError, RetiredBodyPipelineCompletions,
+        RuntimeClockError, RuntimeEffectOwnership, RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot,
+        RuntimeQueueSnapshot, RuntimeStep, SerializedV2Runtime,
     },
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
@@ -1230,6 +1233,15 @@ pub(crate) trait V2EffectServices {
     /// Adapter-specific failure type.
     type Error: fmt::Display;
 
+    /// Retire one exact receiver-side leader-wire lifecycle after the runtime
+    /// retained all of its causal successor ownership. A volatile terminal is
+    /// process-local and reopens after crash; a producer terminal is backed by
+    /// independently persisted continuation evidence.
+    fn complete_leader_wire_runtime_terminal(
+        &mut self,
+        terminal: LeaderWireRuntimeTerminal,
+    ) -> Result<(), Self::Error>;
+
     /// Queue one control-message signing task.
     fn enqueue_consensus_sign(&mut self, task: ConsensusSignTask) -> Result<(), Self::Error>;
     /// Cancel signing work made stale by a certified view transition.
@@ -1601,6 +1613,20 @@ struct PendingFetch {
     request_hash: Option<HashOf<wire::CertifiedBodyRequest>>,
 }
 
+/// One exact receiver-side response retained while its already-owned fetch
+/// completion waits for bounded ready-body or reducer capacity.
+///
+/// Fair ingress stops behind this carrier, so one slot is sufficient and
+/// retries cannot allocate another logical request. The runtime receipt stays
+/// attached until a non-backpressure outcome transfers its volatile terminal
+/// through [`V2EffectServices`].
+#[derive(Clone, Debug)]
+struct RetainedCertifiedBodyResponse {
+    response: wire::CertifiedBodyResponse,
+    authenticated_responder: PeerId,
+    ingress_ownership: FairV2IngressOwnershipEvidence,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StorePurpose {
     Reducer,
@@ -1716,11 +1742,12 @@ struct BodyPipelineOwner {
 /// Planning performs every fallible identity check. The service/runtime
 /// admission happens next; installing this value afterwards is an infallible
 /// map replacement because the executor is the sole owner of these maps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct BodyPipelineOwnerBindingPlan {
     key: (wire::ConsensusRound, wire::BlockSubject),
     owner: BodyPipelineOwner,
     already_owned: bool,
+    checked_effective_lock: CheckedProductionTransition<EffectiveLockTraceProjection>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2055,12 +2082,13 @@ enum StaleFetchTransitionPlan {
 /// The exact residual is computed before any cancellation or runtime queue
 /// mutation. The executor installs it only after every fallible callback has
 /// acknowledged the planned cleanup.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct CertifiedViewBodyCleanupPlan {
     stale_stores: Vec<EffectWorkId>,
     stale_ready: Vec<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_ready_rebinds: Vec<CertifiedViewReadyRebindPlan>,
     accounting: ExactBodyRetirementAccounting,
+    checked_effective_lock: CheckedProductionTransition<EffectiveLockTraceProjection>,
 }
 
 #[derive(Clone, Debug)]
@@ -2079,7 +2107,7 @@ enum FetchReadyCommitPlan {
     Install(ReadyBodyInstallPlan),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct FetchCompletionPlan {
     work_id: EffectWorkId,
     owner: BodyPipelineOwnerBindingPlan,
@@ -2208,6 +2236,11 @@ pub(crate) trait EffectRuntime {
         &mut self,
         effects: &[AdapterEffect],
     ) -> Result<Vec<RuntimeEffectOwnership>, String>;
+    /// Consume the exact receiver-side terminal sidecar emitted by the same
+    /// serialized transition. A later runtime step cannot overtake it.
+    fn take_leader_wire_runtime_terminals(
+        &mut self,
+    ) -> Result<Vec<LeaderWireRuntimeTerminal>, String>;
     /// Publish the bounded owners retained outside runtime ingress before the
     /// next clock arbitration.
     fn set_external_lifecycle_owners(
@@ -2226,6 +2259,18 @@ pub(crate) trait EffectRuntime {
         tag: EventTag,
         manifest: &wire::PayloadManifest,
     ) -> Result<RuntimeEffectOwnership, String>;
+    /// Reserve or release the scheduler-visible proposal producer for one
+    /// authoritative view. Production retains it only when this node is the
+    /// frozen-roster leader.
+    fn reconcile_active_view_producer(&mut self, tag: EventTag, retain: bool)
+    -> Result<(), String>;
+    /// Retire the exact view producer only after its Proposal and chunks enter
+    /// guarded remote fanout with the inherited lifecycle owner.
+    fn complete_active_view_producer_after_proposal_fanout(
+        &mut self,
+        proposal_round: wire::ConsensusRound,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), String>;
     /// Consume and validate the exact scheduler owner created by the preceding
     /// successful live or recovery step.
     fn take_scheduler_ownership(&mut self) -> Result<(), String>;
@@ -2453,6 +2498,14 @@ impl EffectRuntime for SerializedV2Runtime {
         SerializedV2Runtime::take_effect_ownership(self, effects.len())
     }
 
+    fn take_leader_wire_runtime_terminals(
+        &mut self,
+    ) -> Result<Vec<LeaderWireRuntimeTerminal>, String> {
+        Ok(SerializedV2Runtime::take_leader_wire_runtime_terminals(
+            self,
+        ))
+    }
+
     fn set_external_lifecycle_owners(
         &mut self,
         owners: Vec<RuntimeLifecycleOwner>,
@@ -2473,6 +2526,26 @@ impl EffectRuntime for SerializedV2Runtime {
         manifest: &wire::PayloadManifest,
     ) -> Result<RuntimeEffectOwnership, String> {
         SerializedV2Runtime::mint_local_proposal_effect_ownership(self, tag, manifest)
+    }
+
+    fn reconcile_active_view_producer(
+        &mut self,
+        tag: EventTag,
+        retain: bool,
+    ) -> Result<(), String> {
+        SerializedV2Runtime::reconcile_active_view_producer(self, tag, retain)
+    }
+
+    fn complete_active_view_producer_after_proposal_fanout(
+        &mut self,
+        proposal_round: wire::ConsensusRound,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), String> {
+        SerializedV2Runtime::complete_active_view_producer_after_proposal_fanout(
+            self,
+            proposal_round,
+            ownership,
+        )
     }
 
     fn take_scheduler_ownership(&mut self) -> Result<(), String> {
@@ -2793,6 +2866,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     body_pipeline_owners: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), BodyPipelineOwner>,
     certified_work: BTreeMap<HashOf<wire::CertifiedBodyRequest>, EffectWorkId>,
     outstanding_requests: OutstandingCertifiedBodyRequests,
+    retained_certified_body_response: Option<RetainedCertifiedBodyResponse>,
     ready_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ReadyBody>,
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_decision: Option<DurableDecision>,
@@ -2816,12 +2890,49 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// Open the exact-body store under an explicit signature-authority policy
     /// and take ownership of the serialized runtime.
     pub(crate) fn open(
-        mut runtime: SerializedV2Runtime,
+        runtime: SerializedV2Runtime,
         body_store_root: impl AsRef<Path>,
         context: wire::HeightContext,
         requester: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
         signature_policy: BlockSignaturePolicy,
+        output_guard: Arc<ConsensusOutputGuard>,
+        config: EffectQueueConfig,
+    ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
+        let inner_output_guard = Arc::clone(&output_guard);
+        let construction = output_guard.begin_fail_stop_operation().ok_or_else(|| {
+            EffectExecutorError::FailClosed(
+                "process restart is required after a fatal consensus failure".to_owned(),
+            )
+        })?;
+        let body_store =
+            V2BodyStore::open_with_policy(body_store_root, context.clone(), signature_policy)
+                .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
+        let opened = Self::open_with_body_store(
+            runtime,
+            body_store,
+            context,
+            requester,
+            local_validator,
+            inner_output_guard,
+            config,
+        )?;
+        construction.complete();
+        Ok(opened)
+    }
+
+    /// Take ownership of an exact-body store opened during sealed preflight.
+    ///
+    /// Production uses this entry point after independently inspecting the
+    /// store's recovery catalog to validate durable leader-wire terminals and
+    /// before allowing the runtime to mint any later scheduler ordinal.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_with_body_store(
+        mut runtime: SerializedV2Runtime,
+        body_store: V2BodyStore,
+        context: wire::HeightContext,
+        requester: PeerId,
+        local_validator: Option<wire::ValidatorIndex>,
         output_guard: Arc<ConsensusOutputGuard>,
         config: EffectQueueConfig,
     ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
@@ -2831,9 +2942,11 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 "process restart is required after a fatal consensus failure".to_owned(),
             )
         })?;
-        let body_store =
-            V2BodyStore::open_with_policy(body_store_root, context.clone(), signature_policy)
-                .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
+        if !body_store.matches_context(&context) {
+            return Err(EffectExecutorError::BodyStore(
+                "pre-opened Sumeragi v2 body store changed its height context".to_owned(),
+            ));
+        }
         let recovered_bodies = body_store
             .recovery_catalog()
             .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
@@ -2887,6 +3000,11 @@ impl V2EffectExecutor<SerializedV2Runtime> {
 
     /// Arm the runtime pacemaker after all height startup work has completed.
     pub(crate) fn arm_live_clocks(&mut self, now: Instant) -> Result<(), RuntimeClockError> {
+        let tag = self.current_tag();
+        let retain = self.local_validator == Some(self.context.leader(tag.view()));
+        self.runtime
+            .reconcile_active_view_producer(tag, retain)
+            .map_err(|_| RuntimeClockError::ProducerReservation)?;
         self.runtime.arm_live_clocks(now)
     }
 
@@ -3127,6 +3245,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         !self.output_guard.restart_required()
             && self.finality_completion.is_some()
             && self.retained_effect_batch.is_none()
+            && self.retained_certified_body_response.is_none()
             && self.runtime.queued_commands() == 0
             && self.runtime.driver().ready_to_finish()
     }
@@ -3248,8 +3367,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         &self,
         payload: &wire::ConsensusMessageV2Payload,
     ) -> bool {
-        self.retained_effect_batch.is_none()
-            || !Self::network_ingress_requires_reducer_order(payload)
+        self.retained_certified_body_response.is_none()
+            && (self.retained_effect_batch.is_none()
+                || !Self::network_ingress_requires_reducer_order(payload))
     }
 
     /// Return whether handling this outer ingress envelope can execute reducer
@@ -3347,6 +3467,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             body_pipeline_owners: BTreeMap::new(),
             certified_work: BTreeMap::new(),
             outstanding_requests,
+            retained_certified_body_response: None,
             ready_bodies: BTreeMap::new(),
             protected_lock: None,
             protected_decision: None,
@@ -3378,6 +3499,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.fatal_reason.is_none()
             && !self.output_guard.restart_required()
             && self.retained_effect_batch.is_none()
+            && self.retained_certified_body_response.is_none()
             && self.pending_work() < self.config.max_pending_work
     }
 
@@ -3409,8 +3531,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.preflight_observed_protected_lock(tag, lock)?;
         let changed = match self.reconcile_protected_lock(tag, Some(lock), services) {
             Ok(changed) => changed,
-            Err(error) => return Err(self.close(error, services)),
+            Err(error) => {
+                return Err(self.close_after_transferring_runtime_terminals(error, services));
+            }
         };
+        if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+            return Err(self.close(error, services));
+        }
         if changed && let Err(error) = self.publish_status(services) {
             return Err(self.close(error, services));
         }
@@ -3679,11 +3806,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             selected: 0,
             cursor_after: 0,
         };
-        if !production_body_capacity_retirement_preserves_effective_lock_kernel(retirement_trace) {
+        let Some(checked_retirement) =
+            check_production_body_capacity_retirement_effective_lock_transition(retirement_trace)
+        else {
             return Err(EffectExecutorError::Contract(
                 "body retirement did not refine exact effective-lock capacity".to_owned(),
             ));
-        }
+        };
 
         let validations = self
             .pending_validations
@@ -3710,6 +3839,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 pipeline_owners.push((*key, owner, ready.is_some()));
             }
         }
+        let _authorized_retirement = checked_retirement.into_projection();
         for ((round, subject), owner, ready) in &pipeline_owners {
             let retired = self
                 .runtime
@@ -3879,8 +4009,61 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Err(error) = self.retain_effect_batch(effects, ownership) {
             return Err(self.close(error, services));
         }
-        self.drain_retained_effect_batch(services)
-            .map_err(|error| self.close(error, services))
+        if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+            return Err(self.close(error, services));
+        }
+        let count = self
+            .drain_retained_effect_batch(services)
+            .map_err(|error| self.close_after_transferring_runtime_terminals(error, services))?;
+        if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+            return Err(self.close(error, services));
+        }
+        Ok(count)
+    }
+
+    /// Transfer the runtime's terminal sidecar only after the matching effect
+    /// ownership and complete causal suffix have been retained. This keeps an
+    /// empty-effect terminal from being inferred as durable and prevents a
+    /// later scheduler turn from overtaking receiver-gate retirement.
+    fn consume_leader_wire_runtime_terminals<S: V2EffectServices>(
+        &mut self,
+        services: &mut S,
+    ) -> Result<(), EffectExecutorError> {
+        let terminals = self
+            .runtime
+            .take_leader_wire_runtime_terminals()
+            .map_err(EffectExecutorError::Runtime)?;
+        let mut first_error = None;
+        for terminal in terminals {
+            if let Err(error) = services.complete_leader_wire_runtime_terminal(terminal)
+                && first_error.is_none()
+            {
+                first_error = Some(EffectExecutorError::Service(error.to_string()));
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Fail closed only after transferring every runtime terminal already
+    /// emitted before a later synchronous executor operation failed.
+    ///
+    /// The runtime sidecar is independent of the failing adapter or service
+    /// callback. Dropping it would leave a consumed packet's generic gate in
+    /// Runtime and turn the required restart into a carrierless replay barrier.
+    fn close_after_transferring_runtime_terminals<S: V2EffectServices>(
+        &mut self,
+        error: EffectExecutorError,
+        services: &mut S,
+    ) -> EffectExecutorError {
+        match self.consume_leader_wire_runtime_terminals(services) {
+            Ok(()) => self.close(error, services),
+            Err(terminal_error) => self.close(
+                EffectExecutorError::Service(format!(
+                    "{error}; additionally failed to transfer leader-wire terminal: {terminal_error}"
+                )),
+                services,
+            ),
+        }
     }
 
     /// Install one complete adapter macro-step before dispatching any prefix.
@@ -4154,14 +4337,30 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
-        if self.pending_kura_apply_recovery_evidence().is_some() && effects.len() != 1 {
-            return Err(self.close(
-                EffectExecutorError::Contract(
+        if let Some(stage) = self
+            .pending_kura_apply_recovery_evidence()
+            .map(PendingKuraApplyRecoveryEvidence::stage)
+        {
+            let is_effect_stage = matches!(
+                stage,
+                PendingKuraApplyRecoveryStage::CertifiedFetch
+                    | PendingKuraApplyRecoveryStage::DurableStore
+                    | PendingKuraApplyRecoveryStage::DeterministicValidation
+                    | PendingKuraApplyRecoveryStage::Apply
+            );
+            let invalid_count = if is_effect_stage {
+                effects.len() != 1
+            } else {
+                !effects.is_empty()
+            };
+            if invalid_count {
+                let reason = if is_effect_stage {
                     "interrupted-tip recovery must emit exactly one effect for its current stage"
-                        .to_owned(),
-                ),
-                services,
-            ));
+                } else {
+                    "completed interrupted-tip recovery must not emit another effect"
+                };
+                return Err(self.close(EffectExecutorError::Contract(reason.to_owned()), services));
+            }
         }
         for effect in &effects {
             if let Err(error) = self.ensure_pending_tip_recovery_effect_is_local(effect) {
@@ -4176,8 +4375,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Err(error) = self.retain_effect_batch(effects, ownership) {
             return Err(self.close(error, services));
         }
-        self.drain_retained_effect_batch(services)
-            .map_err(|error| self.close(error, services))
+        if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+            return Err(self.close(error, services));
+        }
+        let count = self
+            .drain_retained_effect_batch(services)
+            .map_err(|error| self.close_after_transferring_runtime_terminals(error, services))?;
+        if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+            return Err(self.close(error, services));
+        }
+        Ok(count)
     }
 
     /// Run at most one serialized runtime step and dispatch all of its effects.
@@ -4190,7 +4397,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if self.retained_effect_batch.is_some() {
             let count = self
                 .drain_retained_effect_batch(services)
-                .map_err(|error| self.close(error, services))?;
+                .map_err(|error| {
+                    self.close_after_transferring_runtime_terminals(error, services)
+                })?;
+            if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+                return Err(self.close(error, services));
+            }
             return Ok(if count == 0 {
                 EffectExecutorStep::Idle
             } else {
@@ -4248,7 +4460,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if self.retained_effect_batch.is_some() {
             let count = self
                 .drain_retained_effect_batch(services)
-                .map_err(|error| self.close(error, services))?;
+                .map_err(|error| {
+                    self.close_after_transferring_runtime_terminals(error, services)
+                })?;
+            if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+                return Err(self.close(error, services));
+            }
             let step = if count == 0 {
                 self.pending_tip_recovery_last_result =
                     Some(PendingTipRecoveryAttemptResult::Waiting);
@@ -5003,7 +5220,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         work_id: EffectWorkId,
         chunk: wire::PayloadChunk,
         authenticated_sender: &PeerId,
-        ingress_ownership: FairV2IngressOwnershipEvidence,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
         services: &mut S,
     ) -> Result<(), EffectTransportError> {
         let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
@@ -5171,9 +5388,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         &mut self,
         response: wire::CertifiedBodyResponse,
         authenticated_responder: &PeerId,
-        ingress_ownership: FairV2IngressOwnershipEvidence,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
         services: &mut S,
     ) -> Result<CompletionDisposition, EffectTransportError> {
+        if self.retained_certified_body_response.is_some() {
+            let result = Err(self.fail_closed_transport(
+                "a second certified body response crossed retained exact ingress ownership",
+                services,
+            ));
+            return self.complete_certified_body_response_ingress(
+                ingress_ownership,
+                result,
+                services,
+            );
+        }
         let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response.clone()),
         ));
@@ -5181,12 +5409,122 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             || !ingress_ownership.matches_message(&message)
             || !ingress_ownership.matches_semantic_origin(Some(authenticated_responder))
         {
-            return Err(self.fail_closed_transport(
+            let result = Err(self.fail_closed_transport(
                 "certified body response differs from its fair-ingress ownership",
                 services,
             ));
+            self.complete_certified_body_response_ingress(ingress_ownership, result, services)
+        } else {
+            let carrier = RetainedCertifiedBodyResponse {
+                response: response.clone(),
+                authenticated_responder: authenticated_responder.clone(),
+                ingress_ownership: ingress_ownership.clone(),
+            };
+            let result = self.accept_certified_body_response_inner(
+                response,
+                authenticated_responder,
+                services,
+            );
+            match result {
+                Err(EffectTransportError::Backpressure) => {
+                    self.retained_certified_body_response = Some(carrier);
+                    Err(EffectTransportError::Backpressure)
+                }
+                result => self.complete_certified_body_response_ingress(
+                    ingress_ownership,
+                    result,
+                    services,
+                ),
+            }
         }
-        self.accept_certified_body_response_inner(response, authenticated_responder, services)
+    }
+
+    /// Whether one exact receiver carrier is blocking later ingress while its
+    /// fetch completion waits for local capacity.
+    pub(crate) const fn has_retained_certified_body_response(&self) -> bool {
+        self.retained_certified_body_response.is_some()
+    }
+
+    /// Actor-global position of the retained receiver carrier.
+    ///
+    /// Production ingress binds this receipt before the response leaves the
+    /// fair queue. Its ordinal lets the runner service only the carrier's
+    /// already-frozen completion prefix ahead of a later exact-Serve ticket.
+    pub(crate) fn retained_certified_body_response_scheduler_ordinal(
+        &self,
+    ) -> Result<Option<u128>, EffectExecutorError> {
+        let Some(carrier) = self.retained_certified_body_response.as_ref() else {
+            return Ok(None);
+        };
+        let runtime = carrier
+            .ingress_ownership
+            .leader_wire_runtime_receipt()
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "retained certified body response lost its leader-wire runtime receipt"
+                        .to_owned(),
+                )
+            })?;
+        let ordinal = runtime.token().scheduler_ordinal();
+        if runtime.owner().admission_ordinal() != ordinal {
+            return Err(EffectExecutorError::Contract(
+                "retained certified body response changed its shared scheduler ordinal".to_owned(),
+            ));
+        }
+        Ok(Some(ordinal))
+    }
+
+    /// Retry the sole retained response without admitting another physical
+    /// occurrence.
+    ///
+    /// A repeated capacity rejection restores the byte-for-byte carrier and
+    /// its immutable runtime receipt. Every other outcome retires that receipt
+    /// before returning, including stale/authentication rejection and
+    /// fail-closed errors.
+    pub(crate) fn retry_retained_certified_body_response<S: V2EffectServices>(
+        &mut self,
+        services: &mut S,
+    ) -> Result<Option<CompletionDisposition>, EffectTransportError> {
+        let Some(carrier) = self.retained_certified_body_response.take() else {
+            return Ok(None);
+        };
+        let result = self.accept_certified_body_response_inner(
+            carrier.response.clone(),
+            &carrier.authenticated_responder,
+            services,
+        );
+        match result {
+            Err(EffectTransportError::Backpressure) => {
+                self.retained_certified_body_response = Some(carrier);
+                Err(EffectTransportError::Backpressure)
+            }
+            result => self
+                .complete_certified_body_response_ingress(
+                    &carrier.ingress_ownership,
+                    result,
+                    services,
+                )
+                .map(Some),
+        }
+    }
+
+    fn complete_certified_body_response_ingress<S: V2EffectServices>(
+        &mut self,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+        result: Result<CompletionDisposition, EffectTransportError>,
+        services: &mut S,
+    ) -> Result<CompletionDisposition, EffectTransportError> {
+        if let Some(runtime) = ingress_ownership.leader_wire_runtime_receipt()
+            && let Err(error) = services.complete_leader_wire_runtime_terminal(
+                LeaderWireRuntimeTerminal::Volatile(runtime.clone()),
+            )
+        {
+            return Err(self.fail_closed_transport(
+                format!("certified body response terminal transfer failed: {error}"),
+                services,
+            ));
+        }
+        result
     }
 
     /// Authenticate a certified response against the exact outstanding signed
@@ -5584,7 +5922,31 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 message
                     .validate_version()
                     .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
-                services.broadcast_consensus(message).map_err(service_error)
+                let proposal_round = match &message.payload {
+                    wire::ConsensusMessageV2Payload::Proposal(proposal) => {
+                        if proposal.round.context_id != self.context.id()
+                            || proposal.round.height != self.context.height
+                        {
+                            return Err(EffectExecutorError::Contract(
+                                "outbound Proposal changed the frozen height context".to_owned(),
+                            ));
+                        }
+                        Some(proposal.round)
+                    }
+                    _ => None,
+                };
+                services
+                    .broadcast_consensus(message)
+                    .map_err(service_error)?;
+                if let Some(proposal_round) = proposal_round {
+                    self.runtime
+                        .complete_active_view_producer_after_proposal_fanout(
+                            proposal_round,
+                            &ownership,
+                        )
+                        .map_err(EffectExecutorError::Runtime)?;
+                }
+                Ok(())
             }
             AdapterEffect::FetchBody {
                 tag,
@@ -5765,11 +6127,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             selected: 0,
             cursor_after: 0,
         };
-        if !production_body_ownership_preserves_effective_lock_kernel(ownership_trace) {
+        let Some(checked_effective_lock) =
+            check_production_body_ownership_effective_lock_transition(ownership_trace)
+        else {
             return Err(EffectExecutorError::Contract(
                 "exact body ownership did not refine the effective-lock trace".to_owned(),
             ));
-        }
+        };
         Ok(BodyPipelineOwnerBindingPlan {
             key,
             owner: BodyPipelineOwner {
@@ -5777,6 +6141,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 manifest_hash: binding.owner.manifest_hash,
             },
             already_owned: binding.already_owned,
+            checked_effective_lock,
         })
     }
 
@@ -5870,7 +6235,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
 
     fn commit_body_pipeline_owner(&mut self, plan: BodyPipelineOwnerBindingPlan) {
-        self.body_pipeline_owners.insert(plan.key, plan.owner);
+        let BodyPipelineOwnerBindingPlan {
+            key,
+            owner,
+            already_owned: _,
+            checked_effective_lock,
+        } = plan;
+        let _authorized_ownership = checked_effective_lock.into_projection();
+        self.body_pipeline_owners.insert(key, owner);
     }
 
     fn plan_work_id(&self) -> Result<WorkIdPlan, EffectExecutorError> {
@@ -6967,17 +7339,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             selected: 0,
             cursor_after: 0,
         };
-        if !production_body_capacity_retirement_preserves_effective_lock_kernel(cleanup_trace) {
+        let Some(checked_effective_lock) =
+            check_production_body_capacity_retirement_effective_lock_transition(cleanup_trace)
+        else {
             return Err(EffectExecutorError::Contract(
                 "certified-view cleanup did not refine exact effective-lock capacity".to_owned(),
             ));
-        }
+        };
 
         Ok(CertifiedViewBodyCleanupPlan {
             stale_stores,
             stale_ready,
             protected_ready_rebinds,
             accounting,
+            checked_effective_lock,
         })
     }
 
@@ -8673,6 +9048,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // Byte residuals for the complete store/ready cleanup were checked
         // before any cancellation. A corrupt counter therefore cannot retire
         // worker or runtime ownership and only then discover the underflow.
+        let _authorized_body_cleanup = stale_body_cleanup.checked_effective_lock.into_projection();
         for id in &stale_body_cleanup.stale_stores {
             let key = self
                 .pending_stores
@@ -8776,6 +9152,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             !tag.strictly_advances(owner.tag) || retained_apply_owners.contains(key)
         });
 
+        let retain_local_producer = self.local_validator == Some(self.context.leader(tag.view()));
+        self.runtime
+            .reconcile_active_view_producer(tag, retain_local_producer)
+            .map_err(EffectExecutorError::Runtime)?;
         services
             .entered_view(tag, certificate)
             .map_err(service_error)
@@ -9268,7 +9648,7 @@ fn verify_pending_kura_apply_parts(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, num::NonZeroU64};
+    use std::{collections::VecDeque, num::NonZeroU64, sync::Arc};
 
     use crate::sumeragi::{
         InboundBlockMessage,
@@ -9372,6 +9752,11 @@ mod tests {
         effect_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
         external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
         external_lifecycle_owner_capacity: Option<usize>,
+        active_view_producer_retained: bool,
+        completed_proposal_fanouts: Vec<(wire::ConsensusRound, RuntimeEffectOwnership)>,
+        leader_wire_terminal_batches: VecDeque<Vec<LeaderWireRuntimeTerminal>>,
+        leader_wire_terminal_after_lock: Option<LeaderWireRuntimeTerminal>,
+        leader_wire_terminal_after_decision: Option<LeaderWireRuntimeTerminal>,
     }
 
     /// Actual executor/runtime ownership projected without retaining a shadow
@@ -9529,6 +9914,15 @@ mod tests {
                 .collect())
         }
 
+        fn take_leader_wire_runtime_terminals(
+            &mut self,
+        ) -> Result<Vec<LeaderWireRuntimeTerminal>, String> {
+            Ok(self
+                .leader_wire_terminal_batches
+                .pop_front()
+                .unwrap_or_default())
+        }
+
         fn set_external_lifecycle_owners(
             &mut self,
             owners: Vec<RuntimeLifecycleOwner>,
@@ -9554,6 +9948,28 @@ mod tests {
                         "fake external lifecycle-owner capacity overflowed".to_owned()
                     })?,
             );
+            Ok(())
+        }
+
+        fn reconcile_active_view_producer(
+            &mut self,
+            _tag: EventTag,
+            retain: bool,
+        ) -> Result<(), String> {
+            self.active_view_producer_retained = retain;
+            Ok(())
+        }
+
+        fn complete_active_view_producer_after_proposal_fanout(
+            &mut self,
+            proposal_round: wire::ConsensusRound,
+            ownership: &RuntimeEffectOwnership,
+        ) -> Result<(), String> {
+            if self.active_view_producer_retained {
+                self.active_view_producer_retained = false;
+                self.completed_proposal_fanouts
+                    .push((proposal_round, ownership.clone()));
+            }
             Ok(())
         }
 
@@ -9774,6 +10190,9 @@ mod tests {
             _locked_round: wire::ConsensusRound,
             _locked_subject: wire::BlockSubject,
         ) -> Result<usize, String> {
+            if let Some(terminal) = self.leader_wire_terminal_after_lock.take() {
+                self.leader_wire_terminal_batches.push_back(vec![terminal]);
+            }
             Ok(0)
         }
 
@@ -9859,6 +10278,9 @@ mod tests {
                 }
                 true
             });
+            if let Some(terminal) = self.leader_wire_terminal_after_decision.take() {
+                self.leader_wire_terminal_batches.push_back(vec![terminal]);
+            }
             Ok(DecisionProposalRetirement::new(
                 (retainable == 1).then_some(decision_tag),
                 recovery_only,
@@ -10026,6 +10448,7 @@ mod tests {
         fail_on_call: Option<(&'static str, usize)>,
         operation_calls: BTreeMap<&'static str, usize>,
         validation_error: Option<String>,
+        leader_wire_terminals: Vec<LeaderWireRuntimeTerminal>,
     }
 
     impl FakeServices {
@@ -10083,6 +10506,15 @@ mod tests {
 
     impl V2EffectServices for FakeServices {
         type Error = String;
+
+        fn complete_leader_wire_runtime_terminal(
+            &mut self,
+            terminal: LeaderWireRuntimeTerminal,
+        ) -> Result<(), Self::Error> {
+            self.check("leader-wire-terminal")?;
+            self.leader_wire_terminals.push(terminal);
+            Ok(())
+        }
 
         fn enqueue_consensus_sign(&mut self, task: ConsensusSignTask) -> Result<(), Self::Error> {
             self.check("sign")?;
@@ -11076,6 +11508,99 @@ mod tests {
             )),
             responder,
         )
+    }
+
+    fn certified_response_runtime_ingress_ownership(
+        fixture: &Fixture,
+        response: &wire::CertifiedBodyResponse,
+        responder: PeerId,
+    ) -> (
+        TempDir,
+        crate::sumeragi::FairV2Ingress,
+        Arc<super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
+        FairV2IngressOwnershipEvidence,
+    ) {
+        let roster = fixture
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let directory = TempDir::new().expect("temporary response leader-wire directory");
+        let ingress = crate::sumeragi::FairV2Ingress::new(
+            8,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+            4 * 1024 * 1024,
+            4 * 1024 * 1024,
+        );
+        ingress
+            .configure_roster_for_context(
+                roster.clone(),
+                &fixture.context.chain_id,
+                fixture.context.da_layout,
+            )
+            .expect("configure response leader-wire ingress");
+        ingress.require_leader_wire_lifecycle_gate();
+        let capacity =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                roster.len(),
+                fixture.context.da_layout.max_chunk_count,
+            )
+            .expect("derive response lifecycle capacity");
+        let owner = [0xE5; 32];
+        let recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                fixture.context.id(),
+                fixture.context.height,
+                owner,
+                response.manifest.round.view,
+                false,
+            );
+        let (gate, restore) =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &directory.path().join("response-leader-wire.wal"),
+                fixture.context.id(),
+                fixture.context.height,
+                owner,
+                roster.iter().cloned().collect(),
+                capacity,
+                fixture.context.da_layout.max_chunk_count,
+                recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("open response leader-wire gate");
+        ingress
+            .bind_leader_wire_lifecycle_gate(
+                Arc::clone(&gate),
+                restore,
+                super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(64),
+                fixture.context.id(),
+                fixture.context.height,
+            )
+            .expect("bind response leader-wire gate");
+        ingress.open().expect("open response leader-wire ingress");
+        let message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response.clone()),
+        );
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(message),
+                Some(responder),
+            )),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let mut inbound = ingress
+            .try_recv()
+            .expect("drain exact response ingress carrier");
+        let mut ownership = inbound
+            .take_ingress_ownership()
+            .expect("response retains fair-ingress ownership");
+        ingress
+            .bind_leader_wire_runtime_ownership(&mut ownership)
+            .expect("bind response leader-wire runtime receipt");
+        (directory, ingress, gate, ownership)
     }
 
     fn payload_chunk_ingress_ownership(
@@ -12429,7 +12954,7 @@ mod tests {
                 .accept_certified_body_response_with_ingress_ownership(
                     response_a,
                     &responder,
-                    ingress_ownership,
+                    &ingress_ownership,
                     &mut services,
                 )
                 .expect("exact A response releases certified-request capacity"),
@@ -12760,7 +13285,7 @@ mod tests {
                 .accept_certified_body_response_with_ingress_ownership(
                     response_a,
                     &responder,
-                    ingress_ownership,
+                    &ingress_ownership,
                     &mut services,
                 )
                 .expect("reserve and enqueue exact BodyAvailable completion"),
@@ -17346,7 +17871,7 @@ mod tests {
                 work_id,
                 chunk,
                 &sender,
-                ingress_ownership,
+                &ingress_ownership,
                 &mut services,
             )
             .expect("authenticated chunk");
@@ -17451,7 +17976,7 @@ mod tests {
                 unknown,
                 chunk.clone(),
                 &sender,
-                exact_ownership,
+                &exact_ownership,
                 &mut services,
             ),
             Err(EffectTransportError::UnknownWork(unknown))
@@ -17466,7 +17991,7 @@ mod tests {
                 unknown,
                 chunk,
                 &sender,
-                swapped_ownership,
+                &swapped_ownership,
                 &mut services,
             ),
             Err(EffectTransportError::FailClosed(reason))
@@ -17625,7 +18150,7 @@ mod tests {
                 .accept_certified_body_response_with_ingress_ownership(
                     response.clone(),
                     &responder,
-                    ingress_ownership,
+                    &ingress_ownership,
                     &mut services,
                 )
                 .expect("authenticated certified response"),
@@ -17683,7 +18208,7 @@ mod tests {
             executor.accept_certified_body_response_with_ingress_ownership(
                 response,
                 &responder,
-                swapped_ownership,
+                &swapped_ownership,
                 &mut services,
             ),
             Err(EffectTransportError::FailClosed(reason))
@@ -19547,7 +20072,369 @@ mod tests {
     }
 
     #[test]
-    fn ready_body_backpressure_and_mismatches_are_recoverable_transport_rejections() {
+    fn proposal_fanout_retires_active_producer_only_after_service_acceptance() {
+        let fixture = Fixture::new();
+        let message = proposal(&fixture);
+
+        let mut failed = fixture.executor(EffectQueueConfig::default());
+        failed.runtime.active_view_producer_retained = true;
+        let mut failed_services = fixture.services();
+        failed_services.fail_on = Some("broadcast");
+        assert!(matches!(
+            failed.consume_effects(
+                vec![AdapterEffect::Broadcast(message.clone())],
+                &mut failed_services,
+            ),
+            Err(EffectExecutorError::Service(_))
+        ));
+        assert!(
+            failed.runtime.active_view_producer_retained,
+            "a rejected fanout must retain the exact producer fence"
+        );
+        assert!(failed.runtime.completed_proposal_fanouts.is_empty());
+        assert!(failed_services.broadcasts.is_empty());
+
+        let mut accepted = fixture.executor(EffectQueueConfig::default());
+        accepted.runtime.active_view_producer_retained = true;
+        let mut accepted_services = fixture.services();
+        accepted
+            .consume_effects(
+                vec![AdapterEffect::Broadcast(message.clone())],
+                &mut accepted_services,
+            )
+            .expect("guarded Proposal fanout accepts the exact source owner");
+        assert!(!accepted.runtime.active_view_producer_retained);
+        assert_eq!(accepted_services.broadcasts, vec![message]);
+        let [(round, ownership)] = accepted.runtime.completed_proposal_fanouts.as_slice() else {
+            panic!("one accepted Proposal fanout must retire one active producer")
+        };
+        assert_eq!(*round, fixture.manifest.round);
+        assert_ne!(ownership.owner().lifecycle_ordinal(), 0);
+    }
+
+    fn leader_wire_runtime_terminal_fixture(
+        fixture: &Fixture,
+        scheduler_ordinal: u128,
+    ) -> (TempDir, LeaderWireRuntimeTerminal) {
+        let directory = TempDir::new().expect("temporary leader-wire terminal directory");
+        let origin = fixture.context.roster[0].validator.clone();
+        let phase = super::super::FairV2IngressLeaderWirePhase::PrepareVote;
+        let token = super::super::FairV2IngressLeaderWireToken {
+            identity: super::super::FairV2IngressLeaderWireIdentity {
+                context_id: fixture.context.id(),
+                height: fixture.context.height,
+                view: fixture.manifest.round.view,
+                subject_hash: Hash::new(b"effect-dispatch leader-wire subject"),
+                manifest_hash: None,
+                phase,
+                semantic_origin: origin.clone(),
+                canonical_wire_hash: Hash::new(b"effect-dispatch leader-wire bytes"),
+            },
+            slot: super::super::FairV2IngressLeaderWireSlot {
+                semantic_origin: origin,
+                phase,
+                chunk_index: None,
+            },
+            admission_ordinal: 1,
+            scheduler_ordinal,
+            source_class: super::super::FairV2IngressLeaderWireSourceClass::Control,
+        };
+        let owner = [u8::try_from(scheduler_ordinal)
+            .expect("leader-wire fixture ordinal fits one byte"); 32];
+        let capacity =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                fixture.context.roster.len(),
+                fixture.context.da_layout.max_chunk_count,
+            )
+            .expect("finite leader-wire effect fixture capacity");
+        let recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                fixture.context.id(),
+                fixture.context.height,
+                owner,
+                fixture.manifest.round.view,
+                false,
+            );
+        let (gate, _) = super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+            &directory.path().join("effect-dispatch.wal"),
+            fixture.context.id(),
+            fixture.context.height,
+            owner,
+            fixture
+                .context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            capacity,
+            fixture.context.da_layout.max_chunk_count,
+            recovery_authority,
+            &[],
+            &[],
+        )
+        .expect("open leader-wire effect fixture");
+        gate.reserve(token.clone())
+            .expect("reserve leader-wire effect owner");
+        gate.mark_ingress(&token)
+            .expect("transfer leader-wire effect owner to ingress");
+        let runtime_owner = super::super::serviced_candidate_store::LeaderWireRuntimeOwner::new(
+            token.identity_hash(),
+            token.scheduler_ordinal(),
+        )
+        .expect("construct leader-wire effect runtime owner");
+        let receipt = gate
+            .mark_runtime(&token, runtime_owner)
+            .expect("transfer leader-wire effect owner to runtime");
+        (directory, LeaderWireRuntimeTerminal::Volatile(receipt))
+    }
+
+    #[test]
+    fn effect_dispatch_consumes_leader_wire_terminal_created_while_batch_drains() {
+        let fixture = Fixture::new();
+        let (_directory, terminal) = leader_wire_runtime_terminal_fixture(&fixture, 97);
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        executor
+            .runtime
+            .leader_wire_terminal_batches
+            .push_back(Vec::new());
+        executor
+            .runtime
+            .leader_wire_terminal_batches
+            .push_back(vec![terminal.clone()]);
+        let mut services = fixture.services();
+        assert_eq!(
+            executor
+                .consume_effects(
+                    vec![AdapterEffect::ReportEquivocation {
+                        offender: fixture.context.roster[1].validator.clone(),
+                        round: fixture.manifest.round,
+                        kind: EquivocationKind::Vote,
+                    }],
+                    &mut services,
+                )
+                .expect("dispatch batch and consume its late terminal"),
+            1
+        );
+        assert_eq!(services.leader_wire_terminals, vec![terminal]);
+        assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("a consumed terminal cannot fail-close the next scheduler turn"),
+            EffectExecutorStep::Idle
+        );
+    }
+
+    #[test]
+    fn lock_reconciliation_consumes_retirement_terminal_before_the_next_turn() {
+        let fixture = Fixture::new();
+        let (_directory, terminal) = leader_wire_runtime_terminal_fixture(&fixture, 96);
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        executor.runtime.leader_wire_terminal_after_lock = Some(terminal.clone());
+        let mut services = fixture.services();
+
+        executor
+            .reconcile_locked_body_for_recovery(
+                tag(fixture.manifest.round.view),
+                (fixture.manifest.round, fixture.manifest.subject),
+                &mut services,
+            )
+            .expect("lock retirement transfers its terminal in the same synchronous call");
+
+        assert_eq!(services.leader_wire_terminals, vec![terminal]);
+        assert!(executor.runtime.leader_wire_terminal_after_lock.is_none());
+        assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("the next scheduler turn cannot overtake a lock-retirement terminal"),
+            EffectExecutorStep::Idle
+        );
+    }
+
+    #[test]
+    fn leader_wire_terminal_batch_attempts_every_owner_after_one_transfer_fails() {
+        let fixture = Fixture::new();
+        let (_first_directory, first) = leader_wire_runtime_terminal_fixture(&fixture, 95);
+        let (_second_directory, second) = leader_wire_runtime_terminal_fixture(&fixture, 96);
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        executor
+            .runtime
+            .leader_wire_terminal_batches
+            .push_back(vec![first, second.clone()]);
+        let mut services = fixture.services();
+        services.fail_on = Some("leader-wire-terminal");
+
+        assert!(
+            executor.consume_effects(Vec::new(), &mut services).is_err(),
+            "the first injected terminal-transfer failure must fail closed"
+        );
+        assert_eq!(
+            services.leader_wire_terminals,
+            vec![second],
+            "a failed first transfer cannot drop later independent runtime owners"
+        );
+        assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
+        assert!(executor.status().fail_closed);
+    }
+
+    #[test]
+    fn retained_live_retry_consumes_decision_retirement_terminal_same_cycle() {
+        let fixture = Fixture::new();
+        let (_directory, terminal) = leader_wire_runtime_terminal_fixture(&fixture, 98);
+        let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
+        let mut services = fixture.services();
+        assert_eq!(
+            executor
+                .consume_effects(
+                    vec![timeout_sign(&fixture, 0), timeout_sign(&fixture, 0)],
+                    &mut services,
+                )
+                .expect("retain the second timeout-sign effect at pending-work capacity"),
+            1
+        );
+        assert!(executor.retained_effect_batch.is_some());
+
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        executor.runtime.decided_body = Some((
+            commit.round,
+            commit.proposal_round,
+            commit.subject,
+            commit.execution_commitment,
+        ));
+        executor.runtime.leader_wire_terminal_after_decision = Some(terminal.clone());
+
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("Decision retires the retained suffix and transfers its runtime terminal"),
+            EffectExecutorStep::Idle
+        );
+        assert_eq!(services.leader_wire_terminals, vec![terminal]);
+        assert!(
+            executor
+                .runtime
+                .leader_wire_terminal_after_decision
+                .is_none()
+        );
+        assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
+        assert!(executor.retained_effect_batch.is_none());
+        assert!(executor.pending_signatures.is_empty());
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn retained_drain_failure_transfers_decision_terminal_before_fail_close() {
+        let fixture = Fixture::new();
+        let (_directory, terminal) = leader_wire_runtime_terminal_fixture(&fixture, 100);
+        let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
+        let mut services = fixture.services();
+        assert_eq!(
+            executor
+                .consume_effects(
+                    vec![timeout_sign(&fixture, 0), timeout_sign(&fixture, 0)],
+                    &mut services,
+                )
+                .expect("retain the second timeout-sign effect at pending-work capacity"),
+            1
+        );
+        assert!(executor.retained_effect_batch.is_some());
+
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        executor.runtime.decided_body = Some((
+            commit.round,
+            commit.proposal_round,
+            commit.subject,
+            commit.execution_commitment,
+        ));
+        executor.runtime.leader_wire_terminal_after_decision = Some(terminal.clone());
+        services.fail_on = Some("cancel-sign");
+
+        assert!(
+            executor.step(Instant::now(), &mut services).is_err(),
+            "the injected retained-suffix cancellation failure must fail closed"
+        );
+        assert_eq!(
+            services.leader_wire_terminals,
+            vec![terminal],
+            "the earlier Decision terminal must cross its gate before fail-close teardown"
+        );
+        assert!(
+            executor
+                .runtime
+                .leader_wire_terminal_after_decision
+                .is_none()
+        );
+        assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
+        assert!(executor.status().fail_closed);
+    }
+
+    #[test]
+    fn retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle() {
+        let fixture = Fixture::new();
+        let (_directory, terminal) = leader_wire_runtime_terminal_fixture(&fixture, 99);
+        let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
+        let mut services = fixture.services();
+        let fetch = AdapterEffect::FetchBody {
+            tag: tag(0),
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        assert_eq!(
+            executor
+                .consume_effects(vec![timeout_sign(&fixture, 0), fetch], &mut services)
+                .expect("retain the exact recovery fetch at pending-work capacity"),
+            1
+        );
+        assert!(executor.retained_effect_batch.is_some());
+
+        let durable = DurableBodyReceipt::for_test(
+            fixture.context.id(),
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            HashOf::new(&fixture.manifest),
+        );
+        executor.recovered_bodies.insert(
+            (fixture.manifest.round, fixture.manifest.subject),
+            (fixture.manifest.clone(), durable),
+        );
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        executor.runtime.decided_body = Some((
+            commit.round,
+            commit.proposal_round,
+            commit.subject,
+            commit.execution_commitment,
+        ));
+        executor.runtime.leader_wire_terminal_after_decision = Some(terminal.clone());
+
+        assert_eq!(
+            executor
+                .step_pending_tip_recovery(Instant::now(), &mut services)
+                .expect("recovery retry consumes the Decision retirement terminal"),
+            EffectExecutorStep::Advanced { effects: 1 }
+        );
+        assert_eq!(services.leader_wire_terminals, vec![terminal]);
+        assert!(
+            executor
+                .runtime
+                .leader_wire_terminal_after_decision
+                .is_none()
+        );
+        assert!(executor.runtime.leader_wire_terminal_batches.is_empty());
+        assert!(executor.retained_effect_batch.is_none());
+        assert!(executor.pending_signatures.is_empty());
+        assert_eq!(
+            executor.status().pending_tip_recovery_last_result,
+            Some(PendingTipRecoveryAttemptResult::Advanced)
+        );
+        assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::new(8, 1, 1, 4));
         let mut services = fixture.services();
@@ -19621,10 +20508,23 @@ mod tests {
         .payload()
         .to_vec();
 
+        let responder = fixture.context.roster[0].validator.clone();
+        let (_leader_wire_directory, leader_wire_ingress, leader_wire_gate, ingress_ownership) =
+            certified_response_runtime_ingress_ownership(&fixture, &response, responder.clone());
+        let expected_terminal = LeaderWireRuntimeTerminal::Volatile(
+            ingress_ownership
+                .leader_wire_runtime_receipt()
+                .expect("production response owns a runtime receipt")
+                .clone(),
+        );
+        let response_envelope = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response.clone()),
+        );
         assert!(matches!(
-            executor.accept_certified_body_response(
-                response.clone(),
-                &fixture.context.roster[0].validator,
+            executor.accept_certified_body_response_with_ingress_ownership(
+                response,
+                &responder,
+                &ingress_ownership,
                 &mut services,
             ),
             Err(EffectTransportError::Backpressure)
@@ -19632,9 +20532,40 @@ mod tests {
         assert_eq!(executor.pending_fetches.len(), 1);
         assert_eq!(executor.certified_work.len(), 1);
         assert_eq!(executor.outstanding_requests.len(), 1);
+        assert!(executor.has_retained_certified_body_response());
+        assert!(
+            executor
+                .retained_certified_body_response_scheduler_ordinal()
+                .expect("read retained response ordinal")
+                .is_some()
+        );
+        assert!(!executor.can_admit_local_proposal());
+        assert!(
+            !executor.retained_dispatch_allows_network_ingress(&response_envelope.payload),
+            "later ingress remains behind the exact retained completion"
+        );
         assert!(
             executor.outstanding_requests.response_claim_count() == 0,
             "capacity rejection precedes response-occurrence acquisition"
+        );
+        assert!(services.leader_wire_terminals.is_empty());
+        assert!(
+            leader_wire_gate
+                .earliest_ingress_scheduler_ordinal()
+                .expect("read live response gate")
+                .is_some(),
+            "capacity backpressure must not tombstone the runtime owner"
+        );
+        assert!(matches!(
+            leader_wire_ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(response_envelope.clone()),
+                Some(responder.clone()),
+            )),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Coalesced)
+        ));
+        assert!(
+            leader_wire_ingress.try_recv().is_none(),
+            "an exact retransmission coalesces into the retained runtime owner"
         );
         assert!(!executor.status().fail_closed);
 
@@ -19642,13 +20573,37 @@ mod tests {
             u64::try_from(fixture.body.len()).expect("body length");
         assert_eq!(
             executor
-                .accept_certified_body_response(
-                    response,
-                    &fixture.context.roster[0].validator,
-                    &mut services,
-                )
+                .retry_retained_certified_body_response(&mut services)
                 .expect("same response succeeds after capacity is available"),
-            CompletionDisposition::Accepted
+            Some(CompletionDisposition::Accepted)
+        );
+        assert!(!executor.has_retained_certified_body_response());
+        assert_eq!(
+            services.leader_wire_terminals,
+            vec![expected_terminal.clone()]
+        );
+        let LeaderWireRuntimeTerminal::Volatile(runtime) = &expected_terminal else {
+            panic!("certified response completion must publish a volatile terminal");
+        };
+        leader_wire_ingress
+            .mark_leader_wire_volatile_terminal(runtime)
+            .expect("production terminal hook retires the response runtime owner");
+        assert_eq!(
+            leader_wire_gate
+                .earliest_ingress_scheduler_ordinal()
+                .expect("read retired response gate"),
+            None
+        );
+        assert!(matches!(
+            leader_wire_ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(response_envelope),
+                Some(responder),
+            )),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Coalesced)
+        ));
+        assert!(
+            leader_wire_ingress.try_recv().is_none(),
+            "the volatile tombstone cannot resurrect the drained response stage"
         );
         assert!(executor.pending_fetches.is_empty());
         assert!(executor.certified_work.is_empty());

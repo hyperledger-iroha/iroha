@@ -1120,14 +1120,26 @@ predecessor cleanup. Rejecting a matching CommitQC from a foreign height
 context before Apply schedules work adds one exact `v2_effects` regression.
 Five exact-Serve lifecycle regressions cover Pending/Reserved rollback,
 shutdown rollback, route-neutral tombstone replay, and cached replay after the
-singular future-slot barrier.
-The current source-bound inventory therefore contains 738 exact tests across
-38 modules and 81 pre-network legs.
+singular future-slot barrier, producing the 738-test checkpoint. Another 35
+exact CertifiedServe ingress and worker regressions bind gate ordering,
+immutable admission ordinals, frozen predecessors, coalesced retries, durable
+restart, terminal replay, owner replacement, and anti-resurrection behavior.
+One four-peer leader-wire lifecycle-store regression binds the full
+origin/phase/chunk slot product and restart-stable terminal coalescing,
+producing the 774-test checkpoint. Eight runtime/effect/runner regressions bind
+Decision/lock retirement of orphaned leader-wire owners, same-turn terminal
+consumption across live and recovery capacity retries, and fail-closed
+authenticated semantic-only Coalesce defense.
+Subsequent source reconciliation and exact-ingress lifecycle, restart,
+provenance, and invalid-QC quarantine regressions bind one actor-global
+logical owner across its physical retries.
+The current source-bound inventory therefore contains 806 exact tests across
+39 modules and 82 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`328352eac7b03ac4453475fe62d4c0545ee90fd2dfdeaf36731a13f86f32cd17`.
-Nine of those legs execute the separate 289-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 290 TSV lines and has SHA-256
-`1bee8acd32f2296adda465a85c27eccb86ef5ce7df59e1a63acb144e5e913733`.
+`1873bbd68c9736db1991842c5f34b0ff4b98460567a76649619d256d4e510700`.
+Nine of those legs execute the separate 299-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 300 TSV lines and has SHA-256
+`d3a3ee129d21220c04b147f31b3c99d91d750af19ffda9c71253e88f37754104`.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1361,7 +1373,7 @@ authenticated-non-validator, and two-anonymous owners (`4N+2H+2` total)
 capacity-negative boundary and the exact
 PrepareQC count-and-power quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-81 legs, including separate exact status and atomic lane-certificate decode
+82 legs, including separate exact status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
 fixture check, two `iroha_config` geometry modules, the two new `iroha_p2p`
 geometry modules, the shared-byte-budget module, the daemon genesis module,
@@ -1372,7 +1384,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 738-test inventory is a mechanically checked
+The current 806-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1557,9 +1569,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 738 exact production
-liveness tests and executes all 38 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 289-test
+Before those longer scenarios, the PR gate inventories 806 exact production
+liveness tests and executes all 39 owning Rust modules serially. The release
+profile additionally records nine G-UNIT legs executing a separate 299-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1691,7 +1703,15 @@ The replay-safe locked-proposal authorization regression produces the 724-test
 checkpoint. The exact runner replay-owner regression produces the 732-test
 checkpoint. The foreign-context CommitQC Apply rejection produces the
 733-test checkpoint. Five exact-Serve lifecycle regressions bring the current
-inventory to 738 tests without adding a module or leg. The rollover
+inventory to the 738-test checkpoint. Another 35 exact CertifiedServe ingress
+and worker regressions bring the inventory to 773 tests without adding a
+module or leg. One four-peer leader-wire lifecycle-store regression brings the
+inventory to the 774-test checkpoint, adds its owning module, and adds one
+corridor leg. Eight leader-wire retirement, terminal-consumption, and
+authenticated-Coalesce defense regressions produced the 782-test checkpoint
+without adding another module or leg. Subsequent source reconciliation and
+exact-ingress lifecycle, restart, provenance, and quarantine regressions bring
+the current inventory to 806 tests without adding another module or leg. The rollover
 slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -1962,8 +1982,8 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 81 pre-network corridor legs and
-their exact 738-test production inventory, the separate 289-test G-UNIT
+evidence directory. That receipt binds the 82 pre-network corridor legs and
+their exact 806-test production inventory, the separate 299-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos

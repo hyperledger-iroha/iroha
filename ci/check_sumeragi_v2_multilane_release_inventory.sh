@@ -33,7 +33,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=738
+readonly canonical_production_test_count=806
 
 require_nonignored_test() {
   local path="$1"
@@ -120,7 +120,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=81"
+  "  readonly expected_corridor_leg_count=82"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -243,13 +243,13 @@ if (
         f"{canonical_production_test_count}"
     )
 production_modules = receipt_assignments.get("_PRODUCTION_MODULES")
-if not isinstance(production_modules, tuple) or len(production_modules) != 38:
-    reject("receipt writer must bind exactly 38 production modules")
+if not isinstance(production_modules, tuple) or len(production_modules) != 39:
+    reject("receipt writer must bind exactly 39 production modules")
 module_counts = {
     module: count for _leg_id, module, count in production_modules
 }
 if (
-    len(module_counts) != 38
+    len(module_counts) != 39
     or sum(module_counts.values()) != canonical_production_test_count
 ):
     reject(
@@ -257,11 +257,14 @@ if (
         f"{canonical_production_test_count}"
     )
 expected_changed_module_counts = {
-    "sumeragi::authoritative_runtime_gate_tests": 32,
+    "sumeragi::authoritative_runtime_gate_tests": 40,
+    "sumeragi::serviced_candidate_store::tests": 1,
+    "sumeragi::v2_effects::tests": 66,
+    "sumeragi::v2_runtime::tests": 52,
     "merge_sidecar::tests": 118,
     "sumeragi::v2_lane_work::tests": 53,
-    "sumeragi::v2_runner::tests": 32,
-    "sumeragi::v2_worker::tests": 88,
+    "sumeragi::v2_runner::tests": 34,
+    "sumeragi::v2_worker::tests": 129,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
@@ -288,8 +291,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "328352eac7b03ac4453475fe62d4c054"
-    "5ee90fd2dfdeaf36731a13f86f32cd17"
+    "1873bbd68c9736db1991842c5f34b0ff"
+    "4b98460567a76649619d256d4e510700"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -1163,4 +1166,4 @@ if [[ "$(grep -Fxc -- "    env \"\${ENV_VARS[@]}\" IROHA_MULTILANE_RELEASE_MODE=
   exit 1
 fi
 
-echo "[multilane-release-inventory] 81 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 38 modules, exact 299/299 G-UNIT (105 core, 137 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 82 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 39 modules, exact 299/299 G-UNIT (105 core, 137 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"

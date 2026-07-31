@@ -1083,8 +1083,8 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 738 named tests
-across 38 Rust modules. The preceding 298-name inventory was produced from the
+Before network startup, the executable wrapper inventories 806 named tests
+across 39 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -1166,9 +1166,21 @@ height context before Apply schedules any work adds one exact `v2_effects`
 regression, yielding the 733-test checkpoint.
 Five exact-Serve lifecycle regressions pin Pending/Reserved rollback, shutdown
 rollback, route-neutral tombstone replay, and cached replay after the singular
-future-slot barrier. The current inventory therefore contains 738 tests across 38 modules.
+future-slot barrier, producing the 738-test checkpoint. Another 35 exact
+CertifiedServe ingress and worker regressions bind gate ordering, immutable
+admission ordinals, frozen predecessors, coalesced retries, durable restart,
+terminal replay, owner replacement, and anti-resurrection behavior. One
+four-peer leader-wire lifecycle-store regression binds the full
+origin/phase/chunk slot product and restart-stable terminal coalescing. The
+resulting checkpoint contained 774 tests. Eight runtime/effect/runner
+regressions now bind Decision/lock retirement of orphaned leader-wire owners,
+same-turn terminal consumption across live and recovery capacity retries, and
+fail-closed rejection of the unreachable semantic-only authenticated
+Coalesce branch. Subsequent source reconciliation and exact-ingress lifecycle,
+restart, provenance, and quarantine regressions bind the actor-global logical
+owner separately from every physical queue occurrence. The current inventory therefore contains 806 tests across 39 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 81 legs. The
+corridor contains 82 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
@@ -1241,7 +1253,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`328352eac7b03ac4453475fe62d4c0545ee90fd2dfdeaf36731a13f86f32cd17`.
+`1873bbd68c9736db1991842c5f34b0ff4b98460567a76649619d256d4e510700`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1278,7 +1290,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 81 legs, including separate exact
+the complete pre-network corridor now spans 82 legs, including separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, the daemon genesis
 module, and source-sealed command-success legs. Its finality, offline compact-QC,
@@ -1363,8 +1375,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and the exact
-738-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 82 pre-network legs and the exact
+806-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and
@@ -1399,9 +1411,9 @@ bash ci/check_sumeragi_formal.sh
 TLC requires exact exhaustive completion from two bounded configurations, one
 exact deterministic-simulation transcript from each of four configurations,
 and the exact deliberately violated invariant from the locked-Commit recovery
-witness; none of these outcomes changes proof status. Its liveness configuration uses
-finite `65535` timeout and view ceilings, above the configured complete service
-budget and within the
+witness; none of these outcomes changes proof status. Its liveness configuration
+uses finite `1000000` timeout and view ceilings, above the configured complete
+service budget and within the
 pinned TLC 1.7.4 integer evaluator; the deductive model keeps these constants
 symbolic. The ChainEpoch simulation uses a separate full-state harness:
 `ChainEpochTlcInit` initializes inherited Core state, `ChainEpochTlcVars`

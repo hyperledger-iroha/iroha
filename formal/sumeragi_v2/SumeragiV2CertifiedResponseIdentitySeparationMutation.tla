@@ -13,12 +13,11 @@ Production keeps these values distinct:
   * the frozen-QC signer index cited by the response.
 
 The exact request was originally routed to a distinct current voter.  The
-honest response is instead signed by a rotated, zero-power archive server
-outside the current voting roster and arrives through an unrelated relay.
-The fixed predicate authenticates the response under that archive server,
-checks the exact request hash and coordinates, and checks only the cited
-responder against the frozen QC.  Routing is a liveness choice and grants no
-response authority.
+honest response is signed by a frozen-QC signer which has rotated out of the
+current voting roster and arrives through an unrelated relay.  The fixed
+predicate authenticates the response under that archive signer, checks the
+exact request hash and coordinates, and independently checks the cited signer.
+Routing is a liveness choice and grants no response authority.
 
 One mutant conflates the archive server with the cited responder.  A second
 mutant incorrectly requires the archive server to equal the request's old
@@ -33,7 +32,7 @@ CONSTANT Mode
 
 Modes ==
   {"SeparatedIdentities",
-   "ArchiveServerMustBeQcSigner",
+   "ArchiveServerMustEqualCitedSigner",
    "ArchiveServerMustMatchRouteTarget"}
 
 ASSUME Mode \in Modes
@@ -64,7 +63,8 @@ CommitQc ==
    view |-> RecoveryView,
    phase |-> "Commit",
    subject |-> RecoverySubject,
-   signers |-> {Requester, FrozenSigner, OtherFrozenSigner}]
+   signers |->
+     {Requester, FrozenSigner, OtherFrozenSigner, RotatedArchive}]
 
 ExactRequestPreimage ==
   [round |-> [height |-> RecoveryContext.height, view |-> RecoveryView],
@@ -133,6 +133,7 @@ SeparatedResponseAuthorized(response) ==
   /\ response.kind = "CertifiedResponse"
   /\ ExactResponseCoordinates(response)
   /\ ArchiveSignatureAuthenticated(response)
+  /\ response.archiveServer \in CertifiedRequest.certificate.signers
   /\ response.citedResponder \in CertifiedRequest.certificate.signers
 
 ConflatedResponseAuthorized(response) ==
@@ -147,7 +148,7 @@ RouteBoundResponseAuthorized(response) ==
 ResponseAuthorized(response) ==
   CASE Mode = "SeparatedIdentities" ->
          SeparatedResponseAuthorized(response)
-    [] Mode = "ArchiveServerMustBeQcSigner" ->
+    [] Mode = "ArchiveServerMustEqualCitedSigner" ->
          ConflatedResponseAuthorized(response)
     [] OTHER ->
          RouteBoundResponseAuthorized(response)
@@ -247,7 +248,7 @@ AuthorityIdentitiesAreDistinct ==
   /\ RotatedArchive # FrozenSigner
   /\ RotatedArchive # OriginalRouteTarget
   /\ FrozenSigner # OriginalRouteTarget
-  /\ RotatedArchive \notin CommitQc.signers
+  /\ RotatedArchive \in CommitQc.signers \ {Requester}
   /\ UntrustedRelay \notin CommitQc.signers
   /\ FrozenSigner \in CommitQc.signers \ {Requester}
   /\ CertifiedRequest.routeTarget = OriginalRouteTarget
