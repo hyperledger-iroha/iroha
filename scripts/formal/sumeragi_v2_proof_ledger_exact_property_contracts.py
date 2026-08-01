@@ -98,6 +98,47 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "LeaderWirePhysicalDependencyCertificate",
+    ): (
+        "LET item == packet.item IN "
+        "[stage |-> LeaderWirePhysicalLifecycleStageRank(packet, item), "
+        "packetRank |-> LeaderWirePhysicalPacketDependencyRank(snapshot, packet), "
+        "ingressRank |-> LeaderWirePhysicalIngressDependencyRank(item), "
+        "predecessors |-> snapshot.predecessors, "
+        "schedulerCuts |-> snapshot.schedulerCuts, "
+        "physicalCuts |-> snapshot.physicalCuts, "
+        "causalProducerRank |-> LeaderWirePhysicalCausalProducerRank(snapshot, item), "
+        "causalProducerCarrier |-> "
+        "ExactDecisionTargetNeutralComposedCausalEpisodeCarrier, "
+        "producerBudget |-> "
+        "ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)]"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "LeaderWirePhysicalFrozenCertificateFrontier",
+    ): (
+        "LET certificate == "
+        "LeaderWirePhysicalDependencyCertificate(snapshot, packet) IN "
+        "/\\ snapshot.clock \\in Nat "
+        "/\\ asyncNow = snapshot.clock /\\ gst "
+        "/\\ ExactDecisionTargetNeutralSnapshotActive( "
+        "snapshot, snapshot.clock) "
+        "/\\ packet \\in snapshot.packets "
+        "/\\ packet \\in OverdueResponsivePackets "
+        "/\\ \\/ LeaderWireCurrentContextWitnessIdentity(packet.item) "
+        "\\/ LeaderWireProductiveTransportIdentity(packet.item) "
+        "/\\ certificate.predecessors = snapshot.predecessors "
+        "/\\ certificate.schedulerCuts = snapshot.schedulerCuts "
+        "/\\ certificate.physicalCuts = snapshot.physicalCuts "
+        "/\\ certificate.packetRank = "
+        "LeaderWirePhysicalPacketDependencyRank(snapshot, packet) "
+        "/\\ certificate.causalProducerRank = "
+        "LeaderWirePhysicalCausalProducerRank(snapshot, packet.item) "
+        "/\\ certificate.producerBudget = "
+        "ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderFreshNodeServiceWindow",
     ): (
         "/\\ node \\in ValidatorIds "

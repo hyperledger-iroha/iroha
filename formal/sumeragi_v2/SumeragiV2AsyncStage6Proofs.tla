@@ -486,7 +486,7 @@ Stage6NonCompletionCapacityServeEpisodeResidual(candidate, position, rank) ==
   /\ AsyncProgressOwnershipInvariant
   /\ ProtectedStage6Pending(candidate, position)
   /\ ~Stage6NonCompletionCapacityProgress(candidate, position, rank)
-  /\ \/ /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+  /\ \/ /\ AsyncIngressSchedulerBarrierActive(candidate.node)
         /\ asyncRunnerPhase[candidate.node] = "Ingress"
      \/ AsyncCandidateProducerContinuationRunnerResolutionRequired(
           candidate.node)

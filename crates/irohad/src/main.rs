@@ -9169,6 +9169,7 @@ impl Iroha {
         let genesis_trust_anchor = ConfiguredGenesisTrustAnchor::from(&config.genesis);
         let stored_genesis_block =
             read_stored_genesis_block(kura.as_ref(), block_count, provisional_imported_prefix)?;
+        let stored_genesis_hash = stored_genesis_block.as_ref().map(|block| block.0.hash());
         if !provisional_imported_prefix
             && block_count.0 == 0
             && stored_genesis_block.is_none()
