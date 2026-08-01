@@ -183,24 +183,18 @@ class DockerEntrypointTest(unittest.TestCase):
         bundle_path = self.temp_path / "bundle"
         runtime_assets = bundle_path / "runtime"
         manifests = bundle_path / "manifests"
-        kagemusha = bundle_path / "kagemusha"
         admission = bundle_path / "sorafs_admission"
-        artifact_dir = self.temp_path / "kagemusha-artifacts"
         for directory in (
             runtime_assets,
             manifests,
-            kagemusha,
             admission,
-            artifact_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
         onboarding_signer = runtime_assets / "onboarding-signer.key"
         faucet_signer = runtime_assets / "faucet-signer.key"
-        release_policy = kagemusha / "release-policy.norito"
         governance_manifest = manifests / "governance.manifest.json"
         onboarding_signer.write_text("onboarding\n", encoding="utf-8")
         faucet_signer.write_text("faucet\n", encoding="utf-8")
-        release_policy.write_bytes(b"policy")
         governance_manifest.write_text("{}\n", encoding="utf-8")
 
         config_path = bundle_path / "config.toml"
@@ -216,10 +210,6 @@ class DockerEntrypointTest(unittest.TestCase):
                     "",
                     "[torii.faucet]",
                     f'private_key_file = "{faucet_signer}"',
-                    "",
-                    "[settlement.offline]",
-                    f'kagemusha_release_policy_path = "{release_policy}"',
-                    f'kagemusha_artifact_dir = "{artifact_dir}"',
                     "",
                     "[sorafs.discovery.admission]",
                     f'envelopes_dir = "{admission}"',
@@ -243,7 +233,6 @@ class DockerEntrypointTest(unittest.TestCase):
                 "IROHA_TAIRA_GENESIS": str(genesis_path),
                 "TAIRA_RUNTIME_PROFILE": "production",
                 "TAIRA_IMAGE_REFERENCE": image_reference,
-                "IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR": str(artifact_dir),
             }
         )
 
@@ -255,49 +244,12 @@ class DockerEntrypointTest(unittest.TestCase):
         validation_only = self._run(
             "--validate-taira-production-config",
             str(config_path),
-            env={
-                "IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR": str(artifact_dir),
-            },
+            env={},
         )
         self.assertEqual(validation_only.returncode, 0, validation_only.stderr)
         self.assertEqual(validation_only.stdout, "")
 
-        release_policy.unlink()
-        rejected = self._run(
-            env={
-                "IROHA_IMAGE_CONFIG_PROFILE": "taira",
-                "IROHA_TAIRA_CONFIG": str(config_path),
-                "IROHA_TAIRA_RUNTIME_CONFIG": str(runtime_config_path),
-                "IROHA_TAIRA_GENESIS": str(genesis_path),
-                "TAIRA_RUNTIME_PROFILE": "production",
-                "TAIRA_IMAGE_REFERENCE": image_reference,
-                "IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR": str(artifact_dir),
-            }
-        )
-        self.assertNotEqual(rejected.returncode, 0)
-        self.assertIn("missing Taira Kagemusha release policy", rejected.stderr)
-
-        external_policy_dir = self.temp_path / "external-policy"
-        external_policy_dir.mkdir()
-        (external_policy_dir / "release-policy.norito").write_bytes(b"policy")
-        kagemusha.rmdir()
-        kagemusha.symlink_to(external_policy_dir, target_is_directory=True)
-        symlinked_parent = self._run(
-            env={
-                "IROHA_IMAGE_CONFIG_PROFILE": "taira",
-                "IROHA_TAIRA_CONFIG": str(config_path),
-                "IROHA_TAIRA_RUNTIME_CONFIG": str(runtime_config_path),
-                "IROHA_TAIRA_GENESIS": str(genesis_path),
-                "TAIRA_RUNTIME_PROFILE": "production",
-                "TAIRA_IMAGE_REFERENCE": image_reference,
-                "IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR": str(artifact_dir),
-            }
-        )
-        self.assertNotEqual(symlinked_parent.returncode, 0)
-        self.assertIn(
-            "symlinked Taira Kagemusha policy directory",
-            symlinked_parent.stderr,
-        )
+        self.assertNotIn("Kagemusha", result.stderr)
 
     def test_runtime_config_update_replaces_symlink_without_following_it(self) -> None:
         config_path = self.temp_path / "config.toml"

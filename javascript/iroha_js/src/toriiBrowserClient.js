@@ -5,12 +5,11 @@ import { NumericV1, NumericV1Error } from "./numericV1.js";
 import { browserSignedTransactionHashHex } from "./transactionCodec.js";
 import { buildCanonicalJsonRequest } from "./canonicalRequest.js";
 import {
-  normalizeKagemushaAssetSelector,
   normalizeKagemushaOperationId,
   normalizeKagemushaOperationReference,
   normalizeKagemushaOperationStatus,
   normalizeKagemushaRedeemRequestV4,
-  normalizeKagemushaReadinessV4,
+  normalizeOfflineStatus,
   normalizeKagemushaTopUpRequestV4,
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
@@ -1182,17 +1181,20 @@ export class ToriiBrowserClient {
       normalizedOptions.config?.toriiClient?.timeoutMs ?? normalizedOptions.timeoutMs ?? null;
   }
 
-  getKagemushaReadinessV4(assetDefinitionId, options = {}) {
-    const selector = normalizeKagemushaAssetSelector(assetDefinitionId);
-    const opts = kagemushaOptions(options, "getKagemushaReadinessV4 options");
+  getOfflineCapability(options = {}) {
+    const opts = kagemushaOptions(options, "getOfflineCapability options");
     return this._json("GET", "/v1/offline/readiness", {
-      params: { asset_definition_id: selector },
       signal: opts.signal,
       responseObserver: (response) => requireKagemushaJsonContentType(
         response.headers.get("content-type"),
-        "Kagemusha readiness response",
+        "Offline capability response",
       ),
-    }).then((payload) => normalizeKagemushaReadinessV4(payload, selector));
+    }).then((payload) => normalizeOfflineStatus(payload));
+  }
+
+  /** @deprecated Use getOfflineCapability(). The asset selector is ignored. */
+  getKagemushaReadinessV4(_assetDefinitionId, options = {}) {
+    return this.getOfflineCapability(options);
   }
 
   submitKagemushaTopUpV4(request, options = {}) {

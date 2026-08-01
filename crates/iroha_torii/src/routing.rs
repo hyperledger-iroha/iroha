@@ -244,11 +244,8 @@ pub const SORANET_PRIVACY_EVENT_ENDPOINT: &str = "/v1/soranet/privacy/event";
 #[cfg(feature = "telemetry")]
 pub const SORANET_PRIVACY_SHARE_ENDPOINT: &str = "/v1/soranet/privacy/share";
 
-pub async fn handler_openapi_spec(State(state): State<crate::SharedAppState>) -> Response {
-    let offline_enabled = state.state.view().settlement.offline.enabled;
-    match norito::json::to_string_pretty(&crate::openapi::generate_spec_for_runtime(
-        offline_enabled,
-    )) {
+pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -> Response {
+    match norito::json::to_string_pretty(&crate::openapi::generate_spec()) {
         Ok(body) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/json")
@@ -75080,12 +75077,11 @@ mod status_block_visibility_tests {
     #[test]
     fn authoritative_state_height_replaces_lagging_and_leading_counters() {
         for telemetry_height in [3, 19] {
+            let mut sumeragi = SumeragiConsensusStatus::default();
+            sumeragi.commit_qc_height = telemetry_height;
             let mut status = Status {
                 blocks: telemetry_height,
-                sumeragi: Some(SumeragiConsensusStatus {
-                    commit_qc_height: telemetry_height,
-                    ..SumeragiConsensusStatus::default()
-                }),
+                sumeragi: Some(sumeragi),
                 ..Status::default()
             };
 
@@ -75097,12 +75093,11 @@ mod status_block_visibility_tests {
 
     #[test]
     fn missing_state_anchor_keeps_monotonic_commit_qc_fallback() {
+        let mut sumeragi = SumeragiConsensusStatus::default();
+        sumeragi.commit_qc_height = 8;
         let mut status = Status {
             blocks: 5,
-            sumeragi: Some(SumeragiConsensusStatus {
-                commit_qc_height: 8,
-                ..SumeragiConsensusStatus::default()
-            }),
+            sumeragi: Some(sumeragi),
             ..Status::default()
         };
 

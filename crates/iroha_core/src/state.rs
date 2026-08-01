@@ -7126,6 +7126,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     }
 
     /// Remove a repo agreement and keep derived indexes consistent.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn remove_repo_agreement_entry(
         &mut self,
         agreement_id: &RepoAgreementId,
@@ -16711,6 +16712,7 @@ impl<T: Ord> SortedUniqueVec<T> {
         self.inner.is_empty()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn insert(&mut self, value: T) -> bool {
         match self.inner.binary_search(&value) {
             Ok(_) => false,
@@ -16721,6 +16723,7 @@ impl<T: Ord> SortedUniqueVec<T> {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn remove(&mut self, value: &T) -> bool {
         if let Ok(pos) = self.inner.binary_search(value) {
             self.inner.remove(pos);
@@ -16762,10 +16765,12 @@ type NameId = u32;
 #[derive(Default, Debug, Clone)]
 struct NameIntern {
     entries: Vec<iroha_data_model::name::Name>,
+    #[cfg_attr(not(test), allow(dead_code))]
     index: std::collections::BTreeMap<iroha_data_model::name::Name, NameId>,
 }
 
 impl NameIntern {
+    #[cfg_attr(not(test), allow(dead_code))]
     fn intern(&mut self, name: iroha_data_model::name::Name) -> NameId {
         if let Some(&id) = self.index.get(&name) {
             return id;
@@ -16788,18 +16793,21 @@ impl NameIntern {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 enum PermissionDeltaOp {
     Grant,
     Revoke,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
 enum RoleDeltaOp {
     Grant,
     Revoke,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
 enum DetachedPermissionOp {
     AccountPermission {
         account: AccountId,
@@ -17060,6 +17068,7 @@ impl DetachedStateTransactionDelta {
         self.asset_transfer_amounts.push(amount);
     }
     /// Record a key-value insertion/update on an account.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_account_kv(
         &mut self,
         id: iroha_data_model::account::AccountId,
@@ -17072,6 +17081,7 @@ impl DetachedStateTransactionDelta {
         self.account_kv_set_vals.push(val);
     }
     /// Record a key-value removal on an account.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn remove_account_kv(
         &mut self,
         id: iroha_data_model::account::AccountId,
@@ -17082,6 +17092,7 @@ impl DetachedStateTransactionDelta {
         self.account_kv_del_key_ids.push(key_id);
     }
     /// Record a key-value insertion/update on a domain.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_domain_kv(
         &mut self,
         id: iroha_data_model::domain::DomainId,
@@ -17094,6 +17105,7 @@ impl DetachedStateTransactionDelta {
         self.domain_kv_set_vals.push(val);
     }
     /// Record a key-value removal on a domain.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn remove_domain_kv(
         &mut self,
         id: iroha_data_model::domain::DomainId,
@@ -17104,14 +17116,17 @@ impl DetachedStateTransactionDelta {
         self.domain_kv_del_key_ids.push(key_id);
     }
     /// Record an NFT creation.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_nft(&mut self, nft: iroha_data_model::nft::Nft) {
         self.nft_create.insert(nft.id().clone(), nft);
     }
     /// Record an NFT deletion.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn unregister_nft(&mut self, id: iroha_data_model::nft::NftId) {
         self.nft_delete.insert(id);
     }
     /// Record a key-value insertion/update on an NFT.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_nft_kv(
         &mut self,
         id: iroha_data_model::nft::NftId,
@@ -17124,6 +17139,7 @@ impl DetachedStateTransactionDelta {
         self.nft_kv_set_vals.push(val);
     }
     /// Record a key-value removal on an NFT.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn remove_nft_kv(
         &mut self,
         id: iroha_data_model::nft::NftId,
@@ -17134,6 +17150,7 @@ impl DetachedStateTransactionDelta {
         self.nft_kv_del_key_ids.push(key_id);
     }
     /// Record a key-value insertion/update on an asset definition.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_asset_def_kv(
         &mut self,
         id: iroha_data_model::asset::AssetDefinitionId,
@@ -17146,6 +17163,7 @@ impl DetachedStateTransactionDelta {
         self.asset_def_kv_set_vals.push(val);
     }
     /// Record a key-value removal on an asset definition.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn remove_asset_def_kv(
         &mut self,
         id: iroha_data_model::asset::AssetDefinitionId,
@@ -17157,6 +17175,7 @@ impl DetachedStateTransactionDelta {
     }
 
     /// Record a permission grant to an account.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn grant_permission(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -17172,6 +17191,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a permission revoke from an account.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn revoke_permission(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -17187,6 +17207,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a role grant to an account.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn grant_role(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -17198,6 +17219,7 @@ impl DetachedStateTransactionDelta {
             .push(DetachedPermissionOp::RoleAssignment { account, role, op });
     }
     /// Record a role revoke from an account.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn revoke_role(
         &mut self,
         account: iroha_data_model::account::AccountId,
@@ -17209,6 +17231,7 @@ impl DetachedStateTransactionDelta {
             .push(DetachedPermissionOp::RoleAssignment { account, role, op });
     }
     /// Record a role-permission grant.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn grant_role_permission(
         &mut self,
         role: iroha_data_model::role::RoleId,
@@ -17224,6 +17247,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a role-permission revoke.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn revoke_role_permission(
         &mut self,
         role: iroha_data_model::role::RoleId,
@@ -17239,11 +17263,13 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a peer registration.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register_peer(&mut self, id: iroha_data_model::peer::PeerId) {
         let _ = self.peer_removes.remove(&id);
         self.peer_adds.insert(id);
     }
     /// Record a peer unregistration.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn unregister_peer(&mut self, id: iroha_data_model::peer::PeerId) {
         let _ = self.peer_adds.remove(&id);
         self.peer_removes.insert(id);
@@ -17421,6 +17447,7 @@ impl DetachedStateTransactionDelta {
     }
 
     /// Record a parameter update to be applied at merge.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_parameter(&mut self, param: iroha_data_model::parameter::Parameter) {
         self.param_updates.push(param);
     }
@@ -17431,6 +17458,7 @@ impl DetachedStateTransactionDelta {
     /// # Errors
     /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
     #[allow(clippy::too_many_lines)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn merge_into(
         self,
         state_block: &mut StateBlock<'_>,
@@ -32110,6 +32138,7 @@ impl State {
             .collect()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn lane_relay_committee_seed(
         &self,
         dataspace_id: DataSpaceId,
@@ -34138,14 +34167,34 @@ impl State {
                             "pending queue-plan admission certificate is invalid: {error}"
                         ))
                     })?;
-                Ok((validated.registry_key, bytes))
+                Ok((validated.registry_key, validated.registry_value, bytes))
             })
             .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
-        ordered.sort_by(|left, right| left.0.cmp(&right.0));
-        if ordered.windows(2).any(|pair| pair[0].0 == pair[1].0) {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "pending queue-plan admissions contain duplicate source registry keys".to_owned(),
-            ));
+        ordered.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        let mut canonical = Vec::with_capacity(ordered.len());
+        for (registry_key, registry_value, bytes) in ordered {
+            if let Some((previous_key, previous_value, _)) = canonical.last() {
+                if previous_key == &registry_key {
+                    if previous_value != &registry_value {
+                        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                            "pending queue-plan admissions contain conflicting bindings for one source registry key"
+                                .to_owned(),
+                        ));
+                    }
+                    // Distinct authority response timing may produce multiple valid quorum
+                    // certificates for the same immutable binding.  Their signer subsets and
+                    // bytes can differ, but they are one semantic admission.  Sorting by the
+                    // complete tuple above makes the first certificate the deterministic
+                    // canonical representative on every peer.
+                    continue;
+                }
+            }
+            canonical.push((registry_key, registry_value, bytes));
         }
 
         let mut candidate = if let Some(candidate) = base {
@@ -34182,7 +34231,7 @@ impl State {
         let available = unsigned_limit.saturating_sub(base_len);
         let mut selected_raw_bytes = 0_usize;
         let mut selected_framed_bytes = 0_usize;
-        for (_, bytes) in ordered {
+        for (_, _, bytes) in canonical {
             let framed_estimate = bytes.len().saturating_add(16);
             if candidate.queue_plan_admissions.len()
                 == iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS
@@ -66748,11 +66797,12 @@ pub(crate) mod deserialize {
                 ));
             }
             if location.state == MusubiArchiveLocationStateV1::Retired {
-                if !by_pin.get(&location.pin_manifest).is_some_and(|reference| {
-                    !reference.active && reference.location == *key
-                }) || !by_order
-                    .get(&location.replication_order)
+                if !by_pin
+                    .get(&location.pin_manifest)
                     .is_some_and(|reference| !reference.active && reference.location == *key)
+                    || !by_order
+                        .get(&location.replication_order)
+                        .is_some_and(|reference| !reference.active && reference.location == *key)
                 {
                     return Err(invalid(
                         "retired archive location is missing an immutable reuse tombstone".into(),

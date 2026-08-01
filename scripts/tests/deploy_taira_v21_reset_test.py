@@ -43,10 +43,6 @@ def _mkdir(path: Path) -> None:
     path.chmod(0o700)
 
 
-def _tree_sha(root: Path) -> str:
-    return MODULE.release_tree_sha256(root, os.getuid(), os.getgid())
-
-
 def test_acl_gate_is_a_stable_noop_off_macos(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -152,66 +148,6 @@ def _build_bundle(tmp_path: Path, binary_sha: str, source_commit: str) -> Path:
     ):
         _write(bundle / name, body)
 
-    attestation = b"NRT0-release-attestation"
-    attestation_sha = hashlib.sha256(attestation).hexdigest()
-    release_manifest = {
-        "chain_id": MODULE.CHAIN_ID,
-        "asset": MODULE.OFFLINE_ASSET_ID,
-        "asset_scale": MODULE.OFFLINE_ASSET_SCALE,
-        "activation_height": 2,
-        "bridge_abi_version": MODULE.OFFLINE_BRIDGE_ABI,
-        "generation": "production-gate-real-artifacts-v4",
-        "withdrawal_height": MODULE.MINIMUM_RELEASE_WITHDRAWAL_HEIGHT,
-        "max_proof_bytes": 131_072,
-        "release_attestation_sha256": attestation_sha,
-    }
-    manifest_norito = b"NRT0-authenticated-release"
-    release_sha = hashlib.sha256(manifest_norito).hexdigest()
-    _mkdir(bundle / "kagemusha")
-    _mkdir(bundle / "kagemusha" / "catalog")
-    release = bundle / "kagemusha" / "catalog" / release_sha
-    _mkdir(release)
-    _write(release / "manifest.norito", manifest_norito)
-    _write(release / "manifest.norito.sha256", f"{release_sha}\n".encode())
-    _write(
-        release / "manifest.json",
-        (json.dumps(release_manifest, sort_keys=True) + "\n").encode(),
-    )
-    _write(release / MODULE.RELEASE_ATTESTATION_FILE_NAME, attestation)
-    for name in sorted(
-        MODULE.EXPECTED_RELEASE_FILE_NAMES
-        - {
-            "manifest.norito",
-            "manifest.norito.sha256",
-            "manifest.json",
-            MODULE.RELEASE_ATTESTATION_FILE_NAME,
-        }
-    ):
-        _write(release / name, f"authenticated-{name}".encode())
-    _write(bundle / "kagemusha" / "release-policy-v1.norito", b"policy")
-    tree_sha = _tree_sha(bundle / "kagemusha")
-    installed_release = MODULE.INSTALL_ROOT / "releases" / tree_sha
-    operator_identity = {
-        "cash_handoff_capability": MODULE.OFFLINE_CAPABILITY,
-        "required_bridge_abi_version": MODULE.OFFLINE_BRIDGE_ABI,
-        "asset_definition_id": MODULE.OFFLINE_ASSET_ID,
-        "asset_scale": MODULE.OFFLINE_ASSET_SCALE,
-        "artifact_set": {
-            "generation": "production-gate-real-artifacts-v4",
-            "manifest_sha256": release_sha,
-            "release_policy_sha256": hashlib.sha256(b"policy").hexdigest(),
-            "release_attestation_sha256": attestation_sha,
-            "activation_height": 2,
-            "withdrawal_height": MODULE.MINIMUM_RELEASE_WITHDRAWAL_HEIGHT,
-            "max_proof_bytes": 131_072,
-            "asset_scale": MODULE.OFFLINE_ASSET_SCALE,
-        },
-    }
-    _write(
-        bundle / "operator-identity.json",
-        (json.dumps(operator_identity, sort_keys=True) + "\n").encode(),
-    )
-
     rendered = bundle / "rendered"
     _mkdir(rendered)
     _write(rendered / "genesis.json", (bundle / "genesis.json").read_bytes())
@@ -230,9 +166,6 @@ address = "addr:127.0.0.1:{MODULE.P2P_PORTS[index]}#0000"
 [torii]
 address = "addr:127.0.0.1:{MODULE.TORII_PORTS[index]}#0000"
 
-[torii.kagemusha_commands]
-enabled = true
-
 [nexus.storage]
 local_budget_bytes = {MODULE.NODE_STORAGE_BUDGET_BYTES}
 
@@ -242,13 +175,6 @@ wsv_snapshots_bps = 2000
 sorafs_bps = 0
 soranet_spool_bps = 250
 soravpn_spool_bps = 250
-
-[settlement.offline]
-enabled = true
-escrow_required = true
-kagemusha_release_policy_path = "{installed_release / 'release-policy-v1.norito'}"
-kagemusha_artifact_dir = "{installed_release / 'catalog'}"
-kagemusha_catalog_qualification_seal_path = "{MODULE.qualification_seal_path(tree_sha)}"
 
 [genesis]
 file = "{bundle / 'genesis.signed.nrt'}"
@@ -266,9 +192,6 @@ expected_hash = "{GENESIS_EXPECTED_HASH}"
         "node_storage_budget_bytes": MODULE.NODE_STORAGE_BUDGET_BYTES,
         "node_storage_budget_weights": MODULE.NODE_STORAGE_WEIGHTS,
         "nexus_storage_budget_policy": MODULE.NODE_STORAGE_BUDGET_POLICY,
-        "offline_release_policy": "mandatory-authenticated-kagemusha-v4-activation-height-2",
-        "offline_asset_definition_id": MODULE.OFFLINE_ASSET_ID,
-        "offline_asset_scale": MODULE.OFFLINE_ASSET_SCALE,
         "source_commit": source_commit,
         "irohad_sha256": binary_sha,
         "genesis_public_key": GENESIS_PUBLIC_KEY,
@@ -282,13 +205,6 @@ expected_hash = "{GENESIS_EXPECTED_HASH}"
         "base_config_sha256": hashlib.sha256(
             (bundle / "base-config.toml").read_bytes()
         ).hexdigest(),
-        "operator_identity_sha256": hashlib.sha256(
-            (bundle / "operator-identity.json").read_bytes()
-        ).hexdigest(),
-        "kagemusha_manifest_sha256": release_sha,
-        "kagemusha_release_attestation_sha256": attestation_sha,
-        "kagemusha_release_policy_sha256": hashlib.sha256(b"policy").hexdigest(),
-        "kagemusha_release_tree_sha256": tree_sha,
         "configs": config_hashes,
         "prewarmed_storage_sha256": {
             slug: MODULE.EMPTY_TREE_SHA256 for slug in MODULE.SLUGS
@@ -326,9 +242,6 @@ address = "addr:127.0.0.1:1337#ABCD"
 [torii]
 address = "addr:127.0.0.1:8080#1234"
 
-[torii.kagemusha_commands]
-enabled = true
-
 [nexus.storage]
 local_budget_bytes = {MODULE.NODE_STORAGE_BUDGET_BYTES}
 
@@ -338,13 +251,6 @@ wsv_snapshots_bps = 2000
 sorafs_bps = 0
 soranet_spool_bps = 250
 soravpn_spool_bps = 250
-
-[settlement.offline]
-enabled = true
-escrow_required = true
-kagemusha_release_policy_path = "/Library/SORA/Taira/releases/tree/release-policy-v1.norito"
-kagemusha_artifact_dir = "/Library/SORA/Taira/releases/tree/catalog"
-kagemusha_catalog_qualification_seal_path = "/Library/SORA/Taira/seals/kagemusha-v4-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.norito"
 
 [genesis]
 file = "/private/reset/genesis.signed.nrt"
@@ -361,7 +267,6 @@ def test_projection_parser_extracts_all_required_fields() -> None:
 
     assert config["chain"] == MODULE.CHAIN_ID
     assert config["chain_discriminant"] == MODULE.CHAIN_DISCRIMINANT
-    assert config["torii"]["kagemusha_commands"]["enabled"] is True
     assert config["genesis"]["public_key"] == GENESIS_PUBLIC_KEY
     assert config["genesis"]["expected_hash"] == GENESIS_EXPECTED_HASH
     assert (
@@ -462,447 +367,6 @@ def test_bundle_preflight_requires_receipt_bound_reset_manifest_digest(
         )
 
 
-def test_bundle_preflight_requires_exact_release_file_names(tmp_path: Path) -> None:
-    binary_sha = "a" * 64
-    source_commit = "b" * 40
-    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
-    release = next((bundle / "kagemusha" / "catalog").iterdir())
-    (release / "cryptographic-review.evidence").rename(
-        release / "unreviewed-placeholder.evidence"
-    )
-
-    with pytest.raises(MODULE.DeploymentError, match="exact authenticated"):
-        _validate(bundle, binary_sha, source_commit)
-
-
-def test_release_cutover_moves_one_physical_copy_and_restores_on_rollback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bundle_path = _build_bundle(tmp_path, "c" * 64, "d" * 40)
-    bundle = _validate(bundle_path, "c" * 64, "d" * 40)
-    destination = tmp_path / "root-store" / bundle.release.tree_sha256
-    _mkdir(destination.parent)
-    release = dataclasses.replace(bundle.release, installed_root=destination)
-    bundle = dataclasses.replace(bundle, release=release)
-    source_file = next(
-        path
-        for path in release.source_root.rglob("*")
-        if path.is_file() and path.name.endswith(".proving-key.krv4")
-    )
-    original_inode = source_file.stat().st_ino
-    relative = source_file.relative_to(release.source_root)
-    monkeypatch.setattr(MODULE, "ensure_root_directory", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        MODULE, "rewrite_release_tree_ownership", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        MODULE, "require_hardened_release_identity", lambda _bundle: None
-    )
-
-    MODULE.move_release_to_root_store(bundle)
-
-    assert not release.source_root.exists()
-    assert (destination / relative).stat().st_ino == original_inode
-    assert list(tmp_path.rglob(source_file.name)) == [destination / relative]
-
-    MODULE.restore_release_to_bundle(bundle)
-    assert not destination.exists()
-    assert (release.source_root / relative).stat().st_ino == original_inode
-
-
-def test_release_cutover_recovers_signal_window_after_rename(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bundle_path = _build_bundle(tmp_path, "e" * 64, "f" * 40)
-    bundle = _validate(bundle_path, "e" * 64, "f" * 40)
-    destination = tmp_path / "root-store" / bundle.release.tree_sha256
-    _mkdir(destination.parent)
-    release = dataclasses.replace(bundle.release, installed_root=destination)
-    bundle = dataclasses.replace(bundle, release=release)
-    calls = 0
-
-    def interrupted_fsync(_path: Path) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise MODULE.DeploymentError("injected post-rename interruption")
-
-    monkeypatch.setattr(MODULE, "ensure_root_directory", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        MODULE, "rewrite_release_tree_ownership", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        MODULE, "require_hardened_release_identity", lambda _bundle: None
-    )
-    monkeypatch.setattr(MODULE, "fsync_directory", interrupted_fsync)
-
-    with pytest.raises(MODULE.DeploymentError, match="post-rename"):
-        MODULE.move_release_to_root_store(bundle)
-
-    assert release.source_root.is_dir()
-    assert not destination.exists()
-
-
-def test_release_cutover_rejects_root_swap_during_hardening(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bundle_path = _build_bundle(tmp_path, "1" * 64, "2" * 40)
-    bundle = _validate(bundle_path, "1" * 64, "2" * 40)
-    destination = tmp_path / "root-store" / bundle.release.tree_sha256
-    _mkdir(destination.parent)
-    release = dataclasses.replace(bundle.release, installed_root=destination)
-    bundle = dataclasses.replace(bundle, release=release)
-    displaced = release.source_root.with_name("displaced-kagemusha")
-    calls = 0
-
-    def swap_once(root: Path, **_kwargs: object) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            root.rename(displaced)
-            _mkdir(root)
-
-    monkeypatch.setattr(MODULE, "ensure_root_directory", lambda *args, **kwargs: None)
-    monkeypatch.setattr(MODULE, "rewrite_release_tree_ownership", swap_once)
-
-    with pytest.raises(MODULE.DeploymentError, match="rollback is incomplete"):
-        MODULE.move_release_to_root_store(bundle)
-
-    assert displaced.is_dir()
-    assert release.source_root.is_dir()
-    assert not destination.exists()
-
-
-def test_release_hardening_failure_restores_exact_private_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bundle_path = _build_bundle(tmp_path, "7" * 64, "8" * 40)
-    bundle = _validate(bundle_path, "7" * 64, "8" * 40)
-    destination = tmp_path / "root-store" / bundle.release.tree_sha256
-    _mkdir(destination.parent)
-    bundle = dataclasses.replace(
-        bundle,
-        release=dataclasses.replace(
-            bundle.release,
-            installed_root=destination,
-        ),
-    )
-    target = next(
-        path for path in bundle.release.source_root.rglob("*") if path.is_file()
-    )
-    real_rewrite = MODULE.rewrite_release_tree_ownership
-    calls = 0
-
-    def fail_then_restore(root: Path, **kwargs: object) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            target.chmod(0o400)
-            raise MODULE.DeploymentError("injected partial hardening failure")
-        real_rewrite(root, **kwargs)
-
-    monkeypatch.setattr(MODULE, "ensure_root_directory", lambda *args, **kwargs: None)
-    monkeypatch.setattr(MODULE, "rewrite_release_tree_ownership", fail_then_restore)
-
-    with pytest.raises(
-        MODULE.DeploymentError, match="injected partial hardening failure"
-    ):
-        MODULE.move_release_to_root_store(bundle)
-
-    assert calls == 2
-    assert bundle.release.source_root.is_dir()
-    assert not destination.exists()
-    MODULE.require_restored_release_source_identity(bundle)
-
-
-def test_release_hardening_cleanup_failure_is_explicitly_incomplete(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bundle_path = _build_bundle(tmp_path, "9" * 64, "a" * 40)
-    bundle = _validate(bundle_path, "9" * 64, "a" * 40)
-    destination = tmp_path / "root-store" / bundle.release.tree_sha256
-    _mkdir(destination.parent)
-    bundle = dataclasses.replace(
-        bundle,
-        release=dataclasses.replace(
-            bundle.release,
-            installed_root=destination,
-        ),
-    )
-    target = next(
-        path for path in bundle.release.source_root.rglob("*") if path.is_file()
-    )
-    calls = 0
-
-    def fail_hardening_and_cleanup(_root: Path, **_kwargs: object) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            target.chmod(0o400)
-            raise MODULE.DeploymentError("injected partial hardening failure")
-        raise OSError("injected ownership cleanup failure")
-
-    monkeypatch.setattr(MODULE, "ensure_root_directory", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        MODULE,
-        "rewrite_release_tree_ownership",
-        fail_hardening_and_cleanup,
-    )
-
-    with pytest.raises(
-        MODULE.DeploymentError,
-        match=r"release move failed.*rollback is incomplete",
-    ):
-        MODULE.move_release_to_root_store(bundle)
-
-    assert calls == 2
-    assert bundle.release.source_root.is_dir()
-    assert not destination.exists()
-    assert stat.S_IMODE(target.stat().st_mode) == 0o400
-
-
-@pytest.mark.parametrize(
-    ("mutation", "message"),
-    [
-        ("manifest", "reset manifest"),
-        ("signed-genesis", "signed genesis"),
-        ("config", "validator config"),
-        ("runtime", "runtime path"),
-        ("storage", "fresh-reset storage"),
-    ],
-)
-def test_post_qualification_gate_rechecks_every_mutable_runtime_identity(
-    tmp_path: Path, mutation: str, message: str
-) -> None:
-    bundle_path = _build_bundle(tmp_path, "3" * 64, "4" * 40)
-    bundle = _validate(bundle_path, "3" * 64, "4" * 40)
-    MODULE.require_mutable_bundle_identities(bundle, phase="during qualification")
-
-    if mutation == "manifest":
-        with (bundle.root / "reset-manifest.json").open("ab") as output:
-            output.write(b"\n")
-    elif mutation == "signed-genesis":
-        with (bundle.root / "genesis.signed.nrt").open("ab") as output:
-            output.write(b"mutation")
-    elif mutation == "config":
-        with bundle.peers[0].config.open("ab") as output:
-            output.write(b"\n# mutation\n")
-    elif mutation == "runtime":
-        info = bundle.peers[0].workdir.stat()
-        os.utime(
-            bundle.peers[0].workdir,
-            ns=(info.st_atime_ns, info.st_mtime_ns + 1),
-        )
-    else:
-        _write(bundle.peers[0].storage / "unexpected", b"mutation")
-
-    with pytest.raises(MODULE.DeploymentError, match=message):
-        MODULE.require_mutable_bundle_identities(bundle, phase="during qualification")
-
-
-def test_hardened_release_gate_binds_all_immutable_and_root_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bundle_path = _build_bundle(tmp_path, "5" * 64, "6" * 40)
-    bundle = _validate(bundle_path, "5" * 64, "6" * 40)
-    destination = tmp_path / "root-store" / bundle.release.tree_sha256
-    destination.parent.mkdir(parents=True)
-    bundle.release.source_root.rename(destination)
-    bundle = dataclasses.replace(
-        bundle,
-        release=dataclasses.replace(bundle.release, installed_root=destination),
-    )
-    target_file = next(path for path in destination.rglob("*") if path.is_file())
-    real_lstat = Path.lstat
-    mutation: dict[str, object] = {"field": None, "path": target_file}
-
-    def hardened_lstat(path: Path) -> SimpleNamespace | os.stat_result:
-        info = real_lstat(path)
-        try:
-            path.relative_to(destination)
-        except ValueError:
-            return info
-        is_directory = MODULE.stat.S_ISDIR(info.st_mode)
-        values = {
-            "st_dev": info.st_dev,
-            "st_ino": info.st_ino,
-            "st_mode": (
-                MODULE.stat.S_IFDIR | 0o550
-                if is_directory
-                else MODULE.stat.S_IFREG | 0o440
-            ),
-            "st_uid": 0,
-            "st_gid": bundle.owner_gid,
-            "st_nlink": info.st_nlink,
-            "st_size": info.st_size,
-            "st_mtime_ns": info.st_mtime_ns,
-            "st_ctime_ns": info.st_ctime_ns,
-        }
-        if path == mutation["path"]:
-            field = mutation["field"]
-            if field == "type":
-                values["st_mode"] = MODULE.stat.S_IFSOCK | 0o440
-            elif field == "mode":
-                values["st_mode"] = MODULE.stat.S_IFMT(values["st_mode"]) | 0o640
-            elif field is not None:
-                key = f"st_{field}"
-                values[key] = int(values[key]) + 1
-        return SimpleNamespace(**values)
-
-    monkeypatch.setattr(Path, "lstat", hardened_lstat)
-    MODULE.require_hardened_release_identity(bundle)
-
-    for field in ("dev", "ino", "type", "nlink", "size", "mtime_ns"):
-        mutation.update(field=field, path=target_file)
-        with pytest.raises(MODULE.DeploymentError, match="identity changed"):
-            MODULE.require_hardened_release_identity(bundle)
-    for field in ("uid", "gid", "mode"):
-        mutation.update(field=field, path=destination)
-        with pytest.raises(MODULE.DeploymentError, match="ownership or mode changed"):
-            MODULE.require_hardened_release_identity(bundle)
-
-
-def test_qualification_seal_path_is_bound_to_release_tree_digest() -> None:
-    digest = "a1" * 32
-
-    assert MODULE.MAX_QUALIFICATION_SEAL_BYTES == 8 * 1024 * 1024
-    assert MODULE.qualification_seal_path(digest) == Path(
-        f"/Library/SORA/Taira/seals/kagemusha-v4-{digest}.norito"
-    )
-    with pytest.raises(MODULE.DeploymentError, match="SHA-256"):
-        MODULE.qualification_seal_path("stale")
-
-
-def test_qualification_seal_preflight_never_replaces_existing_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    install_root = tmp_path / "Taira"
-    seals = install_root / "seals"
-    seals.mkdir(parents=True)
-    existing = seals / f"kagemusha-v4-{'ab' * 32}.norito"
-    existing.write_bytes(b"preexisting")
-    real_lstat = Path.lstat
-
-    def root_directory_lstat(path: Path) -> object:
-        if path == seals:
-            return SimpleNamespace(
-                st_mode=MODULE.stat.S_IFDIR | 0o755,
-                st_uid=0,
-                st_gid=0,
-            )
-        return real_lstat(path)
-
-    monkeypatch.setattr(MODULE, "INSTALL_ROOT", install_root)
-    monkeypatch.setattr(MODULE, "ensure_root_directory", lambda *args: None)
-    monkeypatch.setattr(Path, "lstat", root_directory_lstat)
-    bundle = SimpleNamespace(
-        release=SimpleNamespace(tree_sha256="ab" * 32),
-    )
-
-    with pytest.raises(MODULE.DeploymentError, match="preexisting"):
-        MODULE.prepare_qualification_seal_path(bundle)
-
-    assert existing.read_bytes() == b"preexisting"
-
-
-def test_candidate_writes_qualification_seal_with_exact_full_check_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    binary = tmp_path / "irohad"
-    seal = tmp_path / f"kagemusha-v4-{'ab' * 32}.norito"
-    bundle = SimpleNamespace(
-        release=SimpleNamespace(tree_sha256="ab" * 32),
-        peers=tuple(
-            SimpleNamespace(config=tmp_path / slug / "config.toml")
-            for slug in MODULE.SLUGS
-        ),
-    )
-    calls: list[tuple[list[str], dict[str, object]]] = []
-
-    def runner(command: list[str], **kwargs: object) -> SimpleNamespace:
-        calls.append((command, kwargs))
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(
-        MODULE,
-        "qualification_seal_path",
-        lambda _digest: seal,
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "authenticate_qualification_seal",
-        lambda path: (17,) if path == seal else (),
-    )
-
-    assert MODULE.write_catalog_qualification_seal(
-        binary,
-        bundle,
-        seal,
-        runner=runner,
-    ) == (17,)
-    assert calls == [
-        (
-            [
-                str(binary),
-                "--sora",
-                "--config",
-                str(bundle.peers[0].config),
-                "--check-config",
-                "--write-kagemusha-catalog-qualification-seal",
-                str(seal),
-            ],
-            {
-                "check": False,
-                "stdin": MODULE.subprocess.DEVNULL,
-                "capture_output": True,
-                "timeout": MODULE.CATALOG_QUALIFICATION_TIMEOUT_SECONDS,
-                "env": {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
-            },
-        )
-    ]
-
-
-def test_qualification_seal_requires_root_wheel_regular_0444(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "seal.norito"
-    identity = SimpleNamespace(
-        st_dev=1,
-        st_ino=2,
-        st_mode=MODULE.stat.S_IFREG | 0o444,
-        st_uid=0,
-        st_gid=0,
-        st_nlink=1,
-        st_size=128,
-        st_mtime_ns=3,
-        st_ctime_ns=4,
-    )
-    monkeypatch.setattr(MODULE, "open_regular", lambda *_args: (73, identity))
-    monkeypatch.setattr(MODULE.os, "fstat", lambda _descriptor: identity)
-    monkeypatch.setattr(MODULE.os, "fsync", lambda _descriptor: None)
-    monkeypatch.setattr(MODULE.os, "close", lambda _descriptor: None)
-    monkeypatch.setattr(MODULE, "fsync_directory", lambda _path: None)
-
-    assert MODULE.authenticate_qualification_seal(path) == (
-        1,
-        2,
-        MODULE.stat.S_IFREG | 0o444,
-        0,
-        0,
-        1,
-        128,
-        3,
-        4,
-    )
-
-    unsafe = SimpleNamespace(**vars(identity))
-    unsafe.st_mode = MODULE.stat.S_IFREG | 0o644
-    monkeypatch.setattr(MODULE, "open_regular", lambda *_args: (73, unsafe))
-    with pytest.raises(MODULE.DeploymentError, match="0444"):
-        MODULE.authenticate_qualification_seal(path)
-
-
 def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
     tmp_path: Path,
 ) -> None:
@@ -973,351 +437,9 @@ def test_binary_config_gate_stops_on_first_rejected_peer(tmp_path: Path) -> None
     assert calls == 2
 
 
-def _apply_gate_harness(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> SimpleNamespace:
-    install_root = tmp_path / "installed"
-    launch_daemons = tmp_path / "launch-daemons"
-    monkeypatch.setattr(MODULE, "INSTALL_ROOT", install_root)
-    bundle, sources, binary_info = _fake_plan(tmp_path)
-    old_cohort = tuple(
-        SimpleNamespace(
-            path=launch_daemons / f"{label}.plist",
-            body=f"old-{label}".encode(),
-            mode=0o600,
-            uid=os.getuid(),
-            gid=os.getgid(),
-        )
-        for label in MODULE.LABELS
-    )
-    for snapshot in old_cohort:
-        _write(snapshot.path, snapshot.body)
-    events: list[str] = []
-
-    class GateOps:
-        def bootout(self, _label: str) -> None:
-            events.append("bootout")
-
-    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(MODULE, "LAUNCH_DAEMONS", launch_daemons)
-    monkeypatch.setattr(MODULE, "ensure_root_directory", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        MODULE,
-        "install_immutable",
-        lambda *args, **kwargs: binary_info,
-    )
-    monkeypatch.setattr(MODULE, "require_exact_names", lambda *args, **kwargs: None)
-    monkeypatch.setattr(MODULE.os, "chmod", lambda *args, **kwargs: None)
-    monkeypatch.setattr(MODULE, "fsync_directory", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        MODULE,
-        "require_root_controlled_file",
-        lambda *args, **kwargs: SimpleNamespace(),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "install_runtime_layout",
-        lambda _bundle: tmp_path / "runtime",
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "require_filesystem_headroom",
-        lambda *args, **kwargs: (),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "render_plist",
-        lambda peer, *args, **kwargs: peer.label.encode(),
-    )
-    monkeypatch.setattr(
-        MODULE.plistlib,
-        "loads",
-        lambda body: {"Label": body.decode()},
-    )
-
-    initial_identity_checker = MODULE.require_bundle_runtime_unchanged
-
-    def check_initial_identities(checked_bundle: MODULE.BundlePlan) -> None:
-        events.append("runtime-recheck")
-        initial_identity_checker(checked_bundle)
-
-    monkeypatch.setattr(
-        MODULE,
-        "require_bundle_runtime_unchanged",
-        check_initial_identities,
-    )
-
-    def move_release(checked_bundle: MODULE.BundlePlan) -> Path:
-        events.append("release-move")
-        source = checked_bundle.release.source_root
-        destination = checked_bundle.release.installed_root
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        source.rename(destination)
-        return destination
-
-    def restore_release(checked_bundle: MODULE.BundlePlan) -> None:
-        events.append("release-restore")
-        checked_bundle.release.installed_root.rename(checked_bundle.release.source_root)
-
-    monkeypatch.setattr(MODULE, "move_release_to_root_store", move_release)
-    monkeypatch.setattr(MODULE, "restore_release_to_bundle", restore_release)
-    monkeypatch.setattr(MODULE, "verify_restored_snapshot", lambda *_args: None)
-
-    seal_path = MODULE.qualification_seal_path(bundle.release.tree_sha256)
-    seal_path.parent.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        MODULE,
-        "qualification_seal_path",
-        lambda _release_tree_sha256: seal_path,
-    )
-
-    def prepare_seal(_bundle: object) -> Path:
-        events.append("seal-prepare")
-        return seal_path
-
-    def authenticate_seal(path: Path) -> tuple[int, ...]:
-        assert path == seal_path
-        return MODULE.metadata_identity(path.lstat())
-
-    def remove_seal(path: Path, identity: tuple[int, ...]) -> None:
-        assert MODULE.metadata_identity(path.lstat()) == identity
-        events.append("seal-remove")
-        path.unlink()
-
-    return SimpleNamespace(
-        args=SimpleNamespace(
-            minimum_free_bytes=0,
-            restart_generation="9" * 64,
-        ),
-        bundle=bundle,
-        sources=sources,
-        old_cohort=old_cohort,
-        ops=GateOps(),
-        events=events,
-        seal_path=seal_path,
-        seal_preparer=prepare_seal,
-        seal_authenticator=authenticate_seal,
-        seal_remover=remove_seal,
-    )
-
-
-def test_apply_binary_gate_failure_restores_release_before_any_bootout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    harness = _apply_gate_harness(tmp_path, monkeypatch)
-
-    def reject_configs(_binary: Path, _bundle: object) -> None:
-        harness.events.append("binary-config-gate")
-        raise MODULE.DeploymentError("injected binary config rejection")
-
-    def write_seal(_binary: Path, _bundle: object, path: Path) -> tuple[int, ...]:
-        assert path == harness.seal_path
-        harness.events.append("seal-write")
-        path.write_bytes(b"created seal")
-        return MODULE.metadata_identity(path.lstat())
-
-    with pytest.raises(
-        MODULE.DeploymentError, match="injected binary config rejection"
-    ):
-        MODULE.apply_reset(
-            harness.args,
-            harness.bundle,
-            harness.sources,
-            harness.old_cohort,
-            rollout_starter=lambda: pytest.fail("rollout started"),
-            ops=harness.ops,
-            config_checker=reject_configs,
-            seal_preparer=harness.seal_preparer,
-            seal_writer=write_seal,
-            seal_authenticator=harness.seal_authenticator,
-            seal_remover=harness.seal_remover,
-        )
-
-    assert harness.events == [
-        "runtime-recheck",
-        "release-move",
-        "seal-prepare",
-        "seal-write",
-        "binary-config-gate",
-        "seal-remove",
-        "release-restore",
-    ]
-    assert not harness.seal_path.exists()
-    assert harness.bundle.release.source_root.is_dir()
-    assert not harness.bundle.release.installed_root.exists()
-
-
-def test_apply_preserves_unattributed_seal_and_installed_release_when_writer_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    harness = _apply_gate_harness(tmp_path, monkeypatch)
-
-    def write_then_raise(_binary: Path, _bundle: object, path: Path) -> tuple[int, ...]:
-        harness.events.append("seal-write")
-        path.write_bytes(b"unattributed seal")
-        raise MODULE.DeploymentError("injected writer failure after publication")
-
-    with pytest.raises(
-        MODULE.DeploymentError,
-        match=r"rollback is incomplete.*unattributed qualification seal",
-    ):
-        MODULE.apply_reset(
-            harness.args,
-            harness.bundle,
-            harness.sources,
-            harness.old_cohort,
-            rollout_starter=lambda: pytest.fail("rollout started"),
-            ops=harness.ops,
-            config_checker=lambda *_args: pytest.fail("config checker ran"),
-            seal_preparer=harness.seal_preparer,
-            seal_writer=write_then_raise,
-            seal_authenticator=harness.seal_authenticator,
-            seal_remover=lambda *_args: pytest.fail("seal remover ran"),
-        )
-
-    assert harness.events == [
-        "runtime-recheck",
-        "release-move",
-        "seal-prepare",
-        "seal-write",
-    ]
-    assert harness.seal_path.read_bytes() == b"unattributed seal"
-    assert harness.bundle.release.installed_root.is_dir()
-    assert not harness.bundle.release.source_root.exists()
-
-
-def test_apply_restores_release_when_failed_writer_left_seal_absent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    harness = _apply_gate_harness(tmp_path, monkeypatch)
-
-    def fail_without_seal(
-        _binary: Path, _bundle: object, _path: Path
-    ) -> tuple[int, ...]:
-        harness.events.append("seal-write")
-        raise MODULE.DeploymentError("injected writer failure before publication")
-
-    with pytest.raises(
-        MODULE.DeploymentError,
-        match="injected writer failure before publication",
-    ):
-        MODULE.apply_reset(
-            harness.args,
-            harness.bundle,
-            harness.sources,
-            harness.old_cohort,
-            rollout_starter=lambda: pytest.fail("rollout started"),
-            ops=harness.ops,
-            config_checker=lambda *_args: pytest.fail("config checker ran"),
-            seal_preparer=harness.seal_preparer,
-            seal_writer=fail_without_seal,
-            seal_authenticator=harness.seal_authenticator,
-            seal_remover=lambda *_args: pytest.fail("seal remover ran"),
-        )
-
-    assert harness.events == [
-        "runtime-recheck",
-        "release-move",
-        "seal-prepare",
-        "seal-write",
-        "release-restore",
-    ]
-    assert not harness.seal_path.exists()
-    assert harness.bundle.release.source_root.is_dir()
-    assert not harness.bundle.release.installed_root.exists()
-
-
-def test_apply_rechecks_config_identity_after_qualification_before_any_bootout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    harness = _apply_gate_harness(tmp_path, monkeypatch)
-
-    def write_seal(_binary: Path, _bundle: object, path: Path) -> tuple[int, ...]:
-        harness.events.append("seal-write")
-        path.write_bytes(b"created seal")
-        return MODULE.metadata_identity(path.lstat())
-
-    def mutate_config(_binary: Path, bundle: MODULE.BundlePlan) -> None:
-        harness.events.append("binary-config-gate")
-        with bundle.peers[0].config.open("ab") as config:
-            config.write(b"\n# post-qualification mutation\n")
-
-    with pytest.raises(
-        MODULE.DeploymentError,
-        match="validator config changed during qualification",
-    ):
-        MODULE.apply_reset(
-            harness.args,
-            harness.bundle,
-            harness.sources,
-            harness.old_cohort,
-            rollout_starter=lambda: pytest.fail("rollout started"),
-            ops=harness.ops,
-            config_checker=mutate_config,
-            seal_preparer=harness.seal_preparer,
-            seal_writer=write_seal,
-            seal_authenticator=harness.seal_authenticator,
-            seal_remover=harness.seal_remover,
-        )
-
-    assert harness.events == [
-        "runtime-recheck",
-        "release-move",
-        "seal-prepare",
-        "seal-write",
-        "binary-config-gate",
-        "seal-remove",
-        "release-restore",
-    ]
-    assert not harness.seal_path.exists()
-    assert harness.bundle.release.source_root.is_dir()
-    assert not harness.bundle.release.installed_root.exists()
-
-
-def test_apply_marks_admitted_rollout_immediately_before_first_bootout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    harness = _apply_gate_harness(tmp_path, monkeypatch)
-
-    def write_seal(_binary: Path, _bundle: object, path: Path) -> tuple[int, ...]:
-        harness.events.append("seal-write")
-        path.write_bytes(b"created seal")
-        return MODULE.metadata_identity(path.lstat())
-
-    def start_rollout() -> None:
-        harness.events.append("rollout-start")
-        raise MODULE.DeploymentError("injected refusal at rollout boundary")
-
-    with pytest.raises(MODULE.DeploymentError, match="rollout boundary"):
-        MODULE.apply_reset(
-            harness.args,
-            harness.bundle,
-            harness.sources,
-            harness.old_cohort,
-            rollout_starter=start_rollout,
-            ops=harness.ops,
-            config_checker=lambda *_args: harness.events.append("binary-config-gate"),
-            cutover_identity_checker=lambda _bundle: harness.events.append(
-                "cutover-recheck"
-            ),
-            seal_preparer=harness.seal_preparer,
-            seal_writer=write_seal,
-            seal_authenticator=harness.seal_authenticator,
-            seal_remover=harness.seal_remover,
-        )
-
-    assert "rollout-start" in harness.events
-    assert "bootout" not in harness.events
-    assert harness.events.index("cutover-recheck") + 1 == harness.events.index(
-        "rollout-start"
-    )
-    assert harness.bundle.release.source_root.is_dir()
-    assert not harness.bundle.release.installed_root.exists()
-
-
 @pytest.mark.parametrize(
     "mutation",
-    ["source", "budget", "port", "seal", "storage"],
+    ["source", "budget", "port", "storage"],
 )
 def test_bundle_preflight_rejects_identity_and_freshness_drift(
     tmp_path: Path, mutation: str
@@ -1336,17 +458,6 @@ def test_bundle_preflight_rejects_identity_and_freshness_drift(
     elif mutation == "port":
         config = bundle / "rendered" / MODULE.SLUGS[0] / "config.toml"
         _write(config, config.read_bytes().replace(b":29080#", b":19080#"))
-        manifest["configs"][MODULE.SLUGS[0]] = hashlib.sha256(
-            config.read_bytes()
-        ).hexdigest()
-        _write(manifest_path, (json.dumps(manifest) + "\n").encode())
-    elif mutation == "seal":
-        config = bundle / "rendered" / MODULE.SLUGS[0] / "config.toml"
-        expected = (
-            "kagemusha-v4-" f"{manifest['kagemusha_release_tree_sha256']}.norito"
-        ).encode()
-        stale = f"kagemusha-v4-{'f' * 64}.norito".encode()
-        _write(config, config.read_bytes().replace(expected, stale))
         manifest["configs"][MODULE.SLUGS[0]] = hashlib.sha256(
             config.read_bytes()
         ).hexdigest()
@@ -1627,28 +738,27 @@ def _health_getter(
     bundle: MODULE.BundlePlan, source_commit: str, *, bad_blocks: bool = False
 ):
     block_hash = "ab" * 32
-    artifact = {
-        "generation": bundle.release.generation,
-        "manifest_sha256": bundle.release.manifest_sha256,
-        "release_policy_sha256": bundle.release.release_policy_sha256,
-        "release_attestation_sha256": bundle.release.release_attestation_sha256,
-        "activation_height": bundle.release.activation_height,
-        "withdrawal_height": bundle.release.withdrawal_height,
-        "max_proof_bytes": bundle.release.max_proof_bytes,
-        "asset_scale": bundle.release.asset_scale,
-    }
 
     def get(url: str, _timeout: float) -> dict:
         port = int(url.split(":")[2].split("/")[0])
         index = MODULE.TORII_PORTS.index(port)
-        if url.endswith("/readyz"):
+        if url.endswith("/v1/nexus/lifecycle"):
             return {
-                "live": True,
-                "mandatory": True,
-                "ready": True,
-                "cash_handoff_capability": MODULE.OFFLINE_CAPABILITY,
-                "required_bridge_abi_version": MODULE.OFFLINE_BRIDGE_ABI,
-                "blockers": [],
+                "version": 1,
+                "nexus_enabled": True,
+                "lanes": [
+                    {
+                        "id": 3,
+                        "alias": MODULE.IS_ROUTE_ALIAS,
+                        "dataspace_id": MODULE.IS_DATASPACE_ID,
+                    },
+                    {
+                        "id": 4,
+                        "alias": MODULE.IS2_ROUTE_ALIAS,
+                        "dataspace_id": MODULE.IS2_DATASPACE_ID,
+                    },
+                ],
+                "catalog_hash": "hash:" + "c" * 64,
             }
         if "/v1/sumeragi/status" in url:
             subject = {"block_hash": f"hash:{block_hash.upper()}#A1b2"}
@@ -1685,18 +795,7 @@ def _health_getter(
                 "blocks": 6 if bad_blocks and index == 0 else 7,
                 "build": {"git_commit_sha": source_commit},
             }
-        assert "/v1/offline/readiness?" in url
-        return {
-            "ready": True,
-            "blockers": [],
-            "cash_handoff_capability": MODULE.OFFLINE_CAPABILITY,
-            "required_bridge_abi_version": MODULE.OFFLINE_BRIDGE_ABI,
-            "asset_definition_id": MODULE.OFFLINE_ASSET_ID,
-            "asset_scale": MODULE.OFFLINE_ASSET_SCALE,
-            "evaluated_block_height": 7,
-            "evaluated_block_hash": f"{block_hash}#a1B2",
-            "artifact_set": artifact,
-        }
+        raise AssertionError(f"unexpected JSON health route: {url}")
 
     return get
 
@@ -1731,7 +830,7 @@ def test_block_hash_normalization_rejects_noncanonical_suffixes(value: str) -> N
         MODULE.normalized_block_hash(value, "test block")
 
 
-def test_four_peer_health_requires_exact_common_status_and_offline_block(
+def test_four_peer_health_requires_exact_common_status_and_dataspaces(
     tmp_path: Path,
 ) -> None:
     source_commit = "4" * 40
@@ -1749,7 +848,12 @@ def test_four_peer_health_requires_exact_common_status_and_offline_block(
     assert sample.block_hash == "ab" * 32
     assert len(sample.nodes) == MODULE.PEER_COUNT
     assert health_urls == [
-        f"http://127.0.0.1:{port}/health" for port in MODULE.TORII_PORTS
+        url
+        for port in MODULE.TORII_PORTS
+        for url in (
+            f"http://127.0.0.1:{port}/health",
+            f"http://127.0.0.1:{port}/readyz",
+        )
     ]
 
     with pytest.raises(MODULE.DeploymentError, match="status.blocks"):
@@ -1778,7 +882,7 @@ def test_four_peer_health_fails_closed_when_health_is_not_200(tmp_path: Path) ->
         )
 
 
-def test_four_peer_health_requires_full_pinned_offline_release_identity(
+def test_four_peer_health_requires_exact_is_and_is2_dataspace_identities(
     tmp_path: Path,
 ) -> None:
     source_commit = "4" * 40
@@ -1786,17 +890,17 @@ def test_four_peer_health_requires_full_pinned_offline_release_identity(
     plan = _validate(bundle, "5" * 64, source_commit)
     healthy = _health_getter(plan, source_commit)
 
-    def wrong_attestation(url: str, timeout: float) -> dict:
+    def wrong_dataspace(url: str, timeout: float) -> dict:
         payload = copy.deepcopy(healthy(url, timeout))
-        if "/v1/offline/readiness?" in url:
-            payload["artifact_set"]["release_attestation_sha256"] = "0" * 64
+        if url.endswith("/v1/nexus/lifecycle"):
+            payload["lanes"][1]["dataspace_id"] = 9
         return payload
 
-    with pytest.raises(MODULE.DeploymentError, match="offline release"):
+    with pytest.raises(MODULE.DeploymentError, match="is/is2 dataspace identities"):
         MODULE.capture_fleet(
             plan,
             source_commit,
-            getter=wrong_attestation,
+            getter=wrong_dataspace,
             health_getter=lambda _url, _timeout: None,
         )
 
@@ -2626,12 +1730,6 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         bundle_bytes=1,
         free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         fsync_latency_ms=1.0,
-        release=SimpleNamespace(
-            release_attestation_sha256="d" * 64,
-            manifest_sha256="e" * 64,
-            release_policy_sha256="f" * 64,
-            tree_sha256="1" * 64,
-        ),
     )
     sources = SimpleNamespace(
         binary_sha256="a" * 64,
@@ -2703,7 +1801,6 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     assert report["applied"] is False
     assert report["admission_receipt_consumed"] is False
     assert events == ["admission-verify", "capture", "archive-recheck"]
-    assert report["qualification_seal"] == str(MODULE.qualification_seal_path("1" * 64))
 
 
 @pytest.mark.parametrize("apply", [False, True], ids=("dry-run", "apply"))

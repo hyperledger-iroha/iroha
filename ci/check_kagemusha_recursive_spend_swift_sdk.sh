@@ -81,7 +81,7 @@ cd "${ROOT_DIR}"
 
 (
   cd IrohaSwift
-  run_swift_test --filter ToriiClientTests/testGetOfflineReadiness
+  run_swift_test --filter ToriiClientTests/testGetOfflineCapability
 )
 
 (
@@ -97,7 +97,7 @@ cd "${ROOT_DIR}"
 (
   cd IrohaSwift
   run_swift_test \
-    --filter 'ToriiClientTests/testGetOfflineReadinessParsesExactContract|ToriiClientTests/testGetOfflineReadinessRejectsProtocolSubstitutionAndContradictoryClaims'
+    --filter 'ToriiClientTests/testGetOfflineCapabilityParsesExactUniversalContractAndIgnoresDeprecatedSelector|ToriiClientTests/testGetOfflineCapabilityRejectsNonUniversalClaims'
 )
 
 (

@@ -66,7 +66,6 @@ TAIRA_CONTAINER_NAME="${TAIRA_CONTAINER_NAME:-taira-validator-1}"
 TAIRA_IMAGE="${TAIRA_IMAGE:-}"
 TAIRA_CONFIG_BUNDLE_PATH="${TAIRA_CONFIG_BUNDLE_PATH:-/etc/iroha/taira-validator}"
 TAIRA_STORAGE_PATH="${TAIRA_STORAGE_PATH:-/var/lib/iroha/taira-validator-1}"
-TAIRA_KAGEMUSHA_ARTIFACT_PATH="${TAIRA_KAGEMUSHA_ARTIFACT_PATH:-/var/lib/iroha/taira-validator/kagemusha/v4}"
 TAIRA_P2P_PORT="${TAIRA_P2P_PORT:-1337}"
 TAIRA_TORII_PORT="${TAIRA_TORII_PORT:-18080}"
 TAIRA_RUST_LOG="${TAIRA_RUST_LOG:-info}"
@@ -87,15 +86,12 @@ case "$TAIRA_RUNTIME_PROFILE" in
 esac
 CONTAINER_CONFIG_ROOT="/etc/iroha/taira-validator"
 CONTAINER_CONFIG_PATH="${CONTAINER_CONFIG_ROOT}/config.toml"
-CONTAINER_KAGEMUSHA_ARTIFACT_PATH="/var/lib/iroha/taira-validator/kagemusha/v4"
 TAIRA_CONFIG_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/config.toml"
 TAIRA_RUNTIME_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/runtime"
 TAIRA_MANIFEST_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/manifests"
-TAIRA_KAGEMUSHA_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/kagemusha"
 TAIRA_GOVERNANCE_MANIFEST_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/manifests/governance.manifest.json"
 TAIRA_ONBOARDING_SIGNER_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/runtime/onboarding-signer.key"
 TAIRA_FAUCET_SIGNER_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/runtime/faucet-signer.key"
-TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/kagemusha/release-policy.norito"
 TAIRA_SORAFS_ADMISSION_PATH="${TAIRA_CONFIG_BUNDLE_PATH}/sorafs_admission"
 
 require_file() {
@@ -193,19 +189,10 @@ build_run_args() {
             container_torii_port=18080
             require_canonical_directory "$TAIRA_RUNTIME_PATH" "Taira runtime directory"
             require_canonical_directory "$TAIRA_MANIFEST_PATH" "Taira manifest directory"
-            require_canonical_directory "$TAIRA_KAGEMUSHA_PATH" "Taira Kagemusha policy directory"
             require_file "$TAIRA_GOVERNANCE_MANIFEST_PATH" "Taira governance manifest"
             require_file "$TAIRA_ONBOARDING_SIGNER_PATH" "Taira onboarding signer"
             require_file "$TAIRA_FAUCET_SIGNER_PATH" "Taira faucet signer"
-            require_file "$TAIRA_KAGEMUSHA_RELEASE_POLICY_PATH" "Taira Kagemusha release policy"
             require_canonical_directory "$TAIRA_SORAFS_ADMISSION_PATH" "Taira SoraFS admission directory"
-            require_canonical_directory "$TAIRA_KAGEMUSHA_ARTIFACT_PATH" "Taira Kagemusha artifact directory"
-            require_disjoint_directories \
-                "$TAIRA_CONFIG_BUNDLE_PATH" "Taira config bundle" \
-                "$TAIRA_KAGEMUSHA_ARTIFACT_PATH" "Taira Kagemusha artifact directory"
-            require_disjoint_directories \
-                "$TAIRA_STORAGE_PATH" "Taira storage directory" \
-                "$TAIRA_KAGEMUSHA_ARTIFACT_PATH" "Taira Kagemusha artifact directory"
             ;;
         localnet)
             container_torii_port=8080
@@ -232,13 +219,6 @@ build_run_args() {
         -v "${TAIRA_CONFIG_BUNDLE_PATH}:${CONTAINER_CONFIG_ROOT}:ro"
         -v "${TAIRA_STORAGE_PATH}:/storage"
     )
-    if [[ "$TAIRA_RUNTIME_PROFILE" == "production" ]]; then
-        docker_run_args+=(
-            -e "IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR=$CONTAINER_KAGEMUSHA_ARTIFACT_PATH"
-            -v "${TAIRA_KAGEMUSHA_ARTIFACT_PATH}:${CONTAINER_KAGEMUSHA_ARTIFACT_PATH}"
-        )
-    fi
-
     if [[ "$TAIRA_EXPOSE_KVM" == "1" || "$TAIRA_EXPOSE_KVM" == "true" ]]; then
         docker_run_args+=(--device /dev/kvm)
     elif [[ "$TAIRA_EXPOSE_KVM" == "auto" && -e /dev/kvm ]]; then
@@ -337,7 +317,6 @@ resolve_state_path() {
 do_reset() {
     local storage_real
     local config_real
-    local kagemusha_real=""
 
     require_canonical_directory "$TAIRA_CONFIG_BUNDLE_PATH" "Taira config bundle"
     config_real="$TAIRA_CONFIG_BUNDLE_PATH"
@@ -345,21 +324,8 @@ do_reset() {
     require_disjoint_directories \
         "$config_real" "Taira config bundle" \
         "$storage_real" "Taira storage directory"
-    if [[ "$TAIRA_RUNTIME_PROFILE" == "production" ]]; then
-        kagemusha_real="$(resolve_state_path "$TAIRA_KAGEMUSHA_ARTIFACT_PATH")"
-        require_disjoint_directories \
-            "$config_real" "Taira config bundle" \
-            "$kagemusha_real" "Taira Kagemusha artifact directory"
-        require_disjoint_directories \
-            "$storage_real" "Taira storage directory" \
-            "$kagemusha_real" "Taira Kagemusha artifact directory"
-    fi
-
     do_down
     find "$storage_real" -xdev -mindepth 1 -depth -delete
-    if [[ -n "$kagemusha_real" ]]; then
-        find "$kagemusha_real" -xdev -mindepth 1 -depth -delete
-    fi
 }
 
 do_up() {

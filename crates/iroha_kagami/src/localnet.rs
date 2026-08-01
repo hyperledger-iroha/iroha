@@ -3053,17 +3053,6 @@ fn render_peer_config(
     torii.insert("transport".into(), Value::Table(transport));
     root.insert("torii".into(), Value::Table(torii));
 
-    let mut settlement_offline = Table::new();
-    // The generic localnet does not provision release artifacts or command
-    // authority, so it must not opt an asset into the process-local service.
-    // Taira profiles enable the capability explicitly.
-    settlement_offline.insert("enabled".into(), Value::Boolean(false));
-    settlement_offline.insert("escrow_required".into(), Value::Boolean(true));
-    settlement_offline.insert("escrow_accounts".into(), Value::Table(Table::new()));
-    let mut settlement = Table::new();
-    settlement.insert("offline".into(), Value::Table(settlement_offline));
-    root.insert("settlement".into(), Value::Table(settlement));
-
     toml::to_string(&Value::Table(root)).expect("serializing peer config to TOML")
 }
 
@@ -6042,7 +6031,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn generated_generic_localnet_bootstraps_kagemusha_asset_without_offline_opt_in() {
+    fn generated_localnet_bootstraps_universal_kagemusha_asset() {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
@@ -6076,12 +6065,7 @@ mod tests {
             usize::from(client_account_id != *ALICE_ID);
         let expected_mint_destination =
             AssetId::new(kagemusha_asset_id.clone(), client_account_id.clone());
-        let offline_enabled_key: iroha_data_model::name::Name =
-            iroha_data_model::offline::OFFLINE_ASSET_ENABLED_METADATA_KEY
-                .parse()
-                .expect("offline asset metadata key");
-
-        let has_definition_without_offline_opt_in = manifest.instructions().any(|instruction| {
+        let has_definition = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
                 .downcast_ref::<RegisterBox>()
@@ -6090,17 +6074,12 @@ mod tests {
                         register,
                         RegisterBox::AssetDefinition(register)
                             if register.object().id == kagemusha_asset_id
-                                && register
-                                    .object()
-                                    .metadata
-                                    .get(&offline_enabled_key)
-                                    .is_none()
                     )
                 })
         });
         assert!(
-            has_definition_without_offline_opt_in,
-            "generic localnet must register the built-in Kagemusha asset without opting it into offline cash"
+            has_definition,
+            "localnet must register the built-in asset used by universal Kagemusha protocols"
         );
 
         let has_alias_binding = manifest.instructions().any(|instruction| {
@@ -6273,7 +6252,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn generated_generic_localnet_does_not_opt_in_offline_cash() {
+    fn generated_localnet_needs_no_backend_offline_switch() {
         let temp = tempfile::tempdir().expect("make temp dir");
         #[cfg(unix)]
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
@@ -6556,33 +6535,13 @@ mod tests {
             assert_private_tree_modes(temp.path(), temp.path());
         }
 
-        let settlement_offline = peer_cfg
-            .get("settlement")
-            .and_then(toml::Value::as_table)
-            .and_then(|settlement| settlement.get("offline"))
-            .and_then(toml::Value::as_table)
-            .expect("settlement.offline table");
-        let escrow_accounts = settlement_offline
-            .get("escrow_accounts")
-            .and_then(toml::Value::as_table)
-            .expect("settlement.offline.escrow_accounts table");
         assert_eq!(
-            settlement_offline
-                .get("enabled")
-                .and_then(toml::Value::as_bool),
-            Some(false),
-            "the generic localnet must not require unprovisioned offline-cash services"
-        );
-        assert_eq!(
-            settlement_offline
-                .get("escrow_required")
-                .and_then(toml::Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            escrow_accounts.len(),
-            0,
-            "generic localnet config must not fabricate an offline-enabled asset binding"
+            peer_cfg
+                .get("settlement")
+                .and_then(toml::Value::as_table)
+                .and_then(|settlement| settlement.get("offline")),
+            None,
+            "offline protocol support is universal and must not be represented as a localnet opt-in"
         );
     }
 

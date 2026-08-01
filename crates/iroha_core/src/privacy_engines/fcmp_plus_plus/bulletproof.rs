@@ -231,7 +231,11 @@ pub(super) enum Variable {
     aL(usize),
     aR(usize),
     aO(usize),
-    CG { commitment: usize, index: usize },
+    CG {
+        commitment: usize,
+        index: usize,
+    },
+    #[cfg_attr(not(test), allow(dead_code))]
     V(usize),
 }
 

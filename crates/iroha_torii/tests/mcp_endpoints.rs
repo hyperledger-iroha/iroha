@@ -1112,7 +1112,7 @@ async fn mcp_jsonrpc_rejects_every_unlisted_tool_alias() {
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_excludes_cataloged_offline_operations_even_for_operator_profile() {
+async fn mcp_jsonrpc_includes_universal_offline_operations_for_operator_profile() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1121,39 +1121,17 @@ async fn mcp_jsonrpc_excludes_cataloged_offline_operations_even_for_operator_pro
 
     let app = build_router(cfg);
     let names = list_all_tool_names(&app).await;
-    let excluded = [
+    let expected = [
         "torii.get_v1_offline_readiness",
+        "torii.post_v1_offline_receiver_lineage",
         "torii.post_v1_offline_top_up",
         "torii.post_v1_offline_redeem",
         "torii.get_v1_offline_operations_operation_id",
     ];
-    for name in excluded {
+    for name in expected {
         assert!(
-            !names.iter().any(|candidate| candidate == name),
-            "catalog-excluded offline operation leaked into tools/list: {name}"
-        );
-
-        let (status, body) = post_mcp(
-            &app,
-            norito::json!({
-                "jsonrpc": "2.0",
-                "id": name,
-                "method": "tools/call",
-                "params": {
-                    "name": name,
-                    "arguments": {}
-                }
-            }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            body.get("error")
-                .and_then(|value| value.get("data"))
-                .and_then(|value| value.get("error_code"))
-                .and_then(Value::as_str),
-            Some("tool_not_found"),
-            "catalog-excluded offline operation must not be callable: {name}"
+            names.iter().any(|candidate| candidate == name),
+            "universal offline operation is missing from tools/list: {name}"
         );
     }
 

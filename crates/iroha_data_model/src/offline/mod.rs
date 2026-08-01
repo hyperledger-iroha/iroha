@@ -46,15 +46,13 @@ use crate::{
 /// Mobile SDKs parse the label after this prefix up to the first `:` to recover
 /// stable machine-readable error codes.
 pub const OFFLINE_REJECTION_REASON_PREFIX: &str = "offline_reason::";
-/// Mandatory peer-cash finality capability advertised by every offline-ready node.
+/// Peer-cash finality capability implemented by every Iroha node.
 ///
 /// `cash_handoff_v1` means the sender irreversibly consumes the selected inputs
 /// and signs the exact outgoing payment before the payment is exposed to a
 /// receiver-capable transport. Receiver acknowledgement is delivery evidence
 /// only: it is never an acceptance, commit, rollback, or clawback gate.
 pub const KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1: &str = "cash_handoff_v1";
-/// Asset-definition metadata key that enables Offline escrow tracking.
-pub const OFFLINE_ASSET_ENABLED_METADATA_KEY: &str = "offline.enabled";
 /// Domain-separation tag for deterministic offline escrow derivation.
 pub const OFFLINE_ESCROW_ACCOUNT_DOMAIN: &str = "iroha.offline.escrow.v1";
 /// Stable public Norito schema name for the first-release Torii top-up request.

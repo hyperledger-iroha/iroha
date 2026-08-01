@@ -25,6 +25,10 @@ pub mod zk_ace;
 #[cfg(feature = "zk-stark")]
 pub(crate) mod zk_ace_stark;
 pub mod zk_ams;
+// The native prover and its RFC 5280 reference machinery are consumed by the
+// internal test harness and the opt-in release-evidence runner. Normal node
+// builds retain the verifier but cannot observe those crate-private roots.
+#[cfg_attr(not(any(test, feature = "privacy-release-evidence")), allow(dead_code))]
 pub(crate) mod zk_x509;
 
 use iroha_data_model::privacy::{

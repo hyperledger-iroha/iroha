@@ -762,6 +762,7 @@ impl ConsensusSignTask {
         self.ownership.owner().lifecycle_ordinal()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn ownership(&self) -> &RuntimeEffectOwnership {
         &self.ownership
     }
@@ -1420,6 +1421,7 @@ pub(crate) enum CertifiedBodyFetchCompletionDisposition {
     Completed,
     /// A typed transient boundary rejected the handoff without changing the
     /// exact service owner; only the identical response may retry it.
+    #[cfg_attr(not(test), allow(dead_code))]
     Retryable,
 }
 
@@ -2215,6 +2217,32 @@ struct FinalityCompletion {
     artifact: wire::finality::V2FinalityArtifact,
 }
 
+impl FinalityCompletion {
+    /// Whether this exact durable terminal authorizes the same committed
+    /// decision rediscovered before `ApplicationCompleted` drains.
+    fn matches_apply(
+        &self,
+        context: &wire::HeightContext,
+        subject: wire::BlockSubject,
+        certificate: &wire::QuorumCertificate,
+    ) -> bool {
+        self.artifact.validate().is_ok()
+            && self.artifact.height_context == *context
+            && self.artifact.subject == subject
+            && self
+                .artifact
+                .commit_qc
+                .as_ref()
+                .same_commit_decision(certificate.as_ref())
+            && self.receipt.height() == context.height
+            && self.receipt.context_id() == context.id()
+            && self.receipt.block_hash() == subject.block_hash
+            && self.receipt.subject() == subject
+            && self.receipt.certificate() == self.artifact.commit_qc.as_ref()
+            && self.receipt.artifact_hash() == HashOf::new(&self.artifact)
+    }
+}
+
 /// Full immutable identity of one durable reducer Decision.
 ///
 /// The execution commitment is part of consensus identity even when round and
@@ -2342,6 +2370,7 @@ pub(crate) trait EffectRuntime {
         )>,
         String,
     >;
+    #[cfg_attr(not(test), allow(dead_code))]
     fn enqueue_body_available(
         &mut self,
         tag: EventTag,
@@ -2949,6 +2978,7 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
 impl V2EffectExecutor<SerializedV2Runtime> {
     /// Open the exact-body store under an explicit signature-authority policy
     /// and take ownership of the serialized runtime.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn open(
         runtime: SerializedV2Runtime,
         body_store_root: impl AsRef<Path>,
@@ -8528,11 +8558,28 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "Apply is not authorized by the frozen height's exact CommitQC".to_owned(),
             ));
         }
+        if let Some(finality) = self.finality_completion.as_ref() {
+            if !finality.matches_apply(&self.context, subject, &certificate) {
+                return Err(EffectExecutorError::Contract(
+                    "conflicting Apply retransmission after durable finality".to_owned(),
+                ));
+            }
+            // Kura is already durable and the exact ApplicationCompleted
+            // command was admitted before `finality_completion` was latched.
+            // A timer or queued CommitQC can rediscover Apply before that
+            // command reaches the reducer. Coalesce against the immutable
+            // terminal instead of scheduling a second physical application.
+            return Ok(());
+        }
         if let Some(existing) = self.pending_applications.values().next() {
-            let exact = existing.task.tag == tag
+            let same_decision = existing.task.tag == tag
                 && existing.task.subject == subject
-                && existing.task.certificate == certificate;
-            if !exact {
+                && existing
+                    .task
+                    .certificate
+                    .as_ref()
+                    .same_commit_decision(certificate.as_ref());
+            if !same_decision {
                 return Err(EffectExecutorError::Contract(
                     "conflicting Apply retransmission for one height".to_owned(),
                 ));
@@ -21723,10 +21770,11 @@ mod tests {
             )
             .expect("local proposal");
         complete_local_proposal_chain(&mut executor, &mut services);
+        let certificate = fixture.qc(wire::GlobalPhase::Commit);
         let effect = AdapterEffect::Apply {
             tag: tag(0),
             subject: fixture.manifest.subject,
-            certificate: fixture.qc(wire::GlobalPhase::Commit),
+            certificate: certificate.clone(),
         };
         executor.runtime.effect_owners.clear();
         let lifecycle_ordinal_before = executor.runtime.next_lifecycle_ordinal;
@@ -21758,8 +21806,30 @@ mod tests {
             "the regression must exercise eight distinct incoming owners"
         );
 
+        let mut alternate_evidence = fixture.qc(wire::GlobalPhase::Commit);
+        alternate_evidence.aggregate_signature = vec![2];
+        executor.runtime.effect_owners.clear();
+        executor
+            .consume_effects(
+                vec![AdapterEffect::Apply {
+                    tag: tag(0),
+                    subject: fixture.manifest.subject,
+                    certificate: alternate_evidence,
+                }],
+                &mut services,
+            )
+            .expect("coalesce alternate valid evidence for the same committed decision");
+        assert_eq!(services.apply_tasks.len(), 9);
+        assert_eq!(services.apply_tasks[8].certificate(), &certificate);
+        assert!(!executor.status().fail_closed);
+
         let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
-        conflicting.aggregate_signature = vec![2];
+        conflicting.execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"conflicting terminal parent state"),
+            Hash::new(b"conflicting terminal post state"),
+            Hash::new(b"conflicting terminal ordinary writes"),
+            Hash::new(b"conflicting terminal executed block"),
+        );
         executor.runtime.effect_owners.clear();
         assert!(matches!(
             executor.consume_effects(
@@ -21773,7 +21843,104 @@ mod tests {
             Err(EffectExecutorError::Contract(reason))
                 if reason.contains("conflicting Apply retransmission")
         ));
-        assert_eq!(services.apply_tasks.len(), 8);
+        assert_eq!(services.apply_tasks.len(), 9);
+    }
+
+    #[test]
+    fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor
+            .admit_local_proposal(
+                tag(0),
+                fixture.manifest.clone(),
+                fixture.body.clone(),
+                &mut services,
+            )
+            .expect("local proposal");
+        complete_local_proposal_chain(&mut executor, &mut services);
+        let certificate = fixture.qc(wire::GlobalPhase::Commit);
+        let effect = AdapterEffect::Apply {
+            tag: tag(0),
+            subject: fixture.manifest.subject,
+            certificate: certificate.clone(),
+        };
+        executor
+            .consume_effects(vec![effect.clone()], &mut services)
+            .expect("begin application");
+        let work_id = services.apply_tasks[0].id();
+        let artifact = wire::finality::V2FinalityArtifact::new(
+            fixture.context.clone(),
+            fixture.manifest.subject,
+            certificate,
+            vec![vec![0x5C]; fixture.context.roster.len()],
+        );
+        let receipt = KuraV2CommitReceipt::for_test(&artifact);
+        executor
+            .complete_application(
+                DurableApplyCompletion::new(work_id, receipt, artifact.clone()),
+                &mut services,
+            )
+            .expect("durable application");
+        assert!(executor.pending_applications.is_empty());
+        assert_eq!(services.apply_tasks.len(), 1);
+        let completions_before = executor.runtime.completions.clone();
+
+        // Keep ApplicationCompleted queued in the fake runtime and reproduce
+        // the production timer/CommitQC race which rediscovered Apply first.
+        executor.runtime.effect_owners.clear();
+        executor
+            .consume_effects(vec![effect], &mut services)
+            .expect("coalesce post-finality Apply retransmission");
+
+        assert!(executor.pending_applications.is_empty());
+        assert_eq!(services.apply_tasks.len(), 1);
+        assert_eq!(executor.runtime.completions, completions_before);
+        assert_eq!(
+            executor.durable_finality().expect("durable finality").1,
+            &artifact
+        );
+        assert!(!executor.status().fail_closed);
+
+        let mut alternate_evidence = fixture.qc(wire::GlobalPhase::Commit);
+        alternate_evidence.aggregate_signature = vec![2];
+        executor.runtime.effect_owners.clear();
+        executor
+            .consume_effects(
+                vec![AdapterEffect::Apply {
+                    tag: tag(0),
+                    subject: fixture.manifest.subject,
+                    certificate: alternate_evidence,
+                }],
+                &mut services,
+            )
+            .expect("coalesce alternate evidence for the durable committed decision");
+        assert_eq!(services.apply_tasks.len(), 1);
+        assert!(!executor.status().fail_closed);
+
+        let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
+        conflicting.execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"conflicting terminal parent state"),
+            Hash::new(b"conflicting terminal post state"),
+            Hash::new(b"conflicting terminal ordinary writes"),
+            Hash::new(b"conflicting terminal executed block"),
+        );
+        executor.runtime.effect_owners.clear();
+        assert!(matches!(
+            executor.consume_effects(
+                vec![AdapterEffect::Apply {
+                    tag: tag(0),
+                    subject: fixture.manifest.subject,
+                    certificate: conflicting,
+                }],
+                &mut services,
+            ),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("conflicting Apply retransmission after durable finality")
+        ));
+        assert_eq!(services.apply_tasks.len(), 1);
+        assert!(executor.status().fail_closed);
     }
 
     #[test]

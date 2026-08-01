@@ -21,8 +21,10 @@ ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
 ROLLOUT_CANARY_FAUCET_ASSET_ID="${ROLLOUT_CANARY_FAUCET_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
-OFFLINE_ASSET_DEFINITION_ID="${OFFLINE_ASSET_DEFINITION_ID:-}"
-OFFLINE_EXPECTED_IDENTITY_PATH="${OFFLINE_EXPECTED_IDENTITY_PATH:-}"
+EXPECTED_IS_DATASPACE_ID="${EXPECTED_IS_DATASPACE_ID:-6647857470246403404}"
+EXPECTED_IS2_DATASPACE_ID="${EXPECTED_IS2_DATASPACE_ID:-8477022798449861195}"
+EXPECTED_IS_ROUTE_ALIAS="${EXPECTED_IS_ROUTE_ALIAS:-external-poc}"
+EXPECTED_IS2_ROUTE_ALIAS="${EXPECTED_IS2_ROUTE_ALIAS:-boi-mobile}"
 ROLLOUT_CANARY_FEE_PROGRAM_ID="${ROLLOUT_CANARY_FEE_PROGRAM_ID:-testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default}"
 ROLLOUT_CANARY_FEE_PROGRAM_REVISION="${ROLLOUT_CANARY_FEE_PROGRAM_REVISION:-1}"
 ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
@@ -63,8 +65,6 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--onboarding-token-file ABSOLUTE_PATH]
                             [--faucet-asset-id ASSET_DEFINITION_ID]
                             [--fee-program PROGRAM_ID] [--fee-program-revision REVISION]
-                            [--offline-asset-definition-id ASSET_DEFINITION_ID]
-                            [--offline-expected-identity ABSOLUTE_JSON_PATH]
                             [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
                             [--curl-connect-timeout-seconds N]
                             [--curl-max-time-seconds N]
@@ -78,12 +78,9 @@ For a single public-node devex check, prefer the first-class CLI:
 
 The check fails unless:
   - GET /v1/mcp returns HTTP 200 with a capabilities payload
-  - GET /readyz reports live=true, mandatory=true, ready=true, the exact
-    ABI-21 `cash_handoff_v1` capability, and no blockers
-  - GET /v1/offline/readiness returns the exact ABI-21/V4 `cash_handoff_v1`
-    contract for the configured scale-2 Digital Shekel asset, five distinct
-    active roles, the operator-reviewed authenticated release identity, a
-    constructed backend, recursive lineage, ready=true, and no blockers
+  - GET /health and GET /readyz return HTTP 200 for ordinary node readiness
+  - GET /v1/nexus/lifecycle binds the canonical `is` and `is2` dataspace IDs
+    to their checked-in routing-container aliases and publishes one catalog identity
   - POST /v1/mcp initialize returns HTTP 200
   - POST /v1/mcp notifications/initialized returns HTTP 202 with an empty body
   - POST /v1/mcp tools/list returns HTTP 200
@@ -100,9 +97,9 @@ The check fails unless:
     handler (the no-hash probe returns HTTP 400), while the retired
     /v1/transactions/status alias remains unmounted (HTTP 404)
   - when validator roots are supplied, every labeled validator reports the same
-    protocol/build/config/context/commit tuple, `/status.blocks` exactly matches
-    `last_committed_height`, and the exact live offline block/release identity
-    agrees across repeated advancing samples
+    protocol/build/config/catalog/context/commit tuple, `/status.blocks` exactly
+    matches `last_committed_height`, and the common committed height/hash
+    advances across repeated samples
   - public rollout mode is fail-closed: exactly four distinct validator roots,
     --require-all-validators, a full 40-character expected git SHA, and at
     least three advancing fleet samples are mandatory. For non-release local
@@ -327,22 +324,6 @@ while [[ $# -gt 0 ]]; do
       ROLLOUT_CANARY_FEE_PROGRAM_REVISION="$2"
       shift 2
       ;;
-    --offline-asset-definition-id)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --offline-asset-definition-id" >&2
-        exit 1
-      }
-      OFFLINE_ASSET_DEFINITION_ID="$2"
-      shift 2
-      ;;
-    --offline-expected-identity)
-      [[ $# -ge 2 ]] || {
-        echo "missing value for --offline-expected-identity" >&2
-        exit 1
-      }
-      OFFLINE_EXPECTED_IDENTITY_PATH="$2"
-      shift 2
-      ;;
     --expected-git-sha)
       [[ $# -ge 2 ]] || {
         echo "missing value for --expected-git-sha" >&2
@@ -421,39 +402,17 @@ if [[ $SKIP_LOCAL -eq 1 && $SKIP_PUBLIC -eq 1 ]]; then
   exit 1
 fi
 
-if [[ ! "$OFFLINE_ASSET_DEFINITION_ID" =~ ^[1-9A-HJ-NP-Za-km-z]{28,29}$ ]]; then
-  echo "--offline-asset-definition-id must be one canonical unprefixed Base58 asset-definition ID" >&2
+for dataspace_name in EXPECTED_IS_DATASPACE_ID EXPECTED_IS2_DATASPACE_ID; do
+  dataspace_id="${!dataspace_name}"
+  if [[ ! "$dataspace_id" =~ ^[0-9]+$ ]]; then
+    echo "${dataspace_name} must be a non-negative integer" >&2
+    exit 1
+  fi
+done
+if [[ -z "$EXPECTED_IS_ROUTE_ALIAS" || -z "$EXPECTED_IS2_ROUTE_ALIAS" ]]; then
+  echo "EXPECTED_IS_ROUTE_ALIAS and EXPECTED_IS2_ROUTE_ALIAS must be non-empty" >&2
   exit 1
 fi
-
-if [[ -z "$OFFLINE_EXPECTED_IDENTITY_PATH" ]]; then
-  echo "--offline-expected-identity is mandatory and must name the external operator-reviewed release identity" >&2
-  exit 1
-fi
-python3 - "$OFFLINE_EXPECTED_IDENTITY_PATH" "$REPO_ROOT" <<'PY'
-import pathlib
-import sys
-
-configured, repo_root = sys.argv[1:]
-path = pathlib.Path(configured).expanduser()
-if not path.is_absolute():
-    raise SystemExit("--offline-expected-identity must be an absolute path")
-try:
-    resolved = path.resolve(strict=True)
-except OSError as error:
-    raise SystemExit(f"operator-reviewed offline identity is unavailable: {error}") from error
-if not resolved.is_file():
-    raise SystemExit("operator-reviewed offline identity path must name a regular file")
-try:
-    resolved.relative_to(pathlib.Path(repo_root).resolve(strict=True))
-except ValueError:
-    pass
-else:
-    raise SystemExit("operator-reviewed offline identity must remain outside the source repository")
-size = resolved.stat().st_size
-if size <= 0 or size > 65_536:
-    raise SystemExit("operator-reviewed offline identity is empty or exceeds 65536 bytes")
-PY
 
 if [[ -n "$EXPECTED_TAIRA_GIT_SHA" ]]; then
   if [[ ! "$EXPECTED_TAIRA_GIT_SHA" =~ ^[0-9A-Fa-f]{7,40}$ ]]; then
@@ -1499,7 +1458,22 @@ check_sumeragi_snapshot_with_retry() {
   return 1
 }
 
-check_mandatory_readyz() {
+check_ordinary_health() {
+  local label="$1"
+  local root="$2"
+  local health_url
+
+  health_url="$(normalize_root_url "$root")/health"
+  echo "==> ${label}: GET ${health_url}" >&2
+  http_request GET "$health_url"
+  if [[ "$last_status" != "200" ]]; then
+    echo "${label}: /health failed with HTTP ${last_status}" >&2
+    sed -n '1,80p' "$last_body" >&2 || true
+    return 1
+  fi
+}
+
+check_ordinary_readyz() {
   local label="$1"
   local root="$2"
   local readiness_url
@@ -1512,73 +1486,35 @@ check_mandatory_readyz() {
     sed -n '1,80p' "$last_body" >&2 || true
     return 1
   fi
-
-  python3 - "$label" "$last_body" <<'PY'
-import json
-import sys
-
-label, path = sys.argv[1:]
-
-def reject_duplicate_keys(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON member {key!r}")
-        result[key] = value
-    return result
-
-try:
-    with open(path, "r", encoding="utf-8") as stream:
-        payload = json.load(stream, object_pairs_hook=reject_duplicate_keys)
-except (OSError, ValueError, json.JSONDecodeError) as error:
-    raise SystemExit(f"{label}: /readyz gate failed: invalid response JSON: {error}") from error
-
-def fail(message):
-    raise SystemExit(f"{label}: /readyz gate failed: {message}")
-
-if not isinstance(payload, dict):
-    fail("response is not a JSON object")
-if payload.get("live") is not True:
-    fail("live is not true")
-if payload.get("mandatory") is not True:
-    fail("mandatory is not true")
-if payload.get("ready") is not True:
-    fail("ready is not true")
-if payload.get("cash_handoff_capability") != "cash_handoff_v1":
-    fail("cash_handoff_capability is not cash_handoff_v1")
-if payload.get("required_bridge_abi_version") != 21:
-    fail("required_bridge_abi_version is not exact ABI-21")
-if payload.get("blockers") != []:
-    fail(f"blockers are not empty: {payload.get('blockers')!r}")
-PY
 }
 
-check_offline_readiness() {
+check_boi_dataspace_catalog() {
   local label="$1"
   local root="$2"
-  local encoded_asset readiness_url
-  encoded_asset="$(python3 - "$OFFLINE_ASSET_DEFINITION_ID" <<'PY'
-import sys
-import urllib.parse
+  local lifecycle_url
 
-print(urllib.parse.quote(sys.argv[1], safe=""))
-PY
-)"
-  readiness_url="$(normalize_root_url "$root")/v1/offline/readiness?asset_definition_id=${encoded_asset}"
-  echo "==> ${label}: GET ${readiness_url}" >&2
-  http_request GET "$readiness_url"
+  lifecycle_url="$(normalize_root_url "$root")/v1/nexus/lifecycle"
+  echo "==> ${label}: GET ${lifecycle_url}" >&2
+  http_request GET "$lifecycle_url"
   if [[ "$last_status" != "200" ]]; then
-    echo "${label}: mandatory offline readiness failed with HTTP ${last_status}" >&2
+    echo "${label}: Nexus lifecycle catalog failed with HTTP ${last_status}" >&2
     sed -n '1,80p' "$last_body" >&2 || true
     return 1
   fi
 
-  python3 - "$label" "$last_body" "$OFFLINE_EXPECTED_IDENTITY_PATH" "$OFFLINE_ASSET_DEFINITION_ID" <<'PY'
+  python3 - \
+    "$label" \
+    "$last_body" \
+    "$EXPECTED_IS_ROUTE_ALIAS" \
+    "$EXPECTED_IS_DATASPACE_ID" \
+    "$EXPECTED_IS2_ROUTE_ALIAS" \
+    "$EXPECTED_IS2_DATASPACE_ID" <<'PY'
 import json
 import re
 import sys
 
-label, path, expected_path, expected_asset_definition_id = sys.argv[1:]
+label, path, is_lane, is_id_raw, is2_lane, is2_id_raw = sys.argv[1:]
+expected = {is_lane: int(is_id_raw), is2_lane: int(is2_id_raw)}
 
 def reject_duplicate_keys(pairs):
     result = {}
@@ -1592,296 +1528,58 @@ try:
     with open(path, "r", encoding="utf-8") as stream:
         payload = json.load(stream, object_pairs_hook=reject_duplicate_keys)
 except (OSError, ValueError, json.JSONDecodeError) as error:
-    raise SystemExit(f"{label}: offline readiness gate failed: invalid response JSON: {error}") from error
-try:
-    with open(expected_path, "r", encoding="utf-8") as stream:
-        expected_identity = json.load(stream, object_pairs_hook=reject_duplicate_keys)
-except (OSError, ValueError, json.JSONDecodeError) as error:
-    raise SystemExit(
-        f"{label}: offline readiness gate failed: invalid operator-reviewed identity: {error}"
-    ) from error
+    raise SystemExit(f"{label}: Nexus lifecycle catalog is invalid JSON: {error}") from error
 
 def fail(message):
-    raise SystemExit(f"{label}: offline readiness gate failed: {message}")
+    raise SystemExit(f"{label}: BOI dataspace catalog mismatch: {message}")
 
-ROLE_FIELDS = {
-    "active_transfer_verifier": (
-        "halo2/ipa",
-        "confidential_transfer_v2_verifier_record",
-        "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-    ),
-    "active_topup_shield_verifier": (
-        "halo2/ipa",
-        "kagemusha_topup_shield_v2_verifier_record",
-        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-    ),
-    "active_unshield_verifier": (
-        "halo2/ipa",
-        "confidential_unshield_v3_verifier_record",
-        "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-    ),
-    "active_recursive_step_eq_verifier": (
-        "halo2/ipa",
-        "kagemusha_recursive_step_eq_v4_verifier_record",
-        "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-    ),
-    "active_recursive_step_ep_verifier": (
-        "halo2/ipa",
-        "kagemusha_recursive_step_ep_v4_verifier_record",
-        "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-    ),
-}
-VERIFIER_KEYS = {
-    "id",
-    "version",
-    "circuit_id",
-    "commitment",
-    "public_inputs_schema_hash",
-    "max_proof_bytes",
-    "activation_height",
-    "withdrawal_height",
-}
-PROJECTED_VERIFIER_KEYS = {
-    "backend",
-    "name",
-    "version",
-    "circuit_id",
-    "commitment",
-    "public_inputs_schema_hash",
-    "max_proof_bytes",
-    "activation_height",
-    "withdrawal_height",
-}
-ARTIFACT_KEYS = {
-    "generation",
-    "manifest_sha256",
-    "release_policy_sha256",
-    "release_attestation_sha256",
-    "activation_height",
-    "withdrawal_height",
-    "max_proof_bytes",
-    "asset_scale",
-}
-EXPECTED_KEYS = {
-    "cash_handoff_capability",
-    "required_bridge_abi_version",
-    "max_hops",
-    "asset_definition_id",
-    "asset_scale",
-    "artifact_set",
-    "verifiers",
-}
-
-def is_int(value):
-    return isinstance(value, int) and not isinstance(value, bool)
-
-def is_positive_int(value):
-    return is_int(value) and value > 0
-
-def is_nonzero_sha256(value):
-    return (
-        isinstance(value, str)
-        and re.fullmatch(r"[0-9a-f]{64}", value) is not None
-        and set(value) != {"0"}
-    )
-
-def validate_artifact(artifact, *, context):
-    if not isinstance(artifact, dict) or set(artifact) != ARTIFACT_KEYS:
-        fail(f"{context} artifact_set has a non-canonical field set")
-    generation = artifact.get("generation")
-    if not isinstance(generation, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", generation) is None:
-        fail(f"{context} artifact_set.generation is invalid")
-    digests = tuple(
-        artifact.get(field)
-        for field in (
-            "manifest_sha256",
-            "release_policy_sha256",
-            "release_attestation_sha256",
-        )
-    )
-    if not all(is_nonzero_sha256(value) for value in digests):
-        fail(f"{context} artifact_set contains an invalid digest")
-    if len(set(digests)) != 3:
-        fail(f"{context} artifact_set digests are not distinct")
-    activation = artifact.get("activation_height")
-    withdrawal = artifact.get("withdrawal_height")
-    if not is_positive_int(activation) or not is_positive_int(withdrawal) or withdrawal <= activation:
-        fail(f"{context} artifact_set lifecycle is invalid")
-    if not is_positive_int(artifact.get("max_proof_bytes")):
-        fail(f"{context} artifact_set.max_proof_bytes is invalid")
-    if artifact.get("asset_scale") != 2:
-        fail(f"{context} artifact_set.asset_scale is not exact Digital Shekel scale 2")
-
-def validate_projected_verifiers(verifiers, artifact, *, context, evaluated_height=None):
-    if not isinstance(verifiers, dict) or set(verifiers) != set(ROLE_FIELDS):
-        fail(f"{context} verifier identity must contain all five exact roles")
-    identities = []
-    commitments = []
-    schemas = []
-    for field, expected_role in ROLE_FIELDS.items():
-        verifier = verifiers.get(field)
-        if not isinstance(verifier, dict) or set(verifier) != PROJECTED_VERIFIER_KEYS:
-            fail(f"{context} {field} has a non-canonical field set")
-        actual_role = (verifier.get("backend"), verifier.get("name"), verifier.get("circuit_id"))
-        if actual_role != expected_role:
-            fail(f"{context} {field} does not use the governed verifier identity")
-        if not is_positive_int(verifier.get("version")):
-            fail(f"{context} {field}.version is invalid")
-        if not is_nonzero_sha256(verifier.get("commitment")):
-            fail(f"{context} {field}.commitment is invalid")
-        if not is_nonzero_sha256(verifier.get("public_inputs_schema_hash")):
-            fail(f"{context} {field}.public_inputs_schema_hash is invalid")
-        if not is_positive_int(verifier.get("max_proof_bytes")):
-            fail(f"{context} {field}.max_proof_bytes is invalid")
-        activation = verifier.get("activation_height")
-        withdrawal = verifier.get("withdrawal_height")
-        if not is_int(activation) or activation < 0:
-            fail(f"{context} {field}.activation_height is invalid")
-        if withdrawal is not None and (not is_positive_int(withdrawal) or withdrawal <= activation):
-            fail(f"{context} {field}.withdrawal_height is invalid")
-        if evaluated_height is not None and (
-            activation > evaluated_height
-            or (withdrawal is not None and withdrawal <= evaluated_height)
-        ):
-            fail(f"{context} {field} is not active at the evaluated block")
-        identities.append((verifier["backend"], verifier["name"]))
-        commitments.append(verifier["commitment"])
-        schemas.append(verifier["public_inputs_schema_hash"])
-    if len(set(identities)) != 5 or len(set(commitments)) != 5 or len(set(schemas)) != 5:
-        fail(f"{context} five verifier identities are not cryptographically distinct")
-    for field in ("active_recursive_step_eq_verifier", "active_recursive_step_ep_verifier"):
-        verifier = verifiers[field]
-        if (
-            verifier["activation_height"] != artifact["activation_height"]
-            or verifier["withdrawal_height"] != artifact["withdrawal_height"]
-            or verifier["max_proof_bytes"] != artifact["max_proof_bytes"]
-        ):
-            fail(f"{context} {field} is not bound to artifact_set")
-
-if not isinstance(expected_identity, dict) or set(expected_identity) != EXPECTED_KEYS:
-    fail("operator-reviewed identity has a non-canonical field set")
-if expected_identity.get("cash_handoff_capability") != "cash_handoff_v1":
-    fail("operator-reviewed identity is not cash_handoff_v1")
-if expected_identity.get("required_bridge_abi_version") != 21:
-    fail("operator-reviewed identity is not exact ABI-21")
-if expected_identity.get("max_hops") != 8:
-    fail("operator-reviewed identity does not use max_hops 8")
-if expected_identity.get("asset_definition_id") != expected_asset_definition_id:
-    fail("operator-reviewed identity is not bound to --offline-asset-definition-id")
-if expected_identity.get("asset_scale") != 2:
-    fail("operator-reviewed identity is not bound to scale-2 Digital Shekel")
-expected_artifact = expected_identity.get("artifact_set")
-validate_artifact(expected_artifact, context="operator-reviewed")
-validate_projected_verifiers(
-    expected_identity.get("verifiers"),
-    expected_artifact,
-    context="operator-reviewed",
-)
-
-if payload.get("cash_handoff_capability") != "cash_handoff_v1":
-    fail("cash_handoff_capability is not cash_handoff_v1")
-if payload.get("required_bridge_abi_version") != 21:
-    fail("required_bridge_abi_version is not exact ABI-21")
-if payload.get("max_hops") != 8:
-    fail("max_hops is not the first-release bound 8")
-if payload.get("asset_definition_id") != expected_asset_definition_id:
-    fail("asset_definition_id does not match the requested Digital Shekel definition")
-scale = payload.get("asset_scale")
-if scale != 2:
-    fail("asset_scale is not exact Digital Shekel scale 2")
-height = payload.get("evaluated_block_height")
-block_hash = payload.get("evaluated_block_hash")
-if not is_positive_int(height):
-    fail("evaluated_block_height is not positive")
-block_hash_match = (
-    re.fullmatch(
-        r"(?:hash:)?([0-9A-Fa-f]{64})(?:#[0-9A-Fa-f]{4})?",
-        block_hash,
-    )
-    if isinstance(block_hash, str)
-    else None
-)
-if block_hash_match is None:
-    fail("evaluated_block_hash is not a canonical Iroha block hash")
-block_hash = block_hash_match.group(1).lower()
-
-artifact = payload.get("artifact_set")
-validate_artifact(artifact, context="live")
-if not artifact["activation_height"] <= height < artifact["withdrawal_height"]:
-    fail("live artifact_set is outside its issuance window")
-projected_verifiers = {}
-for field in ROLE_FIELDS:
-    verifier = payload.get(field)
-    if not isinstance(verifier, dict) or set(verifier) != VERIFIER_KEYS:
-        fail(f"live {field} has a non-canonical field set")
-    identifier = verifier.get("id")
-    if not isinstance(identifier, dict) or set(identifier) != {"backend", "name"}:
-        fail(f"live {field}.id has a non-canonical field set")
-    projected_verifiers[field] = {
-        "backend": identifier.get("backend"),
-        "name": identifier.get("name"),
-        "version": verifier.get("version"),
-        "circuit_id": verifier.get("circuit_id"),
-        "commitment": verifier.get("commitment"),
-        "public_inputs_schema_hash": verifier.get("public_inputs_schema_hash"),
-        "max_proof_bytes": verifier.get("max_proof_bytes"),
-        "activation_height": verifier.get("activation_height"),
-        "withdrawal_height": verifier.get("withdrawal_height"),
-    }
-validate_projected_verifiers(
-    projected_verifiers,
-    artifact,
-    context="live",
-    evaluated_height=height,
-)
-if payload.get("proof_backend_available") is not True:
-    fail("proof backend is unavailable")
-if payload.get("recursive_lineage_supported") is not True:
-    fail("recursive lineage is unavailable")
-if payload.get("ready") is not True:
-    fail("ready is not true")
-if payload.get("blockers") != []:
-    fail(f"blockers are not empty: {payload.get('blockers')!r}")
-
-observed_identity = {
-    "cash_handoff_capability": payload["cash_handoff_capability"],
-    "required_bridge_abi_version": payload["required_bridge_abi_version"],
-    "max_hops": payload["max_hops"],
-    "asset_definition_id": payload["asset_definition_id"],
-    "asset_scale": payload["asset_scale"],
-    "artifact_set": artifact,
-    "verifiers": projected_verifiers,
-}
-if observed_identity != expected_identity:
-    fail("live release identity does not match the external operator-reviewed identity")
-
-print(
-    json.dumps(
-        {
-            "asset_definition_id": payload.get("asset_definition_id"),
-            "block_height": height,
-            "block_hash": block_hash,
-            "release_identity": observed_identity,
-        },
-        sort_keys=True,
-    )
-)
+if not isinstance(payload, dict) or payload.get("version") != 1:
+    fail("unsupported lifecycle payload")
+if payload.get("nexus_enabled") is not True:
+    fail("Nexus routing is not enabled")
+lanes = payload.get("lanes")
+if not isinstance(lanes, list):
+    fail("lanes is not an array")
+observed = {}
+for lane in lanes:
+    if not isinstance(lane, dict):
+        fail("lane entry is not an object")
+    alias = lane.get("alias")
+    if alias in expected:
+        if alias in observed:
+            fail(f"routing container alias {alias!r} is duplicated")
+        dataspace_id = lane.get("dataspace_id")
+        if not isinstance(dataspace_id, int) or isinstance(dataspace_id, bool):
+            fail(f"routing container alias {alias!r} has an invalid dataspace_id")
+        observed[alias] = dataspace_id
+if observed != expected:
+    fail(f"expected routing identities {expected!r}, observed {observed!r}")
+catalog_hash = payload.get("catalog_hash")
+if not isinstance(catalog_hash, str) or re.fullmatch(
+    r"(?:hash:)?[0-9A-Fa-f]{64}(?:#[0-9A-Fa-f]{4})?", catalog_hash
+) is None:
+    fail("catalog_hash is not canonical")
+print(json.dumps({"catalog_hash": catalog_hash.lower(), "dataspaces": observed}, sort_keys=True))
 PY
 }
 
 capture_validator_fleet_sample() {
-  local records_file status_copy offline_summary
+  local records_file status_copy dataspace_summary
   local idx label root
   records_file="$(mktemp)"
 
   for idx in "${!VALIDATOR_ROOTS[@]}"; do
     label="${VALIDATOR_LABELS[$idx]}"
     root="${VALIDATOR_ROOTS[$idx]}"
-    if ! check_mandatory_readyz "validator ${label}" "$root"; then
+    if ! check_ordinary_health "validator ${label}" "$root"; then
       rm -f "$records_file"
       return 1
     fi
-    if ! offline_summary="$(check_offline_readiness "validator ${label}" "$root")"; then
+    if ! check_ordinary_readyz "validator ${label}" "$root"; then
+      rm -f "$records_file"
+      return 1
+    fi
+    if ! dataspace_summary="$(check_boi_dataspace_catalog "validator ${label}" "$root")"; then
       rm -f "$records_file"
       return 1
     fi
@@ -1903,22 +1601,22 @@ capture_validator_fleet_sample() {
       return 1
     fi
 
-    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$offline_summary" >>"$records_file" <<'PY'
+    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$dataspace_summary" >>"$records_file" <<'PY'
 import json
 import re
 import sys
 
-label, status_path, sumeragi_path, expected_sha, require_exact_raw, offline_summary_raw = sys.argv[1:]
+label, status_path, sumeragi_path, expected_sha, require_exact_raw, dataspace_summary_raw = sys.argv[1:]
 require_exact_sha = require_exact_raw == "1"
 with open(status_path, "r", encoding="utf-8") as handle:
     node_status = json.load(handle)
 with open(sumeragi_path, "r", encoding="utf-8") as handle:
     status = json.load(handle)
 try:
-    offline_summary = json.loads(offline_summary_raw)
+    dataspace_summary = json.loads(dataspace_summary_raw)
 except json.JSONDecodeError as error:
     raise SystemExit(
-        f"validator {label}: offline readiness did not produce a canonical identity summary: {error}"
+        f"validator {label}: dataspace catalog did not produce a canonical identity summary: {error}"
     ) from error
 
 required = (
@@ -1954,20 +1652,6 @@ if status_blocks != status["last_committed_height"]:
         f"the durable committed height {status['last_committed_height']}"
     )
 
-offline_height = offline_summary.get("block_height")
-offline_hash = offline_summary.get("block_hash")
-offline_release = offline_summary.get("release_identity")
-if not isinstance(offline_height, int) or isinstance(offline_height, bool) or offline_height <= 0:
-    raise SystemExit(f"validator {label}: offline identity summary has an invalid block height")
-if not isinstance(offline_hash, str) or re.fullmatch(r"[0-9a-f]{64}", offline_hash) is None:
-    raise SystemExit(f"validator {label}: offline identity summary has an invalid block hash")
-if not isinstance(offline_release, dict):
-    raise SystemExit(f"validator {label}: offline identity summary omitted release_identity")
-if offline_height != status["last_committed_height"]:
-    raise SystemExit(
-        f"validator {label}: offline readiness block height {offline_height} does not match "
-        f"the durable committed height {status['last_committed_height']}"
-    )
 committed_subject = status.get("last_committed_subject")
 committed_hash = committed_subject.get("block_hash") if isinstance(committed_subject, dict) else None
 committed_hash_match = (
@@ -1981,10 +1665,12 @@ committed_hash_match = (
 if committed_hash_match is None:
     raise SystemExit(f"validator {label}: durable committed subject omitted a canonical block hash")
 committed_hash = committed_hash_match.group(1).lower()
-if offline_hash != committed_hash:
-    raise SystemExit(
-        f"validator {label}: offline readiness block hash does not match the durable committed subject"
-    )
+if not isinstance(dataspace_summary, dict):
+    raise SystemExit(f"validator {label}: dataspace catalog summary is not an object")
+if not isinstance(dataspace_summary.get("catalog_hash"), str):
+    raise SystemExit(f"validator {label}: dataspace catalog summary omitted catalog_hash")
+if not isinstance(dataspace_summary.get("dataspaces"), dict):
+    raise SystemExit(f"validator {label}: dataspace catalog summary omitted dataspaces")
 
 if expected_sha:
     build = node_status.get("build") or {}
@@ -2027,11 +1713,10 @@ record = {
     "quorum": canonical(context["quorum"]),
     "status_blocks": status_blocks,
     "committed_height": status["last_committed_height"],
+    "committed_block_hash": committed_hash,
     "committed_subject": canonical(status.get("last_committed_subject")),
     "commit_qc": canonical(status.get("last_commit_qc")),
-    "offline_block_height": offline_height,
-    "offline_block_hash": offline_hash,
-    "offline_release": canonical(offline_release),
+    "dataspace_catalog": canonical(dataspace_summary),
 }
 print(json.dumps(record, ensure_ascii=True, sort_keys=True))
 PY
@@ -2069,10 +1754,9 @@ for record in records[1:]:
         "validator_count",
         "quorum",
         "status_blocks",
-        "offline_block_height",
-        "offline_block_hash",
-        "offline_release",
+        "dataspace_catalog",
         "committed_height",
+        "committed_block_hash",
         "committed_subject",
         "commit_qc",
     ):
@@ -2093,11 +1777,10 @@ summary = {
     "quorum": baseline["quorum"],
     "status_blocks": baseline["status_blocks"],
     "committed_height": baseline["committed_height"],
+    "committed_block_hash": baseline["committed_block_hash"],
     "committed_subject": baseline["committed_subject"],
     "commit_qc": baseline["commit_qc"],
-    "offline_block_height": baseline["offline_block_height"],
-    "offline_block_hash": baseline["offline_block_hash"],
-    "offline_release": baseline["offline_release"],
+    "dataspace_catalog": baseline["dataspace_catalog"],
     "nodes": sorted(nodes),
 }
 print(json.dumps(summary, ensure_ascii=True, sort_keys=True))
@@ -2134,18 +1817,9 @@ import sys
 
 previous = json.loads(sys.argv[1])
 current = json.loads(sys.argv[2])
-for field in ("build", "config", "nodes", "offline_release"):
+for field in ("build", "config", "nodes", "dataspace_catalog"):
     if current[field] != previous[field]:
         raise SystemExit(f"validator fleet changed {field} between progress samples")
-if current["offline_block_height"] <= previous["offline_block_height"]:
-    raise SystemExit(
-        "validator fleet offline readiness did not advance a common evaluated block: "
-        f"{current['offline_block_height']} <= {previous['offline_block_height']}"
-    )
-if current["offline_block_hash"] == previous["offline_block_hash"]:
-    raise SystemExit(
-        "validator fleet offline readiness advanced height without changing its block hash"
-    )
 if current["committed_height"] <= previous["committed_height"]:
     raise SystemExit(
         "validator fleet did not advance a common committed height: "
@@ -2156,7 +1830,7 @@ if current["status_blocks"] <= previous["status_blocks"]:
         "validator fleet /status.blocks did not advance with durable commits: "
         f"{current['status_blocks']} <= {previous['status_blocks']}"
     )
-if current["committed_subject"] == previous["committed_subject"]:
+if current["committed_block_hash"] == previous["committed_block_hash"]:
     raise SystemExit("validator fleet advanced height without changing the common block hash")
 PY
     fi
@@ -2270,8 +1944,9 @@ check_endpoint() {
   check_tool_input_schemas "$label"
 
   root_url="$(mcp_root_from_url "$url")"
-  check_mandatory_readyz "$label" "$root_url"
-  check_offline_readiness "$label" "$root_url"
+  check_ordinary_health "$label" "$root_url"
+  check_ordinary_readyz "$label" "$root_url"
+  check_boi_dataspace_catalog "$label" "$root_url" >/dev/null
   CHECKED_LABELS+=("$label")
   CHECKED_ROOTS+=("$root_url")
   if [[ -n "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then

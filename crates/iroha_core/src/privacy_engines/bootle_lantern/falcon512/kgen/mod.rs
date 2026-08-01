@@ -60,12 +60,12 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
         if !gauss::sample_f_bounded(
             LOG_DEGREE,
             &mut generator,
-            f.as_mut(),
+            &mut **f,
             MAX_PARITY_ATTEMPTS_PER_POLYNOMIAL,
         ) || !gauss::sample_f_bounded(
             LOG_DEGREE,
             &mut generator,
-            g.as_mut(),
+            &mut **g,
             MAX_PARITY_ATTEMPTS_PER_POLYNOMIAL,
         ) {
             continue;
@@ -86,25 +86,20 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
         }
         if !comm::mq::mqpoly_small_is_invertible(
             LOG_DEGREE,
-            f.as_ref(),
+            &**f,
             &mut workspace.temporary_u16[..DEGREE],
         ) {
             continue;
         }
-        if !ntru::check_ortho_norm(
-            LOG_DEGREE,
-            f.as_ref(),
-            g.as_ref(),
-            &mut workspace.temporary_fxr,
-        ) {
+        if !ntru::check_ortho_norm(LOG_DEGREE, &**f, &**g, &mut workspace.temporary_fxr) {
             continue;
         }
         if !ntru::solve_NTRU(
             LOG_DEGREE,
-            f.as_ref(),
-            g.as_ref(),
-            capital_f.as_mut(),
-            capital_g.as_mut(),
+            &**f,
+            &**g,
+            &mut **capital_f,
+            &mut **capital_g,
             &mut workspace.temporary_u32,
             &mut workspace.temporary_fxr,
         ) {
@@ -112,13 +107,7 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
         }
 
         let (division_temporary, _) = workspace.temporary_u16.split_at_mut(DEGREE);
-        comm::mq::mqpoly_div_small(
-            LOG_DEGREE,
-            f.as_ref(),
-            g.as_ref(),
-            h.as_mut(),
-            division_temporary,
-        );
+        comm::mq::mqpoly_div_small(LOG_DEGREE, &**f, &**g, &mut **h, division_temporary);
         if ntru_equation_holds(
             f.as_ref(),
             g.as_ref(),

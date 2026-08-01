@@ -47,10 +47,10 @@ pub(super) fn sample_preimage_from_seed(
 
     let mut basis = Zeroizing::new(vec![flr::FLR::ZERO; 4 * DEGREE]);
     compute_basis(
-        trapdoor.f.as_ref(),
-        trapdoor.g.as_ref(),
-        trapdoor.capital_f.as_ref(),
-        trapdoor.capital_g.as_ref(),
+        &**trapdoor.f,
+        &**trapdoor.g,
+        &**trapdoor.capital_f,
+        &**trapdoor.capital_g,
         &mut basis,
     );
     let mut work = Zeroizing::new(vec![flr::FLR::ZERO; 9 * DEGREE]);
@@ -173,7 +173,7 @@ pub(super) fn sample_preimage_from_seed(
     if norm_squared > super::SIGNATURE_NORM_SQUARED_BOUND {
         return None;
     }
-    if !preimage_equation_holds(target, trapdoor.h.as_ref(), first.as_ref(), second.as_ref()) {
+    if !preimage_equation_holds(target, &**trapdoor.h, &**first, &**second) {
         return None;
     }
     Some(Preimage {
@@ -240,10 +240,10 @@ pub(super) fn sampler_exhausts_with_zero_budget_for_test(
 ) -> bool {
     let mut basis = Zeroizing::new(vec![flr::FLR::ZERO; 4 * DEGREE]);
     compute_basis(
-        trapdoor.f.as_ref(),
-        trapdoor.g.as_ref(),
-        trapdoor.capital_f.as_ref(),
-        trapdoor.capital_g.as_ref(),
+        &**trapdoor.f,
+        &**trapdoor.g,
+        &**trapdoor.capital_f,
+        &**trapdoor.capital_g,
         &mut basis,
     );
     let mut sampler = sampler::Sampler::<comm::chacha::ChaCha20Prng>::new(LOG_DEGREE, seed, 0);

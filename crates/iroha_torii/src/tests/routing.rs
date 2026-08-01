@@ -390,42 +390,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_root_and_tail_include_typed_offline_readiness() {
+    async fn status_root_and_tail_include_universal_offline_capability() {
         use http_body_util::BodyExt;
-        use iroha_torii_shared::offline_api::{
-            OfflineReadiness, OfflineReadinessBlocker, OfflineStatus,
-        };
+        use iroha_torii_shared::offline_api::OfflineStatus;
 
         let telemetry = MaybeTelemetry::for_tests();
-        let asset = OfflineReadiness {
-            cash_handoff_capability: "cash_handoff_v1".to_owned(),
-            required_bridge_abi_version: 21,
-            max_hops: 8,
-            asset_definition_id: "ds#boi.is".to_owned(),
-            asset_scale: Some(2),
-            evaluated_block_height: 42,
-            evaluated_block_hash: "ab".repeat(32),
-            active_transfer_verifier: None,
-            active_topup_shield_verifier: None,
-            active_unshield_verifier: None,
-            active_recursive_step_eq_verifier: None,
-            active_recursive_step_ep_verifier: None,
-            artifact_set: None,
-            proof_backend_available: false,
-            recursive_lineage_supported: false,
-            ready: false,
-            blockers: vec![OfflineReadinessBlocker {
-                code: "transfer_verifier_unavailable".to_owned(),
-                message: "test fixture".to_owned(),
-            }],
-        };
         let offline = OfflineStatus {
-            mandatory: true,
+            mandatory: false,
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
             required_bridge_abi_version: 21,
             max_hops: 8,
-            ready: false,
-            assets: vec![asset],
+            ready: true,
+            assets: Vec::new(),
             blockers: Vec::new(),
         };
 
@@ -465,7 +441,7 @@ mod tests {
         let response = super::handle_status(
             &telemetry,
             None,
-            Some("offline/assets/0/asset_definition_id"),
+            Some("offline/cash_handoff_capability"),
             true,
             None,
             None,
@@ -481,7 +457,7 @@ mod tests {
             .to_bytes();
         let payload: norito::json::Value =
             norito::json::from_slice(&body).expect("decode status tail");
-        assert_eq!(payload.as_str(), Some("ds#boi.is"));
+        assert_eq!(payload.as_str(), Some("cash_handoff_v1"));
     }
 
     #[cfg(feature = "telemetry")]

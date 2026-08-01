@@ -1482,38 +1482,29 @@ fn offline_readiness_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Report Kagemusha readiness.".to_owned()),
+        Value::String("Report universal offline-wallet capability.".to_owned()),
     );
     operation.insert(
         "description".into(),
         Value::String(
-            "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale, five distinct active verifier records, and exact authenticated ABI-21 V4 release identity to that same height and block hash so clients can cross-check capabilities and release artifacts atomically. proof_backend_available reports exact backend construction independently; recursive_lineage_supported additionally requires the authenticated artifact set and distinct active Eq/Ep records. ready is true exactly when no typed blocker remains, so unrelated blockers do not erase backend or lineage facts. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
+            "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 21 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material."
                 .to_owned(),
         ),
     );
     operation.insert(
         "parameters".into(),
-        Value::Array(vec![
-            norito::json!({
-                "name": "asset_definition_id",
-                "in": "query",
-                "required": true,
-                "schema": { "type": "string" },
-                "description": "Canonical asset-definition address literal or currently live asset alias. The response always contains the resolved canonical asset definition id."
-            }),
-            norito::json!({
-                "name": "If-None-Match",
-                "in": "header",
-                "required": false,
-                "schema": { "type": "string" },
-                "description": "A strong or weak ETag returned by an earlier readiness evaluation, or *. A match for the selected representation returns 304."
-            }),
-        ]),
+        Value::Array(vec![norito::json!({
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "A strong or weak ETag returned by an earlier capability response, or *. A match for the selected representation returns 304."
+        })]),
     );
     let mut responses = Map::new();
     let mut ok = dual_format_response(
-        "Readiness was evaluated successfully.",
-        "#/components/schemas/OfflineReadiness",
+        "The universal offline-wallet capability is available.",
+        "#/components/schemas/OfflineCapabilityStatus",
     );
     if let Value::Object(response) = &mut ok {
         response.insert(
@@ -1525,14 +1516,14 @@ fn offline_readiness_operation() -> Map {
     responses.insert(
         "304".to_owned(),
         norito::json!({
-            "description": "The previously returned readiness representation is still current.",
+            "description": "The previously returned capability representation is still current.",
             "headers": {
                 "ETag": {
-                    "description": "Strong validator for the selected readiness representation.",
+                    "description": "Strong validator for the selected capability representation.",
                     "schema": { "type": "string" }
                 },
                 "Cache-Control": {
-                    "description": "Readiness revalidation policy.",
+                    "description": "Capability revalidation policy.",
                     "schema": { "type": "string", "example": "private, max-age=0, must-revalidate" }
                 },
                 "Vary": {
@@ -1542,36 +1533,13 @@ fn offline_readiness_operation() -> Map {
             }
         }),
     );
-    responses.insert(
-        "400".to_owned(),
-        dual_format_error_response_with_reject_codes(
-            "The asset selector is malformed.",
-            "Exact application-validation code; transport or parser failures sharing HTTP 400 may omit this header.",
-            &["asset_definition_id_invalid"],
-        ),
-    );
-    responses.insert(
-        "404".to_owned(),
-        dual_format_error_response_with_reject_codes(
-            "The asset definition does not exist.",
-            "Exact application-resource code distinguishing a missing asset from an unmatched or intermediary-generated HTTP 404.",
-            &["asset_definition_not_found"],
-        ),
-    );
     responses.insert("401".to_owned(), api_token_unauthorized_response());
     responses.insert("406".to_owned(), offline_not_acceptable_response());
     responses.insert(
         "429".to_owned(),
         retryable_error_response(
-            "The readiness request was rejected by an ingress or route rate limit.",
+            "The capability request was rejected by an ingress or route rate limit.",
             &[],
-        ),
-    );
-    responses.insert(
-        "503".to_owned(),
-        retryable_error_response(
-            "Torii could not evaluate readiness (readiness_unavailable).",
-            &["readiness_unavailable"],
         ),
     );
     operation.insert("responses".into(), Value::Object(responses));
@@ -23772,6 +23740,57 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "OfflineCapabilityStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "mandatory", "cash_handoff_capability",
+                "required_bridge_abi_version", "max_hops",
+                "ready", "assets", "blockers"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "mandatory": {
+                    "type": "boolean",
+                    "const": false,
+                    "description": "Always false: offline-wallet UI capability is universal and is never a deployment admission requirement."
+                },
+                "cash_handoff_capability": {
+                    "type": "string",
+                    "const": (iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1),
+                    "description": "Client-facing irreversible cash-handoff interface implemented by every app-api deployment."
+                },
+                "required_bridge_abi_version": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "const": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4),
+                    "description": "Native bridge ABI exposed to offline-wallet applications."
+                },
+                "max_hops": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "const": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2)
+                },
+                "ready": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Always true because this reports interface availability, not per-asset backend material."
+                },
+                "assets": {
+                    "type": "array",
+                    "maxItems": 0,
+                    "description": "Always empty; universal capability discovery never enrolls or attests any asset."
+                },
+                "blockers": {
+                    "type": "array",
+                    "maxItems": 0,
+                    "description": "Always empty; application feature capability never blocks node health or readiness."
+                }
+            },
+            "description": "Universal, asset-neutral offline-wallet application interface capability."
+        }),
+    );
+    schemas.insert(
         "OfflineRecipientRegistrationLineage".to_owned(),
         norito::json!({
             "type": "object",
@@ -29760,9 +29779,6 @@ fn components_section() -> Value {
 static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
     build_spec_on_bounded_worker(crate::router::builder::compiled_route_features())
 });
-static OFFLINE_DISABLED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
-    build_spec_on_bounded_worker(crate::router::builder::runtime_route_features(false))
-});
 
 fn build_spec_on_bounded_worker(enabled_features: EnabledFeatures<'static>) -> Value {
     let worker = std::thread::Builder::new()
@@ -29796,25 +29812,16 @@ pub fn generate_spec() -> Value {
     LazyLock::force(&COMPILED_OPENAPI_SPEC).clone()
 }
 
-/// Return the OpenAPI specification for one concrete Torii runtime.
-#[must_use]
-pub(crate) fn generate_spec_for_runtime(offline_enabled: bool) -> Value {
-    if offline_enabled {
-        LazyLock::force(&COMPILED_OPENAPI_SPEC).clone()
-    } else {
-        LazyLock::force(&OFFLINE_DISABLED_OPENAPI_SPEC).clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeSet, VecDeque};
 
     use super::*;
 
-    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 8] = [
+    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 9] = [
         "OfflineTopUpRequest",
         "OfflineRedeemRequest",
+        "OfflineCapabilityStatus",
         "OfflineReadiness",
         "OfflineOperationReference",
         "OfflineOperationStatus",
@@ -32554,43 +32561,25 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn runtime_openapi_omits_offline_operations_when_capability_is_disabled() {
+    fn openapi_always_contains_the_universal_offline_interface() {
         use iroha_torii_shared::route_catalog::offline;
 
-        let static_paths = generate_spec()
+        let document = generate_spec();
+        let paths = document
             .get("paths")
             .and_then(Value::as_object)
-            .expect("static OpenAPI paths")
-            .clone();
-        let enabled_paths = generate_spec_for_runtime(true)
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("offline-enabled runtime OpenAPI paths")
-            .clone();
-        let disabled_paths = generate_spec_for_runtime(false)
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("offline-disabled runtime OpenAPI paths")
-            .clone();
+            .expect("OpenAPI paths");
 
         for route in offline::ROUTES {
             let path = route.path().replace("{*", "{");
             assert!(
-                static_paths.contains_key(&path),
-                "static build-capability OpenAPI must retain {path}"
-            );
-            assert!(
-                enabled_paths.contains_key(&path),
-                "offline-enabled runtime OpenAPI must retain {path}"
-            );
-            assert!(
-                !disabled_paths.contains_key(&path),
-                "offline-disabled runtime OpenAPI must omit {path}"
+                paths.contains_key(&path),
+                "the universal OpenAPI contract must retain {path}"
             );
         }
         assert!(
-            disabled_paths.contains_key("/v1/accounts"),
-            "runtime filtering must preserve unrelated app-api operations"
+            paths.contains_key("/v1/accounts"),
+            "offline exposure must preserve unrelated app-api operations"
         );
     }
 
@@ -34535,20 +34524,12 @@ mod tests {
             .name("openapi-small-stack-regression".to_owned())
             .stack_size(SMALL_CALLER_STACK_BYTES)
             .spawn(|| {
-                let cold_offline_disabled = build_spec_on_bounded_worker(
-                    crate::router::builder::runtime_route_features(false),
-                );
+                let cold =
+                    build_spec_on_bounded_worker(crate::router::builder::compiled_route_features());
                 let compiled = generate_spec();
-                let runtime_enabled = generate_spec_for_runtime(true);
-                let runtime_disabled = generate_spec_for_runtime(false);
 
-                assert_eq!(compiled, runtime_enabled);
-                for (variant, document) in [
-                    ("cold-offline-disabled", &cold_offline_disabled),
-                    ("compiled", &compiled),
-                    ("offline-enabled", &runtime_enabled),
-                    ("offline-disabled", &runtime_disabled),
-                ] {
+                assert_eq!(cold, compiled);
+                for (variant, document) in [("cold", &cold), ("cached", &compiled)] {
                     let operation = openapi_operation(document, "/v1/ledger/block/{height}", "get");
                     assert_eq!(
                         operation.get("operationId").and_then(Value::as_str),
@@ -34559,21 +34540,16 @@ mod tests {
 
                 #[cfg(feature = "app_api")]
                 {
-                    let enabled_paths = runtime_enabled
-                        .get("paths")
-                        .and_then(Value::as_object)
-                        .expect("offline-enabled OpenAPI paths");
-                    let disabled_paths = runtime_disabled
-                        .get("paths")
-                        .and_then(Value::as_object)
-                        .expect("offline-disabled OpenAPI paths");
-                    let cold_disabled_paths = cold_offline_disabled
-                        .get("paths")
-                        .and_then(Value::as_object)
-                        .expect("cold offline-disabled OpenAPI paths");
-                    assert!(enabled_paths.contains_key("/v1/offline/readiness"));
-                    assert!(!disabled_paths.contains_key("/v1/offline/readiness"));
-                    assert!(!cold_disabled_paths.contains_key("/v1/offline/readiness"));
+                    for (variant, document) in [("cold", &cold), ("cached", &compiled)] {
+                        let paths = document
+                            .get("paths")
+                            .and_then(Value::as_object)
+                            .unwrap_or_else(|| panic!("{variant} OpenAPI paths"));
+                        assert!(
+                            paths.contains_key("/v1/offline/readiness"),
+                            "universal offline capability route missing from {variant} OpenAPI",
+                        );
+                    }
                 }
             })
             .expect("spawn adversarial small-stack OpenAPI caller");
@@ -37099,7 +37075,7 @@ mod tests {
                 .and_then(Value::as_str);
             assert_eq!(schema_ref, Some("#/components/schemas/ErrorEnvelope"));
 
-            for status in ["429", "503"] {
+            for status in ["429"] {
                 let headers = responses
                     .get(status)
                     .and_then(Value::as_object)
@@ -37115,6 +37091,34 @@ mod tests {
             }
         }
 
+        for path in [
+            "/v1/offline/receiver-lineage",
+            "/v1/offline/top-up",
+            "/v1/offline/redeem",
+            "/v1/offline/operations/{operation_id}",
+        ] {
+            let responses = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.values().next())
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("responses"))
+                .and_then(Value::as_object)
+                .expect("offline operation responses");
+            let headers = responses
+                .get("503")
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("headers"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("offline 503 response headers: {path}"));
+            for header in ["Retry-After", "Cache-Control", "Vary"] {
+                assert!(
+                    headers.contains_key(header),
+                    "offline 503 must document {header}: {path}"
+                );
+            }
+        }
+
         let readiness_responses = paths
             .get("/v1/offline/readiness")
             .and_then(Value::as_object)
@@ -37123,18 +37127,12 @@ mod tests {
             .and_then(|operation| operation.get("responses"))
             .and_then(Value::as_object)
             .expect("offline readiness responses");
-        assert_eq!(
-            documented_reject_codes(readiness_responses, "400"),
-            ["asset_definition_id_invalid"]
-        );
-        assert_eq!(
-            documented_reject_codes(readiness_responses, "404"),
-            ["asset_definition_not_found"]
-        );
-        assert_eq!(
-            documented_reject_codes(readiness_responses, "503"),
-            ["readiness_unavailable"]
-        );
+        for status in ["400", "404", "503"] {
+            assert!(
+                !readiness_responses.contains_key(status),
+                "universal capability discovery must not document {status} backend evaluation"
+            );
+        }
         assert!(
             !response_documents_reject_code(readiness_responses, "429"),
             "generic readiness ingress throttling must not advertise an application reject code"

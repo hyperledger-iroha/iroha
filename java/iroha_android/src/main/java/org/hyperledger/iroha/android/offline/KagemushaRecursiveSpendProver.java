@@ -1,7 +1,6 @@
 package org.hyperledger.iroha.android.offline;
 
 import java.net.URI;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -15,6 +14,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import org.hyperledger.iroha.android.client.JsonNumbers;
+import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
@@ -4084,6 +4085,117 @@ public final class KagemushaRecursiveSpendProver {
     public byte[] acknowledgementDigest() { return Arrays.copyOf(acknowledgementDigest, acknowledgementDigest.length); }
   }
 
+  /** Asset-neutral offline protocol capability implemented by every app-api node. */
+  public static final class OfflineStatus {
+    private static final List<String> FIELDS = Collections.unmodifiableList(
+        Arrays.asList(
+            "mandatory",
+            "cash_handoff_capability",
+            "required_bridge_abi_version",
+            "max_hops",
+            "ready",
+            "assets",
+            "blockers"));
+
+    private final boolean mandatory;
+    private final String cashHandoffCapability;
+    private final int requiredBridgeAbiVersion;
+    private final int maximumHops;
+    private final boolean ready;
+    private final List<Object> assets;
+    private final List<ReadinessBlocker> blockers;
+
+    private OfflineStatus(
+        final boolean mandatory,
+        final String cashHandoffCapability,
+        final int requiredBridgeAbiVersion,
+        final int maximumHops,
+        final boolean ready,
+        final List<Object> assets,
+        final List<ReadinessBlocker> blockers) {
+      if (mandatory) {
+        throw new IllegalArgumentException(
+            "mandatory must be false for universal offline capability");
+      }
+      if (!CASH_HANDOFF_CAPABILITY_V1.equals(cashHandoffCapability)) {
+        throw new IllegalArgumentException(
+            "cashHandoffCapability must be the exact cash_handoff_v1 contract");
+      }
+      if (requiredBridgeAbiVersion != REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
+        throw new IllegalArgumentException("requiredBridgeAbiVersion must be 21");
+      }
+      if (maximumHops != MAXIMUM_PEER_HOPS) {
+        throw new IllegalArgumentException(
+            "maximumHops must match the cash_handoff_v1 bound");
+      }
+      if (!ready) {
+        throw new IllegalArgumentException(
+            "ready must be true for universal offline capability");
+      }
+      if (!assets.isEmpty()) {
+        throw new IllegalArgumentException(
+            "assets must be empty because capability is asset-neutral");
+      }
+      if (!blockers.isEmpty()) {
+        throw new IllegalArgumentException(
+            "blockers must be empty for universal offline capability");
+      }
+      this.mandatory = mandatory;
+      this.cashHandoffCapability = cashHandoffCapability;
+      this.requiredBridgeAbiVersion = requiredBridgeAbiVersion;
+      this.maximumHops = maximumHops;
+      this.ready = ready;
+      this.assets = Collections.unmodifiableList(new ArrayList<>(assets));
+      this.blockers = Collections.unmodifiableList(new ArrayList<>(blockers));
+    }
+
+    private static OfflineStatus decode(final byte[] payload) {
+      final Object parsed = JsonParser.parse(new String(payload, StandardCharsets.UTF_8));
+      if (!(parsed instanceof Map<?, ?> root)
+          || root.size() != FIELDS.size()
+          || !root.keySet().containsAll(FIELDS)) {
+        throw new IllegalStateException(
+            "offline capability response must contain exactly the universal fields");
+      }
+      final Object mandatoryValue = root.get("mandatory");
+      final Object capabilityValue = root.get("cash_handoff_capability");
+      final Object readyValue = root.get("ready");
+      final Object assetsValue = root.get("assets");
+      final Object blockersValue = root.get("blockers");
+      if (!(mandatoryValue instanceof Boolean mandatory)
+          || !(capabilityValue instanceof String capability)
+          || !(readyValue instanceof Boolean ready)
+          || !(assetsValue instanceof List<?> parsedAssets)
+          || !(blockersValue instanceof List<?> parsedBlockers)) {
+        throw new IllegalStateException(
+            "offline capability response has an invalid universal field type");
+      }
+      if (!parsedAssets.isEmpty() || !parsedBlockers.isEmpty()) {
+        throw new IllegalStateException(
+            "offline capability assets and blockers must be empty");
+      }
+      return new OfflineStatus(
+          mandatory,
+          capability,
+          JsonNumbers.asInt(
+              root.get("required_bridge_abi_version"),
+              "offline capability required_bridge_abi_version"),
+          JsonNumbers.asInt(root.get("max_hops"), "offline capability max_hops"),
+          ready,
+          Collections.emptyList(),
+          Collections.emptyList());
+    }
+
+    public boolean mandatory() { return mandatory; }
+    public String cashHandoffCapability() { return cashHandoffCapability; }
+    public int requiredBridgeAbiVersion() { return requiredBridgeAbiVersion; }
+    public int maximumHops() { return maximumHops; }
+    public boolean ready() { return ready; }
+    public List<Object> assets() { return assets; }
+    public List<ReadinessBlocker> blockers() { return blockers; }
+  }
+
+  /** Legacy command-specific artifact diagnostics; not a discovery response. */
   public static final class Readiness extends CanonicalArchive {
     private Readiness(final byte[] archive) {
       super(archive, "OfflineReadiness", "readiness", MAX_TORII_RESPONSE_BYTES);
@@ -4481,6 +4593,7 @@ public final class KagemushaRecursiveSpendProver {
     public static final String REDEEM_PATH = "/v1/offline/redeem";
     public static final String OPERATIONS_PATH = "/v1/offline/operations";
     public static final String RECEIVER_LINEAGE_PATH = "/v1/offline/receiver-lineage";
+    public static final String JSON_MEDIA_TYPE = "application/json";
     public static final String NORITO_MEDIA_TYPE = "application/x-norito";
 
     private final String baseUri;
@@ -4502,27 +4615,23 @@ public final class KagemushaRecursiveSpendProver {
       this.baseUri = stripTrailingSlash(baseUri.toString());
     }
 
-    public CompletableFuture<Readiness> getReadiness(final String assetDefinitionId) {
-      if (assetDefinitionId == null
-          || assetDefinitionId.isEmpty()
-          || !assetDefinitionId.equals(assetDefinitionId.trim())) {
-        throw new IllegalArgumentException("assetDefinitionId must be canonical non-empty text");
-      }
-      final String encoded;
-      try {
-        encoded = URLEncoder.encode(assetDefinitionId, StandardCharsets.UTF_8.name());
-      } catch (final java.io.UnsupportedEncodingException impossible) {
-        throw new IllegalStateException("UTF-8 is unavailable", impossible);
-      }
+    public CompletableFuture<OfflineStatus> getOfflineCapability() {
       return execute(
               TransportRequest.builder()
                   .setMethod("GET")
-                  .setUri(URI.create(baseUri + READINESS_PATH + "?asset_definition_id=" + encoded))
-                  .addHeader("Accept", NORITO_MEDIA_TYPE)
+                  .setUri(URI.create(baseUri + READINESS_PATH))
+                  .addHeader("Accept", JSON_MEDIA_TYPE)
                   .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
                   .build(),
-              200)
-          .thenApply(response -> new Readiness(response.body()));
+              200,
+              JSON_MEDIA_TYPE)
+          .thenApply(response -> OfflineStatus.decode(response.body()));
+    }
+
+    /** @deprecated Offline capability is asset-neutral; use {@link #getOfflineCapability()}. */
+    @Deprecated
+    public CompletableFuture<OfflineStatus> getReadiness(final String ignoredAssetDefinitionId) {
+      return getOfflineCapability();
     }
 
     public CompletableFuture<RecipientRegistrationLineage> getRecipientRegistrationLineage(
@@ -4584,6 +4693,13 @@ public final class KagemushaRecursiveSpendProver {
 
     private CompletableFuture<TransportResponse> execute(
         final TransportRequest request, final int expectedStatus) {
+      return execute(request, expectedStatus, NORITO_MEDIA_TYPE);
+    }
+
+    private CompletableFuture<TransportResponse> execute(
+        final TransportRequest request,
+        final int expectedStatus,
+        final String expectedMediaType) {
       return transport
           .execute(request)
           .thenApply(
@@ -4595,9 +4711,9 @@ public final class KagemushaRecursiveSpendProver {
                 final List<String> contentTypes =
                     response.headers().getOrDefault("Content-Type", Collections.emptyList());
                 if (contentTypes.size() != 1
-                    || !NORITO_MEDIA_TYPE.equalsIgnoreCase(contentTypes.get(0))) {
+                    || !expectedMediaType.equalsIgnoreCase(contentTypes.get(0))) {
                   throw new IllegalStateException(
-                      "Kagemusha Torii response must use " + NORITO_MEDIA_TYPE);
+                      "Kagemusha Torii response must use " + expectedMediaType);
                 }
                 return response;
               });

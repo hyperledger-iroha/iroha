@@ -9,8 +9,8 @@ The API mirrors the app-facing endpoints exposed by Torii:
 * `/v1/zk/attachments` for uploading, listing, fetching, and deleting
   proof attachments stored on the node.
 * `/v1/zk/prover/reports` for querying background prover results.
-* `/v1/offline/*` for asset readiness and idempotent asynchronous top-up and
-  redemption operations using direct structured JSON.
+* `/v1/offline/*` for universal offline capability discovery and idempotent
+  asynchronous top-up and redemption operations using direct structured JSON.
 * `/v1/telemetry/peers-info` for peer telemetry snapshots (connectivity,
   config, and connected peers).
 * `/v1/sumeragi/status` for fail-closed authoritative Sumeragi wire-revision-3 consensus
@@ -41,6 +41,7 @@ import re
 import secrets
 import time
 import unicodedata
+import warnings
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import (
@@ -861,6 +862,7 @@ __all__ = [
     "OfflineActiveRecursiveStepEpVerifier",
     "OfflineAuthenticatedArtifactSet",
     "OfflineReadiness",
+    "OfflineStatus",
     "OfflineAssetScale",
     "OfflineScaledAmountJson",
     "OfflineSpendableNoteJson",
@@ -3203,6 +3205,7 @@ _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES = 512 * 1024
 _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
 _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 21
 _KAGEMUSHA_MAX_HOPS = 8
+_KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
 _KAGEMUSHA_RECURSIVE_PROOF_PAIR_MAX_BYTES_V4 = 16 * 1024 * 1024
 _KAGEMUSHA_VERIFIER_BACKEND = "halo2/ipa"
 _KAGEMUSHA_VERIFIER_ROLES = {
@@ -3556,7 +3559,10 @@ def _offline_top_up_shield_evidence_request(value: Any, context: str) -> None:
 
 @dataclass(frozen=True)
 class OfflineReadinessBlocker:
-    """One stable reason an asset is not ready for offline payments."""
+    """Legacy command-specific proof-material diagnostic.
+
+    This type never represents deployment, dataspace, or asset enrollment.
+    """
 
     code: str
     message: str
@@ -3604,6 +3610,88 @@ OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier
 OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier
 OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier
 OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier
+
+
+@dataclass(frozen=True)
+class OfflineStatus:
+    """Universal, asset-neutral offline cash-handoff capability."""
+
+    mandatory: bool
+    cash_handoff_capability: str
+    required_bridge_abi_version: int
+    max_hops: int
+    ready: bool
+    assets: Tuple[()]
+    blockers: Tuple[()]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineStatus":
+        """Decode the exact universally compiled capability projection."""
+
+        context = "offline capability response"
+        record = _offline_mapping(payload, context)
+        _offline_exact_object_fields(
+            record,
+            context,
+            required=(
+                "mandatory",
+                "cash_handoff_capability",
+                "required_bridge_abi_version",
+                "max_hops",
+                "ready",
+                "assets",
+                "blockers",
+            ),
+        )
+        mandatory = _offline_required(record, "mandatory", context)
+        if mandatory is not False:
+            raise RuntimeError(f"{context}.mandatory must be false")
+        capability = _offline_exact_string(
+            _offline_required(record, "cash_handoff_capability", context),
+            f"{context}.cash_handoff_capability",
+        )
+        if capability != _KAGEMUSHA_CASH_HANDOFF_CAPABILITY:
+            raise RuntimeError(
+                f"{context}.cash_handoff_capability must be "
+                f"{_KAGEMUSHA_CASH_HANDOFF_CAPABILITY}"
+            )
+        abi = _offline_unsigned(
+            _offline_required(record, "required_bridge_abi_version", context),
+            f"{context}.required_bridge_abi_version",
+            _OFFLINE_MAX_U32,
+            positive=True,
+        )
+        if abi != _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION:
+            raise RuntimeError(
+                f"{context}.required_bridge_abi_version must be "
+                f"{_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION}"
+            )
+        max_hops = _offline_unsigned(
+            _offline_required(record, "max_hops", context),
+            f"{context}.max_hops",
+            _OFFLINE_MAX_U32,
+            positive=True,
+        )
+        if max_hops != _KAGEMUSHA_MAX_HOPS:
+            raise RuntimeError(f"{context}.max_hops must be {_KAGEMUSHA_MAX_HOPS}")
+        ready = _offline_required(record, "ready", context)
+        if ready is not True:
+            raise RuntimeError(f"{context}.ready must be true")
+        assets = _offline_required(record, "assets", context)
+        if not isinstance(assets, list) or assets:
+            raise RuntimeError(f"{context}.assets must be an empty array")
+        blockers = _offline_required(record, "blockers", context)
+        if not isinstance(blockers, list) or blockers:
+            raise RuntimeError(f"{context}.blockers must be an empty array")
+        return cls(
+            mandatory=False,
+            cash_handoff_capability=_KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
+            required_bridge_abi_version=_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
+            max_hops=_KAGEMUSHA_MAX_HOPS,
+            ready=True,
+            assets=(),
+            blockers=(),
+        )
 
 
 def _offline_active_transfer_verifier(
@@ -3812,7 +3900,12 @@ def _offline_authenticated_artifact_set(
 
 @dataclass(frozen=True)
 class OfflineReadiness:
-    """Snapshot-bound offline readiness for one asset definition."""
+    """Legacy snapshot-bound proof-release diagnostics for one asset.
+
+    Retained for historical wire compatibility and command diagnostics only.
+    Capability discovery returns :class:`OfflineStatus`; this record must not
+    be used to enroll or gate a deployment, dataspace, or asset.
+    """
 
     required_bridge_abi_version: int
     max_hops: int
@@ -12896,19 +12989,32 @@ class ToriiClient:
     # ------------------------------------------------------------------
     # First-release Kagemusha API
     # ------------------------------------------------------------------
-    def get_kagemusha_readiness(self, asset_definition_id: str) -> OfflineReadiness:
-        """Fetch Kagemusha readiness by canonical asset id or live asset alias."""
+    def get_offline_capability(self) -> OfflineStatus:
+        """Fetch the universally compiled, asset-neutral offline capability."""
 
-        asset = _offline_asset_selector(asset_definition_id, "asset_definition_id")
         response = self._request(
             "GET",
             _OFFLINE_READINESS_PATH,
-            params={"asset_definition_id": asset},
             headers={"Accept": "application/json"},
         )
         self._expect_status(response, {200})
-        payload = self._offline_json_response(response, "offline readiness response")
-        return OfflineReadiness.from_payload(payload, asset)
+        payload = self._offline_json_response(response, "offline capability response")
+        return OfflineStatus.from_payload(payload)
+
+    def get_kagemusha_readiness(self, _asset_definition_id: str) -> OfflineStatus:
+        """Deprecated asset-selector shim for :meth:`get_offline_capability`.
+
+        The selector is intentionally ignored because offline capability is
+        compiled into every Iroha deployment and is not asset-specific.
+        """
+
+        warnings.warn(
+            "get_kagemusha_readiness(asset) is deprecated; use "
+            "get_offline_capability()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.get_offline_capability()
 
     def submit_kagemusha_top_up(
         self, request: KagemushaTopUpRequestV4

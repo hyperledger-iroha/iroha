@@ -29,27 +29,6 @@ use crate::{SharedAppState, enforce_required_api_token, operator_signatures};
 const COMPILED_ROUTE_FEATURES: &[&str] = &[
     #[cfg(feature = "app_api")]
     "app_api",
-    #[cfg(feature = "app_api")]
-    "offline",
-    #[cfg(feature = "telemetry")]
-    "telemetry",
-    #[cfg(feature = "profiling")]
-    "profiling",
-    #[cfg(feature = "schema")]
-    "schema",
-    #[cfg(feature = "p2p_ws")]
-    "p2p_ws",
-    #[cfg(feature = "connect")]
-    "connect",
-    #[cfg(feature = "zk-verify-batch")]
-    "zk-verify-batch",
-    #[cfg(feature = "push")]
-    "push",
-];
-
-const OFFLINE_DISABLED_ROUTE_FEATURES: &[&str] = &[
-    #[cfg(feature = "app_api")]
-    "app_api",
     #[cfg(feature = "telemetry")]
     "telemetry",
     #[cfg(feature = "profiling")]
@@ -70,16 +49,6 @@ const OFFLINE_DISABLED_ROUTE_FEATURES: &[&str] = &[
 #[must_use]
 pub(crate) const fn compiled_route_features() -> EnabledFeatures<'static> {
     EnabledFeatures::new(COMPILED_ROUTE_FEATURES)
-}
-
-/// Return the route capabilities enabled for one concrete Torii runtime.
-#[must_use]
-pub(crate) const fn runtime_route_features(offline_enabled: bool) -> EnabledFeatures<'static> {
-    if offline_enabled {
-        compiled_route_features()
-    } else {
-        EnabledFeatures::new(OFFLINE_DISABLED_ROUTE_FEATURES)
-    }
 }
 
 /// Complete description of what one composed router mounted.
@@ -880,61 +849,40 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn runtime_offline_capability_controls_manifest_and_http_reachability() {
+    async fn offline_routes_are_part_of_every_app_api_router() {
         use iroha_torii_shared::route_catalog::offline;
 
-        let disabled = RouterBuilder::new(
+        let mut builder = RouterBuilder::new(
             (),
             RouteCatalog::new(offline::ROUTES),
-            runtime_route_features(false),
+            compiled_route_features(),
         )
         .expect("offline catalog is valid");
-        let (disabled_router, disabled_manifest) = disabled
-            .finish()
-            .expect("disabled offline routes are not required registrations");
-        assert!(disabled_manifest.explicit_routes().is_empty());
-        let response = disabled_router
-            .oneshot(
-                Request::builder()
-                    .uri(offline::READINESS_PATH)
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("disabled router response");
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-        let mut enabled = RouterBuilder::new(
-            (),
-            RouteCatalog::new(offline::ROUTES),
-            runtime_route_features(true),
-        )
-        .expect("offline catalog is valid");
-        enabled.route(
+        builder.route(
             &offline::READINESS,
             catalog_get(|| async { StatusCode::NO_CONTENT }),
         );
-        enabled.route(
+        builder.route(
             &offline::RECIPIENT_LINEAGE,
             catalog_post(|| async { StatusCode::NO_CONTENT }),
         );
-        enabled.route(
+        builder.route(
             &offline::TOP_UP,
             catalog_post(|| async { StatusCode::NO_CONTENT }),
         );
-        enabled.route(
+        builder.route(
             &offline::REDEEM,
             catalog_post(|| async { StatusCode::NO_CONTENT }),
         );
-        enabled.route(
+        builder.route(
             &offline::OPERATION,
             catalog_get(|| async { StatusCode::NO_CONTENT }),
         );
-        let (enabled_router, enabled_manifest) = enabled
+        let (router, manifest) = builder
             .finish()
-            .expect("enabled offline routes require and accept the complete family");
-        assert_eq!(enabled_manifest.explicit_routes(), offline::ROUTES);
-        let response = enabled_router
+            .expect("app-api routes require and accept the complete offline family");
+        assert_eq!(manifest.explicit_routes(), offline::ROUTES);
+        let response = router
             .oneshot(
                 Request::builder()
                     .uri(offline::READINESS_PATH)
@@ -942,11 +890,11 @@ mod tests {
                     .expect("request"),
             )
             .await
-            .expect("enabled router response");
+            .expect("offline route response");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert_eq!(
             RouteCatalog::new(offline::ROUTES)
-                .project(CatalogProjection::Mounted, runtime_route_features(true))
+                .project(CatalogProjection::Mounted, compiled_route_features())
                 .len(),
             offline::ROUTES.len()
         );

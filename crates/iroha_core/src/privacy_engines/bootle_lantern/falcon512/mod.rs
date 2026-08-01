@@ -110,10 +110,10 @@ mod tests {
         .expect("pinned Falcon-512 keygen candidate");
         let mut encoded = Zeroizing::new(Vec::with_capacity(4 * DEGREE));
         for polynomial in [
-            trapdoor.f.as_ref(),
-            trapdoor.g.as_ref(),
-            trapdoor.capital_f.as_ref(),
-            trapdoor.capital_g.as_ref(),
+            &**trapdoor.f,
+            &**trapdoor.g,
+            &**trapdoor.capital_f,
+            &**trapdoor.capital_g,
         ] {
             encoded.extend(polynomial.iter().map(|coefficient| *coefficient as u8));
         }

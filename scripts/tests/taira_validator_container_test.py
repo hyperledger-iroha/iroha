@@ -60,15 +60,10 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         (self.manifest_path / "governance.manifest.json").write_text(
             "{}\n", encoding="utf-8"
         )
-        self.policy_path = self.config_bundle_path / "kagemusha"
-        self.policy_path.mkdir()
-        (self.policy_path / "release-policy.norito").write_bytes(b"policy")
         self.admission_path = self.config_bundle_path / "sorafs_admission"
         self.admission_path.mkdir()
         self.storage_path = self.root / "storage"
         self.storage_path.mkdir()
-        self.kagemusha_artifact_path = self.root / "kagemusha-artifacts"
-        self.kagemusha_artifact_path.mkdir()
         self.genesis_path = self.root / "genesis.json"
         self.genesis_path.write_text("{}\n", encoding="utf-8")
         self.signed_genesis_path = self.root / "genesis.signed.nrt"
@@ -86,7 +81,6 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                 TAIRA_RUNTIME_PROFILE=production
                 TAIRA_CONFIG_BUNDLE_PATH={self.config_bundle_path}
                 TAIRA_STORAGE_PATH={self.storage_path}
-                TAIRA_KAGEMUSHA_ARTIFACT_PATH={self.kagemusha_artifact_path}
                 TAIRA_P2P_PORT=1447
                 TAIRA_TORII_PORT=19080
                 TAIRA_RUST_LOG=debug
@@ -166,11 +160,7 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
             f"{self.config_bundle_path}:/etc/iroha/taira-validator:ro",
             result.stdout,
         )
-        self.assertIn(
-            f"{self.kagemusha_artifact_path}:"
-            "/var/lib/iroha/taira-validator/kagemusha/v4",
-            result.stdout,
-        )
+        self.assertNotIn("KAGEMUSHA", result.stdout)
         self.assertIn("IROHA_TAIRA_GENESIS=/config/genesis.json", result.stdout)
         self.assertIn("IROHA_TAIRA_SIGNED_GENESIS=/config/genesis.signed.nrt", result.stdout)
         self.assertNotIn("IROHA_SORAFS_SITE_BINDINGS_FILE", result.stdout)
@@ -195,12 +185,7 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
             "/etc/iroha/taira-validator:ro",
             compose,
         )
-        self.assertIn(
-            "${TAIRA_KAGEMUSHA_ARTIFACT_PATH:-"
-            "/var/lib/iroha/taira-validator/kagemusha/v4}:"
-            "/var/lib/iroha/taira-validator/kagemusha/v4",
-            compose,
-        )
+        self.assertNotIn("KAGEMUSHA", compose)
         self.assertIn(
             "http://127.0.0.1:18080/status",
             compose,
@@ -244,14 +229,12 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
             service,
         )
         self.assertIn(
-            "ExecStartPre=/usr/bin/env -- "
-            "IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR="
-            "/var/lib/iroha/taira-validator/kagemusha/v4 "
-            "/opt/iroha/scripts/docker_entrypoint.sh "
+            "ExecStartPre=/opt/iroha/scripts/docker_entrypoint.sh "
             "--validate-taira-production-config "
             "/etc/iroha/taira-validator/config.toml",
             service,
         )
+        self.assertNotIn("KAGEMUSHA", service)
         self.assertNotIn("IROHA_TAIRA_CONFIG=", environment)
         for required_path in (
             "/var/lib/iroha/taira-validator-1",
@@ -259,8 +242,6 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
             "/etc/iroha/taira-validator/runtime/faucet-signer.key",
             "/etc/iroha/taira-validator/manifests/governance.manifest.json",
             "/etc/iroha/taira-validator/sorafs_admission",
-            "/etc/iroha/taira-validator/kagemusha/release-policy.norito",
-            "/var/lib/iroha/taira-validator/kagemusha/v4",
         ):
             self.assertIn(required_path, service)
 
@@ -283,10 +264,6 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
                     "-p 1447:1337 -p 19080:18080 "
                     f"-v {self.config_bundle_path}:/etc/iroha/taira-validator:ro "
                     f"-v {self.storage_path}:/storage "
-                    "-e IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR="
-                    "/var/lib/iroha/taira-validator/kagemusha/v4 "
-                    f"-v {self.kagemusha_artifact_path}:"
-                    "/var/lib/iroha/taira-validator/kagemusha/v4 "
                     "--network taira-localnet "
                     "-e IROHA_TAIRA_GENESIS=/config/genesis.json "
                     f"-v {self.genesis_path}:/config/genesis.json:ro "
@@ -392,16 +369,6 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("symlinked Taira config bundle", result.stderr)
 
-    def test_symlinked_release_policy_fails_fast(self) -> None:
-        release_policy = self.policy_path / "release-policy.norito"
-        release_policy.unlink()
-        external_policy = self.root / "external-policy.norito"
-        external_policy.write_bytes(b"policy")
-        release_policy.symlink_to(external_policy)
-        result = self.run_script("config")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Taira Kagemusha release policy", result.stderr)
-
     def test_symlinked_runtime_directory_fails_fast(self) -> None:
         for path in self.runtime_path.iterdir():
             path.unlink()
@@ -435,18 +402,14 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
             self.manifest_path / "governance.manifest.json",
             self.runtime_path / "onboarding-signer.key",
             self.runtime_path / "faucet-signer.key",
-            self.policy_path / "release-policy.norito",
         ):
             path.unlink()
-        self.kagemusha_artifact_path.rmdir()
 
         result = self.run_script("config")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("-p 19080:8080", result.stdout)
-        self.assertNotIn(
-            "/var/lib/iroha/taira-validator/kagemusha/v4", result.stdout
-        )
+        self.assertNotIn("KAGEMUSHA", result.stdout)
 
     def test_unknown_runtime_profile_fails_before_any_docker_action(self) -> None:
         self.env_file.write_text(
@@ -464,13 +427,11 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         )
         self.assertEqual(self.read_docker_log(), [])
 
-    def test_reset_wipes_all_validator_state_roots(self) -> None:
+    def test_reset_wipes_validator_storage(self) -> None:
         (self.storage_path / "blocks").write_bytes(b"blocks")
-        (self.kagemusha_artifact_path / "terminal").write_bytes(b"terminal")
         result = self.run_script("reset")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(list(self.storage_path.iterdir()), [])
-        self.assertEqual(list(self.kagemusha_artifact_path.iterdir()), [])
 
     def test_reset_rejects_config_and_state_overlap_before_docker(self) -> None:
         sentinel = self.config_bundle_path / "do-not-delete"
@@ -488,30 +449,6 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must not be equal or nested", result.stderr)
         self.assertTrue(sentinel.exists())
-        self.assertEqual(self.read_docker_log(), [])
-
-    def test_reset_rejects_nested_state_roots_before_docker(self) -> None:
-        state_root = self.root / "state-root"
-        nested_storage = state_root / "storage"
-        state_root.mkdir()
-        nested_storage.mkdir()
-        self.env_file.write_text(
-            self.env_file.read_text(encoding="utf-8")
-            .replace(
-                f"TAIRA_STORAGE_PATH={self.storage_path}",
-                f"TAIRA_STORAGE_PATH={nested_storage}",
-            )
-            .replace(
-                f"TAIRA_KAGEMUSHA_ARTIFACT_PATH={self.kagemusha_artifact_path}",
-                f"TAIRA_KAGEMUSHA_ARTIFACT_PATH={state_root}",
-            ),
-            encoding="utf-8",
-        )
-
-        result = self.run_script("reset")
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("must not be equal or nested", result.stderr)
         self.assertEqual(self.read_docker_log(), [])
 
     def test_reset_rejects_descendant_of_system_root_before_docker(self) -> None:

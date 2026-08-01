@@ -121,16 +121,6 @@ max_tx_value = "1000000000"
 operation_registry_max_entries = 4096
 operation_registry_max_bytes = 524288
 
-[settlement.offline]
-enabled = true
-escrow_required = true
-escrow_accounts = { "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" = "REPLACE_WITH_TAIRA_OFFLINE_ESCROW_ACCOUNT" }
-kagemusha_release_policy_path = "/etc/iroha/taira-validator/kagemusha/release-policy.norito"
-kagemusha_artifact_dir = "/var/lib/iroha/taira-validator/kagemusha/v4"
-# Reset packaging injects the release-specific absolute seal path:
-# /Library/SORA/Taira/seals/kagemusha-v4-<release-tree-sha256>.norito
-kagemusha_max_decoded_bytes = 268435456
-
 [torii.account_onboarding]
 authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
 private_key_file = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
@@ -323,7 +313,7 @@ allowed_curve_ids = [1, 3, 4]
 
 [nexus]
 enabled = true
-lane_count = 4
+lane_count = 5
 
 [nexus.storage]
 # Four validators share one host. Keep aggregate per-node storage bounded so
@@ -349,9 +339,10 @@ poll_interval_ms = 10000
 
 [nexus.autoscale]
 enabled = true
-# Legacy names: this half-open lane-id range reserves lane 4 for deterministic creation.
-min_lanes = 4
-max_lanes = 5
+# Legacy internal names: five routing containers are statically assigned;
+# this half-open range reserves index 5 for deterministic creation.
+min_lanes = 5
+max_lanes = 6
 target_block_ms = 1000
 scale_out_latency_ratio = 1.50
 scale_in_latency_ratio = 1.10
@@ -408,6 +399,13 @@ description = "External PoC traffic"
 dataspace = "is"
 metadata = { "scheduler.teu_capacity" = "25000000" }
 
+[[nexus.lane_catalog]]
+index = 4
+alias = "boi-mobile"
+description = "Bank of Israel mobile-wallet traffic"
+dataspace = "is2"
+metadata = { "scheduler.teu_capacity" = "25000000" }
+
 [[nexus.dataspace_catalog]]
 alias = "universal"
 id = 0
@@ -433,6 +431,13 @@ manifest_hash = "4cbd76b725ef415c00000000000000000000000000000000000000000000000
 description = "External PoC data space"
 fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
 
+[[nexus.dataspace_catalog]]
+alias = "is2"
+id = 8477022798449861195
+manifest_hash = "4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b"
+description = "Bank of Israel mobile-wallet data space"
+fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
+
 [nexus.governance]
 default_module = "parliament"
 
@@ -455,32 +460,39 @@ instruction = "governance"
 description = "Route governance instructions to the governance lane"
 
 [[nexus.routing_policy.rules]]
+lane = 4
+dataspace = "is2"
+[nexus.routing_policy.rules.matcher]
+account = "*@is2"
+description = "Route mobile-wallet authorities to the is2 dataspace"
+
+[[nexus.routing_policy.rules]]
 lane = 3
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "smartcontract::deploy"
-description = "Route contract deployments to the external IS lane for PoC proof tracking"
+description = "Route contract deployments to the external `is` dataspace routing container for PoC proof tracking"
 
 [[nexus.routing_policy.rules]]
 lane = 3
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "shield"
-description = "Route shield instructions to the external IS lane for dataspace-scoped balances"
+description = "Route shield instructions to the external `is` dataspace routing container for dataspace-scoped balances"
 
 [[nexus.routing_policy.rules]]
 lane = 3
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "zk::zk_transfer"
-description = "Route private ZK transfers to the external IS lane for dataspace-scoped balances"
+description = "Route private ZK transfers to the external `is` dataspace routing container for dataspace-scoped balances"
 
 [[nexus.routing_policy.rules]]
 lane = 3
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "unshield"
-description = "Route unshield instructions to the external IS lane for dataspace-scoped balances"
+description = "Route unshield instructions to the external `is` dataspace routing container for dataspace-scoped balances"
 
 [nexus.fusion]
 floor_teu = 2500

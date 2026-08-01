@@ -75,16 +75,15 @@ def _fleet_record(label: str, node: str) -> dict[str, object]:
         "quorum": "3/4",
         "status_blocks": 707,
         "committed_height": 707,
+        "committed_block_hash": "ab" * 32,
         "committed_subject": "block-707",
         "commit_qc": "qc-707",
-        "offline_block_height": 707,
-        "offline_block_hash": "ab" * 32,
-        "offline_release": json.dumps(
+        "dataspace_catalog": json.dumps(
             {
-                "artifact_set": {"generation": "release-v4"},
-                "verifiers": {
-                    f"role-{index}": {"commitment": f"{index:02x}" * 32}
-                    for index in range(5)
+                "catalog_hash": "hash:" + "cd" * 32,
+                "dataspaces": {
+                    "boi-mobile": 8477022798449861195,
+                    "external-poc": 6647857470246403404,
                 },
             },
             sort_keys=True,
@@ -253,20 +252,24 @@ def test_sumeragi_checker_accepts_authoritative_v2(tmp_path: Path) -> None:
     assert '"commit_qc_signers": 3' in result.stdout
 
 
-def test_validator_fleet_gate_retains_exact_offline_identity(tmp_path: Path) -> None:
+def test_validator_fleet_gate_retains_exact_dataspace_and_commit_identity(
+    tmp_path: Path,
+) -> None:
     records = [_fleet_record("v1", "node-1"), _fleet_record("v2", "node-2")]
     result = _run_fleet_checker(tmp_path, records)
 
     assert result.returncode == 0, result.stderr
     summary = json.loads(result.stdout)
     assert summary["status_blocks"] == summary["committed_height"] == 707
-    assert summary["offline_block_height"] == 707
-    assert summary["offline_block_hash"] == "ab" * 32
-    release = json.loads(summary["offline_release"])
-    assert len(release["verifiers"]) == 5
+    assert summary["committed_block_hash"] == "ab" * 32
+    catalog = json.loads(summary["dataspace_catalog"])
+    assert catalog["dataspaces"] == {
+        "boi-mobile": 8477022798449861195,
+        "external-poc": 6647857470246403404,
+    }
 
 
-def test_validator_fleet_gate_rejects_offline_block_and_verifier_mismatches(
+def test_validator_fleet_gate_rejects_commit_and_dataspace_mismatches(
     tmp_path: Path,
 ) -> None:
     baseline = _fleet_record("v1", "node-1")
@@ -278,65 +281,59 @@ def test_validator_fleet_gate_rejects_offline_block_and_verifier_mismatches(
     assert "status_blocks" in result.stderr
 
     wrong_block = _fleet_record("v2", "node-2")
-    wrong_block["offline_block_hash"] = "cd" * 32
+    wrong_block["committed_block_hash"] = "ef" * 32
     result = _run_fleet_checker(tmp_path, [baseline, wrong_block])
     assert result.returncode == 1
-    assert "offline_block_hash" in result.stderr
+    assert "committed_block_hash" in result.stderr
 
-    wrong_release = _fleet_record("v2", "node-2")
-    release = json.loads(str(wrong_release["offline_release"]))
-    release["verifiers"]["role-4"]["commitment"] = "ff" * 32
-    wrong_release["offline_release"] = json.dumps(
-        release,
+    wrong_catalog = _fleet_record("v2", "node-2")
+    catalog = json.loads(str(wrong_catalog["dataspace_catalog"]))
+    catalog["dataspaces"]["boi-mobile"] = 9
+    wrong_catalog["dataspace_catalog"] = json.dumps(
+        catalog,
         sort_keys=True,
         separators=(",", ":"),
     )
-    result = _run_fleet_checker(tmp_path, [baseline, wrong_release])
+    result = _run_fleet_checker(tmp_path, [baseline, wrong_catalog])
     assert result.returncode == 1
-    assert "offline_release" in result.stderr
+    assert "dataspace_catalog" in result.stderr
 
 
-def test_validator_progress_gate_requires_stable_release_and_advancing_offline_block() -> None:
+def test_validator_progress_gate_requires_stable_catalog_and_advancing_commit() -> None:
     previous = {
         "build": "build",
         "config": "config",
         "nodes": ["node-1", "node-2"],
-        "offline_release": "sealed-release",
+        "dataspace_catalog": "is-and-is2",
         "status_blocks": 707,
         "committed_height": 707,
+        "committed_block_hash": "ab" * 32,
         "committed_subject": "block-707",
-        "offline_block_height": 707,
-        "offline_block_hash": "ab" * 32,
     }
     current = {
         **previous,
         "status_blocks": 708,
         "committed_height": 708,
+        "committed_block_hash": "cd" * 32,
         "committed_subject": "block-708",
-        "offline_block_height": 708,
-        "offline_block_hash": "cd" * 32,
     }
     accepted = _run_progress_checker(previous, current)
     assert accepted.returncode == 0, accepted.stderr
 
-    changed_release = {**current, "offline_release": "unreviewed-release"}
-    rejected = _run_progress_checker(previous, changed_release)
+    changed_catalog = {**current, "dataspace_catalog": "is-only"}
+    rejected = _run_progress_checker(previous, changed_catalog)
     assert rejected.returncode == 1
-    assert "changed offline_release between progress samples" in rejected.stderr
-
-    stale_block = {
-        **current,
-        "offline_block_height": 707,
-        "offline_block_hash": previous["offline_block_hash"],
-    }
-    rejected = _run_progress_checker(previous, stale_block)
-    assert rejected.returncode == 1
-    assert "offline readiness did not advance" in rejected.stderr
+    assert "changed dataspace_catalog between progress samples" in rejected.stderr
 
     stale_status = {**current, "status_blocks": 707}
     rejected = _run_progress_checker(previous, stale_status)
     assert rejected.returncode == 1
     assert "/status.blocks did not advance" in rejected.stderr
+
+    stale_hash = {**current, "committed_block_hash": previous["committed_block_hash"]}
+    rejected = _run_progress_checker(previous, stale_hash)
+    assert rejected.returncode == 1
+    assert "without changing the common block hash" in rejected.stderr
 
 
 def test_sumeragi_checker_rejects_legacy_shape(tmp_path: Path) -> None:

@@ -3804,6 +3804,7 @@ impl ValidQueryRequest {
     /// # Errors
     ///
     /// Returns an error if the query validation fails.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn validate_for_client_parts_with_config(
         request: QueryRequest,
         authority: &AccountId,
@@ -3862,6 +3863,7 @@ impl ValidQueryRequest {
     /// # Errors
     ///
     /// Returns an error if the query execution fails.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn execute_with_replay_state(
         self,
         live_query_store: &LiveQueryStoreHandle,

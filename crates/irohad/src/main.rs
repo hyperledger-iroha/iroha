@@ -5790,7 +5790,6 @@ impl NetworkRelayShared {
             | Health
             | Connect(_)) => {
                 debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
-                // Genesis bootstrap is handled by the dedicated bootstrapper listener.
                 // Health frames are handled elsewhere. Connect, Soracloud local-read proxy,
                 // and Torii proxy frames go to Torii via its own subscriber tasks when those
                 // surfaces are enabled.
@@ -8029,11 +8028,11 @@ fn authorize_kura_runtime_start(
 
 fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &Config) {
     // These fields are process-local execution policy and do not touch Kura-owned geometry.
-    // Settlement must be installed before replay because configured offline
-    // assets and every top-up/redemption transition resolve policy through
-    // `State::settlement`. Installing it only after the mandatory readiness
-    // gate would validate an empty/default catalog and replay historical
-    // offline transitions under the wrong policy.
+    // Settlement must be installed before replay because historical
+    // top-up/redemption transitions resolve their deterministic execution
+    // state and any explicitly referenced proof release through
+    // `State::settlement`. This ordering is replay correctness, not an offline
+    // capability or node-readiness gate.
     state.set_crypto(config.crypto.clone());
     state.set_pipeline(config.pipeline.clone());
     state.set_oracle(config.oracle.clone());
@@ -9057,16 +9056,6 @@ impl Iroha {
         let mut supervisor = Supervisor::new();
         let startup_trace_started_at = Instant::now();
         log_startup_trace("irohad.start.enter", startup_trace_started_at);
-        iroha_torii::ensure_mandatory_offline_configuration_for_chain(
-            &config.common.chain,
-            &config.settlement.offline,
-            config.torii.kagemusha_commands.as_ref(),
-        )
-        .map_err(|error| {
-            Report::new(StartError::InitKura).attach(format!(
-                "mandatory offline cash configuration failed: {error}"
-            ))
-        })?;
         let sorafs_pop_credentials = sorafs_pop_runtime::build(
             config.torii.sorafs_storage.pop_credentials.as_ref(),
             runtime_deps.sorafs_pop_credential_provider_registry.clone(),
@@ -9555,24 +9544,6 @@ impl Iroha {
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
-        // Only a genuinely empty local store can defer this gate to the
-        // disposable genesis overlay below. A restart with a pending durable
-        // v2 tip remains on the replayed-state gate and fails closed.
-        let fresh_genesis_staging_pending =
-            state.committed_height() == 0 && block_count.0 == 0 && stored_genesis_block.is_none();
-        if !fresh_genesis_staging_pending {
-            iroha_torii::ensure_mandatory_offline_startup_readiness(
-                &state,
-                &config.common.chain,
-                &config.settlement.offline,
-                config.torii.kagemusha_commands.as_ref(),
-                &config.nexus.fees.fee_asset_id,
-            )
-            .map_err(|error| {
-                Report::new(StartError::InitKura)
-                    .attach(format!("mandatory offline cash readiness failed: {error}"))
-            })?;
-        }
         // No Kura writer is live while trust selection or replay can still fail. Only the fully
         // authenticated and replayed state may publish the canonical writer thread.
         let child = Kura::start(kura.clone(), supervisor.shutdown_signal())
@@ -10034,19 +10005,6 @@ impl Iroha {
                                 "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {fresh_block_cadence_ms} ms",
                             )));
                         }
-                        iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
-                            &state_block,
-                            genesis_block.0.header(),
-                            &config.common.chain,
-                            &config.settlement.offline,
-                            config.torii.kagemusha_commands.as_ref(),
-                            &config.nexus.fees.fee_asset_id,
-                        )
-                        .map_err(|error| {
-                            Report::new(StartError::InitKura).attach(format!(
-                                "mandatory offline cash readiness failed in staged genesis: {error}"
-                            ))
-                        })?;
                         let (mode, signed_parameters) =
                             signed_v2_genesis_context_metadata(genesis_block)
                                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
@@ -10176,9 +10134,9 @@ impl Iroha {
         state.set_oracle(oracle_cfg);
         state.set_streaming_storage_paths(streaming_soranet_spool_dir, streaming_soravpn_spool_dir);
         state.set_fraud_monitoring(fraud_cfg);
-        // Settlement was installed before Kura replay and authenticated by the
-        // mandatory offline gate. Do not replace that post-replay snapshot
-        // after Kura has started.
+        // Settlement runtime state was installed before Kura replay. Preserve
+        // its lazily derived escrow bindings instead of replacing the replayed
+        // snapshot after Kura has started.
         state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
         log_startup_trace(
@@ -15918,17 +15876,6 @@ fn validate_config_for_check(
     MainError,
 > {
     validate_config_offline(config).change_context(MainError::Config)?;
-    iroha_torii::ensure_mandatory_offline_configuration_for_chain(
-        &config.common.chain,
-        &config.settlement.offline,
-        config.torii.kagemusha_commands.as_ref(),
-    )
-    .map_err(|error| {
-        Report::new(MainError::Config).attach(format!(
-            "mandatory offline cash configuration failed: {error}"
-        ))
-    })?;
-
     if build_kagemusha_qualification_seal && genesis.is_none() {
         return Err(Report::new(MainError::Config).attach(
             "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full offline genesis validation",
@@ -16023,16 +15970,6 @@ fn load_configured_kagemusha_release_catalog(
     config: &Config,
 ) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
     let offline = &config.settlement.offline;
-    if offline.enabled
-        && !offline.escrow_accounts.is_empty()
-        && offline.kagemusha_release_policy_path.is_none()
-        && offline.kagemusha_artifact_dir.is_none()
-    {
-        return Err(
-            "offline-enabled assets cannot start without a Kagemusha V4 release policy and artifact directory"
-                .to_owned(),
-        );
-    }
     iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config(
         offline,
     )
@@ -16048,12 +15985,6 @@ fn load_and_build_configured_kagemusha_catalog_qualification_seal(
     ),
     String,
 > {
-    if !config.settlement.offline.enabled {
-        return Err(
-            "cannot qualify a Kagemusha V4 release catalog while offline settlement is disabled"
-                .to_owned(),
-        );
-    }
     match (
         config
             .settlement
@@ -16273,19 +16204,6 @@ fn validate_genesis_execution_offline(
             "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {expected_block_cadence_ms} ms"
         )));
     }
-    iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
-        &staged,
-        genesis.0.header(),
-        &config.common.chain,
-        &config.settlement.offline,
-        config.torii.kagemusha_commands.as_ref(),
-        &config.nexus.fees.fee_asset_id,
-    )
-    .map_err(|error| {
-        Report::new(MainError::Config).attach(format!(
-            "mandatory offline cash readiness failed in staged genesis: {error}"
-        ))
-    })?;
     iroha_core::sumeragi::freeze_staged_genesis_v2(
         genesis,
         &staged,
@@ -20636,10 +20554,6 @@ mod tests {
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
         ) -> OfflineSemanticGenesisFixture {
             let mut config = sample_config();
-            // These fixtures exercise generic staged-genesis semantics. The
-            // authenticated ABI-21/V4 catalog path has its own Torii readiness
-            // fixtures and cannot be represented by this minimal genesis.
-            config.settlement.offline.enabled = false;
             let chain_id = ChainId::from("offline-genesis-validation-test");
             let genesis_authority = iroha_crypto::KeyPair::try_from_seed(
                 b"offline-genesis-validation-authority".to_vec(),
@@ -20723,7 +20637,7 @@ mod tests {
                 fixture.parameters,
                 fixture.cadence_ms,
                 load_configured_kagemusha_release_catalog(&fixture.config)
-                    .expect("disabled offline settlement uses an empty catalog"),
+                    .expect("an omitted release cache uses an empty catalog"),
             )
             .expect("valid genesis should execute in the disposable overlay");
         }
@@ -20744,15 +20658,15 @@ mod tests {
             let execute = check_path
                 .find("ValidBlock::validate_signed_genesis_keep_voting_block(")
                 .expect("offline genesis execution");
-            let readiness = check_path
-                .find("ensure_mandatory_offline_staged_genesis_readiness(")
-                .expect("staged offline readiness gate");
             let freeze = check_path
                 .find("freeze_staged_genesis_v2(")
                 .expect("staged genesis freeze");
             assert!(install < execute);
-            assert!(execute < readiness);
-            assert!(readiness < freeze);
+            assert!(execute < freeze);
+            assert!(
+                !check_path.contains("ensure_mandatory_offline"),
+                "offline support must not introduce a genesis readiness gate"
+            );
 
             let runtime_path = source
                 .split_once("pub async fn start_with_runtime_deps(")
@@ -20768,38 +20682,24 @@ mod tests {
         }
 
         #[test]
-        fn check_config_rejects_public_taira_without_offline_cash_before_genesis_processing() {
+        fn check_config_accepts_taira_without_offline_backend_settings() {
             let mut config = sample_config();
             config.common.chain = ChainId::from("taira");
             config.confidential.enabled = true;
             config.confidential.assume_valid = false;
-            config.settlement.offline.enabled = false;
 
-            let error = validate_config_for_check(&config, None, false)
-                .expect_err("public Taira check-config must require offline cash");
-            let rendered = format!("{error:?}");
-            assert!(
-                rendered.contains("requires settlement.offline.enabled=true"),
-                "unexpected public Taira check-config error: {rendered}"
-            );
+            validate_config_for_check(&config, None, false)
+                .expect("Taira has universal offline primitives without backend enablement");
         }
 
         #[test]
-        fn configured_kagemusha_catalog_loader_requires_paths_only_for_opted_in_assets() {
+        fn configured_kagemusha_catalog_loader_is_optional_for_every_asset() {
             let mut config = sample_config();
-            config.settlement.offline.enabled = false;
-            assert!(
-                load_configured_kagemusha_release_catalog(&config)
-                    .expect("disabled offline settlement uses an empty catalog")
-                    .is_empty()
-            );
-
-            config.settlement.offline.enabled = true;
             config.settlement.offline.kagemusha_release_policy_path = None;
             config.settlement.offline.kagemusha_artifact_dir = None;
             assert!(
                 load_configured_kagemusha_release_catalog(&config)
-                    .expect("enabled support with no opted-in assets uses an empty catalog")
+                    .expect("an omitted verifier cache uses an empty catalog")
                     .is_empty()
             );
 
@@ -20813,9 +20713,8 @@ mod tests {
             );
             assert!(
                 load_configured_kagemusha_release_catalog(&config)
-                    .err()
-                    .expect("an opted-in asset requires authenticated catalog paths")
-                    .contains("cannot start without")
+                    .expect("runtime escrow state must not require a process-local catalog")
+                    .is_empty()
             );
 
             config.settlement.offline.kagemusha_release_policy_path =
@@ -20831,7 +20730,6 @@ mod tests {
         #[test]
         fn configured_kagemusha_catalog_loader_uses_seal_without_fallback() {
             let mut config = sample_config();
-            config.settlement.offline.enabled = true;
             config.settlement.offline.kagemusha_release_policy_path =
                 Some(PathBuf::from("/missing/policy.norito"));
             config.settlement.offline.kagemusha_artifact_dir =
@@ -20853,8 +20751,7 @@ mod tests {
 
         #[test]
         fn qualification_seal_check_requires_local_genesis() {
-            let mut config = sample_config();
-            config.settlement.offline.enabled = false;
+            let config = sample_config();
 
             let error = validate_config_for_check(&config, None, true)
                 .err()
@@ -20886,7 +20783,7 @@ mod tests {
                 fixture.parameters,
                 fixture.cadence_ms,
                 load_configured_kagemusha_release_catalog(&fixture.config)
-                    .expect("disabled offline settlement uses an empty catalog"),
+                    .expect("an omitted release cache uses an empty catalog"),
             )
             .expect_err("duplicate genesis registration must fail semantic execution");
             let rendered = format!("{error:?}");
@@ -21898,8 +21795,6 @@ mod tests {
                             false,
                         );
                 })?;
-            config.settlement.offline.enabled = false;
-
             let result = validate_config_for_check(&config, None, false);
 
             #[cfg(feature = "embedded-soracloud-runtime")]

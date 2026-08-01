@@ -55,6 +55,9 @@ commands and the final reconciliation pass are recorded.
 
 ## Repository structure follow-ups
 
+- Repair the current `iroha_core` library-test compile blockers in the Falcon
+  fixtures, query fallback, Kura sidecar fixture, and mixed `rand_core`
+  versions, then rerun the focused transcript and SHA word-row regressions.
 - Continue extracting cohesive production modules from the exact source-budget
   exceptions, prioritizing Kura, Torii routing/API, core state, and other files
   still above 20,000 lines. Preserve public facades and wire behavior; every
@@ -68,10 +71,10 @@ commands and the final reconciliation pass are recorded.
   until every documented and CI caller has migrated, then remove only the
   adapters whose replacement paths have parity evidence.
 
-## Taira testnet recovery and offline-cash release closure
+## Taira testnet recovery and universal offline protocol closure
 
 The source-side consensus-stall, exact `/status.blocks`, supervisor-loop, and
-canonical offline-cash ingress repairs are complete. The restart source patch
+cash-handoff protocol ingress repairs are complete. The restart source patch
 also restores snapshot-authenticated autoscale windows before canonical
 reserialization, rejects any writer payload that cannot pass isolated restart
 initialization before publication/geometry compaction, keeps capture and
@@ -91,12 +94,19 @@ signed-mutation path also uses
 middleware-authenticated signer headers only: Torii rejects retired inline
 signing fields and the CLI omits them from every mutation request. Focused
 locked/offline validation of those consensus and restart repairs is complete.
-Compact-commitment validation, source sealing, release generation, and live
-rollout remain open, and public Taira remains on the old deployment. Do not
-expose it as a ready offline-cash lane until the guarded reset reports
-`mandatory: true`, `ready: true` and passes the signed public canary. The
-rollout checker now enforces that same `/readyz` invariant on public ingress
-and every direct validator rather than relying on controller evidence alone.
+Linked-worktree Git provenance now watches the actual common packed ref and
+safe loose-ref ancestor, preventing the stale nonexistent `packed-refs` input
+from cascading every focused command into a full core relink. The two final
+regression fixtures also mirror production semantics for durable post-decision
+CommitQC rebroadcast and startup auxiliary-lane binding. Source-bound focused
+revalidation, compact-commitment validation, source sealing, release
+generation, and live rollout remain open, and public Taira remains on the old
+deployment. Offline application protocols are a universal Iroha capability;
+they require no validator mode, dataspace or asset opt-in, escrow catalog, or
+backend readiness gate. Taira promotion therefore evaluates ordinary node and
+consensus health only. App/device offline user-interface state must never make
+`/health` or `/readyz` fail. The guarded reset must still pass the signed public
+canary and prove a healthy, advancing validator cohort.
 
 The earlier populated-profile probe is superseded for promotion. Authentic
 final-VK generation exposed a 20,154-byte raw compiled-protocol identity: its
@@ -126,7 +136,7 @@ Remaining work stays ordered and fail-closed:
   the fresh guarded k17 shape probe and bind its exact result; this probe and
   authentic generation have not passed yet.
 - Seal the final reviewed source closure over signed `optimizations` anchor
-  `0ecb714edf29e0ff7c5b4e7988ccbbe411b5d040`. Build and hash the candidate
+  `7d0d0d29544cbeaae114c1c098ee1e41187634e2`. Build and hash the candidate
   generator, runtime binaries, configuration, and reset tooling from that one
   provenance set; no earlier r5/r6 binary or artifact seal attests the k17
   layout.
@@ -137,9 +147,10 @@ Remaining work stays ordered and fail-closed:
   probe output is not a candidate or promotion record.
 - Perform the authorized guarded reset across all four validators, deploy the
   sealed binary/configuration/artifact set, and prove advancing consensus,
-  query-visible `/status.blocks` equality, mandatory offline readiness, signed
-  canary operation, a restart below 45 seconds, and continued advancement after
-  restart.
+  query-visible `/status.blocks` equality, ordinary node readiness, universal
+  `cash_handoff_v1`/ABI-21 capability discovery without an asset catalog,
+  signed canary operation, a restart below 45 seconds, and continued
+  advancement after restart.
 
 ## ZK-ACE JavaScript signed-transaction parity
 

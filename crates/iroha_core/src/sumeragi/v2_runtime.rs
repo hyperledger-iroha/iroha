@@ -1419,6 +1419,7 @@ impl RuntimeCandidateCausalOrigin {
 
     /// Whether two exact carriers identify one lifecycle despite diagnostic
     /// process-generation retagging.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn same_lifecycle(&self, other: &Self) -> bool {
         self.validate_exact() && other.validate_exact() && self.lifecycle_key == other.lifecycle_key
     }
@@ -1594,6 +1595,7 @@ impl RuntimeEffectOwnership {
     }
 
     /// Frozen inherit/fresh classification. Retries and rebinds retain it.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn causality(&self) -> RuntimeEffectCausality {
         self.causality
     }
@@ -2826,6 +2828,7 @@ struct BoundedIngress<C> {
 }
 
 impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
+    #[cfg_attr(not(test), allow(dead_code))]
     fn new(config: RuntimeQueueConfig) -> Self {
         Self::with_lifecycle_ordinals(
             config,
@@ -4804,6 +4807,7 @@ impl BoundedIngress<AdapterCommand> {
     /// suppression. Once the queued occurrence leaves, a later retransmission
     /// may be admitted and checked against the adapter's generation-aware
     /// delivery records in the usual way.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn enqueue_authenticated_with_ingress_ownership(
         &mut self,
         tag: EventTag,
@@ -4923,6 +4927,7 @@ impl BoundedIngress<AdapterCommand> {
         self.commit_canonical_body_available(reservation)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn reserve_canonical_body_available(
         &mut self,
         tag: EventTag,
@@ -4931,6 +4936,7 @@ impl BoundedIngress<AdapterCommand> {
         self.reserve_canonical_body_available_internal(tag, manifest, None, None)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn reserve_canonical_body_available_with_owner(
         &mut self,
         tag: EventTag,
@@ -5634,6 +5640,7 @@ impl RuntimeDormantLocalFifoReservation {
 }
 
 impl<E> RuntimeDriverDispatch<E> {
+    #[cfg_attr(not(test), allow(dead_code))]
     fn completed(effects: Vec<E>) -> Self {
         Self {
             effects,
@@ -6507,6 +6514,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.fail_closed = true;
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn with_driver(
         driver: D,
         started_at: Instant,
@@ -7759,6 +7767,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// authenticated ingress or derived deferred continuation whose source
     /// occurrence is at or after this continuation's frozen cut is physically
     /// later and cannot resurrect an older logical queue position.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn minimum_active_lifecycle_ordinal_for_deferred(
         &self,
         target: &RuntimeDeferredLifecycleOwnership,
@@ -9446,6 +9455,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
 
     /// Take exclusive ownership of an opened adapter and preserve its recovery
     /// effects for immediate asynchronous dispatch.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new(
         adapter: SumeragiV2Adapter,
         startup_effects: Vec<AdapterEffect>,
@@ -9988,6 +9998,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// when they advertise a different manifest for this exact round and
     /// subject. Every retained command keeps its original relative order, and
     /// the completion is appended normally.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn enqueue_body_available(
         &mut self,
         tag: EventTag,

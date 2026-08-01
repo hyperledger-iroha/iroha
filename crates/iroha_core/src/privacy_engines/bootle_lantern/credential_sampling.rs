@@ -18,6 +18,7 @@ pub(crate) const CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1: u64 =
     super::params::RANDOMNESS_NORM_SQUARED_BOUND_V1;
 pub(crate) const MAX_CREDENTIAL_RANDOMNESS_VECTOR_ATTEMPTS_V1: u32 = 64;
 pub(crate) const MAX_CREDENTIAL_RANDOMNESS_COEFFICIENT_PROPOSALS_V1: u32 = 256;
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1: &[u8] = b"lazer-10eafeca4cd53ff4fc54193dce904dbd0026fefd-polyvec-grandom-v1|ring:R64-q12289|shape:16x64|sigma:1.55*2|seed:32|rng:AES-256-CTR-domain-le64-zero64-counter-be128|domains:(outer<<32)|(poly+1)|rounding:8-bytes-lsb-first-per-poly|cdf155:21-pairs-u64le|berexp:fdlibm-exp-small-u64le|sign-cache:issuance-local-persistent-across-polynomials-and-vector-retries|norm2<=11881|vector-attempts:64|coefficient-proposals:256|aes:cpu-only-fixed-control-flow-algebraic-sbox";
 
 const DEGREE_V1: usize = 64;
@@ -164,9 +165,9 @@ fn sample_credential_randomness_from_seed_bounded_v1(
         if outer_domain == 1 {
             second_attempt_sign_position = Some(sign_cache.position);
         }
-        let mut centered = Zeroizing::new(
-            vec![[0_i64; DEGREE_V1]; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1].into_boxed_slice(),
-        );
+        let mut centered = Box::new(Zeroizing::new(
+            [[0_i64; DEGREE_V1]; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1],
+        ));
         let mut norm_squared = 0_u64;
         let mut proposals = [0_u32; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1];
         for polynomial_index in 0..CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1 {

@@ -17,6 +17,7 @@ use std::{
     env,
     ffi::OsString,
     fs,
+    future::Future,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     process,
@@ -78,10 +79,10 @@ use mochi_core::{
     ManagedEventStream, ManagedStatusStream, NetworkProfile, PeerLogEvent, PeerState, PrivateKey,
     ProfilePreset, SigningAuthority, StateCursor, StateEntry, StatePage, StateQueryKind,
     StatusStreamEvent, Supervisor, SupervisorBuilder, SupervisorError, SupervisorSessionInfo,
-    ToriiClient, TransactionComposeOptions, TransactionPreview, compose_preview_with_options,
-    development_signing_authorities, drafts_from_json_str, drafts_to_pretty_json,
-    fetch_dashboard_snapshot, infer_workspace_root_from_sandbox_root, run_chaos_preset,
-    run_state_query, sample_cabbage_definition_id, sample_rose_definition_id,
+    ToriiClient, ToriiError, TransactionComposeOptions, TransactionPreview,
+    compose_preview_with_options, development_signing_authorities, drafts_from_json_str,
+    drafts_to_pretty_json, fetch_dashboard_snapshot, infer_workspace_root_from_sandbox_root,
+    run_chaos_preset, run_state_query, sample_cabbage_definition_id, sample_rose_definition_id,
     sandbox_root_for_workspace,
     supervisor::RestartPolicy,
     torii::{
@@ -112,6 +113,8 @@ const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(60);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(12);
 const SMOKE_MAX_ATTEMPTS: usize = 3;
+const LOCAL_MCP_STARTUP_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
+const LOCAL_MCP_STARTUP_MAX_BACKOFF: Duration = Duration::from_secs(1);
 const EVENT_FILTER_STORAGE_KEY: &str = "mochi.event_filter";
 const ACTIVE_VIEW_STORAGE_KEY: &str = "mochi.active_view";
 const FIRST_RUN_COMPLETED_STORAGE_KEY: &str = "mochi.first_run_completed";
@@ -1174,8 +1177,7 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
     })?;
 
     let mcp_probe = runtime.block_on(async {
-        client
-            .validate_local_mcp()
+        validate_local_mcp_for_startup(&client, readiness_options.timeout)
             .await
             .map_err(|err| format!("failed while validating local MCP: {err}"))
     })?;
@@ -1201,6 +1203,85 @@ fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
 
     runtime.block_on(wait_for_shutdown_signal());
     Ok(())
+}
+
+async fn validate_local_mcp_for_startup(
+    client: &ToriiClient,
+    readiness_timeout: Duration,
+) -> Result<LocalMcpProbeResult, ToriiError> {
+    retry_local_mcp_rate_limit(
+        || client.validate_local_mcp(),
+        readiness_timeout,
+        LOCAL_MCP_STARTUP_INITIAL_BACKOFF,
+        LOCAL_MCP_STARTUP_MAX_BACKOFF,
+    )
+    .await
+}
+
+async fn retry_local_mcp_rate_limit<F, Fut>(
+    mut probe: F,
+    readiness_timeout: Duration,
+    initial_backoff: Duration,
+    max_backoff: Duration,
+) -> Result<LocalMcpProbeResult, ToriiError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<LocalMcpProbeResult, ToriiError>>,
+{
+    let started = tokio::time::Instant::now();
+    let Some(deadline) = started.checked_add(readiness_timeout) else {
+        return Err(local_mcp_readiness_timeout(readiness_timeout));
+    };
+    let mut backoff = initial_backoff.min(max_backoff);
+    loop {
+        match tokio::time::timeout_at(deadline, probe()).await {
+            Ok(Ok(result)) => return Ok(result),
+            Ok(Err(error)) if local_mcp_error_is_rate_limited(&error) => {
+                let delay = local_mcp_retry_delay(&error, backoff)
+                    .expect("rate-limited MCP errors always produce a retry delay");
+                if error.retry_after().is_none() {
+                    backoff = backoff.saturating_mul(2).min(max_backoff);
+                }
+
+                let now = tokio::time::Instant::now();
+                let Some(remaining) = deadline.checked_duration_since(now) else {
+                    return Err(local_mcp_readiness_timeout(readiness_timeout));
+                };
+                if delay >= remaining {
+                    tokio::time::sleep(remaining).await;
+                    return Err(local_mcp_readiness_timeout(readiness_timeout));
+                }
+                if delay.is_zero() {
+                    tokio::task::yield_now().await;
+                } else {
+                    tokio::time::sleep(delay).await;
+                }
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(_) => return Err(local_mcp_readiness_timeout(readiness_timeout)),
+        }
+    }
+}
+
+fn local_mcp_retry_delay(error: &ToriiError, fallback: Duration) -> Option<Duration> {
+    if !local_mcp_error_is_rate_limited(error) {
+        return None;
+    }
+    Some(error.retry_after().unwrap_or(fallback))
+}
+
+fn local_mcp_readiness_timeout(readiness_timeout: Duration) -> ToriiError {
+    ToriiError::Timeout {
+        context: format!("local MCP readiness after {readiness_timeout:?}"),
+    }
+}
+
+fn local_mcp_error_is_rate_limited(error: &ToriiError) -> bool {
+    matches!(error, ToriiError::RateLimited { .. })
+        || matches!(
+            error,
+            ToriiError::UnexpectedStatus { status, .. } if status.as_u16() == 429
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13348,7 +13429,10 @@ mod tests {
         collections::VecDeque,
         num::NonZeroU64,
         path::Path,
-        sync::Arc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
 
@@ -13384,11 +13468,12 @@ mod tests {
     use norito::json::{self, Value};
 
     use super::{
-        ActiveView, CliOverrides, InstructionPermission, MaintenanceCommand, MaintenanceState,
-        MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm, SignerEntryState,
-        StatePageCache, StateQueryKind, SupervisorBuilder, compose_app_env_recipe,
-        compose_launch_recipe, ensure_http_base, filter_state_entries,
-        reset_cli_overrides_for_tests, shell_quote,
+        ActiveView, CliOverrides, InstructionPermission, LocalMcpProbeResult, MaintenanceCommand,
+        MaintenanceState, MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm,
+        SignerEntryState, StatePageCache, StateQueryKind, SupervisorBuilder,
+        compose_app_env_recipe, compose_launch_recipe, ensure_http_base, filter_state_entries,
+        local_mcp_retry_delay, reset_cli_overrides_for_tests, retry_local_mcp_rate_limit,
+        shell_quote,
     };
 
     #[test]
@@ -13439,6 +13524,115 @@ mod tests {
         assert_eq!(
             ensure_http_base("http://127.0.0.1:8080/"),
             "http://127.0.0.1:8080"
+        );
+    }
+
+    fn local_mcp_probe_fixture() -> LocalMcpProbeResult {
+        LocalMcpProbeResult {
+            protocol_version: "2025-06-18".to_owned(),
+            toolset_version: Some("test-v1".to_owned()),
+            tool_count: 1,
+            tool_names: vec!["iroha.health".to_owned()],
+        }
+    }
+
+    fn local_mcp_rate_limit_error(retry_after: Option<Duration>) -> ToriiError {
+        ToriiError::RateLimited { retry_after }
+    }
+
+    #[test]
+    fn local_mcp_startup_retry_recovers_from_transient_429() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed_attempts = Arc::clone(&attempts);
+        let result = runtime.block_on(retry_local_mcp_rate_limit(
+            move || {
+                let attempt = observed_attempts.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt < 2 {
+                        Err(local_mcp_rate_limit_error(None))
+                    } else {
+                        Ok(local_mcp_probe_fixture())
+                    }
+                }
+            },
+            Duration::from_secs(1),
+            Duration::ZERO,
+            Duration::ZERO,
+        ));
+
+        assert_eq!(
+            result.expect("third attempt succeeds"),
+            local_mcp_probe_fixture()
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn local_mcp_startup_retry_never_retries_protocol_failure() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed_attempts = Arc::clone(&attempts);
+        let error = runtime
+            .block_on(retry_local_mcp_rate_limit(
+                move || {
+                    observed_attempts.fetch_add(1, Ordering::SeqCst);
+                    async { Err(ToriiError::Decode("invalid MCP tool catalog".to_owned())) }
+                },
+                Duration::from_secs(1),
+                Duration::ZERO,
+                Duration::ZERO,
+            ))
+            .expect_err("protocol failure must be returned immediately");
+
+        assert!(matches!(error, ToriiError::Decode(_)));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn local_mcp_startup_retry_is_bounded() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed_attempts = Arc::clone(&attempts);
+        let error = runtime
+            .block_on(retry_local_mcp_rate_limit(
+                move || {
+                    observed_attempts.fetch_add(1, Ordering::SeqCst);
+                    async { Err(local_mcp_rate_limit_error(Some(Duration::from_secs(1)))) }
+                },
+                Duration::from_millis(10),
+                Duration::from_millis(1),
+                Duration::from_millis(2),
+            ))
+            .expect_err("persistent throttling must reach the readiness deadline");
+
+        assert!(matches!(
+            error,
+            ToriiError::Timeout { context } if context.contains("local MCP readiness")
+        ));
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "a Retry-After beyond the remaining deadline cannot trigger another probe"
+        );
+    }
+
+    #[test]
+    fn local_mcp_startup_retry_honors_server_retry_after() {
+        let retry_after = Duration::from_secs(7);
+        assert_eq!(
+            local_mcp_retry_delay(
+                &local_mcp_rate_limit_error(Some(retry_after)),
+                Duration::from_millis(250),
+            ),
+            Some(retry_after)
+        );
+        assert_eq!(
+            local_mcp_retry_delay(
+                &local_mcp_rate_limit_error(None),
+                Duration::from_millis(250),
+            ),
+            Some(Duration::from_millis(250))
         );
     }
 

@@ -15086,7 +15086,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_lifecycle_routes_are_excluded_from_operator_mcp_tools() {
+    fn offline_lifecycle_routes_are_available_to_operator_mcp_tools() {
         let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
         cfg.profile = ToriiMcpProfile::Operator;
         cfg.expose_operator_routes = true;
@@ -15094,13 +15094,14 @@ mod tests {
 
         for path in [
             iroha_torii_shared::route_catalog::offline::READINESS_PATH,
+            iroha_torii_shared::route_catalog::offline::RECIPIENT_LINEAGE_PATH,
             iroha_torii_shared::route_catalog::offline::TOP_UP_PATH,
             iroha_torii_shared::route_catalog::offline::REDEEM_PATH,
             iroha_torii_shared::route_catalog::offline::OPERATION_PATH,
         ] {
             assert!(
-                tools.iter().all(|tool| tool.path_template != path),
-                "offline route leaked into the operator MCP registry: {path}"
+                tools.iter().any(|tool| tool.path_template == path),
+                "universal offline route is missing from the operator MCP registry: {path}"
             );
         }
     }
@@ -15208,7 +15209,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_registry_honors_offline_catalog_mcp_exclusion() {
+    fn tool_registry_honors_universal_offline_mcp_projection() {
         let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
         cfg.profile = ToriiMcpProfile::Operator;
         cfg.expose_operator_routes = true;
@@ -15228,8 +15229,8 @@ mod tests {
             assert!(
                 tools
                     .iter()
-                    .all(|tool| tool.method != method || tool.path_template != route.path()),
-                "catalog-excluded route leaked into MCP: {} {}",
+                    .any(|tool| tool.method == method && tool.path_template == route.path()),
+                "cataloged universal offline route is missing from MCP: {} {}",
                 route.method().as_str(),
                 route.path()
             );

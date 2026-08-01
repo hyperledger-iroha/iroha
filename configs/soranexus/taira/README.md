@@ -4,6 +4,22 @@ Taira is the Sora Nexus public testnet. This directory
 contains the repo-shipped bootstrap bundle for a public, stake-elected NPoS
 deployment.
 
+## Universal offline capability and BOI dataspaces
+
+Offline cash is an application/device protocol, not a Taira deployment mode.
+Every compatible Iroha validator exposes ABI-21/V4 and `cash_handoff_v1`.
+There is no backend enable flag, asset `offline.enabled` metadata, configured
+escrow catalog, or offline-specific health/admission gate. `/health` and
+`/readyz` describe ordinary validator and consensus readiness only. Missing or
+invalid material referenced by a particular top-up or redemption operation is
+reported as that transaction's validation result.
+
+The checked-in profile contains both BOI dataspaces: `is` for the scenario
+browser and `is2` for the mobile wallet. Their internal routing containers do
+not change this capability contract. The mobile product may expose offline UI
+while the scenario browser does not; both use the same universally capable
+validator fleet.
+
 ## Network identity
 
 - Public Sumeragi-v2 chain ID: `fc56984b-2be7-431d-840e-21514d1883f0`
@@ -179,14 +195,10 @@ into multi-second stalls.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, with wire-revision-3 reducer health read
   from `/v1/sumeragi/status` and an optional signed write canary for final
-  public cutover. Every invocation must pass `--offline-asset-definition-id`
-  with the operator-provisioned canonical ID for the registered scale-2
-  `ds#boi.is` asset and `--offline-expected-identity` with an absolute path to
-  the external, operator-reviewed JSON identity. The identity seals the exact
-  capability, ABI, asset ID/scale, authenticated artifact set, and every field
-  of all five governed verifier identities. It must remain outside the source
-  repository. The script never falls back to the faucet/gas asset, a checked-in
-  digest, or a validator-selected release.
+  public cutover. It verifies ordinary node/consensus health, the common `is`
+  and `is2` dataspace catalog, and universal ABI-21 `cash_handoff_v1`
+  discovery. It never treats an asset, application proof release, or device UI
+  state as a validator admission condition.
 - `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
   canary that catches stale validators still missing the capacity/order ISI
   dispatch table.
@@ -386,13 +398,8 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 3. Fill in every validator's real `public_key`, `pop_hex`, and
    `public_address` plus its own direct `torii_public_address` in the public
    roster, then put the matching validator `private_key` values and the shared
-   `account_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`,
-   `kagemusha_commands_private_key`, every
+   `account_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`, every
    `soracloud_runtime_signer_*` public binding field,
-   `offline_asset_alias = "ds#boi.is"`,
-   the operator-provisioned canonical `offline_asset_definition_id`,
-   `offline_asset_scale = 2`, and canonical Taira I105
-   `offline_escrow_account`,
    `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
    values in the runtime file. SoraFS council roots must be canonical Ed25519
    governance keys; never substitute validator, node identity, or provider
@@ -406,9 +413,9 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    `dist/` path. The renderer creates bundle and runtime directories with mode
    `0700`, creates the onboarding/faucet signer and API-token sidecars with mode
    `0600`, writes only canonical signer paths and the BLAKE3 token digest to
-   peer config, and emits a protective `.gitignore`. It also creates co-located
-   `kagemusha/` and `sorafs_admission/` directories and rewrites the policy,
-   admission-envelope, signer, and manifest paths together when
+   peer config, and emits a protective `.gitignore`. It also creates the
+   co-located `sorafs_admission/` directory and rewrites admission-envelope,
+   signer, and manifest paths together when
    `--install-root` is changed. It prints sidecar paths but never their contents.
 
 The bundle also contains one shared unsigned `genesis.json` whose dedicated
@@ -422,20 +429,14 @@ with that bound manifest, and then writes `genesis.signed.nrt`. Never copy the
 genesis signer or validator private keys into the checked-in template or
 rendered genesis JSON.
 
-## Authenticated offline-cash bootstrap
+## Optional Kagemusha application proof material
 
-A fresh public Taira reset must activate the genuine ABI-21/V4 release at
-height 2. Height 1 executes the genesis instructions; the mandatory staged
-readiness gate evaluates that state at height 2. An activation height of 1 is
-invalid, and the synthetic mobile-acceptance roster must not be used for a
-deployed validator set.
-
-Offline cash is non-optional on the canonical public Taira chain. `/health`
-and `/readyz` fail closed with HTTP 503 until startup validation succeeds.
-Cutover requires HTTP 200 with `mandatory: true`, `ready: true`,
-`cash_handoff_capability: "cash_handoff_v1"`,
-`required_bridge_abi_version: 21`, and an empty blocker list. Native MCP
-availability alone is not sufficient.
+The ABI-21/V4 `cash_handoff_v1` protocol is available on every compatible
+Iroha deployment without a bootstrap switch. Applications that submit a
+particular Kagemusha top-up or redemption may still prepare authenticated
+release and verifier material for that operation. Such material is
+application data: it does not activate offline support, enroll an asset, or
+participate in node startup, `/health`, `/readyz`, or Taira cutover.
 
 First seal the rendered public validator keys and PoPs into the release-bound
 top-up roster. The input config may contain runtime secrets, but the command
@@ -509,82 +510,29 @@ material. Provision the same policy as
 as `taira-release/catalog/<manifest_sha256>/`, where `manifest_sha256` is the
 lowercase digest recorded by the finalized `manifest.norito.sha256`.
 
-Finally append the complete state to a clean unsigned Taira genesis. The
-command never overwrites its input. App identities and signing-certificate
-digests must describe the exact BOI builds being admitted; the helper supplies
-only the native Apple App Attest and Android KeyMint roots and keeps both
-platform policies fail-closed.
+Build a fresh Taira reset from the ordinary signed genesis and validator bundle
+workflow. `render_taira_validator_bundle.py` rewrites the checked-in peer-1
+baseline with the complete `trusted_peers` / `trusted_peers_pop` roster, both
+static dataspace definitions, and the operator-provided runtime credentials.
+It rejects the retired offline enrollment fields in secrets rather than
+turning them into node configuration. Use
+`scripts/prepare_taira_empty_reset_bundle.py` to clone an admitted source bundle
+into new empty validator storage; do not use the retired
+offline-specialized reset helpers.
 
-```bash
-fresh_genesis_public_key='<fresh-ed0120-public-key>'
-fresh_authority="$(
-  /absolute/path/from/sealed-build-report/iroha \
-    tools address convert \
-    --profile taira \
-    --format json \
-    "${fresh_genesis_public_key}" |
-  /opt/homebrew/bin/python3 -c \
-    'import json, sys; p=json.load(sys.stdin); assert p["i105"]["network_prefix"] == 369; print(p["i105"]["value"])'
-)"
+The Digital Shekel assets and accounts are ordinary genesis or post-genesis
+state. Register `ds#boi.is` and `ds#boi.is2` at scale 2 as required by their
+applications, but do not attach offline enablement metadata. Top-up and
+redemption derive and validate their exact asset, scale, escrow, authority,
+release, and balance bindings when the operation is submitted. A hosted Torii
+command-submitter key is an application-service credential, not a validator
+capability switch.
 
-cargo run -p iroha_kagami --bin kagami -- \
-  kagemusha prepare-taira-testnet-bootstrap-v4 \
-  --genesis /absolute/path/to/fresh-taira-genesis.json \
-  --release-bundle /absolute/private/path/taira-release \
-  --genesis-authority "${fresh_authority}" \
-  --command-authority "${fresh_authority}" \
-  --fee-mint 1000000 \
-  --ios-team-id '<apple-team-id>' \
-  --ios-bundle-id '<ios-bundle-id>' \
-  --ios-validation-category 4 \
-  --ios-bundle-version '<cf-bundle-version>' \
-  --android-package-name '<android-package>' \
-  --android-signing-certificate-sha256 '<64-lowercase-hex>' \
-  --output /absolute/path/to/genesis.offline.json \
-  --operator-identity-output /absolute/private/path/taira-offline-release-identity.json
-```
-
-The emitted manifest enables `offline.enabled` on the existing scale-2 Taira
-asset `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`, renames it to `ds`, rebinds it as
-`ds#boi.is`, and replaces the legacy display metadata with code `DS`, ISO
-currency `ILS`, symbol `₪`, and display name `Digital Shekel`. It preserves the
-opaque asset ID, fixed scale, mintability, balances, and total supply. Use the
-newly sealed `iroha` binary for the address conversion and require JSON
-`i105.network_prefix = 369`; do not reuse a legacy global-profile conversion.
-The reset uses one freshly generated key pair for both genesis and command
-signing. The helper derives the canonical escrow, treats that shared
-genesis/command authority as the account that `irohad` implicitly creates
-before height one, registers and binds all three base verifiers, grants the
-exact activation/device/escrow permissions, funds the shared authority, and
-atomically activates the authenticated Eq/Ep release. The reset packager must
-receive the same value through `--command-authority`; it independently derives
-the Taira I105 literal from the fresh genesis public key and rejects any
-mismatch or archived command-key reuse.
-It also refuses a source genesis without non-zero public `ds#boi.is` liquidity outside escrow: top-up
-atomically moves that exact user balance into escrow, and redemption can only
-draw against finalized top-up provenance. The builder also replaces the legacy
-1,000 ms source cadence with the authoritative 4,000 ms Sumeragi parameter
-snapshot and verifies that effective cadence before recomputing consensus
-metadata. Point every validator at the reported policy and catalog paths before
-signing and deploying the reset. Preserve the separately emitted operator
-identity outside the source checkout and pass it to rollout verification as
-`--offline-expected-identity`; its artifact digests and five verifier
-projections are derived from the same authenticated activation, not copied
-from live state.
-
-The renderer rewrites the checked-in peer-1 baseline with the full
-`trusted_peers` / `trusted_peers_pop` roster so every validator starts from the
-same bootstrap source of truth. It refuses to emit a config while the SoraFS
-council placeholder remains or the configured quorum is zero, duplicated, or
-larger than the trusted set. It also requires explicit per-validator
-`torii_public_address` values so direct public Torii hostnames are part of the
-checked operator input instead of a hard-coded shared edge default.
-It also refuses every render that omits offline cash inputs, retains a
-`REPLACE_WITH_` placeholder, uses an asset other than the registered scale-2
-`ds#boi.is`, supplies a non-canonical asset-definition ID, or binds escrow to a
-non-canonical Taira I105 account. The checked-in config contains no guessed DS
-asset ID; the operator-provisioned ID is injected into
-`settlement.offline.escrow_accounts` at render time.
+Before cutover, prove that all four validators run the identical admitted
+binary and configuration, share the expected `is` and `is2` catalogs, and
+advance one common committed chain. Health checks use only that ordinary node
+and consensus evidence. Mobile QR/NFC/Nearby acceptance remains an app/device
+release test and never changes validator admission.
 
 ## Private profiles
 
@@ -612,10 +560,9 @@ bash configs/soranexus/taira/taira-validator-container.sh \
 ```
 
 That sequence removes the mounted validator state under `TAIRA_STORAGE_PATH`
-and the mutable Kagemusha artifact tree after stopping the container, which is
-the required step for a true genesis reset. Reset refuses broad system roots,
-the read-only config bundle, and equal or nested state roots before it stops the
-running container.
+after stopping the container, which is the required step for a true genesis
+reset. Reset refuses broad system roots, the read-only config bundle, and equal
+or nested state roots before it stops the running container.
 
 When you run the shared nginx edge on one host, keep the same roster as the
 source of truth for the edge upstreams too:
@@ -808,10 +755,9 @@ is the handoff record for testnet rollout.
 
 The protected `taira-validator-publish` environment must provision canonical,
 non-symlinked paths outside the checkout for the external signer, raw public
-key, pinned `sorafs-validate`, Linux Kagemusha policy/artifact root, and the
-macOS reset bundle, offline genesis, Kagemusha release bundle, operator
-identity, and genesis private key. It also supplies the public genesis key and
-command authority, `TAIRA_OCI_REPOSITORY`, and the `TAIRA_OCI_USERNAME` and
+key, pinned `sorafs-validate`, macOS reset bundle, operator identity, and
+genesis private key. It also supplies the public genesis key and command
+authority, `TAIRA_OCI_REPOSITORY`, and the `TAIRA_OCI_USERNAME` and
 `TAIRA_OCI_PASSWORD` secrets. The dispatch requires the exact 40-character DPN
 release commit; `artifact_suffix`, when present, is restricted to a short
 lowercase OCI-safe component.
@@ -1025,8 +971,8 @@ user-local MCP servers with the exact public root under test.
 
 For final public rollout, do not stop at MCP discovery. Run the repo smoke with
 the public endpoint, the exact full 40-character deployment git SHA, all four
-direct validator roots, the external reviewed offline identity, and a
-runtime-only canary signer config. Define the non-optional fleet arguments once:
+direct validator roots, and a runtime-only canary signer config. Define the
+non-optional fleet arguments once:
 
 ```bash
 TAIRA_VALIDATOR_ARGS=(
@@ -1037,7 +983,7 @@ TAIRA_VALIDATOR_ARGS=(
 )
 ```
 
-- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
 
 Then gate the SoraFS path on the same public node:
 
@@ -1104,8 +1050,8 @@ debugging ingress or MCP. It also verifies that the same direct node serves:
 The same gate must sample public ingress and all four direct validator roots
 repeatedly. `/status.blocks` is the query-visible WSV committed height, not a
 lazy Kura telemetry counter or a pre-apply CommitQC height, and must advance
-with the signed canary while the fleet retains one exact offline release
-identity.
+with the signed canary while the fleet retains one exact build, configuration,
+catalog, and committed-chain identity.
 
 That config must be a normal `iroha` client TOML for a low-risk runtime-only
 signer. Start from `taira-canary-client.example.toml`, not
@@ -1282,41 +1228,6 @@ For contract or IVM execution, add the command's positive `--gas-limit`; the
 CLI binds it inside `fee_payment`. Do not put `fee_sponsor`, `gas_asset_id`, or
 `gas_limit` in transaction metadata.
 
-## Qualification-sealed public Taira layout
-
-The public Taira reset does not use the validator-owned Kagemusha directories
-shown in the generic deployment examples below. The reset controller installs
-the exact admitted `irohad` binary and release tree under a release-specific
-`/Library/SORA/Taira/releases/<release-tree-sha256>/...` root. Every qualified
-directory is owned by root and the validator runtime group with mode `0550`;
-every qualified file has the same ownership and mode `0440`. This keeps the
-tree immutable to the non-root validator while allowing that runtime identity
-to read it. Generated validator configs point only at that installed policy
-and artifact tree.
-
-Before starting a validator, the controller injects the matching
-`settlement.offline.kagemusha_catalog_qualification_seal_path`:
-
-```text
-/Library/SORA/Taira/seals/kagemusha-v4-<release-tree-sha256>.norito
-```
-
-It then runs the exact installed binary as root with `--check-config`, the
-locally available genesis, and
-`--write-kagemusha-catalog-qualification-seal` set to that same path. This
-no-bind pass performs full catalog and genesis authentication and publishes a
-new root-owned mode `0444` seal without replacing any existing path. Normal
-validator startup may run as its non-root service identity, but the policy,
-artifact, executable, and seal path chains remain root-controlled and only
-readable by that identity. A new release tree always receives a new seal
-filename.
-
-Do not recursively `chown` any public-lane qualified source or seal path to uid
-1001 or `iroha`; doing so invalidates the root-trust invariant and makes sealed
-startup fail closed. Keep `/Library/SORA/Taira/seals` separate from the policy,
-artifact, and executable directories because publishing the seal changes its
-parent directory identity.
-
 ## Development-only containerized validator deployment
 
 This path is excluded from first-release Taira publication and admission. No
@@ -1325,9 +1236,6 @@ macOS deployment archive for the testnet rollout. The primary local wrapper is
 `taira-validator-container.sh`, which uses plain `docker` and therefore works
 on hosts that lack the Compose plugin. `docker-compose.validator.yml` remains
 available as an optional convenience for environments that do have Compose.
-The uid-1001 Kagemusha layout in this section is an unsealed development or
-private-testnet example. It is not valid for the qualification-sealed public
-Taira lane and is not a fallback release path.
 
 1. Build or load an explicitly local development image and retain its local
    image ID for `TAIRA_IMAGE`; do not treat it as release authority.
@@ -1335,20 +1243,13 @@ Taira lane and is not a fallback release path.
 2. Render the validator config bundle from your user-local roster and secrets:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 3. Install the rendered config and storage directories on the validator host:
-   - the ownership commands in this step apply only to the unsealed generic
-     layout; never apply them to public-lane qualified source or seal paths
    - `sudo install -d -m 0700 -o 1001 -g 1001 /etc/iroha/taira-validator`
    - `sudo install -d -o 1001 -g 1001 /var/lib/iroha/taira-validator-1`
-   - `sudo install -d -m 0700 -o 1001 -g 1001 /var/lib/iroha/taira-validator/kagemusha/v4`
    - `sudo cp -a dist/taira-validators/taira-validator-1/. /etc/iroha/taira-validator/`
-   - install the authenticated rollout policy as
-     `/etc/iroha/taira-validator/kagemusha/release-policy.norito`, and install
-     its reviewed artifact tree under
-     `/var/lib/iroha/taira-validator/kagemusha/v4`; both are mandatory
    - install reviewed SoraFS admission envelopes, if any, under the rendered
      `/etc/iroha/taira-validator/sorafs_admission` directory
    - after installing all runtime inputs, run
-     `sudo chown -R 1001:1001 /etc/iroha/taira-validator /var/lib/iroha/taira-validator-1 /var/lib/iroha/taira-validator/kagemusha/v4`
+     `sudo chown -R 1001:1001 /etc/iroha/taira-validator /var/lib/iroha/taira-validator-1`
 4. Copy the sample env file and adjust the host-specific values:
    - `sudo cp configs/soranexus/taira/taira-validator-container.compose.env.example /etc/default/taira-validator-container.compose.env`
    - set at least:
@@ -1356,7 +1257,6 @@ Taira lane and is not a fallback release path.
      - `TAIRA_RUNTIME_PROFILE=localnet`
      - `TAIRA_CONFIG_BUNDLE_PATH=/etc/iroha/taira-validator`
      - `TAIRA_STORAGE_PATH=/var/lib/iroha/taira-validator-1`
-     - `TAIRA_KAGEMUSHA_ARTIFACT_PATH=/var/lib/iroha/taira-validator/kagemusha/v4`
      - `TAIRA_TORII_PORT=18080` unless your ingress expects another loopback port
 5. Start the validator directly with the plain-`docker` wrapper:
    - `bash configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env up`
@@ -1376,9 +1276,9 @@ Taira lane and is not a fallback release path.
    - `sudo systemctl daemon-reload`
    - `sudo systemctl enable --now taira-validator-container.service`
 8. Prove the local MCP surface before any public cutover:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --skip-write-canary`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --skip-write-canary`
    - for a signed local write-path check:
-     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --write-target local`
+     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --write-config /run/secrets/taira-canary-client.toml --write-target local`
 
 Optional container overrides:
 
@@ -1395,12 +1295,6 @@ Optional container overrides:
 
 Install the validator from the repo checkout so the live process cannot drift
 away from the shipped MCP-enabled config:
-
-The `iroha:iroha` Kagemusha ownership examples below describe an unsealed
-generic deployment. They must not be used for the public lane. Public Taira
-uses the controller-installed, root-controlled release tree, executable, and
-release-specific seal described in
-[Qualification-sealed public Taira layout](#qualification-sealed-public-taira-layout).
 
 1. Check out this repository on the validator host, for example at
    `/opt/iroha`.
@@ -1444,17 +1338,11 @@ release-specific seal described in
      `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
      fields because the checked-in template intentionally leaves those
      deployment values as fail-closed placeholders
-   - the following `iroha`-owned paths are for the unsealed generic layout
-     only; never recursively chown the public-lane qualified tree or seal
    - `sudo install -d -m 0700 -o iroha -g iroha /etc/iroha/taira-validator`
    - `sudo install -d -m 0700 -o iroha -g iroha /var/lib/iroha/taira-validator-1`
-   - `sudo install -d -m 0700 -o iroha -g iroha /var/lib/iroha/taira-validator/kagemusha/v4`
    - `sudo cp -a dist/taira-validators/taira-validator-1/. /etc/iroha/taira-validator/`
    - preserve the generated `0600` modes; signer and governance paths already
      target this canonical install root and must not be rewritten
-   - install the authenticated rollout policy at
-     `/etc/iroha/taira-validator/kagemusha/release-policy.norito` and its
-     artifact tree at `/var/lib/iroha/taira-validator/kagemusha/v4`
    - install reviewed SoraFS admission envelopes, if any, under
      `/etc/iroha/taira-validator/sorafs_admission`
    - after installing all runtime inputs, run
@@ -1474,8 +1362,8 @@ release-specific seal described in
      complete canonical `/etc/iroha/taira-validator` bundle, so do not override
      only `IROHA_TAIRA_CONFIG` to another install root
    - if a deployment intentionally uses another renderer `--install-root`,
-     update the unit's config, signer, manifest, SoraFS admission, Kagemusha
-     policy, and artifact preflight paths together before enabling it
+     update the unit's config, signer, manifest, and SoraFS admission preflight
+     paths together before enabling it
    - if your repo checkout or binary path differs from `/opt/iroha` and
      `/usr/local/bin/irohad`, adjust `WorkingDirectory=` and set
      `IROHA_TAIRA_IROHAD_BIN=` in `/etc/default/taira-irohad` before enabling
@@ -1490,21 +1378,21 @@ release-specific seal described in
    - verify `/tmp/taira-trace-config.txt` includes `nexus.fees.fee_asset_id = "xor#universal"`
 7. Prove the validator's loopback Torii endpoint exposes MCP and the expected
    direct-ingress routes before any public cutover:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --skip-write-canary`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --skip-write-canary`
    - for a full local write-path check, use a runtime-only canary signer:
-     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --write-target local`
+     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --write-config /run/secrets/taira-canary-client.toml --write-target local`
 8. After the public node is back, prove the direct hostname is healthy before
    any convenience host or client cutover:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
    - if contract deploy/view health still fails after the route checks pass,
      redeploy SoraSwap with the updated `../soraswap` `deploy-testnet` flow
      before blaming the frontend
 9. Before declaring public Codex/Torii rollout complete, require the SoraSwap
    gate to pass behind the same runtime candidate:
    - probe-only:
-     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml`
+     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml`
    - full gate:
-     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml --run-release-checklist --allow-testnet-mutations`
+     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml --run-release-checklist --allow-testnet-mutations`
    - the wrapper runs the focused `iroha_core` SoraSwap deploy-route router
      regression and three-hop nested transfer canary, `check_mcp_rollout.sh`,
      `check_sorafs_rollout.sh`, the trader app-api CID probe when a bundle is
@@ -1678,10 +1566,10 @@ From `../iroha2-block-explorer-web`:
    - on the shared macOS/Homebrew host, use `nginx -t && nginx -s reload`
 6. Run the MCP rollout smoke from any host that can see the validator loopback
    and the public endpoint:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
    - when you are validating edge-local SNI before public DNS or TLS is fully
      live, pin the public host to the edge IP explicitly:
-     `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --resolve-host taira.sora.org:443:127.0.0.1 --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+     `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --resolve-host taira.sora.org:443:127.0.0.1 --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
    - the public check auto-bootstraps a runtime-only canary config when
     `--write-config` is omitted and
     `--onboarding-token-file /absolute/runtime/path/onboarding-token` names the

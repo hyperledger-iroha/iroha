@@ -17155,14 +17155,14 @@ mod tests {
             "a destination-scoped permission must not authorize another account"
         );
 
-        let offline_key: Name = "offline.enabled".parse().expect("metadata key");
+        let metadata_key: Name = "display.category".parse().expect("metadata key");
         let unprivileged_metadata = executor.execute_instruction(
             &mut stx,
             &retail,
             InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
                 pkr.clone(),
-                offline_key.clone(),
-                Json::new(true),
+                metadata_key.clone(),
+                Json::new("retail"),
             )),
         );
         assert!(
@@ -17201,11 +17201,11 @@ mod tests {
                 &retail,
                 InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
                     pkr.clone(),
-                    offline_key,
-                    Json::new(true),
+                    metadata_key,
+                    Json::new("retail"),
                 )),
             )
-            .expect("the exact PKR metadata grant must authorize offline metadata changes");
+            .expect("the exact PKR metadata grant must authorize metadata changes");
 
         assert_eq!(
             stx.world
@@ -17220,8 +17220,8 @@ mod tests {
                 .asset_definition(&pkr)
                 .expect("PKR definition")
                 .metadata()
-                .get(&"offline.enabled".parse::<Name>().expect("metadata key")),
-            Some(&Json::new(true)),
+                .get(&"display.category".parse::<Name>().expect("metadata key")),
+            Some(&Json::new("retail")),
         );
     }
 
