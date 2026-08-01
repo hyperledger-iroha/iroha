@@ -81,7 +81,7 @@ async function main() {
     throw new Error(`compose file not found: ${composeFile}`);
   }
   if (shouldStart && composeFile === DEFAULT_COMPOSE_FILE) {
-    await validateDefaultComposeGenesisCustody();
+    await validateDefaultComposeGenesisArtifacts();
   }
 
   const composeCommand = shouldStart ? await detectComposeCommand(composeBin) : null;
@@ -154,24 +154,45 @@ async function main() {
   }
 }
 
-export async function validateDefaultComposeGenesisCustody(env = process.env) {
+export async function validateDefaultComposeGenesisArtifacts(env = process.env) {
   for (const name of [
     "IROHA_GENESIS_PUBLIC_KEY_FILE",
-    "IROHA_GENESIS_PRIVATE_KEY_FILE",
+    "IROHA_GENESIS_SIGNED_FILE",
+    "IROHA_GENESIS_EXPECTED_HASH_FILE",
   ]) {
-    const keyPath = env[name];
-    if (!keyPath) {
+    const artifactPath = env[name];
+    if (!artifactPath) {
       throw new Error(
-        `${name} is required by the default Compose stack; generate runtime-only ` +
-          "genesis key files with kagami and never commit the private file",
+        `${name} is required by the default Compose stack; generate a signed genesis, ` +
+          "verifier key, and exact hash with kagami",
       );
     }
-    if (!existsSync(keyPath)) {
+    if (!existsSync(artifactPath)) {
       throw new Error(`${name} does not point to an existing file`);
     }
-    const record = await readFile(keyPath, "utf8");
-    if (!record.endsWith("\n") || record.trim().length === 0 || record.trim().includes("\n")) {
-      throw new Error(`${name} must contain exactly one non-empty key record and a final newline`);
+    if (name === "IROHA_GENESIS_SIGNED_FILE") {
+      const body = await readFile(artifactPath);
+      if (body.length === 0) {
+        throw new Error(`${name} must point to a non-empty file`);
+      }
+      continue;
+    }
+    const record = await readFile(artifactPath, "utf8");
+    const payload = record.endsWith("\n") ? record.slice(0, -1) : record;
+    if (
+      !record.endsWith("\n") ||
+      payload.length === 0 ||
+      payload.includes("\n") ||
+      payload.includes("\r") ||
+      payload !== payload.trim()
+    ) {
+      throw new Error(`${name} must contain exactly one non-empty record and a final newline`);
+    }
+    if (
+      name === "IROHA_GENESIS_EXPECTED_HASH_FILE" &&
+      !/^[0-9a-f]{63}[13579bdf]\n$/.test(record)
+    ) {
+      throw new Error(`${name} must contain one canonical lowercase Iroha hash record`);
     }
   }
 }

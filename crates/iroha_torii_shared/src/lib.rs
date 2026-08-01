@@ -209,6 +209,8 @@ pub mod uri {
     pub const LEDGER_STATE_ROOT: &str = "/v1/ledger/state/{height}";
     /// URI used to fetch the execution state proof/QC for a block height.
     pub const LEDGER_STATE_PROOF: &str = "/v1/ledger/state-proof/{height}";
+    /// URI used to fetch the exact canonical executed block wire for a finalized height.
+    pub const LEDGER_EXECUTED_BLOCK_WIRE: &str = "/v1/ledger/block/{height}";
     /// URI used to fetch Merkle proofs for a transaction entrypoint within a block.
     pub const LEDGER_BLOCK_PROOF: &str = "/v1/ledger/block/{height}/proof/{entry_hash}";
     /// URI used to list validator-set snapshots (newest first).

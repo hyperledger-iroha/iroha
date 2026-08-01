@@ -85,7 +85,7 @@ use norito::{
 };
 use sha2::{Digest as _, Sha256};
 use sorafs_manifest::{
-    alias_cache::{decode_alias_proof, unix_now_secs},
+    alias_cache::{decode_alias_proof_untrusted_signers, unix_now_secs},
     pdp::PdpCommitmentV1,
     repair::RepairTicketId,
 };
@@ -140,6 +140,7 @@ use crate::{
 // (No query imports needed here)
 
 const APPLICATION_JSON: &str = "application/json";
+const MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -171,6 +172,112 @@ const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
+
+/// First-release public Musubi query endpoint selected without constructing a signer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicMusubiQueryPathV1 {
+    /// Fetch one exact structural package record.
+    ExactPackage,
+    /// Fetch one exact immutable release record.
+    ExactRelease,
+    /// Fetch one finalized resolver-index page.
+    ResolverIndex,
+    /// Fetch one finalized structured-version page.
+    Versions,
+    /// Fetch one finalized package-member page.
+    Maintainers,
+    /// Fetch one finalized archive-location page.
+    ArchiveLocations,
+    /// Fetch one exact permanent global alias.
+    Alias,
+    /// Fetch one finalized permanent-alias history page.
+    AliasHistory,
+    /// Fetch one finalized byte-ordered package-prefix page.
+    OrderedPrefix,
+}
+
+impl PublicMusubiQueryPathV1 {
+    const fn path(self) -> &'static str {
+        match self {
+            Self::ExactPackage => "/v1/musubi/queries/exact-package",
+            Self::ExactRelease => "/v1/musubi/queries/exact-release",
+            Self::ResolverIndex => "/v1/musubi/queries/resolver-index",
+            Self::Versions => "/v1/musubi/queries/versions",
+            Self::Maintainers => "/v1/musubi/queries/maintainers",
+            Self::ArchiveLocations => "/v1/musubi/queries/archive-locations",
+            Self::Alias => "/v1/musubi/queries/alias",
+            Self::AliasHistory => "/v1/musubi/queries/alias-history",
+            Self::OrderedPrefix => "/v1/musubi/queries/ordered-prefix",
+        }
+    }
+}
+
+/// Result of a signer-free public Musubi query.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublicMusubiQueryResultV1<T> {
+    /// The exact record or finalized page was returned and decoded.
+    Found(T),
+    /// No exact record exists at the requested finalized state.
+    NotFound,
+    /// A supplied finalized cursor is stale and must not be silently restarted.
+    StaleCursor,
+}
+
+/// Execute one bounded public Musubi V1 query without loading an account or key pair.
+///
+/// This function deliberately accepts only the fixed typed-query route inventory. It
+/// never attaches configured headers, canonical account authentication, or signing
+/// material. Callers that need to mutate state must construct [`Client`] separately.
+///
+/// # Errors
+/// Returns an error when the base URL is unsuitable for a public request, request or
+/// response JSON is invalid, transport fails, or Torii returns any status other than
+/// success, not-found, or stale-cursor.
+pub fn post_public_musubi_query_v1<Q, R>(
+    torii_url: &Url,
+    path: PublicMusubiQueryPathV1,
+    query: &Q,
+    timeout: Duration,
+) -> Result<PublicMusubiQueryResultV1<R>>
+where
+    Q: norito::json::JsonSerialize + ?Sized,
+    R: norito::json::JsonDeserialize,
+{
+    if !matches!(torii_url.scheme(), "http" | "https")
+        || !torii_url.username().is_empty()
+        || torii_url.password().is_some()
+    {
+        return Err(eyre!("invalid public Musubi Torii URL"));
+    }
+    let url = torii_url
+        .join(path.path())
+        .wrap_err("failed to build public Musubi query URL")?;
+    let body = norito::json::to_vec(query).wrap_err("failed to encode public Musubi query")?;
+    let mut builder = DefaultRequestBuilder::new(HttpMethod::POST, url)
+        .header("Content-Type", APPLICATION_JSON)
+        .header("Accept", APPLICATION_JSON)
+        .max_response_bytes(MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES)
+        .body(body);
+    if timeout != Duration::ZERO {
+        builder = builder.timeout(timeout);
+    }
+    let response = builder
+        .build()
+        .wrap_err("failed to build public Musubi query")?
+        .send()
+        .wrap_err("public Musubi query transport failed")?;
+    match response.status() {
+        StatusCode::OK => norito::json::from_slice(response.body())
+            .map(PublicMusubiQueryResultV1::Found)
+            .wrap_err("public Musubi query response was invalid"),
+        StatusCode::NOT_FOUND => Ok(PublicMusubiQueryResultV1::NotFound),
+        StatusCode::GONE => Ok(PublicMusubiQueryResultV1::StaleCursor),
+        status => Err(eyre!(
+            "public Musubi query failed with HTTP status {}",
+            status.as_u16()
+        )),
+    }
+}
 
 #[derive(
     Clone,
@@ -13850,7 +13957,7 @@ impl Client {
         let proof_bytes = base64::engine::general_purpose::STANDARD
             .decode(proof_b64.as_bytes())
             .wrap_err("failed to decode Sora-Proof header as base64")?;
-        let bundle = decode_alias_proof(&proof_bytes)
+        let bundle = decode_alias_proof_untrusted_signers(&proof_bytes)
             .wrap_err("invalid alias proof bundle in Sora-Proof header")?;
 
         let evaluation = self.alias_cache_policy.evaluate(&bundle, unix_now_secs());
@@ -18514,30 +18621,6 @@ impl Client {
             .header("Accept", APPLICATION_JSON)
             .build()?
             .send()
-    }
-
-    /// Convenience: signed POST `/v1/sorafs/transparency/source-entries/{source_kind}`.
-    ///
-    /// # Errors
-    /// Returns an error if the source kind is blank, the payload is not JSON,
-    /// request construction fails, signing fails, or the HTTP call fails.
-    pub fn post_sorafs_transparency_source_entry_json(
-        &self,
-        source_kind: &str,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        let source_kind = require_non_empty_path_segment(source_kind, "source_kind")?;
-        let payload = Self::sorafs_json_request_body(payload, "transparency source entry")?;
-        let url = join_torii_url_with_path_segments(
-            &self.torii_url,
-            "v1/sorafs/transparency/source-entries",
-            &[source_kind],
-        );
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, payload)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
     }
 
     /// Convenience: signed POST `/v1/sorafs/transparency/tokens/issuances`.
@@ -25067,6 +25150,81 @@ mod tests {
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
     const TEST_WORKER_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    #[test]
+    fn public_musubi_query_uses_fixed_route_without_account_headers() {
+        let response = json_response(StatusCode::OK, r#"{"result":"finalized"}"#);
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let query = norito::json!({"package": "apps.sora/demo"});
+        let result: PublicMusubiQueryResultV1<Value> =
+            with_mock_http(respond_with(&snapshots, response), || {
+                post_public_musubi_query_v1(
+                    &base_url(),
+                    PublicMusubiQueryPathV1::ExactPackage,
+                    &query,
+                    Duration::from_secs(1),
+                )
+            })
+            .expect("public Musubi query");
+        assert!(matches!(result, PublicMusubiQueryResultV1::Found(_)));
+
+        let snapshot = snapshots.lock().expect("snapshot lock")[0].clone();
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/musubi/queries/exact-package");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES
+        );
+        assert!(snapshot.headers.iter().all(|(name, _)| {
+            ![
+                HEADER_ACCOUNT,
+                HEADER_SIGNATURE,
+                HEADER_TIMESTAMP_MS,
+                HEADER_NONCE,
+                "authorization",
+            ]
+            .iter()
+            .any(|forbidden| name.eq_ignore_ascii_case(forbidden))
+        }));
+    }
+
+    #[test]
+    fn public_musubi_query_surfaces_missing_and_stale_cursor() {
+        let query = norito::json!({"limit": 1_u64});
+        let missing: PublicMusubiQueryResultV1<Value> = with_mock_http(
+            respond_with(
+                &Arc::new(Mutex::new(Vec::new())),
+                empty_response(StatusCode::NOT_FOUND),
+            ),
+            || {
+                post_public_musubi_query_v1(
+                    &base_url(),
+                    PublicMusubiQueryPathV1::Versions,
+                    &query,
+                    Duration::from_secs(1),
+                )
+            },
+        )
+        .expect("missing query result");
+        assert!(matches!(missing, PublicMusubiQueryResultV1::NotFound));
+
+        let stale: PublicMusubiQueryResultV1<Value> = with_mock_http(
+            respond_with(
+                &Arc::new(Mutex::new(Vec::new())),
+                empty_response(StatusCode::GONE),
+            ),
+            || {
+                post_public_musubi_query_v1(
+                    &base_url(),
+                    PublicMusubiQueryPathV1::OrderedPrefix,
+                    &query,
+                    Duration::from_secs(1),
+                )
+            },
+        )
+        .expect("stale query result");
+        assert!(matches!(stale, PublicMusubiQueryResultV1::StaleCursor));
+    }
 
     fn validation_fee_plain_ballot_draft_fixture() -> (
         String,
@@ -32577,64 +32735,6 @@ mod tests {
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sorafs/transparency/tokens");
         assert_eq!(snapshot.url.query(), Some("limit=7"));
-    }
-
-    #[test]
-    fn sorafs_transparency_source_entry_sends_signed_json_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"source"}"#);
-        let payload = norito::json::to_vec(&norito::json!({
-            "event_id": "legal-hold-1",
-            "occurred_at_unix": 1_800_000_500_u64,
-            "subject": "case-401",
-            "payload_digest_hex": ("a1".repeat(32)),
-        }))
-        .expect("encode source entry payload");
-
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_transparency_source_entry_json("legal hold", &payload)
-                .expect("transparency source entry request");
-        });
-
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/transparency/source-entries/legal%20hold"
-        );
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
-        assert!(headers.contains_key(HEADER_ACCOUNT));
-        assert!(headers.contains_key(HEADER_SIGNATURE));
-        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
-        assert!(headers.contains_key(HEADER_NONCE));
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&APPLICATION_JSON.to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
-
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("event_id").and_then(JsonValue::as_str),
-            Some("legal-hold-1")
-        );
-        assert_eq!(
-            body.get("payload_digest_hex").and_then(JsonValue::as_str),
-            Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")
-        );
-    }
-
-    #[test]
-    fn sorafs_transparency_source_entry_rejects_empty_json_payload() {
-        let client = client_with_base_url(base_url());
-        let err = client
-            .post_sorafs_transparency_source_entry_json("legal-hold-notice", &[])
-            .expect_err("empty payload must be rejected");
-        assert!(err.to_string().contains("payload"));
     }
 
     #[test]

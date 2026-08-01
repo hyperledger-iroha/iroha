@@ -2397,9 +2397,11 @@ mod tests {
             bootle_lantern::{
                 codec::PROOF_BYTES_V1 as BOOTLE_LANTERN_PROOF_BYTES_V1,
                 issuer::{
-                    BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
-                    holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
-                    issuer_blind_issue_with_rng_v1,
+                    BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
+                    BootleLanternIssuerPolicyMetadataV1, holder_finalize_blind_issuance_v1,
+                    holder_prepare_blind_issuance_with_rng_v1,
+                    issuer_authorize_blind_issuance_with_rng_v1,
+                    issuer_blind_issue_once_with_rng_v1,
                 },
                 prove_bound_presentation_v1,
             },
@@ -2974,29 +2976,43 @@ mod tests {
                         .collect(),
                 })
                 .expect("canonical initial native issuer policy");
-            let mut attributes = [[0_u8; 8]; 8];
-            attributes[1] = [1; 8];
-            let mut holder_mask_rng = KatRng::new([0xB4; 32]);
-            let mut holder_proof_rng = KatRng::new([0xB5; 32]);
-            let (issuance_request, issuance_state) = holder_prepare_blind_issuance_with_rng_v1(
-                &context,
-                genesis_hash,
-                &policy,
-                attributes,
-                &mut holder_mask_rng,
-                &mut holder_proof_rng,
-            )
-            .expect("holder blind-issuance request");
-            let mut tag_rng = KatRng::new([0xB6; 32]);
-            let mut preimage_rng = KatRng::new([0xB7; 32]);
-            let issuance_response = issuer_blind_issue_with_rng_v1(
+            let issuance_store = BootleLanternInMemoryIssuanceStoreV1::new();
+            let mut authorization_rng = KatRng::new([0xB9; 32]);
+            let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer_key_pair,
                 &context,
                 genesis_hash,
                 &policy,
+                [0xBA; 32],
+                10,
+                20,
+                &issuance_store,
+                &mut authorization_rng,
+            )
+            .expect("issuer one-shot authorization");
+            let mut attributes = [[0_u8; 8]; 8];
+            attributes[1] = [1; 8];
+            let mut holder_issuance_rng = KatRng::new([0xB4; 32]);
+            let (issuance_request, issuance_state) = holder_prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
+                attributes,
+                &mut holder_issuance_rng,
+            )
+            .expect("holder blind-issuance request");
+            let mut issuer_issuance_rng = KatRng::new([0xB6; 32]);
+            let issuance_response = issuer_blind_issue_once_with_rng_v1(
+                &issuer_key_pair,
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
                 &issuance_request,
-                &mut tag_rng,
-                &mut preimage_rng,
+                10,
+                &issuance_store,
+                &mut issuer_issuance_rng,
             )
             .expect("native blind issuance");
             let credential = holder_finalize_blind_issuance_v1(

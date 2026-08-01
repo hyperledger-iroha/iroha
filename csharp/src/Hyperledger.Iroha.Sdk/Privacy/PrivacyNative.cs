@@ -1,25 +1,27 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Hyperledger.Iroha.Privacy;
 
 /// <summary>Closed first-release privacy protocol identity in canonical Norito order.</summary>
-public enum PrivacyProtocolIdV1
+public enum PrivacyProtocolIdV1 : uint
 {
-    ZkAcePqAuthorizationV0,
-    AnonymousPgcKOutOfNV1,
-    VeRangeTransparentRangeV1,
-    IrohaZkAmsV1,
-    VegaExistingCredentialZkV0,
-    IrohaZkX509StarkP256V0,
-    IrohaJindoPolynomialCommitmentV0,
-    IrohaBootleLanternAnoncredV1,
-    OrchardHalo2ActionsV1,
-    MoneroFcmpPlusPlusV1,
-    IrohaIvmPrivateNoteStarkV1,
-    PqMaspStarkV0,
+    ZkAcePqAuthorizationV0 = 0,
+    AnonymousPgcKOutOfNV1 = 1,
+    VeRangeTransparentRangeV1 = 2,
+    IrohaZkAmsV1 = 3,
+    VegaExistingCredentialZkV0 = 4,
+    IrohaZkX509StarkP256V0 = 5,
+    IrohaJindoPolynomialCommitmentV0 = 6,
+    IrohaBootleLanternAnoncredV1 = 7,
+    OrchardHalo2ActionsV1 = 8,
+    MoneroFcmpPlusPlusV1 = 9,
+    IrohaIvmPrivateNoteStarkV1 = 10,
+    PqMaspStarkV0 = 11,
 }
 
 /// <summary>Stable ABI-21 result of validating one typed local compiled-profile catalog.</summary>
@@ -84,8 +86,10 @@ public static class PrivacyProtocolsV1
     /// Parse one exact canonical label. Aliases, retired identifiers, whitespace, and case changes
     /// are rejected.
     /// </summary>
-    public static PrivacyProtocolIdV1 ParseCanonicalLabel(string label) =>
-        label switch
+    public static PrivacyProtocolIdV1 ParseCanonicalLabel(string label)
+    {
+        ArgumentNullException.ThrowIfNull(label);
+        return label switch
         {
             "zk-ace-pq-authorization-v0" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV0,
             "anonymous-pgc-k-out-of-n-v1" => PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1,
@@ -105,6 +109,60 @@ public static class PrivacyProtocolsV1
                 "Unknown canonical privacy protocol id.",
                 nameof(label)),
         };
+    }
+
+    /// <summary>
+    /// Return the exact first-release Norito statement/proof variant label for one protocol.
+    /// </summary>
+    public static string CanonicalTypedVariantLabel(this PrivacyProtocolIdV1 protocol) =>
+        protocol switch
+        {
+            PrivacyProtocolIdV1.ZkAcePqAuthorizationV0 => "ZkAcePqAuthorizationV0",
+            PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1 => "AnonymousPgcKOutOfNV1",
+            PrivacyProtocolIdV1.VeRangeTransparentRangeV1 => "VeRangeTransparentRangeV1",
+            PrivacyProtocolIdV1.IrohaZkAmsV1 => "IrohaZkAmsV1",
+            PrivacyProtocolIdV1.VegaExistingCredentialZkV0 => "VegaExistingCredentialZkV0",
+            PrivacyProtocolIdV1.IrohaZkX509StarkP256V0 => "IrohaZkX509StarkP256V0",
+            PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0 =>
+                "IrohaJindoPolynomialCommitmentV0",
+            PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1 =>
+                "IrohaBootleLanternAnoncredV1",
+            PrivacyProtocolIdV1.OrchardHalo2ActionsV1 => "OrchardHalo2ActionsV1",
+            PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1 => "MoneroFcmpPlusPlusV1",
+            PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1 =>
+                "IrohaIvmPrivateNoteStarkV1",
+            PrivacyProtocolIdV1.PqMaspStarkV0 => "PqMaspStarkV0",
+            _ => throw new ArgumentOutOfRangeException(nameof(protocol)),
+        };
+
+    /// <summary>
+    /// Parse one exact first-release Norito statement/proof variant label. Legacy row names,
+    /// aliases, whitespace, and case changes are rejected.
+    /// </summary>
+    public static PrivacyProtocolIdV1 ParseCanonicalTypedVariantLabel(string label)
+    {
+        ArgumentNullException.ThrowIfNull(label);
+        return label switch
+        {
+            "ZkAcePqAuthorizationV0" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV0,
+            "AnonymousPgcKOutOfNV1" => PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1,
+            "VeRangeTransparentRangeV1" => PrivacyProtocolIdV1.VeRangeTransparentRangeV1,
+            "IrohaZkAmsV1" => PrivacyProtocolIdV1.IrohaZkAmsV1,
+            "VegaExistingCredentialZkV0" => PrivacyProtocolIdV1.VegaExistingCredentialZkV0,
+            "IrohaZkX509StarkP256V0" => PrivacyProtocolIdV1.IrohaZkX509StarkP256V0,
+            "IrohaJindoPolynomialCommitmentV0" =>
+                PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0,
+            "IrohaBootleLanternAnoncredV1" =>
+                PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1,
+            "OrchardHalo2ActionsV1" => PrivacyProtocolIdV1.OrchardHalo2ActionsV1,
+            "MoneroFcmpPlusPlusV1" => PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1,
+            "IrohaIvmPrivateNoteStarkV1" => PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1,
+            "PqMaspStarkV0" => PrivacyProtocolIdV1.PqMaspStarkV0,
+            _ => throw new ArgumentException(
+                "Unknown canonical privacy statement/proof variant.",
+                nameof(label)),
+        };
+    }
 }
 
 /// <summary>Validated canonical local <c>PrivacyCompiledProfileCatalogV1</c> archive.</summary>
@@ -164,6 +222,8 @@ public static class PrivacyNative
     public const int PrivacyExact12FixtureBundleMaxBytes =
         PrivacyExact12FixtureCodecV1.MaxArchiveBytes;
     public const uint RequiredBridgeAbiVersion = 21;
+    // Do not inherit the comparatively small worker stacks used by foreign managed runtimes.
+    private const int NativeWorkerStackBytes = 16 * 1024 * 1024;
     private const string LibraryName = "connect_norito_bridge";
     private static readonly bool Available = DetectAvailability();
     private delegate int NativeArchiveQuery(out IntPtr output, out UIntPtr outputLength);
@@ -176,7 +236,11 @@ public static class PrivacyNative
         IntPtr handle = IntPtr.Zero;
         try
         {
-            var symbolsAvailable = NativeLibrary.TryLoad(LibraryName, out handle)
+            var symbolsAvailable = NativeLibrary.TryLoad(
+                    LibraryName,
+                    typeof(PrivacyNative).Assembly,
+                    null,
+                    out handle)
                 && NativeLibrary.TryGetExport(
                     handle,
                     "iroha_privacy_compiled_profile_catalog_v1",
@@ -226,6 +290,15 @@ public static class PrivacyNative
         NativeArchiveValidator validate,
         int maximumBytes)
     {
+        return RunWithNativeStack(() =>
+            ProbeNativeArchiveOnWorker(query, validate, maximumBytes));
+    }
+
+    private static bool ProbeNativeArchiveOnWorker(
+        NativeArchiveQuery query,
+        NativeArchiveValidator validate,
+        int maximumBytes)
+    {
         IntPtr pointer = IntPtr.Zero;
         UIntPtr length = UIntPtr.Zero;
         var status = query(out pointer, out length);
@@ -264,6 +337,23 @@ public static class PrivacyNative
             throw new InvalidOperationException("Native privacy bridge is unavailable.");
         }
 
+        return RunWithNativeStack(QueryExact12FixtureBundleOnWorker);
+    }
+
+    /// <summary>Returns this binary's canonical local compiled-profile catalog.</summary>
+    public static PrivacyCompiledProfileCatalogArchive CompiledProfileCatalogV1()
+    {
+        if (!IsAvailable())
+        {
+            throw new InvalidOperationException(
+                "Native privacy compiled-profile catalog is unavailable.");
+        }
+
+        return RunWithNativeStack(QueryCompiledProfileCatalogOnWorker);
+    }
+
+    private static PrivacyExact12FixtureBundleArchive QueryExact12FixtureBundleOnWorker()
+    {
         IntPtr pointer = IntPtr.Zero;
         UIntPtr length = UIntPtr.Zero;
         var status = NativeExact12FixtureBundle(out pointer, out length);
@@ -293,15 +383,8 @@ public static class PrivacyNative
         }
     }
 
-    /// <summary>Returns this binary's canonical local compiled-profile catalog.</summary>
-    public static PrivacyCompiledProfileCatalogArchive CompiledProfileCatalogV1()
+    private static PrivacyCompiledProfileCatalogArchive QueryCompiledProfileCatalogOnWorker()
     {
-        if (!IsAvailable())
-        {
-            throw new InvalidOperationException(
-                "Native privacy compiled-profile catalog is unavailable.");
-        }
-
         IntPtr pointer = IntPtr.Zero;
         UIntPtr length = UIntPtr.Zero;
         var status = NativeCompiledProfileCatalog(out pointer, out length);
@@ -349,9 +432,10 @@ public static class PrivacyNative
             throw new InvalidOperationException(
                 "Native privacy compiled-profile catalog is unavailable.");
         }
-        var code = NativeValidateCompiledProfileCatalog(
-            archive,
-            new UIntPtr((uint)archive.Length));
+        var snapshot = (byte[])archive.Clone();
+        var code = RunWithNativeStack(() => NativeValidateCompiledProfileCatalog(
+            snapshot,
+            new UIntPtr((uint)snapshot.Length)));
         if (!Enum.IsDefined(typeof(PrivacyCompiledProfileCatalogValidationStatusV1), code))
         {
             throw new InvalidOperationException(
@@ -379,15 +463,44 @@ public static class PrivacyNative
         {
             throw new InvalidOperationException("Native privacy bridge is unavailable.");
         }
-        var code = NativeValidateExact12FixtureBundle(
-            archive,
-            new UIntPtr((uint)archive.Length));
+        var snapshot = (byte[])archive.Clone();
+        var code = RunWithNativeStack(() => NativeValidateExact12FixtureBundle(
+            snapshot,
+            new UIntPtr((uint)snapshot.Length)));
         if (!Enum.IsDefined(typeof(PrivacyExact12FixtureValidationStatusV1), code))
         {
             throw new InvalidOperationException(
                 "Native exact-12 privacy fixture validation returned an unknown status.");
         }
         return (PrivacyExact12FixtureValidationStatusV1)code;
+    }
+
+    private static T RunWithNativeStack<T>(Func<T> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        T result = default!;
+        ExceptionDispatchInfo? failure = null;
+        var worker = new Thread(
+            () =>
+            {
+                try
+                {
+                    result = action();
+                }
+                catch (Exception error)
+                {
+                    failure = ExceptionDispatchInfo.Capture(error);
+                }
+            },
+            NativeWorkerStackBytes)
+        {
+            IsBackground = true,
+            Name = "Iroha privacy native bridge",
+        };
+        worker.Start();
+        worker.Join();
+        failure?.Throw();
+        return result;
     }
 
     [DllImport(

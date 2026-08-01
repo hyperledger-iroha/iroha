@@ -70,21 +70,6 @@ pub enum Error {
     #[error("invalid encoding")]
     InvalidEncoding,
 
-    /// Encountered parameters that do not match the deterministic V1 derivation.
-    #[error("non-canonical parameter set")]
-    UnknownParams,
-
-    /// Generator was invalid (e.g., identity element or duplicate point).
-    #[error("invalid {kind} generator at index {index}: {reason}")]
-    InvalidGenerator {
-        /// Type of generator (`G`, `H`, or `U`).
-        kind: &'static str,
-        /// Index within the generator vector (0-based; `0` for `U`).
-        index: usize,
-        /// Human-readable failure reason.
-        reason: &'static str,
-    },
-
     /// Backend is not compiled in or otherwise unsupported.
     #[error("unsupported backend: {backend:?}")]
     UnsupportedBackend {

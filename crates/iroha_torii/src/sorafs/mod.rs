@@ -53,7 +53,8 @@ pub use alias_cache::{
     AliasCacheEnforcement, AliasCachePolicy, AliasCachePolicyExt, AliasCachePolicyHttpExt,
     AliasProofError, AliasProofEvaluation, AliasProofEvaluationExt, AliasProofState, CacheDecision,
     CacheDecisionOutcome, GovernanceAssessment, SuccessorAssessment, decode_alias_proof,
-    enforcement_from_config, policy_from_config, unix_now_secs,
+    decode_alias_proof_untrusted_signers, enforcement_from_config, policy_from_config,
+    unix_now_secs,
 };
 pub use blinded::{
     BLINDED_CID_LEN, BlindedCidResolver, ResolveError as BlindedResolveError, SaltSchedule,

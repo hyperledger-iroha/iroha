@@ -103,6 +103,18 @@ use iroha_data_model::{
         merge_queue_plan_admissions_within_limits,
     },
     metadata::Metadata,
+    musubi::{
+        ArchiveId, MusubiAliasHistoryEntryV1, MusubiAliasHistoryKeyV1, MusubiAliasNameV1,
+        MusubiAliasRecordV1, MusubiArchiveAvailabilityV1, MusubiArchiveLocationKeyV1,
+        MusubiArchiveLocationStateV1, MusubiArchiveLocationV1, MusubiArchiveRecordV1,
+        MusubiArchiveReverseReferencesV1, MusubiGovernanceDecisionV1, MusubiInviteIdV1,
+        MusubiMaintainerInvitationV1, MusubiNamespaceBindingV1, MusubiNamespaceV1,
+        MusubiOrderedPackageEntryV1, MusubiPackageIdV1, MusubiPackageMemberKeyV1,
+        MusubiPackageMemberV1, MusubiPackageMetadataRecordV1, MusubiPackageRecordV1,
+        MusubiPackageSelectorV1, MusubiPinLocationReferenceV1, MusubiProviderLocationKeyV1,
+        MusubiRegistryPolicyV1, MusubiReleaseIdV1, MusubiReleaseRecordV1,
+        MusubiReplicationOrderLocationReferenceV1, MusubiResolverReleaseRowV1,
+    },
     name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
@@ -419,13 +431,23 @@ enum ResolvedIvmTriggerProgram {
     Generic(crate::smartcontracts::ivm::cache::GenericProgramSummary),
 }
 
-fn default_streaming_key_material() -> iroha_crypto::streaming::StreamingKeyMaterial {
-    let key_pair = iroha_crypto::KeyPair::try_from_seed(
-        b"iroha:state:default-streaming-key-material:v1".to_vec(),
-        Algorithm::Ed25519,
-    )
-    .expect("derive default streaming key material fixture key");
-    iroha_crypto::streaming::StreamingKeyMaterial::new(key_pair).expect("streaming key material")
+#[derive(Clone)]
+struct StreamingStoragePaths {
+    soranet_provision_spool_dir: PathBuf,
+    soravpn_provision_spool_dir: PathBuf,
+}
+
+impl Default for StreamingStoragePaths {
+    fn default() -> Self {
+        Self {
+            soranet_provision_spool_dir:
+                iroha_config::parameters::actual::StreamingSoranet::from_defaults()
+                    .provision_spool_dir,
+            soravpn_provision_spool_dir:
+                iroha_config::parameters::actual::StreamingSoravpn::from_defaults()
+                    .provision_spool_dir,
+        }
+    }
 }
 
 pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
@@ -662,6 +684,31 @@ macro_rules! build_world_block {
             contract_subject_bindings: $state.contract_subject_bindings.$method(),
             contract_subject_addresses: $state.contract_subject_addresses.$method(),
             smart_contract_state: $state.smart_contract_state.$method(),
+            musubi_namespace_bindings: $state.musubi_namespace_bindings.$method(),
+            musubi_domain_ownership_generations: $state
+                .musubi_domain_ownership_generations
+                .$method(),
+            musubi_packages: $state.musubi_packages.$method(),
+            musubi_package_metadata: $state.musubi_package_metadata.$method(),
+            musubi_package_members: $state.musubi_package_members.$method(),
+            musubi_package_invitations: $state.musubi_package_invitations.$method(),
+            musubi_releases: $state.musubi_releases.$method(),
+            musubi_archives: $state.musubi_archives.$method(),
+            musubi_archive_locations: $state.musubi_archive_locations.$method(),
+            musubi_locations_by_pin: $state.musubi_locations_by_pin.$method(),
+            musubi_locations_by_replication_order: $state
+                .musubi_locations_by_replication_order
+                .$method(),
+            musubi_locations_by_provider: $state.musubi_locations_by_provider.$method(),
+            musubi_archive_availability: $state.musubi_archive_availability.$method(),
+            musubi_archive_reverse_references: $state.musubi_archive_reverse_references.$method(),
+            musubi_resolver_index: $state.musubi_resolver_index.$method(),
+            musubi_public_directory: $state.musubi_public_directory.$method(),
+            musubi_aliases: $state.musubi_aliases.$method(),
+            musubi_alias_history: $state.musubi_alias_history.$method(),
+            musubi_governance_decisions: $state.musubi_governance_decisions.$method(),
+            musubi_registry_policy: $state.musubi_registry_policy.$method(),
+            musubi_resolver_index_revision: $state.musubi_resolver_index_revision.$method(),
             soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
             soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
             soracloud_app_infra_states: $state.soracloud_app_infra_states.$method(),
@@ -904,6 +951,33 @@ macro_rules! build_world_transaction {
             contract_subject_bindings: $state.contract_subject_bindings.transaction(),
             contract_subject_addresses: $state.contract_subject_addresses.transaction(),
             smart_contract_state: $state.smart_contract_state.transaction(),
+            musubi_namespace_bindings: $state.musubi_namespace_bindings.transaction(),
+            musubi_domain_ownership_generations: $state
+                .musubi_domain_ownership_generations
+                .transaction(),
+            musubi_packages: $state.musubi_packages.transaction(),
+            musubi_package_metadata: $state.musubi_package_metadata.transaction(),
+            musubi_package_members: $state.musubi_package_members.transaction(),
+            musubi_package_invitations: $state.musubi_package_invitations.transaction(),
+            musubi_releases: $state.musubi_releases.transaction(),
+            musubi_archives: $state.musubi_archives.transaction(),
+            musubi_archive_locations: $state.musubi_archive_locations.transaction(),
+            musubi_locations_by_pin: $state.musubi_locations_by_pin.transaction(),
+            musubi_locations_by_replication_order: $state
+                .musubi_locations_by_replication_order
+                .transaction(),
+            musubi_locations_by_provider: $state.musubi_locations_by_provider.transaction(),
+            musubi_archive_availability: $state.musubi_archive_availability.transaction(),
+            musubi_archive_reverse_references: $state
+                .musubi_archive_reverse_references
+                .transaction(),
+            musubi_resolver_index: $state.musubi_resolver_index.transaction(),
+            musubi_public_directory: $state.musubi_public_directory.transaction(),
+            musubi_aliases: $state.musubi_aliases.transaction(),
+            musubi_alias_history: $state.musubi_alias_history.transaction(),
+            musubi_governance_decisions: $state.musubi_governance_decisions.transaction(),
+            musubi_registry_policy: $state.musubi_registry_policy.transaction(),
+            musubi_resolver_index_revision: $state.musubi_resolver_index_revision.transaction(),
             soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
             soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
             soracloud_app_infra_states: $state.soracloud_app_infra_states.transaction(),
@@ -1363,12 +1437,7 @@ pub struct LaneRelayStore {
 
 impl LaneRelayStore {
     fn same_relay_identity(left: &LaneRelayEnvelope, right: &LaneRelayEnvelope) -> bool {
-        left.settlement_hash == right.settlement_hash
-            && left.block_header.hash() == right.block_header.hash()
-            && left.da_commitment_hash == right.da_commitment_hash
-            && left.lane_block_descriptor_hash == right.lane_block_descriptor_hash
-            && left.rbc_bytes_total == right.rbc_bytes_total
-            && left.manifest_root == right.manifest_root
+        left.same_finality_effect(right)
     }
 
     fn conflicting_existing(&self, envelope: &LaneRelayEnvelope) -> Option<LaneRelayError> {
@@ -1706,6 +1775,22 @@ struct NexusFeeSettlementPlan {
     settled_lease_usage: BTreeMap<Hash, Quantity>,
     settlement_markers: Vec<StatePath>,
     receipt_markers: Vec<([u8; 32], StatePath)>,
+}
+
+/// Non-reusable proof that Nexus fee settlement admitted one exact aggregate custody burn.
+pub(crate) struct VerifiedNexusFeeBurn {
+    asset_id: AssetId,
+    amount: Quantity,
+}
+
+impl VerifiedNexusFeeBurn {
+    fn new(asset_id: AssetId, amount: Quantity) -> Self {
+        Self { asset_id, amount }
+    }
+
+    pub(crate) fn into_parts(self) -> (AssetId, Quantity) {
+        (self.asset_id, self.amount)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -3241,6 +3326,14 @@ pub enum BlockProofError {
     /// Referenced block not found in storage.
     #[error("block {0} not found in Kura")]
     BlockNotFound(NonZeroU64),
+    /// The durable Kura slot contains a block with a different header height.
+    #[error("Kura slot {requested} contains block header height {actual}")]
+    BlockHeightMismatch {
+        /// Height requested from the durable index.
+        requested: NonZeroU64,
+        /// Height declared by the decoded block header.
+        actual: NonZeroU64,
+    },
     /// Block does not have entrypoint results attached.
     #[error("block {0} is missing execution results")]
     MissingResults(NonZeroU64),
@@ -3268,6 +3361,9 @@ pub enum BlockProofError {
         /// Height for which the lookup was performed.
         block_height: NonZeroU64,
     },
+    /// The canonical executed block wire identity could not be derived.
+    #[error("executed block wire hash unavailable for block {0}")]
+    ExecutedBlockWireHashUnavailable(NonZeroU64),
 }
 
 /// Key identifying a directly applied standalone lane block in world state.
@@ -3576,6 +3672,52 @@ pub struct SmartContractCodeUploadProgress {
     pub descriptor: SmartContractCodeUploadDescriptor,
     /// Number of distinct chunks currently stored.
     pub received_chunks: u32,
+}
+
+/// Non-zero universal Musubi resolver-index revision persisted in world state.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+)]
+#[repr(transparent)]
+pub struct MusubiResolverIndexRevisionV1(u64);
+
+impl MusubiResolverIndexRevisionV1 {
+    /// Construct a non-zero resolver-index revision.
+    pub fn new(revision: u64) -> Result<Self, ParseError> {
+        if revision == 0 {
+            return Err(ParseError::new(
+                "Musubi resolver-index revision must be non-zero",
+            ));
+        }
+        Ok(Self(revision))
+    }
+
+    /// Return the exact revision value bound into finalized cursors.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Return the following revision, failing closed on overflow.
+    pub fn checked_next(self) -> Option<Self> {
+        self.0.checked_add(1).map(Self)
+    }
+}
+
+impl Default for MusubiResolverIndexRevisionV1 {
+    fn default() -> Self {
+        Self(1)
+    }
 }
 
 /// The global entity consisting of `domains`, `triggers` and etc.
@@ -3919,6 +4061,52 @@ pub struct World {
         Storage<AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: Storage<StatePath, Vec<u8>>,
+    /// Immutable public namespace bindings keyed by canonical namespace text.
+    pub(crate) musubi_namespace_bindings: Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1>,
+    /// Monotonic domain-owner generations used by Musubi delegation validation.
+    pub(crate) musubi_domain_ownership_generations: Storage<DomainId, u64>,
+    /// Authoritative package records keyed by stable structural package identity.
+    pub(crate) musubi_packages: Storage<MusubiPackageIdV1, MusubiPackageRecordV1>,
+    /// Mutable package metadata records keyed by stable package identity.
+    pub(crate) musubi_package_metadata: Storage<MusubiPackageIdV1, MusubiPackageMetadataRecordV1>,
+    /// Accepted package members ordered by package and account.
+    pub(crate) musubi_package_members: Storage<MusubiPackageMemberKeyV1, MusubiPackageMemberV1>,
+    /// Package governance invitations keyed by immutable invitation identity.
+    pub(crate) musubi_package_invitations: Storage<MusubiInviteIdV1, MusubiMaintainerInvitationV1>,
+    /// Immutable release records and their mutable governance projections.
+    pub(crate) musubi_releases: Storage<MusubiReleaseIdV1, MusubiReleaseRecordV1>,
+    /// Canonical source archive commitments keyed by ArchiveId.
+    pub(crate) musubi_archives: Storage<ArchiveId, MusubiArchiveRecordV1>,
+    /// Renewable archive locations ordered by archive and location identity.
+    pub(crate) musubi_archive_locations:
+        Storage<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
+    /// Exact one-to-one reverse index from a SoraFS pin manifest to its Musubi location.
+    pub(crate) musubi_locations_by_pin: Storage<ManifestDigest, MusubiPinLocationReferenceV1>,
+    /// Exact one-to-one reverse index from a replication order to its Musubi location.
+    pub(crate) musubi_locations_by_replication_order:
+        Storage<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>,
+    /// Ordered provider/location reverse index supporting exact provider-prefix ranges.
+    pub(crate) musubi_locations_by_provider: Storage<MusubiProviderLocationKeyV1, ()>,
+    /// Finalized aggregate archive availability keyed by ArchiveId.
+    pub(crate) musubi_archive_availability: Storage<ArchiveId, MusubiArchiveAvailabilityV1>,
+    /// Reverse references from archives to every active or yanked release that binds them.
+    pub(crate) musubi_archive_reverse_references:
+        Storage<ArchiveId, MusubiArchiveReverseReferencesV1>,
+    /// Compact universal exact-resolution index keyed by exact release.
+    pub(crate) musubi_resolver_index: Storage<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Public ordered directory keyed by canonical structural or paid-alias selector.
+    pub(crate) musubi_public_directory:
+        Storage<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
+    /// Permanent global aliases keyed by their paid canonical name.
+    pub(crate) musubi_aliases: Storage<MusubiAliasNameV1, MusubiAliasRecordV1>,
+    /// Complete alias history ordered by alias and revision.
+    pub(crate) musubi_alias_history: Storage<MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>,
+    /// Enacted governance decisions retained for replay protection.
+    pub(crate) musubi_governance_decisions: Storage<[u8; 32], MusubiGovernanceDecisionV1>,
+    /// Active chain-wide registry admission and alias-pricing policy.
+    pub(crate) musubi_registry_policy: Cell<MusubiRegistryPolicyV1>,
+    /// Universal sparse-index revision bound into finalized query cursors.
+    pub(crate) musubi_resolver_index_revision: Cell<MusubiResolverIndexRevisionV1>,
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
     pub(crate) soracloud_service_revisions: Storage<(String, String), SoraDeploymentBundleV1>,
     /// Current Soracloud deployment state keyed by service name.
@@ -4509,6 +4697,61 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageBlock<'world, StatePath, Vec<u8>>,
+    /// Immutable public namespace bindings.
+    pub(crate) musubi_namespace_bindings:
+        StorageBlock<'world, MusubiNamespaceV1, MusubiNamespaceBindingV1>,
+    /// Monotonic domain-owner generations used by Musubi delegation validation.
+    pub(crate) musubi_domain_ownership_generations: StorageBlock<'world, DomainId, u64>,
+    /// Authoritative package records.
+    pub(crate) musubi_packages: StorageBlock<'world, MusubiPackageIdV1, MusubiPackageRecordV1>,
+    /// Mutable package metadata records.
+    pub(crate) musubi_package_metadata:
+        StorageBlock<'world, MusubiPackageIdV1, MusubiPackageMetadataRecordV1>,
+    /// Accepted package members ordered by package and account.
+    pub(crate) musubi_package_members:
+        StorageBlock<'world, MusubiPackageMemberKeyV1, MusubiPackageMemberV1>,
+    /// Package governance invitations.
+    pub(crate) musubi_package_invitations:
+        StorageBlock<'world, MusubiInviteIdV1, MusubiMaintainerInvitationV1>,
+    /// Immutable release records and mutable governance projections.
+    pub(crate) musubi_releases: StorageBlock<'world, MusubiReleaseIdV1, MusubiReleaseRecordV1>,
+    /// Canonical source archive commitments.
+    pub(crate) musubi_archives: StorageBlock<'world, ArchiveId, MusubiArchiveRecordV1>,
+    /// Renewable archive locations.
+    pub(crate) musubi_archive_locations:
+        StorageBlock<'world, MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
+    /// Exact pin-manifest reverse index.
+    pub(crate) musubi_locations_by_pin:
+        StorageBlock<'world, ManifestDigest, MusubiPinLocationReferenceV1>,
+    /// Exact replication-order reverse index.
+    pub(crate) musubi_locations_by_replication_order:
+        StorageBlock<'world, ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>,
+    /// Ordered provider/location reverse index.
+    pub(crate) musubi_locations_by_provider: StorageBlock<'world, MusubiProviderLocationKeyV1, ()>,
+    /// Finalized aggregate archive availability.
+    pub(crate) musubi_archive_availability:
+        StorageBlock<'world, ArchiveId, MusubiArchiveAvailabilityV1>,
+    /// Reverse references from archives to bound releases.
+    pub(crate) musubi_archive_reverse_references:
+        StorageBlock<'world, ArchiveId, MusubiArchiveReverseReferencesV1>,
+    /// Compact universal exact-resolution index.
+    pub(crate) musubi_resolver_index:
+        StorageBlock<'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Public ordered package directory.
+    pub(crate) musubi_public_directory:
+        StorageBlock<'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
+    /// Permanent global aliases.
+    pub(crate) musubi_aliases: StorageBlock<'world, MusubiAliasNameV1, MusubiAliasRecordV1>,
+    /// Complete permanent-alias history.
+    pub(crate) musubi_alias_history:
+        StorageBlock<'world, MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>,
+    /// Replayed enacted governance decisions.
+    pub(crate) musubi_governance_decisions:
+        StorageBlock<'world, [u8; 32], MusubiGovernanceDecisionV1>,
+    /// Active registry admission and alias-pricing policy.
+    pub(crate) musubi_registry_policy: CellBlock<'world, MusubiRegistryPolicyV1>,
+    /// Universal sparse-index revision.
+    pub(crate) musubi_resolver_index_revision: CellBlock<'world, MusubiResolverIndexRevisionV1>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageBlock<'world, (String, String), SoraDeploymentBundleV1>,
@@ -4987,6 +5230,8 @@ impl<'world> WorldBlock<'world> {
             sccp_registry,
             sccp_outbound_pending_usage,
             privacy_consensus_policy,
+            musubi_registry_policy,
+            musubi_resolver_index_revision,
             merge_hint_roots,
             merge_global_state_root,
         );
@@ -5100,6 +5345,25 @@ impl<'world> WorldBlock<'world> {
             contract_subject_bindings,
             contract_subject_addresses,
             smart_contract_state,
+            musubi_namespace_bindings,
+            musubi_domain_ownership_generations,
+            musubi_packages,
+            musubi_package_metadata,
+            musubi_package_members,
+            musubi_package_invitations,
+            musubi_releases,
+            musubi_archives,
+            musubi_archive_locations,
+            musubi_locations_by_pin,
+            musubi_locations_by_replication_order,
+            musubi_locations_by_provider,
+            musubi_archive_availability,
+            musubi_archive_reverse_references,
+            musubi_resolver_index,
+            musubi_public_directory,
+            musubi_aliases,
+            musubi_alias_history,
+            musubi_governance_decisions,
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_app_infra_states,
@@ -5589,6 +5853,72 @@ pub struct WorldTransaction<'block, 'world> {
     >,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageTransaction<'block, 'world, StatePath, Vec<u8>>,
+    /// Immutable public namespace bindings.
+    pub(crate) musubi_namespace_bindings:
+        StorageTransaction<'block, 'world, MusubiNamespaceV1, MusubiNamespaceBindingV1>,
+    /// Monotonic domain-owner generations used by Musubi delegation validation.
+    pub(crate) musubi_domain_ownership_generations:
+        StorageTransaction<'block, 'world, DomainId, u64>,
+    /// Authoritative package records.
+    pub(crate) musubi_packages:
+        StorageTransaction<'block, 'world, MusubiPackageIdV1, MusubiPackageRecordV1>,
+    /// Mutable package metadata records.
+    pub(crate) musubi_package_metadata:
+        StorageTransaction<'block, 'world, MusubiPackageIdV1, MusubiPackageMetadataRecordV1>,
+    /// Accepted package members.
+    pub(crate) musubi_package_members:
+        StorageTransaction<'block, 'world, MusubiPackageMemberKeyV1, MusubiPackageMemberV1>,
+    /// Package governance invitations.
+    pub(crate) musubi_package_invitations:
+        StorageTransaction<'block, 'world, MusubiInviteIdV1, MusubiMaintainerInvitationV1>,
+    /// Immutable release records and mutable governance projections.
+    pub(crate) musubi_releases:
+        StorageTransaction<'block, 'world, MusubiReleaseIdV1, MusubiReleaseRecordV1>,
+    /// Canonical source archive commitments.
+    pub(crate) musubi_archives:
+        StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveRecordV1>,
+    /// Renewable archive locations.
+    pub(crate) musubi_archive_locations:
+        StorageTransaction<'block, 'world, MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
+    /// Exact pin-manifest reverse index.
+    pub(crate) musubi_locations_by_pin:
+        StorageTransaction<'block, 'world, ManifestDigest, MusubiPinLocationReferenceV1>,
+    /// Exact replication-order reverse index.
+    pub(crate) musubi_locations_by_replication_order: StorageTransaction<
+        'block,
+        'world,
+        ReplicationOrderId,
+        MusubiReplicationOrderLocationReferenceV1,
+    >,
+    /// Ordered provider/location reverse index.
+    pub(crate) musubi_locations_by_provider:
+        StorageTransaction<'block, 'world, MusubiProviderLocationKeyV1, ()>,
+    /// Finalized aggregate archive availability.
+    pub(crate) musubi_archive_availability:
+        StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveAvailabilityV1>,
+    /// Reverse references from archives to bound releases.
+    pub(crate) musubi_archive_reverse_references:
+        StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveReverseReferencesV1>,
+    /// Compact universal exact-resolution index.
+    pub(crate) musubi_resolver_index:
+        StorageTransaction<'block, 'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Public ordered package directory.
+    pub(crate) musubi_public_directory:
+        StorageTransaction<'block, 'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
+    /// Permanent global aliases.
+    pub(crate) musubi_aliases:
+        StorageTransaction<'block, 'world, MusubiAliasNameV1, MusubiAliasRecordV1>,
+    /// Complete permanent-alias history.
+    pub(crate) musubi_alias_history:
+        StorageTransaction<'block, 'world, MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>,
+    /// Replayed enacted governance decisions.
+    pub(crate) musubi_governance_decisions:
+        StorageTransaction<'block, 'world, [u8; 32], MusubiGovernanceDecisionV1>,
+    /// Active registry admission and alias-pricing policy.
+    pub(crate) musubi_registry_policy: CellTransaction<'block, 'world, MusubiRegistryPolicyV1>,
+    /// Universal sparse-index revision.
+    pub(crate) musubi_resolver_index_revision:
+        CellTransaction<'block, 'world, MusubiResolverIndexRevisionV1>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageTransaction<'block, 'world, (String, String), SoraDeploymentBundleV1>,
@@ -5877,6 +6207,165 @@ fn validate_alias_lease_window(
 
 #[allow(single_use_lifetimes)]
 impl<'block, 'world> WorldTransaction<'block, 'world> {
+    /// Mutable Musubi namespace-binding storage used by registry execution.
+    pub fn musubi_namespace_bindings_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiNamespaceV1, MusubiNamespaceBindingV1> {
+        &mut self.musubi_namespace_bindings
+    }
+
+    /// Mutable authoritative domain-owner generations used by Musubi delegations.
+    pub fn musubi_domain_ownership_generations_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, DomainId, u64> {
+        &mut self.musubi_domain_ownership_generations
+    }
+
+    /// Mutable authoritative Musubi package storage.
+    pub fn musubi_packages_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiPackageIdV1, MusubiPackageRecordV1> {
+        &mut self.musubi_packages
+    }
+
+    /// Mutable Musubi package-metadata storage.
+    pub fn musubi_package_metadata_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiPackageIdV1, MusubiPackageMetadataRecordV1>
+    {
+        &mut self.musubi_package_metadata
+    }
+
+    /// Mutable Musubi accepted-member storage.
+    pub fn musubi_package_members_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiPackageMemberKeyV1, MusubiPackageMemberV1>
+    {
+        &mut self.musubi_package_members
+    }
+
+    /// Mutable Musubi package-invitation storage.
+    pub fn musubi_package_invitations_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiInviteIdV1, MusubiMaintainerInvitationV1>
+    {
+        &mut self.musubi_package_invitations
+    }
+
+    /// Mutable Musubi release storage.
+    pub fn musubi_releases_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiReleaseIdV1, MusubiReleaseRecordV1> {
+        &mut self.musubi_releases
+    }
+
+    /// Mutable Musubi archive-commitment storage.
+    pub fn musubi_archives_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveRecordV1> {
+        &mut self.musubi_archives
+    }
+
+    /// Mutable Musubi archive-location storage.
+    pub fn musubi_archive_locations_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>
+    {
+        &mut self.musubi_archive_locations
+    }
+
+    /// Mutable exact pin-manifest to Musubi-location reverse index.
+    pub fn musubi_locations_by_pin_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, ManifestDigest, MusubiPinLocationReferenceV1> {
+        &mut self.musubi_locations_by_pin
+    }
+
+    /// Mutable exact replication-order to Musubi-location reverse index.
+    pub fn musubi_locations_by_replication_order_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        ReplicationOrderId,
+        MusubiReplicationOrderLocationReferenceV1,
+    > {
+        &mut self.musubi_locations_by_replication_order
+    }
+
+    /// Mutable ordered provider/location reverse index.
+    pub fn musubi_locations_by_provider_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiProviderLocationKeyV1, ()> {
+        &mut self.musubi_locations_by_provider
+    }
+
+    /// Mutable Musubi archive-availability projection.
+    pub fn musubi_archive_availability_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveAvailabilityV1> {
+        &mut self.musubi_archive_availability
+    }
+
+    /// Mutable reverse references from archives to bound Musubi releases.
+    pub fn musubi_archive_reverse_references_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveReverseReferencesV1> {
+        &mut self.musubi_archive_reverse_references
+    }
+
+    /// Mutable universal Musubi resolver index.
+    pub fn musubi_resolver_index_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>
+    {
+        &mut self.musubi_resolver_index
+    }
+
+    /// Mutable public ordered Musubi package directory.
+    pub fn musubi_public_directory_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>
+    {
+        &mut self.musubi_public_directory
+    }
+
+    /// Mutable permanent Musubi alias storage.
+    pub fn musubi_aliases_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiAliasNameV1, MusubiAliasRecordV1> {
+        &mut self.musubi_aliases
+    }
+
+    /// Mutable complete Musubi alias-history storage.
+    pub fn musubi_alias_history_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>
+    {
+        &mut self.musubi_alias_history
+    }
+
+    /// Mutable Musubi governance replay ledger.
+    pub fn musubi_governance_decisions_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, [u8; 32], MusubiGovernanceDecisionV1> {
+        &mut self.musubi_governance_decisions
+    }
+
+    /// Mutable active Musubi registry admission and alias-pricing policy.
+    pub fn musubi_registry_policy_mut(
+        &mut self,
+    ) -> &mut CellTransaction<'block, 'world, MusubiRegistryPolicyV1> {
+        &mut self.musubi_registry_policy
+    }
+
+    /// Mutable universal Musubi resolver-index revision.
+    pub fn musubi_resolver_index_revision_mut(
+        &mut self,
+    ) -> &mut CellTransaction<'block, 'world, MusubiResolverIndexRevisionV1> {
+        &mut self.musubi_resolver_index_revision
+    }
+
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
     pub fn smart_contract_state_mut_for_testing(
@@ -7104,6 +7593,12 @@ pub struct WorldView<'world> {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
+    /// Private backing view used only for typed, validated privacy lookups.
+    privacy_commitments: StorageView<
+        'world,
+        crate::privacy_state::PrivacyCommitmentKeyV1,
+        crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs:
         StorageView<'world, iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>,
@@ -7147,6 +7642,61 @@ pub struct WorldView<'world> {
         StorageView<'world, AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageView<'world, StatePath, Vec<u8>>,
+    /// Immutable public namespace bindings.
+    pub(crate) musubi_namespace_bindings:
+        StorageView<'world, MusubiNamespaceV1, MusubiNamespaceBindingV1>,
+    /// Monotonic domain-owner generations used by Musubi delegation validation.
+    pub(crate) musubi_domain_ownership_generations: StorageView<'world, DomainId, u64>,
+    /// Authoritative package records.
+    pub(crate) musubi_packages: StorageView<'world, MusubiPackageIdV1, MusubiPackageRecordV1>,
+    /// Mutable package metadata records.
+    pub(crate) musubi_package_metadata:
+        StorageView<'world, MusubiPackageIdV1, MusubiPackageMetadataRecordV1>,
+    /// Accepted package members.
+    pub(crate) musubi_package_members:
+        StorageView<'world, MusubiPackageMemberKeyV1, MusubiPackageMemberV1>,
+    /// Package governance invitations.
+    pub(crate) musubi_package_invitations:
+        StorageView<'world, MusubiInviteIdV1, MusubiMaintainerInvitationV1>,
+    /// Immutable release records and mutable governance projections.
+    pub(crate) musubi_releases: StorageView<'world, MusubiReleaseIdV1, MusubiReleaseRecordV1>,
+    /// Canonical source archive commitments.
+    pub(crate) musubi_archives: StorageView<'world, ArchiveId, MusubiArchiveRecordV1>,
+    /// Renewable archive locations.
+    pub(crate) musubi_archive_locations:
+        StorageView<'world, MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
+    /// Exact pin-manifest reverse index.
+    pub(crate) musubi_locations_by_pin:
+        StorageView<'world, ManifestDigest, MusubiPinLocationReferenceV1>,
+    /// Exact replication-order reverse index.
+    pub(crate) musubi_locations_by_replication_order:
+        StorageView<'world, ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>,
+    /// Ordered provider/location reverse index.
+    pub(crate) musubi_locations_by_provider: StorageView<'world, MusubiProviderLocationKeyV1, ()>,
+    /// Finalized aggregate archive availability.
+    pub(crate) musubi_archive_availability:
+        StorageView<'world, ArchiveId, MusubiArchiveAvailabilityV1>,
+    /// Reverse references from archives to bound releases.
+    pub(crate) musubi_archive_reverse_references:
+        StorageView<'world, ArchiveId, MusubiArchiveReverseReferencesV1>,
+    /// Compact universal exact-resolution index.
+    pub(crate) musubi_resolver_index:
+        StorageView<'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Public ordered package directory.
+    pub(crate) musubi_public_directory:
+        StorageView<'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
+    /// Permanent global aliases.
+    pub(crate) musubi_aliases: StorageView<'world, MusubiAliasNameV1, MusubiAliasRecordV1>,
+    /// Complete permanent-alias history.
+    pub(crate) musubi_alias_history:
+        StorageView<'world, MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>,
+    /// Replayed enacted governance decisions.
+    pub(crate) musubi_governance_decisions:
+        StorageView<'world, [u8; 32], MusubiGovernanceDecisionV1>,
+    /// Active registry admission and alias-pricing policy.
+    pub(crate) musubi_registry_policy: CellView<'world, MusubiRegistryPolicyV1>,
+    /// Universal sparse-index revision.
+    pub(crate) musubi_resolver_index_revision: CellView<'world, MusubiResolverIndexRevisionV1>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageView<'world, (String, String), SoraDeploymentBundleV1>,
@@ -8040,7 +8590,8 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
-            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
                 None
             }
         }
@@ -8057,7 +8608,8 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
-            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
                 None
             }
         }
@@ -8074,7 +8626,8 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
             | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
-            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
                 None
             }
         }
@@ -8091,7 +8644,8 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
             | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
                 None
             }
         }
@@ -8108,7 +8662,28 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
             | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
-            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
+                None
+            }
+        }
+    }
+
+    /// Access the exact Musubi Parliament action retained by this proposal.
+    pub fn as_musubi_registry_governance(
+        &self,
+    ) -> Option<&iroha_data_model::musubi::MusubiParliamentActionV1> {
+        match &self.kind {
+            iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(action) => {
+                Some(action)
+            }
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_)
+            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                None
+            }
         }
     }
 
@@ -9008,6 +9583,51 @@ pub struct GovernanceLocksForReferendum {
         std::collections::BTreeMap<iroha_data_model::account::AccountId, GovernanceLockRecord>,
 }
 
+/// Non-reusable proof that the start-of-block sweep validated one exact expired governance lock.
+pub(crate) struct VerifiedGovernanceUnlock {
+    referendum_id: String,
+    owner: iroha_data_model::account::AccountId,
+    source_id: iroha_data_model::asset::AssetId,
+    destination_id: iroha_data_model::asset::AssetId,
+    amount: Quantity,
+}
+
+impl VerifiedGovernanceUnlock {
+    fn new(
+        referendum_id: String,
+        owner: iroha_data_model::account::AccountId,
+        source_id: iroha_data_model::asset::AssetId,
+        destination_id: iroha_data_model::asset::AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            referendum_id,
+            owner,
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        String,
+        iroha_data_model::account::AccountId,
+        iroha_data_model::asset::AssetId,
+        iroha_data_model::asset::AssetId,
+        Quantity,
+    ) {
+        (
+            self.referendum_id,
+            self.owner,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
+}
+
 /// Public status of an asset-definition alias lease at a specific observation time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssetDefinitionAliasLeaseStatus {
@@ -9212,7 +9832,8 @@ fn validation_fee_plain_electorate_rules(
         }
         ProposalKind::DeployContract(_)
         | ProposalKind::RuntimeUpgrade(_)
-        | ProposalKind::SccpRouteGovernance(_) => None,
+        | ProposalKind::SccpRouteGovernance(_)
+        | ProposalKind::MusubiRegistryGovernance(_) => None,
     }
 }
 
@@ -10324,8 +10945,8 @@ pub struct State {
     pipeline_ivm_prepared_cache: parking_lot::RwLock<PreparedContractCache>,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
-    /// Streaming configuration snapshot (spool paths, codec defaults).
-    streaming: iroha_config::parameters::actual::Streaming,
+    /// Process-local streaming spool paths used by storage-budget enforcement.
+    streaming_storage_paths: StreamingStoragePaths,
     /// Cryptography configuration (enabled algorithms, defaults).
     pub crypto: parking_lot::RwLock<Arc<iroha_config::parameters::actual::Crypto>>,
     /// Nexus configuration snapshot (lanes, fusion, DA policies).
@@ -16266,8 +16887,6 @@ pub(crate) struct DetachedStateTransactionDelta {
     peer_removes: SortedUniqueVec<iroha_data_model::peer::PeerId>,
     // Parameter updates (applied in order)
     param_updates: Vec<iroha_data_model::parameter::Parameter>,
-    // By‑call trigger executions to apply at merge time
-    exec_by_call: Vec<iroha_data_model::events::execute_trigger::ExecuteTriggerEvent>,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -16368,8 +16987,7 @@ impl DetachedStateTransactionDelta {
             && self.permission_ops.is_empty()
             && self.peer_adds.is_empty()
             && self.peer_removes.is_empty()
-            && self.param_updates.is_empty()
-            && self.exec_by_call.is_empty();
+            && self.param_updates.is_empty();
         transfer_only.then(|| {
             (
                 self.asset_transfer_source_ids[0].clone(),
@@ -16380,7 +16998,7 @@ impl DetachedStateTransactionDelta {
     }
 
     /// Return true when this transfer can use the simple batch merge path.
-    pub(crate) fn supports_uncontrolled_single_transfer_batch(
+    pub(crate) fn supports_numeric_transfer_batch_merge(
         &self,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> bool {
@@ -16806,13 +17424,6 @@ impl DetachedStateTransactionDelta {
     pub(crate) fn set_parameter(&mut self, param: iroha_data_model::parameter::Parameter) {
         self.param_updates.push(param);
     }
-    /// Record an `ExecuteTrigger` (by‑call) to be executed at merge.
-    pub(crate) fn execute_trigger_by_call(
-        &mut self,
-        evt: iroha_data_model::events::execute_trigger::ExecuteTriggerEvent,
-    ) {
-        self.exec_by_call.push(evt);
-    }
 
     /// Merge the recorded changes into the live `StateBlock` using a per-transaction
     /// overlay. Emits asset events similar to the sequential path.
@@ -16876,14 +17487,14 @@ impl DetachedStateTransactionDelta {
     ///
     /// # Errors
     /// Returns a transaction rejection when transfer validation or trigger execution fails.
-    pub(crate) fn merge_uncontrolled_single_transfer_into_transaction(
+    pub(crate) fn merge_numeric_transfer_batch_into_transaction(
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &iroha_data_model::account::AccountId,
     ) -> Option<TransactionResultInner> {
         let (source_id, destination, amount) = self.single_transfer_delta()?;
         Some(
-            crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer_uncontrolled_batch(
+            crate::smartcontracts::isi::asset::isi::execute_batch_merge_eligible_user_numeric_asset_transfer(
                 state_transaction,
                 authority,
                 source_id,
@@ -17455,23 +18066,6 @@ impl DetachedStateTransactionDelta {
                 }
             }
 
-            // Execute by-call triggers recorded during detached apply using the
-            // same validation path as ExecuteTrigger::execute.
-            for evt in self.exec_by_call {
-                let exec = iroha_data_model::isi::ExecuteTrigger {
-                    trigger: evt.trigger_id().clone(),
-                    args: evt.args().clone(),
-                };
-                if let Err(err) =
-                    <iroha_data_model::isi::ExecuteTrigger as crate::smartcontracts::Execute>::execute(
-                        exec,
-                        authority,
-                        &mut stx,
-                    )
-                {
-                    return Err(ValidationFail::InstructionFailed(err));
-                }
-            }
             Ok(())
         })();
 
@@ -18884,6 +19478,7 @@ impl World {
             runtime_upgrades: self.runtime_upgrades.view(),
             privacy_consensus_policy: self.privacy_consensus_policy.view(),
             privacy_activations: self.privacy_activations.view(),
+            privacy_commitments: self.privacy_commitments.view(),
             proofs: self.proofs.view(),
             proofs_by_status: self.proofs_by_status.view(),
             proof_tags: self.proof_tags.view(),
@@ -18898,6 +19493,29 @@ impl World {
             contract_subject_bindings: self.contract_subject_bindings.view(),
             contract_subject_addresses: self.contract_subject_addresses.view(),
             smart_contract_state: self.smart_contract_state.view(),
+            musubi_namespace_bindings: self.musubi_namespace_bindings.view(),
+            musubi_domain_ownership_generations: self.musubi_domain_ownership_generations.view(),
+            musubi_packages: self.musubi_packages.view(),
+            musubi_package_metadata: self.musubi_package_metadata.view(),
+            musubi_package_members: self.musubi_package_members.view(),
+            musubi_package_invitations: self.musubi_package_invitations.view(),
+            musubi_releases: self.musubi_releases.view(),
+            musubi_archives: self.musubi_archives.view(),
+            musubi_archive_locations: self.musubi_archive_locations.view(),
+            musubi_locations_by_pin: self.musubi_locations_by_pin.view(),
+            musubi_locations_by_replication_order: self
+                .musubi_locations_by_replication_order
+                .view(),
+            musubi_locations_by_provider: self.musubi_locations_by_provider.view(),
+            musubi_archive_availability: self.musubi_archive_availability.view(),
+            musubi_archive_reverse_references: self.musubi_archive_reverse_references.view(),
+            musubi_resolver_index: self.musubi_resolver_index.view(),
+            musubi_public_directory: self.musubi_public_directory.view(),
+            musubi_aliases: self.musubi_aliases.view(),
+            musubi_alias_history: self.musubi_alias_history.view(),
+            musubi_governance_decisions: self.musubi_governance_decisions.view(),
+            musubi_registry_policy: self.musubi_registry_policy.view(),
+            musubi_resolver_index_revision: self.musubi_resolver_index_revision.view(),
             soracloud_service_revisions: self.soracloud_service_revisions.view(),
             soracloud_service_deployments: self.soracloud_service_deployments.view(),
             soracloud_app_infra_states: self.soracloud_app_infra_states.view(),
@@ -19620,6 +20238,87 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<AccountId, iroha_data_model::smart_contract::ContractAddress>;
     /// Durable smart-contract state keyed by logical path (read-only).
     fn smart_contract_state(&self) -> &impl StorageReadOnly<StatePath, Vec<u8>>;
+    /// Immutable Musubi namespace bindings keyed by canonical namespace text.
+    fn musubi_namespace_bindings(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiNamespaceV1, MusubiNamespaceBindingV1>;
+    /// Authoritative monotonic domain-owner generations used by Musubi delegations.
+    fn musubi_domain_ownership_generations(&self) -> &impl StorageReadOnly<DomainId, u64>;
+    /// Return the current domain-owner generation, treating an untransferred domain as V1.
+    fn musubi_domain_ownership_generation(&self, domain: &DomainId) -> u64 {
+        self.musubi_domain_ownership_generations()
+            .get(domain)
+            .copied()
+            .unwrap_or(1)
+    }
+    /// Authoritative Musubi package records.
+    fn musubi_packages(&self) -> &impl StorageReadOnly<MusubiPackageIdV1, MusubiPackageRecordV1>;
+    /// Mutable Musubi package metadata records.
+    fn musubi_package_metadata(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiPackageIdV1, MusubiPackageMetadataRecordV1>;
+    /// Accepted Musubi package members ordered by package and account.
+    fn musubi_package_members(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiPackageMemberKeyV1, MusubiPackageMemberV1>;
+    /// Musubi package-governance invitations.
+    fn musubi_package_invitations(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiInviteIdV1, MusubiMaintainerInvitationV1>;
+    /// Musubi release records keyed by exact release identity.
+    fn musubi_releases(&self) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiReleaseRecordV1>;
+    /// Canonical Musubi source archive commitments.
+    fn musubi_archives(&self) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveRecordV1>;
+    /// Renewable Musubi archive locations.
+    fn musubi_archive_locations(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>;
+    /// Exact pin-manifest to Musubi-location reverse index.
+    fn musubi_locations_by_pin(
+        &self,
+    ) -> &impl StorageReadOnly<ManifestDigest, MusubiPinLocationReferenceV1>;
+    /// Exact replication-order to Musubi-location reverse index.
+    fn musubi_locations_by_replication_order(
+        &self,
+    ) -> &impl StorageReadOnly<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>;
+    /// Ordered provider/location reverse index.
+    fn musubi_locations_by_provider(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiProviderLocationKeyV1, ()>;
+    /// Finalized Musubi archive availability projections.
+    fn musubi_archive_availability(
+        &self,
+    ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveAvailabilityV1>;
+    /// Reverse references from archives to every active or yanked bound release.
+    fn musubi_archive_reverse_references(
+        &self,
+    ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveReverseReferencesV1>;
+    /// Universal sparse Musubi resolver index.
+    fn musubi_resolver_index(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>;
+    /// Public ordered package directory.
+    fn musubi_public_directory(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>;
+    /// Permanent paid Musubi aliases.
+    fn musubi_aliases(&self) -> &impl StorageReadOnly<MusubiAliasNameV1, MusubiAliasRecordV1>;
+    /// Complete permanent-alias history.
+    fn musubi_alias_history(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>;
+    /// Enacted Musubi governance decisions retained for replay protection.
+    fn musubi_governance_decisions(
+        &self,
+    ) -> &impl StorageReadOnly<[u8; 32], MusubiGovernanceDecisionV1>;
+    /// Active Musubi registry admission and alias-pricing policy.
+    fn musubi_registry_policy(&self) -> &MusubiRegistryPolicyV1;
+    /// Active Musubi registry policy revision.
+    fn musubi_registry_policy_revision(&self) -> u64 {
+        self.musubi_registry_policy().revision
+    }
+    /// Universal Musubi sparse-index revision bound into finalized cursors.
+    fn musubi_resolver_index_revision(&self) -> u64;
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
     fn soracloud_service_revisions(
         &self,
@@ -19849,6 +20548,23 @@ pub trait WorldReadOnly {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >;
+
+    /// Load one current authoritative Bootle/Lantern issuer policy by its
+    /// exact typed issuer and policy identities.
+    ///
+    /// This intentionally exposes only the validated policy record, never the
+    /// privacy commitment registry that persists it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic error when the identity is invalid or absent,
+    /// the stored record has the wrong provenance or identity, or persisted
+    /// policy state fails canonical validation.
+    fn privacy_bootle_lantern_issuer_policy_v1(
+        &self,
+        issuer_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
+        policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
+    ) -> core::result::Result<iroha_data_model::privacy::BootleLanternIssuerPolicyV1, String>;
 
     /// ZK shielded ledger state (read-only) per asset definition.
     fn zk_assets(&self) -> &impl StorageReadOnly<AssetDefinitionId, ZkAssetState>;
@@ -21077,6 +21793,110 @@ macro_rules! impl_world_ro {
             fn smart_contract_state(&self) -> &impl StorageReadOnly<StatePath, Vec<u8>> {
                 &self.smart_contract_state
             }
+            fn musubi_namespace_bindings(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiNamespaceV1, MusubiNamespaceBindingV1> {
+                &self.musubi_namespace_bindings
+            }
+            fn musubi_domain_ownership_generations(
+                &self,
+            ) -> &impl StorageReadOnly<DomainId, u64> {
+                &self.musubi_domain_ownership_generations
+            }
+            fn musubi_packages(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiPackageIdV1, MusubiPackageRecordV1> {
+                &self.musubi_packages
+            }
+            fn musubi_package_metadata(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiPackageIdV1, MusubiPackageMetadataRecordV1> {
+                &self.musubi_package_metadata
+            }
+            fn musubi_package_members(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiPackageMemberKeyV1, MusubiPackageMemberV1> {
+                &self.musubi_package_members
+            }
+            fn musubi_package_invitations(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiInviteIdV1, MusubiMaintainerInvitationV1> {
+                &self.musubi_package_invitations
+            }
+            fn musubi_releases(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiReleaseRecordV1> {
+                &self.musubi_releases
+            }
+            fn musubi_archives(
+                &self,
+            ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveRecordV1> {
+                &self.musubi_archives
+            }
+            fn musubi_archive_locations(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1> {
+                &self.musubi_archive_locations
+            }
+            fn musubi_locations_by_pin(
+                &self,
+            ) -> &impl StorageReadOnly<ManifestDigest, MusubiPinLocationReferenceV1> {
+                &self.musubi_locations_by_pin
+            }
+            fn musubi_locations_by_replication_order(
+                &self,
+            ) -> &impl StorageReadOnly<
+                ReplicationOrderId,
+                MusubiReplicationOrderLocationReferenceV1,
+            > {
+                &self.musubi_locations_by_replication_order
+            }
+            fn musubi_locations_by_provider(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiProviderLocationKeyV1, ()> {
+                &self.musubi_locations_by_provider
+            }
+            fn musubi_archive_availability(
+                &self,
+            ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveAvailabilityV1> {
+                &self.musubi_archive_availability
+            }
+            fn musubi_archive_reverse_references(
+                &self,
+            ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveReverseReferencesV1> {
+                &self.musubi_archive_reverse_references
+            }
+            fn musubi_resolver_index(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiResolverReleaseRowV1> {
+                &self.musubi_resolver_index
+            }
+            fn musubi_public_directory(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1> {
+                &self.musubi_public_directory
+            }
+            fn musubi_aliases(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiAliasNameV1, MusubiAliasRecordV1> {
+                &self.musubi_aliases
+            }
+            fn musubi_alias_history(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1> {
+                &self.musubi_alias_history
+            }
+            fn musubi_governance_decisions(
+                &self,
+            ) -> &impl StorageReadOnly<[u8; 32], MusubiGovernanceDecisionV1> {
+                &self.musubi_governance_decisions
+            }
+            fn musubi_registry_policy(&self) -> &MusubiRegistryPolicyV1 {
+                self.musubi_registry_policy.get()
+            }
+            fn musubi_resolver_index_revision(&self) -> u64 {
+                self.musubi_resolver_index_revision.get().get()
+            }
             fn soracloud_service_revisions(
                 &self,
             ) -> &impl StorageReadOnly<(String, String), SoraDeploymentBundleV1> {
@@ -21404,6 +22224,20 @@ macro_rules! impl_world_ro {
             > {
                 &self.privacy_activations
             }
+            fn privacy_bootle_lantern_issuer_policy_v1(
+                &self,
+                issuer_id: iroha_data_model::privacy::PrivacyIssuerIdV1,
+                policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
+            ) -> core::result::Result<
+                iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
+                String,
+            > {
+                crate::privacy_state::load_privacy_bootle_lantern_issuer_policy_v1(
+                    issuer_id,
+                    policy_id,
+                    &self.privacy_commitments,
+                )
+            }
             fn commit_qcs(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, Qc> {
                 &self.commit_qcs
             }
@@ -21479,6 +22313,161 @@ macro_rules! impl_world_ro {
 
 impl_world_ro! {
     WorldBlock<'_>, WorldTransaction<'_, '_>, WorldView<'_>
+}
+
+#[cfg(test)]
+mod bootle_lantern_policy_world_read_tests {
+    use iroha_data_model::privacy::{
+        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
+        BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPolicyV1, BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
+        PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
+        PrivacyParameterIdV1, PrivacyPolicyIdV1,
+    };
+
+    use super::*;
+    use crate::privacy_state::{PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1};
+
+    fn policy_fixture_v1() -> BootleLanternIssuerPolicyV1 {
+        let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
+            coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
+                .map(|coefficient| {
+                    u16::try_from(block * BOOTLE_LANTERN_RING_DEGREE_V1 + coefficient + 1)
+                        .expect("fixture coefficient fits u16")
+                })
+                .collect(),
+        });
+        let issuer_public_matrix =
+            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+                .expect("canonical dense multiplication matrix");
+        let mut policy = BootleLanternIssuerPolicyV1 {
+            issuer_id: PrivacyIssuerIdV1::new([0xA1; 32]),
+            policy_id: PrivacyPolicyIdV1::new([0xB1; 32]),
+            epoch: 1,
+            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
+            issuer_parameter_id: PrivacyParameterIdV1::new([0xC1; 32]),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
+            issuer_public_matrix,
+            required_disclosure_bitmap: 0,
+            allowed_values: vec![
+                BootleLanternAllowedAttributeValuesV1 { values: Vec::new() };
+                BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1
+            ],
+            record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
+        };
+        policy.issuer_parameter_digest = policy
+            .computed_issuer_parameter_digest()
+            .expect("canonical issuer parameter digest");
+        policy.record_digest = policy
+            .computed_record_digest()
+            .expect("canonical issuer policy digest");
+        policy.validate().expect("canonical issuer policy");
+        policy
+    }
+
+    fn policy_key_v1(
+        issuer_id: PrivacyIssuerIdV1,
+        policy_id: PrivacyPolicyIdV1,
+    ) -> PrivacyCommitmentKeyV1 {
+        PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(issuer_id, policy_id)
+            .expect("typed Bootle/Lantern policy key")
+    }
+
+    #[test]
+    fn typed_policy_lookup_is_exact_across_every_world_view() {
+        let policy = policy_fixture_v1();
+        let issuer_id = policy.issuer_id;
+        let policy_id = policy.policy_id;
+        let mut world = World::default();
+
+        let missing = world
+            .view()
+            .privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id)
+            .expect_err("missing typed policy must reject");
+        assert_eq!(
+            missing,
+            format!("Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} is not registered")
+        );
+
+        world.privacy_commitments.insert(
+            policy_key_v1(issuer_id, policy_id),
+            PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(policy.clone(), 7)
+                .expect("canonical governed policy state"),
+        );
+        assert_eq!(
+            world
+                .view()
+                .privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id),
+            Ok(policy.clone())
+        );
+
+        let mut block = world.block();
+        assert_eq!(
+            block.privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id),
+            Ok(policy.clone())
+        );
+        let transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
+        assert_eq!(
+            transaction.privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id),
+            Ok(policy)
+        );
+    }
+
+    #[test]
+    fn typed_policy_lookup_rejects_wrong_identity_and_corrupt_state_exactly() {
+        let policy = policy_fixture_v1();
+        let issuer_id = policy.issuer_id;
+        let policy_id = policy.policy_id;
+        let key = policy_key_v1(issuer_id, policy_id);
+
+        let mut mismatched_policy = policy.clone();
+        mismatched_policy.issuer_id = PrivacyIssuerIdV1::new([0xA2; 32]);
+        mismatched_policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        mismatched_policy.record_digest = mismatched_policy
+            .computed_record_digest()
+            .expect("mismatched policy digest");
+        mismatched_policy
+            .validate()
+            .expect("intrinsically valid mismatched policy");
+        let mut mismatched_world = World::default();
+        mismatched_world.privacy_commitments.insert(
+            key,
+            PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(mismatched_policy, 7)
+                .expect("valid mismatched governed policy state"),
+        );
+        assert_eq!(
+            mismatched_world
+                .view()
+                .privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id)
+                .expect_err("key/record identity mismatch must reject"),
+            format!(
+                "Bootle/Lantern issuer-policy key {issuer_id:?}/{policy_id:?} does not match its record"
+            )
+        );
+
+        let mut corrupted_policy = policy;
+        corrupted_policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0xD1; 32]);
+        let validation_error = corrupted_policy
+            .validate()
+            .expect_err("corrupted self-digest must reject");
+        let mut corrupted_world = World::default();
+        corrupted_world.privacy_commitments.insert(
+            policy_key_v1(issuer_id, policy_id),
+            PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
+                policy: corrupted_policy,
+                admitted_at_height: 7,
+            },
+        );
+        assert_eq!(
+            corrupted_world
+                .view()
+                .privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id)
+                .expect_err("corrupt governed policy state must reject"),
+            format!(
+                "Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} is invalid: {validation_error}"
+            )
+        );
+    }
 }
 
 impl<'world> WorldBlock<'world> {
@@ -21731,6 +22720,27 @@ impl<'world> WorldBlock<'world> {
             contract_subject_bindings,
             contract_subject_addresses,
             smart_contract_state,
+            musubi_namespace_bindings,
+            musubi_domain_ownership_generations,
+            musubi_packages,
+            musubi_package_metadata,
+            musubi_package_members,
+            musubi_package_invitations,
+            musubi_releases,
+            musubi_archives,
+            musubi_archive_locations,
+            musubi_locations_by_pin,
+            musubi_locations_by_replication_order,
+            musubi_locations_by_provider,
+            musubi_archive_availability,
+            musubi_archive_reverse_references,
+            musubi_resolver_index,
+            musubi_public_directory,
+            musubi_aliases,
+            musubi_alias_history,
+            musubi_governance_decisions,
+            musubi_registry_policy,
+            musubi_resolver_index_revision,
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_app_infra_states,
@@ -21851,6 +22861,27 @@ impl<'world> WorldBlock<'world> {
         contract_subject_bindings.commit();
         contract_subject_addresses.commit();
         smart_contract_state.commit();
+        musubi_namespace_bindings.commit();
+        musubi_domain_ownership_generations.commit();
+        musubi_packages.commit();
+        musubi_package_metadata.commit();
+        musubi_package_members.commit();
+        musubi_package_invitations.commit();
+        musubi_releases.commit();
+        musubi_archives.commit();
+        musubi_archive_locations.commit();
+        musubi_locations_by_pin.commit();
+        musubi_locations_by_replication_order.commit();
+        musubi_locations_by_provider.commit();
+        musubi_archive_availability.commit();
+        musubi_archive_reverse_references.commit();
+        musubi_resolver_index.commit();
+        musubi_public_directory.commit();
+        musubi_aliases.commit();
+        musubi_alias_history.commit();
+        musubi_governance_decisions.commit();
+        musubi_registry_policy.commit();
+        musubi_resolver_index_revision.commit();
         soracloud_service_revisions.commit();
         soracloud_service_deployments.commit();
         soracloud_app_infra_states.commit();
@@ -23176,6 +24207,27 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             contract_subject_bindings,
             contract_subject_addresses,
             smart_contract_state,
+            musubi_namespace_bindings,
+            musubi_domain_ownership_generations,
+            musubi_packages,
+            musubi_package_metadata,
+            musubi_package_members,
+            musubi_package_invitations,
+            musubi_releases,
+            musubi_archives,
+            musubi_archive_locations,
+            musubi_locations_by_pin,
+            musubi_locations_by_replication_order,
+            musubi_locations_by_provider,
+            musubi_archive_availability,
+            musubi_archive_reverse_references,
+            musubi_resolver_index,
+            musubi_public_directory,
+            musubi_aliases,
+            musubi_alias_history,
+            musubi_governance_decisions,
+            musubi_registry_policy,
+            musubi_resolver_index_revision,
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_app_infra_states,
@@ -23308,6 +24360,27 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         contract_subject_bindings.apply();
         contract_subject_addresses.apply();
         smart_contract_state.apply();
+        musubi_namespace_bindings.apply();
+        musubi_domain_ownership_generations.apply();
+        musubi_packages.apply();
+        musubi_package_metadata.apply();
+        musubi_package_members.apply();
+        musubi_package_invitations.apply();
+        musubi_releases.apply();
+        musubi_archives.apply();
+        musubi_archive_locations.apply();
+        musubi_locations_by_pin.apply();
+        musubi_locations_by_replication_order.apply();
+        musubi_locations_by_provider.apply();
+        musubi_archive_availability.apply();
+        musubi_archive_reverse_references.apply();
+        musubi_resolver_index.apply();
+        musubi_public_directory.apply();
+        musubi_aliases.apply();
+        musubi_alias_history.apply();
+        musubi_governance_decisions.apply();
+        musubi_registry_policy.apply();
+        musubi_resolver_index_revision.apply();
         soracloud_service_revisions.apply();
         soracloud_service_deployments.apply();
         soracloud_app_infra_states.apply();
@@ -26793,17 +27866,7 @@ impl State {
             .copied()
             .map(|lane_id| (lane_id, 0))
             .collect();
-        let streaming = iroha_config::parameters::actual::Streaming {
-            key_material: default_streaming_key_material(),
-            session_store_dir: PathBuf::from(
-                iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
-            ),
-            feature_bits: iroha_config::parameters::defaults::streaming::FEATURE_BITS,
-            soranet: iroha_config::parameters::actual::StreamingSoranet::from_defaults(),
-            soravpn: iroha_config::parameters::actual::StreamingSoravpn::from_defaults(),
-            sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
-            codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
-        };
+        let streaming_storage_paths = StreamingStoragePaths::default();
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
         // Reuse the exact journal snapshot Kura validated during startup. Re-reading here would
         // introduce a second, previously fail-open decode boundary and a race with recovery-temp
@@ -26945,7 +28008,7 @@ impl State {
                 PreparedContractCache::with_capacity(pipeline_cache_size),
             ),
             oracle: default_oracle(),
-            streaming,
+            streaming_storage_paths,
             nexus: parking_lot::RwLock::new(nexus),
             lane_incarnations: parking_lot::RwLock::new(lane_incarnations),
             lane_incarnation_lineage: parking_lot::RwLock::new(lane_incarnation_lineage),
@@ -28287,7 +29350,8 @@ impl State {
                                         iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
                                         | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
                                         | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
-                                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => &[
+                                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+                                        | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => &[
                                             ParliamentBody::RulesCommittee,
                                             ParliamentBody::AgendaCouncil,
                                             ParliamentBody::InterestPanel,
@@ -28532,8 +29596,13 @@ impl State {
                     }
                 }
             }
-            // Sweep expired locks: unlock those with expiry_height < now_h
-            let lock_ids: Vec<String> = wtx
+            wtx.apply();
+        }
+        {
+            let mut stx = sb.transaction();
+            // Sweep expired locks through the same typed movement choke point as transaction ISIs.
+            let lock_ids: Vec<String> = stx
+                .world
                 .governance_locks
                 .iter()
                 .map(|(rid, _)| rid.clone())
@@ -28550,7 +29619,7 @@ impl State {
                 .flatten()
                 .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
                 .and_then(|proposal_id| {
-                    let proposal = wtx.governance_proposals.get(&proposal_id)?;
+                    let proposal = stx.world.governance_proposals.get(&proposal_id)?;
                     let rules = validation_fee_plain_electorate_rules(&proposal.kind)?;
                     if proposal.kind.fingerprint() != proposal_id {
                         validation_fee_proposal_key_mismatch = true;
@@ -28563,7 +29632,7 @@ impl State {
                         slash_receiver_account: rules.slash_receiver_account.clone(),
                     })
                 });
-                if let Some(mut locks) = wtx.governance_locks.get(&rid).cloned() {
+                if let Some(mut locks) = stx.world.governance_locks.get(&rid).cloned() {
                     // Collect owners to remove
                     let mut to_remove: Vec<iroha_data_model::account::AccountId> = Vec::new();
                     for (owner, rec) in &locks.locks {
@@ -28598,12 +29667,15 @@ impl State {
                                     continue;
                                 }
                                 (Some(custody), _) => custody.clone(),
-                                (None, None) => GovernanceLockCustody {
-                                    escrowed: !sb.gov.min_bond_amount.is_zero(),
-                                    asset_definition_id: sb.gov.voting_asset_id.clone(),
-                                    bond_escrow_account: sb.gov.bond_escrow_account.clone(),
-                                    slash_receiver_account: sb.gov.slash_receiver_account.clone(),
-                                },
+                                (None, None) => {
+                                    warn!(
+                                        %rid,
+                                        owner = %owner,
+                                        "retaining governance lock without immutable custody"
+                                    );
+                                    sweep_failed = true;
+                                    continue;
+                                }
                             };
                             let release = if custody.escrowed && !rec.amount.is_zero() {
                                 let owner_asset_id = iroha_data_model::asset::AssetId::new(
@@ -28614,10 +29686,16 @@ impl State {
                                     custody.asset_definition_id,
                                     custody.bond_escrow_account,
                                 );
-                                wtx.transfer_numeric_asset_exact(
-                                    &escrow_asset_id,
-                                    &owner_asset_id,
-                                    &rec.amount,
+                                let authorization = VerifiedGovernanceUnlock::new(
+                                    rid.clone(),
+                                    owner.clone(),
+                                    escrow_asset_id,
+                                    owner_asset_id,
+                                    rec.amount.clone(),
+                                );
+                                crate::smartcontracts::isi::asset::isi::execute_verified_governance_unlock(
+                                    &mut stx,
+                                    authorization,
                                 )
                             } else {
                                 Ok(())
@@ -28633,7 +29711,7 @@ impl State {
                                 continue;
                             }
                             // Emit unlock event
-                            wtx.emit_events(Some(
+                            stx.world.emit_events(Some(
                                 iroha_data_model::events::data::governance::GovernanceEvent::LockUnlocked(
                                     iroha_data_model::events::data::governance::GovernanceLockUnlocked {
                                         referendum_id: rid.clone(),
@@ -28649,13 +29727,24 @@ impl State {
                         for owner in to_remove {
                             locks.locks.remove(&owner);
                         }
-                        wtx.governance_locks.insert(rid.clone(), locks);
+                        stx.world.governance_locks.insert(rid.clone(), locks);
                     }
                 }
             }
             if sweep_attempted && !sweep_failed {
-                *wtx.governance_last_unlock_sweep_height.get_mut() = now_h;
+                *stx.world.governance_last_unlock_sweep_height.get_mut() = now_h;
             }
+            stx.apply();
+        }
+        {
+            let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
+            let mut wtx = sb.world.trasaction_with_axt_lane_map(
+                #[cfg(feature = "telemetry")]
+                Some(sb.telemetry),
+                sb.nexus.lane_config.clone(),
+                current_slot,
+                axt_lane_map,
+            );
             update_governance_pipeline_slas(&mut wtx, now_h, &sb.gov);
             update_oracle_change_pipeline(&mut wtx, now_h, &sb.oracle.governance);
             crate::smartcontracts::ivm::active_runtime_abi_hash(&wtx, now_h).unwrap_or_else(
@@ -30241,12 +31330,13 @@ impl State {
         let mut parts = suffix.split('_');
         let _dataspace = parts.next()?.parse::<u64>().ok()?;
         let lane = parts.next()?.parse::<u32>().ok()?;
+        let incarnation = parts.next()?;
         let _height = parts.next()?.parse::<u64>().ok()?;
-        let digest = parts.next()?;
         let is_lower_hex = |byte: u8| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte);
         if parts.next().is_some()
-            || digest.len() != Hash::LENGTH * 2
-            || !digest.bytes().all(is_lower_hex)
+            || incarnation.len() != Hash::LENGTH * 2
+            || !incarnation.bytes().all(is_lower_hex)
+            || incarnation.parse::<Hash>().is_err()
         {
             return None;
         }
@@ -31686,15 +32776,7 @@ impl State {
             ConsensusMode::Permissioned => crate::sumeragi::consensus::PERMISSIONED_TAG,
             ConsensusMode::Npos => crate::sumeragi::consensus::NPOS_TAG,
         };
-        let expected_lane_mode_tag = envelope.lane_qc_mode_tag(derived_mode_tag);
-        let mode_tag = if qc.mode_tag.is_empty() {
-            expected_lane_mode_tag.as_str()
-        } else {
-            if qc.mode_tag.as_str() != expected_lane_mode_tag.as_str() {
-                return Err(LaneRelayError::AggregateSignatureInvalid);
-            }
-            qc.mode_tag.as_str()
-        };
+        envelope.verify_lane_finality_qc_mode_tag(derived_mode_tag)?;
         let vote = crate::sumeragi::consensus::Vote {
             phase: qc.phase,
             block_hash: qc.subject_block_hash,
@@ -31709,7 +32791,8 @@ impl State {
             signer: 0,
             bls_sig: Vec::new(),
         };
-        let preimage = crate::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote);
+        let preimage =
+            crate::sumeragi::consensus::vote_preimage(chain_id, qc.mode_tag.as_str(), &vote);
         let key_refs: Vec<&PublicKey> = public_keys.iter().collect();
         let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
         iroha_crypto::bls_normal_verify_preaggregated_same_message(
@@ -31917,11 +33000,20 @@ impl State {
         if manifest_root.iter().all(|byte| *byte == 0) {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
+        let qc = envelope.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
+        let expected_finality_statement_hash = envelope.lane_finality_statement_hash()?;
+        let expected_old_root: [u8; 32] = qc.parent_state_root.into();
+        let expected_new_root: [u8; 32] = qc.post_state_root.into();
+        let expected_tx_set_hash: [u8; 32] = expected_finality_statement_hash.into();
         if record.relay_ref != envelope.relay_ref()
             || record.proof_payload_hash != material.proof_digest
             || record.verified_at_height < material.verified_at_height
             || record.verified_at_height > observed_at_height
             || record.manifest_root != manifest_root
+            || record.lane_finality_statement_hash != expected_finality_statement_hash
+            || record.fastpq_old_root != expected_old_root
+            || record.fastpq_new_root != expected_new_root
+            || record.fastpq_tx_set_hash != expected_tx_set_hash
             || record.fastpq_binding.source_dsid != envelope.dataspace_id.as_u64()
             || record.fastpq_binding.verified_effect_type != LANE_RELAY_FASTPQ_EFFECT_TYPE
             || record.fastpq_binding.effect_binding.is_some()
@@ -31986,8 +33078,8 @@ impl State {
             (
                 record.relay_ref.lane_id.as_u32(),
                 record.relay_ref.dataspace_id.as_u64(),
+                record.relay_ref.lane_incarnation,
                 record.relay_ref.block_height,
-                record.relay_ref.settlement_hash,
             )
         });
         records
@@ -32060,10 +33152,10 @@ impl State {
 
     /// Fully authenticate a merge-authoritative embedded relay.
     ///
-    /// The lane QC authenticates finality for the block header, while the
-    /// committed `FastPQ` record authenticates the exact effect claim,
-    /// including the descriptor and settlement commitment. Neither proof is
-    /// sufficient on its own.
+    /// The lane QC authenticates the complete finality effect, including the
+    /// header, descriptor, manifest, DA, settlement, and RBC commitments. The
+    /// committed `FastPQ` record proves the same statement and QC state roots;
+    /// proof validity cannot replace committee authority.
     fn validate_embedded_lane_relay(
         &self,
         envelope: &LaneRelayEnvelope,
@@ -37982,18 +39074,13 @@ impl State {
             );
             tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             for (asset_id, amount) in &aggregate_burns {
-                tx.withdraw_numeric_asset(asset_id, amount)
+                let authorization = VerifiedNexusFeeBurn::new(asset_id.clone(), amount.clone());
+                crate::smartcontracts::isi::asset::isi::apply_verified_nexus_fee_burn_to_world_for_test(
+                    &mut tx,
+                    &nexus,
+                    authorization,
+                )
                     .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-                tx.decrease_asset_total_amount(asset_id.definition(), amount)
-                    .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-                tx.emit_events(Some(
-                    iroha_data_model::events::data::prelude::AssetEvent::Removed(
-                        iroha_data_model::events::data::prelude::AssetChanged {
-                            asset: asset_id.clone(),
-                            amount: amount.clone(),
-                        },
-                    ),
-                ));
             }
             for key in settlement_markers {
                 tx.smart_contract_state.insert(key, vec![1]);
@@ -39660,9 +40747,16 @@ impl State {
         self.oracle = oracle;
     }
 
-    /// Update streaming configuration snapshot.
-    pub fn set_streaming(&mut self, streaming: iroha_config::parameters::actual::Streaming) {
-        self.streaming = streaming;
+    /// Update the process-local streaming spool paths used for disk-budget enforcement.
+    pub fn set_streaming_storage_paths(
+        &mut self,
+        soranet_provision_spool_dir: PathBuf,
+        soravpn_provision_spool_dir: PathBuf,
+    ) {
+        self.streaming_storage_paths = StreamingStoragePaths {
+            soranet_provision_spool_dir,
+            soravpn_provision_spool_dir,
+        };
     }
 
     /// Update settlement configuration snapshot and rebuild the router engine.
@@ -42211,8 +43305,14 @@ impl State {
             return;
         }
 
-        let soranet_spool_dir = self.streaming.soranet.provision_spool_dir.clone();
-        let soravpn_spool_dir = self.streaming.soravpn.provision_spool_dir.clone();
+        let soranet_spool_dir = self
+            .streaming_storage_paths
+            .soranet_provision_spool_dir
+            .clone();
+        let soravpn_spool_dir = self
+            .streaming_storage_paths
+            .soravpn_provision_spool_dir
+            .clone();
 
         let mut kura_used = match self.kura.disk_usage_bytes() {
             Ok(bytes) => bytes,
@@ -44647,6 +45747,16 @@ fn block_proofs_for_entry_from_kura(
         .ok_or(BlockProofError::BlockNotFound(block_height))?;
 
     let header = block.header();
+    if header.height() != block_height {
+        return Err(BlockProofError::BlockHeightMismatch {
+            requested: block_height,
+            actual: header.height(),
+        });
+    }
+    let block_hash = block.hash();
+    let executed_block_wire_hash = block
+        .executed_block_wire_hash()
+        .map_err(|_| BlockProofError::ExecutedBlockWireHashUnavailable(block_height))?;
     if !block.has_results() {
         return Err(BlockProofError::MissingResults(block_height));
     }
@@ -44668,73 +45778,90 @@ fn block_proofs_for_entry_from_kura(
                 block_height,
             })?;
 
-    let external_count = block.external_entrypoint_count();
-    let (entry_root, entry_receipt_proof) = if entry_index < external_count {
-        let entry_root = header
-            .merkle_root()
+    let expected_root =
+        block
+            .full_entry_merkle_root()
             .ok_or(BlockProofError::MerkleProofUnavailable {
                 entry_hash,
                 block_height,
             })?;
-        let external_hashes = block
-            .external_entrypoints_cloned()
-            .map(|entrypoint| entrypoint.hash());
-        let external_merkle: CanonMerkleTree<_> = external_hashes.collect();
-        let proof = external_merkle.get_proof(entry_index_u32).ok_or(
-            BlockProofError::MerkleProofUnavailable {
+    let stored_entry_commitment =
+        block
+            .full_entry_merkle_commitment()
+            .ok_or(BlockProofError::MerkleProofUnavailable {
                 entry_hash,
                 block_height,
-            },
-        )?;
-        (entry_root, proof)
-    } else {
-        let entry_root =
-            block
-                .full_entry_merkle_root()
-                .ok_or(BlockProofError::MerkleProofUnavailable {
-                    entry_hash,
-                    block_height,
-                })?;
-        let entry_merkle: CanonMerkleTree<_> = entry_hashes.iter().copied().collect();
-        let proof = entry_merkle.get_proof(entry_index_u32).ok_or(
-            BlockProofError::MerkleProofUnavailable {
+            })?;
+    let entry_merkle: CanonMerkleTree<_> = entry_hashes.iter().copied().collect();
+    let entry_commitment = entry_merkle
+        .commitment()
+        .filter(|commitment| {
+            commitment.root() == &expected_root && commitment == &stored_entry_commitment
+        })
+        .ok_or(BlockProofError::MerkleProofUnavailable {
+            entry_hash,
+            block_height,
+        })?;
+    let entry_receipt_proof =
+        entry_merkle
+            .get_proof(entry_index_u32)
+            .ok_or(BlockProofError::MerkleProofUnavailable {
                 entry_hash,
                 block_height,
-            },
-        )?;
-        (entry_root, proof)
-    };
+            })?;
 
     let entry_receipt = BlockReceiptProof::new(entry_hash, entry_receipt_proof);
 
-    let result_root = header.result_merkle_root();
-    let result_receipt = if result_root.is_some() {
-        let result_hashes: Vec<_> = block.result_hashes().collect();
-        let result_hash =
-            *result_hashes
-                .get(entry_index)
-                .ok_or(BlockProofError::ExecutionResultMissing {
-                    entry_hash,
-                    block_height,
-                })?;
-        let result_merkle: CanonMerkleTree<_> = result_hashes.iter().copied().collect();
-        let proof = result_merkle.get_proof(entry_index_u32).ok_or(
-            BlockProofError::ExecutionResultMissing {
+    let expected_result_root =
+        header
+            .result_merkle_root()
+            .ok_or(BlockProofError::ExecutionResultMissing {
                 entry_hash,
                 block_height,
-            },
-        )?;
-        Some(ExecutionReceiptProof::new(result_hash, proof))
-    } else {
-        None
-    };
+            })?;
+    let result_hashes: Vec<_> = block.result_hashes().collect();
+    let result_hash =
+        *result_hashes
+            .get(entry_index)
+            .ok_or(BlockProofError::ExecutionResultMissing {
+                entry_hash,
+                block_height,
+            })?;
+    let result_merkle: CanonMerkleTree<_> = result_hashes.iter().copied().collect();
+    let stored_result_commitment =
+        block
+            .result_merkle_commitment()
+            .ok_or(BlockProofError::ExecutionResultMissing {
+                entry_hash,
+                block_height,
+            })?;
+    let result_commitment = result_merkle
+        .commitment()
+        .filter(|commitment| {
+            commitment.root() == &expected_result_root
+                && commitment == &stored_result_commitment
+                && commitment.leaf_count() == entry_commitment.leaf_count()
+        })
+        .ok_or(BlockProofError::ExecutionResultMissing {
+            entry_hash,
+            block_height,
+        })?;
+    let result_proof = result_merkle.get_proof(entry_index_u32).ok_or(
+        BlockProofError::ExecutionResultMissing {
+            entry_hash,
+            block_height,
+        },
+    )?;
+    let result_receipt = ExecutionReceiptProof::new(result_hash, result_proof);
 
     Ok(BlockProofs {
         block_height: header.height(),
+        block_hash,
+        executed_block_wire_hash,
         entry_hash,
-        entry_root,
+        entry_commitment,
         entry_proof: entry_receipt,
-        result_root,
+        result_commitment,
         result_proof: result_receipt,
         fastpq_transcripts: block.fastpq_transcripts().clone(),
     })
@@ -48863,20 +49990,12 @@ impl<'state> StateBlock<'state> {
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate {
-            tx.world
-                .withdraw_numeric_asset(asset_id, amount)
-                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-            tx.world
-                .decrease_asset_total_amount(asset_id.definition(), amount)
-                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-            tx.world.emit_events(Some(
-                iroha_data_model::events::data::prelude::AssetEvent::Removed(
-                    iroha_data_model::events::data::prelude::AssetChanged {
-                        asset: asset_id.clone(),
-                        amount: amount.clone(),
-                    },
-                ),
-            ));
+            let authorization = VerifiedNexusFeeBurn::new(asset_id.clone(), amount.clone());
+            crate::smartcontracts::isi::asset::isi::execute_verified_nexus_fee_burn(
+                &mut tx,
+                authorization,
+            )
+            .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
         }
         for key in settlement_markers {
             tx.world.smart_contract_state.insert(key, vec![1]);
@@ -48921,20 +50040,12 @@ impl<'state> StateBlock<'state> {
         let mut tx = self.transaction();
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate_burns {
-            tx.world
-                .withdraw_numeric_asset(asset_id, amount)
-                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-            tx.world
-                .decrease_asset_total_amount(asset_id.definition(), amount)
-                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-            tx.world.emit_events(Some(
-                iroha_data_model::events::data::prelude::AssetEvent::Removed(
-                    iroha_data_model::events::data::prelude::AssetChanged {
-                        asset: asset_id.clone(),
-                        amount: amount.clone(),
-                    },
-                ),
-            ));
+            let authorization = VerifiedNexusFeeBurn::new(asset_id.clone(), amount.clone());
+            crate::smartcontracts::isi::asset::isi::execute_verified_nexus_fee_burn(
+                &mut tx,
+                authorization,
+            )
+            .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
         }
         for key in settlement_markers {
             tx.world.smart_contract_state.insert(key, vec![1]);
@@ -49659,22 +50770,17 @@ impl<'state> StateBlock<'state> {
             }
         }
         if let Some(effects) = signed_block.npos_consensus_effects() {
-            let dataspace_catalog = self.nexus.dataspace_catalog.clone();
-            let staking_cfg = self.nexus.staking.clone();
             let now_ms = signed_block.header().creation_time_ms;
             #[cfg(feature = "telemetry")]
             let telemetry = Some(self.telemetry);
-            #[cfg(not(feature = "telemetry"))]
-            let telemetry = None;
             let mut transaction = self.transaction();
             crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
                 &mut transaction,
                 effects,
-                &dataspace_catalog,
-                &staking_cfg,
                 signed_block.header().height().get(),
                 signed_block.header().view_change_index(),
                 now_ms,
+                #[cfg(feature = "telemetry")]
                 telemetry,
             )
             .expect("committed NPoS consensus effects must be applicable");
@@ -55671,7 +56777,7 @@ mod transfer_transcript_tests {
     }
 
     #[test]
-    fn transfer_transcript_identity_preflight_is_replay_aware() {
+    fn transfer_transcript_identity_preflight_fails_closed_during_replay() {
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), Arc::clone(&kura), query);
@@ -55691,22 +56797,20 @@ mod transfer_transcript_tests {
                 transaction
                     .require_transfer_transcript_identity("test transfer")
                     .expect("live transfer with call_hash must pass"),
-                Some(call_hash)
+                call_hash
             );
         }
 
         block.replay_compatibility = true;
         let transaction = block.transaction();
-        assert_eq!(
-            transaction
-                .require_transfer_transcript_identity("test replay transfer")
-                .expect("replay transfer intentionally skips transcript identity"),
-            None
-        );
+        let error = transaction
+            .require_transfer_transcript_identity("test replay transfer")
+            .expect_err("replay transfer without call_hash must fail closed");
+        assert!(error.to_string().contains("transaction call_hash"));
     }
 
     #[test]
-    fn replay_transfer_transcripts_skip_fastpq_work_without_call_hash() {
+    fn replay_transfer_transcripts_reject_missing_call_hash_without_fastpq_work() {
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(World::default(), Arc::clone(&kura), query);
@@ -55718,10 +56822,10 @@ mod transfer_transcript_tests {
         let mut tx = block.transaction();
 
         tx.record_transfer_transcript(&ALICE_ID, sample_delta(1))
-            .expect("replay mode skips transcript recording");
+            .expect_err("replay mode must not bypass transcript identity");
         assert!(
             tx.pending_transfer_transcripts.is_empty(),
-            "replay mode must not stage FASTPQ transcripts"
+            "rejected replay transfer must not stage FASTPQ transcripts"
         );
         tx.apply();
 
@@ -56016,12 +57120,12 @@ mod transfer_transcript_tests {
             let mut tx = block_batch.transaction();
             tx.tx_call_hash = Some(call_hash);
             first_delta
-                .merge_uncontrolled_single_transfer_into_transaction(&mut tx, &ALICE_ID)
+                .merge_numeric_transfer_batch_into_transaction(&mut tx, &ALICE_ID)
                 .expect("first delta should be a single transfer")
                 .expect("first batch transfer merge");
             tx.tx_call_hash = Some(second_call_hash);
             second_delta
-                .merge_uncontrolled_single_transfer_into_transaction(&mut tx, &ALICE_ID)
+                .merge_numeric_transfer_batch_into_transaction(&mut tx, &ALICE_ID)
                 .expect("second delta should be a single transfer")
                 .expect("second batch transfer merge");
             tx.tx_call_hash = None;
@@ -56061,7 +57165,7 @@ mod transfer_transcript_tests {
         let mut block_batch_guard = state_batch_guard.block(header);
         let mut batch_guard_tx = block_batch_guard.transaction();
         assert!(
-            first_delta.supports_uncontrolled_single_transfer_batch(&batch_guard_tx),
+            first_delta.supports_numeric_transfer_batch_merge(&batch_guard_tx),
             "preseeded receiver assets without matching data triggers should batch"
         );
 
@@ -56074,7 +57178,8 @@ mod transfer_transcript_tests {
                 Repeats::Indefinitely,
                 ALICE_ID.clone(),
                 data_pre::DataEventFilter::Configuration(data_pre::ConfigurationEventFilter::new()),
-            );
+            )
+            .expect("test data-trigger action satisfies its authority invariant");
         batch_guard_tx
             .world
             .triggers
@@ -56088,7 +57193,7 @@ mod transfer_transcript_tests {
             )
             .expect("add nonmatching data trigger");
         assert!(
-            first_delta.supports_uncontrolled_single_transfer_batch(&batch_guard_tx),
+            first_delta.supports_numeric_transfer_batch_merge(&batch_guard_tx),
             "unrelated data triggers should not disable transfer batching"
         );
 
@@ -56097,7 +57202,8 @@ mod transfer_transcript_tests {
             Repeats::Indefinitely,
             ALICE_ID.clone(),
             data_pre::DataEventFilter::Asset(data_pre::AssetEventFilter::new()),
-        );
+        )
+        .expect("test data-trigger action satisfies its authority invariant");
         batch_guard_tx
             .world
             .triggers
@@ -56109,7 +57215,7 @@ mod transfer_transcript_tests {
             )
             .expect("add matching data trigger");
         assert!(
-            !first_delta.supports_uncontrolled_single_transfer_batch(&batch_guard_tx),
+            !first_delta.supports_numeric_transfer_batch_merge(&batch_guard_tx),
             "matching asset data triggers should keep per-transaction semantics"
         );
         drop(batch_guard_tx);
@@ -56588,41 +57694,61 @@ mod fastpq_tx_set_hash_tests {
     }
 }
 
-#[cfg(all(test, feature = "transparent_api"))]
+#[cfg(test)]
 mod block_proof_tests {
-    use iroha_crypto::{KeyPair, SignatureOf};
+    use iroha_crypto::SignatureOf;
     use iroha_data_model::{
         ChainId,
         account::AccountId,
-        block::{BlockHeader, BlockSignature},
-        transaction::signed::{TransactionBuilder, TransactionResultInner},
-        trigger::DataTriggerSequence,
+        block::{BlockHeader, BlockPayload, BlockResult, BlockSignature},
+        transaction::{
+            ExecutionStep,
+            signed::{
+                TransactionBuilder, TransactionEntrypoint, TransactionResult,
+                TransactionResultInner,
+            },
+        },
+        trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
     };
+    use iroha_primitives::const_vec::ConstVec;
     use nonzero_ext::nonzero;
+    use norito::codec::{DecodeAll as _, Encode as _};
 
     use super::*;
     use crate::kura::Kura;
 
-    #[test]
-    fn block_proofs_for_entry_produce_valid_merkle_paths() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let world = World::default();
-        let state = State::new_for_testing(world, Arc::clone(&kura), query);
+    #[derive(norito::codec::Decode, norito::codec::Encode)]
+    struct MutableSignedBlockWire {
+        signatures: BTreeSet<BlockSignature>,
+        payload: BlockPayload,
+        result: Option<BlockResult>,
+    }
 
+    fn block_proof_fixture() -> (
+        SignedBlock,
+        HashOf<TransactionEntrypoint>,
+        HashOf<TransactionEntrypoint>,
+    ) {
         let keypair = crate::state::checked_keypair();
         let chain: ChainId = "block-proof-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            chain,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(keypair.private_key());
-        let entry_hash = tx.hash_as_entrypoint();
+        let scheduled = TimeTriggerEntrypoint {
+            id: "block_proof_schedule".parse().expect("trigger id"),
+            instructions: ExecutionStep(ConstVec::new_empty()),
+            authority,
+        };
+        let external_hash = tx.hash_as_entrypoint();
+        let scheduled_hash = scheduled.hash_as_entrypoint();
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let external_tree: CanonMerkleTree<TransactionEntrypoint> =
+            [external_hash].into_iter().collect();
+        let header = BlockHeader::new(nonzero!(1_u64), None, external_tree.root(), None, 0, 0);
         let signature = BlockSignature::new(
             0,
             SignatureOf::try_from_hash(keypair.private_key(), header.hash())
@@ -56631,11 +57757,82 @@ mod block_proof_tests {
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
             .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+                vec![scheduled],
+                &[external_hash, scheduled_hash],
+                vec![
+                    TransactionResultInner::Ok(DataTriggerSequence::default()),
+                    TransactionResultInner::Ok(DataTriggerSequence::default()),
+                ],
             )
-            .expect("test block entrypoint hash should match payload");
+            .expect("test block entrypoints and results should align");
+        (block, external_hash, scheduled_hash)
+    }
+
+    fn mutate_stored_block(
+        block: &SignedBlock,
+        mutate: impl FnOnce(&mut BlockPayload, &mut BlockResult),
+    ) -> SignedBlock {
+        let encoded = block.encode();
+        let mut wire = MutableSignedBlockWire::decode_all(&mut encoded.as_slice())
+            .expect("fixture block wire should decode into mutable parts");
+        let result = wire.result.as_mut().expect("fixture block has results");
+        mutate(&mut wire.payload, result);
+        SignedBlock::decode_all(&mut wire.encode().as_slice())
+            .expect("tampered fixture should remain a structurally valid block wire")
+    }
+
+    fn proof_error(
+        block: SignedBlock,
+        requested_height: NonZeroU64,
+        entry_hash: HashOf<TransactionEntrypoint>,
+    ) -> BlockProofError {
+        let kura = Kura::blank_kura_for_testing();
+        kura.append_pending_block_for_bench(Arc::new(block));
+        block_proofs_for_entry_from_kura(kura.as_ref(), requested_height, entry_hash)
+            .expect_err("adversarial stored block must not produce a proof")
+    }
+
+    fn assert_entry_geometry_error(
+        error: BlockProofError,
+        entry_hash: HashOf<TransactionEntrypoint>,
+        block_height: NonZeroU64,
+    ) {
+        match error {
+            BlockProofError::MerkleProofUnavailable {
+                entry_hash: actual_entry_hash,
+                block_height: actual_block_height,
+            } => {
+                assert_eq!(actual_entry_hash, entry_hash);
+                assert_eq!(actual_block_height, block_height);
+            }
+            other => panic!("expected canonical entry geometry error, got {other:?}"),
+        }
+    }
+
+    fn assert_result_geometry_error(
+        error: BlockProofError,
+        entry_hash: HashOf<TransactionEntrypoint>,
+        block_height: NonZeroU64,
+    ) {
+        match error {
+            BlockProofError::ExecutionResultMissing {
+                entry_hash: actual_entry_hash,
+                block_height: actual_block_height,
+            } => {
+                assert_eq!(actual_entry_hash, entry_hash);
+                assert_eq!(actual_block_height, block_height);
+            }
+            other => panic!("expected canonical result geometry error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_proofs_for_external_entry_use_full_executed_tree() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let world = World::default();
+        let state = State::new_for_testing(world, Arc::clone(&kura), query);
+        let (block, entry_hash, _) = block_proof_fixture();
 
         let block_arc = Arc::new(block);
         kura.store_block(Arc::clone(&block_arc))
@@ -56651,17 +57848,189 @@ mod block_proof_tests {
             .block_proofs_for_entry(block_arc.header().height(), entry_hash)
             .expect("proofs available");
 
-        let entry_root = block_arc.header().merkle_root().expect("entry merkle root");
-        assert_eq!(proofs.entry_root, entry_root);
-        assert!(proofs.entry_proof.verify(&proofs.entry_root));
+        let external_root = block_arc
+            .header()
+            .merkle_root()
+            .expect("external entry merkle root");
+        let full_entry_root = block_arc
+            .full_entry_merkle_root()
+            .expect("full entry merkle root");
+        assert_ne!(external_root, full_entry_root);
+        assert_eq!(proofs.block_hash, block_arc.hash());
+        assert_eq!(
+            proofs.executed_block_wire_hash,
+            block_arc
+                .executed_block_wire_hash()
+                .expect("executed block wire hash")
+        );
+        assert_eq!(proofs.entry_commitment.root(), &full_entry_root);
+        assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
+        assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
 
         let result_root = block_arc
             .header()
             .result_merkle_root()
             .expect("result merkle root");
-        assert_eq!(proofs.result_root, Some(result_root));
-        let result_proof = proofs.result_proof.expect("result proof present");
-        assert!(result_proof.verify(&result_root));
+        let result_commitment = proofs.result_commitment;
+        assert_eq!(result_commitment.root(), &result_root);
+        assert_eq!(result_commitment.leaf_count().get(), 2);
+        let result_proof = proofs.result_proof;
+        assert!(result_proof.verify(&result_commitment));
+    }
+
+    #[test]
+    fn block_proofs_reject_stored_full_entry_root_drift() {
+        let block_height = nonzero!(1_u64);
+        let (block, external_hash, scheduled_hash) = block_proof_fixture();
+        let canonical_commitment = block
+            .full_entry_merkle_commitment()
+            .expect("fixture full entry commitment");
+        let substituted_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"substituted stored entry leaf",
+        ));
+        let substituted_tree: CanonMerkleTree<TransactionEntrypoint> =
+            [substituted_hash, scheduled_hash].into_iter().collect();
+        let substituted_commitment = substituted_tree
+            .commitment()
+            .expect("substituted entry commitment");
+        assert_eq!(
+            substituted_commitment.leaf_count(),
+            canonical_commitment.leaf_count()
+        );
+        assert_ne!(substituted_commitment.root(), canonical_commitment.root());
+
+        let tampered = mutate_stored_block(&block, |_, result| {
+            result.merkle = substituted_tree;
+        });
+        assert_entry_geometry_error(
+            proof_error(tampered, block_height, external_hash),
+            external_hash,
+            block_height,
+        );
+    }
+
+    #[test]
+    fn block_proofs_reject_stored_full_entry_count_drift() {
+        let block_height = nonzero!(1_u64);
+        let (block, external_hash, scheduled_hash) = block_proof_fixture();
+        let extra_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"extra stored entry leaf",
+        ));
+        let substituted_tree: CanonMerkleTree<TransactionEntrypoint> =
+            [external_hash, scheduled_hash, extra_hash]
+                .into_iter()
+                .collect();
+        assert_eq!(substituted_tree.leaf_count(), 3);
+
+        let tampered = mutate_stored_block(&block, |_, result| {
+            result.merkle = substituted_tree;
+        });
+        assert_entry_geometry_error(
+            proof_error(tampered, block_height, external_hash),
+            external_hash,
+            block_height,
+        );
+    }
+
+    #[test]
+    fn block_proofs_reject_stored_result_commitment_drift() {
+        let block_height = nonzero!(1_u64);
+        let (block, external_hash, _) = block_proof_fixture();
+        let canonical_hashes = block.result_hashes().collect::<Vec<_>>();
+        let substituted_hash = HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(
+            b"substituted stored result leaf",
+        ));
+        let substituted_tree: CanonMerkleTree<TransactionResult> =
+            [substituted_hash, canonical_hashes[1]]
+                .into_iter()
+                .collect();
+        assert_eq!(substituted_tree.leaf_count(), canonical_hashes.len());
+        assert_ne!(substituted_tree.root(), block.header().result_merkle_root());
+
+        let tampered = mutate_stored_block(&block, |_, result| {
+            result.result_merkle = substituted_tree;
+        });
+        assert_result_geometry_error(
+            proof_error(tampered, block_height, external_hash),
+            external_hash,
+            block_height,
+        );
+    }
+
+    #[test]
+    fn block_proofs_reject_header_result_root_drift() {
+        let block_height = nonzero!(1_u64);
+        let (block, external_hash, _) = block_proof_fixture();
+        let substituted_hash = HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(
+            b"substituted header result leaf",
+        ));
+        let substituted_tree: CanonMerkleTree<TransactionResult> =
+            [substituted_hash].into_iter().collect();
+        let substituted_root = substituted_tree.root();
+        assert_ne!(substituted_root, block.header().result_merkle_root());
+
+        let tampered = mutate_stored_block(&block, |payload, _| {
+            payload.header.result_merkle_root = substituted_root;
+        });
+        assert_result_geometry_error(
+            proof_error(tampered, block_height, external_hash),
+            external_hash,
+            block_height,
+        );
+    }
+
+    #[test]
+    fn block_proofs_reject_self_consistent_result_count_misalignment() {
+        let block_height = nonzero!(1_u64);
+        let (block, external_hash, _) = block_proof_fixture();
+        let tampered = mutate_stored_block(&block, |payload, result| {
+            result.transaction_results.truncate(1);
+            result.result_merkle = result
+                .transaction_results
+                .iter()
+                .map(TransactionResult::hash)
+                .collect();
+            payload.header.result_merkle_root = result.result_merkle.root();
+        });
+        assert_eq!(
+            tampered
+                .result_merkle_commitment()
+                .expect("tampered result commitment")
+                .leaf_count()
+                .get(),
+            1
+        );
+        assert_eq!(
+            tampered
+                .full_entry_merkle_commitment()
+                .expect("tampered entry commitment")
+                .leaf_count()
+                .get(),
+            2
+        );
+        assert_result_geometry_error(
+            proof_error(tampered, block_height, external_hash),
+            external_hash,
+            block_height,
+        );
+    }
+
+    #[test]
+    fn block_proofs_reject_requested_slot_header_height_mismatch() {
+        let requested_height = nonzero!(1_u64);
+        let actual_height = nonzero!(2_u64);
+        let (block, external_hash, _) = block_proof_fixture();
+        let tampered = mutate_stored_block(&block, |payload, _| {
+            payload.header.height = actual_height;
+        });
+
+        match proof_error(tampered, requested_height, external_hash) {
+            BlockProofError::BlockHeightMismatch { requested, actual } => {
+                assert_eq!(requested, requested_height);
+                assert_eq!(actual, actual_height);
+            }
+            other => panic!("expected canonical Kura slot/header error, got {other:?}"),
+        }
     }
 }
 
@@ -57258,7 +58627,7 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     *isolated.pipeline_ivm_prepared_cache.write() =
         PreparedContractCache::with_capacity(isolated.pipeline.cache_size);
     isolated.oracle = state.oracle.clone();
-    isolated.streaming = state.streaming.clone();
+    isolated.streaming_storage_paths = state.streaming_storage_paths.clone();
     isolated.settlement = state.settlement.clone();
     isolated.settlement_engine = state.settlement_engine.clone();
     *isolated.crypto.write() = state.crypto();
@@ -60384,7 +61753,8 @@ mod permission_cache_tests {
                     iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
                         .for_trigger(trigger_id.clone())
                         .under_authority(owner.clone()),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             )))
             .append_instruction(Grant::account_permission(CanManageRoles, owner.clone()));
         let genesis_block = genesis_builder
@@ -61710,21 +63080,14 @@ impl StateTransaction<'_, '_> {
 
     /// Require the deterministic identity used by transfer transcripts before balance mutation.
     ///
-    /// Committed-block replay deliberately skips transcript construction, so historical execution
-    /// remains valid even when the original transaction identity is unavailable to the replay
-    /// adapter. Live execution must fail closed before mutating balances or holder indexes.
-    ///
     /// # Errors
     ///
-    /// Returns [`Error`] when live execution has no transaction `call_hash`.
+    /// Returns [`Error`] when execution has no transaction `call_hash`.
     pub(crate) fn require_transfer_transcript_identity(
         &self,
         context: &str,
-    ) -> Result<Option<iroha_crypto::Hash>, Error> {
-        if self.replay_compatibility {
-            return Ok(None);
-        }
-        self.tx_call_hash.map(Some).ok_or_else(|| {
+    ) -> Result<iroha_crypto::Hash, Error> {
+        self.tx_call_hash.ok_or_else(|| {
             Error::InvariantViolation(
                 format!(
                     "{context} requires a transaction call_hash before balance or transcript mutation"
@@ -61747,16 +63110,31 @@ impl StateTransaction<'_, '_> {
     pub fn record_transfer_transcripts(
         &mut self,
         authority: &AccountId,
-        mut deltas: Vec<TransferDeltaTranscript>,
+        deltas: Vec<TransferDeltaTranscript>,
     ) -> Result<(), Error> {
         if deltas.is_empty() {
             return Ok(());
         }
-        let Some(batch_hash) =
-            self.require_transfer_transcript_identity("FastPQ transfer transcript recording")?
-        else {
-            return Ok(());
-        };
+        let batch_hash =
+            self.require_transfer_transcript_identity("FastPQ transfer transcript recording")?;
+        self.record_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas);
+        Ok(())
+    }
+
+    /// Stage a transfer transcript under an already resolved execution identity.
+    ///
+    /// Numeric movement preparation owns identity resolution so direct protocol execution can
+    /// bind its transcript to the exact typed purpose before any state mutation. Keeping this
+    /// method infallible ensures transcript staging cannot split an already prepared atomic move.
+    pub(crate) fn record_transfer_transcripts_with_batch_hash(
+        &mut self,
+        authority: &AccountId,
+        batch_hash: iroha_crypto::Hash,
+        mut deltas: Vec<TransferDeltaTranscript>,
+    ) {
+        if deltas.is_empty() {
+            return;
+        }
         let authority_digest = crate::fastpq::authority_digest(authority);
         let poseidon_preimage_digest = match deltas.as_slice() {
             [delta] => Some(crate::fastpq::poseidon_preimage_digest(delta, &batch_hash)),
@@ -61770,7 +63148,6 @@ impl StateTransaction<'_, '_> {
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);
-        Ok(())
     }
 
     /// Generate the next canonical RWA identifier for this transaction scope.
@@ -65268,6 +66645,131 @@ pub(crate) mod deserialize {
         }
     }
 
+    fn reject_legacy_musubi_state(
+        smart_contract_state: &Storage<StatePath, Vec<u8>>,
+    ) -> Result<(), json::Error> {
+        let legacy = smart_contract_state.view().iter().find_map(|(key, _)| {
+            let key = key.as_ref();
+            (key == "musubi_package_catalog"
+                || key.starts_with("musubi_release_")
+                || key.starts_with("musubi_alias_"))
+            .then_some(key.to_owned())
+        });
+        if let Some(key) = legacy {
+            return Err(json::Error::InvalidField {
+                field: "smart_contract_state".to_owned(),
+                message: format!(
+                    "legacy pre-release Musubi state `{key}` is unsupported; reset registry state"
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_musubi_location_reverse_indices(
+        locations: &Storage<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
+        by_pin: &Storage<ManifestDigest, MusubiPinLocationReferenceV1>,
+        by_order: &Storage<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>,
+        by_provider: &Storage<MusubiProviderLocationKeyV1, ()>,
+    ) -> Result<(), json::Error> {
+        let invalid = |message: String| json::Error::InvalidField {
+            field: "world.musubi_location_reverse_indices".to_owned(),
+            message,
+        };
+        let locations = locations.view();
+        let by_pin = by_pin.view();
+        let by_order = by_order.view();
+        let by_provider = by_provider.view();
+
+        for (digest, reference) in by_pin.iter() {
+            reference
+                .validate()
+                .map_err(|error| invalid(error.to_string()))?;
+            if digest != &reference.pin_manifest {
+                return Err(invalid(
+                    "pin reverse-index key does not match its duplicated manifest digest".into(),
+                ));
+            }
+            let target = locations.get(&reference.location).ok_or_else(|| {
+                invalid("pin reverse reference targets a missing location".into())
+            })?;
+            if reference.active {
+                if target.state == MusubiArchiveLocationStateV1::Retired
+                    || target.pin_manifest != *digest
+                {
+                    return Err(invalid(
+                        "active pin reverse reference does not match its current location".into(),
+                    ));
+                }
+            }
+        }
+        for (order, reference) in by_order.iter() {
+            reference
+                .validate()
+                .map_err(|error| invalid(error.to_string()))?;
+            if order != &reference.replication_order {
+                return Err(invalid(
+                    "order reverse-index key does not match its duplicated order identity".into(),
+                ));
+            }
+            let target = locations.get(&reference.location).ok_or_else(|| {
+                invalid("order reverse reference targets a missing location".into())
+            })?;
+            if reference.active {
+                if target.state == MusubiArchiveLocationStateV1::Retired
+                    || target.replication_order != *order
+                {
+                    return Err(invalid(
+                        "active order reverse reference does not match its current location".into(),
+                    ));
+                }
+            }
+        }
+        for (key, ()) in by_provider.iter() {
+            key.validate().map_err(|error| invalid(error.to_string()))?;
+            let location = locations.get(&key.location).ok_or_else(|| {
+                invalid("provider reverse reference targets a missing location".into())
+            })?;
+            if location.state == MusubiArchiveLocationStateV1::Retired
+                || location.providers.binary_search(&key.provider_id).is_err()
+            {
+                return Err(invalid(
+                    "provider reverse reference does not match its current location".into(),
+                ));
+            }
+        }
+        for (key, location) in locations.iter() {
+            location
+                .validate()
+                .map_err(|error| invalid(error.to_string()))?;
+            if key != &location.key() {
+                return Err(invalid(
+                    "archive-location key does not match the stored record".into(),
+                ));
+            }
+            if location.state == MusubiArchiveLocationStateV1::Retired {
+                continue;
+            }
+            if !by_pin
+                .get(&location.pin_manifest)
+                .is_some_and(|reference| reference.active && reference.location == *key)
+                || !by_order
+                    .get(&location.replication_order)
+                    .is_some_and(|reference| reference.active && reference.location == *key)
+                || location.providers.iter().any(|provider| {
+                    by_provider
+                        .get(&MusubiProviderLocationKeyV1::new(*provider, *key))
+                        .is_none()
+                })
+            {
+                return Err(invalid(
+                    "current archive location is missing an exact reverse-index entry".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_lines)]
     fn parse_world(
         value: json::Value,
@@ -65465,6 +66967,38 @@ pub(crate) mod deserialize {
         let contract_subject_bindings =
             take_optional_default(&mut map, "contract_subject_bindings")?;
         let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
+        reject_legacy_musubi_state(&smart_contract_state)?;
+        let musubi_namespace_bindings = take_required(&mut map, "musubi_namespace_bindings")?;
+        let musubi_domain_ownership_generations =
+            take_optional_default(&mut map, "musubi_domain_ownership_generations")?;
+        let musubi_packages = take_required(&mut map, "musubi_packages")?;
+        let musubi_package_metadata = take_required(&mut map, "musubi_package_metadata")?;
+        let musubi_package_members = take_required(&mut map, "musubi_package_members")?;
+        let musubi_package_invitations = take_required(&mut map, "musubi_package_invitations")?;
+        let musubi_releases = take_required(&mut map, "musubi_releases")?;
+        let musubi_archives = take_required(&mut map, "musubi_archives")?;
+        let musubi_archive_locations = take_required(&mut map, "musubi_archive_locations")?;
+        let musubi_locations_by_pin = take_required(&mut map, "musubi_locations_by_pin")?;
+        let musubi_locations_by_replication_order =
+            take_required(&mut map, "musubi_locations_by_replication_order")?;
+        let musubi_locations_by_provider = take_required(&mut map, "musubi_locations_by_provider")?;
+        validate_musubi_location_reverse_indices(
+            &musubi_archive_locations,
+            &musubi_locations_by_pin,
+            &musubi_locations_by_replication_order,
+            &musubi_locations_by_provider,
+        )?;
+        let musubi_archive_availability = take_required(&mut map, "musubi_archive_availability")?;
+        let musubi_archive_reverse_references =
+            take_required(&mut map, "musubi_archive_reverse_references")?;
+        let musubi_resolver_index = take_required(&mut map, "musubi_resolver_index")?;
+        let musubi_public_directory = take_required(&mut map, "musubi_public_directory")?;
+        let musubi_aliases = take_required(&mut map, "musubi_aliases")?;
+        let musubi_alias_history = take_required(&mut map, "musubi_alias_history")?;
+        let musubi_governance_decisions = take_required(&mut map, "musubi_governance_decisions")?;
+        let musubi_registry_policy = take_required(&mut map, "musubi_registry_policy")?;
+        let musubi_resolver_index_revision =
+            take_required(&mut map, "musubi_resolver_index_revision")?;
         let soracloud_service_revisions = take_required(&mut map, "soracloud_service_revisions")?;
         let soracloud_service_deployments =
             take_optional_default(&mut map, "soracloud_service_deployments")?;
@@ -65682,6 +67216,27 @@ pub(crate) mod deserialize {
             contract_subject_bindings,
             contract_subject_addresses: Storage::default(),
             smart_contract_state,
+            musubi_namespace_bindings,
+            musubi_domain_ownership_generations,
+            musubi_packages,
+            musubi_package_metadata,
+            musubi_package_members,
+            musubi_package_invitations,
+            musubi_releases,
+            musubi_archives,
+            musubi_archive_locations,
+            musubi_locations_by_pin,
+            musubi_locations_by_replication_order,
+            musubi_locations_by_provider,
+            musubi_archive_availability,
+            musubi_archive_reverse_references,
+            musubi_resolver_index,
+            musubi_public_directory,
+            musubi_aliases,
+            musubi_alias_history,
+            musubi_governance_decisions,
+            musubi_registry_policy,
+            musubi_resolver_index_revision,
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_app_infra_states,
@@ -65897,17 +67452,7 @@ pub(crate) mod deserialize {
         #[cfg(feature = "telemetry")]
         let telemetry_seed = telemetry.clone();
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();
-        let streaming = iroha_config::parameters::actual::Streaming {
-            key_material: default_streaming_key_material(),
-            session_store_dir: PathBuf::from(
-                iroha_config::parameters::defaults::streaming::SESSION_STORE_DIR,
-            ),
-            feature_bits: iroha_config::parameters::defaults::streaming::FEATURE_BITS,
-            soranet: iroha_config::parameters::actual::StreamingSoranet::from_defaults(),
-            soravpn: iroha_config::parameters::actual::StreamingSoravpn::from_defaults(),
-            sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
-            codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
-        };
+        let streaming_storage_paths = StreamingStoragePaths::default();
         let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
         let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
         let commit_roster_journal = kura.commit_roster_journal_handle();
@@ -66001,7 +67546,7 @@ pub(crate) mod deserialize {
             pipeline_ivm_prepared_cache: parking_lot::RwLock::new(
                 PreparedContractCache::with_capacity(pipeline_cache_size),
             ),
-            streaming,
+            streaming_storage_paths,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             nexus: parking_lot::RwLock::new(nexus),
             lane_incarnations: parking_lot::RwLock::new(lane_incarnations),

@@ -22,7 +22,6 @@ from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     CYCLE_DETAIL_PROBE_LABEL_ERROR,
     CYCLE_DETAIL_PROBE_LABEL_PATTERN,
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
-    DEFAULT_REQUIRED_SOURCE_KINDS,
     FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
     REQUIRED_EXPLORER_ROUTES,
@@ -59,8 +58,8 @@ from sorafs_response_args import (  # noqa: E402
 )
 
 
-CANARY_KINDS = tuple(KIND_BY_NAME)
-SOURCE_BATCH_DIGEST_KINDS = ("source_entry",) + SOURCE_BOUND_KINDS
+CANARY_KINDS = tuple(kind for kind in KIND_BY_NAME if kind != "source_entry")
+SOURCE_BATCH_DIGEST_KINDS = SOURCE_BOUND_KINDS
 CYCLE_DIGEST_KINDS = ("publication",) + CYCLE_BOUND_KINDS
 HEX64_LEN = 64
 DEFAULT_REQUEST_BODY_HASH = "a" * 64
@@ -245,21 +244,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free transparency rollout canary payload."""
 
     payload = common_payload(args)
-    if args.kind == "source_entry":
-        probes = build_probe_records(args.source_kinds, field="source_kind", args=args)
-        payload.update(
-            {
-                "source_batch_digest_hex": args.source_batch_digest_hex,
-                "probe_count": len(probes),
-                "passed_probe_count": len(probes),
-                "source_entry_probe_count": len(probes),
-                "payload_bytes_included": False,
-                "private_payloads_included": False,
-                "response_bodies_included": False,
-                "probes": probes,
-            }
-        )
-    elif args.kind == "publication":
+    if args.kind == "publication":
         routes = build_publication_routes(args)
         cycle_detail_probes = build_cycle_detail_probe_records(args)
         payload.update(
@@ -359,14 +344,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--cycle-digest-hex",
             errors=errors,
         )
-    if args.kind == "source_entry":
-        args.source_kinds = validate_name_set(
-            split_csv_values(args.source_kind),
-            allowed=DEFAULT_REQUIRED_SOURCE_KINDS,
-            option="--source-kind",
-            errors=errors,
-        )
-    elif args.kind == "publication":
+    if args.kind == "publication":
         cycle_detail_probe_names = split_csv_values(args.cycle_detail_probe)
         validate_inventory_labels(
             cycle_detail_probe_names,
@@ -489,7 +467,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--now-unix", type=positive_int_arg, required=True)
     parser.add_argument("--source-batch-digest-hex")
     parser.add_argument("--cycle-digest-hex")
-    parser.add_argument("--source-kind", action="append", default=[])
     parser.add_argument("--publication-route", action="append", default=[])
     parser.add_argument("--cycle-detail-probe", action="append", default=[])
     parser.add_argument("--privacy-action", action="append", default=[])

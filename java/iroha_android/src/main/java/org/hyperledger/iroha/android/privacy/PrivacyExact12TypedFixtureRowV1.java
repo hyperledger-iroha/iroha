@@ -9,7 +9,7 @@ import java.util.Objects;
 
 /** One byte-complete row of the canonical first-release exact-12 fixture. */
 public final class PrivacyExact12TypedFixtureRowV1 {
-  private final PrivacyNativeBridge.ProtocolIdV1 protocolId;
+  private final PrivacyProtocolIdV1 protocolId;
   private final byte[] statementNorito;
   private final byte[] envelopeNorito;
   private final String submitProofWireId;
@@ -21,7 +21,7 @@ public final class PrivacyExact12TypedFixtureRowV1 {
   private final byte[] signedTransactionHash;
 
   public PrivacyExact12TypedFixtureRowV1(
-      final PrivacyNativeBridge.ProtocolIdV1 protocolId,
+      final PrivacyProtocolIdV1 protocolId,
       final byte[] statementNorito,
       final byte[] envelopeNorito,
       final String submitProofWireId,
@@ -78,7 +78,7 @@ public final class PrivacyExact12TypedFixtureRowV1 {
     }
   }
 
-  public PrivacyNativeBridge.ProtocolIdV1 protocolId() {
+  public PrivacyProtocolIdV1 protocolId() {
     return protocolId;
   }
 

@@ -58,6 +58,8 @@ mod model {
         Soradns(SoradnsDirectoryEventFilter),
         /// Matches `SoraFS` gateway compliance events
         Sorafs(SorafsGatewayEventFilter),
+        /// Matches Musubi package-registry and archive lifecycle events
+        Musubi(MusubiEventFilter),
         /// Matches Space Directory manifest lifecycle events
         SpaceDirectory(SpaceDirectoryEventFilter),
         /// Matches native asset escrow lifecycle events
@@ -147,6 +149,20 @@ mod model {
         pub(super) detail_matcher: Option<super::sorafs::SorafsGarPolicyDetail>,
         /// Matches only events from this set.
         pub(super) event_set: super::sorafs::SorafsGatewayEventSet,
+    }
+
+    /// Exact structural filter for Musubi registry events.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct MusubiEventFilter {
+        /// If set, match only events structurally associated with this package.
+        pub(super) package_matcher: Option<crate::musubi::MusubiPackageIdV1>,
+        /// If set, match only events structurally associated with this archive.
+        pub(super) archive_matcher: Option<crate::musubi::ArchiveId>,
+        /// If set, match only events structurally associated with this permanent alias.
+        pub(super) alias_matcher: Option<crate::musubi::MusubiAliasNameV1>,
+        /// Closed set of accepted Musubi transition variants.
+        pub(super) event_set: super::musubi::MusubiEventSet,
     }
 
     /// Filter for Space Directory manifest lifecycle events.
@@ -310,6 +326,7 @@ impl_json_via_norito_bytes!(
     ProofEventFilter,
     VerifyingKeyEventFilter,
     RuntimeUpgradeEventFilter,
+    MusubiEventFilter,
     PeerEventFilter,
     DomainEventFilter,
     AccountEventFilter,
@@ -507,6 +524,46 @@ impl SorafsGatewayEventFilter {
     }
 }
 
+impl MusubiEventFilter {
+    /// Create a filter accepting every Musubi transition.
+    pub const fn new() -> Self {
+        Self {
+            package_matcher: None,
+            archive_matcher: None,
+            alias_matcher: None,
+            event_set: super::musubi::MusubiEventSet::all(),
+        }
+    }
+
+    /// Match only events structurally associated with `package`.
+    #[must_use]
+    pub fn for_package(mut self, package: crate::musubi::MusubiPackageIdV1) -> Self {
+        self.package_matcher = Some(package);
+        self
+    }
+
+    /// Match only events structurally associated with `archive`.
+    #[must_use]
+    pub const fn for_archive(mut self, archive: crate::musubi::ArchiveId) -> Self {
+        self.archive_matcher = Some(archive);
+        self
+    }
+
+    /// Match only events structurally associated with `alias`.
+    #[must_use]
+    pub fn for_alias(mut self, alias: crate::musubi::MusubiAliasNameV1) -> Self {
+        self.alias_matcher = Some(alias);
+        self
+    }
+
+    /// Match only transition variants contained in `event_set`.
+    #[must_use]
+    pub const fn for_events(mut self, event_set: super::musubi::MusubiEventSet) -> Self {
+        self.event_set = event_set;
+        self
+    }
+}
+
 impl SoradnsDirectoryEventFilter {
     /// Creates a new [`SoradnsDirectoryEventFilter`] accepting all directory events.
     pub const fn new() -> Self {
@@ -647,6 +704,12 @@ impl Default for ConfidentialEventFilter {
 }
 
 impl Default for SorafsGatewayEventFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for MusubiEventFilter {
     fn default() -> Self {
         Self::new()
     }
@@ -1009,6 +1072,26 @@ impl super::EventFilter for SorafsGatewayEventFilter {
                 }
             }
         }
+    }
+}
+
+#[cfg(feature = "transparent_api")]
+impl super::EventFilter for MusubiEventFilter {
+    type Event = super::musubi::MusubiEvent;
+
+    fn matches(&self, event: &Self::Event) -> bool {
+        self.event_set.matches(event)
+            && self
+                .package_matcher
+                .as_ref()
+                .is_none_or(|package| event.package() == Some(package))
+            && self
+                .archive_matcher
+                .is_none_or(|archive| event.archive() == Some(archive))
+            && self
+                .alias_matcher
+                .as_ref()
+                .is_none_or(|alias| event.alias() == Some(alias))
     }
 }
 
@@ -1681,6 +1764,9 @@ impl EventFilter for DataEventFilter {
             (DataEventFilter::Sorafs(filter), DataEvent::Sorafs(sorafs_event)) => {
                 filter.matches(sorafs_event)
             }
+            (DataEventFilter::Musubi(filter), DataEvent::Musubi(musubi_event)) => {
+                filter.matches(musubi_event)
+            }
             (DataEventFilter::SpaceDirectory(filter), DataEvent::SpaceDirectory(space_event)) => {
                 filter.matches(space_event)
             }
@@ -1756,10 +1842,10 @@ pub mod prelude {
     pub use super::{
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
         ConfidentialEventFilter, ConfigurationEventFilter, DataEventFilter, DomainEventFilter,
-        EscrowEventFilter, ExecutorEventFilter, NftEventFilter, OracleEventFilter, PeerEventFilter,
-        ProofEventFilter, RoleEventFilter, RwaEventFilter, SocialEventFilter,
-        SoradnsDirectoryEventFilter, SorafsGatewayEventFilter, TriggerEventFilter,
-        VerifyingKeyEventFilter,
+        EscrowEventFilter, ExecutorEventFilter, MusubiEventFilter, NftEventFilter,
+        OracleEventFilter, PeerEventFilter, ProofEventFilter, RoleEventFilter, RwaEventFilter,
+        SocialEventFilter, SoradnsDirectoryEventFilter, SorafsGatewayEventFilter,
+        TriggerEventFilter, VerifyingKeyEventFilter,
     };
 }
 #[cfg(test)]
@@ -2258,6 +2344,56 @@ mod tests {
             OracleEventFilter::new().for_feed("other_feed".parse().unwrap()),
         );
         assert!(!mismatching.matches(&event));
+    }
+
+    #[test]
+    fn musubi_filter_matches_structural_package_and_archive() {
+        use crate::{
+            events::data::musubi::{MusubiEvent, MusubiReleasePublishedEventV1},
+            musubi::{
+                ArchiveId, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseDigestV1,
+                MusubiReleaseIdV1,
+            },
+            nexus::DataSpaceId,
+        };
+
+        let package = MusubiPackageIdV1::new(
+            DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "codec".parse().expect("package name"),
+        );
+        let archive = ArchiveId::new([0x22; 32]);
+        let event = DataEvent::Musubi(MusubiEvent::ReleasePublished(
+            MusubiReleasePublishedEventV1 {
+                release: MusubiReleaseIdV1::new(package.clone(), "1.2.3".parse().expect("version")),
+                release_digest: MusubiReleaseDigestV1::new([0x11; 32]),
+                archive_id: archive,
+                published_by: checked_random_account_id(),
+                finalized_height: 9,
+            },
+        ));
+
+        let matching = DataEventFilter::Musubi(
+            MusubiEventFilter::new()
+                .for_package(package.clone())
+                .for_archive(archive),
+        );
+        assert!(matching.matches(&event));
+        let other_package = MusubiPackageIdV1::new(
+            DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "other".parse().expect("package name"),
+        );
+        assert!(
+            !DataEventFilter::Musubi(MusubiEventFilter::new().for_package(other_package))
+                .matches(&event)
+        );
+        assert!(
+            !DataEventFilter::Musubi(
+                MusubiEventFilter::new().for_archive(ArchiveId::new([0x33; 32]))
+            )
+            .matches(&event)
+        );
     }
 }
 

@@ -623,7 +623,8 @@ fn domain_owner_trigger_permissions() -> Result<()> {
             Repeats::from(2_u32),
             bob_id.clone(),
             ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     ));
     let err = test_client
         .submit_blocking(

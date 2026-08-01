@@ -1465,7 +1465,7 @@ mod tests {
         assert_eq!(digest, VEGA_MDL_CANONICAL_RELATION_DIGEST_V1);
         assert_eq!(
             hex::encode(VEGA_MDL_CANONICAL_RELATION_DIGEST_V1),
-            "f327bb5b0aa3a09418a7c062cac81196cdfb65c56259e90195f80983da5307e3"
+            "8bf6a311206ef6789b2b3d613b4e98b9fdc58acd02373a9dbc2b7b64cb7edfbc"
         );
 
         let base_shape =

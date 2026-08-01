@@ -75,6 +75,7 @@ pub mod query_load_profiles;
 #[cfg(feature = "app_api")]
 mod validation_fee_api;
 mod vpn;
+pub use vpn::VpnRelayTrust;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
     use norito::json::{self, JsonSerialize, Value};
@@ -309,7 +310,6 @@ use iroha_data_model::{
         offline::RegisterOfflineDeviceAttestation,
         settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource},
     },
-    musubi::{MusubiNamespace, MusubiPackageId, MusubiPackageRef},
     name::Name,
     nexus::{DataSpaceId, FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId, LaneId},
     nft::NftId,
@@ -2013,7 +2013,8 @@ struct AppState {
     soranet_privacy_tokens: Arc<HashSet<String>>,
     soranet_privacy_allow_nets: Arc<Vec<limits::IpNet>>,
     soranet_privacy_rate_limiter: limits::RateLimiter,
-    allow_nets: Arc<Vec<limits::IpNet>>,
+    api_rate_limit_bypass_nets: Arc<Vec<limits::IpNet>>,
+    internal_api_trusted_nets: Arc<Vec<limits::IpNet>>,
     trusted_proxy_nets: Arc<Vec<limits::IpNet>>,
     norito_rpc_mtls_trusted_proxy_nets: Arc<Vec<limits::IpNet>>,
     preauth_gate: Arc<limits::PreAuthGate>,
@@ -2163,6 +2164,7 @@ struct AppState {
     #[cfg(feature = "app_api")]
     account_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
+    vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
     vpn_quotes: Arc<DashMap<String, vpn::VpnQuoteRecord>>,
     vpn_used_payments: Arc<DashMap<String, ()>>,
     vpn_sessions: Arc<DashMap<String, vpn::VpnSessionRecord>>,
@@ -3583,6 +3585,7 @@ mod preauth_connection_lifetime_tests {
             rate_per_ip: None,
             burst_per_ip: None,
             ban_duration: None,
+            ban_capacity: NonZeroUsize::new(4_096).expect("test ban capacity is non-zero"),
             allow_nets: Vec::new(),
             scheme_limits: vec![limits::SchemeLimit {
                 name: scheme.to_owned(),
@@ -3602,6 +3605,7 @@ mod preauth_connection_lifetime_tests {
             rate_per_ip: None,
             burst_per_ip: None,
             ban_duration: None,
+            ban_capacity: NonZeroUsize::new(4_096).expect("test ban capacity is non-zero"),
             allow_nets: Vec::new(),
             scheme_limits: Vec::new(),
         }));
@@ -9927,9 +9931,7 @@ struct InternalAccountReadResponse {
 #[cfg(feature = "app_api")]
 fn trusted_internal_read_source(app: &AppState, headers: &HeaderMap, remote_ip: IpAddr) -> bool {
     limits::ingress_remote_ip(headers, Some(remote_ip), &app.trusted_proxy_nets).is_some_and(
-        |effective_ip| {
-            effective_ip.is_loopback() || limits::cidr_contains(&app.allow_nets, effective_ip)
-        },
+        |effective_ip| limits::cidr_contains(&app.internal_api_trusted_nets, effective_ip),
     )
 }
 
@@ -9938,7 +9940,7 @@ fn trusted_internal_read_forbidden_response() -> Response {
     torii_proxy_error_response(
         StatusCode::FORBIDDEN,
         "trusted_network_required",
-        "this internal read requires a loopback or explicitly allowlisted transport source",
+        "this internal read requires an explicitly trusted transport source",
     )
 }
 
@@ -10065,14 +10067,15 @@ async fn handler_account_get(
     AxPath(account_id): AxPath<String>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let key_hint = account_id.clone();
     let telemetry = app.telemetry_handle();
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), &key_hint, enforce).await?;
@@ -10095,7 +10098,8 @@ async fn handler_account_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_GET,
     )?;
-    let use_target_account_routes = trusted_internal || visibility.is_signed();
+    let use_target_account_routes =
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || visibility.is_signed();
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         visibility.caller(),
@@ -10133,7 +10137,8 @@ async fn handler_account_transactions_query(
     >,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let tel = app.telemetry.clone();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
@@ -10143,7 +10148,7 @@ async fn handler_account_transactions_query(
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
     let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10175,7 +10180,8 @@ async fn handler_account_transactions_query(
         raw.as_ref(),
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
     )?;
-    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let use_target_account_routes =
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || caller.is_signed();
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -10215,13 +10221,14 @@ async fn handler_transactions_query(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut env = env;
     let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10284,8 +10291,9 @@ async fn handler_transactions_visible_query(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
-    if !trusted_internal {
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
+    if !rate_limit_bypassed {
         check_access_enforced_with_cost(
             &app,
             &headers,
@@ -10325,14 +10333,15 @@ async fn handler_account_assets(
     AxQuery(p): AxQuery<crate::routing::AccountAssetsGetParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let tel = app.telemetry_handle();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let page_limit = limits.clamp_page_limit(p.limit)?;
     let mut p = p;
     p.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10386,10 +10395,11 @@ async fn handler_account_permissions(
     AxQuery(p): AxQuery<crate::filter::Pagination>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let key_hint = account_id.clone();
     let tel = app.telemetry_handle();
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), &key_hint, enforce).await?;
@@ -10412,7 +10422,8 @@ async fn handler_account_permissions(
         &[],
         "/v1/accounts/{account_id}/permissions",
     )?;
-    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let use_target_account_routes =
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || caller.is_signed();
     let route_scope = torii_account_permissions_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -10461,7 +10472,8 @@ async fn handler_account_assets_query(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let tel = app.telemetry_handle();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
@@ -10470,7 +10482,7 @@ async fn handler_account_assets_query(
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let cost = limits.rate_limit_cost(page_limit);
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, true, cost)
             .await?;
@@ -10527,14 +10539,15 @@ async fn handler_account_transactions_get(
     AxQuery(params): AxQuery<crate::routing::AccountTransactionsGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
     let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10560,7 +10573,8 @@ async fn handler_account_transactions_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
-    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let use_target_account_routes =
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || caller.is_signed();
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -10603,14 +10617,15 @@ async fn handler_account_history_get(
     AxQuery(params): AxQuery<crate::routing::AccountHistoryGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
     let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10636,7 +10651,8 @@ async fn handler_account_history_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_HISTORY,
     )?;
-    let use_target_account_routes = trusted_internal || caller.is_signed();
+    let use_target_account_routes =
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || caller.is_signed();
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -10720,12 +10736,13 @@ async fn handler_contracts_activity_get(
     AxQuery(params): AxQuery<crate::routing::ContractActivityGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10756,12 +10773,13 @@ async fn handler_contracts_events_get(
     AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10793,12 +10811,13 @@ async fn handler_contracts_rollups_swaps_fills_get(
     AxQuery(params): AxQuery<crate::routing::ContractRollupSwapsFillsParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10827,12 +10846,13 @@ async fn handler_contracts_rollups_swaps_candles_get(
     AxQuery(params): AxQuery<crate::routing::ContractRollupSwapsCandlesParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10861,12 +10881,13 @@ async fn handler_contracts_rollups_uranai_markets_history_get(
     AxQuery(params): AxQuery<crate::routing::UranaiMarketHistoryParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10895,12 +10916,13 @@ async fn handler_contracts_rollups_trader_activity_get(
     AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10930,9 +10952,10 @@ async fn handler_contracts_rollups_trader_account_get(
     AxQuery(params): AxQuery<crate::routing::TraderRollupAccountParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(limits.default_page_limit);
@@ -10963,12 +10986,13 @@ async fn handler_contracts_rollups_intents_get(
     AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -10996,12 +11020,13 @@ async fn handler_contracts_rollups_vault_positions_get(
     AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -11029,12 +11054,13 @@ async fn handler_contracts_rollups_operators_status_get(
     AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -11062,12 +11088,13 @@ async fn handler_contracts_rollups_margin_health_get(
     AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -11095,12 +11122,13 @@ async fn handler_contracts_rollups_rwa_lots_get(
     AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -11128,12 +11156,13 @@ async fn handler_contracts_rollups_dlmm_hooks_get(
     AxQuery(params): AxQuery<crate::routing::ContractEventGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if !trusted_internal {
+    if !rate_limit_bypassed {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -11167,7 +11196,7 @@ async fn handler_proofs_query(
         Err(resp) => return Ok(resp),
     };
 
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let signed = crate::routing::signed_find_proof_by_id(&dto)?;
         let verified = routing::verify_signed_query_request(signed)?;
         let query_response =
@@ -11195,7 +11224,7 @@ async fn handler_proof_tags(
     AxPath((backend, hash)): AxPath<(String, String)>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_get_proof_tags(app.state.clone(), AxPath((backend, hash))).await;
     }
 
@@ -11268,7 +11297,7 @@ async fn handler_accounts_list(
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/accounts", enforce).await?;
@@ -11296,7 +11325,7 @@ async fn handler_accounts_query(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/accounts/query", true).await?;
     }
     let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
@@ -11328,7 +11357,7 @@ async fn handler_accounts_onboard_plan(
     request: crate::CanonicalJsonOnly<crate::routing::AccountOnboardingPlanRequestDto>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_accounts_onboard_plan(
             app.clone(),
             authenticated_domain.0,
@@ -11363,7 +11392,7 @@ async fn handler_accounts_onboard(
     request: crate::CanonicalJsonOnly<crate::routing::AccountOnboardingApplyRequestDto>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
@@ -11429,7 +11458,7 @@ async fn handler_accounts_faucet(
     request: crate::utils::extractors::NoritoJson<crate::routing::AccountFaucetRequestDto>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_accounts_faucet(app.clone(), request, app.telemetry.clone())
             .await;
     }
@@ -11502,7 +11531,7 @@ async fn handler_accounts_portfolio(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
@@ -11579,7 +11608,7 @@ async fn handler_nexus_public_lane_validators(
         routing::ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS,
     )?;
     let lane_id = routing::parse_lane_id_literal(&lane_literal)?;
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
@@ -11617,7 +11646,7 @@ async fn handler_nexus_public_lane_stake(
     let nexus_enabled = app.state.nexus_snapshot().enabled;
     ensure_nexus_lanes_enabled(nexus_enabled, routing::ENDPOINT_NEXUS_PUBLIC_LANE_STAKE)?;
     let lane_id = routing::parse_lane_id_literal(&lane_literal)?;
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
@@ -11655,7 +11684,7 @@ async fn handler_nexus_public_lane_rewards(
     let nexus_enabled = app.state.nexus_snapshot().enabled;
     ensure_nexus_lanes_enabled(nexus_enabled, routing::ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS)?;
     let lane_id = routing::parse_lane_id_literal(&lane_literal)?;
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
@@ -11697,7 +11726,7 @@ async fn handler_nexus_dataspaces_account_summary(
         nexus_enabled,
         routing::ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
     )?;
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
@@ -11723,7 +11752,7 @@ async fn handler_space_directory_bindings(
     AxQuery(query): AxQuery<crate::routing::SpaceDirectoryBindingsQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
@@ -11750,7 +11779,7 @@ async fn handler_space_directory_manifests(
     AxQuery(query): AxQuery<crate::routing::SpaceDirectoryManifestQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
@@ -11829,7 +11858,7 @@ async fn handler_space_directory_manifest_publish(
     request: crate::utils::extractors::NoritoJson<crate::routing::SpaceDirectoryManifestPublishDto>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_post_space_directory_manifest_publish(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -11870,7 +11899,7 @@ async fn handler_space_directory_manifest_revoke(
     request: crate::utils::extractors::NoritoJson<crate::routing::SpaceDirectoryManifestRevokeDto>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_post_space_directory_manifest_revoke(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -11911,7 +11940,7 @@ async fn handler_repo_agreements(
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_repo_agreements(
             app.state.clone(),
             AxQuery(p),
@@ -11945,7 +11974,7 @@ async fn handler_repo_agreements_query(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_repo_agreements_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
@@ -15245,7 +15274,8 @@ async fn handler_explorer_accounts_list(
         Some(raw) => Some(parse_asset_definition_id(app.as_ref(), &raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/accounts").await?;
     }
@@ -15273,7 +15303,8 @@ async fn handler_explorer_domains_list(
         )?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/domains").await?;
     }
@@ -15306,7 +15337,8 @@ async fn handler_explorer_asset_definitions_list(
         )?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -15351,7 +15383,8 @@ async fn handler_explorer_assets_list(
         Some(raw) => Some(parse_asset_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/assets").await?;
     }
@@ -15391,7 +15424,8 @@ async fn handler_explorer_nfts_list(
         Some(raw) => Some(parse_domain_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/nfts").await?;
     }
@@ -15424,7 +15458,8 @@ async fn handler_explorer_rwas_list(
         Some(raw) => Some(parse_domain_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/rwas").await?;
     }
@@ -15440,7 +15475,8 @@ async fn handler_explorer_blocks_list(
     AxQuery(query): AxQuery<ExplorerPaginationOnly>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/blocks").await?;
     }
@@ -15456,7 +15492,8 @@ async fn handler_explorer_health(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/health").await?;
     }
@@ -15504,7 +15541,8 @@ async fn handler_explorer_transactions_list(
         Some(raw) => Some(parse_asset_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/transactions").await?;
     }
@@ -15560,7 +15598,8 @@ async fn handler_explorer_transactions_latest(
         Some(raw) => Some(parse_asset_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -15647,7 +15686,8 @@ async fn handler_explorer_instructions_list(
         Some(raw) => Some(parse_asset_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/instructions").await?;
     }
@@ -15733,7 +15773,8 @@ async fn handler_explorer_instructions_latest(
         Some(raw) => Some(parse_asset_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -15768,7 +15809,8 @@ async fn handler_explorer_metrics(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/metrics").await?;
     }
@@ -15785,7 +15827,8 @@ async fn handler_defi_oracle_attestation_latest(
     AxQuery(query): AxQuery<DefiOracleAttestationLatestQuery>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -15836,7 +15879,8 @@ async fn handler_oracle_feeds(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/soracles/feeds").await?;
     }
@@ -15860,7 +15904,8 @@ async fn handler_oracle_feed_history(
     AxPath(feed_id_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/soracles/feeds/history").await?;
     }
@@ -15892,7 +15937,8 @@ async fn handler_telemetry_peers_info(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/telemetry/peers-info").await?;
     }
@@ -15908,7 +15954,8 @@ async fn handler_telemetry_propagation(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/telemetry/propagation").await?;
     }
@@ -15927,8 +15974,9 @@ async fn handler_explorer_account_detail(
     AxPath(account_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
-    if !trusted_internal {
+    let rate_limit_bypassed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
+    if !rate_limit_bypassed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/accounts/{id}").await?;
     }
     let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
@@ -15945,7 +15993,8 @@ async fn handler_explorer_account_detail(
         &[],
         CONTEXT_EXPLORER_ACCOUNT_DETAIL,
     )?;
-    let use_target_account_routes = trusted_internal || visibility.is_signed();
+    let use_target_account_routes =
+        trusted_internal_read_source(app.as_ref(), &headers, remote_ip) || visibility.is_signed();
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         visibility.caller(),
@@ -15981,7 +16030,8 @@ async fn handler_explorer_account_qr(
     AxPath(account_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -16006,7 +16056,8 @@ async fn handler_explorer_domain_detail(
     AxPath(domain_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/domains/{id}").await?;
     }
@@ -16023,7 +16074,8 @@ async fn handler_explorer_asset_definition_detail(
     AxPath(def_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -16052,7 +16104,8 @@ async fn handler_explorer_asset_definition_econometrics(
     AxPath(def_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -16081,7 +16134,8 @@ async fn handler_explorer_asset_definition_snapshot(
     AxPath(def_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -16110,7 +16164,8 @@ async fn handler_explorer_asset_detail(
     AxPath(asset_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/assets/{id}").await?;
     }
@@ -16127,7 +16182,8 @@ async fn handler_explorer_nft_detail(
     AxPath(nft_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/nfts/{id}").await?;
     }
@@ -16144,7 +16200,8 @@ async fn handler_explorer_rwa_detail(
     AxPath(rwa_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/rwas/{id}").await?;
     }
@@ -16161,7 +16218,8 @@ async fn handler_explorer_block_detail(
     AxPath(identifier): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/blocks/{id}").await?;
     }
@@ -16178,7 +16236,8 @@ async fn handler_explorer_transaction_detail(
     AxPath(hash): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -16209,7 +16268,8 @@ async fn handler_explorer_instruction_detail(
     AxPath((hash, index)): AxPath<(String, u64)>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -16241,7 +16301,8 @@ async fn handler_explorer_instruction_contract_view(
     AxPath((hash, index)): AxPath<(String, u64)>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -16285,7 +16346,7 @@ async fn handler_assets_definitions_list(
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
@@ -16319,7 +16380,7 @@ async fn handler_assets_definitions_query(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access_enforced(
             &app,
             &headers,
@@ -16354,7 +16415,7 @@ async fn handler_asset_definition_get(
     AxPath(asset): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
@@ -16392,7 +16453,7 @@ async fn handler_asset_holders(
     let query: AxQuery<routing::AssetHolderGetParams> = AxQuery(p.clone());
 
     let _ = query;
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -16427,7 +16488,7 @@ async fn handler_asset_holders_query(
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let cost = limits.rate_limit_cost(page_limit);
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &def_id, true, cost)
             .await?;
@@ -16456,7 +16517,7 @@ async fn handler_confidential_asset_transitions(
     AxPath(def_id): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_confidential_asset_transitions(
             app.state.clone(),
             AxPath(def_id.clone()),
@@ -16475,7 +16536,7 @@ async fn handler_confidential_notes(
     AxQuery(query): AxQuery<crate::routing::ConfidentialNotesQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access(&app, &headers, Some(remote_ip), "v1/confidential/notes").await?;
     }
     routing::handle_v1_confidential_notes(app.state.clone(), AxQuery(query)).await
@@ -16509,7 +16570,7 @@ async fn handler_domains_list(
     AxQuery(p): AxQuery<crate::filter::Pagination>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/domains", enforce).await?;
@@ -16536,7 +16597,7 @@ async fn handler_domains_query(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/domains/query", true).await?;
     }
     let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
@@ -16564,7 +16625,7 @@ async fn handler_nfts_list(
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts", enforce).await?;
@@ -16592,7 +16653,7 @@ async fn handler_nfts_query(
     >,
 ) -> Result<axum::response::Response, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts/query", true).await?;
     }
     let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
@@ -16622,7 +16683,7 @@ async fn handler_rwas_list(
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas", enforce).await?;
@@ -16650,7 +16711,7 @@ async fn handler_rwas_query(
     >,
 ) -> Result<axum::response::Response, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas/query", true).await?;
     }
     let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
@@ -16680,7 +16741,7 @@ async fn handler_subscription_plans_list(
     AxQuery(p): AxQuery<crate::routing::SubscriptionPlanListParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await;
     }
 
@@ -16708,7 +16769,7 @@ async fn handler_subscription_plans_create(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_post_v1_subscription_plan(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -16746,7 +16807,7 @@ async fn handler_subscriptions_list(
     AxQuery(p): AxQuery<crate::routing::SubscriptionListParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await;
     }
 
@@ -16767,7 +16828,7 @@ async fn handler_subscriptions_create(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_post_v1_subscription_create(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(req),
@@ -16795,7 +16856,7 @@ async fn handler_subscription_get(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_subscription_get(app.state.clone(), subscription_id).await;
     }
 
@@ -16825,7 +16886,7 @@ async fn handler_subscription_pause(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_post_v1_subscription_pause(
             app.state.clone(),
             subscription_id,
@@ -16865,7 +16926,7 @@ async fn handler_subscription_resume(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_post_v1_subscription_resume(
             app.state.clone(),
             subscription_id,
@@ -16905,7 +16966,7 @@ async fn handler_subscription_cancel(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_post_v1_subscription_cancel(
             app.state.clone(),
             subscription_id,
@@ -16945,7 +17006,7 @@ async fn handler_subscription_keep(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_post_v1_subscription_keep(
             app.state.clone(),
             subscription_id,
@@ -16985,7 +17046,7 @@ async fn handler_subscription_usage(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_post_v1_subscription_usage(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -17029,7 +17090,7 @@ async fn handler_subscription_charge_now(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_post_v1_subscription_charge_now(
             app.state.clone(),
             subscription_id,
@@ -17064,7 +17125,7 @@ async fn handler_parameters(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_parameters(app.state.clone()).await;
     }
 
@@ -17083,7 +17144,7 @@ async fn handler_webhooks_create(
     body: crate::utils::extractors::JsonOnly<crate::webhook::WebhookCreate>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(webhook::handle_create_webhook(body).await);
     }
 
@@ -17099,7 +17160,7 @@ async fn handler_webhooks_list(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(webhook::handle_list_webhooks().await);
     }
 
@@ -17116,7 +17177,7 @@ async fn handler_webhooks_delete(
     AxPath(id): AxPath<u64>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await);
     }
 
@@ -17424,7 +17485,7 @@ async fn handler_get_vpn_profile(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/vpn/profile").await?;
-    vpn::handle_get_vpn_profile(app.kiso.clone()).await
+    vpn::handle_get_vpn_profile(app).await
 }
 
 /// POST /v1/vpn/sessions — create a signed Sora VPN session for the active wallet account.
@@ -17787,7 +17848,7 @@ async fn handler_schema(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_schema().await);
     }
     validate_api_token(app.as_ref(), &headers)?;
@@ -17817,7 +17878,7 @@ async fn handler_profile(
     AxQuery(params): AxQuery<routing::profiling::ProfileParams>,
 ) -> Result<Vec<u8>, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access(&app, &headers, Some(remote_ip), "debug/pprof/profile").await?;
     }
     let lock = PROFILING_LOCK
@@ -20186,7 +20247,7 @@ async fn handler_status_tail(
     let nexus_routing_policy = nexus.routing_policy.clone();
     let offline = status_offline_snapshot(&app);
     // Allowlist bypass
-    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         let authoritative_block_height =
             u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
         return routing::handle_status(
@@ -20241,7 +20302,7 @@ async fn handler_status_root(
     let nexus_enabled = nexus.enabled;
     let nexus_routing_policy = nexus.routing_policy.clone();
     let offline = status_offline_snapshot(&app);
-    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         let authoritative_block_height =
             u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
         return routing::handle_status(
@@ -20290,7 +20351,7 @@ async fn handler_metrics(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<String, Error> {
     let nexus_enabled = app.state.nexus_snapshot().enabled;
-    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         return routing::handle_metrics(&app.telemetry, nexus_enabled).await;
     }
     validate_api_token(app.as_ref(), &headers)?;
@@ -23784,10 +23845,13 @@ fn torii_authorize_signed_query_routes(
 
 fn payload_matches_query<Query>(payload: &[u8]) -> bool
 where
-    Query: norito::codec::Decode,
+    Query: norito::codec::Decode + norito::codec::Encode,
 {
     let mut cursor = payload;
-    <Query as norito::codec::Decode>::decode(&mut cursor).is_ok() && cursor.is_empty()
+    let Ok(query) = <Query as norito::codec::Decode>::decode(&mut cursor) else {
+        return false;
+    };
+    cursor.is_empty() && norito::codec::Encode::encode(&query) == payload
 }
 
 fn is_trigger_inventory_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
@@ -23838,11 +23902,11 @@ fn is_public_control_plane_query(query: &iroha_data_model::query::QueryWithParam
 
 fn decode_query_payload<Query>(payload: &[u8]) -> Option<Query>
 where
-    Query: norito::codec::Decode,
+    Query: norito::codec::Decode + norito::codec::Encode,
 {
     let mut cursor = payload;
     let query = <Query as norito::codec::Decode>::decode(&mut cursor).ok()?;
-    cursor.is_empty().then_some(query)
+    (cursor.is_empty() && norito::codec::Encode::encode(&query) == payload).then_some(query)
 }
 
 fn target_scope_singular_query(
@@ -26017,23 +26081,6 @@ fn torii_contract_target_read_route(
         .and_then(|address| address.dataspace_id().ok())
         .or_else(|| alias.and_then(|alias| contract_alias_dataspace_id(app, alias)))?;
     resolve_torii_route_for_dataspace_id(app, dataspace_id).ok()
-}
-
-#[cfg(feature = "app_api")]
-fn torii_musubi_namespace_read_route(
-    app: &AppState,
-    namespace: &MusubiNamespace,
-) -> Option<RoutingDecision> {
-    dataspace_id_for_alias_segment(app, namespace.dataspace_segment())
-        .and_then(|dataspace_id| resolve_torii_route_for_dataspace_id(app, dataspace_id).ok())
-}
-
-#[cfg(feature = "app_api")]
-fn torii_musubi_package_read_route(
-    app: &AppState,
-    package: &MusubiPackageId,
-) -> Option<RoutingDecision> {
-    torii_musubi_namespace_read_route(app, &package.namespace)
 }
 
 #[cfg(feature = "app_api")]
@@ -29355,14 +29402,6 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
         ToriiReadEndpointV1::ContractStateGet => "/v1/contracts/state".to_owned(),
         ToriiReadEndpointV1::ContractViewPost => "/v1/contracts/view".to_owned(),
         ToriiReadEndpointV1::ContractViewBatchPost => "/v1/contracts/view/batch".to_owned(),
-        ToriiReadEndpointV1::MusubiPackagesSearch => "/v1/musubi/packages".to_owned(),
-        ToriiReadEndpointV1::MusubiReleaseGet => "/v1/musubi/release".to_owned(),
-        ToriiReadEndpointV1::MusubiPackageReleases => "/v1/musubi/releases".to_owned(),
-        ToriiReadEndpointV1::MusubiPackageVersions => "/v1/musubi/versions".to_owned(),
-        ToriiReadEndpointV1::MusubiAliasResolve => format!(
-            "/v1/musubi/aliases/{}",
-            torii_read_path_arg_encoded(request, 0, "alias")?
-        ),
     };
     Ok(path)
 }
@@ -30565,69 +30604,6 @@ async fn execute_torii_read_request_locally(
             };
             insert_routing_headers(&mut response, routing_decision, routed_by);
             response
-        }
-        ToriiReadEndpointV1::MusubiPackagesSearch => {
-            let params = match decode_torii_proxy_query::<musubi::MusubiPackageSearchParams>(
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                musubi::handler_search_packages(State(app.clone()), crate::NoritoQuery(params))
-                    .await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::MusubiReleaseGet => {
-            let params = match decode_torii_proxy_query::<musubi::MusubiReleaseQueryParams>(
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                musubi::handler_get_release(State(app.clone()), crate::NoritoQuery(params)).await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::MusubiPackageReleases => {
-            let params = match decode_torii_proxy_query::<musubi::MusubiPackageQueryParams>(
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                musubi::handler_list_releases(State(app.clone()), crate::NoritoQuery(params)).await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::MusubiPackageVersions => {
-            let params = match decode_torii_proxy_query::<musubi::MusubiPackageQueryParams>(
-                request.query_string.as_deref(),
-            ) {
-                Ok(params) => params,
-                Err(response) => return response,
-            };
-            finish_torii_read_result(
-                musubi::handler_list_versions(State(app.clone()), crate::NoritoQuery(params)).await,
-                routing_decision,
-                routed_by,
-            )
-        }
-        ToriiReadEndpointV1::MusubiAliasResolve => {
-            let Ok(alias) = torii_proxy_path_arg(&request, 0, "alias") else {
-                return torii_proxy_path_arg(&request, 0, "alias").unwrap_err();
-            };
-            finish_torii_read_result(
-                musubi::handler_resolve_alias(State(app.clone()), AxPath(alias)).await,
-                routing_decision,
-                routed_by,
-            )
         }
     }
 }
@@ -34699,7 +34675,8 @@ async fn handler_kaigi_call(
     AxPath(call_raw): AxPath<String>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/kaigi/calls/{call_id}").await?;
     }
@@ -34716,7 +34693,8 @@ async fn handler_kaigi_call_signals(
     AxQuery(params): AxQuery<routing::KaigiCallSignalsParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let allowed =
+        limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     if !allowed {
         check_access(
             &app,
@@ -34740,7 +34718,7 @@ async fn handler_kaigi_call_events_sse(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     let call_id = parse_kaigi_call_id(&call_raw)?;
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_kaigi_call_events_sse(
             app.events.clone(),
             call_id,
@@ -34893,7 +34871,7 @@ async fn handler_kaigi_relays_sse(
         params.relay = Some(parsed.1);
     }
 
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(
             routing::handle_v1_kaigi_relays_sse(app.events.clone(), AxQuery(params))
                 .into_response(),
@@ -34946,7 +34924,7 @@ async fn handler_soradns_directory_events(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(
             routing::handle_v1_soradns_directory_events_sse(app.events.clone()).into_response(),
         );
@@ -35015,7 +34993,11 @@ async fn enforce_canonical_stream_admission(
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|connect_info| connect_info.0.ip());
-    if !limits::is_allowed_by_cidr(req.headers(), remote_ip, &admission.app.allow_nets) {
+    if !limits::is_allowed_by_cidr(
+        req.headers(),
+        remote_ip,
+        &admission.app.api_rate_limit_bypass_nets,
+    ) {
         let high_load_threshold =
             canonical_stream_high_load_threshold(&admission.app, admission.route);
         if admission.app.queue.active_len() >= high_load_threshold {
@@ -35701,7 +35683,7 @@ async fn handler_gov_stream(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_gov_stream(app.events.clone()).into_response());
     }
     validate_api_token(app.as_ref(), &headers)?;
@@ -35726,7 +35708,7 @@ async fn handler_telemetry_live(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_telemetry_live(
             app.state.clone(),
             app.kura.clone(),
@@ -35765,7 +35747,7 @@ async fn handler_explorer_transactions_stream(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_transactions_stream(
             app.kura.clone(),
             app.events.clone(),
@@ -35797,7 +35779,7 @@ async fn handler_explorer_blocks_stream(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(
             routing::handle_v1_explorer_blocks_stream(app.kura.clone(), app.events.clone())
                 .into_response(),
@@ -35828,7 +35810,7 @@ async fn handler_explorer_instructions_stream(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_explorer_instructions_stream(
             app.kura.clone(),
             app.events.clone(),
@@ -36075,7 +36057,7 @@ async fn handler_get_contract_code(
     axum::extract::Path(code_hash): axum::extract::Path<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_get_contract_code(
             app.state.clone(),
             axum::extract::Path(code_hash),
@@ -36119,7 +36101,7 @@ async fn handler_get_contract_code_view(
     axum::extract::Path(code_hash): axum::extract::Path<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::contract_sources::handle_get_contract_code_view(
             app.state.clone(),
             code_hash,
@@ -36405,7 +36387,7 @@ async fn handler_get_vk_by_backend_name(
     axum::extract::Path((backend, name)): axum::extract::Path<(String, String)>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_get_vk(
             app.state.clone(),
             axum::extract::Path((backend, name)),
@@ -36444,7 +36426,8 @@ async fn handler_get_proof_by_backend_hash(
     axum::extract::Path((backend, hash)): axum::extract::Path<(String, String)>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let enforce = !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let enforce =
+        !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     check_proof_access(
         &app,
         &headers,
@@ -36489,7 +36472,7 @@ async fn handler_list_vk(
     AxQuery(q): AxQuery<crate::routing::VkListQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_list_vk(app.state.clone(), AxQuery(q)).await;
     }
     validate_api_token(app.as_ref(), &headers)?;
@@ -36515,7 +36498,7 @@ async fn handler_list_proofs(
     AxQuery(q): AxQuery<crate::routing::ProofListQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_list_proofs(
             app.state.clone(),
             app.proof_limits,
@@ -36562,7 +36545,7 @@ async fn handler_count_proofs(
     AxQuery(q): AxQuery<crate::routing::ProofListQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_count_proofs(
             app.state.clone(),
             app.proof_limits,
@@ -38283,186 +38266,6 @@ async fn handler_post_contract_view_batch(
             Err(err)
         }
     }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_musubi_search_packages_routed(
-    State(app): State<SharedAppState>,
-    request: axum::extract::Request,
-) -> Result<AxResponse, Error> {
-    let query_string = request.uri().query().map(ToOwned::to_owned);
-    let params = match decode_torii_proxy_query::<musubi::MusubiPackageSearchParams>(
-        query_string.as_deref(),
-    ) {
-        Ok(params) => params,
-        Err(response) => return Ok(response.into_response()),
-    };
-
-    if let Some(namespace) = params
-        .namespace
-        .as_deref()
-        .and_then(|namespace| namespace.parse::<MusubiNamespace>().ok())
-        && let Some(route) = torii_musubi_namespace_read_route(app.as_ref(), &namespace)
-    {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::MusubiPackagesSearch,
-            Vec::new(),
-            query_string,
-            Vec::new(),
-        )
-        .await
-        .into_response());
-    }
-
-    if params.namespace.is_none() {
-        return Ok(execute_torii_read_fanout_via_nexus(
-            &app,
-            ToriiFanoutRouteScopeV1::AllDataspaces,
-            ToriiReadFanoutMergeV1::List,
-            ToriiReadEndpointV1::MusubiPackagesSearch,
-            Vec::new(),
-            query_string,
-            Vec::new(),
-            ToriiProxyResponseFormatV1::Json,
-        )
-        .await
-        .into_response());
-    }
-
-    Ok(
-        musubi::handler_search_packages(State(app), crate::NoritoQuery(params))
-            .await?
-            .into_response(),
-    )
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_musubi_get_release_routed(
-    State(app): State<SharedAppState>,
-    request: axum::extract::Request,
-) -> Result<AxResponse, Error> {
-    let query_string = request.uri().query().map(ToOwned::to_owned);
-    let params =
-        match decode_torii_proxy_query::<musubi::MusubiReleaseQueryParams>(query_string.as_deref())
-        {
-            Ok(params) => params,
-            Err(response) => return Ok(response.into_response()),
-        };
-    if let Some(package_ref) = params
-        .package
-        .as_deref()
-        .and_then(|package| package.parse::<MusubiPackageRef>().ok())
-        && let Some(route) = torii_musubi_package_read_route(app.as_ref(), &package_ref.package)
-    {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::MusubiReleaseGet,
-            Vec::new(),
-            query_string,
-            Vec::new(),
-        )
-        .await
-        .into_response());
-    }
-
-    Ok(
-        musubi::handler_get_release(State(app), crate::NoritoQuery(params))
-            .await?
-            .into_response(),
-    )
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_musubi_list_releases_routed(
-    State(app): State<SharedAppState>,
-    request: axum::extract::Request,
-) -> Result<AxResponse, Error> {
-    let query_string = request.uri().query().map(ToOwned::to_owned);
-    let params =
-        match decode_torii_proxy_query::<musubi::MusubiPackageQueryParams>(query_string.as_deref())
-        {
-            Ok(params) => params,
-            Err(response) => return Ok(response.into_response()),
-        };
-    if let Some(package) = params
-        .package
-        .as_deref()
-        .and_then(|package| package.parse::<MusubiPackageId>().ok())
-        && let Some(route) = torii_musubi_package_read_route(app.as_ref(), &package)
-    {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::MusubiPackageReleases,
-            Vec::new(),
-            query_string,
-            Vec::new(),
-        )
-        .await
-        .into_response());
-    }
-
-    Ok(
-        musubi::handler_list_releases(State(app), crate::NoritoQuery(params))
-            .await?
-            .into_response(),
-    )
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_musubi_list_versions_routed(
-    State(app): State<SharedAppState>,
-    request: axum::extract::Request,
-) -> Result<AxResponse, Error> {
-    let query_string = request.uri().query().map(ToOwned::to_owned);
-    let params =
-        match decode_torii_proxy_query::<musubi::MusubiPackageQueryParams>(query_string.as_deref())
-        {
-            Ok(params) => params,
-            Err(response) => return Ok(response.into_response()),
-        };
-    if let Some(package) = params
-        .package
-        .as_deref()
-        .and_then(|package| package.parse::<MusubiPackageId>().ok())
-        && let Some(route) = torii_musubi_package_read_route(app.as_ref(), &package)
-    {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::MusubiPackageVersions,
-            Vec::new(),
-            query_string,
-            Vec::new(),
-        )
-        .await
-        .into_response());
-    }
-
-    Ok(
-        musubi::handler_list_versions(State(app), crate::NoritoQuery(params))
-            .await?
-            .into_response(),
-    )
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_musubi_resolve_alias_routed(
-    State(app): State<SharedAppState>,
-    AxPath(alias): AxPath<String>,
-) -> Result<AxResponse, Error> {
-    Ok(execute_torii_fanout_singleton_read(
-        &app,
-        ToriiReadEndpointV1::MusubiAliasResolve,
-        vec![alias],
-        None,
-        Vec::new(),
-    )
-    .await
-    .into_response())
 }
 
 #[cfg(feature = "app_api")]
@@ -41020,7 +40823,7 @@ async fn handler_post_vk_register(
     request: NoritoJson<crate::routing::ZkVkRegisterDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_post_vk_register(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -41062,7 +40865,7 @@ async fn handler_post_vk_update(
     request: NoritoJson<crate::routing::ZkVkUpdateDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_post_vk_update(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -42198,7 +42001,8 @@ async fn handler_proof_record_get(
     AxPath(id): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let enforce = !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let enforce =
+        !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     let start = std::time::Instant::now();
     check_proof_access(
         &app,
@@ -42303,7 +42107,8 @@ async fn handler_proof_retention_status(
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-    let enforce = !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let enforce =
+        !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
     check_proof_access(
         &app,
         &headers,
@@ -42401,61 +42206,228 @@ async fn handler_pipeline_preflight(
 
 async fn handler_pipeline_recovery_fastpq_proofs(
     State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(height): AxPath<u64>,
-) -> Result<impl IntoResponse, Error> {
-    let Some(sidecar) = app.kura.read_pipeline_metadata(height) else {
+    crate::NoritoStringQuery(query): crate::NoritoStringQuery<PipelineFastpqRecoveryQuery>,
+) -> Result<Response, Error> {
+    // The route's sealed middleware has already verified its canonical,
+    // replay-resistant operator signature before extractors or this handler can
+    // run. Charge the authenticated request before touching Kura or acquiring
+    // compute capacity.
+    check_access_with_rate_limiter(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/pipeline/recovery/fastpq-proofs",
+        &app.rate_limiter,
+    )
+    .await?;
+
+    let page = PipelineFastpqRecoveryPage::parse(&query)?;
+    let admission = acquire_query_admission(&app, true).await?;
+    let kura = Arc::clone(&app.kura);
+    let (result, _admission) = tokio::task::spawn_blocking(move || {
+        // Keep both general-query and heavy-work permits in the physical worker.
+        // Cancelling the HTTP future therefore cannot release capacity while
+        // Kura reads, transcript reconstruction, or encoding still run.
+        let result = build_pipeline_recovery_fastpq_response(&kura, height, page);
+        (result, admission)
+    })
+    .await
+    .map_err(|error| Error::AppServiceUnavailable {
+        code: "pipeline_recovery_fastpq_worker_failed",
+        message: error.to_string(),
+    })?;
+    let serialized = result?;
+    Ok(axum::http::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(serialized))
+        .expect("static FASTPQ recovery response is valid"))
+}
+
+const PIPELINE_FASTPQ_RECOVERY_DEFAULT_LIMIT: usize = 16;
+const PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT: usize = 64;
+const PIPELINE_FASTPQ_RECOVERY_MAX_PROOF_BYTES: usize = 4 * 1024 * 1024;
+const PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES: usize = 8 * 1024 * 1024;
+const PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
+const PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES: usize = 24 * 1024 * 1024;
+
+#[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug, Default)]
+struct PipelineFastpqRecoveryQuery {
+    #[norito(default)]
+    offset: Option<u64>,
+    #[norito(default)]
+    limit: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PipelineFastpqRecoveryPage {
+    offset: usize,
+    limit: usize,
+}
+
+impl PipelineFastpqRecoveryPage {
+    fn parse(query: &PipelineFastpqRecoveryQuery) -> Result<Self, Error> {
+        let offset = usize::try_from(query.offset.unwrap_or_default())
+            .map_err(|_| conversion_error("FASTPQ recovery offset exceeds this host".to_owned()))?;
+        let raw_limit = query
+            .limit
+            .unwrap_or(PIPELINE_FASTPQ_RECOVERY_DEFAULT_LIMIT as u64);
+        if raw_limit == 0 || raw_limit > PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT as u64 {
+            return Err(conversion_error(format!(
+                "FASTPQ recovery limit must be between 1 and {PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT}"
+            )));
+        }
+        let limit = usize::try_from(raw_limit)
+            .map_err(|_| conversion_error("FASTPQ recovery limit exceeds this host".to_owned()))?;
+        Ok(Self { offset, limit })
+    }
+}
+
+fn fastpq_recovery_capacity_error(message: impl Into<String>) -> Error {
+    Error::AppServiceUnavailable {
+        code: "pipeline_recovery_fastpq_artifact_too_large",
+        message: message.into(),
+    }
+}
+
+fn charge_fastpq_recovery_artifact_bytes(used: &mut usize, amount: usize) -> Result<(), Error> {
+    let next = used.checked_add(amount).ok_or_else(|| {
+        fastpq_recovery_capacity_error("FASTPQ recovery artifact size overflowed")
+    })?;
+    if next > PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES {
+        return Err(fastpq_recovery_capacity_error(format!(
+            "selected FASTPQ recovery artifacts exceed the {} byte response-source budget",
+            PIPELINE_FASTPQ_RECOVERY_MAX_ARTIFACT_BYTES
+        )));
+    }
+    *used = next;
+    Ok(())
+}
+
+fn build_pipeline_recovery_fastpq_response(
+    kura: &Kura,
+    height: u64,
+    page: PipelineFastpqRecoveryPage,
+) -> Result<String, Error> {
+    let Some(sidecar) = kura.read_pipeline_metadata(height) else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
     };
+    let total = sidecar.fastpq_proofs.len();
+    let start = page.offset.min(total);
+    let end = start.saturating_add(page.limit).min(total);
+    let mut artifact_bytes = 0;
+    let proofs = sidecar.fastpq_proofs[start..end]
+        .iter()
+        .map(|snapshot| {
+            fastpq_proof_snapshot_recovery_json(kura, height, snapshot, &mut artifact_bytes)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut root = norito::json::Map::new();
     root.insert(
-        "height".to_string(),
+        "height".to_owned(),
         norito::json::to_value(&sidecar.height).expect("serialize pipeline height"),
     );
     root.insert(
-        "block_hash".to_string(),
+        "block_hash".to_owned(),
         norito::json::to_value(&sidecar.block_hash.to_string())
             .expect("serialize pipeline block hash"),
     );
     root.insert(
-        "proofs".to_string(),
-        norito::json::Value::Array(
-            sidecar
-                .fastpq_proofs
-                .iter()
-                .map(|snapshot| fastpq_proof_snapshot_recovery_json(&app.kura, height, snapshot))
-                .collect(),
-        ),
+        "total_proofs".to_owned(),
+        norito::json::to_value(&u64::try_from(total).unwrap_or(u64::MAX))
+            .expect("serialize FASTPQ proof total"),
     );
-    match norito::json::to_json_pretty(&norito::json::Value::Object(root)) {
-        Ok(serialized) => {
-            let body = axum::body::Body::from(serialized);
-            Ok(axum::http::Response::builder()
-                .status(axum::http::StatusCode::OK)
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(body)
-                .unwrap())
-        }
-        Err(err) => Err(Error::SerializationFailure {
-            context: "pipeline_recovery_fastpq_proofs",
-            source: Box::new(err),
-        }),
+    root.insert(
+        "offset".to_owned(),
+        norito::json::to_value(&u64::try_from(page.offset).unwrap_or(u64::MAX))
+            .expect("serialize FASTPQ proof offset"),
+    );
+    root.insert(
+        "limit".to_owned(),
+        norito::json::to_value(&u64::try_from(page.limit).unwrap_or(u64::MAX))
+            .expect("serialize FASTPQ proof limit"),
+    );
+    root.insert(
+        "next_offset".to_owned(),
+        norito::json::to_value(&(end < total).then(|| u64::try_from(end).unwrap_or(u64::MAX)))
+            .expect("serialize FASTPQ proof continuation"),
+    );
+    root.insert("proofs".to_owned(), norito::json::Value::Array(proofs));
+    let serialized =
+        norito::json::to_json_pretty(&norito::json::Value::Object(root)).map_err(|source| {
+            Error::SerializationFailure {
+                context: "pipeline_recovery_fastpq_proofs",
+                source: Box::new(source),
+            }
+        })?;
+    if serialized.len() > PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES {
+        return Err(fastpq_recovery_capacity_error(format!(
+            "encoded FASTPQ recovery page exceeds the {} byte response budget",
+            PIPELINE_FASTPQ_RECOVERY_MAX_RESPONSE_BYTES
+        )));
     }
+    Ok(serialized)
 }
 
 fn fastpq_proof_snapshot_recovery_json(
     kura: &Kura,
     height: u64,
     snapshot: &iroha_core::kura::FastpqProofSnapshot,
-) -> norito::json::Value {
-    let mut entry = snapshot.to_json_value();
-    let norito::json::Value::Object(ref mut object) = entry else {
-        return entry;
-    };
+    artifact_bytes: &mut usize,
+) -> Result<norito::json::Value, Error> {
+    if snapshot.proof.len() > PIPELINE_FASTPQ_RECOVERY_MAX_PROOF_BYTES {
+        return Err(fastpq_recovery_capacity_error(format!(
+            "FASTPQ proof exceeds the {} byte per-proof budget",
+            PIPELINE_FASTPQ_RECOVERY_MAX_PROOF_BYTES
+        )));
+    }
+    charge_fastpq_recovery_artifact_bytes(artifact_bytes, snapshot.proof.len())?;
 
-    match fastpq_committed_batch_base64(kura, height, snapshot) {
+    // Build the object field-by-field. `FastpqProofSnapshot::to_json_value`
+    // eagerly encodes its batch, which would duplicate expensive work before
+    // this endpoint can enforce its source-byte budget.
+    let mut object = norito::json::Map::new();
+    object.insert(
+        "entry_hash".to_owned(),
+        norito::json::to_value(&snapshot.entry_hash.to_string())
+            .expect("serialize FASTPQ entry hash"),
+    );
+    object.insert(
+        "batch_index".to_owned(),
+        norito::json::to_value(&snapshot.batch_index).expect("serialize FASTPQ batch index"),
+    );
+    object.insert(
+        "parameter".to_owned(),
+        norito::json::to_value(&snapshot.parameter).expect("serialize FASTPQ parameter"),
+    );
+    object.insert(
+        "transition_count".to_owned(),
+        norito::json::to_value(&snapshot.transition_count)
+            .expect("serialize FASTPQ transition count"),
+    );
+    object.insert(
+        "trace_commitment".to_owned(),
+        norito::json::to_value(&snapshot.trace_commitment.to_string())
+            .expect("serialize FASTPQ trace commitment"),
+    );
+    object.insert(
+        "proof_digest".to_owned(),
+        norito::json::to_value(&snapshot.proof_digest.to_string())
+            .expect("serialize FASTPQ proof digest"),
+    );
+    object.insert(
+        "proof".to_owned(),
+        norito::json::to_value(&base64::engine::general_purpose::STANDARD.encode(&snapshot.proof))
+            .expect("serialize FASTPQ proof"),
+    );
+
+    match fastpq_committed_batch_base64(kura, height, snapshot, artifact_bytes)? {
         Some((batch, reconstructed)) => {
             object.insert(
                 "batch".to_string(),
@@ -42489,21 +42461,20 @@ fn fastpq_proof_snapshot_recovery_json(
         }
     }
 
-    entry
+    Ok(norito::json::Value::Object(object))
 }
 
 fn fastpq_committed_batch_base64(
     kura: &Kura,
     height: u64,
     snapshot: &iroha_core::kura::FastpqProofSnapshot,
-) -> Option<(String, bool)> {
+    artifact_bytes: &mut usize,
+) -> Result<Option<(String, bool)>, Error> {
     if snapshot.transition_count == 0 {
-        return None;
+        return Ok(None);
     }
     if !snapshot.batch.transitions.is_empty() {
-        let batch = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&snapshot.batch).expect("encode FASTPQ recovery batch"));
-        return Some((batch, false));
+        return encode_fastpq_recovery_batch(&snapshot.batch, false, artifact_bytes).map(Some);
     }
 
     let Some(height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
@@ -42511,7 +42482,7 @@ fn fastpq_committed_batch_base64(
             height,
             "cannot reconstruct FASTPQ batch for invalid block height"
         );
-        return None;
+        return Ok(None);
     };
     let Some(block) = kura.get_block(height) else {
         iroha_logger::warn!(
@@ -42519,7 +42490,7 @@ fn fastpq_committed_batch_base64(
             entry_hash = %snapshot.entry_hash,
             "cannot reconstruct FASTPQ batch because committed block is unavailable"
         );
-        return None;
+        return Ok(None);
     };
     let Some(transcripts) = block.fastpq_transcripts().get(&snapshot.entry_hash) else {
         iroha_logger::warn!(
@@ -42527,7 +42498,7 @@ fn fastpq_committed_batch_base64(
             entry_hash = %snapshot.entry_hash,
             "cannot reconstruct FASTPQ batch because committed block has no matching transcript"
         );
-        return None;
+        return Ok(None);
     };
     match iroha_core::fastpq::batch_from_transcript_bundle(
         snapshot.parameter.clone(),
@@ -42535,11 +42506,7 @@ fn fastpq_committed_batch_base64(
         snapshot.entry_hash,
         transcripts,
     ) {
-        Ok(batch) => Some((
-            base64::engine::general_purpose::STANDARD
-                .encode(norito::to_bytes(&batch).expect("encode reconstructed FASTPQ batch")),
-            true,
-        )),
+        Ok(batch) => encode_fastpq_recovery_batch(&batch, true, artifact_bytes).map(Some),
         Err(err) => {
             iroha_logger::warn!(
                 height = height.get(),
@@ -42547,9 +42514,31 @@ fn fastpq_committed_batch_base64(
                 ?err,
                 "failed to reconstruct FASTPQ batch from committed transcripts"
             );
-            None
+            Ok(None)
         }
     }
+}
+
+fn encode_fastpq_recovery_batch(
+    batch: &fastpq_prover::TransitionBatch,
+    reconstructed: bool,
+    artifact_bytes: &mut usize,
+) -> Result<(String, bool), Error> {
+    let bytes = norito::to_bytes(batch).map_err(|source| Error::SerializationFailure {
+        context: "pipeline_recovery_fastpq_batch",
+        source: Box::new(source),
+    })?;
+    if bytes.len() > PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES {
+        return Err(fastpq_recovery_capacity_error(format!(
+            "FASTPQ batch exceeds the {} byte per-batch budget",
+            PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES
+        )));
+    }
+    charge_fastpq_recovery_artifact_bytes(artifact_bytes, bytes.len())?;
+    Ok((
+        base64::engine::general_purpose::STANDARD.encode(bytes),
+        reconstructed,
+    ))
 }
 
 #[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
@@ -43181,6 +43170,14 @@ async fn handler_pipeline_transaction_status(
         Ok(format) => format,
         Err(resp) => return Ok(resp),
     };
+    check_access_with_rate_limiter(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/pipeline/transactions/status",
+        &app.pipeline_status_rate_limiter,
+    )
+    .await?;
     let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
     let hash_raw = query
         .hash
@@ -43200,15 +43197,6 @@ async fn handler_pipeline_transaction_status(
 
     #[cfg(feature = "app_api")]
     {
-        check_access_with_rate_limiter(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/pipeline/transactions/status",
-            &app.pipeline_status_rate_limiter,
-        )
-        .await?;
-
         let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
         if let Some(route) = queue::routing_plan_hint(&hash).map(|plan| plan.coordinator_route()) {
             let hinted = execute_torii_single_route_read(
@@ -43361,7 +43349,7 @@ async fn handler_policy(
     let queue_len = app.queue.active_len() as u64;
     let token_required = app.require_api_token;
 
-    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         return Ok(build_policy_body(
             app.require_api_token,
             &app.fee_policy,
@@ -43412,7 +43400,7 @@ async fn handler_signed_query(
         Err(resp) => return Ok(resp),
     };
 
-    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         admit_signed_query_preauth(app.as_ref(), &headers, Some(remote.ip())).await?;
     }
 
@@ -47266,6 +47254,123 @@ async fn handler_ledger_state_proof(
     }
 }
 
+fn finalized_block_not_found() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+    ))
+}
+
+fn finalized_block_wire_internal_error(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::InternalError(
+        message.into(),
+    ))
+}
+
+fn finalized_block_wire_fits_carrier_v1(wire_len: usize) -> bool {
+    wire_len <= iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1
+}
+
+fn executed_block_wire_too_large_response(height: NonZeroU64) -> Response {
+    utils::respond_with_status_and_format(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        ErrorEnvelope::new(
+            "executed_block_wire_too_large",
+            "The finalized block exceeds the authenticated block-proof carrier limit.",
+        )
+        .with_details(ErrorDetails {
+            endpoint: Some(format!("/v1/ledger/block/{height}")),
+            expected: Some(format!(
+                "at most {} bytes",
+                iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1
+            )),
+            ..Default::default()
+        }),
+        utils::current_response_format(),
+    )
+}
+
+async fn handler_ledger_executed_block_wire(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(height): axum::extract::Path<u64>,
+) -> Result<Response, Error> {
+    let height = NonZeroU64::new(height)
+        .ok_or_else(|| conversion_error("block height must be at least 1".to_owned()))?;
+    let height_usize = NonZeroUsize::new(
+        height
+            .get()
+            .try_into()
+            .map_err(|_| conversion_error("block height exceeds host pointer width".to_owned()))?,
+    )
+    .ok_or_else(|| conversion_error("block height must be at least 1".to_owned()))?;
+    let committed_index = height_usize.get().saturating_sub(1);
+
+    // Kura may already contain a staged body which has not reached the
+    // committed state journal. Snapshot the finalized hash first so a
+    // height-only storage lookup cannot publish that staged body. Release the
+    // state view before storage access and encoding; finalized hashes are
+    // immutable, and neither operation should hold the state read guard.
+    let committed_hash = {
+        let state_view = app.state.view();
+        state_view
+            .block_hashes()
+            .get(committed_index)
+            .copied()
+            .ok_or_else(finalized_block_not_found)?
+    };
+    let block = app
+        .kura
+        .get_block(height_usize)
+        .ok_or_else(finalized_block_not_found)?;
+    if block.header().height() != height {
+        return Err(finalized_block_wire_internal_error(format!(
+            "committed block slot {} contains header height {}",
+            height,
+            block.header().height()
+        )));
+    }
+    if block.hash() != committed_hash {
+        return Err(finalized_block_wire_internal_error(format!(
+            "committed block slot {height} does not match the finalized state hash"
+        )));
+    }
+    if !block.has_results() {
+        return Err(finalized_block_wire_internal_error(format!(
+            "committed block {height} has no execution results"
+        )));
+    }
+    let predicted_wire_len = norito::codec::Encode::encoded_len(block.as_ref())
+        .checked_add(1 + norito::core::Header::SIZE)
+        .ok_or_else(|| {
+            finalized_block_wire_internal_error(format!(
+                "canonical wire length overflow for committed block {height}"
+            ))
+        })?;
+    if !finalized_block_wire_fits_carrier_v1(predicted_wire_len) {
+        return Ok(executed_block_wire_too_large_response(height));
+    }
+    let wire = block.encode_wire().map_err(|error| {
+        finalized_block_wire_internal_error(format!(
+            "failed to encode committed block {height} as canonical SignedBlockWire: {error}"
+        ))
+    })?;
+    if wire.len() != predicted_wire_len {
+        return Err(finalized_block_wire_internal_error(format!(
+            "canonical wire length changed between bounded preflight and encoding for committed block {height}"
+        )));
+    }
+
+    let mut response = Response::new(Body::from(wire));
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static(utils::NORITO_MIME_TYPE),
+    );
+    response.headers_mut().insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
+}
+
 async fn handler_block_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path((height, entry_hex)): axum::extract::Path<(u64, String)>,
@@ -47280,27 +47385,10 @@ async fn handler_block_proof(
     let proofs = app
         .state
         .block_proofs_for_entry(block_height, entry_hash)
-        .map_err(|err| match err {
-            BlockProofError::ZeroHeight | BlockProofError::HeightOutOfRange(_) => {
-                conversion_error(err.to_string())
-            }
-            BlockProofError::BlockNotFound(_)
-            | BlockProofError::MissingResults(_)
-            | BlockProofError::EntrypointNotFound { .. }
-            | BlockProofError::ExecutionResultMissing { .. }
-            | BlockProofError::MerkleProofUnavailable { .. } => {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::NotFound,
-                ))
-            }
-        })?;
+        .map_err(map_block_proof_error)?;
     #[cfg(feature = "connect")]
     if app.connect_enabled {
-        if let Err(err) = app
-            .connect_bus
-            .broadcast_block_proof(block_height, &entry_hash, &proofs)
-            .await
-        {
+        if let Err(err) = app.connect_bus.broadcast_block_proof(&proofs).await {
             iroha_logger::warn!(
                 %err,
                 height,
@@ -47310,6 +47398,26 @@ async fn handler_block_proof(
         }
     }
     Ok(NoritoBody(proofs))
+}
+
+fn map_block_proof_error(error: BlockProofError) -> Error {
+    match error {
+        BlockProofError::ZeroHeight | BlockProofError::HeightOutOfRange(_) => {
+            conversion_error(error.to_string())
+        }
+        BlockProofError::BlockNotFound(_) | BlockProofError::EntrypointNotFound { .. } => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        }
+        BlockProofError::BlockHeightMismatch { .. }
+        | BlockProofError::MissingResults(_)
+        | BlockProofError::ExecutionResultMissing { .. }
+        | BlockProofError::MerkleProofUnavailable { .. }
+        | BlockProofError::ExecutedBlockWireHashUnavailable(_) => Error::Query(
+            iroha_data_model::ValidationFail::InternalError(error.to_string()),
+        ),
+    }
 }
 
 async fn handler_sumeragi_vrf_commit(
@@ -49423,7 +49531,8 @@ pub struct Torii {
     soranet_privacy_tokens: std::sync::Arc<std::collections::HashSet<String>>,
     soranet_privacy_allow_nets: std::sync::Arc<Vec<limits::IpNet>>,
     soranet_privacy_rate_limiter: limits::RateLimiter,
-    allow_nets: std::sync::Arc<Vec<limits::IpNet>>,
+    api_rate_limit_bypass_nets: std::sync::Arc<Vec<limits::IpNet>>,
+    internal_api_trusted_nets: std::sync::Arc<Vec<limits::IpNet>>,
     trusted_proxy_nets: std::sync::Arc<Vec<limits::IpNet>>,
     high_load_tx_threshold: usize,
     high_load_stream_tx_threshold: usize,
@@ -49529,6 +49638,7 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     account_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
+    vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     soracloud_hf_config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
 }
@@ -49643,6 +49753,7 @@ pub struct ToriiRuntimeDeps {
         Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
+    vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
     torii_proxy_bridge_signer: Option<KeyPair>,
 }
 
@@ -49723,6 +49834,7 @@ impl ToriiRuntimeDeps {
             sorafs_gateway_compliance_feed_transport: None,
             sorafs_cache: None,
             vpn_helper_ticket_secret: None,
+            vpn_relay_trust: None,
             torii_proxy_bridge_signer: None,
         }
     }
@@ -50196,6 +50308,13 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_vpn_helper_ticket_secret(mut self, secret: Option<[u8; 32]>) -> Self {
         self.vpn_helper_ticket_secret = secret;
+        self
+    }
+
+    /// Attach immutable VPN relay trust authenticated during node startup.
+    #[must_use]
+    pub fn with_vpn_relay_trust(mut self, trust: Option<VpnRelayTrust>) -> Self {
+        self.vpn_relay_trust = trust.map(Arc::new);
         self
     }
 
@@ -51478,6 +51597,10 @@ impl Torii {
             catalog_get(handler_ledger_state_proof),
         );
         builder.route(
+            &route_catalog::core::LEDGER_EXECUTED_BLOCK_WIRE,
+            catalog_get(handler_ledger_executed_block_wire),
+        );
+        builder.route(
             &route_catalog::core::LEDGER_BLOCK_PROOF,
             catalog_get(handler_block_proof),
         );
@@ -51831,40 +51954,108 @@ impl Torii {
     #[cfg(feature = "app_api")]
     fn add_musubi_routes(&self, builder: &mut RouterBuilder) {
         builder.route(
-            &route_catalog::musubi::PACKAGES,
-            catalog_get(handler_musubi_search_packages_routed),
+            &route_catalog::musubi::EXACT_PACKAGE,
+            catalog_post(musubi::handler_find_exact_package),
         );
         builder.route(
-            &route_catalog::musubi::RELEASE,
-            catalog_get(handler_musubi_get_release_routed),
+            &route_catalog::musubi::EXACT_RELEASE,
+            catalog_post(musubi::handler_find_exact_release),
         );
         builder.route(
-            &route_catalog::musubi::RELEASES,
-            catalog_get(handler_musubi_list_releases_routed),
+            &route_catalog::musubi::RESOLVER_INDEX,
+            catalog_post(musubi::handler_find_resolver_index),
         );
         builder.route(
             &route_catalog::musubi::VERSIONS,
-            catalog_get(handler_musubi_list_versions_routed),
+            catalog_post(musubi::handler_find_versions),
+        );
+        builder.route(
+            &route_catalog::musubi::MAINTAINERS,
+            catalog_post(musubi::handler_find_maintainers),
+        );
+        builder.route(
+            &route_catalog::musubi::ARCHIVE_LOCATIONS,
+            catalog_post(musubi::handler_find_archive_locations),
         );
         builder.route(
             &route_catalog::musubi::ALIAS,
-            catalog_get(handler_musubi_resolve_alias_routed),
+            catalog_post(musubi::handler_find_alias),
         );
         builder.route(
-            &route_catalog::musubi::PUBLISH_RELEASE,
-            catalog_post(musubi::handler_build_publish_release_instruction),
+            &route_catalog::musubi::ALIAS_HISTORY,
+            catalog_post(musubi::handler_find_alias_history),
         );
         builder.route(
-            &route_catalog::musubi::YANK_RELEASE,
-            catalog_post(musubi::handler_build_yank_release_instruction),
+            &route_catalog::musubi::ORDERED_PREFIX,
+            catalog_post(musubi::handler_find_ordered_prefix),
         );
         builder.route(
-            &route_catalog::musubi::SET_ALIAS,
-            catalog_post(musubi::handler_build_set_alias_instruction),
+            &route_catalog::musubi::NAMESPACE_BINDING_REGISTER,
+            catalog_post(musubi::handler_build_namespace_binding_register),
         );
         builder.route(
-            &route_catalog::musubi::ASSERT_RELEASE_EXISTS,
-            catalog_post(musubi::handler_build_assert_release_exists_instruction),
+            &route_catalog::musubi::ARCHIVE_REGISTER,
+            catalog_post(musubi::handler_build_archive_register),
+        );
+        builder.route(
+            &route_catalog::musubi::ARCHIVE_LOCATION_ADD,
+            catalog_post(musubi::handler_build_archive_location_add),
+        );
+        builder.route(
+            &route_catalog::musubi::ARCHIVE_LOCATION_RETIRE,
+            catalog_post(musubi::handler_build_archive_location_retire),
+        );
+        builder.route(
+            &route_catalog::musubi::RELEASE_PUBLISH,
+            catalog_post(musubi::handler_build_release_publish),
+        );
+        builder.route(
+            &route_catalog::musubi::RELEASE_YANK_SET,
+            catalog_post(musubi::handler_build_release_yank_set),
+        );
+        builder.route(
+            &route_catalog::musubi::PACKAGE_METADATA_SET,
+            catalog_post(musubi::handler_build_package_metadata_set),
+        );
+        builder.route(
+            &route_catalog::musubi::PACKAGE_MEMBER_INVITE,
+            catalog_post(musubi::handler_build_package_member_invite),
+        );
+        builder.route(
+            &route_catalog::musubi::PACKAGE_MEMBER_ACCEPT,
+            catalog_post(musubi::handler_build_package_member_accept),
+        );
+        builder.route(
+            &route_catalog::musubi::PACKAGE_MEMBER_SET_ROLE,
+            catalog_post(musubi::handler_build_package_member_set_role),
+        );
+        builder.route(
+            &route_catalog::musubi::PACKAGE_MEMBER_REMOVE,
+            catalog_post(musubi::handler_build_package_member_remove),
+        );
+        builder.route(
+            &route_catalog::musubi::ALIAS_REGISTER,
+            catalog_post(musubi::handler_build_alias_register),
+        );
+        builder.route(
+            &route_catalog::musubi::PACKAGE_RECOVER,
+            catalog_post(musubi::handler_build_package_recover),
+        );
+        builder.route(
+            &route_catalog::musubi::ALIAS_RETARGET,
+            catalog_post(musubi::handler_build_alias_retarget),
+        );
+        builder.route(
+            &route_catalog::musubi::ARTIFACT_TAKEDOWN,
+            catalog_post(musubi::handler_build_artifact_takedown),
+        );
+        builder.route(
+            &route_catalog::musubi::REGISTRY_POLICY_SET,
+            catalog_post(musubi::handler_build_registry_policy_set),
+        );
+        builder.route(
+            &route_catalog::musubi::RELEASE_DIGEST_ASSERT,
+            catalog_post(musubi::handler_build_release_digest_assert),
         );
     }
 
@@ -52648,6 +52839,7 @@ impl Torii {
     /// Policy and pipeline recovery routes
     fn add_policy_and_pipeline_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
+        let app_state = builder.state().clone();
         builder.route(
             &route_catalog::pipeline::TRANSACTION_STATUS,
             catalog_get(handler_pipeline_transaction_status),
@@ -52666,7 +52858,7 @@ impl Torii {
         );
         builder.route(
             &route_catalog::pipeline::RECOVERY_FASTPQ_PROOFS,
-            catalog_get(handler_pipeline_recovery_fastpq_proofs),
+            catalog_get(handler_pipeline_recovery_fastpq_proofs).authenticated_operator(app_state),
         );
         builder.route(
             &route_catalog::pipeline::POLICY,
@@ -53777,10 +53969,6 @@ impl Torii {
             sorafs::api::handle_get_sorafs_transparency_explorer_ui
         );
         capacity_post!(
-            TRANSPARENCY_SOURCE_ENTRY,
-            sorafs::api::handle_post_sorafs_transparency_source_entry
-        );
-        capacity_post!(
             TRANSPARENCY_PRIVACY_SOURCE_EVENT,
             sorafs::api::handle_post_sorafs_transparency_privacy_aggregate_source_event
         );
@@ -54492,6 +54680,7 @@ impl Torii {
                 .unwrap_or_else(|err| panic!("invalid SoraFS static-site bindings: {err}"))
                 .map(Arc::new);
         let vpn_helper_ticket_secret = runtime_deps.vpn_helper_ticket_secret;
+        let vpn_relay_trust = runtime_deps.vpn_relay_trust;
         let torii_proxy_bridge_signer = runtime_deps
             .torii_proxy_bridge_signer
             .unwrap_or_else(|| da_receipt_signer.clone());
@@ -54675,7 +54864,8 @@ impl Torii {
             Some(content_limits_snapshot.max_egress_bytes_per_second.get()),
             Some(content_limits_snapshot.egress_burst_bytes.get()),
         );
-        let allow_nets = limits::parse_cidrs(&config.api_allow_cidrs);
+        let api_rate_limit_bypass_nets = limits::parse_cidrs(&config.api_rate_limit_bypass_cidrs);
+        let internal_api_trusted_nets = limits::parse_cidrs(&config.internal_api_trusted_cidrs);
         let soranet_privacy_allow_nets =
             limits::parse_cidrs(&config.soranet_privacy_ingest.allow_cidrs);
         let soranet_privacy_tokens: HashSet<String> = config
@@ -54730,6 +54920,7 @@ impl Torii {
                 .map(std::num::NonZeroU32::get),
             burst_per_ip: config.preauth_burst_per_ip.map(std::num::NonZeroU32::get),
             ban_duration: config.preauth_temp_ban,
+            ban_capacity: config.preauth_ban_capacity,
             allow_nets: limits::parse_cidrs(&config.preauth_allow_cidrs),
             scheme_limits: config
                 .preauth_scheme_limits
@@ -55538,7 +55729,7 @@ impl Torii {
             }
             let service = Arc::new(identifier_resolution::IdentifierResolutionService::new());
             for (index, program_cfg) in cfg.programs.iter().enumerate() {
-                let signer = KeyPair::from_private_key(program_cfg.signer_private_key.0.clone())
+                let signer = KeyPair::from_private_key(program_cfg.signer_private_key.clone())
                     .unwrap_or_else(|err| {
                         panic!("invalid torii.ram_lfe.programs[{index}].signer_private_key: {err}")
                     });
@@ -55672,7 +55863,8 @@ impl Torii {
             soranet_privacy_tokens: std::sync::Arc::new(soranet_privacy_tokens),
             soranet_privacy_allow_nets: std::sync::Arc::new(soranet_privacy_allow_nets),
             soranet_privacy_rate_limiter,
-            allow_nets: std::sync::Arc::new(allow_nets),
+            api_rate_limit_bypass_nets: std::sync::Arc::new(api_rate_limit_bypass_nets),
+            internal_api_trusted_nets: std::sync::Arc::new(internal_api_trusted_nets),
             trusted_proxy_nets: std::sync::Arc::new(limits::parse_cidrs(
                 &config.transport.trusted_proxy_cidrs,
             )),
@@ -55776,6 +55968,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_onboarding,
             vpn_helper_ticket_secret,
+            vpn_relay_trust,
             soracloud_runtime,
             soracloud_hf_config,
         }
@@ -56090,7 +56283,8 @@ impl Torii {
             soranet_privacy_tokens: self.soranet_privacy_tokens.clone(),
             soranet_privacy_allow_nets: self.soranet_privacy_allow_nets.clone(),
             soranet_privacy_rate_limiter: self.soranet_privacy_rate_limiter.clone(),
-            allow_nets: self.allow_nets.clone(),
+            api_rate_limit_bypass_nets: self.api_rate_limit_bypass_nets.clone(),
+            internal_api_trusted_nets: self.internal_api_trusted_nets.clone(),
             trusted_proxy_nets: self.trusted_proxy_nets.clone(),
             norito_rpc_mtls_trusted_proxy_nets: Arc::new(limits::parse_cidrs(
                 &self.norito_rpc.mtls_trusted_proxy_cidrs,
@@ -56251,6 +56445,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_onboarding: self.account_onboarding.clone(),
             vpn_helper_ticket_secret: self.vpn_helper_ticket_secret,
+            vpn_relay_trust: self.vpn_relay_trust.clone(),
             vpn_quotes: Arc::new(DashMap::new()),
             vpn_used_payments: Arc::new(DashMap::new()),
             vpn_sessions: Arc::new(DashMap::new()),
@@ -56836,7 +57031,7 @@ async fn handler_openapi(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access(&app, &headers, Some(remote_ip), "openapi").await?;
     }
 

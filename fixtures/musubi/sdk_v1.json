@@ -1,0 +1,321 @@
+{
+  "format": "iroha-musubi-sdk-v1",
+  "fixture_version": 1,
+  "rust_owner": "iroha_data_model::musubi",
+  "canonical": {
+    "namespace": ["sora"],
+    "package_name": ["math-utils"],
+    "selector": {
+      "namespace": ["sora"],
+      "name": ["math-utils"]
+    },
+    "package": {
+      "home_dataspace": 7,
+      "scope": {"kind": "DataspaceRoot", "value": null},
+      "name": ["math-utils"]
+    },
+    "version": {
+      "major": 1,
+      "minor": 2,
+      "patch": 3,
+      "prerelease": [
+        {"kind": "AlphaNumeric", "value": "rc"},
+        {"kind": "Numeric", "value": 1}
+      ]
+    },
+    "requirements": [
+      {
+        "text": "^1.2.3",
+        "wire": {
+          "kind": "Caret",
+          "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        }
+      },
+      {
+        "text": "~1.2.3",
+        "wire": {
+          "kind": "Tilde",
+          "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        }
+      },
+      {
+        "text": "1.2.*",
+        "wire": {"kind": "MinorWildcard", "value": {"major": 1, "minor": 2}}
+      },
+      {
+        "text": "=1.2.3",
+        "wire": {
+          "kind": "Exact",
+          "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        }
+      },
+      {
+        "text": ">=1.2.3,<2.0.0",
+        "wire": {
+          "kind": "Comparators",
+          "value": [
+            {
+              "op": {"kind": "GreaterOrEqual", "value": null},
+              "version": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+            },
+            {
+              "op": {"kind": "Less", "value": null},
+              "version": {"major": 2, "minor": 0, "patch": 0, "prerelease": []}
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "routes": [
+    {
+      "id": "exact-package",
+      "path": "/v1/musubi/queries/exact-package",
+      "request": {
+        "package": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        }
+      },
+      "response": {
+        "package": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        },
+        "claimed_namespace": ["sora"],
+        "claimed_namespace_binding": [[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]],
+        "owners": ["sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"],
+        "member_accounts": ["sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"],
+        "claimed_at_height": 42,
+        "revisions": {"governance": 1, "metadata": 1, "archive_locations": 1}
+      }
+    },
+    {
+      "id": "exact-release",
+      "path": "/v1/musubi/queries/exact-release",
+      "request": {
+        "release": {
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "version": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        }
+      },
+      "response": {
+        "manifest": {
+          "release": {
+            "package": {
+              "home_dataspace": 7,
+              "scope": {"kind": "DataspaceRoot", "value": null},
+              "name": ["math-utils"]
+            },
+            "version": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+          },
+          "edition": {"kind": "V1", "value": null},
+          "abi": {
+            "abi_version": 1,
+            "abi_hash": [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]
+          },
+          "dependencies": [],
+          "exports": ["add"],
+          "interface_digest": [[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3]],
+          "metadata": {
+            "description": ["Canonical arithmetic helpers"],
+            "readme": ["README.md"],
+            "license": ["Apache-2.0"],
+            "repository": ["https://example.invalid/sora/math-utils"],
+            "keywords": [["math"], ["utility"]]
+          },
+          "archive_id": [[4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4]],
+          "verification_lock_digest": [[5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5]]
+        },
+        "release_digest": [[6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6]],
+        "published_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        "published_at_height": 43,
+        "yank": {
+          "release": {
+            "package": {
+              "home_dataspace": 7,
+              "scope": {"kind": "DataspaceRoot", "value": null},
+              "name": ["math-utils"]
+            },
+            "version": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+          },
+          "yanked": false,
+          "reason": ["initial publication"],
+          "changed_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+          "changed_at_height": 43,
+          "revision": 1
+        },
+        "artifact_governance": {"kind": "Available", "value": null},
+        "revisions": {"yank": 1, "artifact_governance": 1}
+      }
+    },
+    {
+      "id": "resolver-index",
+      "path": "/v1/musubi/queries/resolver-index",
+      "request": {
+        "package": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        },
+        "requirement": {
+          "kind": "Caret",
+          "value": {"major": 1, "minor": 2, "patch": 3, "prerelease": []}
+        },
+        "page": {"limit": 50, "cursor": null}
+      },
+      "response": {
+        "chain_id": "musubi-fixture-chain",
+        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "items": [],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "versions",
+      "path": "/v1/musubi/queries/versions",
+      "request": {
+        "package": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        },
+        "page": {"limit": 50, "cursor": null}
+      },
+      "response": {
+        "items": [{"major": 1, "minor": 2, "patch": 3, "prerelease": []}],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "maintainers",
+      "path": "/v1/musubi/queries/maintainers",
+      "request": {
+        "package": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        },
+        "page": {"limit": 50, "cursor": null}
+      },
+      "response": {
+        "items": [],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "archive-locations",
+      "path": "/v1/musubi/queries/archive-locations",
+      "request": {
+        "archive_id": [[4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4]],
+        "page": {"limit": 50, "cursor": null}
+      },
+      "response": {
+        "items": [],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "alias",
+      "path": "/v1/musubi/queries/alias",
+      "request": {"alias": ["math"], "page": {"limit": 50, "cursor": null}},
+      "response": {
+        "alias": ["math"],
+        "target": {
+          "home_dataspace": 7,
+          "scope": {"kind": "DataspaceRoot", "value": null},
+          "name": ["math-utils"]
+        },
+        "registered_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        "pricing_revision": 1,
+        "paid_xor": 8,
+        "registered_at_height": 44,
+        "history_revision": 1
+      }
+    },
+    {
+      "id": "alias-history",
+      "path": "/v1/musubi/queries/alias-history",
+      "request": {"alias": ["math"], "page": {"limit": 50, "cursor": null}},
+      "response": {
+        "items": [{
+          "alias": ["math"],
+          "revision": 1,
+          "action": {"kind": "Registered", "value": null},
+          "previous_target": null,
+          "target": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "governance_action": null,
+          "finalized_height": 44
+        }],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    },
+    {
+      "id": "ordered-prefix",
+      "path": "/v1/musubi/queries/ordered-prefix",
+      "request": {"prefix": ["sora/"], "page": {"limit": 50, "cursor": null}},
+      "response": {
+        "chain_id": "musubi-fixture-chain",
+        "genesis_hash": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+        "items": [{
+          "selector": {"namespace": ["sora"], "name": ["math-utils"]},
+          "package": {
+            "home_dataspace": 7,
+            "scope": {"kind": "DataspaceRoot", "value": null},
+            "name": ["math-utils"]
+          },
+          "latest_selectable": {"major": 1, "minor": 2, "patch": 3, "prerelease": []},
+          "metadata_revision": 1,
+          "index_revision": 9
+        }],
+        "next_cursor": null,
+        "snapshot": {
+          "finalized_height": 50,
+          "finalized_block_hash": [7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],
+          "index_revision": 9
+        }
+      }
+    }
+  ],
+  "reject": {
+    "fixture_versions": [0, 2],
+    "names": ["", "Upper", "leading-", "two--hyphens", "has/slash"],
+    "versions": ["1.2", "01.2.3", "1.02.3", "1.2.03", "1.2.3+build", "1.2.3-01"],
+    "requirements": ["", "1", "1.2", "1.2.x", ">=1.0.0,"]
+  }
+}

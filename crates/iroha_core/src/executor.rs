@@ -93,6 +93,107 @@ use crate::{
     },
     sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
 };
+
+/// One-shot proof that the executor debited one exact sponsored fee charge.
+pub(crate) struct VerifiedFeeSponsorCharge {
+    submitting_authority: AccountId,
+    program_id: FeeSponsorProgramId,
+    kind: FeeChargeKind,
+    source_id: AssetId,
+    destination: Option<AccountId>,
+    amount: Quantity,
+}
+
+impl VerifiedFeeSponsorCharge {
+    fn transfer(
+        submitting_authority: AccountId,
+        program_id: FeeSponsorProgramId,
+        kind: FeeChargeKind,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            submitting_authority,
+            program_id,
+            kind,
+            source_id,
+            destination: Some(destination),
+            amount,
+        }
+    }
+
+    fn burn(
+        submitting_authority: AccountId,
+        program_id: FeeSponsorProgramId,
+        kind: FeeChargeKind,
+        source_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            submitting_authority,
+            program_id,
+            kind,
+            source_id,
+            destination: None,
+            amount,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transfer_for_test(
+        submitting_authority: AccountId,
+        program_id: FeeSponsorProgramId,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Quantity,
+    ) -> Self {
+        Self::transfer(
+            submitting_authority,
+            program_id,
+            FeeChargeKind::PipelineGas,
+            source_id,
+            destination,
+            amount,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn burn_for_test(
+        submitting_authority: AccountId,
+        program_id: FeeSponsorProgramId,
+        source_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self::burn(
+            submitting_authority,
+            program_id,
+            FeeChargeKind::Nexus,
+            source_id,
+            amount,
+        )
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        AccountId,
+        FeeSponsorProgramId,
+        FeeChargeKind,
+        AssetId,
+        Option<AccountId>,
+        Quantity,
+    ) {
+        (
+            self.submitting_authority,
+            self.program_id,
+            self.kind,
+            self.source_id,
+            self.destination,
+            self.amount,
+        )
+    }
+}
 // NoritoDecode alias is unused; keep Decode via norito::codec where needed inline
 
 const EXECUTOR_LENGTH_PREFIX_BYTES: usize = 8;
@@ -205,11 +306,15 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindSorafsModerationSnapshot(_)
         | SingularQueryBox::FindSorafsModerationEvents(_)
         | SingularQueryBox::FindDataspaceNameOwnerById(_)
-        | SingularQueryBox::FindMusubiReleaseByRef(_)
-        | SingularQueryBox::FindMusubiPackageVersions(_)
-        | SingularQueryBox::FindMusubiPackageReleases(_)
-        | SingularQueryBox::SearchMusubiPackages(_)
-        | SingularQueryBox::FindMusubiShortAliasByName(_)
+        | SingularQueryBox::FindMusubiExactPackageV1(_)
+        | SingularQueryBox::FindMusubiExactReleaseV1(_)
+        | SingularQueryBox::FindMusubiResolverIndexV1(_)
+        | SingularQueryBox::FindMusubiVersionsV1(_)
+        | SingularQueryBox::FindMusubiMaintainersV1(_)
+        | SingularQueryBox::FindMusubiArchiveLocationsV1(_)
+        | SingularQueryBox::FindMusubiAliasV1(_)
+        | SingularQueryBox::FindMusubiAliasHistoryV1(_)
+        | SingularQueryBox::FindMusubiOrderedPrefixV1(_)
         | SingularQueryBox::FindAccountByAlias(_)
         | SingularQueryBox::FindDomainById(_) => NativeQueryAccess::Registered,
 
@@ -231,9 +336,6 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindFxCorridorPolicyRegistry(_)
         | SingularQueryBox::FindFxCorridorPolicyById(_)
         | SingularQueryBox::FindNftById(_) => NativeQueryAccess::AllLedger,
-
-        #[cfg(test)]
-        SingularQueryBox::__TestFallback => NativeQueryAccess::AllLedger,
     }
 }
 
@@ -377,21 +479,25 @@ fn native_iterable_query_access(
         }
         return Err(invalid_native_iterable_query());
     }
-    if let Some(payload) = payload_for!(data_model_query::CommittedTransaction, CommittedTransaction)
+    if let Some(payload) =
+        payload_for!(data_model_query::CommittedTransaction, CommittedTransaction)
     {
-        if any_exact!(payload; data_model_query::FindTransactions) {
+        if any_exact!(
+            payload;
+            data_model_query::transaction::prelude::FindTransactions
+        ) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
     }
     if let Some(payload) = payload_for!(iroha_data_model::block::SignedBlock, SignedBlock) {
-        if any_exact!(payload; data_model_query::FindBlocks) {
+        if any_exact!(payload; data_model_query::block::prelude::FindBlocks) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
     }
     if let Some(payload) = payload_for!(BlockHeader, BlockHeader) {
-        if any_exact!(payload; data_model_query::FindBlockHeaders) {
+        if any_exact!(payload; data_model_query::block::prelude::FindBlockHeaders) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
@@ -407,9 +513,10 @@ fn native_iterable_query_access(
         }
         return Err(invalid_native_iterable_query());
     }
-    if let Some(payload) =
-        payload_for!(iroha_data_model::nexus::FeeSponsorProgram, FeeSponsorProgram)
-    {
+    if let Some(payload) = payload_for!(
+        iroha_data_model::nexus::FeeSponsorProgram,
+        FeeSponsorProgram
+    ) {
         if any_exact!(payload; data_model_query::nexus::prelude::FindFeeSponsorPrograms) {
             return Ok(NativeQueryAccess::AllLedger);
         }
@@ -449,8 +556,7 @@ fn native_iterable_query_access(
         iroha_data_model::oracle::OracleProviderStatsRecord,
         OracleProviderStatsRecord
     ) {
-        if any_exact!(payload; data_model_query::oracle::prelude::FindOracleProviderStatsByFeedId)
-        {
+        if any_exact!(payload; data_model_query::oracle::prelude::FindOracleProviderStatsByFeedId) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
@@ -487,8 +593,7 @@ fn native_iterable_query_access(
         iroha_data_model::oracle::DefiOracleAttestation,
         DefiOracleAttestation
     ) {
-        if any_exact!(payload; data_model_query::oracle::prelude::FindDefiOracleAttestationsByKey)
-        {
+        if any_exact!(payload; data_model_query::oracle::prelude::FindDefiOracleAttestationsByKey) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
@@ -585,8 +690,10 @@ fn validate_builtin_native_query_permission(
             if account == *authority || has_global()? {
                 return Ok(());
             }
-            let permission: Permission =
-                executor_permission::query::CanReadAccountData { account: account.clone() }.into();
+            let permission: Permission = executor_permission::query::CanReadAccountData {
+                account: account.clone(),
+            }
+            .into();
             authority_has_permission(world, authority, &permission)?
                 .then_some(())
                 .ok_or_else(|| {
@@ -1607,8 +1714,7 @@ fn ensure_contract_deployment_permission_mutation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     instruction: &InstructionBox,
 ) -> Result<(), ValidationFail> {
-    let is_genesis =
-        state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
+    let is_genesis = is_initial_genesis_context(state_transaction);
     if !is_genesis && mutates_contract_deployment_permission(instruction) {
         return Err(ValidationFail::NotPermitted(
             "granting or revoking CanRegisterSmartContractCode is only allowed inside the genesis block or the exact missing-authority deployment bootstrap"
@@ -4368,11 +4474,11 @@ pub fn quote_nexus_fee_admission(
     )
 }
 
-/// Return whether fee processing is running inside the chain's initial genesis block.
+/// Return whether execution is running inside the chain's initial genesis block.
 ///
 /// The empty committed-block history keeps a genesis-shaped header replayed against live state
-/// subject to ordinary signed fee limits.
-fn is_initial_genesis_context(state_transaction: &StateTransaction<'_, '_>) -> bool {
+/// outside every bootstrap-only permission and fee exception.
+pub(crate) fn is_initial_genesis_context(state_transaction: &StateTransaction<'_, '_>) -> bool {
     state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()
 }
 
@@ -5168,13 +5274,18 @@ impl Executor {
             ),
         };
         let payer_asset = AssetId::with_scope(asset_definition_id.clone(), payer, payer_scope);
-        let transfer_result = if fee_sponsor.is_some() {
-            crate::smartcontracts::isi::asset::isi::execute_fee_sponsor_custody_transfer(
-                state_transaction,
-                authority,
+        let transfer_result = if let Some(program_id) = fee_sponsor {
+            let charge = VerifiedFeeSponsorCharge::transfer(
+                authority.clone(),
+                program_id.clone(),
+                FeeChargeKind::PipelineGas,
                 payer_asset,
                 tech_account,
                 qty.clone(),
+            );
+            crate::smartcontracts::isi::asset::isi::execute_verified_fee_sponsor_charge(
+                state_transaction,
+                charge,
             )
         } else {
             let transfer = iroha_data_model::isi::Transfer::<
@@ -5372,10 +5483,21 @@ impl Executor {
         state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let fee_burn_result = if matches!(payer_kind, NexusFeePayer::Sponsor) {
-            crate::smartcontracts::isi::asset::isi::execute_fee_sponsor_custody_burn(
-                state_transaction,
+            let program_id = sponsor.clone().ok_or_else(|| {
+                ValidationFail::InternalError(
+                    "sponsored Nexus burn lost its verified program id".to_owned(),
+                )
+            })?;
+            let charge = VerifiedFeeSponsorCharge::burn(
+                authority.clone(),
+                program_id,
+                FeeChargeKind::Nexus,
                 payer_asset,
                 fee.clone(),
+            );
+            crate::smartcontracts::isi::asset::isi::execute_verified_fee_sponsor_charge(
+                state_transaction,
+                charge,
             )
         } else {
             let burn = Burn::asset_quantity(fee.clone(), payer_asset);
@@ -7478,8 +7600,7 @@ impl Executor {
             ));
         }
 
-        let is_genesis =
-            state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
+        let is_genesis = is_initial_genesis_context(state_transaction);
 
         validate_initial_permission_or_role_mutation(
             state_transaction,
@@ -7700,9 +7821,7 @@ impl Executor {
                     .map(|rm| rm.object.clone())
             })
         {
-            if !(state_transaction._curr_block.is_genesis()
-                && state_transaction.block_hashes.is_empty())
-            {
+            if !is_initial_genesis_context(state_transaction) {
                 let domain_owner = state_transaction
                     .world
                     .domain(nft_id.domain())
@@ -7910,6 +8029,7 @@ impl Executor {
     ///
     /// # Errors
     ///
+    /// - The caller is outside initial genesis and does not hold `CanUpgradeExecutor`;
     /// - Failed to load `raw_executor`;
     /// - Failed to prepare the IVM runtime;
     /// - Failed to execute the entrypoint of the IVM bytecode.
@@ -7920,6 +8040,14 @@ impl Executor {
         authority: &AccountId,
     ) -> Result<(), VMError> {
         trace!("Running executor migration");
+
+        let can_upgrade: Permission = executor_permission::executor::CanUpgradeExecutor.into();
+        if !is_initial_genesis_context(state_transaction)
+            && !authority_has_permission(&state_transaction.world, authority, &can_upgrade)
+                .map_err(|_| VMError::PermissionDenied)?
+        {
+            return Err(VMError::PermissionDenied);
+        }
 
         // Load new executor bytecode
         let loaded_executor = LoadedExecutor::load(raw_executor)?;
@@ -8781,12 +8909,12 @@ fn initial_permission_capability_root_authority(
                 &token.asset_definition,
             )?
         }
-        "CanMintAsset" => {
-            let token = decode!(executor_permission::asset::CanMintAsset);
+        "CanMintAssetToAccount" => {
+            let token = decode!(executor_permission::asset::CanMintAssetToAccount);
             authority_owns_asset_definition(
                 &state_transaction.world,
                 authority,
-                token.asset.definition(),
+                &token.asset_definition,
             )?
         }
         "CanBurnAsset" => {
@@ -9992,11 +10120,12 @@ fn can_mint_asset(
     if authority_has_permission(world, authority, &by_definition)? {
         return Ok(true);
     }
-    let exact_asset: Permission = executor_permission::asset::CanMintAsset {
-        asset: asset_id.clone(),
+    let exact_destination: Permission = executor_permission::asset::CanMintAssetToAccount {
+        asset_definition: asset_id.definition().clone(),
+        account: asset_id.account().clone(),
     }
     .into();
-    authority_has_permission(world, authority, &exact_asset)
+    authority_has_permission(world, authority, &exact_destination)
 }
 
 fn can_modify_asset_definition_metadata(
@@ -10519,7 +10648,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanMintAssetWithDefinition",
     "CanBurnAssetWithDefinition",
     "CanTransferAssetWithDefinition",
-    "CanMintAsset",
+    "CanMintAssetToAccount",
     "CanBurnAsset",
     "CanTransferAsset",
     "CanModifyAssetMetadataWithDefinition",
@@ -10587,7 +10716,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanResolveSorafsCapacityDispute",
     "CanRegisterSorafsProviderOwner",
     "CanUnregisterSorafsProviderOwner",
-    "CanSetMusubiShortAlias",
     "CanIngestSoranetPrivacy",
     "CanRegisterOracleFeed",
     "CanProposeOracleChange",
@@ -10634,8 +10762,7 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
     authority: &AccountId,
     reg_asset_definition: &Register<AssetDefinition>,
 ) -> Result<(), ValidationFail> {
-    let is_genesis_context = state_transaction._curr_block.is_genesis()
-        && state_transaction.block_hashes.is_empty()
+    let is_genesis_context = is_initial_genesis_context(state_transaction)
         && state_transaction
             .world
             .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
@@ -12577,9 +12704,8 @@ mod tests {
             "root_asset".parse().expect("asset name"),
         );
         let root_asset = AssetId::new(asset_definition.clone(), legitimate_root.clone());
-        // The exact mint permission deliberately names the attacker's balance bucket. Mint
-        // authority belongs to the definition owner, never to the bucket account.
-        let adjacent_asset = AssetId::new(asset_definition.clone(), adjacent_owner.clone());
+        // The exact mint permission deliberately names the attacker as destination. Mint
+        // authority belongs to the definition owner, never to the destination account.
         let nft_id = NftId::new(
             governed_domain.clone(),
             "root_nft".parse().expect("NFT name"),
@@ -12637,7 +12763,8 @@ mod tests {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(legitimate_root.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         ))
         .execute(&legitimate_root, &mut state_transaction)
         .expect("seed trigger authority");
@@ -12799,9 +12926,10 @@ mod tests {
                 true,
             ),
             (
-                "CanMintAsset",
-                executor_permission::asset::CanMintAsset {
-                    asset: adjacent_asset,
+                "CanMintAssetToAccount",
+                executor_permission::asset::CanMintAssetToAccount {
+                    asset_definition: asset_definition.clone(),
+                    account: adjacent_owner.clone(),
                 }
                 .into(),
                 true,
@@ -14273,6 +14401,26 @@ mod tests {
         assert!(is_initial_genesis_context(&state_transaction));
         validate_transaction_fee_admission(&mut state_transaction, &transaction)
             .expect("authenticated genesis must bypass Nexus fee intent validation");
+    }
+
+    #[test]
+    fn initial_genesis_context_rejects_height_one_replay_over_committed_history() {
+        let (state, _, _, _, _, _, _) = pipeline_fee_state_fixture();
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push_for_tests(HashOf::from_untyped_unchecked(Hash::new(
+                b"already-committed-height-one",
+            )));
+            hashes.commit_for_tests();
+        }
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let state_transaction = block.transaction();
+
+        assert!(state_transaction._curr_block.is_genesis());
+        assert!(
+            !is_initial_genesis_context(&state_transaction),
+            "a genesis-shaped header over committed state must not regain bootstrap authority"
+        );
     }
 
     #[test]
@@ -16963,16 +17111,49 @@ mod tests {
         let executor = super::Executor::Initial;
         let retail_pkr = AssetId::new(pkr.clone(), retail.clone());
 
-        let unprivileged_mint = executor.execute_instruction(
+        stx.world.account_permissions.insert(
+            retail.clone(),
+            BTreeSet::from([Permission::new(
+                "CanMintAsset".to_owned(),
+                norito::json!({"asset": (retail_pkr.to_string())}),
+            )]),
+        );
+        let legacy_permission_mint = executor.execute_instruction(
             &mut stx,
             &retail,
             InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
         );
-        assert!(matches!(
-            unprivileged_mint,
-            Err(ValidationFail::NotPermitted(ref message))
-                if message.contains("exact mint permission")
-        ));
+        assert!(
+            matches!(
+                legacy_permission_mint,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("exact mint permission")
+            ),
+            "the retired CanMintAsset token must be inert"
+        );
+
+        stx.world.account_permissions.insert(
+            retail.clone(),
+            BTreeSet::from([Permission::from(
+                executor_permission::asset::CanMintAssetToAccount {
+                    asset_definition: pkr.clone(),
+                    account: owner.clone(),
+                },
+            )]),
+        );
+        let wrong_destination_mint = executor.execute_instruction(
+            &mut stx,
+            &retail,
+            InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
+        );
+        assert!(
+            matches!(
+                wrong_destination_mint,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("exact mint permission")
+            ),
+            "a destination-scoped permission must not authorize another account"
+        );
 
         let offline_key: Name = "offline.enabled".parse().expect("metadata key");
         let unprivileged_metadata = executor.execute_instruction(
@@ -16996,8 +17177,9 @@ mod tests {
         stx.world.account_permissions.insert(
             retail.clone(),
             BTreeSet::from([
-                Permission::from(executor_permission::asset::CanMintAssetWithDefinition {
+                Permission::from(executor_permission::asset::CanMintAssetToAccount {
                     asset_definition: pkr.clone(),
+                    account: retail.clone(),
                 }),
                 Permission::from(
                     executor_permission::asset_definition::CanModifyAssetDefinitionMetadata {
@@ -17012,7 +17194,7 @@ mod tests {
                 &retail,
                 InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
             )
-            .expect("the exact PKR definition mint grant must authorize minting");
+            .expect("the exact PKR destination mint grant must authorize minting");
         executor
             .execute_instruction(
                 &mut stx,
@@ -20723,6 +20905,265 @@ seiyaku IdentityRequired {
         );
     }
 
+    fn native_find_accounts_request() -> QueryRequest {
+        use iroha_data_model::query::{
+            QueryBox, QueryWithParams,
+            account::prelude::FindAccounts,
+            dsl::{CompoundPredicate, SelectorTuple},
+            parameters::QueryParams,
+        };
+
+        let query: QueryBox<_> =
+            Box::new(iroha_data_model::query::ErasedIterQuery::<Account>::new(
+                CompoundPredicate::PASS,
+                SelectorTuple::default(),
+                norito::codec::Encode::encode(&FindAccounts),
+            ));
+        #[cfg(feature = "fast_dsl")]
+        let query = QueryWithParams::new(&query, QueryParams::default());
+        #[cfg(not(feature = "fast_dsl"))]
+        let query = QueryWithParams::new(query, QueryParams::default());
+        QueryRequest::Start(query)
+    }
+
+    fn native_find_permissions_request_with_payload(payload: Vec<u8>) -> QueryRequest {
+        use iroha_data_model::query::{
+            QueryBox, QueryWithParams,
+            dsl::{CompoundPredicate, SelectorTuple},
+            parameters::QueryParams,
+        };
+
+        let query: QueryBox<_> =
+            Box::new(iroha_data_model::query::ErasedIterQuery::<Permission>::new(
+                CompoundPredicate::PASS,
+                SelectorTuple::default(),
+                payload,
+            ));
+        #[cfg(feature = "fast_dsl")]
+        let query = QueryWithParams::new(&query, QueryParams::default());
+        #[cfg(not(feature = "fast_dsl"))]
+        let query = QueryWithParams::new(query, QueryParams::default());
+        QueryRequest::Start(query)
+    }
+
+    fn native_find_permissions_request(account: AccountId) -> QueryRequest {
+        native_find_permissions_request_with_payload(norito::codec::Encode::encode(
+            &iroha_data_model::query::permission::prelude::FindPermissionsByAccountId::new(account),
+        ))
+    }
+
+    fn validate_native_query_with_world(
+        executor: &super::Executor,
+        world: &World,
+        authority: &AccountId,
+        query: &QueryRequest,
+    ) -> Result<(), ValidationFail> {
+        let world_view = world.view();
+        executor.validate_query_with_world_parts(&world_view, None, authority, query)
+    }
+
+    fn remove_committed_storage_entry<K: mv::Key, V: mv::Value>(
+        storage: &mv::storage::Storage<K, V>,
+        key: K,
+    ) -> Option<V> {
+        let mut block = storage.block();
+        let removed = block.remove(key);
+        block.commit();
+        removed
+    }
+
+    #[test]
+    fn native_query_boundary_requires_registered_authority_for_every_executor() {
+        let public_query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        let initial = super::Executor::Initial;
+        let allow_all = super::Executor::UserProvided(
+            super::LoadedExecutor::load(data_model_executor::Executor::new(
+                IvmBytecode::from_compiled(generate_ok_program()),
+            ))
+            .expect("load allow-all executor"),
+        );
+        let empty_world = World::new();
+
+        for executor in [&initial, &allow_all] {
+            let error =
+                validate_native_query_with_world(executor, &empty_world, &ALICE_ID, &public_query)
+                    .expect_err("an unregistered query authority must fail closed");
+            assert!(matches!(error, ValidationFail::NotPermitted(message)
+                if message.contains("not a registered account")));
+        }
+
+        let registered_world =
+            World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+        validate_native_query_with_world(&initial, &registered_world, &ALICE_ID, &public_query)
+            .expect("registered accounts may use public queries");
+        validate_native_query_with_world(&allow_all, &registered_world, &ALICE_ID, &public_query)
+            .expect("the shared native boundary must also admit a registered IVM caller");
+
+        let error = validate_native_query_with_world(
+            &allow_all,
+            &registered_world,
+            &ALICE_ID,
+            &native_find_accounts_request(),
+        )
+        .expect_err("an allow-all custom executor must not widen native ledger access");
+        assert!(matches!(error, ValidationFail::NotPermitted(message)
+            if message.contains("CanReadAllLedgerData")));
+    }
+
+    #[test]
+    fn native_global_query_requires_exact_direct_or_assigned_role_grant() {
+        let mut world = World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&BOB_ID),
+            ],
+            [],
+        );
+        let query = native_find_accounts_request();
+        let executor = super::Executor::Initial;
+        let exact: Permission = executor_permission::query::CanReadAllLedgerData.into();
+
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &query)
+            .expect_err("the account roster must not be public");
+        world.account_permissions.insert(
+            ALICE_ID.clone(),
+            BTreeSet::from([Permission::new(
+                "CanReadAllLedgerData".to_owned(),
+                Json::new("wrong-payload"),
+            )]),
+        );
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &query)
+            .expect_err("same-name malformed grants must fail closed");
+
+        world
+            .account_permissions
+            .insert(ALICE_ID.clone(), BTreeSet::from([exact.clone()]));
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &query)
+            .expect("the exact direct root must authorize a global query");
+        assert!(
+            remove_committed_storage_entry(&world.account_permissions, ALICE_ID.clone()).is_some(),
+            "the direct global-read grant must exist before revocation"
+        );
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &query)
+            .expect_err("revoking the direct root must revoke access");
+
+        let role_id: RoleId = "native_global_reader".parse().expect("role id");
+        world.roles.insert(
+            role_id.clone(),
+            Role {
+                id: role_id.clone(),
+                permissions: BTreeSet::from([exact]),
+                permission_epochs: BTreeMap::new(),
+            },
+        );
+        world.grant_role_for_tests(ALICE_ID.clone(), role_id.clone());
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &query)
+            .expect("an assigned role carrying the exact root must authorize the query");
+        assert!(
+            remove_committed_storage_entry(
+                &world.account_roles,
+                crate::role::RoleIdWithOwner::new(ALICE_ID.clone(), role_id),
+            )
+            .is_some(),
+            "the global-reader role assignment must exist before revocation"
+        );
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &query)
+            .expect_err("revoking role membership must revoke global access");
+    }
+
+    #[test]
+    fn native_account_query_is_self_scoped_and_exact_payload_bound() {
+        let mut world = World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&BOB_ID),
+            ],
+            [],
+        );
+        let executor = super::Executor::Initial;
+        let self_query = QueryRequest::Singular(
+            iroha_data_model::query::account::prelude::FindAccountById::new(ALICE_ID.clone())
+                .into(),
+        );
+        let bob_query = native_find_permissions_request(BOB_ID.clone());
+        let exact: Permission = executor_permission::query::CanReadAccountData {
+            account: BOB_ID.clone(),
+        }
+        .into();
+
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &self_query)
+            .expect("an account may read its own private data");
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &bob_query)
+            .expect_err("foreign account data requires an exact grant");
+        world.account_permissions.insert(
+            ALICE_ID.clone(),
+            BTreeSet::from([
+                executor_permission::query::CanReadAccountData {
+                    account: ALICE_ID.clone(),
+                }
+                .into(),
+                Permission::new("CanReadAccountData".to_owned(), Json::new(())),
+            ]),
+        );
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &bob_query)
+            .expect_err("wrong-target and malformed grants must not authorize Bob's data");
+
+        world
+            .account_permissions
+            .insert(ALICE_ID.clone(), BTreeSet::from([exact.clone()]));
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &bob_query)
+            .expect("the exact direct grant must authorize Bob's data");
+        assert!(
+            remove_committed_storage_entry(&world.account_permissions, ALICE_ID.clone()).is_some(),
+            "the direct account-read grant must exist before revocation"
+        );
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &bob_query)
+            .expect_err("revoking the exact grant must revoke account access");
+
+        let role_id: RoleId = "native_account_reader".parse().expect("role id");
+        world.roles.insert(
+            role_id.clone(),
+            Role {
+                id: role_id.clone(),
+                permissions: BTreeSet::from([exact]),
+                permission_epochs: BTreeMap::new(),
+            },
+        );
+        world.grant_role_for_tests(ALICE_ID.clone(), role_id.clone());
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &bob_query)
+            .expect("an assigned exact role grant must authorize Bob's data");
+        assert!(
+            remove_committed_storage_entry(
+                &world.account_roles,
+                crate::role::RoleIdWithOwner::new(ALICE_ID.clone(), role_id),
+            )
+            .is_some(),
+            "the account-reader role assignment must exist before revocation"
+        );
+
+        let mut malformed_payload = norito::codec::Encode::encode(
+            &iroha_data_model::query::permission::prelude::FindPermissionsByAccountId::new(
+                BOB_ID.clone(),
+            ),
+        );
+        malformed_payload.push(0xA5);
+        let malformed_query = native_find_permissions_request_with_payload(malformed_payload);
+        world.account_permissions.insert(
+            ALICE_ID.clone(),
+            BTreeSet::from([executor_permission::query::CanReadAllLedgerData.into()]),
+        );
+        let error =
+            validate_native_query_with_world(&executor, &world, &ALICE_ID, &malformed_query)
+                .expect_err("a malformed iterable carrier must fail before permission lookup");
+        assert!(matches!(error, ValidationFail::NotPermitted(message)
+            if message.contains("malformed") || message.contains("authorization matrix")));
+
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &bob_query)
+            .expect("the global read root must override an account-scoped grant");
+    }
+
     #[test]
     fn validate_query_with_ivm() {
         let bytecode = read_default_bytecode().unwrap_or_else(generate_ok_program);
@@ -20985,7 +21426,9 @@ seiyaku IdentityRequired {
 
         let iter_query = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::domain::prelude::FindDomains,
+            ),
             item: QueryItemKind::Domain,
             predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::default()),
@@ -21058,6 +21501,28 @@ seiyaku IdentityRequired {
             super::Executor::UserProvided(_) => {}
             _ => panic!("expected UserProvided executor after migration"),
         }
+    }
+
+    #[test]
+    fn migrate_rejects_unauthorized_non_genesis_callers_before_loading_bytecode() {
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(Vec::new()));
+        let mut executor = super::Executor::Initial;
+        let state = State::new_with_chain(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            ChainId::from("executor-mutation-boundary"),
+        );
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let error = executor
+            .migrate(raw, &mut state_transaction, &ALICE_ID)
+            .expect_err("direct migration must enforce executor-upgrade authority");
+
+        assert_eq!(error, VMError::PermissionDenied);
+        assert!(matches!(executor, super::Executor::Initial));
     }
 
     #[test]

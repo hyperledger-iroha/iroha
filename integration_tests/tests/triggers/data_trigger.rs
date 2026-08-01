@@ -139,7 +139,8 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
                 Repeats::Indefinitely,
                 account_id.clone(),
                 AccountEventFilter::new().for_events(AccountEventSet::Created),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         ));
         spawn_blocking({
             let client = test_client.clone();
@@ -159,7 +160,8 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
                 Repeats::Indefinitely,
                 account_id,
                 DomainEventFilter::new().for_events(DomainEventSet::Created),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         ));
         spawn_blocking({
             let client = test_client.clone();

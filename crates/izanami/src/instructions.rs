@@ -1723,7 +1723,7 @@ impl ChaosState {
             EventFilterBox::ExecuteTrigger(
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             ),
-        );
+        )?;
         instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
             trigger_id.clone(),
             action,
@@ -1766,7 +1766,7 @@ impl ChaosState {
             EventFilterBox::ExecuteTrigger(
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             ),
-        );
+        )?;
         instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
             trigger_id.clone(),
             action,
@@ -1815,7 +1815,7 @@ impl ChaosState {
                 EventFilterBox::ExecuteTrigger(
                     ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
                 ),
-            );
+            )?;
             instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
                 trigger_id.clone(),
                 action,
@@ -2036,7 +2036,7 @@ impl ChaosState {
             Repeats::Exactly(1),
             self.treasury.id.clone(),
             TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
-        );
+        )?;
         Ok(TransactionPlan {
             state_updates: Vec::new(),
             label: "register_time_trigger",
@@ -2063,7 +2063,7 @@ impl ChaosState {
             Repeats::Indefinitely,
             self.treasury.id.clone(),
             DataEventFilter::Account(filter),
-        );
+        )?;
         let state_updates = vec![PlanUpdate::RegisterTrigger(trigger_id.clone())];
         Ok(TransactionPlan {
             state_updates,
@@ -2088,7 +2088,7 @@ impl ChaosState {
             EventFilterBox::Pipeline(PipelineEventFilterBox::Transaction(
                 TransactionEventFilter::new(),
             )),
-        );
+        )?;
         let state_updates = vec![PlanUpdate::RegisterTrigger(trigger_id.clone())];
         Ok(TransactionPlan {
             state_updates,
@@ -2113,7 +2113,7 @@ impl ChaosState {
             EventFilterBox::ExecuteTrigger(
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             ),
-        );
+        )?;
         let trigger = Trigger::new(trigger_id.clone(), action);
         let state_updates = vec![
             PlanUpdate::RegisterTrigger(trigger_id.clone()),
@@ -2154,7 +2154,7 @@ impl ChaosState {
             Repeats::Exactly(1),
             self.treasury.id.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
-        );
+        )?;
         Ok(TransactionPlan {
             state_updates: Vec::new(),
             label: "deploy_ivm_contract",
@@ -2185,7 +2185,7 @@ impl ChaosState {
             Repeats::Indefinitely,
             self.treasury.id.clone(),
             DataEventFilter::Any,
-        );
+        )?;
         let state_updates = vec![PlanUpdate::RegisterTrigger(trigger_id.clone())];
         Ok(TransactionPlan {
             state_updates,

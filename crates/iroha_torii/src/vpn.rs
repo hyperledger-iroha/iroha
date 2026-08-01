@@ -10,7 +10,13 @@ use axum::{
 };
 use iroha_config::client_api::ConfigGetDTO;
 use iroha_core::{kiso::KisoHandle, state::WorldReadOnly};
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
+use iroha_crypto::{
+    Algorithm, Hash, HashOf, PublicKey,
+    soranet::{
+        certificate::{RelayCertificateBundleV2, select_vpn_endpoint},
+        directory::GuardDirectorySnapshotV2,
+    },
+};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
@@ -29,6 +35,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use mv::storage::StorageReadOnly;
+use sha2::{Digest as _, Sha256};
 
 use crate::{Error, SharedAppState};
 
@@ -36,6 +43,87 @@ const SUPPORTED_EXIT_CLASSES: [&str; 3] = ["standard", "low-latency", "high-secu
 const DEFAULT_TUNNEL_ADDRESSES: [&str; 2] = ["10.208.0.2/32", "fd53:7261:6574::2/128"];
 const MAX_RECEIPTS_PER_ACCOUNT: usize = 24;
 const MAX_SESSION_ADDRESS_ALLOCATION_ATTEMPTS: u32 = 4_096;
+
+/// Immutable VPN relay trust derived from an authenticated guard-directory snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnRelayTrust {
+    /// Exact relay Ed25519 identity advertised by the signed certificate.
+    pub relay_id: [u8; 32],
+    /// Exact signed QUIC endpoint selected for VPN traffic.
+    pub relay_endpoint: String,
+    /// Exact TLS DNS name selected for the endpoint.
+    pub tls_server_name: String,
+    /// Exact leaf SPKI SHA-256 pin selected for the endpoint.
+    pub relay_tls_spki_sha256: [u8; 32],
+    /// Descriptor commitment authenticated by the relay certificate.
+    pub descriptor_commit: [u8; 32],
+    /// SHA-256 digest of the canonical relay certificate bundle.
+    pub relay_certificate_sha256: [u8; 32],
+    /// Externally provisioned digest authenticating the exact directory snapshot.
+    pub directory_snapshot_digest: [u8; 32],
+    /// Exclusive upper bound on authenticated relay trust, in Unix milliseconds.
+    pub valid_until_ms: u64,
+}
+
+impl VpnRelayTrust {
+    /// Authenticate a directory snapshot and select one exact VPN relay endpoint.
+    ///
+    /// # Errors
+    /// Returns an error if snapshot authentication or freshness fails, the relay
+    /// is absent, or its certificate does not authorize a VPN endpoint.
+    pub fn from_guard_directory_at(
+        snapshot_bytes: &[u8],
+        expected_snapshot_digest: [u8; 32],
+        relay_id: [u8; 32],
+        at_unix: i64,
+    ) -> Result<Self, String> {
+        let snapshot = GuardDirectorySnapshotV2::authenticate_bytes_at(
+            snapshot_bytes,
+            expected_snapshot_digest,
+            at_unix,
+        )
+        .map_err(|error| format!("VPN guard directory authentication failed: {error}"))?;
+        let bundle = snapshot
+            .relays
+            .iter()
+            .map(|entry| RelayCertificateBundleV2::from_cbor(&entry.certificate))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("VPN relay certificate decode failed: {error}"))?
+            .into_iter()
+            .find(|bundle| bundle.certificate.relay_id == relay_id)
+            .ok_or_else(|| {
+                format!(
+                    "VPN relay {} is absent from the authenticated guard directory",
+                    hex::encode(relay_id)
+                )
+            })?;
+        if !bundle.certificate.roles.exit {
+            return Err("VPN relay certificate does not authorize the exit role".to_owned());
+        }
+        let endpoint = select_vpn_endpoint(&bundle.certificate.endpoints)
+            .map_err(|error| format!("VPN endpoint selection failed: {error}"))?;
+        let canonical_bundle = bundle
+            .try_to_cbor()
+            .map_err(|error| format!("VPN relay certificate encode failed: {error}"))?;
+        let valid_until_unix = snapshot
+            .valid_until_unix
+            .min(bundle.certificate.valid_until);
+        let valid_until_ms = u64::try_from(valid_until_unix)
+            .ok()
+            .and_then(|seconds| seconds.checked_mul(1_000))
+            .ok_or_else(|| "VPN relay trust validity exceeds Unix millisecond range".to_owned())?;
+        Ok(Self {
+            relay_id,
+            relay_endpoint: endpoint.quic_multiaddr.clone(),
+            tls_server_name: endpoint.tls_server_name.clone(),
+            relay_tls_spki_sha256: endpoint.tls_spki_sha256,
+            descriptor_commit: bundle.certificate.descriptor_commit,
+            relay_certificate_sha256: Sha256::digest(canonical_bundle).into(),
+            directory_snapshot_digest: expected_snapshot_digest,
+            valid_until_ms,
+        })
+    }
+}
 
 #[derive(
     Debug,
@@ -72,7 +160,12 @@ pub struct VpnProfileResponseDto {
     pub settlement_grace_secs: u64,
     pub flow_label_bits: u8,
     pub padding_budget_ms: u16,
-    pub relay_tls_spki_sha256_hex: Option<String>,
+    pub relay_id_hex: String,
+    pub descriptor_commit_hex: String,
+    pub tls_server_name: String,
+    pub relay_tls_spki_sha256_hex: String,
+    pub relay_certificate_sha256_hex: String,
+    pub directory_snapshot_digest_hex: String,
 }
 
 #[derive(
@@ -125,7 +218,12 @@ pub struct VpnQuoteResponseDto {
     pub meter_family: String,
     pub flow_label_bits: u8,
     pub padding_budget_ms: u16,
-    pub relay_tls_spki_sha256_hex: Option<String>,
+    pub relay_id_hex: String,
+    pub descriptor_commit_hex: String,
+    pub tls_server_name: String,
+    pub relay_tls_spki_sha256_hex: String,
+    pub relay_certificate_sha256_hex: String,
+    pub directory_snapshot_digest_hex: String,
     pub metering_public_key_hex: String,
     #[norito(default)]
     pub open_lease_instruction: Option<VpnTxInstructionDto>,
@@ -183,7 +281,12 @@ pub struct VpnSessionResponseDto {
     pub lease_fee: Quantity,
     pub flow_label_bits: u8,
     pub padding_budget_ms: u16,
-    pub relay_tls_spki_sha256_hex: Option<String>,
+    pub relay_id_hex: String,
+    pub descriptor_commit_hex: String,
+    pub tls_server_name: String,
+    pub relay_tls_spki_sha256_hex: String,
+    pub relay_certificate_sha256_hex: String,
+    pub directory_snapshot_digest_hex: String,
     #[norito(default)]
     pub route_pushes: Vec<String>,
     #[norito(default)]
@@ -307,7 +410,13 @@ pub(crate) struct VpnSessionRecord {
     pub tariff: VpnTariffV1,
     pub flow_label_bits: u8,
     pub padding_budget_ms: u16,
-    pub relay_tls_spki_sha256_hex: Option<String>,
+    pub relay_id: [u8; 32],
+    pub descriptor_commit: [u8; 32],
+    pub tls_server_name: String,
+    pub relay_tls_spki_sha256: [u8; 32],
+    pub relay_certificate_sha256: [u8; 32],
+    pub directory_snapshot_digest: [u8; 32],
+    pub relay_trust_valid_until_ms: u64,
     pub metering_public_key: PublicKey,
     pub route_pushes: Vec<String>,
     pub excluded_routes: Vec<String>,
@@ -369,7 +478,13 @@ pub(crate) struct VpnQuoteRecord {
     pub meter_family: String,
     pub flow_label_bits: u8,
     pub padding_budget_ms: u16,
-    pub relay_tls_spki_sha256_hex: Option<String>,
+    pub relay_id: [u8; 32],
+    pub descriptor_commit: [u8; 32],
+    pub tls_server_name: String,
+    pub relay_tls_spki_sha256: [u8; 32],
+    pub relay_certificate_sha256: [u8; 32],
+    pub directory_snapshot_digest: [u8; 32],
+    pub relay_trust_valid_until_ms: u64,
 }
 
 fn now_ms() -> u64 {
@@ -413,16 +528,30 @@ fn default_tunnel_addresses() -> Vec<String> {
         .collect()
 }
 
-fn build_profile(dto: &ConfigGetDTO) -> VpnProfileResponseDto {
+fn build_profile_at(
+    dto: &ConfigGetDTO,
+    trust: Option<&VpnRelayTrust>,
+    current_ms: u64,
+) -> VpnProfileResponseDto {
     let vpn = &dto.network.soranet_vpn;
-    let relay_endpoint = dto.transport.streaming.soranet.exit_multiaddr.clone();
+    let trust = trust.filter(|trust| {
+        vpn.enabled
+            && vpn
+                .lease_secs
+                .checked_mul(1_000)
+                .and_then(|duration_ms| current_ms.checked_add(duration_ms))
+                .is_some_and(|lease_end_ms| lease_end_ms <= trust.valid_until_ms)
+    });
+    let relay_endpoint = trust
+        .map(|trust| trust.relay_endpoint.clone())
+        .unwrap_or_default();
     let default_exit_class = vpn.exit_class.trim().to_owned();
     let supported_exit_classes = SUPPORTED_EXIT_CLASSES
         .iter()
         .map(|item| (*item).to_owned())
         .collect::<Vec<_>>();
     VpnProfileResponseDto {
-        available: vpn.enabled,
+        available: trust.is_some(),
         relay_endpoint,
         supported_exit_classes,
         default_exit_class: default_exit_class.clone(),
@@ -445,7 +574,24 @@ fn build_profile(dto: &ConfigGetDTO) -> VpnProfileResponseDto {
         settlement_grace_secs: vpn.settlement_grace_secs,
         flow_label_bits: vpn.flow_label_bits,
         padding_budget_ms: vpn.padding_budget_ms,
-        relay_tls_spki_sha256_hex: vpn.relay_tls_spki_sha256_hex.clone(),
+        relay_id_hex: trust
+            .map(|trust| hex::encode(trust.relay_id))
+            .unwrap_or_default(),
+        descriptor_commit_hex: trust
+            .map(|trust| hex::encode(trust.descriptor_commit))
+            .unwrap_or_default(),
+        tls_server_name: trust
+            .map(|trust| trust.tls_server_name.clone())
+            .unwrap_or_default(),
+        relay_tls_spki_sha256_hex: trust
+            .map(|trust| hex::encode(trust.relay_tls_spki_sha256))
+            .unwrap_or_default(),
+        relay_certificate_sha256_hex: trust
+            .map(|trust| hex::encode(trust.relay_certificate_sha256))
+            .unwrap_or_default(),
+        directory_snapshot_digest_hex: trust
+            .map(|trust| hex::encode(trust.directory_snapshot_digest))
+            .unwrap_or_default(),
     }
 }
 
@@ -496,10 +642,6 @@ fn fixed_hash_bytes(input: &str) -> [u8; 32] {
 
 fn account_hash(account_id: &AccountId) -> [u8; 32] {
     fixed_hash_bytes(&account_id.to_string())
-}
-
-fn relay_id_from_endpoint(endpoint: &str) -> [u8; 32] {
-    fixed_hash_bytes(endpoint)
 }
 
 fn decode_hex_32(raw: &str, field: &str) -> Result<[u8; 32], Error> {
@@ -596,7 +738,7 @@ fn build_helper_ticket_hex(
         session_id: relay_session_id_from_session_id(&record.session_id),
         quote_id: decode_hex_32(&record.quote_id, "quote_id")?,
         account_hash: account_hash(&record.account_id),
-        relay_id: relay_id_from_endpoint(&record.relay_endpoint),
+        relay_id: record.relay_id,
         payment_tx_hash: decode_hex_32(&record.payment_tx_hash, "payment_tx_hash")?,
         metering_public_key: record.metering_public_key.clone(),
         tariff: record.tariff.clone(),
@@ -654,6 +796,13 @@ fn quote_policy_from_record(record: &VpnQuoteRecord) -> VpnQuotePolicyV1 {
         exit_class: VpnExitClassV1::try_from_label(&record.exit_class)
             .expect("quote exit class is normalized"),
         relay_endpoint: record.relay_endpoint.clone(),
+        relay_id: record.relay_id,
+        descriptor_commit: record.descriptor_commit,
+        tls_server_name: record.tls_server_name.clone(),
+        relay_tls_spki_sha256: record.relay_tls_spki_sha256,
+        relay_certificate_sha256: record.relay_certificate_sha256,
+        directory_snapshot_digest: record.directory_snapshot_digest,
+        relay_trust_valid_until_ms: record.relay_trust_valid_until_ms,
         lease_secs: record.lease_secs,
         meter_family: record.meter_family.clone(),
         fee_asset_id: record.fee_asset_id.clone(),
@@ -665,7 +814,6 @@ fn quote_policy_from_record(record: &VpnQuoteRecord) -> VpnQuotePolicyV1 {
         mtu_bytes: record.mtu_bytes,
         flow_label_bits: record.flow_label_bits,
         padding_budget_ms: record.padding_budget_ms,
-        relay_tls_spki_sha256_hex: record.relay_tls_spki_sha256_hex.clone(),
     }
 }
 
@@ -676,7 +824,7 @@ fn open_lease_instruction(record: &VpnQuoteRecord) -> Result<VpnTxInstructionDto
         lease_id,
         relay_session_id_from_session_id(&record.quote_id),
         lease_id,
-        relay_id_from_endpoint(&record.relay_endpoint),
+        record.relay_id,
         record.operator_account_id.clone(),
         record.metering_public_key.clone(),
         asset_definition,
@@ -732,7 +880,12 @@ fn quote_response_from_record(record: &VpnQuoteRecord) -> Result<VpnQuoteRespons
         meter_family: record.meter_family.clone(),
         flow_label_bits: record.flow_label_bits,
         padding_budget_ms: record.padding_budget_ms,
-        relay_tls_spki_sha256_hex: record.relay_tls_spki_sha256_hex.clone(),
+        relay_id_hex: hex::encode(record.relay_id),
+        descriptor_commit_hex: hex::encode(record.descriptor_commit),
+        tls_server_name: record.tls_server_name.clone(),
+        relay_tls_spki_sha256_hex: hex::encode(record.relay_tls_spki_sha256),
+        relay_certificate_sha256_hex: hex::encode(record.relay_certificate_sha256),
+        directory_snapshot_digest_hex: hex::encode(record.directory_snapshot_digest),
         metering_public_key_hex: public_key_payload_hex(&record.metering_public_key)?,
         open_lease_instruction: Some(open_lease_instruction),
         tx_instructions,
@@ -796,7 +949,12 @@ fn response_from_record(record: &VpnSessionRecord) -> VpnSessionResponseDto {
         lease_fee: record.lease_fee.clone(),
         flow_label_bits: record.flow_label_bits,
         padding_budget_ms: record.padding_budget_ms,
-        relay_tls_spki_sha256_hex: record.relay_tls_spki_sha256_hex.clone(),
+        relay_id_hex: hex::encode(record.relay_id),
+        descriptor_commit_hex: hex::encode(record.descriptor_commit),
+        tls_server_name: record.tls_server_name.clone(),
+        relay_tls_spki_sha256_hex: hex::encode(record.relay_tls_spki_sha256),
+        relay_certificate_sha256_hex: hex::encode(record.relay_certificate_sha256),
+        directory_snapshot_digest_hex: hex::encode(record.directory_snapshot_digest),
         route_pushes: record.route_pushes.clone(),
         excluded_routes: record.excluded_routes.clone(),
         dns_servers: record.dns_servers.clone(),
@@ -993,7 +1151,7 @@ fn remove_existing_sessions_for_account(
 fn list_receipts_for_account(
     app: &SharedAppState,
     account_id: &AccountId,
-) -> Vec<VpnReceiptResponseDto> {
+) -> Result<Vec<VpnReceiptResponseDto>, Error> {
     let mut records = app
         .vpn_receipts
         .get(&account_id.to_string())
@@ -1012,13 +1170,13 @@ fn list_receipts_for_account(
         if cached_lease_ids.contains(&lease_id_hex) {
             continue;
         }
-        if let Some(record) = receipt_record_from_settled_lease(lease) {
+        if let Some(record) = receipt_record_from_settled_lease(lease)? {
             records.push(record);
         }
     }
     records.sort_by(|left, right| right.disconnected_at_ms.cmp(&left.disconnected_at_ms));
     records.truncate(MAX_RECEIPTS_PER_ACCOUNT);
-    records.iter().map(receipt_response_from_record).collect()
+    Ok(records.iter().map(receipt_response_from_record).collect())
 }
 
 fn external_signed_transaction_results(
@@ -1100,7 +1258,7 @@ fn open_lease_matches_quote(
     Ok(open.lease_id == quote_id
         && open.session_id == relay_session_id_from_session_id(&quote.quote_id)
         && open.quote_id == quote_id
-        && open.relay_id == relay_id_from_endpoint(&quote.relay_endpoint)
+        && open.relay_id == quote.relay_id
         && open.operator_account_id == quote.operator_account_id
         && open.metering_public_key == quote.metering_public_key
         && open.asset_definition == asset_definition
@@ -1192,9 +1350,42 @@ fn session_id_hex_from_lease(record: &VpnLeaseRecordV1) -> String {
     hex::encode(record.quote_id)
 }
 
-fn session_record_from_lease(record: &VpnLeaseRecordV1) -> VpnSessionRecord {
+fn ensure_lease_matches_authenticated_trust(
+    record: &VpnLeaseRecordV1,
+    trust: &VpnRelayTrust,
+) -> Result<(), Error> {
     let policy = &record.quote_policy;
-    VpnSessionRecord {
+    if record.relay_id != trust.relay_id
+        || policy.relay_id != trust.relay_id
+        || policy.relay_endpoint != trust.relay_endpoint
+        || policy.descriptor_commit != trust.descriptor_commit
+        || policy.tls_server_name != trust.tls_server_name
+        || policy.relay_tls_spki_sha256 != trust.relay_tls_spki_sha256
+        || policy.relay_certificate_sha256 != trust.relay_certificate_sha256
+        || policy.directory_snapshot_digest != trust.directory_snapshot_digest
+        || policy.relay_trust_valid_until_ms != trust.valid_until_ms
+        || record.expires_at_ms > trust.valid_until_ms
+    {
+        return Err(not_permitted_error(
+            "persisted VPN lease does not match the authenticated relay trust",
+        ));
+    }
+    Ok(())
+}
+
+fn session_record_from_lease(record: &VpnLeaseRecordV1) -> Result<VpnSessionRecord, Error> {
+    let policy = &record.quote_policy;
+    if record.relay_id != policy.relay_id {
+        return Err(not_permitted_error(
+            "vpn lease relay id does not match its authenticated quote policy",
+        ));
+    }
+    if record.expires_at_ms > policy.relay_trust_valid_until_ms {
+        return Err(not_permitted_error(
+            "vpn relay trust does not cover the complete persisted lease",
+        ));
+    }
+    Ok(VpnSessionRecord {
         session_id: session_id_hex_from_lease(record),
         account_id: record.client_account_id.clone(),
         exit_class: policy.exit_class.as_label().to_owned(),
@@ -1213,7 +1404,13 @@ fn session_record_from_lease(record: &VpnLeaseRecordV1) -> VpnSessionRecord {
         tariff: record.tariff.clone(),
         flow_label_bits: policy.flow_label_bits,
         padding_budget_ms: policy.padding_budget_ms,
-        relay_tls_spki_sha256_hex: policy.relay_tls_spki_sha256_hex.clone(),
+        relay_id: policy.relay_id,
+        descriptor_commit: policy.descriptor_commit,
+        tls_server_name: policy.tls_server_name.clone(),
+        relay_tls_spki_sha256: policy.relay_tls_spki_sha256,
+        relay_certificate_sha256: policy.relay_certificate_sha256,
+        directory_snapshot_digest: policy.directory_snapshot_digest,
+        relay_trust_valid_until_ms: policy.relay_trust_valid_until_ms,
         metering_public_key: record.metering_public_key.clone(),
         route_pushes: policy.route_pushes.clone(),
         excluded_routes: policy.excluded_routes.clone(),
@@ -1223,7 +1420,7 @@ fn session_record_from_lease(record: &VpnLeaseRecordV1) -> VpnSessionRecord {
         helper_ticket_hex: String::new(),
         bytes_in: 0,
         bytes_out: 0,
-    }
+    })
 }
 
 fn active_session_record_from_wsv(
@@ -1240,7 +1437,11 @@ fn active_session_record_from_wsv(
     if lease_record.status != VpnLeaseStatusV1::Active || lease_record.expires_at_ms <= current_ms {
         return Ok(None);
     }
-    let mut record = session_record_from_lease(&lease_record);
+    let trust = app.vpn_relay_trust.as_deref().ok_or_else(|| {
+        not_permitted_error("vpn relay trust is not configured on this Torii node")
+    })?;
+    ensure_lease_matches_authenticated_trust(&lease_record, trust)?;
+    let mut record = session_record_from_lease(&lease_record)?;
     record.helper_ticket_hex = build_helper_ticket_hex(
         &record,
         record.expires_at_ms,
@@ -1249,18 +1450,22 @@ fn active_session_record_from_wsv(
     Ok(Some(record))
 }
 
-fn receipt_record_from_settled_lease(record: &VpnLeaseRecordV1) -> Option<VpnReceiptRecord> {
+fn receipt_record_from_settled_lease(
+    record: &VpnLeaseRecordV1,
+) -> Result<Option<VpnReceiptRecord>, Error> {
     if record.status != VpnLeaseStatusV1::Settled {
-        return None;
+        return Ok(None);
     }
-    let relay_receipt = record.settled_relay_receipt.as_ref()?;
-    let session = session_record_from_lease(record);
+    let Some(relay_receipt) = record.settled_relay_receipt.as_ref() else {
+        return Ok(None);
+    };
+    let session = session_record_from_lease(record)?;
     let connected_at_ms = relay_receipt.started_at_ms.max(record.opened_at_ms);
     let disconnected_at_ms = record.settled_at_ms.unwrap_or(relay_receipt.ended_at_ms);
     let duration_ms = relay_receipt
         .ended_at_ms
         .saturating_sub(relay_receipt.started_at_ms);
-    Some(VpnReceiptRecord {
+    Ok(Some(VpnReceiptRecord {
         session_id: session.session_id,
         account_id: session.account_id,
         exit_class: session.exit_class,
@@ -1283,7 +1488,7 @@ fn receipt_record_from_settled_lease(record: &VpnLeaseRecordV1) -> Option<VpnRec
         refunded_fee: record.refunded_fee.clone(),
         lease_id_hex: hex::encode(record.lease_id),
         settle_lease_instruction: None,
-    })
+    }))
 }
 
 fn verify_relay_receipt_for_session(
@@ -1317,7 +1522,7 @@ fn verify_relay_receipt_for_session(
             "vpn receipt account hash does not match the active session",
         ));
     }
-    let expected_relay_id = relay_id_from_endpoint(&record.relay_endpoint);
+    let expected_relay_id = record.relay_id;
     if relay_receipt.relay_id != expected_relay_id || voucher.body.relay_id != expected_relay_id {
         return Err(not_permitted_error(
             "vpn receipt relay id does not match the configured relay",
@@ -1378,9 +1583,14 @@ fn session_earned_fee(
         .map_err(|err| conversion_error(format!("vpn tariff arithmetic failed: {err}")))
 }
 
-pub(crate) async fn handle_get_vpn_profile(kiso: KisoHandle) -> Result<Response, Error> {
-    let dto = kiso.get_dto().await?;
-    Ok(crate::utils::JsonBody(build_profile(&dto)).into_response())
+pub(crate) async fn handle_get_vpn_profile(app: SharedAppState) -> Result<Response, Error> {
+    let dto = app.kiso.get_dto().await?;
+    Ok(crate::utils::JsonBody(build_profile_at(
+        &dto,
+        app.vpn_relay_trust.as_deref(),
+        now_ms(),
+    ))
+    .into_response())
 }
 
 pub(crate) async fn handle_create_vpn_quote(
@@ -1394,8 +1604,14 @@ pub(crate) async fn handle_create_vpn_quote(
     let request: VpnQuoteCreateRequestDto = norito::json::from_slice(body)
         .map_err(|err| conversion_error(format!("invalid vpn quote create payload: {err}")))?;
     let dto = app.kiso.get_dto().await?;
-    let profile = build_profile(&dto);
+    let current_ms = now_ms();
+    let profile = build_profile_at(&dto, app.vpn_relay_trust.as_deref(), current_ms);
     if !profile.available {
+        if dto.network.soranet_vpn.enabled && app.vpn_relay_trust.is_some() {
+            return Err(not_permitted_error(
+                "authenticated relay trust does not cover the complete VPN lease",
+            ));
+        }
         return Err(not_permitted_error("vpn is disabled on this Torii node"));
     }
     if app.vpn_helper_ticket_secret.is_none() {
@@ -1403,10 +1619,9 @@ pub(crate) async fn handle_create_vpn_quote(
             "vpn helper ticket secret is not configured on this Torii node",
         ));
     }
-    let relay_tls_spki_sha256_hex = profile
-        .relay_tls_spki_sha256_hex
-        .clone()
-        .ok_or_else(|| not_permitted_error("vpn relay TLS SPKI pin is not configured"))?;
+    let trust = app.vpn_relay_trust.as_deref().ok_or_else(|| {
+        not_permitted_error("vpn relay trust is not configured on this Torii node")
+    })?;
     let exit_class = normalize_exit_class(&request.exit_class, &profile.default_exit_class)?;
     let escrow_account_id =
         parse_profile_account_id(&profile.escrow_account_id, "escrow_account_id")?;
@@ -1419,7 +1634,6 @@ pub(crate) async fn handle_create_vpn_quote(
     }
     let metering_public_key = parse_metering_public_key(&request.metering_public_key_hex)?;
 
-    let current_ms = now_ms();
     let _vpn_guard = app.vpn_state_lock.lock().await;
     prune_expired_quotes(&app, current_ms);
     prune_expired_sessions(&app, current_ms);
@@ -1431,7 +1645,18 @@ pub(crate) async fn handle_create_vpn_quote(
     let quote_id = build_quote_id(&account_id, &exit_class, nonce, current_ms);
     let address_plan =
         derive_vpn_session_address_plan_v1(relay_session_id_from_session_id(&quote_id));
-    let quote_expires_at_ms = current_ms.saturating_add(profile.lease_secs.saturating_mul(1_000));
+    let lease_duration_ms = profile
+        .lease_secs
+        .checked_mul(1_000)
+        .ok_or_else(|| conversion_error("vpn lease duration overflows milliseconds"))?;
+    let quote_expires_at_ms = current_ms
+        .checked_add(lease_duration_ms)
+        .ok_or_else(|| conversion_error("vpn lease expiry exceeds Unix millisecond range"))?;
+    if quote_expires_at_ms > trust.valid_until_ms {
+        return Err(not_permitted_error(
+            "authenticated relay trust does not cover the complete VPN lease",
+        ));
+    }
     let tariff = vpn_tariff_for_lease(&profile.lease_fee, profile.lease_secs)?;
     let record = VpnQuoteRecord {
         quote_id: quote_id.clone(),
@@ -1456,7 +1681,13 @@ pub(crate) async fn handle_create_vpn_quote(
         meter_family: profile.meter_family,
         flow_label_bits: profile.flow_label_bits,
         padding_budget_ms: profile.padding_budget_ms,
-        relay_tls_spki_sha256_hex: Some(relay_tls_spki_sha256_hex),
+        relay_id: trust.relay_id,
+        descriptor_commit: trust.descriptor_commit,
+        tls_server_name: trust.tls_server_name.clone(),
+        relay_tls_spki_sha256: trust.relay_tls_spki_sha256,
+        relay_certificate_sha256: trust.relay_certificate_sha256,
+        directory_snapshot_digest: trust.directory_snapshot_digest,
+        relay_trust_valid_until_ms: trust.valid_until_ms,
     };
     let response = quote_response_from_record(&record)?;
     app.vpn_quotes.insert(quote_id, record);
@@ -1474,8 +1705,8 @@ pub(crate) async fn handle_create_vpn_session(
     let request: VpnSessionCreateRequestDto = norito::json::from_slice(body)
         .map_err(|err| conversion_error(format!("invalid vpn session create payload: {err}")))?;
     let dto = app.kiso.get_dto().await?;
-    let profile = build_profile(&dto);
-    if !profile.available {
+    let vpn = &dto.network.soranet_vpn;
+    if !vpn.enabled {
         return Err(not_permitted_error("vpn is disabled on this Torii node"));
     }
     let current_ms = now_ms();
@@ -1500,7 +1731,7 @@ pub(crate) async fn handle_create_vpn_session(
             "vpn quote belongs to a different account",
         ));
     }
-    let exit_class = normalize_exit_class(&request.exit_class, &profile.default_exit_class)?;
+    let exit_class = normalize_exit_class(&request.exit_class, &vpn.exit_class)?;
     if quote.exit_class != exit_class {
         return Err(not_permitted_error(
             "vpn quote exit class does not match session request",
@@ -1541,7 +1772,13 @@ pub(crate) async fn handle_create_vpn_session(
         tariff: quote.tariff,
         flow_label_bits: quote.flow_label_bits,
         padding_budget_ms: quote.padding_budget_ms,
-        relay_tls_spki_sha256_hex: quote.relay_tls_spki_sha256_hex,
+        relay_id: quote.relay_id,
+        descriptor_commit: quote.descriptor_commit,
+        tls_server_name: quote.tls_server_name,
+        relay_tls_spki_sha256: quote.relay_tls_spki_sha256,
+        relay_certificate_sha256: quote.relay_certificate_sha256,
+        directory_snapshot_digest: quote.directory_snapshot_digest,
+        relay_trust_valid_until_ms: quote.relay_trust_valid_until_ms,
         metering_public_key,
         route_pushes: quote.route_pushes,
         excluded_routes: quote.excluded_routes,
@@ -1641,7 +1878,7 @@ pub(crate) async fn handle_list_vpn_receipts(
     let account_id = require_signed_request(&app, headers, method, uri, &[])?;
     let _vpn_guard = app.vpn_state_lock.lock().await;
     prune_expired_sessions(&app, now_ms());
-    let items = list_receipts_for_account(&app, &account_id);
+    let items = list_receipts_for_account(&app, &account_id)?;
     let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
     Ok(crate::utils::JsonBody(VpnReceiptListResponseDto { items, total }).into_response())
 }
@@ -1676,7 +1913,7 @@ pub(crate) async fn handle_submit_vpn_receipt(
             "vpn lease settlement grace window expired",
         ));
     }
-    let record = session_record_from_lease(&lease_record);
+    let record = session_record_from_lease(&lease_record)?;
     if signed_account != record.operator_account_id {
         return Err(not_permitted_error(
             "vpn receipt submission must be signed by the configured operator account",
@@ -1734,6 +1971,39 @@ mod tests {
         account_id_for(&checked_vpn_ed25519_keypair(seed))
     }
 
+    fn test_vpn_relay_trust() -> VpnRelayTrust {
+        let relay_keypair = checked_vpn_ed25519_keypair(0x55);
+        let (_, relay_id) = relay_keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("test relay identity");
+        VpnRelayTrust {
+            relay_id: relay_id.try_into().expect("32-byte Ed25519 identity"),
+            relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
+            tls_server_name: "relay.example".to_owned(),
+            relay_tls_spki_sha256: [0xAB; 32],
+            descriptor_commit: [0xCD; 32],
+            relay_certificate_sha256: [0xEF; 32],
+            directory_snapshot_digest: [0x42; 32],
+            valid_until_ms: u64::MAX,
+        }
+    }
+
+    #[test]
+    fn vpn_relay_trust_rejects_unauthenticated_snapshot_bytes() {
+        let error = VpnRelayTrust::from_guard_directory_at(
+            b"attacker-controlled directory",
+            [0xAA; 32],
+            test_vpn_relay_trust().relay_id,
+            1,
+        )
+        .expect_err("directory bytes without the provisioned digest must fail");
+        assert!(
+            error.contains("snapshot digest mismatch"),
+            "unexpected trust error: {error}"
+        );
+    }
+
     #[test]
     fn checked_vpn_ed25519_keypair_uses_fallible_seed_derivation() {
         assert_eq!(
@@ -1784,7 +2054,6 @@ mod tests {
         let app = mk_app_state_for_tests_with_world(world);
         let mut cfg = crate::test_utils::mk_minimal_root_cfg();
         cfg.network.soranet_vpn.enabled = true;
-        cfg.network.soranet_vpn.relay_tls_spki_sha256_hex = Some("ab".repeat(32));
         cfg.network.soranet_vpn.operator_account_id = operator_account_id.clone();
 
         let mut inner = match Arc::try_unwrap(app) {
@@ -1793,6 +2062,7 @@ mod tests {
         };
         inner.kiso = KisoHandle::mock(&cfg);
         inner.vpn_helper_ticket_secret = Some([0x5A; 32]);
+        inner.vpn_relay_trust = Some(Arc::new(test_vpn_relay_trust()));
         Arc::new(inner)
     }
 
@@ -1915,7 +2185,13 @@ mod tests {
             tariff: vpn_tariff_for_lease(&lease_fee, 600).expect("valid fixture tariff"),
             flow_label_bits: 24,
             padding_budget_ms: 15,
-            relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
+            relay_id: test_vpn_relay_trust().relay_id,
+            descriptor_commit: [0xCD; 32],
+            tls_server_name: "relay.example".to_owned(),
+            relay_tls_spki_sha256: [0xAB; 32],
+            relay_certificate_sha256: [0xEF; 32],
+            directory_snapshot_digest: [0x42; 32],
+            relay_trust_valid_until_ms: u64::MAX,
             metering_public_key: metering_keys.public_key().clone(),
             route_pushes: vec!["0.0.0.0/0".to_owned()],
             excluded_routes: Vec::new(),
@@ -1956,11 +2232,18 @@ mod tests {
             asset_definition: parse_fee_asset_definition(&record.fee_asset_id).expect("fee asset"),
             lease_fee: record.lease_fee.clone(),
             custody_account_id: record.escrow_account_id.clone(),
-            relay_id: relay_id_from_endpoint(&record.relay_endpoint),
+            relay_id: record.relay_id,
             tariff: record.tariff.clone(),
             quote_policy: VpnQuotePolicyV1 {
                 exit_class: VpnExitClassV1::try_from_label(&record.exit_class).expect("exit class"),
                 relay_endpoint: record.relay_endpoint.clone(),
+                relay_id: record.relay_id,
+                descriptor_commit: record.descriptor_commit,
+                tls_server_name: record.tls_server_name.clone(),
+                relay_tls_spki_sha256: record.relay_tls_spki_sha256,
+                relay_certificate_sha256: record.relay_certificate_sha256,
+                directory_snapshot_digest: record.directory_snapshot_digest,
+                relay_trust_valid_until_ms: record.relay_trust_valid_until_ms,
                 lease_secs: record.lease_secs,
                 meter_family: record.meter_family.clone(),
                 fee_asset_id: record.fee_asset_id.clone(),
@@ -1972,7 +2255,6 @@ mod tests {
                 mtu_bytes: record.mtu_bytes,
                 flow_label_bits: record.flow_label_bits,
                 padding_budget_ms: record.padding_budget_ms,
-                relay_tls_spki_sha256_hex: record.relay_tls_spki_sha256_hex.clone(),
             },
             open_tx_hash: decode_hex_32(&record.payment_tx_hash, "payment").expect("payment hash"),
             status,
@@ -1996,6 +2278,34 @@ mod tests {
             earned_fee,
             refunded_fee,
         }
+    }
+
+    #[test]
+    fn persisted_session_rejects_trust_expiring_before_lease() {
+        let account = checked_vpn_account(0x5E);
+        let session = sample_session_record(&account);
+        let mut lease = lease_record_from_session_record(&session, VpnLeaseStatusV1::Active, None);
+        lease.quote_policy.relay_trust_valid_until_ms = lease.expires_at_ms - 1;
+
+        let error = session_record_from_lease(&lease)
+            .expect_err("persisted lease must remain bounded by authenticated trust");
+        assert!(format!("{error:?}").contains("complete persisted lease"));
+    }
+
+    #[test]
+    fn persisted_session_requires_current_authenticated_trust() {
+        let account = checked_vpn_account(0x60);
+        let session = sample_session_record(&account);
+        let lease = lease_record_from_session_record(&session, VpnLeaseStatusV1::Active, None);
+        let trust = test_vpn_relay_trust();
+
+        ensure_lease_matches_authenticated_trust(&lease, &trust)
+            .expect("exact authenticated trust must reconstruct the session");
+        let mut wrong_trust = trust;
+        wrong_trust.directory_snapshot_digest[0] ^= 1;
+        let error = ensure_lease_matches_authenticated_trust(&lease, &wrong_trust)
+            .expect_err("different authenticated snapshot must not reconstruct the session");
+        assert!(format!("{error:?}").contains("authenticated relay trust"));
     }
 
     struct ReceiptFixture {
@@ -2034,7 +2344,8 @@ mod tests {
     ) -> ReceiptFixture {
         let relay_session_id = relay_session_id_from_session_id(&session.session_id);
         let quote_id = decode_hex_32(&session.quote_id, "quote").expect("quote id");
-        let relay_id = relay_id_from_endpoint(&session.relay_endpoint);
+        assert_eq!(session.relay_id_hex, hex::encode(record.relay_id));
+        let relay_id = record.relay_id;
         let voucher_body = VpnUsageVoucherBodyV1 {
             session_id: relay_session_id,
             quote_id,
@@ -2175,7 +2486,7 @@ mod tests {
         let account = checked_vpn_account(0x57);
         let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
 
-        let response = handle_get_vpn_profile(app.kiso.clone())
+        let response = handle_get_vpn_profile(app)
             .await
             .expect("profile")
             .into_response();
@@ -2193,7 +2504,75 @@ mod tests {
         assert_eq!(body.fee_asset_id, "xor#universal.universal");
         assert_eq!(body.route_pushes, vec!["0.0.0.0/0", "::/0"]);
         assert_eq!(body.dns_servers, vec!["1.1.1.1"]);
-        assert_eq!(body.relay_tls_spki_sha256_hex, Some("ab".repeat(32)));
+        assert_eq!(
+            body.relay_id_hex,
+            hex::encode(test_vpn_relay_trust().relay_id)
+        );
+        assert_eq!(body.descriptor_commit_hex, "cd".repeat(32));
+        assert_eq!(body.tls_server_name, "relay.example");
+        assert_eq!(body.relay_tls_spki_sha256_hex, "ab".repeat(32));
+        assert_eq!(body.relay_certificate_sha256_hex, "ef".repeat(32));
+        assert_eq!(body.directory_snapshot_digest_hex, "42".repeat(32));
+    }
+
+    #[tokio::test]
+    async fn vpn_profile_hides_trust_that_cannot_cover_a_lease() {
+        let account = checked_vpn_account(0x5F);
+        let app = vpn_enabled_app_with_operator(world_with_account(&account), &account);
+        let mut inner = Arc::try_unwrap(app)
+            .unwrap_or_else(|_| panic!("test app should be uniquely owned before trust update"));
+        let mut trust = test_vpn_relay_trust();
+        trust.valid_until_ms = now_ms();
+        inner.vpn_relay_trust = Some(Arc::new(trust));
+        let app = Arc::new(inner);
+
+        let response = handle_get_vpn_profile(app)
+            .await
+            .expect("profile")
+            .into_response();
+        let body: VpnProfileResponseDto = read_json(response).await;
+
+        assert!(!body.available);
+        assert!(body.relay_endpoint.is_empty());
+        assert!(body.relay_id_hex.is_empty());
+        assert!(body.descriptor_commit_hex.is_empty());
+        assert!(body.tls_server_name.is_empty());
+        assert!(body.relay_tls_spki_sha256_hex.is_empty());
+        assert!(body.relay_certificate_sha256_hex.is_empty());
+        assert!(body.directory_snapshot_digest_hex.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_vpn_quote_requires_trust_for_complete_lease() {
+        let client_keys = checked_vpn_ed25519_keypair(0x5B);
+        let client = account_id_for(&client_keys);
+        let operator = checked_vpn_account(0x5C);
+        let app = vpn_enabled_app_with_operator(
+            world_with_accounts(&[client.clone(), operator.clone()]),
+            &operator,
+        );
+        let mut inner = Arc::try_unwrap(app)
+            .unwrap_or_else(|_| panic!("test app should be uniquely owned before trust update"));
+        let mut trust = test_vpn_relay_trust();
+        trust.valid_until_ms = now_ms().saturating_add(1);
+        inner.vpn_relay_trust = Some(Arc::new(trust));
+        let app = Arc::new(inner);
+
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/quotes".parse().expect("quote uri");
+        let body = norito::json::to_vec(&VpnQuoteCreateRequestDto {
+            exit_class: "standard".to_owned(),
+            metering_public_key_hex: metering_public_key_hex(&checked_vpn_ed25519_keypair(0x5D)),
+        })
+        .expect("quote body");
+        let headers = signed_app_headers(&client, &client_keys, &method, &uri, body.as_ref());
+        let error = match handle_create_vpn_quote(app, &method, &uri, &headers, body.as_ref()).await
+        {
+            Ok(_) => panic!("lease extending beyond authenticated trust must fail"),
+            Err(error) => format!("{error:?}"),
+        };
+
+        assert!(error.contains("complete VPN lease"));
     }
 
     #[tokio::test]
@@ -2203,7 +2582,6 @@ mod tests {
         let app = mk_app_state_for_tests_with_world(world_with_account(&account));
         let mut cfg = crate::test_utils::mk_minimal_root_cfg();
         cfg.network.soranet_vpn.enabled = true;
-        cfg.network.soranet_vpn.relay_tls_spki_sha256_hex = Some("ab".repeat(32));
         cfg.network.soranet_vpn.escrow_account_id = account.clone();
         cfg.network.soranet_vpn.operator_account_id = account.clone();
         let mut inner = match Arc::try_unwrap(app) {
@@ -2212,6 +2590,7 @@ mod tests {
         };
         inner.kiso = KisoHandle::mock(&cfg);
         inner.vpn_helper_ticket_secret = Some([0x5A; 32]);
+        inner.vpn_relay_trust = Some(Arc::new(test_vpn_relay_trust()));
         let app = Arc::new(inner);
 
         let method = Method::POST;
@@ -2253,10 +2632,7 @@ mod tests {
             parsed.payment_tx_hash
         );
         assert_eq!(account_hash(&record.account_id), parsed.account_hash);
-        assert_eq!(
-            relay_id_from_endpoint(&record.relay_endpoint),
-            parsed.relay_id
-        );
+        assert_eq!(record.relay_id, parsed.relay_id);
         assert_eq!(record.metering_public_key, parsed.metering_public_key);
         assert_eq!(record.tariff, parsed.tariff);
         assert_eq!(expires_at_ms, parsed.expires_at_ms);
@@ -2997,7 +3373,7 @@ mod tests {
             quote_id: decode_hex_32(&record.quote_id, "quote").expect("quote"),
             payment_tx_hash: decode_hex_32(&record.payment_tx_hash, "payment").expect("payment"),
             account_hash: account_hash(&account),
-            relay_id: relay_id_from_endpoint(&record.relay_endpoint),
+            relay_id: record.relay_id,
             ingress_bytes: 128,
             egress_bytes: 256,
             cover_bytes: 0,
@@ -3842,7 +4218,8 @@ mod tests {
 
         let relay_session_id = relay_session_id_from_session_id(&session.session_id);
         let quote_id = decode_hex_32(&session.quote_id, "quote").expect("quote id");
-        let relay_id = relay_id_from_endpoint(&session.relay_endpoint);
+        assert_eq!(session.relay_id_hex, hex::encode(active_record.relay_id));
+        let relay_id = active_record.relay_id;
         let voucher_body = VpnUsageVoucherBodyV1 {
             session_id: relay_session_id,
             quote_id,

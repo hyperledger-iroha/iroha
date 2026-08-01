@@ -65,7 +65,7 @@ macro_rules! schema_types {
             iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition,
             iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,
             iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition,
-            iroha_executor_data_model::permission::asset::CanMintAsset,
+            iroha_executor_data_model::permission::asset::CanMintAssetToAccount,
             iroha_executor_data_model::permission::asset::CanBurnAsset,
             iroha_executor_data_model::permission::asset::CanTransferAsset,
             iroha_executor_data_model::permission::nft::CanRegisterNft,

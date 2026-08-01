@@ -24,6 +24,10 @@ pub const DOMAIN_NAME_SUFFIX_ID: SuffixId = 0x1002;
 /// Fixed suffix id for dataspace-alias lease records.
 pub const DATASPACE_ALIAS_SUFFIX_ID: SuffixId = 0x1003;
 
+const fn default_ownership_generation_v1() -> u64 {
+    1
+}
+
 /// Canonical selector payload for SNS names.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -107,6 +111,9 @@ pub struct NameRecordV1 {
     pub name_hash: [u8; 32],
     /// Account that currently controls the registration.
     pub owner: AccountId,
+    /// Monotonic ownership generation used to invalidate signed delegations after transfer.
+    #[norito(default = "default_ownership_generation_v1")]
+    pub ownership_generation: u64,
     /// Controller descriptors (accounts, resolver templates, or external payloads).
     pub controllers: Vec<NameControllerV1>,
     /// Lifecycle state (active, grace, frozen, etc.).
@@ -146,6 +153,7 @@ impl NameRecordV1 {
             selector,
             name_hash,
             owner,
+            ownership_generation: default_ownership_generation_v1(),
             controllers,
             status: NameStatus::Active,
             pricing_class,
@@ -156,6 +164,14 @@ impl NameRecordV1 {
             metadata,
             auction: None,
         }
+    }
+
+    /// Replace the owner and advance the authoritative ownership generation.
+    pub fn transfer_owner(&mut self, owner: AccountId) {
+        if self.owner != owner {
+            self.ownership_generation = self.ownership_generation.saturating_add(1);
+        }
+        self.owner = owner;
     }
 }
 

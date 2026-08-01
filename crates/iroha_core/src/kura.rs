@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Debug,
     io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     ops::Bound,
     path::{Path, PathBuf},
     sync::{
@@ -50,7 +50,7 @@ use iroha_config::{
 use iroha_crypto::Algorithm;
 #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 use iroha_crypto::KeyPair;
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, PublicKey};
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
@@ -27442,11 +27442,10 @@ impl Kura {
         let root = HashOf::<MerkleTree<NativeAmxApplicationManifestLeafV1>>::from_untyped_unchecked(
             artifact.manifest_root,
         );
-        if !artifact.proof.clone().verify(
-            &leaf_hash,
-            &root,
-            NATIVE_AMX_APPLICATION_MANIFEST_MAX_PROOF_HEIGHT,
-        ) {
+        let leaf_count = NonZeroU64::new(u64::from(artifact.manifest_leaf_count))
+            .ok_or("Native AMX participant manifest leaf count is zero")?;
+        let commitment = MerkleTreeCommitment::new(root, leaf_count);
+        if !artifact.proof.verify(&leaf_hash, &commitment) {
             return Err("Native AMX participant manifest Merkle proof is invalid");
         }
         Ok(())

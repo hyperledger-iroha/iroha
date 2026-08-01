@@ -1,11 +1,14 @@
 package org.hyperledger.iroha.android.client;
 
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
@@ -28,21 +31,27 @@ public final class VpnJsonParser {
           "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
           "display_billing_label", "fee_asset_id", "escrow_account_id", "operator_account_id",
           "lease_fee", "settlement_grace_secs", "flow_label_bits", "padding_budget_ms",
-          "relay_tls_spki_sha256_hex");
+          "relay_id_hex", "descriptor_commit_hex", "tls_server_name",
+          "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
+          "directory_snapshot_digest_hex");
   private static final Set<String> QUOTE_FIELDS =
       fields(
           "quote_id", "lease_id_hex", "session_id_hex", "payment_reference", "account_id",
           "exit_class", "relay_endpoint", "lease_secs", "quote_expires_at_ms", "fee_asset_id",
           "escrow_account_id", "operator_account_id", "lease_fee", "route_pushes",
           "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes", "meter_family",
-          "flow_label_bits", "padding_budget_ms", "relay_tls_spki_sha256_hex",
+          "flow_label_bits", "padding_budget_ms", "relay_id_hex", "descriptor_commit_hex",
+          "tls_server_name", "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
+          "directory_snapshot_digest_hex",
           "metering_public_key_hex", "open_lease_instruction", "tx_instructions");
   private static final Set<String> SESSION_FIELDS =
       fields(
           "session_id", "account_id", "exit_class", "relay_endpoint", "lease_secs",
           "expires_at_ms", "connected_at_ms", "meter_family", "quote_id", "payment_reference",
           "payment_tx_hash", "fee_asset_id", "escrow_account_id", "operator_account_id",
-          "lease_fee", "flow_label_bits", "padding_budget_ms", "relay_tls_spki_sha256_hex",
+          "lease_fee", "flow_label_bits", "padding_budget_ms", "relay_id_hex",
+          "descriptor_commit_hex", "tls_server_name", "relay_tls_spki_sha256_hex",
+          "relay_certificate_sha256_hex", "directory_snapshot_digest_hex",
           "route_pushes", "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
           "helper_ticket_hex", "bytes_in", "bytes_out", "status");
   private static final Set<String> RECEIPT_FIELDS =
@@ -61,9 +70,13 @@ public final class VpnJsonParser {
     final Map<String, Object> root =
         expectObject(parse(payload, "vpn profile response"), "vpn profile response");
     requireExactFields(root, PROFILE_FIELDS, "vpn profile response");
+    final boolean available =
+        requiredBoolean(root.get("available"), "vpn profile response.available");
+    final VpnTrustTuple trust = vpnTrustTuple(root, "vpn profile response", !available);
     return new VpnProfile(
-        requiredBoolean(root.get("available"), "vpn profile response.available"),
-        requiredString(root.get("relay_endpoint"), "vpn profile response.relay_endpoint"),
+        available,
+        relayEndpoint(
+            root.get("relay_endpoint"), "vpn profile response.relay_endpoint", !available),
         exitClassList(root.get("supported_exit_classes"), "vpn profile response.supported_exit_classes"),
         exitClass(root.get("default_exit_class"), "vpn profile response.default_exit_class"),
         boundedLong(root.get("lease_secs"), "vpn profile response.lease_secs", 1L, U32_MAX),
@@ -85,13 +98,19 @@ public final class VpnJsonParser {
         atLeastLong(root.get("settlement_grace_secs"), "vpn profile response.settlement_grace_secs", 1L),
         exactInt(root.get("flow_label_bits"), "vpn profile response.flow_label_bits", 24),
         boundedInt(root.get("padding_budget_ms"), "vpn profile response.padding_budget_ms", 1, 65535),
-        optionalHex32(root.get("relay_tls_spki_sha256_hex"), "relayTlsSpkiSha256Hex"));
+        trust.relayIdHex,
+        trust.descriptorCommitHex,
+        trust.tlsServerName,
+        trust.relayTlsSpkiSha256Hex,
+        trust.relayCertificateSha256Hex,
+        trust.directorySnapshotDigestHex);
   }
 
   public static VpnQuote parseQuote(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "vpn quote response"), "vpn quote response");
     requireExactFields(root, QUOTE_FIELDS, "vpn quote response");
+    final VpnTrustTuple trust = vpnTrustTuple(root, "vpn quote response", false);
     return new VpnQuote(
         hex32(root.get("quote_id"), "quoteId"),
         hex32(root.get("lease_id_hex"), "leaseIdHex"),
@@ -99,7 +118,7 @@ public final class VpnJsonParser {
         requiredString(root.get("payment_reference"), "vpn quote response.payment_reference"),
         requiredString(root.get("account_id"), "vpn quote response.account_id"),
         exitClass(root.get("exit_class"), "vpn quote response.exit_class"),
-        requiredString(root.get("relay_endpoint"), "vpn quote response.relay_endpoint"),
+        relayEndpoint(root.get("relay_endpoint"), "vpn quote response.relay_endpoint", false),
         boundedLong(root.get("lease_secs"), "vpn quote response.lease_secs", 1L, U32_MAX),
         atLeastLong(root.get("quote_expires_at_ms"), "vpn quote response.quote_expires_at_ms", 0L),
         requiredString(root.get("fee_asset_id"), "vpn quote response.fee_asset_id"),
@@ -114,7 +133,12 @@ public final class VpnJsonParser {
         requiredString(root.get("meter_family"), "vpn quote response.meter_family"),
         exactInt(root.get("flow_label_bits"), "vpn quote response.flow_label_bits", 24),
         boundedInt(root.get("padding_budget_ms"), "vpn quote response.padding_budget_ms", 1, 65535),
-        optionalHex32(root.get("relay_tls_spki_sha256_hex"), "relayTlsSpkiSha256Hex"),
+        trust.relayIdHex,
+        trust.descriptorCommitHex,
+        trust.tlsServerName,
+        trust.relayTlsSpkiSha256Hex,
+        trust.relayCertificateSha256Hex,
+        trust.directorySnapshotDigestHex,
         ed25519PublicKeyHex(root.get("metering_public_key_hex"), "meteringPublicKeyHex"),
         optionalTxInstruction(root.get("open_lease_instruction"), "vpn quote response.open_lease_instruction"),
         txInstructionList(root.get("tx_instructions"), "vpn quote response.tx_instructions", 1, 1));
@@ -124,11 +148,12 @@ public final class VpnJsonParser {
     final Map<String, Object> root =
         expectObject(parse(payload, "vpn session response"), "vpn session response");
     requireExactFields(root, SESSION_FIELDS, "vpn session response");
+    final VpnTrustTuple trust = vpnTrustTuple(root, "vpn session response", false);
     return new VpnSession(
         hex32(root.get("session_id"), "sessionId"),
         requiredString(root.get("account_id"), "vpn session response.account_id"),
         exitClass(root.get("exit_class"), "vpn session response.exit_class"),
-        requiredString(root.get("relay_endpoint"), "vpn session response.relay_endpoint"),
+        relayEndpoint(root.get("relay_endpoint"), "vpn session response.relay_endpoint", false),
         boundedLong(root.get("lease_secs"), "vpn session response.lease_secs", 1L, U32_MAX),
         atLeastLong(root.get("expires_at_ms"), "vpn session response.expires_at_ms", 0L),
         atLeastLong(root.get("connected_at_ms"), "vpn session response.connected_at_ms", 0L),
@@ -142,7 +167,12 @@ public final class VpnJsonParser {
         quantity(root.get("lease_fee"), "vpn session response.lease_fee"),
         exactInt(root.get("flow_label_bits"), "vpn session response.flow_label_bits", 24),
         boundedInt(root.get("padding_budget_ms"), "vpn session response.padding_budget_ms", 1, 65535),
-        optionalHex32(root.get("relay_tls_spki_sha256_hex"), "relayTlsSpkiSha256Hex"),
+        trust.relayIdHex,
+        trust.descriptorCommitHex,
+        trust.tlsServerName,
+        trust.relayTlsSpkiSha256Hex,
+        trust.relayCertificateSha256Hex,
+        trust.directorySnapshotDigestHex,
         stringList(root.get("route_pushes"), "vpn session response.route_pushes"),
         stringList(root.get("excluded_routes"), "vpn session response.excluded_routes"),
         stringList(root.get("dns_servers"), "vpn session response.dns_servers"),
@@ -452,6 +482,228 @@ public final class VpnJsonParser {
     return canonicalHex(value, field, 64);
   }
 
+  private static final class VpnTrustTuple {
+    private final String relayIdHex;
+    private final String descriptorCommitHex;
+    private final String tlsServerName;
+    private final String relayTlsSpkiSha256Hex;
+    private final String relayCertificateSha256Hex;
+    private final String directorySnapshotDigestHex;
+
+    private VpnTrustTuple(
+        final String relayIdHex,
+        final String descriptorCommitHex,
+        final String tlsServerName,
+        final String relayTlsSpkiSha256Hex,
+        final String relayCertificateSha256Hex,
+        final String directorySnapshotDigestHex) {
+      this.relayIdHex = relayIdHex;
+      this.descriptorCommitHex = descriptorCommitHex;
+      this.tlsServerName = tlsServerName;
+      this.relayTlsSpkiSha256Hex = relayTlsSpkiSha256Hex;
+      this.relayCertificateSha256Hex = relayCertificateSha256Hex;
+      this.directorySnapshotDigestHex = directorySnapshotDigestHex;
+    }
+  }
+
+  private static VpnTrustTuple vpnTrustTuple(
+      final Map<String, Object> root, final String context, final boolean allowEmpty) {
+    return new VpnTrustTuple(
+        trustRelayId(root.get("relay_id_hex"), context + ".relay_id_hex", allowEmpty),
+        trustDigest(
+            root.get("descriptor_commit_hex"), context + ".descriptor_commit_hex", allowEmpty),
+        tlsServerName(root.get("tls_server_name"), context + ".tls_server_name", allowEmpty),
+        trustDigest(
+            root.get("relay_tls_spki_sha256_hex"),
+            context + ".relay_tls_spki_sha256_hex",
+            allowEmpty),
+        trustDigest(
+            root.get("relay_certificate_sha256_hex"),
+            context + ".relay_certificate_sha256_hex",
+            allowEmpty),
+        trustDigest(
+            root.get("directory_snapshot_digest_hex"),
+            context + ".directory_snapshot_digest_hex",
+            allowEmpty));
+  }
+
+  private static String trustRelayId(
+      final Object value, final String field, final boolean allowEmpty) {
+    if (allowEmpty && "".equals(value)) {
+      return "";
+    }
+    return ed25519PublicKeyHex(value, field);
+  }
+
+  private static String trustDigest(
+      final Object value, final String field, final boolean allowEmpty) {
+    if (allowEmpty && "".equals(value)) {
+      return "";
+    }
+    final String canonical = hex32(value, field);
+    for (int index = 0; index < canonical.length(); index++) {
+      if (canonical.charAt(index) != '0') {
+        return canonical;
+      }
+    }
+    throw new IllegalStateException(field + " must not be the all-zero digest");
+  }
+
+  private static String tlsServerName(
+      final Object value, final String field, final boolean allowEmpty) {
+    if (allowEmpty && "".equals(value)) {
+      return "";
+    }
+    final String name = requiredString(value, field);
+    if (name.length() > 253 || !name.equals(name.toLowerCase(Locale.ROOT))) {
+      throw new IllegalStateException(field + " must be a canonical lowercase DNS name");
+    }
+    final String[] labels = name.split("\\.", -1);
+    for (final String label : labels) {
+      if (label.isEmpty()
+          || label.length() > 63
+          || !isDnsAlphaNumeric(label.charAt(0))
+          || !isDnsAlphaNumeric(label.charAt(label.length() - 1))) {
+        throw new IllegalStateException(field + " must be a canonical lowercase DNS name");
+      }
+      for (int index = 0; index < label.length(); index++) {
+        final char character = label.charAt(index);
+        if (!isDnsAlphaNumeric(character) && character != '-') {
+          throw new IllegalStateException(field + " must be a canonical lowercase DNS name");
+        }
+      }
+    }
+    return name;
+  }
+
+  private static boolean isDnsAlphaNumeric(final char character) {
+    return (character >= 'a' && character <= 'z')
+        || (character >= '0' && character <= '9');
+  }
+
+  private static String relayEndpoint(
+      final Object value, final String field, final boolean allowEmpty) {
+    if (allowEmpty && "".equals(value)) {
+      return "";
+    }
+    final String endpoint = requiredString(value, field);
+    final String[] parts = endpoint.split("/", -1);
+    if (parts.length != 6
+        || !parts[0].isEmpty()
+        || !"udp".equals(parts[3])
+        || !"quic".equals(parts[5])) {
+      throw new IllegalStateException(
+          field + " must use /{ip4|ip6|dns|dns4|dns6}/host/udp/port/quic");
+    }
+    final String protocol = parts[1];
+    if (!("ip4".equals(protocol)
+        || "ip6".equals(protocol)
+        || "dns".equals(protocol)
+        || "dns4".equals(protocol)
+        || "dns6".equals(protocol))) {
+      throw new IllegalStateException(field + " has an unsupported host protocol");
+    }
+    if ("ip4".equals(protocol)) {
+      requireCanonicalIpv4(parts[2], field);
+    } else if ("ip6".equals(protocol)) {
+      requireCanonicalIpv6(parts[2], field);
+    } else {
+      tlsServerName(parts[2], field + " host", false);
+    }
+    final int port;
+    try {
+      port = Integer.parseInt(parts[4]);
+    } catch (final NumberFormatException error) {
+      throw new IllegalStateException(field + " must contain a canonical non-zero UDP port");
+    }
+    if (port < 1 || port > 65535 || !Integer.toString(port).equals(parts[4])) {
+      throw new IllegalStateException(field + " must contain a canonical non-zero UDP port");
+    }
+    return endpoint;
+  }
+
+  private static void requireCanonicalIpv4(final String host, final String field) {
+    final String[] octets = host.split("\\.", -1);
+    if (octets.length != 4) {
+      throw new IllegalStateException(field + " must contain a canonical IPv4 address");
+    }
+    for (final String octet : octets) {
+      final int parsed;
+      try {
+        parsed = Integer.parseInt(octet);
+      } catch (final NumberFormatException error) {
+        throw new IllegalStateException(field + " must contain a canonical IPv4 address");
+      }
+      if (parsed < 0 || parsed > 255 || !Integer.toString(parsed).equals(octet)) {
+        throw new IllegalStateException(field + " must contain a canonical IPv4 address");
+      }
+    }
+  }
+
+  private static void requireCanonicalIpv6(final String host, final String field) {
+    final InetAddress parsed;
+    try {
+      parsed = InetAddress.getByName(host);
+    } catch (final Exception error) {
+      throw new IllegalStateException(field + " must contain a canonical lowercase IPv6 address");
+    }
+    if (!(parsed instanceof Inet6Address) || !host.equals(canonicalIpv6(parsed.getAddress()))) {
+      throw new IllegalStateException(field + " must contain a canonical lowercase IPv6 address");
+    }
+  }
+
+  private static String canonicalIpv6(final byte[] bytes) {
+    final int[] groups = new int[8];
+    for (int index = 0; index < groups.length; index++) {
+      groups[index] =
+          ((bytes[index * 2] & 0xff) << 8) | (bytes[index * 2 + 1] & 0xff);
+    }
+    int bestStart = -1;
+    int bestLength = 0;
+    for (int index = 0; index < groups.length; ) {
+      if (groups[index] != 0) {
+        index++;
+        continue;
+      }
+      final int start = index;
+      while (index < groups.length && groups[index] == 0) {
+        index++;
+      }
+      final int length = index - start;
+      if (length >= 2 && length > bestLength) {
+        bestStart = start;
+        bestLength = length;
+      }
+    }
+    if (bestStart < 0) {
+      return joinIpv6Groups(groups, 0, groups.length);
+    }
+    final String before = joinIpv6Groups(groups, 0, bestStart);
+    final String after = joinIpv6Groups(groups, bestStart + bestLength, groups.length);
+    if (before.isEmpty() && after.isEmpty()) {
+      return "::";
+    }
+    if (before.isEmpty()) {
+      return "::" + after;
+    }
+    if (after.isEmpty()) {
+      return before + "::";
+    }
+    return before + "::" + after;
+  }
+
+  private static String joinIpv6Groups(
+      final int[] groups, final int startInclusive, final int endExclusive) {
+    final StringBuilder result = new StringBuilder();
+    for (int index = startInclusive; index < endExclusive; index++) {
+      if (result.length() > 0) {
+        result.append(':');
+      }
+      result.append(Integer.toHexString(groups[index]));
+    }
+    return result.toString();
+  }
+
   private static String ed25519PublicKeyHex(final Object value, final String field) {
     final String canonical = hex32(value, field);
     final byte[] publicKey = new byte[Ed25519PublicKeyAdmission.PUBLIC_KEY_LENGTH];
@@ -471,10 +723,6 @@ public final class VpnJsonParser {
 
   private static String hex16(final Object value, final String field) {
     return canonicalHex(value, field, 32);
-  }
-
-  private static String optionalHex32(final Object value, final String field) {
-    return value == null ? null : canonicalHex(value, field, 64);
   }
 
   private static String canonicalEvenHex(final Object value, final String field) {

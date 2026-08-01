@@ -328,9 +328,11 @@ impl Registers {
         (root, path)
     }
 
-    /// Build a compact Merkle proof for the register at `idx`. Returns the
-    /// compact proof and the current typed register Merkle root. `depth_cap`
-    /// can restrict the number of levels used (at most 32).
+    /// Build a compact Merkle proof for the register at `idx`.
+    ///
+    /// Without truncation the returned root is the full register-tree root.
+    /// When `depth_cap` truncates the path, the returned root commits only to
+    /// that path fragment and is not a membership commitment.
     #[inline]
     pub fn merkle_compact(
         &self,
@@ -342,10 +344,16 @@ impl Registers {
         let leaf_digest = register_leaf_digest(self.gpr[idx], self.tags[idx]);
         let leaf_hash = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_digest));
         let siblings = proof.siblings().to_vec();
-        let merkle_proof = MerkleProof::from_audit_path(idx as u32, siblings);
-        let adj_root = merkle_proof
-            .compute_root_sha256(&leaf_hash, proof.depth() as usize)
-            .unwrap_or(root);
+        let merkle_proof = MerkleProof::from_audit_path(proof.dirs(), siblings);
+        // A depth cap commits only to this path fragment. It is deliberately
+        // not treated as membership in the fixed 256-leaf register tree.
+        let adj_root = if usize::from(proof.depth()) < path.len() {
+            merkle_proof
+                .compute_partial_root_sha256(&leaf_hash, usize::from(proof.depth()))
+                .expect("proof height equals compact depth")
+        } else {
+            root
+        };
         (proof, adj_root)
     }
 

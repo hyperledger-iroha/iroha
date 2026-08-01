@@ -28,6 +28,9 @@ assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+GENESIS_PUBLIC_KEY = "ed0120" + "AB" * 32
+GENESIS_EXPECTED_HASH = "00" * 31 + "01"
+
 
 def _write(path: Path, body: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -249,6 +252,8 @@ kagemusha_catalog_qualification_seal_path = "{MODULE.qualification_seal_path(tre
 
 [genesis]
 file = "{bundle / 'genesis.signed.nrt'}"
+public_key = "{GENESIS_PUBLIC_KEY}"
+expected_hash = "{GENESIS_EXPECTED_HASH}"
 """
         _write(workdir / "config.toml", config.encode())
         config_hashes[slug] = hashlib.sha256(config.encode()).hexdigest()
@@ -266,6 +271,8 @@ file = "{bundle / 'genesis.signed.nrt'}"
         "offline_asset_scale": MODULE.OFFLINE_ASSET_SCALE,
         "source_commit": source_commit,
         "irohad_sha256": binary_sha,
+        "genesis_public_key": GENESIS_PUBLIC_KEY,
+        "genesis_expected_hash": GENESIS_EXPECTED_HASH,
         "signed_genesis_sha256": hashlib.sha256(
             (bundle / "genesis.signed.nrt").read_bytes()
         ).hexdigest(),
@@ -341,6 +348,8 @@ kagemusha_catalog_qualification_seal_path = "/Library/SORA/Taira/seals/kagemusha
 
 [genesis]
 file = "/private/reset/genesis.signed.nrt"
+public_key = "{GENESIS_PUBLIC_KEY}"
+expected_hash = "{GENESIS_EXPECTED_HASH}"
 """
 
 
@@ -353,6 +362,8 @@ def test_projection_parser_extracts_all_required_fields() -> None:
     assert config["chain"] == MODULE.CHAIN_ID
     assert config["chain_discriminant"] == MODULE.CHAIN_DISCRIMINANT
     assert config["torii"]["kagemusha_commands"]["enabled"] is True
+    assert config["genesis"]["public_key"] == GENESIS_PUBLIC_KEY
+    assert config["genesis"]["expected_hash"] == GENESIS_EXPECTED_HASH
     assert (
         config["nexus"]["storage"]["disk_budget_weights"] == MODULE.NODE_STORAGE_WEIGHTS
     )
@@ -405,6 +416,32 @@ def test_bundle_preflight_authenticates_exact_four_peer_reset(tmp_path: Path) ->
     assert [peer.torii_port for peer in plan.peers] == list(MODULE.TORII_PORTS)
     assert [peer.p2p_port for peer in plan.peers] == list(MODULE.P2P_PORTS)
     assert all(not any(peer.storage.iterdir()) for peer in plan.peers)
+
+
+def test_bundle_preflight_rejects_a_config_with_an_alternate_genesis_hash(
+    tmp_path: Path,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    slug = MODULE.SLUGS[0]
+    config_path = bundle / "rendered" / slug / "config.toml"
+    alternate_hash = "02" * 31 + "03"
+    config = config_path.read_text().replace(
+        f'expected_hash = "{GENESIS_EXPECTED_HASH}"',
+        f'expected_hash = "{alternate_hash}"',
+    )
+    _write(config_path, config.encode())
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["configs"][slug] = hashlib.sha256(config.encode()).hexdigest()
+    _write(
+        manifest_path,
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+    )
+
+    with pytest.raises(MODULE.DeploymentError, match="exact expected hash"):
+        _validate(bundle, binary_sha, source_commit)
 
 
 def test_bundle_preflight_requires_receipt_bound_reset_manifest_digest(

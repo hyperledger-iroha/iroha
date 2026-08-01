@@ -418,7 +418,8 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                     ExecuteTriggerEventFilter::new()
                         .for_trigger(bad_trigger_id.clone())
                         .under_authority(account_id.clone()),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             ));
             submit_instruction_and_wait(
                 &network,
@@ -436,7 +437,8 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                     Repeats::Indefinitely,
                     account_id.clone(),
                     TimeEventFilter::new(ExecutionTime::PreCommit),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             ));
             submit_instruction_and_wait(
                 &network,
@@ -799,7 +801,8 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
                     ExecuteTriggerEventFilter::new()
                         .for_trigger(trigger_id.clone())
                         .under_authority(alice_account_id.clone()),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             );
 
             submit_instruction_and_wait(
@@ -915,7 +918,8 @@ async fn unregister_trigger() -> Result<()> {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(account_id),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let register_trigger = Register::trigger(trigger.clone());
         submit_instruction_and_wait(
@@ -961,7 +965,8 @@ async fn unregister_trigger() -> Result<()> {
                 found_action.repeats(),
                 found_action.authority().clone(),
                 found_action.filter().clone(),
-            ),
+            )
+            .expect("queried trigger action preserves server-validated invariants"),
         );
         assert_eq!(found_trigger, trigger);
 
@@ -1021,6 +1026,7 @@ async fn trigger_in_genesis() -> Result<()> {
                 .for_trigger(trigger_id.clone())
                 .under_authority(account_id.clone()),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(contract_entrypoint_metadata("run")),
     );
 
@@ -1426,7 +1432,7 @@ async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_ca
                         ExecuteTriggerEventFilter::new()
                             .for_trigger(trigger_id)
                             .under_authority(account_id.clone()),
-                    )
+                    ).expect("trigger action fixture satisfies validation invariants")
                     .with_metadata(contract_entrypoint_metadata("run")),
                 )
             };
@@ -1495,7 +1501,8 @@ fn build_register_trigger_isi(
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id)
                 .under_authority(account_id.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     ))
 }
 
@@ -1532,6 +1539,7 @@ async fn call_execute_trigger_with_args() -> Result<()> {
                     .for_trigger(trigger_id.clone())
                     .under_authority(account_id.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(contract_entrypoint_metadata("run")),
         );
 

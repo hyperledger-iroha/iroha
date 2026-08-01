@@ -514,7 +514,7 @@ elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$pa
   status="202"
   body=''
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$payload" == *'"method":"tools/list"'* ]]; then
-  body='{"result":{"tools":[{"name":"iroha.health","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.search","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.release.get","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.yank_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
+  body='{"result":{"tools":[{"name":"iroha.health","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.queries.exact_package","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.queries.exact_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.release_yank_set","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/readyz" ]]; then
   body="$(cat "${MOCK_STATE_DIR:?}/readyz.json")"
   if [[ "$scenario" == "public_readyz_not_mandatory" ]]; then
@@ -614,10 +614,12 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/transactions/
     status="404"
     body='{"code":"route_not_found","message":"route not found"}'
   fi
-elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/musubi/packages?query=&limit=1" ]]; then
-  body='{"items":[]}'
-elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/instructions/yank-release" ]]; then
-  body='{"instructions":[]}'
+elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/queries/ordered-prefix" ]]; then
+  status="400"
+  body='{"error":"missing typed request"}'
+elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/instructions/release-yank-set" ]]; then
+  status="400"
+  body='{"error":"missing typed instruction"}'
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/contracts/deploy" ]]; then
   status="404"
   body='{"code":"route_not_found","message":"route not found"}'

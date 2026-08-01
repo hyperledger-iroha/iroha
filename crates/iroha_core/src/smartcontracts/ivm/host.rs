@@ -7992,6 +7992,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             context.authority.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
         )
+        .map_err(|_| ivm::VMError::NoritoInvalid)?
         .with_metadata(next_trigger_metadata);
         let trigger = Trigger::new(trigger_id.clone(), action);
         let unregister =
@@ -10350,7 +10351,7 @@ impl<QS> CoreHostImpl<QS> {
         };
 
         let filter = Self::decode_trigger_filter(filter_value)?;
-        Action::try_new(executable, repeats, authority, filter)
+        Action::new(executable, repeats, authority, filter)
             .map(|action| action.with_metadata(metadata))
             .map_err(|_| ivm::VMError::DecodeError)
     }
@@ -16451,7 +16452,8 @@ seiyaku PrivilegedBinding {
                 Repeats::Exactly(1),
                 authority.clone(),
                 DataEventFilter::Any,
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let json = Json::new(trigger.clone());
         let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
@@ -16480,7 +16482,8 @@ seiyaku PrivilegedBinding {
             Repeats::Exactly(1),
             authority.clone(),
             EventFilterBox::Data(DataEventFilter::Any),
-        );
+        )
+        .expect("test data-trigger action satisfies its authority invariant");
         let action_value = norito::json::to_value(&action).expect("serialize specialized action");
         let mut map = BTreeMap::new();
         map.insert(
@@ -16500,6 +16503,7 @@ seiyaku PrivilegedBinding {
             action.authority.clone(),
             action.filter.clone(),
         )
+        .expect("test action reconstructed from a validated specialized action")
         .with_metadata(action.metadata.clone());
         let expected =
             InstructionBox::from(Register::trigger(Trigger::new(trigger_id, expected_action)));
@@ -16524,7 +16528,8 @@ seiyaku PrivilegedBinding {
             Repeats::Exactly(1),
             authority.clone(),
             EventFilterBox::Data(DataEventFilter::Any),
-        );
+        )
+        .expect("test data-trigger action satisfies its authority invariant");
         let mut action_value =
             norito::json::to_value(&action).expect("serialize specialized action");
         let filter_value =
@@ -16554,6 +16559,7 @@ seiyaku PrivilegedBinding {
             action.authority.clone(),
             action.filter.clone(),
         )
+        .expect("test action reconstructed from a validated specialized action")
         .with_metadata(action.metadata.clone());
         let expected =
             InstructionBox::from(Register::trigger(Trigger::new(trigger_id, expected_action)));
@@ -16580,7 +16586,8 @@ seiyaku PrivilegedBinding {
             EventFilterBox::ExecuteTrigger(
                 ExecuteTriggerEventFilter::new().under_authority(filter_authority),
             ),
-        );
+        )
+        .expect("test by-call action initially has matching filter and action authorities");
         let mut action_value =
             norito::json::to_value(&action).expect("serialize specialized action");
         match &mut action_value {
@@ -19917,7 +19924,8 @@ seiyaku DedicatedQueryContract {
             Repeats::Exactly(1),
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata.clone();
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -19990,6 +19998,7 @@ seiyaku DedicatedQueryContract {
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata({
             let mut metadata = trigger_metadata;
             let registered_height_key: Name = "__registered_block_height".parse().unwrap();
@@ -20141,7 +20150,8 @@ seiyaku DedicatedQueryContract {
                 start_ms: 1_000,
                 period_ms: None,
             })),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata;
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -20423,7 +20433,8 @@ seiyaku DedicatedQueryContract {
             Repeats::Exactly(1),
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata.clone();
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -20485,6 +20496,7 @@ seiyaku DedicatedQueryContract {
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(trigger_metadata);
         let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
         let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
@@ -20607,7 +20619,8 @@ seiyaku DedicatedQueryContract {
             Repeats::Exactly(1),
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata.clone();
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {

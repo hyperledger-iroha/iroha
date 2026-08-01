@@ -121,10 +121,13 @@ const TRANSACTION_ARTIFACT_NAMES = new Set([
 ]);
 
 export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
+  "blockProofsVerifyAuthenticatedV1",
   "connectNoritoBridgeAbiVersion",
   "noritoEncodeInstruction",
   "noritoDecodeInstruction",
   "compileKotodama",
+  "privacyCompiledProfileCatalogV1",
+  "privacyValidateCompiledProfileCatalogV1",
   "sorafsValidateAppealFinanceCancelAssetLockJson",
   "securePrivateFileAbiVersion",
   "securePrivateDirectoryEnsure",
@@ -405,6 +408,39 @@ if (wrongResult.length > 0) {
         .join(", "),
   );
   process.exitCode = 1;
+}
+if (
+  required.includes("privacyCompiledProfileCatalogV1") &&
+  required.includes("privacyValidateCompiledProfileCatalogV1") &&
+  typeof binding.privacyCompiledProfileCatalogV1 === "function" &&
+  typeof binding.privacyValidateCompiledProfileCatalogV1 === "function"
+) {
+  try {
+    const catalog = binding.privacyCompiledProfileCatalogV1();
+    if (
+      !Buffer.isBuffer(catalog) ||
+      !(catalog.buffer instanceof ArrayBuffer) ||
+      catalog.byteLength === 0 ||
+      catalog.byteLength > 256 * 1024
+    ) {
+      throw new Error(
+        "privacyCompiledProfileCatalogV1 must return 1..262144 non-shared Buffer bytes",
+      );
+    }
+    const validationStatus = binding.privacyValidateCompiledProfileCatalogV1(catalog);
+    if (!Number.isSafeInteger(validationStatus) || validationStatus !== 0) {
+      throw new Error(
+        "privacyValidateCompiledProfileCatalogV1 must accept the published catalog with status 0, found " +
+          String(validationStatus),
+      );
+    }
+  } catch (error) {
+    process.stderr.write(
+      "invalid native privacy compiled-profile catalog contract: " +
+        String(error?.message ?? error),
+    );
+    process.exitCode = 1;
+  }
 }
 `;
   const probe = spawnSync(

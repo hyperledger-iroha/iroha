@@ -826,6 +826,7 @@ public sealed partial class ToriiClient : IDisposable
 
     public async Task<ToriiVpnProfile> GetVpnProfileAsync(CancellationToken cancellationToken = default)
     {
+        RequireSecureVpnTransport();
         using var response = await SendExpectingStatusAsync(
             HttpMethod.Get,
             "/v1/vpn/profile",
@@ -1903,7 +1904,17 @@ public sealed partial class ToriiClient : IDisposable
             accept: null,
             configureRequest: null,
             cancellationToken);
+        var expectedRequestUri = request.RequestUri;
         var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (path.StartsWith("/v1/vpn/", StringComparison.Ordinal)
+            && response.RequestMessage?.RequestUri is Uri responseUri
+            && expectedRequestUri is not null
+            && responseUri != expectedRequestUri)
+        {
+            response.Dispose();
+            throw new HttpRequestException("Sora VPN requests must not follow redirects.");
+        }
+
         if (response.StatusCode == expectedStatusCode
             || (allowedStatusCode.HasValue && response.StatusCode == allowedStatusCode.Value))
         {
@@ -1917,10 +1928,19 @@ public sealed partial class ToriiClient : IDisposable
 
     private void RequireVpnCanonicalRequestCredentials(string route)
     {
+        RequireSecureVpnTransport();
         if (Options.CanonicalRequestCredentials is null)
         {
             throw new InvalidOperationException(
                 $"VPN route `{route}` requires ToriiClientOptions.CanonicalRequestCredentials.");
+        }
+    }
+
+    private void RequireSecureVpnTransport()
+    {
+        if (!string.Equals(BaseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Sora VPN requests require an HTTPS Torii base URI.");
         }
     }
 

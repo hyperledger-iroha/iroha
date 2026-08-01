@@ -152,8 +152,9 @@ For authoritative NPoS validity, `sumeragi_npos_parameters` must exist in commit
 Genesis builders emit it for NPoS chains. VRF scheduling, evidence attribution, and slashing delay
 are read from that committed snapshot; customized node-local fallback values cannot change a
 candidate or follower result. The reserved parameter ID rejects malformed payloads, zero-length
-epochs or VRF windows, windows that do not fit within the epoch, and zero evidence, activation, or
-slashing bounds. An NPoS v2 node that cannot load the committed snapshot fails closed.
+epochs or VRF windows, windows that reach or exceed the epoch boundary, and zero evidence,
+activation, or slashing bounds. At least one finalized pre-boundary block is therefore reserved
+after the reveal cutoff. An NPoS v2 node that cannot load the committed snapshot fails closed.
 
 ### Authenticated NPoS VRF records
 
@@ -164,6 +165,13 @@ domain-separated `VrfCommit`/`VrfReveal` preimage and verifies it against the si
 in the frozen `HeightContext` roster.  A summary value without its matching proof, a proof replayed
 from another chain/epoch/index, a commitment/reveal mismatch, duplicate signer, or non-canonical
 ordering makes the candidate invalid.
+
+At an epoch boundary, context construction requires the exact authenticated current-epoch record
+already present in finalized pre-state. It revalidates the epoch, frozen seed, roster, window
+geometry, canonical participant order, signatures, VRF proofs, and observation heights before
+mixing the canonically signer-ordered on-time reveals into the immediate successor seed. Missing or
+inconsistent pre-state fails context construction. Boundary-height and late reveals remain useful
+for penalty accounting but cannot alter the already frozen successor seed.
 
 The recorded first-observation height is not covered by the validator signature.  It is therefore
 validated as monotonic admission metadata: a proof absent from committed pre-state must first
@@ -212,12 +220,13 @@ separate reserved progress queue. Thus a valid old-view flood cannot consume the
 needed to form the current QC or TC.
 
 At the local P2P scheduler, authoritative v2 proposals, votes, QCs, timeout votes/certificates,
-and commit-certificate responses use `ConsensusSafety`. This tag is derived after decode and is
-not part of the wire format. It has independent bounded network-actor, per-peer, encrypted-frame,
-deferred-send, inbound-dispatch, and relay-subscriber queues. Auxiliary lane/VRF and retired
-consensus traffic stays on `Consensus`; Torii proxy and genesis bootstrap traffic stays on
-`Control`. An auxiliary or control-plane flood therefore cannot consume safety admission, while
-bounded burst scheduling still gives repair traffic a turn.
+commit-certificate responses, and VRF commit/reveal messages use `ConsensusSafety`. This tag is
+derived after decode and is not part of the wire format. It has independent bounded network-actor,
+per-peer, encrypted-frame, deferred-send, inbound-dispatch, and relay-subscriber queues. Auxiliary
+lane traffic uses `Consensus`; Torii proxy and streaming-control traffic use `Control`. Genesis is
+a local trust-root input and has no peer request/response route. An auxiliary or control-plane flood
+therefore cannot consume safety admission, while bounded burst scheduling still gives repair
+traffic a turn.
 
 The final Sumeragi handoff repeats that source isolation instead of collapsing authenticated
 traffic into one FIFO. Each frozen-roster validator has a bounded ingress lane, authenticated

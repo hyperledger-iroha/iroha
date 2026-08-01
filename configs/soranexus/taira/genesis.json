@@ -607,6 +607,16 @@
               }
             }
           }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanReadAllLedgerData"
+              }
+            }
+          }
         }
       ],
       "ivm_triggers": [],

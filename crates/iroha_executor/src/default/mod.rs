@@ -3262,8 +3262,8 @@ pub mod domain {
             AnyPermission::CanModifyAssetMetadataWithDefinition(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
-            AnyPermission::CanMintAsset(permission) => {
-                asset_definition_matches_domain(permission.asset.definition())
+            AnyPermission::CanMintAssetToAccount(permission) => {
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanBurnAsset(permission) => {
                 asset_definition_matches_domain(permission.asset.definition())
@@ -3579,7 +3579,7 @@ pub mod account {
                 permission.account == *account_id
             }
             AnyPermission::CanReadAccountData(permission) => permission.account == *account_id,
-            AnyPermission::CanMintAsset(permission) => permission.asset.account() == account_id,
+            AnyPermission::CanMintAssetToAccount(permission) => &permission.account == account_id,
             AnyPermission::CanBurnAsset(permission) => permission.asset.account() == account_id,
             AnyPermission::CanTransferAsset(permission) => permission.asset.account() == account_id,
             AnyPermission::CanModifyAssetMetadata(permission) => {
@@ -3895,8 +3895,8 @@ pub mod asset_definition {
             AnyPermission::CanModifyAssetMetadataWithDefinition(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
-            AnyPermission::CanMintAsset(permission) => {
-                permission.asset.definition() == asset_definition_id
+            AnyPermission::CanMintAssetToAccount(permission) => {
+                &permission.asset_definition == asset_definition_id
             }
             AnyPermission::CanBurnAsset(permission) => {
                 permission.asset.definition() == asset_definition_id
@@ -3991,10 +3991,10 @@ pub mod asset_definition {
 /// Permission-checked visitors for asset operations.
 pub mod asset {
     use iroha_executor_data_model::permission::asset::{
-        CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanSetAssetHoldingLimit,
-        CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit, CanTransferAsset,
-        CanTransferAssetWithDefinition,
+        CanBurnAsset, CanBurnAssetWithDefinition, CanMintAssetToAccount,
+        CanMintAssetWithDefinition, CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
+        CanSetAssetHoldingLimit, CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit,
+        CanTransferAsset, CanTransferAssetWithDefinition,
     };
     use iroha_smart_contract::data_model::isi::{
         BuiltInInstruction, RemoveAssetKeyValue, SetAssetKeyValue,
@@ -4173,10 +4173,11 @@ pub mod asset {
         {
             execute!(executor, isi);
         }
-        let can_mint_user_asset_token = CanMintAsset {
-            asset: asset_id.clone(),
+        let can_mint_to_account_token = CanMintAssetToAccount {
+            asset_definition: asset_id.definition().clone(),
+            account: asset_id.account().clone(),
         };
-        if can_mint_user_asset_token.is_owned_by(&executor.context().authority, executor.host()) {
+        if can_mint_to_account_token.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
 
@@ -5461,7 +5462,7 @@ pub mod trigger {
             | AnyPermission::CanMintAssetWithDefinition(_)
             | AnyPermission::CanBurnAssetWithDefinition(_)
             | AnyPermission::CanTransferAssetWithDefinition(_)
-            | AnyPermission::CanMintAsset(_)
+            | AnyPermission::CanMintAssetToAccount(_)
             | AnyPermission::CanBurnAsset(_)
             | AnyPermission::CanModifyAssetMetadata(_)
             | AnyPermission::CanTransferAsset(_)

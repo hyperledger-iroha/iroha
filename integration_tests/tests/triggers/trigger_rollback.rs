@@ -44,7 +44,8 @@ async fn failed_trigger_revert() -> Result<()> {
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone())
                 .under_authority(account_id),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     ));
     let _ = spawn_blocking({
         let client = client.clone();

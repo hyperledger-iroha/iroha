@@ -103,14 +103,14 @@ use sorafs_manifest::por::{
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
-    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, MANIFEST_DAG_CODEC,
-    MAX_MANIFEST_ENCODED_BYTES, MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestBuildError, ManifestBuilder,
-    ManifestV1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1, PorReportIsoWeek,
-    PorWeeklyReportV1, ProofStreamHttpRequestV1, ProofStreamRequestV1, ReputationMerkleProofV1,
-    ReputationSnapshotV1, StorageClass, ValidationOutcomeV1,
-    chunker_registry as manifest_chunker_registry, decode_manifest_v1_canonical,
-    governance_dag_block_cid_v1, validate_governance_dag_head_against_chain_v1,
-    validate_governance_log_node_bytes,
+    GovernanceLogSignatureV1,
+    GovernanceSignatureAlgorithm, MANIFEST_DAG_CODEC, MAX_MANIFEST_ENCODED_BYTES,
+    MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestBuildError, ManifestBuilder, ManifestV1, PinPolicy,
+    PorChallengeOutcome, PorChallengeStatusV1, PorReportIsoWeek, PorWeeklyReportV1,
+    ProofStreamHttpRequestV1, ProofStreamRequestV1, ReputationMerkleProofV1, ReputationSnapshotV1,
+    StorageClass, ValidationOutcomeV1, chunker_registry as manifest_chunker_registry,
+    decode_manifest_v1_canonical, governance_dag_block_cid_v1,
+    validate_governance_dag_head_against_chain_v1, validate_governance_log_node_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, OrchestratorConfig, RolloutPhase, TransportPolicy,
@@ -18397,7 +18397,42 @@ struct GovernanceDagNodeSummary {
     prev_cid_hex: Option<String>,
     timestamp: u64,
     publisher_peer_id: String,
+    submission_publisher_account_digest_hex: Option<String>,
+    submission_origin: Option<&'static str>,
     payload_kind: &'static str,
+}
+
+fn governance_submission_summary(
+    node: &GovernanceLogNodeV1,
+) -> (Option<String>, Option<&'static str>) {
+    node.submission_provenance
+        .as_ref()
+        .map_or((None, None), |provenance| {
+            (
+                Some(hex_encode(provenance.publisher_account_digest)),
+                Some(provenance.origin.label()),
+            )
+        })
+}
+
+fn insert_governance_submission_summary(
+    object: &mut Map,
+    publisher_account_digest_hex: Option<&str>,
+    origin: Option<&str>,
+) {
+    object.insert(
+        "submission_publisher_account_digest_hex".into(),
+        publisher_account_digest_hex.map_or(Value::Null, Value::from),
+    );
+    object.insert(
+        "submission_origin".into(),
+        origin.map_or(Value::Null, Value::from),
+    );
+}
+
+fn insert_governance_node_submission_summary(object: &mut Map, node: &GovernanceLogNodeV1) {
+    let (publisher_account_digest_hex, origin) = governance_submission_summary(node);
+    insert_governance_submission_summary(object, publisher_account_digest_hex.as_deref(), origin);
 }
 
 #[derive(Debug, Clone)]
@@ -18641,6 +18676,11 @@ fn governance_dag_export(raw_args: Vec<String>) -> Result<(), String> {
         if let Some(node) = &artifact.node {
             file.insert("node_cid".into(), Value::from(node.node_cid_label.clone()));
             file.insert("payload_kind".into(), Value::from(node.payload_kind));
+            insert_governance_submission_summary(
+                &mut file,
+                node.submission_publisher_account_digest_hex.as_deref(),
+                node.submission_origin,
+            );
         }
         exported_files.push(Value::Object(file));
     }
@@ -18846,6 +18886,11 @@ fn governance_dag_build(raw_args: Vec<String>) -> Result<(), String> {
                 Value::from(node.node_cid_hex.clone()),
             );
             block_value.insert("payload_kind".into(), Value::from(node.payload_kind));
+            insert_governance_submission_summary(
+                &mut block_value,
+                node.submission_publisher_account_digest_hex.as_deref(),
+                node.submission_origin,
+            );
         }
         block_value.insert(
             "encoded_blake3_hex".into(),
@@ -20004,6 +20049,7 @@ fn governance_dag_mirror_index_value(
             "payload_kind".into(),
             Value::from(governance_payload_kind_cli(&block.node.payload)),
         );
+        insert_governance_node_submission_summary(&mut block_value, &block.node);
         block_value.insert("blake3".into(), Value::from(blake3_hex.clone()));
         block_value.insert("sidecar_status".into(), Value::from(sidecar_status.clone()));
         block_values.push(Value::Object(block_value));
@@ -20491,6 +20537,7 @@ fn load_governance_dag_block_snapshot(
             "payload_kind".into(),
             Value::from(governance_payload_kind_cli(&block.node.payload)),
         );
+        insert_governance_node_submission_summary(&mut record, &block.node);
         record.insert("blake3".into(), Value::from(blake3_hex));
         record.insert("sidecar_status".into(), Value::from(sidecar_status));
         blocks.push(block);
@@ -20833,6 +20880,7 @@ fn verify_governance_dag_build_snapshot(
                             "payload_kind".into(),
                             Value::from(governance_payload_kind_cli(&block.node.payload)),
                         );
+                        insert_governance_node_submission_summary(&mut block_value, &block.node);
                         decoded_blocks.push((rel_path, block));
                     }
                     Err(err) => {
@@ -21141,6 +21189,8 @@ fn write_governance_blake3_sidecar(path: &Path, bytes: &[u8]) -> Result<Vec<u8>,
 
 impl GovernanceDagNodeSummary {
     fn from_node(node: &GovernanceLogNodeV1) -> Self {
+        let (submission_publisher_account_digest_hex, submission_origin) =
+            governance_submission_summary(node);
         Self {
             node_cid: node.node_cid.clone(),
             node_cid_label: cid_display(&node.node_cid),
@@ -21150,6 +21200,8 @@ impl GovernanceDagNodeSummary {
             prev_cid_hex: node.prev_cid.as_ref().map(hex_encode),
             timestamp: node.timestamp,
             publisher_peer_id: String::from_utf8_lossy(&node.publisher_peer_id).to_string(),
+            submission_publisher_account_digest_hex,
+            submission_origin,
             payload_kind: governance_payload_kind_cli(&node.payload),
         }
     }
@@ -21532,13 +21584,20 @@ fn governance_dag_node_value(node: &GovernanceDagNodeSummary) -> Value {
         "publisher_peer_id".into(),
         Value::from(node.publisher_peer_id.clone()),
     );
+    insert_governance_submission_summary(
+        &mut obj,
+        node.submission_publisher_account_digest_hex.as_deref(),
+        node.submission_origin,
+    );
     obj.insert("payload_kind".into(), Value::from(node.payload_kind));
     Value::Object(obj)
 }
 
 fn print_governance_dag_inventory_table(root: &Path, artifacts: &[GovernanceDagArtifact]) {
     println!("root: {}", root.display());
-    println!("path\tkind\tvalidation\tsidecar\tblake3");
+    println!(
+        "path\tkind\tsubmission_account_digest_hex\tsubmission_origin\tvalidation\tsidecar\tblake3"
+    );
     for artifact in artifacts {
         let kind = artifact
             .node
@@ -21550,9 +21609,25 @@ fn print_governance_dag_inventory_table(root: &Path, artifacts: &[GovernanceDagA
             .as_ref()
             .map(|outcome| outcome.status.as_str())
             .unwrap_or("not_governance_node");
+        let submission_account_digest_hex = artifact
+            .node
+            .as_ref()
+            .and_then(|node| node.submission_publisher_account_digest_hex.as_deref())
+            .unwrap_or("-");
+        let submission_origin = artifact
+            .node
+            .as_ref()
+            .and_then(|node| node.submission_origin)
+            .unwrap_or("-");
         println!(
-            "{}\t{}\t{}\t{}\t{}",
-            artifact.rel_path, kind, validation, artifact.sidecar_status, artifact.blake3_hex
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            artifact.rel_path,
+            kind,
+            submission_account_digest_hex,
+            submission_origin,
+            validation,
+            artifact.sidecar_status,
+            artifact.blake3_hex
         );
     }
 }
@@ -21571,6 +21646,16 @@ fn print_governance_dag_artifact_table(artifact: &GovernanceDagArtifact) {
         );
         println!("timestamp: {}", node.timestamp);
         println!("publisher_peer_id: {}", node.publisher_peer_id);
+        println!(
+            "submission_publisher_account_digest_hex: {}",
+            node.submission_publisher_account_digest_hex
+                .as_deref()
+                .unwrap_or("-")
+        );
+        println!(
+            "submission_origin: {}",
+            node.submission_origin.unwrap_or("-")
+        );
         println!("payload_kind: {}", node.payload_kind);
     }
     if let Some(outcome) = &artifact.outcome {

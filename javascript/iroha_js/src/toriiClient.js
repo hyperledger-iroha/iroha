@@ -116,6 +116,8 @@ import {
   verifyValidationFeeCurrentPolicyProofV1,
 } from "./validationFeeConsensus.js";
 import { assertCanonicalBls12381G1Compressed } from "./bls12381G1.js";
+import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
+import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 const APPLICATION_JSON = "application/json";
@@ -6988,6 +6990,14 @@ export class ToriiClient {
     return normalizeExplorerAccountQrResponse(payload, "explorer account qr response");
   }
 
+  async _vpnRequest(method, path, options = {}) {
+    const protocol = new URL(this._baseUrl).protocol.toLowerCase();
+    if (protocol !== "https:") {
+      throw new Error("Sora VPN requests require an HTTPS Torii base URL");
+    }
+    return this._request(method, path, { ...options, redirect: "error" });
+  }
+
   /**
    * Fetch the public Sora VPN profile (`GET /v1/vpn/profile`).
    * Returns null when the control plane is unavailable.
@@ -6996,7 +7006,7 @@ export class ToriiClient {
    */
   async getVpnProfile(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getVpnProfile");
-    const response = await this._request("GET", "/v1/vpn/profile", {
+    const response = await this._vpnRequest("GET", "/v1/vpn/profile", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
     });
@@ -7024,7 +7034,7 @@ export class ToriiClient {
       options,
       "createVpnQuote",
     );
-    const response = await this._request("POST", "/v1/vpn/quotes", {
+    const response = await this._vpnRequest("POST", "/v1/vpn/quotes", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnQuoteCreateRequest(request)),
       signal,
@@ -7050,7 +7060,7 @@ export class ToriiClient {
       options,
       "createVpnSession",
     );
-    const response = await this._request("POST", "/v1/vpn/sessions", {
+    const response = await this._vpnRequest("POST", "/v1/vpn/sessions", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnSessionCreateRequest(request)),
       signal,
@@ -7077,7 +7087,7 @@ export class ToriiClient {
       options,
       "getVpnSession",
     );
-    const response = await this._request(
+    const response = await this._vpnRequest(
       "GET",
       `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
       {
@@ -7110,7 +7120,7 @@ export class ToriiClient {
       options,
       "deleteVpnSession",
     );
-    const response = await this._request(
+    const response = await this._vpnRequest(
       "DELETE",
       `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
       {
@@ -7142,7 +7152,7 @@ export class ToriiClient {
       options,
       "submitVpnReceipt",
     );
-    const response = await this._request("POST", "/v1/vpn/receipts", {
+    const response = await this._vpnRequest("POST", "/v1/vpn/receipts", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnReceiptSubmitRequest(request)),
       signal,
@@ -7166,7 +7176,7 @@ export class ToriiClient {
       options,
       "listVpnReceipts",
     );
-    const response = await this._request("GET", "/v1/vpn/receipts", {
+    const response = await this._vpnRequest("GET", "/v1/vpn/receipts", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
@@ -8174,6 +8184,65 @@ export class ToriiClient {
       return buffer.toString("utf8");
     }
     return this._maybeJson(response);
+  }
+
+  /**
+   * Fetch the exact canonical result-bearing SignedBlockWire at a finalized height.
+   * @param {number | string | bigint} height
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<Buffer>}
+   */
+  async getLedgerExecutedBlockWire(height, options = {}) {
+    const normalizedHeight = normalizeUint64DecimalString(
+      height,
+      "getLedgerExecutedBlockWire.height",
+      { allowZero: false },
+    );
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getLedgerExecutedBlockWire",
+    );
+    const context = "executed block wire endpoint";
+    const response = await this._request(
+      "GET",
+      `/v1/ledger/block/${normalizedHeight}`,
+      {
+        headers: { Accept: APPLICATION_NORITO },
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    let contentType;
+    try {
+      contentType = this._getHeader(response, "content-type");
+    } catch (error) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected an unreadable Content-Type header`,
+      );
+      throw error;
+    }
+    if (contentType !== APPLICATION_NORITO) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected a non-Norito response body`,
+      );
+      throw new TypeError(`${context} must use the application/x-norito media type`);
+    }
+    const declaredLength = this._getHeader(response, "content-length");
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+      context,
+      { signal },
+    );
+    if (declaredLength !== null && Number(declaredLength) !== bytes.byteLength) {
+      throw new TypeError(`${context} Content-Length does not match the response body`);
+    }
+    if (bytes.byteLength === 0) {
+      throw new TypeError(`${context} must not be empty`);
+    }
+    return Buffer.from(bytes);
   }
 
   /**
@@ -19650,7 +19719,12 @@ const VPN_PROFILE_RESPONSE_FIELDS = new Set([
   "settlement_grace_secs",
   "flow_label_bits",
   "padding_budget_ms",
+  "relay_id_hex",
+  "descriptor_commit_hex",
+  "tls_server_name",
   "relay_tls_spki_sha256_hex",
+  "relay_certificate_sha256_hex",
+  "directory_snapshot_digest_hex",
 ]);
 const VPN_QUOTE_RESPONSE_FIELDS = new Set([
   "quote_id",
@@ -19674,7 +19748,12 @@ const VPN_QUOTE_RESPONSE_FIELDS = new Set([
   "meter_family",
   "flow_label_bits",
   "padding_budget_ms",
+  "relay_id_hex",
+  "descriptor_commit_hex",
+  "tls_server_name",
   "relay_tls_spki_sha256_hex",
+  "relay_certificate_sha256_hex",
+  "directory_snapshot_digest_hex",
   "metering_public_key_hex",
   "open_lease_instruction",
   "tx_instructions",
@@ -19697,7 +19776,12 @@ const VPN_SESSION_RESPONSE_FIELDS = new Set([
   "lease_fee",
   "flow_label_bits",
   "padding_budget_ms",
+  "relay_id_hex",
+  "descriptor_commit_hex",
+  "tls_server_name",
   "relay_tls_spki_sha256_hex",
+  "relay_certificate_sha256_hex",
+  "directory_snapshot_digest_hex",
   "route_pushes",
   "excluded_routes",
   "dns_servers",
@@ -19752,11 +19836,16 @@ function normalizeExplorerRequestOptions(options) {
 function normalizeVpnProfileResponse(payload) {
   const record = ensureRecord(payload ?? {}, "vpn profile response");
   assertVpnResponseFields(record, VPN_PROFILE_RESPONSE_FIELDS, "vpn profile response");
+  const available = coerceBoolean(record.available, "vpn profile response.available");
+  const trust = normalizeVpnTrustTuple(record, "vpn profile response", {
+    allowEmpty: !available,
+  });
   return {
-    available: coerceBoolean(record.available, "vpn profile response.available"),
-    relayEndpoint: requireNonEmptyString(
+    available,
+    relayEndpoint: requireVpnRelayEndpoint(
       record.relay_endpoint,
       "vpn profile response.relay_endpoint",
+      { allowEmpty: !available },
     ),
     supportedExitClasses: requireVpnProfileExitClasses(
       record.supported_exit_classes,
@@ -19837,11 +19926,158 @@ function normalizeVpnProfileResponse(payload) {
       "vpn profile response.padding_budget_ms",
       { min: 1, max: 65535 },
     ),
-    relayTlsSpkiSha256Hex: requireNullableExactLowerHex32String(
+    ...trust,
+  };
+}
+
+function normalizeVpnTrustTuple(record, context, { allowEmpty = false } = {}) {
+  return {
+    relayIdHex: requireVpnRelayId(record.relay_id_hex, `${context}.relay_id_hex`, {
+      allowEmpty,
+    }),
+    descriptorCommitHex: requireVpnTrustDigest(
+      record.descriptor_commit_hex,
+      `${context}.descriptor_commit_hex`,
+      { allowEmpty },
+    ),
+    tlsServerName: requireVpnTlsServerName(
+      record.tls_server_name,
+      `${context}.tls_server_name`,
+      { allowEmpty },
+    ),
+    relayTlsSpkiSha256Hex: requireVpnTrustDigest(
       record.relay_tls_spki_sha256_hex,
-      "vpn profile response.relay_tls_spki_sha256_hex",
+      `${context}.relay_tls_spki_sha256_hex`,
+      { allowEmpty },
+    ),
+    relayCertificateSha256Hex: requireVpnTrustDigest(
+      record.relay_certificate_sha256_hex,
+      `${context}.relay_certificate_sha256_hex`,
+      { allowEmpty },
+    ),
+    directorySnapshotDigestHex: requireVpnTrustDigest(
+      record.directory_snapshot_digest_hex,
+      `${context}.directory_snapshot_digest_hex`,
+      { allowEmpty },
     ),
   };
+}
+
+function requireVpnRelayId(value, context, { allowEmpty = false } = {}) {
+  if (allowEmpty && value === "") return "";
+  const literal = requireExactLowerHex32String(value, context);
+  try {
+    assertValidEd25519PublicKey(Buffer.from(literal, "hex"));
+  } catch (error) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context} must encode a canonical prime-order Ed25519 public key`,
+      context,
+      { cause: error },
+    );
+  }
+  return literal;
+}
+
+function requireVpnTrustDigest(value, context, { allowEmpty = false } = {}) {
+  if (allowEmpty && value === "") return "";
+  const literal = requireExactLowerHex32String(value, context);
+  if (/^0+$/u.test(literal)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context} must not be the all-zero digest`,
+      context,
+    );
+  }
+  return literal;
+}
+
+function requireVpnTlsServerName(value, context, { allowEmpty = false } = {}) {
+  if (allowEmpty && value === "") return "";
+  const literal = requireExactNonEmptyString(value, context);
+  const labels = literal.split(".");
+  if (
+    literal.length > 253 ||
+    literal !== literal.toLowerCase() ||
+    labels.some(
+      (label) =>
+        label.length === 0 ||
+        label.length > 63 ||
+        !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(label),
+    )
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be a canonical lowercase DNS name`,
+      context,
+    );
+  }
+  return literal;
+}
+
+function requireVpnRelayEndpoint(value, context, { allowEmpty = false } = {}) {
+  if (allowEmpty && value === "") return "";
+  const literal = requireExactNonEmptyString(value, context);
+  const parts = literal.split("/");
+  if (
+    parts.length !== 6 ||
+    parts[0] !== "" ||
+    !new Set(["ip4", "ip6", "dns", "dns4", "dns6"]).has(parts[1]) ||
+    parts[3] !== "udp" ||
+    parts[5] !== "quic"
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must use /{ip4|ip6|dns|dns4|dns6}/host/udp/port/quic`,
+      context,
+    );
+  }
+  const [, protocol, host, , port] = parts;
+  if (protocol === "ip4") {
+    const octets = host.split(".");
+    if (
+      octets.length !== 4 ||
+      octets.some((octet) => {
+        const parsed = Number(octet);
+        return !/^(?:0|[1-9][0-9]{0,2})$/u.test(octet) || parsed > 255;
+      })
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${context} must contain a canonical IPv4 address`,
+        context,
+      );
+    }
+  } else if (protocol === "ip6") {
+    let canonicalHost = null;
+    try {
+      canonicalHost = new URL(`https://[${host}]/`).hostname;
+    } catch {
+      // Handled by the canonical comparison below.
+    }
+    if (canonicalHost !== `[${host}]` || host !== host.toLowerCase()) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${context} must contain a canonical lowercase IPv6 address`,
+        context,
+      );
+    }
+  } else {
+    requireVpnTlsServerName(host, `${context} host`);
+  }
+  const parsedPort = Number(port);
+  if (
+    !/^[1-9][0-9]{0,4}$/u.test(port) ||
+    !Number.isSafeInteger(parsedPort) ||
+    parsedPort > 65535
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${context} must contain a canonical non-zero UDP port`,
+      context,
+    );
+  }
+  return literal;
 }
 
 function requireVpnEnum(value, allowed, context) {
@@ -20017,16 +20253,10 @@ function normalizeVpnTxInstructionList(payload, context, { min = 0, max } = {}) 
   );
 }
 
-function requireNullableExactLowerHex32String(value, context) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  return requireExactLowerHex32String(value, context);
-}
-
 function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
   const record = ensureRecord(payload ?? {}, context);
   assertVpnResponseFields(record, VPN_QUOTE_RESPONSE_FIELDS, context);
+  const trust = normalizeVpnTrustTuple(record, context);
   const txInstructions = normalizeVpnTxInstructionList(
     record.tx_instructions,
     `${context}.tx_instructions`,
@@ -20053,7 +20283,7 @@ function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
       VPN_EXIT_CLASSES,
       `${context}.exit_class`,
     ),
-    relayEndpoint: requireNonEmptyString(
+    relayEndpoint: requireVpnRelayEndpoint(
       record.relay_endpoint,
       `${context}.relay_endpoint`,
     ),
@@ -20106,10 +20336,7 @@ function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
       `${context}.padding_budget_ms`,
       { min: 1, max: 65535 },
     ),
-    relayTlsSpkiSha256Hex: requireNullableExactLowerHex32String(
-      record.relay_tls_spki_sha256_hex,
-      `${context}.relay_tls_spki_sha256_hex`,
-    ),
+    ...trust,
     meteringPublicKeyHex: requireExactLowerHex32String(
       record.metering_public_key_hex,
       `${context}.metering_public_key_hex`,
@@ -20125,6 +20352,7 @@ function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
 function normalizeVpnSessionResponse(payload, context = "vpn session response") {
   const record = ensureRecord(payload ?? {}, context);
   assertVpnResponseFields(record, VPN_SESSION_RESPONSE_FIELDS, context);
+  const trust = normalizeVpnTrustTuple(record, context);
   return {
     sessionId: requireExactLowerHex32String(record.session_id, `${context}.session_id`),
     accountId: requireNonEmptyString(record.account_id, `${context}.account_id`),
@@ -20133,7 +20361,7 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
       VPN_EXIT_CLASSES,
       `${context}.exit_class`,
     ),
-    relayEndpoint: requireNonEmptyString(
+    relayEndpoint: requireVpnRelayEndpoint(
       record.relay_endpoint,
       `${context}.relay_endpoint`,
     ),
@@ -20185,10 +20413,7 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
       `${context}.padding_budget_ms`,
       { min: 1, max: 65535 },
     ),
-    relayTlsSpkiSha256Hex: requireNullableExactLowerHex32String(
-      record.relay_tls_spki_sha256_hex,
-      `${context}.relay_tls_spki_sha256_hex`,
-    ),
+    ...trust,
     routePushes: requireStringArray(record.route_pushes, `${context}.route_pushes`),
     excludedRoutes: requireStringArray(
       record.excluded_routes,

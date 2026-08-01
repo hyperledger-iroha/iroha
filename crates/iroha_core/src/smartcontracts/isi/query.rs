@@ -1094,20 +1094,16 @@ fn preflight_singular_source_materialization(
         SingularQueryBox::FindDataspaceNameOwnerById(_) => {
             return Err(reject_unbounded("FindDataspaceNameOwnerById"));
         }
-        SingularQueryBox::FindMusubiReleaseByRef(_) => {
-            return Err(reject_unbounded("FindMusubiReleaseByRef"));
-        }
-        SingularQueryBox::FindMusubiPackageVersions(_) => {
-            return Err(reject_unbounded("FindMusubiPackageVersions"));
-        }
-        SingularQueryBox::FindMusubiPackageReleases(_) => {
-            return Err(reject_unbounded("FindMusubiPackageReleases"));
-        }
-        SingularQueryBox::SearchMusubiPackages(_) => {
-            return Err(reject_unbounded("SearchMusubiPackages"));
-        }
-        SingularQueryBox::FindMusubiShortAliasByName(_) => {
-            return Err(reject_unbounded("FindMusubiShortAliasByName"));
+        SingularQueryBox::FindMusubiExactPackageV1(_)
+        | SingularQueryBox::FindMusubiExactReleaseV1(_)
+        | SingularQueryBox::FindMusubiResolverIndexV1(_)
+        | SingularQueryBox::FindMusubiVersionsV1(_)
+        | SingularQueryBox::FindMusubiMaintainersV1(_)
+        | SingularQueryBox::FindMusubiArchiveLocationsV1(_)
+        | SingularQueryBox::FindMusubiAliasV1(_)
+        | SingularQueryBox::FindMusubiAliasHistoryV1(_)
+        | SingularQueryBox::FindMusubiOrderedPrefixV1(_) => {
+            return Err(reject_unbounded("Musubi V1 query"));
         }
         SingularQueryBox::FindNftById(query) => {
             if let Ok(nft) = world.nft(query.nft_id()) {
@@ -1370,19 +1366,31 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindDataspaceNameOwnerById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindMusubiReleaseByRef(q) => {
+            SingularQueryBox::FindMusubiExactPackageV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindMusubiPackageVersions(q) => {
+            SingularQueryBox::FindMusubiExactReleaseV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindMusubiPackageReleases(q) => {
+            SingularQueryBox::FindMusubiResolverIndexV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::SearchMusubiPackages(q) => {
+            SingularQueryBox::FindMusubiVersionsV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindMusubiShortAliasByName(q) => {
+            SingularQueryBox::FindMusubiMaintainersV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiArchiveLocationsV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiAliasV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiAliasHistoryV1(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindMusubiOrderedPrefixV1(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindDomainById(q) => {
@@ -3521,6 +3529,7 @@ app_api_max_fetch_size = {max_fetch_size}
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -3556,6 +3565,7 @@ query_max_fetch_size = {max_fetch_size}
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -6509,6 +6519,26 @@ mod tests {
             .expect("query algorithm-specific fixture key generation should succeed")
     }
 
+    fn grant_global_reader(world: &mut World, authority: &AccountId) {
+        let permission: Permission =
+            iroha_executor_data_model::permission::query::CanReadAllLedgerData.into();
+        let mut permissions = world
+            .account_permissions
+            .view()
+            .get(authority)
+            .cloned()
+            .unwrap_or_default();
+        permissions.insert(permission);
+        world
+            .account_permissions
+            .insert(authority.clone(), permissions);
+    }
+
+    fn with_global_reader(mut world: World, authority: &AccountId) -> World {
+        grant_global_reader(&mut world, authority);
+        world
+    }
+
     fn find_transactions_request_with_filter(
         params: QueryParams,
         filter: CompoundPredicate<CommittedTransaction>,
@@ -6803,7 +6833,7 @@ mod tests {
     #[tokio::test]
     async fn validate_for_client_world_parts_matches_state_view_path() {
         let state = State::new_for_testing(
-            World::new(),
+            World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -6827,6 +6857,32 @@ mod tests {
             limits,
         )
         .expect("world validation should pass");
+    }
+
+    #[test]
+    fn fresh_client_facade_rejects_bare_continue_before_store_lookup() {
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+        let world_view = world.view();
+        let cursor = iroha_data_model::query::parameters::ForwardCursor {
+            query: "unresolved-cursor".to_owned(),
+            cursor: nonzero!(1_u64),
+            gas_budget: None,
+        };
+
+        let error = validate_fresh_query_for_client_world_parts(
+            QueryRequest::Continue(cursor),
+            &ALICE_ID,
+            &world_view,
+            None,
+            QueryLimits::default(),
+        )
+        .expect_err("a bare continuation must never enter reusable raw validation");
+
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("store-aware snapshot corridor")),
+            "unexpected bare-continuation rejection: {error:?}"
+        );
     }
 
     #[tokio::test]
@@ -8300,7 +8356,10 @@ mod tests {
             "rose".parse().unwrap(),
         );
         let asset_definition = AssetDefinition::numeric(asset_definition_id).build(&ALICE_ID);
-        World::with([domain], [account], [asset_definition])
+        with_global_reader(
+            World::with([domain], [account], [asset_definition]),
+            &ALICE_ID,
+        )
     }
 
     #[cfg(feature = "bls")]
@@ -8577,7 +8636,9 @@ mod tests {
         let (state_fast, handle_fast) = build_state(make_world());
         let fast_qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::domain::prelude::FindDomains,
+            ),
             item: iroha_data_model::query::QueryItemKind::Domain,
             predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::default()),
@@ -8690,7 +8751,9 @@ mod tests {
         let predicate = CompoundPredicate::<iroha_data_model::asset::value::Asset>::PASS;
         let fast_qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::asset::prelude::FindAssets,
+            ),
             item: iroha_data_model::query::QueryItemKind::Asset,
             predicate_bytes: norito::codec::Encode::encode(&predicate),
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<
@@ -8794,7 +8857,9 @@ mod tests {
         let (state_fast, handle_fast) = build_state(make_world());
         let fast_qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::nft::prelude::FindNfts,
+            ),
             item: iroha_data_model::query::QueryItemKind::Nft,
             predicate_bytes: norito::codec::Encode::encode(
                 &CompoundPredicate::<iroha_data_model::nft::Nft>::PASS,
@@ -8897,7 +8962,9 @@ mod tests {
         let (state_fast, handle_fast) = build_state(make_world());
         let fast_qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::account::prelude::FindAccounts,
+            ),
             item: iroha_data_model::query::QueryItemKind::Account,
             predicate_bytes: norito::codec::Encode::encode(
                 &CompoundPredicate::<iroha_data_model::account::Account>::PASS,
@@ -8984,7 +9051,9 @@ mod tests {
         // fast_dsl path
         let fast_qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::block::prelude::FindBlockHeaders,
+            ),
             item: iroha_data_model::query::QueryItemKind::BlockHeader,
             predicate_bytes: norito::codec::Encode::encode(
                 &CompoundPredicate::<iroha_data_model::block::BlockHeader>::PASS,
@@ -9205,7 +9274,8 @@ mod tests {
             let mut tx = block.transaction();
             let exec = [Log::new(iroha_logger::Level::INFO, "x".into())];
             let filter = TimeEventFilter::new(ExecutionTime::PreCommit);
-            let action = Action::new(exec, Repeats::Indefinitely, ALICE_ID.clone(), filter);
+            let action = Action::new(exec, Repeats::Indefinitely, ALICE_ID.clone(), filter)
+                .expect("trigger action fixture satisfies validation invariants");
             let t1 = Trigger::new("t1".parse().unwrap(), action.clone())
                 .try_into()
                 .unwrap();
@@ -9841,7 +9911,8 @@ mod tests {
             let mut tx = block.transaction();
             let exec = [Log::new(iroha_logger::Level::INFO, "x".into())];
             let filter = TimeEventFilter::new(ExecutionTime::PreCommit);
-            let action = Action::new(exec, Repeats::Indefinitely, ALICE_ID.clone(), filter);
+            let action = Action::new(exec, Repeats::Indefinitely, ALICE_ID.clone(), filter)
+                .expect("trigger action fixture satisfies validation invariants");
             let t1 = Trigger::new("t1".parse().unwrap(), action.clone())
                 .try_into()
                 .unwrap();
@@ -10125,7 +10196,9 @@ mod tests {
         };
         let iter_query = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::domain::prelude::FindDomains,
+            ),
             item: iroha_data_model::query::QueryItemKind::Domain,
             predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::default()),
@@ -11725,7 +11798,9 @@ mod tests {
 
         let qwp = QueryWithParams {
             query: (),
-            query_payload: Vec::new(),
+            query_payload: norito::codec::Encode::encode(
+                &iroha_data_model::query::domain::prelude::FindDomains,
+            ),
             item: QueryItemKind::Domain,
             predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
             selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::ids_only()),
@@ -12013,7 +12088,8 @@ mod tests {
                 Repeats::Indefinitely,
                 ALICE_ID.clone(),
                 TimeEventFilter::new(ExecutionTime::PreCommit),
-            );
+            )
+            .expect("trigger action fixture satisfies validation invariants");
             let t1 = Trigger::new("t1".parse().unwrap(), action.clone())
                 .try_into()
                 .unwrap();

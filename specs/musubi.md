@@ -1,189 +1,363 @@
 ---
-title: Musubi Kotodama Package Manager
+title: Musubi V1 Kotodama Package Ecosystem
 ---
 
-# Musubi Kotodama Package Manager
+# Musubi V1 Kotodama Package Ecosystem
 
-Musubi is the package manager for Kotodama source packages. It gives
-developers a Cargo-like workflow for sharing composable Kotodama programs while
-keeping package identity tied to Sora/Iroha namespaces instead of a global
-first-come name table.
+Musubi is the first-release package ecosystem for Kotodama source packages.
+It provides Cargo-style manifests, workspaces, dependency resolution,
+lockfiles, packaging, fetching, testing, publishing, ownership, and registry
+operations while keeping every consensus-visible identity and decision
+deterministic.
 
-## Package Names
+This document specifies V1. The earlier pre-release Musubi registry, wire
+types, CLI aliases, lock formats, cache layout, and Torii upload workflow are
+retired. Nodes must refuse launch when legacy Musubi registry records remain;
+operators reset disposable pre-release state explicitly. No compatibility
+decoder or automatic cache deletion is provided.
 
-Canonical package ids use:
+## Identity and namespace binding
 
-```text
-namespace/package
-```
+A canonical public namespace is registered once as a
+`MusubiNamespaceBindingV1`. The record binds:
 
-Exact release references use:
+- canonical namespace text;
+- a stable home `DataSpaceId`;
+- either dataspace-root or domain scope; and
+- the namespace generation used by delegations.
 
-```text
-namespace/package@version
-```
+Bindings are immutable. A package has the structural identity
+`MusubiPackageIdV1 { home_dataspace, scope, name }`; changing an SNS or domain
+owner does not change an existing package or its governance. User interfaces
+render and accept `namespace/package`, resolving the namespace through the
+binding registry before an identifier enters an instruction or lockfile.
 
-There is no leading `@` before a namespace. The `@` separator is reserved only
-for the version suffix.
+Package and namespace names are canonical lowercase portable names. Global
+aliases are a distinct convenience layer. Alias text is lowercase ASCII kebab
+case, one through 32 bytes, and never appears as package identity in a
+published manifest or lock.
 
-The `namespace` segment intentionally matches the suffix used by Kotodama dapp
-contract aliases:
+## Versions and requirements
 
-- `universal/math` links to contract aliases such as `router::universal`
-- `dex.universal/swap-core` links to aliases such as `router::dex.universal`
+`MusubiVersionV1` stores `major`, `minor`, `patch`, and structured prerelease
+identifiers. It does not store a version string. Parsing rejects:
 
-The namespace has either `<dataspace>` or `<domain>.<dataspace>` form. Musubi
-validates dapp links by checking that every linked contract alias uses the same
-namespace suffix as the package.
+- build metadata;
+- integer overflow;
+- leading zeroes in core or numeric prerelease identifiers;
+- empty or non-ASCII identifiers; and
+- any spelling that does not round-trip to the canonical display form.
 
-## Musubi.toml
+`MusubiVersionReqV1` is a canonical comparator AST. V1 accepts Cargo-style
+bare/caret, tilde, wildcard, explicit exact, and comma-separated comparator
+requirements. Bare versions have caret semantics; exact versions require
+`=`. Equivalent accepted input produces identical Norito bytes. A prerelease
+candidate is eligible only when a comparator in the requirement names a
+prerelease with the same major, minor, and patch tuple.
 
-A package manifest starts with a package table:
+Published normal dependencies retain version requirements. Exact selections
+belong to consumer locks and to the bounded verification proof supplied for a
+publication.
+
+## Archives and releases
+
+`MusubiArchiveCommitmentV1` binds all material needed to reproduce and verify
+a package:
+
+- canonical SoraFS root CID and chunker handle;
+- ordered chunk-plan digest and PoR root;
+- source content length;
+- CAR digest and size;
+- semantic bundle, normalized source-tree, and typed descriptor digests; and
+- bounded file and chunk counts.
+
+`ArchiveId` is the BLAKE3-256 digest of the domain separator followed by the
+canonical Norito encoding of this commitment. Every zero, substituted, or
+out-of-bounds commitment is rejected before state mutation.
+
+The bundle contains `MusubiSemanticReleaseManifestV1`, which commits to every
+semantic release field except the archive storage binding. Its domain-separated
+digest is carried by the staging receipt, artifact descriptor, and provider
+attestations. After the bundle and archive commitment have produced an
+`ArchiveId`, `MusubiReleaseManifestV1` combines that semantic manifest with the
+`ArchiveId`; the immutable registry release digest covers this complete
+manifest. This two-stage commitment avoids circular hashing without weakening
+the binding between release content and its selected canonical archive.
+
+Archive location records are separate from archive commitments. A location
+binds an `ArchiveId` to one renewable SoraFS pin and replication order. A
+release never depends on one expiring pin. A location is selectable only after
+the pin is finalized and approved and the replication order has distinct,
+validated provider completions satisfying registry quorum.
+
+`MusubiReleaseManifestV1` is immutable and contains:
+
+- the exact release id;
+- Kotodama edition;
+- IVM ABI version 1 and exact ABI hash;
+- bounded normal dependency requirements;
+- typed-interface digest;
+- immutable release metadata;
+- `ArchiveId`; and
+- the digest of the normalized publication verification lock.
+
+The publisher supplies a bounded exact resolution proof. Core validates that
+every selected node exists at the claimed finalized registry snapshot, every
+edge satisfies the published requirement, every digest and ABI binding
+matches, the graph is acyclic, and the graph remains within 1,024 nodes and
+depth 64. This proof does not become a global resolution for consumers.
+
+Release content and its release digest are immutable. The following mutable
+states are independent:
+
+- reversible owner-authorized yank state;
+- derived storage/quorum availability; and
+- Parliament-authorized artifact takedown.
+
+Fresh resolution excludes yanked, below-quorum, and governed-unavailable
+releases. A lock may continue fetching a yanked or degraded release while at
+least one valid location remains. Takedown makes the artifact unavailable.
+
+## Package governance
+
+The first publication may claim an absent package only when the transaction
+authority owns the bound namespace or presents a generation-bound namespace
+delegation. The claim creates package-scoped governance with that authority as
+the first accepted owner.
+
+Later namespace ownership changes do not grant package authority. Package
+members have accepted roles. Owner is a role and at least one owner must
+remain. Maintainer capabilities independently cover publish, yank, metadata,
+and archive-location management.
+
+Invitations are explicit and must be accepted by the invited account. Invite,
+accept, role, removal, metadata, and ownership operations use compare-and-set
+governance or metadata revisions. Stale revisions fail without mutation.
+
+Sora Parliament recovery consumes an enacted decision bound to the exact
+action digest. Core verifies the existing enactment delay and records the
+decision as consumed so it cannot be replayed. Recovery actions cover package
+ownership, alias retargeting, and artifact takedown only; ordinary owners
+cannot invoke those exceptional paths.
+
+## Permanent global aliases
+
+Alias registration requires:
+
+- an unregistered canonical alias;
+- authority as an accepted package owner;
+- at least one active release;
+- the exact expected pricing-policy revision; and
+- atomic payment in XOR.
+
+Genesis prices, in whole XOR, are 1,000 for length one, 200 for length two, 40
+for length three, 8 for length four, and 1 for lengths five through 32.
+Parliament may change prices for future registrations only. An alias is never
+recycled. Normal package governance cannot retarget it. A Parliament recovery
+retarget appends immutable history and preserves every prior target.
+
+## Registry state and queries
+
+Authoritative namespace, package, release, metadata, member, and invite
+records live in typed ordered `mv::Storage` keyed by their stable home
+dataspace identity. The universal dataspace contains only compact resolver
+rows, archive/location records, reverse references, the public directory, and
+the alias registry.
+
+Publication, yank changes, metadata projection, and availability changes
+update home and universal records atomically through Native AMX. No Musubi
+state is encoded into `smart_contract_state`, stored in a global vector, or
+recovered by scanning unrelated state. Exact resolution reads only the
+universal sparse index.
+
+V1 exposes typed exact package, release, resolver-index, version, member,
+archive-location, alias/history, and ordered-prefix queries. Resolver pages
+default to 50 entries. A continuation cursor binds finalized height and hash,
+the canonical query hash, the last returned key, index revision, and caller
+when authorization affects output. A changed anchor, query, revision, caller,
+or boundary is an explicit stale-cursor error.
+
+Description and keyword search is a rebuildable projection of finalized
+events. Fuzzy or partial search never affects resolution.
+
+## `Musubi.toml` and workspaces
+
+Every manifest declares `manifest-version = 1`. Unknown or duplicate fields
+are errors at every nesting level. A package manifest supports package
+metadata, a configurable library directory, explicit exports, optional local
+contract targets, tests, readme, license, repository, keywords, and positive
+include additions.
+
+A workspace root may be virtual or also contain a package. It supports
+portable member, default-member, and exclude paths plus
+`[workspace.package]` and `[workspace.dependencies]`. A workspace has exactly
+one root `Musubi.lock`. Commands discover the nearest ancestor manifest and
+then the owning workspace.
+
+V1 dependency kinds are registry, path, and development. A dependency may be
+renamed and may inherit with `{ workspace = true }`. V1 rejects git, optional,
+feature, build, and target-specific dependencies.
+
+A path dependency points to a validated local package manifest. A publishable
+normal path dependency also declares its canonical registry package and
+version requirement. Packaging removes the path, resolves the registry
+release, and compiler-checks again from the clean packaged tree. Development
+dependencies apply only to selected workspace roots and never propagate.
+
+Focused manifest edits preserve comments and unrelated formatting. Paths are
+portable, relative to their defining root, and cannot escape that root.
+
+## `Musubi.lock`
+
+The only accepted schema begins with:
 
 ```toml
-[package]
-namespace = "dex.universal"
-name = "swap-core"
-version = "0.1.0"
-
-[dependencies.arith]
-package = "std.universal/math"
-version = "^1.0.0"
-
-[exports]
-functions = ["quote"]
-
-[dapp]
-namespace = "dex.universal"
-contracts = ["router::dex.universal"]
+schema = "musubi-lock"
+version = 1
 ```
 
-Dependencies may use exact versions, caret requirements, tilde requirements,
-wildcards such as `1.*`, or comparator lists such as `>=1.0.0,<2.0.0`.
-`Musubi.lock` records the full transitive graph selected from the on-chain
-registry plus each source archive commitment and deterministic source archive
-plan. Lockfile package identities are always canonical package ids; short
-aliases are resolved before they enter the lockfile.
+It records chain/genesis identity and the finalized registry height/hash and
+index revision at which the graph last changed. Nodes contain exact structural
+package id and version, immutable release digest, `ArchiveId`, source and
+interface digests, and ABI binding. Parent-local edges contain the import
+alias, child node, and dependency kind. Multiple versions of one package are
+valid.
 
-## CLI
+The lock contains no cache paths, source plans, timestamps, credentials,
+provider URLs, bearer tokens, or process-local data. Parsing any pre-release
+lock format returns a regenerate instruction. `--locked` never rewrites an
+invalid or stale lock.
 
-The workspace ships `musubi` from the dedicated `musubi` package, so the binary
-name matches the eventual crates.io install path:
+Lock writes use a same-directory private temporary file, flush and fsync the
+file, atomically rename, and fsync the parent directory. The previous complete
+lock remains visible after every failed write phase.
 
-Useful local commands:
+## Resolver
 
-```bash
-cargo run -p musubi -- init --namespace dex.universal --name swap-core --dapp
-cargo run -p musubi -- add std.universal/math --version '^1.0.0' --alias arith
-cargo run -p musubi -- install --config client.toml
-cargo run -p musubi -- install --config client.toml --fetch --provider-payload math.payload
-cargo run -p musubi -- install --config client.toml --fetch --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64,package=arith'
-cargo run -p musubi -- cache import arith --source-root ../math
-cargo run -p musubi -- cache fetch arith --provider-payload math.payload
-cargo run -p musubi -- cache fetch arith --config client.toml --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64'
-cargo run -p musubi -- pack --car-out source.car --sorafs-manifest-out manifest.norito --source-plan-out source-plan.norito
-cargo run -p musubi -- build src/lib.ko --manifest-out target/lib.contract.json
-cargo run -p musubi -- search swap --config client.toml
-cargo run -p musubi -- versions dex.universal/swap-core --config client.toml
-cargo run -p musubi -- alias resolve swap --config client.toml
-```
+Resolution is deterministic backtracking over ordered registry snapshots. It
+uses this preference order:
 
-For source installs from crates.io after publication:
+1. an already-selected compatible version;
+2. a still-valid selection preserved from the lock; and
+3. remaining candidates in descending SemVer order.
 
-```bash
-cargo install musubi
-```
+Input and query ordering cannot affect the result. Parallel versions are
+allowed when constraints cannot converge. The resolver backtracks across
+parent candidates, detects dependency cycles, and reports the minimal stable
+conflict chain.
 
-`install` resolves dependency requirements against the on-chain Musubi registry
-by default, follows transitive Musubi dependencies, and records lockfile v3
-nodes with the canonical package ref, selected requirement, SoraFS manifest
-digest, source archive hash, byte count, file count, exported functions, archive
-plan, and each node's own dependency aliases. Use `install --offline` to write
-an unresolved lockfile for exact-version dependencies without querying a node.
-Use `install --locked` in CI to reject stale lockfiles.
+Every still-valid locked selection remains fixed unless explicitly targeted,
+including a yanked locked release. `update -p PACKAGE[@VERSION]` unlocks the
+target and only nodes forced to change; `--precise VERSION` adds the exact
+target constraint. Fresh candidates exclude yanked, takedown, and below-quorum
+rows.
 
-`cache import` copies a fetched or checked-out source tree into the local
-Musubi cache and verifies it against the archive commitment in `Musubi.lock`.
-`cache fetch` and `install --fetch` reconstruct a source tree from a verified
-provider payload or live SoraFS gateway providers using the lockfile source
-archive plan. Local payload files use `--provider-payload <path>`. Live gateway
-fetch uses one or more `--gateway-provider` specs:
+## Command contract
+
+The first-release command groups are:
+
+- Project: `new`, `init`, `add`, `remove`, `metadata`, `tree`.
+- Build: `fetch`, `check`, `build`, `test`, `package`.
+- Registry: `publish`, `search`, `info`, `versions`, `yank`, `unyank`.
+- Governance: `owner invite|accept|list|set-role|remove` and
+  `alias register|resolve|info|history`.
+- Maintenance: `update` and `cache verify|repair|prune`.
+
+The retired `install`, `pack`, short-alias `set`, cache `import`, and public
+Torii upload workflows are not aliases.
+
+`fetch`, `check`, `build`, and `test` resolve and atomically update the lock
+when permitted, then fetch missing archives. `--locked` forbids graph changes,
+`--offline` uses only cached index and archives, and `--frozen` combines both.
+Workspace selection follows default members, `--workspace`, `--exclude`, and
+`-p`.
+
+Local and read-only commands do not load a signer. Mutation credentials come
+only from explicit or platform Iroha configuration. Secrets and stream tokens
+are rejected on argv and are never persisted. Human output has deterministic
+stdout/stderr separation; JSON output is one document with a stable schema and
+error code.
+
+## Packaging and cache
+
+Packaging starts from a positive set: canonicalized `Musubi.toml`, a generated
+verification lock, declared library/contract/test roots, declared readme and
+license files, and explicit include additions. It never starts by recursively
+including the project and subtracting a denylist.
+
+Generated, VCS, and configuration roots are always excluded. Packaging rejects
+symlinks, hardlinks, special files, non-UTF-8 paths, traversal, portable
+reserved names, Unicode/case collisions, and known credential/private-key
+paths or contents. SoraFS CAR portable-path and chunk-plan validation applies
+before commitments are calculated.
+
+The canonical bundle contains the semantic release manifest, typed artifact
+descriptor, normalized source tree, and verification lock. Provider validation
+attests successful parsing and verification of that bundle, not storage of an
+opaque byte string.
+
+The user cache path is derived only from the trusted root and archive id:
 
 ```text
-name=<alias>,provider-id=<64-hex>,gateway-key=<64-hex>,base-url=<https-origin>,stream-token=<base64>[,privacy-url=<https-origin/privacy/events>][,package=<alias-or-ref-or-id>][,manifest=<64-hex>]
+registry-v1/<archive-id>/src
 ```
 
-`--provider-payload` and `--gateway-provider` are mutually exclusive for one
-fetch operation. If exactly one locked package is missing from the cache, an
-unscoped gateway provider can be used. If more than one package is missing,
-scope each gateway provider with `package=<dependency-alias>`,
-`package=<namespace/package@version>`, `package=<namespace/package>`, or
-`manifest=<64-hex SoraFS manifest digest>` so Musubi cannot fetch the wrong
-archive for a lockfile node. Runtime gateway options include
-`--gateway-client-id`, `--gateway-retry-budget`, `--gateway-max-peers`,
-`--gateway-telemetry-region`, and `--gateway-scoreboard-out`. Gateway
-`gateway-key` is the pinned Ed25519 key that verifies the stream token and must
-come from authenticated provider inventory. `base-url` must be an HTTPS port-443
-origin with a root path; `privacy-url`, when present, must be the same strict
-kind of public origin with the exact `/privacy/events` path. Plaintext HTTP,
-localhost/private/reserved addresses, non-root base paths, redirects,
-credentials, queries, and fragments are rejected in every build.
-Stream tokens are runtime credentials; they are not written into `Musubi.lock`.
-`build` resolves calls such as `arith::add()` through explicit lockfile aliases,
-type-checks each module before linking, and assigns deterministic internal
-identities in typed HIR. It never rewrites source ASTs, and it rejects calls to
-functions that the dependency did not export. Musubi V1 modules may declare
-structs, error enums, constants, and private functions. Durable state, triggers,
-`kotoage`/`言挙げ`, `hajimari`/`始まり`, `kaizen`/`改善`, and other
-`seiyaku`/`誓約`-only declarations are rejected inside reusable modules.
+Extraction streams into a private sibling with no-follow/create-new file
+creation, verifies every commitment, fsyncs files and directories, then
+renames into an absent immutable destination. Repair quarantines only validated
+descendants. Lock-controlled deletion, arbitrary replacement, and cache import
+do not exist.
 
-`pack` computes the deterministic BLAKE3-256 source archive hash plus the source
-byte and file counts. With `--car-out`, `--sorafs-manifest-out`, or
-`--source-plan-out`, it also builds the deterministic SoraFS CAR payload,
-SoraFS manifest, and Musubi source archive plan from the same source file set.
-`publish --dry-run` prints the release payload. Without `--dry-run`, `publish`
-now writes default artifacts under `.musubi/dist/<namespace>/<name>/<version>/`,
-rejects digest-only archive submissions, optionally uploads the manifest and
-payload through Torii's SoraFS storage-pin endpoint with `--upload`, registers
-the generated SoraFS pin, then submits the signed `PublishMusubiRelease`
-transaction using the Iroha client config. Publish also parses package `.ko`
-sources through the canonical production compiler session before writing any
-archive output. Every local source must be a production `module`; a deployable
-`seiyaku`/`誓約`, test-only function, invalid body or type, duplicate module or
-symbol, missing export, or ambiguous export rejects publication. When the
-manifest has dependencies, publish requires the resolved lockfile and
-authenticated source cache (selectable with `--cache-dir`), validates the full
-locked typed package graph, and rejects dependency cycles and calls to hidden
-or unexported functions. Package source identities and fingerprints use
-normalized package-relative paths, so cache locations do not affect release
-validation. `yank` works the same way for `YankMusubiRelease`.
+## Publication state machine
 
-`search`, `versions`, and `alias resolve` query the same registry. `alias set
---dry-run` prints a curated short-alias binding, and without `--dry-run` submits
-`SetMusubiShortAlias`.
+Production publication is resumable and idempotent:
 
-## Name Squatting Policy
+1. Validate and compiler-check the clean package and exact proof graph.
+2. Stage the CAR through admitted authenticated SoraFS seed ingress and obtain
+   a signed expiring receipt bound to chain, publisher, broker/provider,
+   manifest, archive, body digest and length, nonce, and expiry.
+3. Register or reuse the exact archive and permanent registry-grade pin.
+4. Wait for finalized approval and distinct provider validations/completions.
+5. Require three healthy replicas and read back through two distinct providers.
+6. Submit the package claim and immutable release through Native AMX.
+7. Wait for finality and verify the exact universal resolver row.
 
-Musubi avoids Cargo-style global name squatting by making
-`namespace/package` the only canonical package name. Publishing into a namespace
-must be authorized by the same ownership or delegated permission model used for
-that Kotodama dapp namespace.
+The operation journal contains no secrets and is safe to resume. `publish
+--detach` may return the operation id; ordinary `publish` succeeds only after
+step seven. Retrying identical commitments is idempotent. Reusing a package
+version with different commitments is permanently rejected.
 
-The registry policy is:
+Active and yanked releases cannot lose their last healthy archive location.
+Replica degradation removes a row from fresh selection and emits an alert but
+does not rewrite release content.
 
-- packages are canonicalized as `namespace/package`
-- releases are immutable; yanking hides a release from new resolution but keeps
-  existing lockfiles reproducible
-- empty reservations are rejected because a release must contain a non-empty
-  canonical source archive and at least one exported Kotodama function
-- package namespaces are enforced on-chain: `<dataspace>` namespaces require an
-  active SNS dataspace owner, and `<domain>.<dataspace>` namespaces require the
-  registered domain owner
-- global short aliases are not first-come package ownership; setting one
-  requires the explicit `CanSetMusubiShortAlias` permission and the target
-  package must already have at least one active release, and an existing active
-  short alias cannot be silently retargeted
-- lockfiles record canonical package ids, never short aliases
+## Policy, limits, and operations
 
-This means a project can use convenient import aliases locally while the shared
-registry remains namespace-owned.
+`MusubiRegistryPolicyV1` has `Closed`, `Allowlisted`, and `Open` admission.
+Closing blocks new archives, releases, and aliases only. Reads, repair, owner
+recovery, and yank/unyank remain available. Policy is configuration/governance
+state with deterministic defaults, never an environment toggle.
+
+First-release defaults are:
+
+- source payload: 64 MiB;
+- CAR: 96 MiB;
+- files: 4,096;
+- chunks: 16,384;
+- dependencies: 256;
+- exports: 1,024;
+- resolver graph: 1,024 nodes, depth 64;
+- archive locations: four;
+- fresh-selection replica quorum: three; and
+- query page: 50.
+
+Consensus maxima are fixed and may be larger than local CLI defaults. Every
+hash, ordering, resolver choice, and state transition is hardware-independent.
+
+Bounded events, low-cardinality metrics, and operator alerts cover publication
+phase age, replication shortfall, ingest deadletters, integrity failures,
+cache corruption, stale cursors, unauthorized governance attempts, and storage
+pressure. Rollout proceeds through a four-peer devnet, a five-to-ten namespace
+Taira allowlist with a two-week soak, and a 30-day invite beta. Open admission
+requires zero critical/high findings, completed recovery drills, load and chaos
+success, and sustained SLO evidence.

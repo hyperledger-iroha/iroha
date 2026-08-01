@@ -1434,9 +1434,10 @@ mod tests {
         codec::{PROOF_BYTES_V1, PROOF_HEADER_BYTES_V1},
         compression::proof_residue_from_centered_v1,
         issuer::{
-            BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
-            holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
-            issuer_blind_issue_with_rng_v1,
+            BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
+            BootleLanternIssuerPolicyMetadataV1, holder_finalize_blind_issuance_v1,
+            holder_prepare_blind_issuance_with_rng_v1, issuer_authorize_blind_issuance_with_rng_v1,
+            issuer_blind_issue_once_with_rng_v1,
         },
         params::{
             APPLICATION_MODULUS_V1, CHALLENGE_OMEGA_V1, COMPRESSION_MODULUS_V1, PROOF_MODULUS_V1,
@@ -1603,6 +1604,9 @@ mod tests {
         policy: BootleLanternIssuerPolicyV1,
         statement: IrohaBootleLanternAnoncredStatementV1,
         witness: BootleLanternPresentationWitnessV1,
+        p1_relation: BootleLanternApplicationRelationV1,
+        p1_transcript: BlindIssuanceRequestTranscriptV1,
+        p1_proof: BootleLanternBlindIssuanceRequestProofV1,
     }
 
     fn issued_fixture() -> &'static IssuedFixture {
@@ -1633,29 +1637,49 @@ mod tests {
                 .expect("active native issuer policy");
             let context = statement_context();
             let genesis_hash = [0x32; 32];
-            let mut attributes = [[0_u8; 8]; 8];
-            attributes[1] = [1; 8];
-            let mut holder_mask_rng = TestRng::healthy(0xbb67_ae85_84ca_a73b);
-            let mut holder_proof_rng = TestRng::healthy(0x3c6e_f372_fe94_f82b);
-            let (request, state) = holder_prepare_blind_issuance_with_rng_v1(
-                &context,
-                genesis_hash,
-                &policy,
-                attributes,
-                &mut holder_mask_rng,
-                &mut holder_proof_rng,
-            )
-            .expect("holder blind-issuance request");
-            let mut tag_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
-            let mut preimage_rng = TestRng::healthy(0x510e_527f_ade6_82d1);
-            let response = issuer_blind_issue_with_rng_v1(
+            let issuance_store = BootleLanternInMemoryIssuanceStoreV1::new();
+            let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
+            let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer_key_pair,
                 &context,
                 genesis_hash,
                 &policy,
+                [0x71; 32],
+                10,
+                20,
+                &issuance_store,
+                &mut authorization_rng,
+            )
+            .expect("one-shot issuer authorization");
+            let mut attributes = [[0_u8; 8]; 8];
+            attributes[1] = [1; 8];
+            let mut holder_issuance_rng = TestRng::healthy(0xbb67_ae85_84ca_a73b);
+            let (request, state) = holder_prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
+                attributes,
+                &mut holder_issuance_rng,
+            )
+            .expect("holder blind-issuance request");
+            let (p1_relation, p1_transcript) = request
+                .compile_transcript_v1(&context, genesis_hash, &policy, &authorization)
+                .expect("canonical P1 relation and transcript");
+            let p1_proof = request.proof_v1().clone();
+            verify_blind_issuance_request_v1(&p1_relation, p1_transcript, &p1_proof)
+                .expect("holder's nominal P1 proof verifies before issuance");
+            let mut issuer_issuance_rng = TestRng::healthy(0xa54f_f53a_5f1d_36f1);
+            let response = issuer_blind_issue_once_with_rng_v1(
+                &issuer_key_pair,
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
                 &request,
-                &mut tag_rng,
-                &mut preimage_rng,
+                11,
+                &issuance_store,
+                &mut issuer_issuance_rng,
             )
             .expect("native blind issuance");
             let credential =
@@ -1669,6 +1693,9 @@ mod tests {
                 policy,
                 statement,
                 witness,
+                p1_relation,
+                p1_transcript,
+                p1_proof,
             }
         })
     }
@@ -1750,7 +1777,7 @@ mod tests {
                 credential_scope_digest: [0x36; 32],
                 issuer_policy_record_digest: [0x34; 32],
                 masked_target_digest: [0x37; 32],
-                request_nonce: [0x35; 32],
+                issuance_authorization_digest: [0x35; 32],
             },
             seed,
             relation_digest,
@@ -1759,9 +1786,11 @@ mod tests {
         let pre_challenge = b"same canonical fixed-profile proof body";
         assert_ne!(
             presentation
+                .proof_core()
                 .derive_final_challenge(pre_challenge)
                 .expect("P2 challenge"),
             blind_issuance
+                .proof_core()
                 .derive_final_challenge(pre_challenge)
                 .expect("P1 challenge"),
             "P1 and P2 must not share a Fiat--Shamir challenge namespace"
@@ -1825,11 +1854,11 @@ mod tests {
                 }
             }))
         });
-        let (projection_r, projection_r_prime) =
-            derive_projection_matrices(fixture.transcript, &t_b)
-                .expect("transcript-bound projection matrices");
-        let weights = derive_schwartz_weights(fixture.transcript, &t_b).expect("Schwartz weights");
-        let multipliers = derive_equation_multipliers(fixture.transcript, &t_b, &h, &z3, &z4)
+        let proof_core = fixture.transcript.proof_core();
+        let (projection_r, projection_r_prime) = derive_projection_matrices(proof_core, &t_b)
+            .expect("transcript-bound projection matrices");
+        let weights = derive_schwartz_weights(proof_core, &t_b).expect("Schwartz weights");
+        let multipliers = derive_equation_multipliers(proof_core, &t_b, &h, &z3, &z4)
             .expect("ring equation multipliers");
         QuadraticEquationV1::new(
             &fixture.relation,
@@ -2436,7 +2465,7 @@ mod tests {
         assert_eq!(encoded.len(), PROOF_BYTES_V1);
         assert_eq!(
             hex::encode(Sha3_256::digest(&encoded)),
-            "fcca08f5077d94520395e3e6ba49c716e919561d4fb7b9a4b8302988409b0ec8"
+            "fde02a3ec20bb584f9fc6aa440ccf370f6862304e2ee74056ea88a01e4d38f81"
         );
         let decoded = BootleLanternPresentationProofV1::decode_exact(
             &encoded,
@@ -2454,6 +2483,93 @@ mod tests {
             u32::try_from(encoded.len()).expect("proof length fits u32"),
         )
         .expect("strictly decoded governed proof verifies");
+
+        let issued = issued_fixture();
+        let p1_encoded = issued.p1_proof.encode();
+        let proof_cap = u32::try_from(PROOF_BYTES_V1).expect("fixed proof length fits u32");
+        let decoded_p1 =
+            BootleLanternBlindIssuanceRequestProofV1::decode_exact(&p1_encoded, proof_cap)
+                .expect("strict nominal P1 wire round trip");
+        verify_blind_issuance_request_v1(&issued.p1_relation, issued.p1_transcript, &decoded_p1)
+            .expect("decoded nominal P1 proof verifies");
+        assert_ne!(
+            proof.challenge_polynomial(),
+            issued.p1_proof.validated_body_v1().challenge_polynomial(),
+            "the issued P1 request and P2 presentation must not reuse a challenge"
+        );
+        assert_eq!(
+            BootleLanternPresentationProofV1::decode_exact(&p1_encoded, proof_cap),
+            Err(ProofCodecErrorV1::InvalidMagic)
+        );
+        assert_eq!(
+            BootleLanternBlindIssuanceRequestProofV1::decode_exact(&encoded, proof_cap),
+            Err(ProofCodecErrorV1::InvalidMagic)
+        );
+
+        // Replacing the complete nominal header makes either shared-layout
+        // body structurally decodable as the other protocol. The respective
+        // transcript-bound verifier must still reject the substitution.
+        let mut p1_body_with_p2_header = p1_encoded.clone();
+        p1_body_with_p2_header[..PROOF_HEADER_BYTES_V1]
+            .copy_from_slice(&encoded[..PROOF_HEADER_BYTES_V1]);
+        let p1_body_as_p2 =
+            BootleLanternPresentationProofV1::decode_exact(&p1_body_with_p2_header, proof_cap)
+                .expect("P1 body remains structurally canonical under a complete P2 header splice");
+        let p1_binding = issued.p1_transcript.binding();
+        let p2_transcript_for_p1_relation = PresentationTranscriptV1::new(
+            PresentationChallengeBindingV1 {
+                parameter_digest: p1_binding.parameter_digest,
+                genesis_hash: p1_binding.genesis_hash,
+                statement_digest: p1_binding.issuer_profile_digest,
+                issuer_policy_record_digest: p1_binding.issuer_policy_record_digest,
+                transaction_intent_digest: p1_binding.issuance_authorization_digest,
+            },
+            issued.p1_transcript.proof_core().matrix_seed(),
+            issued.p1_transcript.proof_core().relation_digest(),
+        )
+        .expect("P2-purpose transcript over the exact P1 relation");
+        assert!(
+            verify_presentation_v1(
+                &issued.p1_relation,
+                p2_transcript_for_p1_relation,
+                &p1_body_as_p2,
+            )
+            .is_err(),
+            "a P1 body with a P2 header must fail the P2 purpose over the same relation"
+        );
+
+        let mut p2_body_with_p1_header = encoded.clone();
+        p2_body_with_p1_header[..PROOF_HEADER_BYTES_V1]
+            .copy_from_slice(&p1_encoded[..PROOF_HEADER_BYTES_V1]);
+        let p2_body_as_p1 = BootleLanternBlindIssuanceRequestProofV1::decode_exact(
+            &p2_body_with_p1_header,
+            proof_cap,
+        )
+        .expect("P2 body remains structurally canonical under a complete P1 header splice");
+        let p2_binding = fixture.transcript.binding();
+        let p1_transcript_for_p2_relation = BlindIssuanceRequestTranscriptV1::new(
+            BlindIssuanceRequestChallengeBindingV1 {
+                parameter_digest: p2_binding.parameter_digest,
+                genesis_hash: p2_binding.genesis_hash,
+                issuer_profile_digest: p2_binding.statement_digest,
+                credential_scope_digest: p2_binding.transaction_intent_digest,
+                issuer_policy_record_digest: p2_binding.issuer_policy_record_digest,
+                masked_target_digest: p2_binding.statement_digest,
+                issuance_authorization_digest: p2_binding.transaction_intent_digest,
+            },
+            fixture.transcript.matrix_seed(),
+            fixture.transcript.relation_digest(),
+        )
+        .expect("P1-purpose transcript over the exact P2 relation");
+        assert!(
+            verify_blind_issuance_request_v1(
+                &fixture.relation,
+                p1_transcript_for_p2_relation,
+                &p2_body_as_p1,
+            )
+            .is_err(),
+            "a P2 body with a P1 header must fail the P1 purpose over the same relation"
+        );
 
         let proof_ceiling =
             u32::try_from(encoded.len() - 1).expect("fixed proof length minus one fits u32");

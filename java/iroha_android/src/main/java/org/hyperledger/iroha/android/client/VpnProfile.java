@@ -27,7 +27,12 @@ public final class VpnProfile {
   private final long settlementGraceSecs;
   private final int flowLabelBits;
   private final int paddingBudgetMs;
+  private final String relayIdHex;
+  private final String descriptorCommitHex;
+  private final String tlsServerName;
   private final String relayTlsSpkiSha256Hex;
+  private final String relayCertificateSha256Hex;
+  private final String directorySnapshotDigestHex;
 
   public VpnProfile(
       final boolean available,
@@ -50,7 +55,12 @@ public final class VpnProfile {
       final long settlementGraceSecs,
       final int flowLabelBits,
       final int paddingBudgetMs,
-      final String relayTlsSpkiSha256Hex) {
+      final String relayIdHex,
+      final String descriptorCommitHex,
+      final String tlsServerName,
+      final String relayTlsSpkiSha256Hex,
+      final String relayCertificateSha256Hex,
+      final String directorySnapshotDigestHex) {
     this.available = available;
     this.relayEndpoint = Objects.requireNonNull(relayEndpoint, "relayEndpoint");
     this.supportedExitClasses = immutableList(supportedExitClasses);
@@ -71,7 +81,15 @@ public final class VpnProfile {
     this.settlementGraceSecs = settlementGraceSecs;
     this.flowLabelBits = flowLabelBits;
     this.paddingBudgetMs = paddingBudgetMs;
-    this.relayTlsSpkiSha256Hex = relayTlsSpkiSha256Hex;
+    this.relayIdHex = Objects.requireNonNull(relayIdHex, "relayIdHex");
+    this.descriptorCommitHex = Objects.requireNonNull(descriptorCommitHex, "descriptorCommitHex");
+    this.tlsServerName = Objects.requireNonNull(tlsServerName, "tlsServerName");
+    this.relayTlsSpkiSha256Hex =
+        Objects.requireNonNull(relayTlsSpkiSha256Hex, "relayTlsSpkiSha256Hex");
+    this.relayCertificateSha256Hex =
+        Objects.requireNonNull(relayCertificateSha256Hex, "relayCertificateSha256Hex");
+    this.directorySnapshotDigestHex =
+        Objects.requireNonNull(directorySnapshotDigestHex, "directorySnapshotDigestHex");
   }
 
   public boolean available() { return available; }
@@ -94,7 +112,12 @@ public final class VpnProfile {
   public long settlementGraceSecs() { return settlementGraceSecs; }
   public int flowLabelBits() { return flowLabelBits; }
   public int paddingBudgetMs() { return paddingBudgetMs; }
+  public String relayIdHex() { return relayIdHex; }
+  public String descriptorCommitHex() { return descriptorCommitHex; }
+  public String tlsServerName() { return tlsServerName; }
   public String relayTlsSpkiSha256Hex() { return relayTlsSpkiSha256Hex; }
+  public String relayCertificateSha256Hex() { return relayCertificateSha256Hex; }
+  public String directorySnapshotDigestHex() { return directorySnapshotDigestHex; }
 
   static List<String> immutableList(final List<String> values) {
     return Collections.unmodifiableList(new ArrayList<>(Objects.requireNonNull(values, "values")));

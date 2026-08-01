@@ -5608,7 +5608,8 @@ mod tests {
                 Repeats::Indefinitely,
                 initiator.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let instruction_groups = std::collections::BTreeMap::from([(
             initiator,
@@ -5906,7 +5907,8 @@ mod tests {
                 Repeats::Indefinitely,
                 user.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         instruction_groups.insert(
             user.clone(),
@@ -5931,7 +5933,8 @@ mod tests {
                 Repeats::Indefinitely,
                 user.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(nested_trigger_id),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let multisig = account(4);
         instruction_groups.insert(
@@ -5991,7 +5994,8 @@ mod tests {
                 Repeats::Indefinitely,
                 user.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(approval_trigger_id),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         assert_indirect_approval_rejected(vec![
             RegisterBox::Trigger(Register::trigger(approval_trigger)).into(),

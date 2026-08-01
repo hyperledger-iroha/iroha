@@ -22,7 +22,7 @@ fn construct_proof_from_ivm_path_and_verify() {
     let chunk = 32;
     let ivm_tree = ivm::ByteMerkleTree::from_bytes(&data, chunk);
     let crypto_tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
-    let root = crypto_tree.root().unwrap();
+    let commitment = crypto_tree.commitment().expect("non-empty tree");
 
     for idx in 0..data.len().div_ceil(chunk) {
         let path = ivm_tree.path(idx);
@@ -33,7 +33,7 @@ fn construct_proof_from_ivm_path_and_verify() {
         );
         let leaf = crypto_tree.leaves().nth(idx).unwrap();
         assert!(
-            proof.verify_sha256(&leaf, &root, 9),
+            proof.verify_sha256(&leaf, &commitment),
             "proof must verify at {idx}"
         );
     }

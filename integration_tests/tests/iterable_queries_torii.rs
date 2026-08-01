@@ -250,7 +250,8 @@ fn find_triggers_includes_registered() -> Result<()> {
             Repeats::Exactly(1),
             ALICE_ID.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     client.submit_blocking(
         Register::trigger(trig),
@@ -317,7 +318,8 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
             Repeats::Indefinitely,
             ALICE_ID.clone(),
             ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     client.submit_blocking(
         Register::trigger(trig),
@@ -366,7 +368,8 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
             Repeats::Exactly(1),
             ALICE_ID.clone(),
             ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     client.submit_blocking(
         Register::trigger(trig),
@@ -427,7 +430,8 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
             Repeats::Exactly(1),
             ALICE_ID.clone(),
             ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     client
         .submit_blocking(

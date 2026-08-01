@@ -28,7 +28,7 @@ use iroha_config::parameters::{
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
 };
 use iroha_config_base::{env::MockEnv, read::ConfigReader};
-use iroha_crypto::{Algorithm, PublicKey};
+use iroha_crypto::{Algorithm, Hash, PublicKey};
 use iroha_data_model::{account::AccountId, name::Name};
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
@@ -415,7 +415,9 @@ fn minimal_config_snapshot() {
                     dns_servers: [
                         "1.1.1.1",
                     ],
-                    relay_tls_spki_sha256_hex: None,
+                    relay_id: None,
+                    guard_directory_path: None,
+                    guard_directory_digest: None,
                 },
                 lane_profile: Core,
                 require_sm_handshake_match: true,
@@ -540,7 +542,7 @@ fn minimal_config_snapshot() {
                 ),
                 file: None,
                 manifest_json: None,
-                expected_hash: None,
+                expected_hash: { iroha_crypto::hash::HashOf<iroha_data_model::block::BlockHeader> 0000000000000000000000000000000000000000000000000000000000000001 },
             },
             torii: Torii {
                 address: WithOrigin {
@@ -618,7 +620,12 @@ fn minimal_config_snapshot() {
                     ),
                     allow_cidrs: [],
                 },
-                api_allow_cidrs: [],
+                privacy_bootle_lantern_issuer: None,
+                api_rate_limit_bypass_cidrs: [],
+                internal_api_trusted_cidrs: [
+                    "127.0.0.1/32",
+                    "::1/128",
+                ],
                 peer_telemetry_urls: [],
                 peer_geo: ToriiPeerGeo {
                     enabled: false,
@@ -673,6 +680,7 @@ fn minimal_config_snapshot() {
                 preauth_temp_ban: Some(
                     60s,
                 ),
+                preauth_ban_capacity: 4096,
                 preauth_allow_cidrs: [],
                 preauth_scheme_limits: [],
                 api_high_load_tx_threshold: None,
@@ -3198,7 +3206,11 @@ fn torii_ram_lfe_parses() {
     let program = &runtime.programs[0];
     let expected_program_id = "phone_retail".parse().expect("program id");
     assert_eq!(program.program_id, expected_program_id);
-    assert_eq!(program.secret, vec![0x01, 0x02, 0x03, 0x04]);
+    assert_eq!(program.secret.as_bytes(), &[0x01, 0x02, 0x03, 0x04]);
+    let debug = format!("{runtime:?}");
+    assert!(debug.contains("REDACTED RAM-LFE secret"));
+    assert!(!debug.contains("01020304"));
+    assert!(!debug.contains("4e525430"));
     assert_eq!(
         program.receipt_ttl,
         Some(Duration::from_millis(30_000)),
@@ -3683,14 +3695,27 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .expect("workspace root")
         .join("defaults/nexus/config.toml");
 
+    let source = fs::read_to_string(&config_path).expect("read Nexus signing profile");
+    let mut table: toml::Table = toml::from_str(&source).expect("parse Nexus signing profile");
+    let expected_hash = table
+        .get_mut("genesis")
+        .and_then(TomlValue::as_table_mut)
+        .and_then(|genesis| genesis.get_mut("expected_hash"))
+        .expect("Nexus signing profile expected-hash placeholder");
+    assert_eq!(
+        expected_hash.as_str(),
+        Some("REPLACE_WITH_GENESIS_EXPECTED_HASH")
+    );
+    // Substitute only inside this inspection test; the checked-in profile must fail runtime
+    // normalization until an operator provisions the signed genesis hash.
+    *expected_hash = TomlValue::String(
+        Hash::new(b"iroha-config non-runtime Nexus profile inspection").to_string(),
+    );
+
     let config = ConfigReader::new()
-        .read_toml_with_extends(&config_path)
+        .with_toml_source(iroha_config_base::toml::TomlSource::inline(table))
+        .read_and_complete::<UserConfig>()
         .change_context(FixtureConfigLoadError)
-        .and_then(|reader| {
-            reader
-                .read_and_complete::<UserConfig>()
-                .change_context(FixtureConfigLoadError)
-        })
         .and_then(|user| user.parse().change_context(FixtureConfigLoadError))
         .expect("Nexus profile config should parse");
 
@@ -5182,6 +5207,26 @@ fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
         cfg.torii.transport.trusted_proxy_cidrs.is_empty(),
         "trusted proxy CIDRs should default to empty until operators opt in"
     );
+}
+
+#[test]
+fn torii_internal_api_trust_defaults_to_exact_loopback_hosts() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+
+    assert_eq!(
+        cfg.torii.internal_api_trusted_cidrs,
+        ["127.0.0.1/32", "::1/128"],
+    );
+    assert!(cfg.torii.api_rate_limit_bypass_cidrs.is_empty());
 }
 
 #[test]

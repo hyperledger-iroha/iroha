@@ -171,6 +171,7 @@ KAGEMUSHA_VERIFIER_ROLES = {
 GENESIS_PUBLIC_KEY_RE = re.compile(r"ed0120[0-9A-F]{64}")
 GENESIS_PRIVATE_KEY_RE = re.compile(r"802620[0-9A-F]{64}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+GENESIS_EXPECTED_HASH_PLACEHOLDER = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
 MANIFEST_SCHEMA = "taira-exact2f-reset-bundle"
 EXPECTED_RELEASE_FILE_COUNT = 16
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
@@ -209,6 +210,16 @@ def require_sha256(value: str, label: str) -> str:
 
     if SHA256_RE.fullmatch(value) is None:
         fail(f"{label} must be a lowercase SHA-256 digest")
+    return value
+
+
+def require_genesis_expected_hash(value: object) -> str:
+    """Require one canonical Iroha hash suitable as a genesis trust root."""
+
+    if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+        fail("genesis expected hash must be one lowercase 32-byte Iroha hash")
+    if int(value[-2:], 16) & 1 == 0:
+        fail("genesis expected hash must carry the Iroha marker bit")
     return value
 
 
@@ -275,6 +286,19 @@ def require_private_file(path: Path, maximum_size: int) -> bytes:
     if after != before:
         fail(f"owner-private file changed while it was read: {path}")
     return payload
+
+
+def read_genesis_expected_hash(path: Path) -> str:
+    """Read Kagami's exact one-line signed-genesis hash output."""
+
+    raw = require_private_file(path, 65)
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise RuntimeError("Kagami genesis expected hash is not ASCII") from error
+    if not text.endswith("\n") or text.count("\n") != 1:
+        fail("Kagami genesis expected hash is not one canonical line")
+    return require_genesis_expected_hash(text[:-1])
 
 
 def _write_stream_chunk(stream: BinaryIO, payload: bytes) -> None:
@@ -1491,6 +1515,7 @@ def runtime_config_text(
     bundle: Path,
     release_tree_sha256: str,
     genesis_public_key: str,
+    genesis_expected_hash: str,
     command_private_key: str,
 ) -> str:
     """Render one self-contained mandatory-offline validator config."""
@@ -1572,6 +1597,15 @@ def runtime_config_text(
         quote_toml(str(signed_genesis)),
         insert_if_missing=True,
     )
+    if genesis_expected_hash != GENESIS_EXPECTED_HASH_PLACEHOLDER:
+        require_genesis_expected_hash(genesis_expected_hash)
+    text = replace_section_assignment(
+        text,
+        "genesis",
+        "expected_hash",
+        quote_toml(genesis_expected_hash),
+        insert_if_missing=True,
+    )
     return text
 
 
@@ -1581,6 +1615,7 @@ def base_config_text(
     bundle: Path,
     release_tree_sha256: str,
     genesis_public_key: str,
+    genesis_expected_hash: str,
     command_private_key: str,
 ) -> str:
     """Render the bundle's sealed base config with the same runtime identity."""
@@ -1590,7 +1625,30 @@ def base_config_text(
         bundle=bundle,
         release_tree_sha256=release_tree_sha256,
         genesis_public_key=genesis_public_key,
+        genesis_expected_hash=genesis_expected_hash,
         command_private_key=command_private_key,
+    )
+
+
+def bind_runtime_genesis_expected_hash(source: str, expected_hash: str) -> str:
+    """Replace only the explicit pre-signing placeholder with Kagami's hash."""
+
+    expected_hash = require_genesis_expected_hash(expected_hash)
+    try:
+        payload = tomllib.loads(source)
+    except tomllib.TOMLDecodeError as error:
+        raise RuntimeError("staged validator config is invalid TOML") from error
+    genesis = payload.get("genesis")
+    if not isinstance(genesis, dict):
+        fail("staged validator config lacks a genesis table")
+    current = genesis.get("expected_hash")
+    if current not in (GENESIS_EXPECTED_HASH_PLACEHOLDER, expected_hash):
+        fail("staged validator config has an unexpected genesis trust root")
+    return replace_section_assignment(
+        source,
+        "genesis",
+        "expected_hash",
+        quote_toml(expected_hash),
     )
 
 
@@ -2446,11 +2504,15 @@ def validate_runtime_config(
     bundle: Path,
     release_tree_sha256: str,
     genesis_public_key: str,
+    genesis_expected_hash: str,
 ) -> None:
     """Enforce the exact mandatory-offline runtime projection."""
 
     if GENESIS_PUBLIC_KEY_RE.fullmatch(genesis_public_key) is None:
         fail("expected genesis public key is not canonical Ed25519")
+    genesis_expected_hash = require_genesis_expected_hash(
+        genesis_expected_hash
+    )
     if (
         config.get("chain") != PUBLIC_TAIRA_CHAIN_ID
         or config.get("chain_discriminant") != PUBLIC_TAIRA_CHAIN_DISCRIMINANT
@@ -2514,10 +2576,11 @@ def validate_runtime_config(
     if (
         genesis.get("file") != str(bundle / "genesis.signed.nrt")
         or genesis.get("public_key") != genesis_public_key
+        or genesis.get("expected_hash") != genesis_expected_hash
     ):
         fail(
             "validator config does not use the bundle's signed genesis "
-            "and fresh public key"
+            "with its fresh public key and exact expected hash"
         )
 
 
@@ -2567,6 +2630,7 @@ def update_manifest(
     kagami: Path,
     source_commit: str,
     genesis_public_key: str,
+    genesis_expected_hash: str,
     command_authority: str,
     manifest_sha256: str,
     release_attestation_sha256: str,
@@ -2579,6 +2643,9 @@ def update_manifest(
     command_authority = require_command_authority(
         command_authority,
         genesis_public_key=genesis_public_key,
+    )
+    genesis_expected_hash = require_genesis_expected_hash(
+        genesis_expected_hash
     )
     manifest_path = bundle / "reset-manifest.json"
     manifest = json.loads(
@@ -2596,6 +2663,7 @@ def update_manifest(
             "irohad_sha256": sha256(irohad),
             "kagami_sha256": sha256(kagami),
             "genesis_public_key": genesis_public_key,
+            "genesis_expected_hash": genesis_expected_hash,
             "signed_genesis_sha256": sha256(bundle / "genesis.signed.nrt"),
             "unsigned_genesis_sha256": sha256(bundle / "genesis.json"),
             "base_config_sha256": sha256(bundle / "base-config.toml"),
@@ -2697,6 +2765,9 @@ def check_bundle(
         or GENESIS_PUBLIC_KEY_RE.fullmatch(genesis_public_key) is None
     ):
         fail("v21 reset manifest lacks one canonical genesis public key")
+    genesis_expected_hash = require_genesis_expected_hash(
+        manifest.get("genesis_expected_hash")
+    )
     command_authority = require_command_authority(
         manifest.get("command_authority"),
         genesis_public_key=genesis_public_key,
@@ -2762,6 +2833,7 @@ def check_bundle(
         bundle,
         release_tree_digest,
         genesis_public_key,
+        genesis_expected_hash,
     )
     config_hashes = manifest.get("configs")
     if not isinstance(config_hashes, dict) or set(config_hashes) != set(
@@ -2778,6 +2850,7 @@ def check_bundle(
             bundle,
             release_tree_digest,
             genesis_public_key,
+            genesis_expected_hash,
         )
         storage = workdir / "storage"
         require_private_directory(storage)
@@ -2820,6 +2893,7 @@ def check_bundle(
         "offline_asset_name": PUBLIC_TAIRA_OFFLINE_ASSET_NAME,
         "offline_escrow_account": PUBLIC_TAIRA_OFFLINE_ESCROW_ACCOUNT,
         "command_authority": command_authority,
+        "genesis_expected_hash": genesis_expected_hash,
         "online_backing_source_ready": True,
         "activation_height": PUBLIC_TAIRA_RELEASE_ACTIVATION_HEIGHT,
         "manifest_sha256": manifest["kagemusha_manifest_sha256"],
@@ -2918,6 +2992,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 bundle=output,
                 release_tree_sha256=release_tree_digest,
                 genesis_public_key=args.genesis_public_key,
+                genesis_expected_hash=GENESIS_EXPECTED_HASH_PLACEHOLDER,
                 command_private_key=command_private_key,
             ).encode("utf-8"),
         )
@@ -2956,6 +3031,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                     bundle=output,
                     release_tree_sha256=release_tree_digest,
                     genesis_public_key=args.genesis_public_key,
+                    genesis_expected_hash=GENESIS_EXPECTED_HASH_PLACEHOLDER,
                     command_private_key=command_private_key,
                 ).encode("utf-8"),
             )
@@ -2966,6 +3042,9 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         )
         signed_genesis = output / "genesis.signed.nrt"
         signed_genesis.unlink()
+        expected_hash_output = output / ".genesis.expected_hash"
+        if expected_hash_output.exists() or expected_hash_output.is_symlink():
+            fail("temporary genesis expected-hash output already exists")
         validator_one = output / "rendered" / VALIDATOR_SLUGS[0]
         run_checked(
             [
@@ -2979,10 +3058,35 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 str(args.genesis_private_key_file),
                 "--out-file",
                 str(signed_genesis),
+                "--expected-hash-out",
+                str(expected_hash_output),
             ],
             cwd=validator_one,
         )
         os.chmod(signed_genesis, 0o600)
+        try:
+            os.chmod(expected_hash_output, 0o600)
+            genesis_expected_hash = read_genesis_expected_hash(
+                expected_hash_output
+            )
+        finally:
+            expected_hash_output.unlink(missing_ok=True)
+        for config_path in [
+            base_path,
+            *(
+                output / "rendered" / slug / "config.toml"
+                for slug in VALIDATOR_SLUGS
+            ),
+        ]:
+            empty_reset.write_private_file(
+                config_path,
+                bind_runtime_genesis_expected_hash(
+                    require_private_file(
+                        config_path, MAX_CONFIG_BYTES
+                    ).decode("utf-8"),
+                    genesis_expected_hash,
+                ).encode("utf-8"),
+            )
         free_bytes_after_materialization = empty_reset.require_minimum_free_space(
             output, args.minimum_free_bytes
         )
@@ -2992,6 +3096,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             kagami=args.kagami,
             source_commit=args.source_commit,
             genesis_public_key=args.genesis_public_key,
+            genesis_expected_hash=genesis_expected_hash,
             command_authority=command_authority,
             manifest_sha256=manifest_sha256,
             release_attestation_sha256=str(

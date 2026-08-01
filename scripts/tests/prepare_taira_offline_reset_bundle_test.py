@@ -22,6 +22,7 @@ PREVIOUS_PRIVATE_KEY = "802620" + "B4" * 32
 PUBLIC_KEY = (
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 )
+EXPECTED_HASH = "00" * 31 + "01"
 COMMAND_AUTHORITY = (
     "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 )
@@ -307,6 +308,7 @@ class TairaOfflineConfigTests(unittest.TestCase):
             bundle=bundle,
             release_tree_sha256="ab" * 32,
             genesis_public_key=PUBLIC_KEY,
+            genesis_expected_hash=EXPECTED_HASH,
             command_private_key=PRIVATE_KEY,
         )
         config = tomllib.loads(rendered)
@@ -358,6 +360,7 @@ class TairaOfflineConfigTests(unittest.TestCase):
             config["genesis"]["file"], str(bundle / "genesis.signed.nrt")
         )
         self.assertEqual(config["genesis"]["public_key"], PUBLIC_KEY)
+        self.assertEqual(config["genesis"]["expected_hash"], EXPECTED_HASH)
         self.assertEqual(
             config["nexus"]["storage"]["local_budget_bytes"],
             offline_reset.PUBLIC_TAIRA_NODE_STORAGE_BUDGET_BYTES,
@@ -371,6 +374,7 @@ class TairaOfflineConfigTests(unittest.TestCase):
             bundle,
             "ab" * 32,
             PUBLIC_KEY,
+            EXPECTED_HASH,
         )
         with self.assertRaisesRegex(RuntimeError, "fresh public key"):
             offline_reset.validate_runtime_config(
@@ -378,6 +382,7 @@ class TairaOfflineConfigTests(unittest.TestCase):
                 bundle,
                 "ab" * 32,
                 "ed0120" + "6B" * 32,
+                EXPECTED_HASH,
             )
         staged = tomllib.loads(
             offline_reset.staged_check_config_text(
@@ -416,6 +421,7 @@ class TairaOfflineConfigTests(unittest.TestCase):
                 bundle=bundle,
                 release_tree_sha256="ab" * 32,
                 genesis_public_key=PUBLIC_KEY,
+                genesis_expected_hash=EXPECTED_HASH,
                 command_private_key=PRIVATE_KEY,
             )
         )
@@ -435,7 +441,49 @@ class TairaOfflineConfigTests(unittest.TestCase):
                 bundle,
                 "ab" * 32,
                 PUBLIC_KEY,
+                EXPECTED_HASH,
             )
+
+    def test_pre_signing_placeholder_binds_once_to_the_exact_signed_hash(
+        self,
+    ) -> None:
+        bundle = Path("/private/taira/bundle-v21-canonical-offline")
+        staged = offline_reset.runtime_config_text(
+            _archived_config(),
+            bundle=bundle,
+            release_tree_sha256="ab" * 32,
+            genesis_public_key=PUBLIC_KEY,
+            genesis_expected_hash=(
+                offline_reset.GENESIS_EXPECTED_HASH_PLACEHOLDER
+            ),
+            command_private_key=PRIVATE_KEY,
+        )
+        self.assertEqual(
+            tomllib.loads(staged)["genesis"]["expected_hash"],
+            offline_reset.GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        )
+
+        bound = offline_reset.bind_runtime_genesis_expected_hash(
+            staged, EXPECTED_HASH
+        )
+        self.assertEqual(
+            tomllib.loads(bound)["genesis"]["expected_hash"], EXPECTED_HASH
+        )
+        with self.assertRaisesRegex(RuntimeError, "marker bit"):
+            offline_reset.bind_runtime_genesis_expected_hash(
+                staged, "00" * 32
+            )
+
+    def test_reads_only_one_canonical_kagami_expected_hash_line(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "genesis.expected_hash"
+            _private_file(path, f"{EXPECTED_HASH}\n".encode("ascii"))
+            self.assertEqual(
+                offline_reset.read_genesis_expected_hash(path), EXPECTED_HASH
+            )
+            _private_file(path, EXPECTED_HASH.encode("ascii"))
+            with self.assertRaisesRegex(RuntimeError, "one canonical line"):
+                offline_reset.read_genesis_expected_hash(path)
 
     def test_replaces_existing_storage_budget_without_losing_other_settings(
         self,
@@ -451,6 +499,7 @@ class TairaOfflineConfigTests(unittest.TestCase):
             bundle=Path("/private/v21"),
             release_tree_sha256="ab" * 32,
             genesis_public_key=PUBLIC_KEY,
+            genesis_expected_hash=EXPECTED_HASH,
             command_private_key=PRIVATE_KEY,
         )
         storage = tomllib.loads(rendered)["nexus"]["storage"]
@@ -472,6 +521,7 @@ class TairaOfflineConfigTests(unittest.TestCase):
                 bundle=Path("/private/v21"),
                 release_tree_sha256="ab" * 32,
                 genesis_public_key=PUBLIC_KEY,
+                genesis_expected_hash=EXPECTED_HASH,
                 command_private_key=PRIVATE_KEY,
             )
 

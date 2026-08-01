@@ -3,7 +3,7 @@
 #![allow(unexpected_cfgs)]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fmt::Write as _,
     fs,
     io::{self, Read as _, Write as _},
@@ -22,11 +22,13 @@ use futures::{SinkExt, StreamExt};
 use iroha_crypto::{
     Algorithm, KeyPair, PrivateKey, PublicKey,
     soranet::{
-        certificate::RelayCertificateBundleV2,
+        certificate::{
+            RelayCertificateBundleV2, leaf_certificate_spki_sha256, select_vpn_endpoint,
+        },
         handshake::{
-            HandshakeSuite, HarnessError as NoiseHandshakeError,
-            RuntimeParams as NoiseRuntimeParams, SessionSecrets, process_client_hello,
-            relay_finalize_handshake, update_suite_list,
+            DEFAULT_TLS_SERVER_NAME, HandshakeSuite, HarnessError as NoiseHandshakeError,
+            RuntimeParams as NoiseRuntimeParams, SORANET_QUIC_ALPN, SessionSecrets,
+            process_client_hello, relay_finalize_handshake, update_suite_list,
         },
         pow::{
             self, Parameters as PowParameters, Ticket as PowTicket, TicketRevocationStore,
@@ -37,6 +39,7 @@ use iroha_crypto::{
             RecordEndpoint, RecordLayer, RecordReader, RecordStreamContext, RecordStreamKind,
             RecordWriter,
         },
+        replay::{PersistentReplayLedger, ReplayInsertStatus, ReplayLedgerLimits},
         token::{self, AdmissionToken, DecodeError as TokenDecodeError},
     },
 };
@@ -70,6 +73,7 @@ use quinn::{
 };
 use rand::{SeedableRng, rngs::StdRng};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -250,6 +254,9 @@ const HANDSHAKE_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_PAYLOAD_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HANDSHAKE_FRAME_LEN: usize = MAX_CLIENT_HELLO_LEN;
 const _: () = assert!(MAX_HANDSHAKE_FRAME_LEN <= u16::MAX as usize);
+const VPN_HELPER_TICKET_REPLAY_NAMESPACE: &[u8] =
+    b"iroha.soranet.vpn.helper-ticket.consumptions.v1";
+const VPN_HELPER_TICKET_REPLAY_ID_DOMAIN: &[u8] = b"iroha.soranet.vpn.helper-ticket.replay-id.v1";
 /// Temporary seed used when the relay configuration does not provide an identity key.
 const FALLBACK_IDENTITY_SEED: [u8; 32] = [0x42; 32];
 /// Provisional epoch window for incentive aggregation (1 hour).
@@ -1225,6 +1232,8 @@ fn record_route_open_egress_metrics(
 /// Fully configured relay runtime ready to serve traffic.
 pub struct RelayRuntime {
     config: RelayConfig,
+    server_config: quinn::ServerConfig,
+    transport_trust: Option<Arc<RelayTransportTrust>>,
     admin_authorization: Option<AdminAuthorization>,
     metrics: Arc<Metrics>,
     privacy: Arc<PrivacyAggregator>,
@@ -1248,7 +1257,7 @@ pub struct RelayRuntime {
     incentives: Option<Arc<IncentiveLogger>>,
     lane_manager: Arc<ConstantRateLaneManager>,
     vpn: Option<Arc<VpnOverlay>>,
-    vpn_redeemed_tickets: Arc<Mutex<HashMap<[u8; 16], u64>>>,
+    vpn_helper_ticket_replays: Option<Arc<StdMutex<PersistentReplayLedger>>>,
     ticket_replays: Arc<StdMutex<TicketReplayState>>,
 }
 
@@ -1272,12 +1281,23 @@ struct CircuitContext {
     compliance: Option<Arc<ComplianceLogger>>,
     performance: Arc<Mutex<RelayPerformanceAccumulator>>,
     relay_id: RelayId,
+    transport_trust: Option<Arc<RelayTransportTrust>>,
     exit_routing: Arc<ExitRoutingState>,
     incentives: Option<Arc<IncentiveLogger>>,
     lane_manager: Arc<ConstantRateLaneManager>,
     vpn: Option<Arc<VpnOverlay>>,
-    vpn_redeemed_tickets: Arc<Mutex<HashMap<[u8; 16], u64>>>,
+    vpn_helper_ticket_replays: Option<Arc<StdMutex<PersistentReplayLedger>>>,
     ticket_replays: Arc<StdMutex<TicketReplayState>>,
+}
+
+#[derive(Debug, Clone)]
+struct RelayTransportTrust {
+    quic_multiaddr: String,
+    tls_server_name: String,
+    tls_spki_sha256: [u8; 32],
+    relay_certificate_sha256: [u8; 32],
+    directory_snapshot_digest: [u8; 32],
+    valid_until_ms: u64,
 }
 
 #[derive(Debug)]
@@ -1391,20 +1411,139 @@ fn continue_after_admission<T>(
     expensive_handshake()
 }
 
+fn load_vpn_helper_ticket_replay_ledger(
+    config: &config::VpnConfig,
+    relay_id: &RelayId,
+    now_ms: u64,
+) -> Result<PersistentReplayLedger, ConfigError> {
+    let max_ttl_ms = u64::from(config.lease_secs)
+        .checked_mul(1_000)
+        .ok_or_else(|| ConfigError::Vpn("vpn.lease_secs overflows milliseconds".to_owned()))?;
+    let limits = ReplayLedgerLimits::new(config.helper_ticket_replay_store_capacity, max_ttl_ms)
+        .map_err(|error| {
+            ConfigError::Vpn(format!(
+                "invalid VPN helper-ticket replay ledger settings: {error}"
+            ))
+        })?;
+    let mut namespace =
+        Vec::with_capacity(VPN_HELPER_TICKET_REPLAY_NAMESPACE.len() + relay_id.len());
+    namespace.extend_from_slice(VPN_HELPER_TICKET_REPLAY_NAMESPACE);
+    namespace.extend_from_slice(relay_id);
+    PersistentReplayLedger::load(
+        &config.helper_ticket_replay_store_path,
+        &namespace,
+        limits,
+        now_ms,
+    )
+    .map_err(|error| {
+        ConfigError::Vpn(format!(
+            "failed to load VPN helper-ticket replay ledger ({}): {error}",
+            config.helper_ticket_replay_store_path.display()
+        ))
+    })
+}
+
+fn vpn_helper_ticket_replay_id(ticket: &VpnHelperTicketV1) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(VPN_HELPER_TICKET_REPLAY_ID_DOMAIN);
+    hasher.update(&ticket.relay_id);
+    hasher.update(&ticket.session_id);
+    *hasher.finalize().as_bytes()
+}
+
+fn consume_vpn_helper_ticket(
+    replay_ledger: &StdMutex<PersistentReplayLedger>,
+    replay_id: [u8; 32],
+    expires_at_ms: u64,
+    now_ms: u64,
+) -> Result<(), HandshakeError> {
+    let mut replay_ledger = replay_ledger.lock().map_err(|_| {
+        HandshakeError::ReplayStore("VPN helper-ticket replay ledger lock poisoned".to_owned())
+    })?;
+    let status = replay_ledger
+        .insert(replay_id, expires_at_ms, now_ms)
+        .map_err(|error| {
+            HandshakeError::ReplayStore(format!(
+                "VPN helper-ticket replay ledger persistence failed: {error}"
+            ))
+        })?;
+    match status {
+        ReplayInsertStatus::Accepted => Ok(()),
+        ReplayInsertStatus::Duplicate => {
+            Err(HandshakeError::HelperTicket(VpnHelperTicketError::Replayed))
+        }
+        ReplayInsertStatus::Expired => Err(HandshakeError::HelperTicket(
+            VpnHelperTicketError::Expired {
+                expires_at_ms,
+                now_ms,
+            },
+        )),
+        ReplayInsertStatus::TtlExceeded => Err(HandshakeError::ReplayStore(
+            "VPN helper ticket lifetime exceeds configured vpn.lease_secs".to_owned(),
+        )),
+        ReplayInsertStatus::Capacity => Err(HandshakeError::ReplayStore(
+            "VPN helper-ticket replay ledger is at capacity".to_owned(),
+        )),
+    }
+}
+
 async fn redeem_vpn_helper_ticket(
-    redeemed: &Mutex<HashMap<[u8; 16], u64>>,
+    replay_ledger: Arc<StdMutex<PersistentReplayLedger>>,
     ticket: &VpnHelperTicketV1,
     now_ms: u64,
-) -> Result<(), VpnHelperTicketError> {
-    let mut redeemed = redeemed.lock().await;
-    redeemed.retain(|_, expires_at_ms| *expires_at_ms > now_ms);
-    if redeemed
-        .insert(ticket.session_id, ticket.expires_at_ms)
-        .is_some()
-    {
-        return Err(VpnHelperTicketError::Replayed);
+) -> Result<(), HandshakeError> {
+    let replay_id = vpn_helper_ticket_replay_id(ticket);
+    let expires_at_ms = ticket.expires_at_ms;
+    tokio::task::spawn_blocking(move || {
+        consume_vpn_helper_ticket(replay_ledger.as_ref(), replay_id, expires_at_ms, now_ms)
+    })
+    .await
+    .map_err(|error| {
+        HandshakeError::ReplayStore(format!(
+            "VPN helper-ticket replay ledger worker failed: {error}"
+        ))
+    })?
+}
+
+fn ensure_vpn_helper_ticket_within_trust(
+    ticket: &VpnHelperTicketV1,
+    trust: &RelayTransportTrust,
+) -> Result<(), NoiseHandshakeError> {
+    if ticket.expires_at_ms > trust.valid_until_ms {
+        return Err(NoiseHandshakeError::Validation(
+            "VPN helper ticket outlives authenticated relay trust".to_owned(),
+        ));
     }
     Ok(())
+}
+
+fn vpn_helper_handshake_binding(
+    helper_ticket: &[u8],
+    relay_id: &RelayId,
+    descriptor_commit: &[u8],
+    trust: &RelayTransportTrust,
+) -> [u8; 32] {
+    fn update(hasher: &mut blake3::Hasher, value: &[u8]) {
+        hasher.update(&(value.len() as u64).to_be_bytes());
+        hasher.update(value);
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    for value in [
+        b"iroha.soranet.vpn.helper-handshake-binding.v2".as_slice(),
+        helper_ticket,
+        trust.quic_multiaddr.as_bytes(),
+        relay_id.as_slice(),
+        descriptor_commit,
+        trust.tls_spki_sha256.as_slice(),
+        trust.relay_certificate_sha256.as_slice(),
+        trust.directory_snapshot_digest.as_slice(),
+        trust.tls_server_name.as_bytes(),
+        SORANET_QUIC_ALPN,
+    ] {
+        update(&mut hasher, value);
+    }
+    *hasher.finalize().as_bytes()
 }
 
 impl RelayRuntime {
@@ -1547,10 +1686,19 @@ impl RelayRuntime {
             )));
         }
 
+        let mut authenticated_guard_entry = None;
         if let Some(guard_cfg) = config.guard_directory_config() {
             let commit_bytes = descriptor_commit_bytes.expect("checked above");
             match guard::load_guard_entry_at(guard_cfg, &relay_id, &commit_bytes, validation_time) {
                 Ok(entry) => {
+                    if let Some(configured_bundle) = certificate_bundle.as_ref()
+                        && configured_bundle != &entry.bundle
+                    {
+                        return Err(RelayError::Config(ConfigError::GuardDirectory(
+                            "configured relay certificate bundle does not exactly match the authenticated guard-directory entry"
+                                .to_owned(),
+                        )));
+                    }
                     if let Some(public) = ml_kem_public.as_ref()
                         && public.as_slice() != entry.bundle.certificate.pq_kem_public.as_slice()
                     {
@@ -1579,6 +1727,7 @@ impl RelayRuntime {
                             "failed to persist guard pinning proof"
                         );
                     }
+                    authenticated_guard_entry = Some(entry);
                 }
                 Err(GuardDirectoryError::RelayEntryMissing { identity_hex, .. })
                     if guard_cfg.allow_missing_entry() =>
@@ -1591,6 +1740,22 @@ impl RelayRuntime {
                 Err(err) => return Err(RelayError::Config(err.into())),
             }
         }
+
+        let transport_certificate_bundle = if config.vpn_config().is_some_and(|vpn| vpn.enabled) {
+            authenticated_guard_entry
+                .as_ref()
+                .map(|entry| &entry.bundle)
+        } else {
+            certificate_bundle.as_ref()
+        };
+        let directory_valid_until_unix = authenticated_guard_entry
+            .as_ref()
+            .map(|entry| entry.snapshot_valid_until_unix);
+        let (server_config, transport_trust) = Self::prepare_server_transport(
+            &config,
+            transport_certificate_bundle,
+            directory_valid_until_unix,
+        )?;
 
         let incentive_logger = config
             .incentive_log_config()
@@ -1671,6 +1836,17 @@ impl RelayRuntime {
             .map(VpnOverlay::try_from_config)
             .transpose()?
             .map(Arc::new);
+        let vpn_helper_ticket_replays = vpn_overlay
+            .as_ref()
+            .map(|vpn| {
+                load_vpn_helper_ticket_replay_ledger(
+                    vpn.config(),
+                    &relay_id,
+                    unix_time_ms(SystemTime::now()),
+                )
+            })
+            .transpose()?
+            .map(|ledger| Arc::new(StdMutex::new(ledger)));
         if let Some(vpn) = vpn_overlay.as_ref() {
             let (session_label, byte_label) = vpn.billing_labels();
             metrics.set_vpn_meter_labels(session_label, byte_label);
@@ -1733,6 +1909,8 @@ impl RelayRuntime {
         ));
         Ok(Self {
             config,
+            server_config,
+            transport_trust: transport_trust.map(Arc::new),
             admin_authorization,
             metrics: Arc::clone(&metrics),
             privacy,
@@ -1756,7 +1934,7 @@ impl RelayRuntime {
             incentives: incentive_logger,
             lane_manager,
             vpn: vpn_overlay,
-            vpn_redeemed_tickets: Arc::new(Mutex::new(HashMap::new())),
+            vpn_helper_ticket_replays,
             ticket_replays,
         })
     }
@@ -1806,11 +1984,12 @@ impl RelayRuntime {
             compliance: self.compliance.clone(),
             performance: Arc::clone(&self.performance),
             relay_id: self.relay_id,
+            transport_trust: self.transport_trust.as_ref().map(Arc::clone),
             exit_routing: Arc::clone(&self.exit_routing),
             incentives: self.incentives.clone(),
             lane_manager: Arc::clone(&self.lane_manager),
             vpn: self.vpn.clone(),
-            vpn_redeemed_tickets: Arc::clone(&self.vpn_redeemed_tickets),
+            vpn_helper_ticket_replays: self.vpn_helper_ticket_replays.clone(),
             ticket_replays: Arc::clone(&self.ticket_replays),
         }
     }
@@ -1821,16 +2000,7 @@ impl RelayRuntime {
         let admin_addr = self.config.admin_addr()?;
         let mode = self.config.mode;
 
-        let server_config = if let (Some(cert), Some(key)) = (
-            self.config.certificate_path(),
-            self.config.private_key_path(),
-        ) {
-            Self::load_server_config_from_files(cert, key)?
-        } else {
-            Self::self_signed_server_config(self.config.self_signed_subject())?
-        };
-
-        let endpoint = Endpoint::server(server_config, listen_addr)
+        let endpoint = Endpoint::server(self.server_config, listen_addr)
             .map_err(|error| RelayError::Quic(error.to_string()))?;
 
         let actual_addr = endpoint
@@ -4207,6 +4377,7 @@ impl RelayRuntime {
         let mut pending_pow_ticket: Option<PowTicket> = None;
         let mut admission_token: Option<AdmissionToken> = None;
         let mut vpn_helper_ticket: Option<VpnHelperTicketV1> = None;
+        let mut vpn_helper_ticket_frame: Option<Vec<u8>> = None;
 
         if helper_ticket_secret.is_some() || has_token_policy || (pow_required && puzzle_enforced) {
             let first_frame = match timeout(
@@ -4230,13 +4401,26 @@ impl RelayRuntime {
                             VpnHelperTicketError::InvalidRelay,
                         ));
                     }
-                    redeem_vpn_helper_ticket(
-                        context.vpn_redeemed_tickets.as_ref(),
-                        &helper_ticket,
-                        now_ms,
-                    )
-                    .await?;
+                    let trust = context.transport_trust.as_deref().ok_or_else(|| {
+                        HandshakeError::Noise(NoiseHandshakeError::Validation(
+                            "VPN helper ticket received without immutable relay transport trust"
+                                .to_owned(),
+                        ))
+                    })?;
+                    ensure_vpn_helper_ticket_within_trust(&helper_ticket, trust)
+                        .map_err(HandshakeError::Noise)?;
+                    let replay_ledger = context
+                        .vpn_helper_ticket_replays
+                        .as_ref()
+                        .map(Arc::clone)
+                        .ok_or_else(|| {
+                            HandshakeError::ReplayStore(
+                                "VPN helper-ticket replay ledger is unavailable".to_owned(),
+                            )
+                        })?;
+                    redeem_vpn_helper_ticket(replay_ledger, &helper_ticket, now_ms).await?;
                     vpn_helper_ticket = Some(helper_ticket);
+                    vpn_helper_ticket_frame = Some(first_frame);
                 } else if has_token_policy && token::frame_looks_like_token(&first_frame) {
                     let token = AdmissionToken::decode(&first_frame)
                         .map_err(HandshakeError::TokenDecode)?;
@@ -4363,6 +4547,29 @@ impl RelayRuntime {
 
         // Admission must complete before the handshake engine validates or
         // encapsulates any client ML-KEM material.
+        let helper_resume_binding = match vpn_helper_ticket_frame.as_deref() {
+            Some(frame) => {
+                let trust = context.transport_trust.as_deref().ok_or_else(|| {
+                    HandshakeError::Noise(NoiseHandshakeError::Validation(
+                        "VPN helper ticket received without immutable relay transport trust"
+                            .to_owned(),
+                    ))
+                })?;
+                Some(vpn_helper_handshake_binding(
+                    frame,
+                    &context.relay_id,
+                    context.descriptor_commit.as_slice(),
+                    trust,
+                ))
+            }
+            None => None,
+        };
+        let transport_tls_server_name = context
+            .transport_trust
+            .as_deref()
+            .map_or(DEFAULT_TLS_SERVER_NAME, |trust| {
+                trust.tls_server_name.as_str()
+            });
         let (relay_hello, relay_state) = continue_after_admission(admission, || {
             let mut rng = StdRng::from_os_rng();
             let runtime_params = NoiseRuntimeParams {
@@ -4371,7 +4578,12 @@ impl RelayRuntime {
                 relay_capabilities: &relay_caps_bytes,
                 kem_id: negotiated.kem.id.code(),
                 sig_id: client_hello.sig_id(),
-                resume_hash: client_hello.resume_hash(),
+                transport_alpn: SORANET_QUIC_ALPN,
+                tls_server_name: transport_tls_server_name,
+                resume_hash: helper_resume_binding.as_ref().map_or_else(
+                    || client_hello.resume_hash(),
+                    |binding| Some(binding.as_slice()),
+                ),
             };
             match process_client_hello(
                 &client_frame,
@@ -4691,13 +4903,89 @@ impl RelayRuntime {
         }
     }
 
-    fn load_server_config_from_files(
-        cert_path: &std::path::Path,
-        key_path: &std::path::Path,
-    ) -> Result<quinn::ServerConfig, RelayError> {
+    fn prepare_server_transport(
+        config: &RelayConfig,
+        certificate_bundle: Option<&RelayCertificateBundleV2>,
+        directory_valid_until_unix: Option<i64>,
+    ) -> Result<(quinn::ServerConfig, Option<RelayTransportTrust>), RelayError> {
+        let Some(cert_path) = config.certificate_path() else {
+            return Ok((
+                Self::self_signed_server_config(config.self_signed_subject())?,
+                None,
+            ));
+        };
+        let key_path = config.private_key_path().ok_or_else(|| {
+            RelayError::Tls(
+                "TLS private key path missing after configuration validation".to_owned(),
+            )
+        })?;
         let certs = Self::load_certificates(cert_path)?;
+        let trust = if config.vpn_config().is_some_and(|vpn| vpn.enabled) {
+            let bundle = certificate_bundle.ok_or_else(|| {
+                RelayError::Tls("VPN transport requires a verified relay certificate".to_owned())
+            })?;
+            if !bundle.certificate.roles.exit {
+                return Err(RelayError::Tls(
+                    "VPN relay certificate must authorize the exit role".to_owned(),
+                ));
+            }
+            let endpoint = select_vpn_endpoint(&bundle.certificate.endpoints).map_err(|error| {
+                RelayError::Tls(format!("VPN endpoint selection failed: {error}"))
+            })?;
+            let leaf = certs
+                .first()
+                .ok_or_else(|| RelayError::Tls("TLS certificate chain is empty".to_owned()))?;
+            let leaf_spki = leaf_certificate_spki_sha256(leaf.as_ref()).map_err(|error| {
+                RelayError::Tls(format!("invalid TLS leaf certificate: {error}"))
+            })?;
+            if leaf_spki != endpoint.tls_spki_sha256 {
+                return Err(RelayError::Tls(
+                    "TLS leaf SPKI does not match the signed VPN endpoint pin".to_owned(),
+                ));
+            }
+            let certificate_bytes = bundle.try_to_cbor().map_err(|error| {
+                RelayError::Tls(format!(
+                    "failed to encode verified relay certificate: {error}"
+                ))
+            })?;
+            let relay_certificate_sha256: [u8; 32] = Sha256::digest(certificate_bytes).into();
+            let directory_snapshot_digest = config
+                .guard_directory_config()
+                .ok_or_else(|| {
+                    RelayError::Tls(
+                        "VPN transport requires an authenticated guard directory".to_owned(),
+                    )
+                })?
+                .expected_snapshot_digest()?;
+            let valid_until_unix = directory_valid_until_unix
+                .ok_or_else(|| {
+                    RelayError::Tls(
+                        "VPN transport requires authenticated directory validity".to_owned(),
+                    )
+                })?
+                .min(bundle.certificate.valid_until);
+            let valid_until_ms = u64::try_from(valid_until_unix)
+                .ok()
+                .and_then(|seconds| seconds.checked_mul(1_000))
+                .ok_or_else(|| {
+                    RelayError::Tls(
+                        "VPN authenticated directory validity exceeds Unix milliseconds".to_owned(),
+                    )
+                })?;
+            Some(RelayTransportTrust {
+                quic_multiaddr: endpoint.quic_multiaddr.clone(),
+                tls_server_name: endpoint.tls_server_name.clone(),
+                tls_spki_sha256: leaf_spki,
+                relay_certificate_sha256,
+                directory_snapshot_digest,
+                valid_until_ms,
+            })
+        } else {
+            None
+        };
         let key = Self::load_private_key(key_path)?;
-        Self::server_config(certs, key)
+        let server_config = Self::server_config(certs, key)?;
+        Ok((server_config, trust))
     }
 
     fn self_signed_server_config(subject: &str) -> Result<quinn::ServerConfig, RelayError> {
@@ -4732,6 +5020,7 @@ impl RelayRuntime {
         // The signed hybrid handshake and the SNR1 record layer run after QUIC setup.
         // Replayable TLS 0-RTT data must never reach either protocol.
         tls.max_early_data_size = 0;
+        tls.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
         Ok(tls)
     }
 
@@ -6259,7 +6548,9 @@ mod tests {
                 bandwidth_bytes_per_sec: 1_000_000,
                 reputation_weight: 50,
                 endpoints: vec![RelayEndpointV2 {
-                    url: "https://relay.test".to_string(),
+                    quic_multiaddr: "/dns/relay.test/udp/443/quic".to_string(),
+                    tls_server_name: "relay.test".to_string(),
+                    tls_spki_sha256: [0xA5; 32],
                     priority: 0,
                     tags: vec!["norito".to_string()],
                 }],
@@ -6346,6 +6637,147 @@ mod tests {
             .expect("build relay TLS configuration");
 
         assert_eq!(tls.max_early_data_size, 0);
+    }
+
+    #[test]
+    fn vpn_helper_binding_commits_to_authenticated_transport_trust() {
+        let relay_id = [0x11; 32];
+        let descriptor_commit = [0x22; 32];
+        let trust = RelayTransportTrust {
+            quic_multiaddr: "/dns/relay.test/udp/443/quic".to_owned(),
+            tls_server_name: "relay.test".to_owned(),
+            tls_spki_sha256: [0x33; 32],
+            relay_certificate_sha256: [0x44; 32],
+            directory_snapshot_digest: [0x55; 32],
+            valid_until_ms: u64::MAX,
+        };
+        let expected =
+            vpn_helper_handshake_binding(b"ticket", &relay_id, &descriptor_commit, &trust);
+        assert_ne!(expected, [0; 32]);
+
+        let mut changed = trust.clone();
+        changed.directory_snapshot_digest[0] ^= 0x01;
+        assert_ne!(
+            expected,
+            vpn_helper_handshake_binding(b"ticket", &relay_id, &descriptor_commit, &changed)
+        );
+
+        let mut changed = trust;
+        changed.tls_server_name = "other.relay.test".to_owned();
+        assert_ne!(
+            expected,
+            vpn_helper_handshake_binding(b"ticket", &relay_id, &descriptor_commit, &changed)
+        );
+    }
+
+    #[test]
+    fn vpn_helper_ticket_cannot_outlive_authenticated_transport_trust() {
+        let mut ticket = sample_helper_ticket([0x11; 16]);
+        ticket.expires_at_ms = 101;
+        let trust = RelayTransportTrust {
+            quic_multiaddr: "/dns/relay.test/udp/443/quic".to_owned(),
+            tls_server_name: "relay.test".to_owned(),
+            tls_spki_sha256: [0x33; 32],
+            relay_certificate_sha256: [0x44; 32],
+            directory_snapshot_digest: [0x55; 32],
+            valid_until_ms: 100,
+        };
+
+        let error = ensure_vpn_helper_ticket_within_trust(&ticket, &trust)
+            .expect_err("ticket past trust expiry must fail");
+        assert!(error.to_string().contains("outlives"));
+        ticket.expires_at_ms = trust.valid_until_ms;
+        ensure_vpn_helper_ticket_within_trust(&ticket, &trust)
+            .expect("ticket ending at the exclusive trust boundary is accepted");
+    }
+
+    #[tokio::test]
+    async fn vpn_helper_ticket_replay_is_rejected_after_relay_restart() {
+        let directory = tempdir().expect("temporary directory");
+        let config = VpnConfig {
+            enabled: true,
+            lease_secs: 60,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_replay_store_capacity: 4,
+            helper_ticket_replay_store_path: directory.path().join("helper-replays.norito"),
+            ..VpnConfig::default()
+        };
+        let now_ms = 1_000_000;
+        let mut ticket = sample_helper_ticket([0x71; 16]);
+        ticket.expires_at_ms = now_ms + 30_000;
+        let relay_id = ticket.relay_id;
+        {
+            let ledger = load_vpn_helper_ticket_replay_ledger(&config, &relay_id, now_ms)
+                .expect("create durable replay ledger");
+            let ledger = Arc::new(StdMutex::new(ledger));
+            redeem_vpn_helper_ticket(ledger, &ticket, now_ms)
+                .await
+                .expect("first redemption must be persisted");
+        }
+
+        let reloaded = load_vpn_helper_ticket_replay_ledger(&config, &relay_id, now_ms + 1)
+            .expect("reload durable replay ledger");
+        let error =
+            redeem_vpn_helper_ticket(Arc::new(StdMutex::new(reloaded)), &ticket, now_ms + 1)
+                .await
+                .expect_err("persisted redemption must survive restart");
+        assert!(matches!(
+            error,
+            HandshakeError::HelperTicket(VpnHelperTicketError::Replayed)
+        ));
+    }
+
+    #[test]
+    fn vpn_helper_ticket_replay_ledger_fails_closed_on_corrupt_state() {
+        let directory = tempdir().expect("temporary directory");
+        let replay_path = directory.path().join("helper-replays.norito");
+        std::fs::write(&replay_path, b"not a norito replay snapshot")
+            .expect("write corrupt replay ledger");
+        let config = VpnConfig {
+            enabled: true,
+            lease_secs: 60,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_replay_store_capacity: 4,
+            helper_ticket_replay_store_path: replay_path,
+            ..VpnConfig::default()
+        };
+
+        let error = load_vpn_helper_ticket_replay_ledger(&config, &[0x33; 32], 1_000_000)
+            .expect_err("corrupt replay state must prevent startup");
+        assert!(matches!(
+            error,
+            ConfigError::Vpn(message) if message.contains("failed to load VPN helper-ticket replay ledger")
+        ));
+    }
+
+    #[test]
+    fn vpn_helper_ticket_lifetime_is_bounded_by_relay_lease_policy() {
+        let directory = tempdir().expect("temporary directory");
+        let config = VpnConfig {
+            enabled: true,
+            lease_secs: 1,
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            helper_ticket_replay_store_capacity: 4,
+            helper_ticket_replay_store_path: directory.path().join("helper-replays.norito"),
+            ..VpnConfig::default()
+        };
+        let now_ms = 50_000;
+        let mut ticket = sample_helper_ticket([0x72; 16]);
+        ticket.expires_at_ms = now_ms + 1_001;
+        let ledger = load_vpn_helper_ticket_replay_ledger(&config, &ticket.relay_id, now_ms)
+            .expect("create replay ledger");
+
+        let error = consume_vpn_helper_ticket(
+            &StdMutex::new(ledger),
+            vpn_helper_ticket_replay_id(&ticket),
+            ticket.expires_at_ms,
+            now_ms,
+        )
+        .expect_err("overlong helper ticket must fail closed");
+        assert!(matches!(
+            error,
+            HandshakeError::ReplayStore(message) if message.contains("vpn.lease_secs")
+        ));
     }
 
     #[test]

@@ -22,7 +22,7 @@
 // the number of words matches the size of the slice of another big
 // integer which uses stride 1).
 
-use super::mp31::{mp_add, mp_half, mp_mmul, mp_set_u, mp_sub, PRIMES, tbmask};
+use super::mp31::{PRIMES, mp_add, mp_half, mp_mmul, mp_set_u, mp_sub, tbmask};
 
 // Multiply m by the small value x (non-negative). x MUST be less than 2^31.
 // The integer m uses base 2^31 with stride 1, and is modified to receive
@@ -45,10 +45,15 @@ pub(crate) fn zint_mul_small(m: &mut [u32], x: u32) -> u32 {
 //   p0i = -1/p mod 2^32
 //   R2 = 2^64 mod p
 pub(crate) fn zint_mod_small_unsigned(
-    d: &[u32], dlen: usize, dstride: usize, p: u32, p0i: u32, R2: u32) -> u32
-{
+    d: &[u32],
+    dlen: usize,
+    dstride: usize,
+    p: u32,
+    p0i: u32,
+    R2: u32,
+) -> u32 {
     let mut x = 0u32;
-    let z = mp_half(R2, p);   // 2^63 = Montgomery representation of 2^31
+    let z = mp_half(R2, p); // 2^63 = Montgomery representation of 2^31
     let mut j = dlen * dstride;
     while j > 0 {
         j -= dstride;
@@ -67,9 +72,14 @@ pub(crate) fn zint_mod_small_unsigned(
 //   R2 = 2^64 mod p
 //   Rx = 2^(31*len(d)) mod p
 pub(crate) fn zint_mod_small_signed(
-    d: &[u32], dlen: usize, dstride: usize,
-    p: u32, p0i: u32, R2: u32, Rx: u32) -> u32
-{
+    d: &[u32],
+    dlen: usize,
+    dstride: usize,
+    p: u32,
+    p0i: u32,
+    R2: u32,
+    Rx: u32,
+) -> u32 {
     if dlen == 0 {
         return 0;
     }
@@ -83,9 +93,7 @@ pub(crate) fn zint_mod_small_signed(
 //   0 <= s < 2^31
 // On input, d[] contains the same number of elements as a[], but it has
 // room for one extra word, which is set by this function.
-pub(crate) fn zint_add_mul_small(
-    d: &mut [u32], dstride: usize, a: &[u32], s: u32)
-{
+pub(crate) fn zint_add_mul_small(d: &mut [u32], dstride: usize, a: &[u32], s: u32) {
     let mut cc = 0u32;
     let mut j = 0;
     for i in 0..a.len() {
@@ -156,9 +164,14 @@ pub(crate) fn zint_norm_zero(x: &mut [u32], xstride: usize, m: &[u32]) {
 //
 // tmp[] is used to store temporary values and must have size at least
 // xlen elements.
-pub(crate) fn zint_rebuild_CRT(xx: &mut [u32], xlen: usize, n: usize,
-    num_sets: usize, normalize_signed: bool, tmp: &mut [u32])
-{
+pub(crate) fn zint_rebuild_CRT(
+    xx: &mut [u32],
+    xlen: usize,
+    n: usize,
+    num_sets: usize,
+    normalize_signed: bool,
+    tmp: &mut [u32],
+) {
     tmp[0] = PRIMES[0].p;
     for i in 1..xlen {
         // At entry of each iteration:
@@ -227,19 +240,28 @@ fn zint_negate(a: &mut [u32], ctl: u32) {
 //   negb    0xFFFFFFFF if (a*ya + b*yb)/2^31 < 0, 0 otherwise
 // Coefficients xa, xb, ya and yb may range up to 2^31 in absolute value
 // (i.e. they are in [-2^31,+2^31], with both limits included).
-fn zint_co_lin_div31_abs(a: &mut [u32], b: &mut [u32],
-    xa: i64, xb: i64, ya: i64, yb: i64) -> (u32, u32)
-{
+fn zint_co_lin_div31_abs(
+    a: &mut [u32],
+    b: &mut [u32],
+    xa: i64,
+    xb: i64,
+    ya: i64,
+    yb: i64,
+) -> (u32, u32) {
     let mut cca = 0i64;
     let mut ccb = 0i64;
     let nlen = a.len();
     for i in 0..nlen {
         let aw = a[i];
         let bw = b[i];
-        let za = (aw as u64).wrapping_mul(xa as u64).wrapping_add(
-            (bw as u64).wrapping_mul(xb as u64)).wrapping_add(cca as u64);
-        let zb = (aw as u64).wrapping_mul(ya as u64).wrapping_add(
-            (bw as u64).wrapping_mul(yb as u64)).wrapping_add(ccb as u64);
+        let za = (aw as u64)
+            .wrapping_mul(xa as u64)
+            .wrapping_add((bw as u64).wrapping_mul(xb as u64))
+            .wrapping_add(cca as u64);
+        let zb = (aw as u64)
+            .wrapping_mul(ya as u64)
+            .wrapping_add((bw as u64).wrapping_mul(yb as u64))
+            .wrapping_add(ccb as u64);
         if i > 0 {
             a[i - 1] = (za as u32) & 0x7FFFFFFF;
             b[i - 1] = (zb as u32) & 0x7FFFFFFF;
@@ -301,27 +323,44 @@ fn zint_finish_mod(a: &mut [u32], m: &[u32], neg: u32) {
 //    -2^31 <= yb <= +2^31
 //    -2^31 <= xa + xb <= +2^31
 //    -2^31 <= ya + yb <= +2^31
-fn zint_co_lin_mod(a: &mut [u32], b: &mut [u32],
-    m: &[u32], m0i: u32, xa: i64, xb: i64, ya: i64, yb: i64)
-{
+fn zint_co_lin_mod(
+    a: &mut [u32],
+    b: &mut [u32],
+    m: &[u32],
+    m0i: u32,
+    xa: i64,
+    xb: i64,
+    ya: i64,
+    yb: i64,
+) {
     // These operations are actually four combined Montgomery multiplications.
     let mut cca = 0i64;
     let mut ccb = 0i64;
-    let fa = a[0].wrapping_mul(xa as u32).wrapping_add(
-        b[0].wrapping_mul(xb as u32)).wrapping_mul(m0i) & 0x7FFFFFFF;
-    let fb = a[0].wrapping_mul(ya as u32).wrapping_add(
-        b[0].wrapping_mul(yb as u32)).wrapping_mul(m0i) & 0x7FFFFFFF;
+    let fa = a[0]
+        .wrapping_mul(xa as u32)
+        .wrapping_add(b[0].wrapping_mul(xb as u32))
+        .wrapping_mul(m0i)
+        & 0x7FFFFFFF;
+    let fb = a[0]
+        .wrapping_mul(ya as u32)
+        .wrapping_add(b[0].wrapping_mul(yb as u32))
+        .wrapping_mul(m0i)
+        & 0x7FFFFFFF;
     let nlen = a.len();
     for i in 0..nlen {
         let aw = a[i] as u64;
         let bw = b[i] as u64;
         let mw = m[i] as u64;
-        let za = aw.wrapping_mul(xa as u64).wrapping_add(
-            bw.wrapping_mul(xb as u64)).wrapping_add(
-            mw.wrapping_mul(fa as u64)).wrapping_add(cca as u64);
-        let zb = aw.wrapping_mul(ya as u64).wrapping_add(
-            bw.wrapping_mul(yb as u64)).wrapping_add(
-            mw.wrapping_mul(fb as u64)).wrapping_add(ccb as u64);
+        let za = aw
+            .wrapping_mul(xa as u64)
+            .wrapping_add(bw.wrapping_mul(xb as u64))
+            .wrapping_add(mw.wrapping_mul(fa as u64))
+            .wrapping_add(cca as u64);
+        let zb = aw
+            .wrapping_mul(ya as u64)
+            .wrapping_add(bw.wrapping_mul(yb as u64))
+            .wrapping_add(mw.wrapping_mul(fb as u64))
+            .wrapping_add(ccb as u64);
         if i > 0 {
             a[i - 1] = (za as u32) & 0x7FFFFFFF;
             b[i - 1] = (zb as u32) & 0x7FFFFFFF;
@@ -375,9 +414,13 @@ fn ninv31(x: u32) -> u32 {
 // x and y must use the same number of words.
 // The temporary array tmp[] must be large enough to accommodate 4
 // extra values with the same size as x and y.
-pub(crate) fn zint_bezout(u: &mut [u32], v: &mut [u32],
-    x: &[u32], y: &[u32], tmp: &mut [u32]) -> u32
-{
+pub(crate) fn zint_bezout(
+    u: &mut [u32],
+    v: &mut [u32],
+    x: &[u32],
+    y: &[u32],
+    tmp: &mut [u32],
+) -> u32 {
     let nlen = x.len();
     if nlen == 0 {
         return 0;
@@ -425,7 +468,7 @@ pub(crate) fn zint_bezout(u: &mut [u32], v: &mut [u32],
     u1.copy_from_slice(y);
     v0.fill(0);
     v1.copy_from_slice(x);
-    v1[0] = x[0] - 1;      // x is odd, so no possible overflow
+    v1[0] = x[0] - 1; // x is odd, so no possible overflow
 
     // Coefficients for Montgomery reduction.
     let x0i = ninv31(x[0]);
@@ -494,7 +537,7 @@ pub(crate) fn zint_bezout(u: &mut [u32], v: &mut [u32],
         // Assemble the approximate values xa and xb (63 bits each).
         let mut xa = ((ha as u64) << 31) | (a[0] as u64);
         let mut xb = ((hb as u64) << 31) | (b[0] as u64);
-        
+
         // Compute reduction factors:
         //   a' = a*f0 + b*g0
         //   b' = a*f1 + b*g1
@@ -568,7 +611,8 @@ pub(crate) fn zint_bezout(u: &mut [u32], v: &mut [u32],
     target_arch = "x86",
     target_arch = "x86_64",
     target_arch = "aarch64",
-    target_arch = "arm64ec"))]
+    target_arch = "arm64ec"
+))]
 const fn lzcnt(x: u32) -> u32 {
     x.leading_zeros()
 }
@@ -577,30 +621,31 @@ const fn lzcnt(x: u32) -> u32 {
     target_arch = "x86",
     target_arch = "x86_64",
     target_arch = "aarch64",
-    target_arch = "arm64ec")))]
+    target_arch = "arm64ec"
+)))]
 const fn lzcnt(x: u32) -> u32 {
     let m = tbmask((x >> 16).wrapping_sub(1));
     let s = m & 16;
     let x = (x >> 16) ^ (m & (x ^ (x >> 16)));
 
-    let m = tbmask((x >>  8).wrapping_sub(1));
-    let s = s | (m &  8);
-    let x = (x >>  8) ^ (m & (x ^ (x >>  8)));
+    let m = tbmask((x >> 8).wrapping_sub(1));
+    let s = s | (m & 8);
+    let x = (x >> 8) ^ (m & (x ^ (x >> 8)));
 
-    let m = tbmask((x >>  4).wrapping_sub(1));
-    let s = s | (m &  4);
-    let x = (x >>  4) ^ (m & (x ^ (x >>  4)));
+    let m = tbmask((x >> 4).wrapping_sub(1));
+    let s = s | (m & 4);
+    let x = (x >> 4) ^ (m & (x ^ (x >> 4)));
 
-    let m = tbmask((x >>  2).wrapping_sub(1));
-    let s = s | (m &  2);
-    let x = (x >>  2) ^ (m & (x ^ (x >>  2)));
+    let m = tbmask((x >> 2).wrapping_sub(1));
+    let s = s | (m & 2);
+    let x = (x >> 2) ^ (m & (x ^ (x >> 2)));
 
     // At this point, x fits on 2 bits. Number of leading zeros is then:
     //   x = 0   -> 2
     //   x = 1   -> 1
     //   x = 2   -> 0
     //   x = 3   -> 0
-    let s = s.wrapping_add(2u32.wrapping_sub(x) & ((x.wrapping_sub(3) >> 2)));
+    let s = s.wrapping_add(2u32.wrapping_sub(x) & (x.wrapping_sub(3) >> 2));
 
     s as u32
 }
@@ -623,14 +668,15 @@ const fn lzcnt(x: u32) -> u32 {
     all(target_arch = "x86_64", target_feature = "lzcnt"),
     target_arch = "aarch64",
     target_arch = "arm64ec",
-    ))]
+))]
 pub(crate) const fn bitlength(x: u32) -> u32 {
     32 - x.leading_zeros()
 }
 
 #[cfg(all(
     any(target_arch = "x86", target_arch = "x86_64"),
-    not(target_feature = "lzcnt")))]
+    not(target_feature = "lzcnt")
+))]
 pub(crate) const fn bitlength(x: u32) -> u32 {
     (31 + ((x | x.wrapping_neg()) >> 31)) - (x | 1).leading_zeros()
 }
@@ -639,7 +685,8 @@ pub(crate) const fn bitlength(x: u32) -> u32 {
     target_arch = "x86",
     target_arch = "x86_64",
     target_arch = "aarch64",
-    target_arch = "arm64ec")))]
+    target_arch = "arm64ec"
+)))]
 pub(crate) const fn bitlength(x: u32) -> u32 {
     32 - lzcnt(x)
 }
@@ -653,9 +700,15 @@ pub(crate) const fn bitlength(x: u32) -> u32 {
 // necessarily have the same length, but they share the same stride
 // ('xystride'). Factor k is itself signed.
 pub(crate) fn zint_add_scaled_mul_small(
-    x: &mut [u32], xlen: usize, y: &[u32], ylen: usize, xystride: usize,
-    k: i32, sch: u32, scl: u32)
-{
+    x: &mut [u32],
+    xlen: usize,
+    y: &[u32],
+    ylen: usize,
+    xystride: usize,
+    k: i32,
+    sch: u32,
+    scl: u32,
+) {
     let sch = sch as usize;
     if ylen == 0 || sch >= xlen {
         return;
@@ -684,9 +737,15 @@ pub(crate) fn zint_add_scaled_mul_small(
 // scl is in the 0 to 30 range.
 //
 // x and y are considered signed (using two's complement).
-pub(crate) fn zint_sub_scaled(x: &mut [u32], xlen: usize,
-    y: &[u32], ylen: usize, xystride: usize, sch: u32, scl: u32)
-{
+pub(crate) fn zint_sub_scaled(
+    x: &mut [u32],
+    xlen: usize,
+    y: &[u32],
+    ylen: usize,
+    xystride: usize,
+    sch: u32,
+    scl: u32,
+) {
     let sch = sch as usize;
     if ylen == 0 || sch >= xlen {
         return;
@@ -709,4 +768,3 @@ pub(crate) fn zint_sub_scaled(x: &mut [u32], xlen: usize,
 }
 
 // ========================================================================
-

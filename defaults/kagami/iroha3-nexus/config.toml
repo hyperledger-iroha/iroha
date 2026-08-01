@@ -34,6 +34,7 @@ lane_count = 3
 
 [genesis]
 public_key = "ed012065D3D00819052AB4D41FD6D168D1F59BE9CE384591383F7762F99C5F9C7A9B11"
+expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
 
 # Optional ABI-21/V4 Kagemusha release catalog. Configure both paths together.
 # Omit both for normal node startup with Kagemusha issuance readiness false.

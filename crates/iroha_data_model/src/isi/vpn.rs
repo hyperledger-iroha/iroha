@@ -309,6 +309,13 @@ mod tests {
         VpnQuotePolicyV1 {
             exit_class: VpnExitClassV1::Standard,
             relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
+            relay_id: [0x11; 32],
+            descriptor_commit: [0x22; 32],
+            tls_server_name: "relay.example".to_owned(),
+            relay_tls_spki_sha256: [0xAB; 32],
+            relay_certificate_sha256: [0x33; 32],
+            directory_snapshot_digest: [0x44; 32],
+            relay_trust_valid_until_ms: u64::MAX,
             lease_secs: 600,
             meter_family: "soranet.vpn.standard".to_owned(),
             fee_asset_id: "xor#universal.universal".to_owned(),
@@ -320,7 +327,6 @@ mod tests {
             mtu_bytes: 1_280,
             flow_label_bits: 24,
             padding_budget_ms: 15,
-            relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
         }
     }
 

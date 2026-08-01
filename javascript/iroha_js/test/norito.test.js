@@ -80,6 +80,21 @@ baseTest("root entrypoints expose every declared typed Norito value encoder", as
   assert.equal("encodeNumericNoritoValue" in root.Norito, false);
 });
 
+baseTest("public BlockProofs entrypoints do not fabricate trusted anchors", async () => {
+  const [root, browser, norito] = await Promise.all([
+    import("../src/index.js"),
+    import("../src/browser.js"),
+    import("../src/norito.js"),
+  ]);
+  for (const runtime of [root, browser, norito]) {
+    const anchorFactories = Object.keys(runtime).filter((name) =>
+      /(?:blockproof.*anchor|anchor.*blockproof)/iu.test(name));
+    assert.deepEqual(anchorFactories, []);
+    assert.equal(typeof runtime.noritoDecodeBlockProofs, "function");
+    assert.equal(typeof runtime.verifyBlockProofs, "function");
+  }
+});
+
 function canonicalSignatureBase64Fixture() {
   return Buffer.alloc(64, 0x01).toString("base64");
 }
@@ -154,18 +169,83 @@ function proofOption(value) {
   return value === null ? Buffer.of(0) : Buffer.concat([Buffer.of(1), proofField(value)]);
 }
 
-function blockProofFixture() {
+const blockMerkleLeafDomain = Buffer.from("iroha:merkle:leaf:v1\0", "utf8");
+const blockMerkleInternalDomain = Buffer.from("iroha:merkle:internal:v1\0", "utf8");
+
+function blockMerkleDigest(preimage) {
+  const digest = Buffer.from(blake2b(preimage, { dkLen: 32 }));
+  digest[31] |= 1;
+  return digest;
+}
+
+function blockMerkleLeafNode(rawLeaf) {
+  return blockMerkleDigest(Buffer.concat([blockMerkleLeafDomain, rawLeaf]));
+}
+
+function blockProofHashLiteralBytes(value) {
+  const match = /^hash:([0-9A-Fa-f]{64})#[0-9A-Fa-f]{4}$/u.exec(value);
+  assert.ok(match, "expected canonical Iroha hash literal");
+  return Buffer.from(match[1], "hex");
+}
+
+function blockMerkleParent(left, right) {
+  if (right === null) return left;
+  return blockMerkleDigest(Buffer.concat([blockMerkleInternalDomain, left, right]));
+}
+
+function authenticatedBlockProofAnchorFixture() {
+  const entryHash = Buffer.alloc(32, 0x20);
+  entryHash[31] |= 1;
+  const resultHash = Buffer.alloc(32, 0x50);
+  resultHash[31] |= 1;
+  const blockHash = Buffer.alloc(32, 0x30);
+  blockHash[31] |= 1;
+  const executedBlockWireHash = Buffer.alloc(32, 0x40);
+  executedBlockWireHash[31] |= 1;
+  return {
+    block_height: "7",
+    block_hash: blockHash.toString("hex"),
+    executed_block_wire_hash: executedBlockWireHash.toString("hex"),
+    entry_hash: entryHash.toString("hex"),
+    entry_index: 0,
+    entry_commitment: {
+      root: blockMerkleLeafNode(entryHash).toString("hex"),
+      leaf_count: "1",
+    },
+    result_commitment: {
+      root: blockMerkleLeafNode(resultHash).toString("hex"),
+      leaf_count: "1",
+    },
+    fastpq_transcripts: {},
+  };
+}
+
+function blockProofFixture({ nullableResults = false, resultLeafCount = 1 } = {}) {
   const leaf = Buffer.alloc(32, 0x20);
   leaf[31] |= 1;
+  const resultLeaf = Buffer.alloc(32, 0x50);
+  resultLeaf[31] |= 1;
+  const blockHash = Buffer.alloc(32, 0x30);
+  blockHash[31] |= 1;
+  const executedBlockWireHash = Buffer.alloc(32, 0x40);
+  executedBlockWireHash[31] |= 1;
   const merkleProof = proofStruct(proofU32(0), proofVec([]));
+  const entryCommitment = proofStruct(blockMerkleLeafNode(leaf), proofU64(1));
   const receipt = proofStruct(leaf, merkleProof);
+  const resultCommitment = proofStruct(
+    blockMerkleLeafNode(resultLeaf),
+    proofU64(resultLeafCount),
+  );
+  const resultReceipt = proofStruct(resultLeaf, merkleProof);
   const payload = proofStruct(
     proofU64(7),
+    blockHash,
+    executedBlockWireHash,
     leaf,
-    leaf,
+    entryCommitment,
     receipt,
-    proofOption(null),
-    proofOption(null),
+    nullableResults ? proofOption(null) : resultCommitment,
+    nullableResults ? proofOption(null) : resultReceipt,
     proofU64(0),
   );
   const schemaHash = Buffer.from(
@@ -186,23 +266,32 @@ function blockProofFixture() {
   return Buffer.concat([header, payload]);
 }
 
-test("Norito BlockProofs decoder binds the exact schema and verifies a canonical receipt", () => {
+baseTest("Norito BlockProofs decoder binds the exact schema and verifies a canonical receipt", () => {
   const fixture = blockProofFixture();
   const decoded = noritoDecodeBlockProofs(fixture);
 
   assert.equal(decoded.block_height, "7");
-  assert.equal(decoded.entry_hash, decoded.entry_root);
+  assert.deepEqual(
+    blockProofHashLiteralBytes(decoded.entry_commitment.root),
+    blockMerkleLeafNode(blockProofHashLiteralBytes(decoded.entry_hash)),
+  );
+  assert.equal(decoded.entry_commitment.leaf_count, "1");
   assert.equal(decoded.entry_proof.leaf, decoded.entry_hash);
   assert.deepEqual(decoded.entry_proof.proof, { leaf_index: 0, audit_path: [] });
-  assert.equal(decoded.result_root, null);
-  assert.equal(decoded.result_proof, null);
+  assert.equal(decoded.result_commitment.leaf_count, "1");
+  assert.deepEqual(
+    blockProofHashLiteralBytes(decoded.result_commitment.root),
+    blockMerkleLeafNode(blockProofHashLiteralBytes(decoded.result_proof.leaf)),
+  );
+  assert.deepEqual(decoded.result_proof.proof, { leaf_index: 0, audit_path: [] });
   assert.deepEqual(decoded.fastpq_transcripts, {});
-  assert.deepEqual(verifyBlockProofs(decoded), {
+  assert.deepEqual(verifyBlockProofs(decoded, authenticatedBlockProofAnchorFixture()), {
     valid: true,
+    anchor_matches: true,
     entry_hash_matches: true,
     entry_proof_valid: true,
     result_pair_consistent: true,
-    result_proof_valid: null,
+    result_proof_valid: true,
   });
 
   const corrupted = Buffer.from(fixture);
@@ -210,27 +299,43 @@ test("Norito BlockProofs decoder binds the exact schema and verifies a canonical
   assert.throws(() => noritoDecodeBlockProofs(corrupted), /CRC64 mismatch/u);
 });
 
-test("block proof verification rejects direction, root, and result-pair mismatches", () => {
+baseTest("Norito BlockProofs decoder rejects the retired nullable result layout", () => {
+  assert.throws(
+    () => noritoDecodeBlockProofs(blockProofFixture({ nullableResults: true })),
+    /BlockProofs\.result_commitment/u,
+  );
+});
+
+baseTest("Norito BlockProofs decoder rejects misaligned entry/result counts", () => {
+  assert.throws(
+    () => noritoDecodeBlockProofs(blockProofFixture({ resultLeafCount: 2 })),
+    /entry\/result commitment leaf counts must match/u,
+  );
+});
+
+baseTest("block proof verification rejects direction, root, and result-pair mismatches", () => {
   const left = Buffer.alloc(32, 0x40);
   const right = Buffer.alloc(32, 0x60);
   left[31] |= 1;
   right[31] |= 1;
-  const root = Buffer.from(blake2b(Buffer.concat([left, right]), { dkLen: 32 }));
-  root[31] |= 1;
+  const leftNode = blockMerkleLeafNode(left);
+  const rightNode = blockMerkleLeafNode(right);
+  const root = blockMerkleParent(leftNode, rightNode);
+  const commitment = { root: root.toString("hex"), leaf_count: "2" };
 
   assert.equal(
     verifyBlockMerkleProof(
       left.toString("hex"),
-      { leaf_index: 0, audit_path: [right.toString("hex")] },
-      root.toString("hex"),
+      { leaf_index: 0, audit_path: [rightNode.toString("hex")] },
+      commitment,
     ),
     true,
   );
   assert.equal(
     verifyBlockMerkleProof(
       left.toString("hex"),
-      { leaf_index: 1, audit_path: [right.toString("hex")] },
-      root.toString("hex"),
+      { leaf_index: 1, audit_path: [rightNode.toString("hex")] },
+      commitment,
     ),
     false,
   );
@@ -238,13 +343,240 @@ test("block proof verification rejects direction, root, and result-pair mismatch
   const decoded = noritoDecodeBlockProofs(blockProofFixture());
   const mismatchedResult = {
     ...decoded,
-    result_root: decoded.entry_root,
+    result_commitment: decoded.entry_commitment,
     result_proof: null,
   };
-  const verification = verifyBlockProofs(mismatchedResult);
+  const verification = verifyBlockProofs(
+    mismatchedResult,
+    authenticatedBlockProofAnchorFixture(),
+  );
   assert.equal(verification.valid, false);
   assert.equal(verification.result_pair_consistent, false);
   assert.equal(verification.result_proof_valid, false);
+
+  const mismatchedIndex = {
+    ...decoded,
+    result_commitment: decoded.entry_commitment,
+    result_proof: {
+      leaf: decoded.entry_hash,
+      proof: { leaf_index: 1, audit_path: [] },
+    },
+  };
+  const independentlyAuthenticatedAnchor = authenticatedBlockProofAnchorFixture();
+  const resultAnchor = {
+    ...independentlyAuthenticatedAnchor,
+    result_commitment: independentlyAuthenticatedAnchor.entry_commitment,
+  };
+  const indexVerification = verifyBlockProofs(mismatchedIndex, resultAnchor);
+  assert.equal(indexVerification.result_pair_consistent, false);
+  assert.equal(indexVerification.valid, false);
+
+  const otherEntry = Buffer.alloc(32, 0x66);
+  otherEntry[31] |= 1;
+  const entryNode = blockMerkleLeafNode(
+    Buffer.from(authenticatedBlockProofAnchorFixture().entry_hash, "hex"),
+  );
+  const otherEntryNode = blockMerkleLeafNode(otherEntry);
+  const twoEntryCommitment = {
+    root: blockMerkleParent(entryNode, otherEntryNode).toString("hex"),
+    leaf_count: "2",
+  };
+  const countMisaligned = {
+    ...decoded,
+    entry_commitment: twoEntryCommitment,
+    entry_proof: {
+      ...decoded.entry_proof,
+      proof: { leaf_index: 0, audit_path: [otherEntryNode.toString("hex")] },
+    },
+  };
+  const countAnchor = {
+    ...authenticatedBlockProofAnchorFixture(),
+    entry_commitment: twoEntryCommitment,
+  };
+  const countVerification = verifyBlockProofs(countMisaligned, countAnchor);
+  assert.equal(countVerification.entry_proof_valid, true);
+  assert.equal(countVerification.result_pair_consistent, false);
+  assert.equal(countVerification.valid, false);
+});
+
+baseTest("block Merkle proofs enforce exact ragged geometry and domain separation", () => {
+  const leaves = Array.from({ length: 5 }, (_, index) => {
+    const leaf = Buffer.alloc(32, 0x50 + index);
+    leaf[31] |= 1;
+    return leaf;
+  });
+  const proofFor = (target) => {
+    const siblings = [];
+    let level = leaves.map(blockMerkleLeafNode);
+    let index = target;
+    while (level.length > 1) {
+      const siblingIndex = index ^ 1;
+      siblings.push(siblingIndex < level.length ? level[siblingIndex] : null);
+      const parents = [];
+      for (let offset = 0; offset < level.length; offset += 2) {
+        parents.push(blockMerkleParent(level[offset], level[offset + 1] ?? null));
+      }
+      level = parents;
+      index >>= 1;
+    }
+    return { root: level[0], siblings };
+  };
+  const last = proofFor(4);
+  const commitment = { root: last.root.toString("hex"), leaf_count: "5" };
+  const proof = {
+    leaf_index: 4,
+    audit_path: last.siblings.map((sibling) => sibling?.toString("hex") ?? null),
+  };
+  assert.equal(verifyBlockMerkleProof(leaves[4].toString("hex"), proof, commitment), true);
+  assert.equal(
+    verifyBlockMerkleProof(
+      leaves[4].toString("hex"),
+      { ...proof, audit_path: [leaves[0].toString("hex"), ...proof.audit_path.slice(1)] },
+      commitment,
+    ),
+    false,
+  );
+  assert.equal(
+    verifyBlockMerkleProof(
+      leaves[4].toString("hex"),
+      { ...proof, audit_path: proof.audit_path.slice(0, -1) },
+      commitment,
+    ),
+    false,
+  );
+  assert.equal(
+    verifyBlockMerkleProof(leaves[4].toString("hex"), proof, { ...commitment, leaf_count: "4" }),
+    false,
+  );
+  assert.equal(
+    verifyBlockMerkleProof(leaves[4].toString("hex"), { ...proof, leaf_index: 5 }, commitment),
+    false,
+  );
+
+  const committedLeft = blockMerkleLeafNode(leaves[0]);
+  const committedRight = blockMerkleLeafNode(leaves[1]);
+  const missingLeafDomainRoot = blockMerkleParent(leaves[0], leaves[1]);
+  assert.equal(
+    verifyBlockMerkleProof(
+      leaves[0].toString("hex"),
+      { leaf_index: 0, audit_path: [leaves[1].toString("hex")] },
+      { root: missingLeafDomainRoot.toString("hex"), leaf_count: "2" },
+    ),
+    false,
+  );
+  const missingInternalDomainRoot = blockMerkleDigest(
+    Buffer.concat([committedLeft, committedRight]),
+  );
+  assert.equal(
+    verifyBlockMerkleProof(
+      leaves[0].toString("hex"),
+      { leaf_index: 0, audit_path: [committedRight.toString("hex")] },
+      { root: missingInternalDomainRoot.toString("hex"), leaf_count: "2" },
+    ),
+    false,
+  );
+});
+
+baseTest("BlockProofs verification refuses roots that are not bound to a trusted anchor", () => {
+  const decoded = noritoDecodeBlockProofs(blockProofFixture());
+  assert.equal(verifyBlockProofs(decoded).valid, false);
+  assert.equal(verifyBlockProofs(decoded, decoded).valid, false);
+
+  const forgedLeaf = Buffer.alloc(32, 0x72);
+  forgedLeaf[31] |= 1;
+  const forgedRoot = blockMerkleLeafNode(forgedLeaf);
+  const forged = {
+    ...decoded,
+    entry_hash: forgedLeaf.toString("hex"),
+    entry_commitment: { root: forgedRoot.toString("hex"), leaf_count: "1" },
+    entry_proof: {
+      leaf: forgedLeaf.toString("hex"),
+      proof: { leaf_index: 0, audit_path: [] },
+    },
+  };
+  const verification = verifyBlockProofs(
+    forged,
+    authenticatedBlockProofAnchorFixture(),
+  );
+  assert.equal(verification.entry_proof_valid, false);
+  assert.equal(verification.anchor_matches, false);
+  assert.equal(verification.valid, false);
+});
+
+baseTest("BlockProofs verification binds the authenticated FASTPQ transcript projection", () => {
+  const decoded = noritoDecodeBlockProofs(blockProofFixture());
+  const forged = {
+    ...decoded,
+    fastpq_transcripts: { forged: [] },
+  };
+
+  const verification = verifyBlockProofs(
+    forged,
+    authenticatedBlockProofAnchorFixture(),
+  );
+  assert.equal(verification.anchor_matches, false);
+  assert.equal(verification.valid, false);
+
+  const missingProjection = { ...decoded };
+  delete missingProjection.fastpq_transcripts;
+  const missingAnchor = { ...authenticatedBlockProofAnchorFixture() };
+  delete missingAnchor.fastpq_transcripts;
+  const missingVerification = verifyBlockProofs(missingProjection, missingAnchor);
+  assert.equal(missingVerification.anchor_matches, false);
+  assert.equal(missingVerification.valid, false);
+});
+
+baseTest("BlockProofs verification binds the requested entry hash and execution index", () => {
+  const decoded = noritoDecodeBlockProofs(blockProofFixture());
+  const left = Buffer.alloc(32, 0x74);
+  const right = Buffer.alloc(32, 0x76);
+  left[31] |= 1;
+  right[31] |= 1;
+  const leftNode = blockMerkleLeafNode(left);
+  const rightNode = blockMerkleLeafNode(right);
+  const commitment = {
+    root: blockMerkleParent(leftNode, rightNode).toString("hex"),
+    leaf_count: "2",
+  };
+  const resultLeft = Buffer.alloc(32, 0x50);
+  resultLeft[31] |= 1;
+  const resultRight = Buffer.alloc(32, 0x78);
+  resultRight[31] |= 1;
+  const resultLeftNode = blockMerkleLeafNode(resultLeft);
+  const resultRightNode = blockMerkleLeafNode(resultRight);
+  const resultCommitment = {
+    root: blockMerkleParent(resultLeftNode, resultRightNode).toString("hex"),
+    leaf_count: "2",
+  };
+  const anchor = {
+    ...authenticatedBlockProofAnchorFixture(),
+    entry_hash: left.toString("hex"),
+    entry_index: 0,
+    entry_commitment: commitment,
+    result_commitment: resultCommitment,
+  };
+  const substituted = {
+    ...decoded,
+    entry_hash: right.toString("hex"),
+    entry_commitment: commitment,
+    entry_proof: {
+      leaf: right.toString("hex"),
+      proof: { leaf_index: 1, audit_path: [leftNode.toString("hex")] },
+    },
+    result_commitment: resultCommitment,
+    result_proof: {
+      leaf: resultRight.toString("hex"),
+      proof: { leaf_index: 1, audit_path: [resultLeftNode.toString("hex")] },
+    },
+  };
+
+  const verification = verifyBlockProofs(substituted, anchor);
+  assert.equal(verification.entry_proof_valid, true);
+  assert.equal(verification.result_pair_consistent, true);
+  assert.equal(verification.result_proof_valid, true);
+  assert.equal(verification.entry_hash_matches, false);
+  assert.equal(verification.anchor_matches, false);
+  assert.equal(verification.valid, false);
 });
 
 function rewriteNestedInstructionFrameCrcs(buffer) {

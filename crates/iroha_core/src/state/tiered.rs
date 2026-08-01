@@ -3951,6 +3951,9 @@ mod measured_bytes_impls {
                 ProposalKind::ValidationFeePayoutLifecycle(payload) => {
                     total = total.saturating_add(payload.measured_bytes_extra());
                 }
+                ProposalKind::MusubiRegistryGovernance(action) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(action).len());
+                }
             }
             total
         }

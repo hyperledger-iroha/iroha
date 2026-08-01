@@ -22,7 +22,13 @@ use iroha_data_model::{
         asset_alias::SetAssetDefinitionBalancePolicy,
         contract_alias::SetContractAlias,
         musubi::{
-            AssertMusubiReleaseExists, PublishMusubiRelease, SetMusubiShortAlias, YankMusubiRelease,
+            AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1,
+            AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
+            RecoverMusubiPackageV1, RegisterMusubiAliasV1, RegisterMusubiArchiveV1,
+            RegisterMusubiNamespaceBindingV1, RemoveMusubiPackageMaintainerV1,
+            RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1, SetMusubiArtifactTakedownV1,
+            SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1,
+            SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
         },
         offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
         settlement::{
@@ -44,7 +50,7 @@ use iroha_data_model::{
         },
     },
     metadata::Metadata,
-    musubi::{MusubiNamespace, MusubiPackageId},
+    musubi::MusubiPackageIdV1,
     name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
@@ -64,7 +70,7 @@ use iroha_executor_data_model::permission::{
         CanResolveAccountAlias,
     },
     asset::{
-        CanBurnAssetWithDefinition, CanMintAssetWithDefinition,
+        CanBurnAssetWithDefinition, CanMintAssetToAccount, CanMintAssetWithDefinition,
         CanModifyAssetMetadataWithDefinition, CanTransferAssetWithDefinition,
     },
     asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
@@ -3177,36 +3183,8 @@ fn instruction_transaction_dataspace_target(
         );
     }
 
-    if let Some(publish) = any.downcast_ref::<PublishMusubiRelease>() {
-        return musubi_package_dataspace_target_with_state(
-            &publish.release.package.package,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(yank) = any.downcast_ref::<YankMusubiRelease>() {
-        return musubi_package_dataspace_target_with_state(
-            &yank.package.package,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(set_alias) = any.downcast_ref::<SetMusubiShortAlias>() {
-        return musubi_package_dataspace_target_with_state(
-            &set_alias.alias.target,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(assert_release) = any.downcast_ref::<AssertMusubiReleaseExists>() {
-        return musubi_package_dataspace_target_with_state(
-            &assert_release.package,
-            dataspace_catalog,
-            state_view,
-        );
+    if let Some(target) = musubi_instruction_dataspace_target(any) {
+        return Some(target);
     }
 
     if let Some(publish) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
@@ -3612,40 +3590,8 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         );
     }
 
-    if let Some(publish) = any.downcast_ref::<PublishMusubiRelease>() {
-        return musubi_package_dataspace_target_with_world(
-            &publish.release.package.package,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(yank) = any.downcast_ref::<YankMusubiRelease>() {
-        return musubi_package_dataspace_target_with_world(
-            &yank.package.package,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(set_alias) = any.downcast_ref::<SetMusubiShortAlias>() {
-        return musubi_package_dataspace_target_with_world(
-            &set_alias.alias.target,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(assert_release) = any.downcast_ref::<AssertMusubiReleaseExists>() {
-        return musubi_package_dataspace_target_with_world(
-            &assert_release.package,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
+    if let Some(target) = musubi_instruction_dataspace_target(any) {
+        return Some(target);
     }
 
     if let Some(publish) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
@@ -4394,6 +4340,10 @@ fn instruction_transaction_target_requires_universal_coordinator(
 ) -> bool {
     let any = instruction.as_any();
 
+    if musubi_instruction_requires_universal_coordinator(any) {
+        return true;
+    }
+
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match multisig {
             MultisigInstructionBox::Propose(propose) => Some(propose.instructions),
@@ -4543,6 +4493,10 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     ledger_time_ms: Option<u64>,
 ) -> bool {
     let any = instruction.as_any();
+
+    if musubi_instruction_requires_universal_coordinator(any) {
+        return true;
+    }
 
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match multisig {
@@ -4814,26 +4768,74 @@ fn contract_address_dataspace_target(contract_address: &ContractAddress) -> Opti
     contract_address.dataspace_id().ok()
 }
 
-fn musubi_namespace_dataspace_target_with_state(
-    namespace: &MusubiNamespace,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    state_view: Option<&StateView<'_>>,
-) -> Option<DataSpaceId> {
-    dataspace_alias_target_with_state(namespace.dataspace_segment(), dataspace_catalog, state_view)
+fn musubi_package_dataspace_target(package: &MusubiPackageIdV1) -> DataSpaceId {
+    package.home_dataspace
 }
 
-fn musubi_namespace_dataspace_target_with_world<W: WorldReadOnly>(
-    namespace: &MusubiNamespace,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    world: &W,
-    ledger_time_ms: Option<u64>,
-) -> Option<DataSpaceId> {
-    dataspace_alias_target_with_world(
-        namespace.dataspace_segment(),
-        dataspace_catalog,
-        world,
-        ledger_time_ms,
-    )
+fn musubi_instruction_dataspace_target(any: &dyn core::any::Any) -> Option<DataSpaceId> {
+    if let Some(register) = any.downcast_ref::<RegisterMusubiNamespaceBindingV1>() {
+        return Some(register.binding.home_dataspace);
+    }
+    if any.downcast_ref::<RegisterMusubiArchiveV1>().is_some()
+        || any.downcast_ref::<AddMusubiArchiveLocationV1>().is_some()
+        || any
+            .downcast_ref::<RetireMusubiArchiveLocationV1>()
+            .is_some()
+        || any.downcast_ref::<SetMusubiRegistryPolicyV1>().is_some()
+    {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+    if let Some(publish) = any.downcast_ref::<PublishMusubiReleaseV1>() {
+        return Some(musubi_package_dataspace_target(
+            &publish.publication.manifest.release.package,
+        ));
+    }
+    if let Some(yank) = any.downcast_ref::<SetMusubiReleaseYankV1>() {
+        return Some(musubi_package_dataspace_target(&yank.release.package));
+    }
+    if let Some(metadata) = any.downcast_ref::<SetMusubiPackageMetadataV1>() {
+        return Some(musubi_package_dataspace_target(&metadata.package));
+    }
+    if let Some(invite) = any.downcast_ref::<InviteMusubiPackageMaintainerV1>() {
+        return Some(musubi_package_dataspace_target(&invite.package));
+    }
+    if let Some(accept) = any.downcast_ref::<AcceptMusubiPackageMaintainerV1>() {
+        return Some(musubi_package_dataspace_target(&accept.package));
+    }
+    if let Some(set_role) = any.downcast_ref::<SetMusubiPackageMaintainerRoleV1>() {
+        return Some(musubi_package_dataspace_target(&set_role.package));
+    }
+    if let Some(remove) = any.downcast_ref::<RemoveMusubiPackageMaintainerV1>() {
+        return Some(musubi_package_dataspace_target(&remove.package));
+    }
+    if let Some(register) = any.downcast_ref::<RegisterMusubiAliasV1>() {
+        return Some(musubi_package_dataspace_target(&register.target));
+    }
+    if let Some(recover) = any.downcast_ref::<RecoverMusubiPackageV1>() {
+        return Some(musubi_package_dataspace_target(&recover.package));
+    }
+    if let Some(retarget) = any.downcast_ref::<RetargetMusubiAliasV1>() {
+        return Some(musubi_package_dataspace_target(&retarget.target));
+    }
+    if let Some(takedown) = any.downcast_ref::<SetMusubiArtifactTakedownV1>() {
+        return Some(musubi_package_dataspace_target(&takedown.release.package));
+    }
+    if let Some(assert) = any.downcast_ref::<AssertMusubiReleaseDigestV1>() {
+        return Some(musubi_package_dataspace_target(&assert.release.package));
+    }
+    None
+}
+
+fn musubi_instruction_requires_universal_coordinator(any: &dyn core::any::Any) -> bool {
+    any.downcast_ref::<RegisterMusubiNamespaceBindingV1>()
+        .is_some()
+        || any.downcast_ref::<PublishMusubiReleaseV1>().is_some()
+        || any.downcast_ref::<SetMusubiReleaseYankV1>().is_some()
+        || any.downcast_ref::<SetMusubiPackageMetadataV1>().is_some()
+        || any.downcast_ref::<RegisterMusubiAliasV1>().is_some()
+        || any.downcast_ref::<RecoverMusubiPackageV1>().is_some()
+        || any.downcast_ref::<RetargetMusubiAliasV1>().is_some()
+        || any.downcast_ref::<SetMusubiArtifactTakedownV1>().is_some()
 }
 
 fn dataspace_alias_target(
@@ -4886,28 +4888,6 @@ fn state_view_ledger_time_ms(state_view: &StateView<'_>) -> u64 {
         .as_ref()
         .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
-}
-
-fn musubi_package_dataspace_target_with_state(
-    package: &MusubiPackageId,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    state_view: Option<&StateView<'_>>,
-) -> Option<DataSpaceId> {
-    musubi_namespace_dataspace_target_with_state(&package.namespace, dataspace_catalog, state_view)
-}
-
-fn musubi_package_dataspace_target_with_world<W: WorldReadOnly>(
-    package: &MusubiPackageId,
-    dataspace_catalog: Option<&DataSpaceCatalog>,
-    world: &W,
-    ledger_time_ms: Option<u64>,
-) -> Option<DataSpaceId> {
-    musubi_namespace_dataspace_target_with_world(
-        &package.namespace,
-        dataspace_catalog,
-        world,
-        ledger_time_ms,
-    )
 }
 
 fn asset_definition_target_from_parts_with_state(
@@ -5456,6 +5436,11 @@ fn account_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
 
 fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bool {
     match permission.name() {
+        "CanMintAssetToAccount" => permission
+            .payload()
+            .try_into_any_norito::<CanMintAssetToAccount>()
+            .ok()
+            .is_some(),
         "CanMintAssetWithDefinition" => permission
             .payload()
             .try_into_any_norito::<CanMintAssetWithDefinition>()
@@ -5515,6 +5500,19 @@ fn dataspace_scoped_permission_target(
         && permission.name() != "CanPublishSpaceDirectoryManifestForAccountDomain"
     {
         return match permission.name() {
+            "CanMintAssetToAccount" => permission
+                .payload()
+                .try_into_any_norito::<CanMintAssetToAccount>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                }),
             "CanMintAssetWithDefinition" => permission
                 .payload()
                 .try_into_any_norito::<CanMintAssetWithDefinition>()
@@ -5694,6 +5692,20 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
         && permission.name() != "CanPublishSpaceDirectoryManifestForAccountDomain"
     {
         return match permission.name() {
+            "CanMintAssetToAccount" => permission
+                .payload()
+                .try_into_any_norito::<CanMintAssetToAccount>()
+                .ok()
+                .and_then(|token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }),
             "CanMintAssetWithDefinition" => permission
                 .payload()
                 .try_into_any_norito::<CanMintAssetWithDefinition>()
@@ -8006,7 +8018,8 @@ mod tests {
             authority.clone(),
             iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone()),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         InstructionBox::from(Register::trigger(Trigger::new(trigger_id, action)))
     }
 
@@ -12030,7 +12043,7 @@ mod tests {
     }
 
     #[test]
-    fn musubi_package_alias_routes_to_package_namespace_dataspace_without_explicit_rule() {
+    fn musubi_alias_registration_uses_universal_amx_with_home_dataspace_participant() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
@@ -12046,20 +12059,40 @@ mod tests {
                 (lane_id, dataspace_id),
             ]),
         );
-        let target = iroha_data_model::musubi::MusubiPackageId::from_parts("mibank.paynet", "fx")
-            .expect("package id");
-        let alias =
-            iroha_data_model::musubi::MusubiShortAlias::new("fx".parse().expect("alias"), target);
-        let instruction = iroha_data_model::isi::musubi::SetMusubiShortAlias::new(alias);
+        let target = iroha_data_model::musubi::MusubiPackageIdV1::new(
+            dataspace_id,
+            iroha_data_model::musubi::MusubiPackageScopeV1::Domain(
+                "mibank".parse().expect("domain scope"),
+            ),
+            "fx".parse().expect("package name"),
+        );
+        let instruction = iroha_data_model::isi::musubi::RegisterMusubiAliasV1::new(
+            "fx".parse().expect("alias"),
+            target,
+            1,
+        );
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(instruction)],
         );
 
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("Musubi alias route must resolve");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("Musubi alias registration must use Native AMX");
+        };
         assert_eq!(
-            router.try_route(&tx).expect("musubi route must resolve"),
-            RoutingDecision::new(lane_id, dataspace_id)
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            plan.participants,
+            vec![RouteLeg::new(
+                RoutingDecision::new(lane_id, dataspace_id),
+                RouteLegRole::Participant,
+            )]
         );
     }
 
@@ -15259,7 +15292,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_home_extra_coverage_mint_permission_uses_stored_alias_dataspace() {
+    fn asset_home_extra_coverage_mint_permissions_use_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
@@ -15282,16 +15315,6 @@ mod tests {
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Grant::account_permission(
-                iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition {
-                    asset_definition: asset_definition.clone(),
-                },
-                bob_id,
-            ))],
-        );
         let alias: AssetDefinitionAlias = "pkr#paynet".parse().expect("asset alias");
         let mut state = state_with_asset_definitions(
             vec![
@@ -15308,7 +15331,7 @@ mod tests {
             .asset_definition_aliases
             .insert(alias.clone(), asset_definition.clone());
         state.world.asset_definition_alias_bindings.insert(
-            asset_definition,
+            asset_definition.clone(),
             crate::state::AssetDefinitionAliasBindingRecord {
                 alias,
                 lease_expiry_ms: None,
@@ -15317,18 +15340,37 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("mint permission alias lookup should defer to state"),
-            None
-        );
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("stored alias mint permission route must resolve with state"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
+        let permissions = [
+            Permission::from(CanMintAssetWithDefinition {
+                asset_definition: asset_definition.clone(),
+            }),
+            Permission::from(CanMintAssetToAccount {
+                asset_definition,
+                account: bob_id.clone(),
+            }),
+        ];
+        for permission in permissions {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![InstructionBox::from(Grant::account_permission(
+                    permission,
+                    bob_id.clone(),
+                ))],
+            );
+            assert_eq!(
+                router
+                    .try_route_without_state(&tx)
+                    .expect("mint permission alias lookup should defer to state"),
+                None
+            );
+            assert_eq!(
+                router
+                    .try_route_with_view(&tx, &state.view())
+                    .expect("stored alias mint permission route must resolve with state"),
+                RoutingDecision::new(lane_id, dataspace_id)
+            );
+        }
     }
 
     #[test]

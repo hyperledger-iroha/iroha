@@ -5,13 +5,51 @@ Last updated: 2026-08-01
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Musubi first-release registry and developer ecosystem reset
+
+The pre-release Musubi contract is being replaced rather than migrated. The
+work remains ordered as the following production gates:
+
+- Land bounded V1 identities, structured SemVer and requirement ASTs, complete
+  archive commitments, immutable release manifests, package governance, alias
+  policy, resolver rows, cursor records, and Norito golden/property coverage.
+- Replace legacy ISIs, queries, permissions, generic `smart_contract_state`
+  vectors, scan fallbacks, and namespace-owner reauthorization with typed
+  ordered home/universal stores and atomic Native AMX projections. Add archive
+  quorum/location guards, reversible yank, compare-and-set ownership, recovery,
+  permanent paid aliases, admission policy, and explicit legacy-state startup
+  rejection.
+- Replace the monolithic pre-release CLI with strict manifest/workspace/lock,
+  deterministic backtracking resolution, targeted update, Cargo-style project
+  and build commands, stable JSON/error output, and signer-free local/read-only
+  paths. Delete `install`, `pack`, cache import, short-alias set, and legacy-lock
+  compatibility.
+- Complete positive-set canonical bundles, immutable user cache extraction and
+  quarantine repair, authenticated seed-ingress receipts, secret-free resumable
+  publication journals, three-provider finalized replication, two-provider
+  readback, and exact universal-index verification.
+- Regenerate Norito/OpenAPI/MCP fixtures and Kotlin/Java/Swift surfaces, then
+  pass focused model/core/CLI/SoraFS tests, four-peer Native AMX fault tests,
+  cache/archive fuzzing, SDK parity, strict clippy, workspace serialization
+  guards, scale gates, and the documented devnet/Taira/invite-beta rollout.
+
+The implementation-coupled contract is [`specs/musubi.md`](./specs/musubi.md).
+
 ## First-release security remediation validation
 
 Release validation remains open. It requires a stable serialized build lane,
-focused locked/offline Nexus configuration, daemon, and state-enforcement
-tests, regeneration of the canonical DA reconstruction fixture and unsigned
-OpenAPI development provenance from the final source state, a broad locked
-offline workspace compile attempt, and a final report-by-report reconciliation.
+focused locked/offline Nexus configuration, daemon, state-enforcement,
+Kagami-signing, and swarm Compose-render tests, regeneration of the canonical
+DA reconstruction fixture and unsigned OpenAPI development provenance from the
+final source state, a broad locked offline workspace compile attempt, and a
+final report-by-report reconciliation.
+The lane-relay effect-finality repair is implemented; its focused model,
+FastPQ, Core state/ISI, daemon-worker, and adversarial re-proof tests remain in
+the shared build-lane validation queue.
+The validator-only, prepared-bundle Compose redesign still needs execution of
+its focused `iroha_swarm` and Kagami positive/mismatch regressions plus
+generated-Compose consistency once the shared serialized Cargo/rustc lane is
+free.
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
 
@@ -6288,27 +6326,27 @@ excluded from the first release.
   `SoraFsAppealFinanceReportV1`, and
   `SoraFsAppealFinanceSettlementReceiptV1`; they derive canonical Norito
   payload digests plus sorted public metadata, and the local moderation/appeal
-  paths now record best-effort source entries for governance ballot events and
-  derived appeal finance reports. Torii now also exposes
-  `/v1/sorafs/transparency/source-entries/{source_kind}` as a
-  canonical-authenticated local feed boundary for those concrete source
-  payloads plus public legal-hold/redaction/evidence-access summaries,
-  returning only the derived public source-entry summary while routing accepted
-  entries into the duplicate-checked local worker. `iroha::client` and
-  `iroha sorafs transparency cycles|explorer|tokens|source-entry` now wrap the
-  local cycle/entry/explorer/token readback and signed source-entry ingest
-  surface for operator automation. `iroha sorafs transparency source-entry
-  canary --source-entry KIND=PATH [--source-entry KIND=PATH...] [--out PATH]`
-  now submits canary source-entry producer payloads through that signed feed,
-  records request/response sizes, status, and BLAKE3 hashes, and emits
-  `sorafs.transparency.source_entry.canary.v1` evidence without archiving source
-  payload fields or response bodies. The rollout evidence gate now also binds
-  source-entry `source_entry_probe_count` to the unique canonical
-  `probes[].source_kind` inventory, rejecting duplicate source-kind probes even
-  when reported probe counts match the raw array length. The remaining SFM-4c
+  paths expose trusted in-process adapter boundaries. Torii deliberately has no
+  generic source-kind-selected public write route. The externally reachable
+  token, privacy-aggregate, and appeal-finance Governance DAG writes require
+  canonical account signatures plus exact publisher roles, and bind the
+  server-verified account and stable origin into durable checkpoint/outbox
+  records and publish-index labels. The same provenance is part of the signed
+  public DAG node CID/signature preimages, with payload/origin validation and
+  identity-aware idempotency. Finance publication requires provenance at the
+  outbox and publisher type boundaries; proof-token and transparency payloads
+  preserve it for authenticated ingress while trusted in-process producers are
+  explicitly node-attested without caller provenance. Pre-change DAGs must be
+  reseeded. The standalone public mirror cross-checks nullable runtime-index
+  attribution against each signed node and publishes only the signed values,
+  so its lookup index cannot relabel an attestation. Rollout collection accepts only
+  pre-collected `sorafs.transparency.source_entry.producer_evidence.v1` from
+  trusted internal producers; the gate requires internal producer routes,
+  durable provenance digests, verified checkpoints, and
+  `generic_public_ingress_absent=true`. The remaining SFM-4c
   production work is
   deployed producers for GAR, moderation, appeal, legal-hold, redaction, and
-  evidence-viewer events plus captured rollout evidence using that canary and
+  evidence-viewer events plus captured trusted-producer evidence and
   the rollout evidence verifier,
   deployed anchoring/publisher identities, deployed proof API hardening beyond
   the local verifier throttle and bounded readback arrays, deployed proof-token

@@ -306,20 +306,23 @@ const MODERATION_QUARANTINE_OBJECT_STORE_MAX_DEPTH: usize = 4;
 const MODERATION_EVIDENCE_VIEWER_DIR: &str = "moderation-evidence-viewer";
 const MODERATION_EVIDENCE_VIEWER_SNAPSHOT_FILE: &str = "evidence-viewer-snapshot.to";
 const AUX_RUNTIME_STATE_DIR: &str = "runtime-state";
-const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot-v3.to";
+const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot-v4.to";
 const RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V1: &str = "auxiliary-snapshot.to";
 const RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V2: &str = "auxiliary-snapshot-v2.to";
-const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v3";
+const RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V3: &str = "auxiliary-snapshot-v3.to";
+const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v4";
 const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V1: &str = "initialized-v1";
 const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V2: &str = "initialized-v2";
-const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v3\n";
-// V3 is a first-release hard cut: it adds replay-stable PoR reputation work
-// and its acknowledgement cursor. V1/V2 artifacts are rejected and must be
-// explicitly reseeded; no field-default or heuristic migration is accepted.
-const AUX_RUNTIME_STATE_VERSION_V3: u8 = 3;
+const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V3: &str = "initialized-v3";
+const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v4\n";
+// V4 is a first-release hard cut: it adds authenticated governance provenance
+// to retained source events, publish receipts, and outbox entries. V1/V2/V3
+// artifacts are rejected and must be explicitly reseeded; no field-default or
+// heuristic migration is accepted.
+const AUX_RUNTIME_STATE_VERSION_V4: u8 = 4;
 const ADMITTED_REPUTATION_SNAPSHOT_VERSION_V1: u8 = 1;
-const GOVERNANCE_OUTBOX_VERSION_V2: u8 = 2;
-const GOVERNANCE_OUTBOX_BINDING_DOMAIN_V2: &[u8] = b"sorafs.node.governance_outbox.binding.v2";
+const GOVERNANCE_OUTBOX_VERSION_V3: u8 = 3;
+const GOVERNANCE_OUTBOX_BINDING_DOMAIN_V3: &[u8] = b"sorafs.node.governance_outbox.binding.v3";
 const GC_EVICTION_INTENT_VERSION_V1: u8 = 1;
 const GC_EVICTION_AUDIT_LINK_VERSION_V1: u8 = 1;
 const GC_EVICTION_RESERVED_OUTBOX_SLOTS: u8 = 1;
@@ -383,6 +386,7 @@ use iroha_data_model::{
 use iroha_telemetry::metrics::{
     global_or_default, global_sorafs_gc_otel, global_sorafs_reconciliation_otel,
 };
+use norito::codec::Encode as NoritoEncode;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 #[cfg(test)]
 use norito::json::Value as JsonValue;
@@ -440,6 +444,7 @@ use sorafs_manifest::{
         GC_AUDIT_REASON_RETENTION_EXPIRED_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1, GcAuditPayloadV1,
         RepairReportV1, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
     },
+    governance_dag_submission_account_digest_v1,
     validate_reputation_snapshot_transition,
 };
 use thiserror::Error;
@@ -645,6 +650,12 @@ fn retired_runtime_state_initialization_path_v2(data_dir: &Path) -> PathBuf {
         .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V2)
 }
 
+fn retired_runtime_state_initialization_path_v3(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(AUX_RUNTIME_STATE_DIR)
+        .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V3)
+}
+
 fn retired_auxiliary_runtime_checkpoint_path_v1(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
@@ -655,6 +666,12 @@ fn retired_auxiliary_runtime_checkpoint_path_v2(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V2)
+}
+
+fn retired_auxiliary_runtime_checkpoint_path_v3(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(AUX_RUNTIME_STATE_DIR)
+        .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V3)
 }
 
 fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 5] {
@@ -696,6 +713,7 @@ fn inspect_runtime_checkpoint_initialization(
     for (version, retired_marker_path) in [
         (1, retired_runtime_state_initialization_path_v1(data_dir)),
         (2, retired_runtime_state_initialization_path_v2(data_dir)),
+        (3, retired_runtime_state_initialization_path_v3(data_dir)),
     ] {
         if read_local_checkpoint_bounded(
             &retired_marker_path,
@@ -722,6 +740,7 @@ fn inspect_runtime_checkpoint_initialization(
     for (version, retired_checkpoint_path) in [
         (1, retired_auxiliary_runtime_checkpoint_path_v1(data_dir)),
         (2, retired_auxiliary_runtime_checkpoint_path_v2(data_dir)),
+        (3, retired_auxiliary_runtime_checkpoint_path_v3(data_dir)),
     ] {
         if read_local_checkpoint_bounded(&retired_checkpoint_path, checkpoint_max_bytes)
             .map_err(|err| {
@@ -753,7 +772,7 @@ fn inspect_runtime_checkpoint_initialization(
                 return Err(NodeInitError::checkpoint(
                     "runtime initialization marker",
                     &marker_path,
-                    "marker contents are not canonical for runtime-state v3",
+                    "marker contents are not canonical for runtime-state v4",
                 ));
             }
             for (component, path) in required_runtime_checkpoint_paths(data_dir) {
@@ -2563,6 +2582,104 @@ fn fenced_privacy_head_inclusion_digest(
 /// Implementations must be idempotent for identical canonical payload bytes.
 /// The durable node outbox intentionally retries after crashes where external
 /// publication succeeded but the local acknowledgement was not yet durable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub enum GovernanceSubmissionOriginV1 {
+    /// Canonical Torii proof-token issuance ingress.
+    TransparencyTokenIssuance,
+    /// Canonical Torii privacy-aggregate source-event ingress.
+    PrivacyAggregateSourceEvent,
+    /// Canonical Torii due-cycle publication ingress.
+    PrivacyAggregatePublishDue,
+    /// Canonical Torii appeal-finance report ingress.
+    AppealFinanceReport,
+    /// Canonical Torii appeal-finance weekly-rollup ingress.
+    AppealFinanceWeeklyRollup,
+}
+
+impl GovernanceSubmissionOriginV1 {
+    pub(crate) const fn tag(self) -> u8 {
+        match self {
+            Self::TransparencyTokenIssuance => 0,
+            Self::PrivacyAggregateSourceEvent => 1,
+            Self::PrivacyAggregatePublishDue => 2,
+            Self::AppealFinanceReport => 3,
+            Self::AppealFinanceWeeklyRollup => 4,
+        }
+    }
+
+    /// Return the stable publish-index label for this authenticated ingress.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::TransparencyTokenIssuance => "transparency_token_issuance",
+            Self::PrivacyAggregateSourceEvent => "privacy_aggregate_source_event",
+            Self::PrivacyAggregatePublishDue => "privacy_aggregate_publish_due",
+            Self::AppealFinanceReport => "appeal_finance_report",
+            Self::AppealFinanceWeeklyRollup => "appeal_finance_weekly_rollup",
+        }
+    }
+}
+
+/// Server-derived authenticated identity bound to a durable governance submission.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct GovernanceSubmissionProvenanceV1 {
+    publisher_account: AccountId,
+    origin: GovernanceSubmissionOriginV1,
+}
+
+impl GovernanceSubmissionProvenanceV1 {
+    fn new(publisher_account: AccountId, origin: GovernanceSubmissionOriginV1) -> Self {
+        Self {
+            publisher_account,
+            origin,
+        }
+    }
+
+    /// Return the canonical account authenticated by Torii.
+    #[must_use]
+    pub fn publisher_account(&self) -> &AccountId {
+        &self.publisher_account
+    }
+
+    /// Return the exact authenticated ingress that admitted the submission.
+    #[must_use]
+    pub const fn origin(&self) -> GovernanceSubmissionOriginV1 {
+        self.origin
+    }
+
+    pub(crate) fn to_dag_provenance(&self) -> sorafs_manifest::GovernanceDagSubmissionProvenanceV1 {
+        let origin = match self.origin {
+            GovernanceSubmissionOriginV1::TransparencyTokenIssuance => {
+                sorafs_manifest::GovernanceDagSubmissionOriginV1::TransparencyTokenIssuance
+            }
+            GovernanceSubmissionOriginV1::PrivacyAggregateSourceEvent => {
+                sorafs_manifest::GovernanceDagSubmissionOriginV1::PrivacyAggregateSourceEvent
+            }
+            GovernanceSubmissionOriginV1::PrivacyAggregatePublishDue => {
+                sorafs_manifest::GovernanceDagSubmissionOriginV1::PrivacyAggregatePublishDue
+            }
+            GovernanceSubmissionOriginV1::AppealFinanceReport => {
+                sorafs_manifest::GovernanceDagSubmissionOriginV1::AppealFinanceReport
+            }
+            GovernanceSubmissionOriginV1::AppealFinanceWeeklyRollup => {
+                sorafs_manifest::GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup
+            }
+        };
+        let publisher_account_digest = governance_dag_submission_account_digest_v1(
+            &self.publisher_account.encode(),
+        );
+        sorafs_manifest::GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest,
+            origin,
+        }
+    }
+}
+
+/// Durable publication boundary for authenticated governance records.
+///
+/// Implementations must make retries of the same canonical record idempotent,
+/// persist every accepted publication durably, and preserve any server-derived
+/// authentication provenance carried by the published value.
 pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
     /// Persist the supplied settlement NORITO payload to the governance pipeline.
     fn publish_deal_settlement(
@@ -2622,24 +2739,28 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
         publication: &ModerationLedgerCyclePublicationV1,
         encoded: &[u8],
         authorization: Option<&PrivacyPublicationAuthorizationV1>,
+        provenance: Option<&GovernanceSubmissionProvenanceV1>,
     ) -> Result<(), GovernancePublishError>;
     /// Persist a proof-token issuance summary to the governance pipeline.
     fn publish_proof_token_issuance(
         &self,
         issuance: &ProofTokenIssuanceV1,
         encoded: &[u8],
+        provenance: Option<&GovernanceSubmissionProvenanceV1>,
     ) -> Result<(), GovernancePublishError>;
     /// Persist an appeal finance report to the governance pipeline.
     fn publish_appeal_finance_report(
         &self,
         report: &SoraFsAppealFinanceReportV1,
         encoded: &[u8],
+        provenance: &GovernanceSubmissionProvenanceV1,
     ) -> Result<(), GovernancePublishError>;
     /// Persist a weekly appeal finance rollup to the governance pipeline.
     fn publish_appeal_finance_weekly_rollup(
         &self,
         rollup: &SoraFsAppealFinanceWeeklyRollupV1,
         encoded: &[u8],
+        provenance: &GovernanceSubmissionProvenanceV1,
     ) -> Result<(), GovernancePublishError>;
     /// Persist an appeal finance settlement receipt to the governance pipeline.
     fn publish_appeal_finance_settlement_receipt(
@@ -2761,6 +2882,7 @@ struct PrivacyPublishRequestReceiptV1 {
     cycle_end_unix: u64,
     publish_delay_seconds: u64,
     due_at_unix: u64,
+    provenance: Option<GovernanceSubmissionProvenanceV1>,
     outcome: PrivacyPublishRequestOutcomeV1,
 }
 
@@ -2777,6 +2899,7 @@ impl std::fmt::Debug for PrivacyPublishRequestReceiptV1 {
             .field("cycle_end_unix", &self.cycle_end_unix)
             .field("publish_delay_seconds", &self.publish_delay_seconds)
             .field("due_at_unix", &self.due_at_unix)
+            .field("provenance", &self.provenance)
             .field(
                 "outcome",
                 &match &self.outcome {
@@ -2811,6 +2934,9 @@ impl PrivacyPublishRequestReceiptV1 {
                     self.cycle_start_unix,
                     self.cycle_end_unix,
                 )
+            || self.provenance.as_ref().is_some_and(|provenance| {
+                provenance.origin() != GovernanceSubmissionOriginV1::PrivacyAggregatePublishDue
+            })
         {
             return Err(GovernancePublishError::other(
                 "privacy publish-request receipt is invalid",
@@ -3563,6 +3689,7 @@ struct GovernanceOutboxEntryV1 {
     sequence: u64,
     kind: GovernanceOutboxKindV1,
     payload_digest: [u8; 32],
+    provenance: Option<GovernanceSubmissionProvenanceV1>,
     binding_digest: [u8; 32],
     payload_bytes: Vec<u8>,
 }
@@ -4075,14 +4202,54 @@ fn governance_outbox_binding_digest(
     sequence: u64,
     kind: GovernanceOutboxKindV1,
     payload_digest: [u8; 32],
+    provenance: Option<&GovernanceSubmissionProvenanceV1>,
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(GOVERNANCE_OUTBOX_BINDING_DOMAIN_V2);
+    hasher.update(GOVERNANCE_OUTBOX_BINDING_DOMAIN_V3);
     hasher.update(&[version]);
     hasher.update(&sequence.to_le_bytes());
     hasher.update(&[kind.tag()]);
     hasher.update(&payload_digest);
+    match provenance {
+        Some(provenance) => {
+            hasher.update(&[1, provenance.origin.tag()]);
+            hash_length_prefixed(&mut hasher, &provenance.publisher_account.encode());
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
     *hasher.finalize().as_bytes()
+}
+
+fn governance_outbox_provenance_matches_kind(
+    kind: GovernanceOutboxKindV1,
+    provenance: &GovernanceSubmissionProvenanceV1,
+) -> bool {
+    matches!(
+        (kind, provenance.origin),
+        (
+            GovernanceOutboxKindV1::TransparencyLedgerPublication,
+            GovernanceSubmissionOriginV1::PrivacyAggregatePublishDue
+        ) | (
+            GovernanceOutboxKindV1::ProofTokenIssuance,
+            GovernanceSubmissionOriginV1::TransparencyTokenIssuance
+        ) | (
+            GovernanceOutboxKindV1::AppealFinanceReport,
+            GovernanceSubmissionOriginV1::AppealFinanceReport
+        ) | (
+            GovernanceOutboxKindV1::AppealFinanceWeeklyRollup,
+            GovernanceSubmissionOriginV1::AppealFinanceWeeklyRollup
+        )
+    )
+}
+
+fn governance_outbox_kind_requires_provenance(kind: GovernanceOutboxKindV1) -> bool {
+    matches!(
+        kind,
+        GovernanceOutboxKindV1::AppealFinanceReport
+            | GovernanceOutboxKindV1::AppealFinanceWeeklyRollup
+    )
 }
 
 fn decode_canonical_governance_payload<T>(bytes: &[u8]) -> Result<T, GovernancePublishError>
@@ -4150,7 +4317,7 @@ fn validate_gc_audit_event(
 fn validate_governance_outbox_entry(
     entry: &GovernanceOutboxEntryV1,
 ) -> Result<(), GovernancePublishError> {
-    if entry.version != GOVERNANCE_OUTBOX_VERSION_V2 {
+    if entry.version != GOVERNANCE_OUTBOX_VERSION_V3 {
         return Err(GovernancePublishError::other(format!(
             "unsupported governance outbox entry version {}",
             entry.version
@@ -4172,10 +4339,23 @@ fn validate_governance_outbox_entry(
         entry.sequence,
         entry.kind,
         entry.payload_digest,
+        entry.provenance.as_ref(),
     );
     if binding_digest != entry.binding_digest {
         return Err(GovernancePublishError::other(
             "governance outbox kind/sequence binding digest mismatch",
+        ));
+    }
+    if governance_outbox_kind_requires_provenance(entry.kind) && entry.provenance.is_none() {
+        return Err(GovernancePublishError::other(
+            "governance outbox finance submission is missing authenticated provenance",
+        ));
+    }
+    if entry.provenance.as_ref().is_some_and(|provenance| {
+        !governance_outbox_provenance_matches_kind(entry.kind, provenance)
+    }) {
+        return Err(GovernancePublishError::other(
+            "governance outbox provenance does not match its payload kind",
         ));
     }
     match entry.kind {
@@ -4255,6 +4435,7 @@ fn insert_governance_outbox_entry(
     outbox: &mut GovernanceOutboxRuntime,
     kind: GovernanceOutboxKindV1,
     payload_bytes: Vec<u8>,
+    provenance: Option<GovernanceSubmissionProvenanceV1>,
     entry_limit: usize,
     reserved_slots: usize,
 ) -> Result<(u64, bool), GovernancePublishError> {
@@ -4264,7 +4445,12 @@ fn insert_governance_outbox_entry(
             && entry.payload_digest == payload_digest
             && entry.payload_bytes == payload_bytes
     }) {
-        return Ok((existing.sequence, false));
+        if existing.provenance == provenance {
+            return Ok((existing.sequence, false));
+        }
+        return Err(GovernancePublishError::other(
+            "governance outbox canonical payload conflicts with retained authenticated provenance",
+        ));
     }
     let unreserved_limit = entry_limit.checked_sub(reserved_slots).ok_or_else(|| {
         GovernancePublishError::other(format!(
@@ -4280,17 +4466,20 @@ fn insert_governance_outbox_entry(
     let next_sequence = sequence
         .checked_add(1)
         .ok_or_else(|| GovernancePublishError::other("governance outbox sequence exhausted"))?;
-    let entry = GovernanceOutboxEntryV1 {
-        version: GOVERNANCE_OUTBOX_VERSION_V2,
+    let binding_digest = governance_outbox_binding_digest(
+        GOVERNANCE_OUTBOX_VERSION_V3,
         sequence,
         kind,
         payload_digest,
-        binding_digest: governance_outbox_binding_digest(
-            GOVERNANCE_OUTBOX_VERSION_V2,
-            sequence,
-            kind,
-            payload_digest,
-        ),
+        provenance.as_ref(),
+    );
+    let entry = GovernanceOutboxEntryV1 {
+        version: GOVERNANCE_OUTBOX_VERSION_V3,
+        sequence,
+        kind,
+        payload_digest,
+        provenance,
+        binding_digest,
         payload_bytes,
     };
     validate_governance_outbox_entry(&entry)?;
@@ -4540,24 +4729,43 @@ fn publish_governance_outbox_entry(
                 &payload,
                 &entry.payload_bytes,
                 authorization,
+                entry.provenance.as_ref(),
             )
         }
         GovernanceOutboxKindV1::ProofTokenIssuance => {
             let payload =
                 decode_canonical_governance_payload::<ProofTokenIssuanceV1>(&entry.payload_bytes)?;
-            publisher.publish_proof_token_issuance(&payload, &entry.payload_bytes)
+            publisher.publish_proof_token_issuance(
+                &payload,
+                &entry.payload_bytes,
+                entry.provenance.as_ref(),
+            )
         }
         GovernanceOutboxKindV1::AppealFinanceReport => {
             let payload = decode_canonical_governance_payload::<SoraFsAppealFinanceReportV1>(
                 &entry.payload_bytes,
             )?;
-            publisher.publish_appeal_finance_report(&payload, &entry.payload_bytes)
+            let provenance = entry.provenance.as_ref().ok_or_else(|| {
+                GovernancePublishError::other(
+                    "governance outbox finance report is missing authenticated provenance",
+                )
+            })?;
+            publisher.publish_appeal_finance_report(&payload, &entry.payload_bytes, provenance)
         }
         GovernanceOutboxKindV1::AppealFinanceWeeklyRollup => {
             let payload = decode_canonical_governance_payload::<SoraFsAppealFinanceWeeklyRollupV1>(
                 &entry.payload_bytes,
             )?;
-            publisher.publish_appeal_finance_weekly_rollup(&payload, &entry.payload_bytes)
+            let provenance = entry.provenance.as_ref().ok_or_else(|| {
+                GovernancePublishError::other(
+                    "governance outbox finance rollup is missing authenticated provenance",
+                )
+            })?;
+            publisher.publish_appeal_finance_weekly_rollup(
+                &payload,
+                &entry.payload_bytes,
+                provenance,
+            )
         }
         GovernanceOutboxKindV1::AppealFinanceSettlementReceipt => {
             let payload = decode_canonical_governance_payload::<
@@ -4592,7 +4800,7 @@ struct AdmittedReputationSnapshotV1 {
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct AuxiliaryRuntimeCheckpointV3 {
+struct AuxiliaryRuntimeCheckpointV4 {
     version: u8,
     capacity_runtime: CapacityRuntimeCheckpointV1,
     por_tracker: por::PorTrackerCheckpointV1,
@@ -7180,6 +7388,21 @@ impl NodeHandle {
         self.enqueue_governance_outbox_unlocked_with_reservation(
             kind,
             payload_bytes,
+            None,
+            GovernanceOutboxReservationUse::None,
+        )
+    }
+
+    fn enqueue_governance_outbox_unlocked_with_provenance(
+        &self,
+        kind: GovernanceOutboxKindV1,
+        payload_bytes: Vec<u8>,
+        provenance: GovernanceSubmissionProvenanceV1,
+    ) -> Result<(u64, bool), GovernancePublishError> {
+        self.enqueue_governance_outbox_unlocked_with_reservation(
+            kind,
+            payload_bytes,
+            Some(provenance),
             GovernanceOutboxReservationUse::None,
         )
     }
@@ -7191,6 +7414,7 @@ impl NodeHandle {
         self.enqueue_governance_outbox_unlocked_with_reservation(
             GovernanceOutboxKindV1::GcAudit,
             payload_bytes,
+            None,
             GovernanceOutboxReservationUse::GcEviction,
         )
     }
@@ -7199,6 +7423,7 @@ impl NodeHandle {
         &self,
         kind: GovernanceOutboxKindV1,
         payload_bytes: Vec<u8>,
+        provenance: Option<GovernanceSubmissionProvenanceV1>,
         reservation_use: GovernanceOutboxReservationUse,
     ) -> Result<(u64, bool), GovernancePublishError> {
         let gc_reserved_slots = {
@@ -7227,6 +7452,7 @@ impl NodeHandle {
             &mut outbox,
             kind,
             payload_bytes,
+            provenance,
             self.config.runtime_retention().state_entry_limit(),
             reserved_slots,
         )
@@ -7236,6 +7462,28 @@ impl NodeHandle {
         &self,
         kind: GovernanceOutboxKindV1,
         payload_bytes: Vec<u8>,
+    ) -> Result<u64, GovernancePublishError> {
+        self.enqueue_governance_outbox_with_optional_provenance(kind, payload_bytes, None)
+    }
+
+    fn enqueue_governance_outbox_with_provenance(
+        &self,
+        kind: GovernanceOutboxKindV1,
+        payload_bytes: Vec<u8>,
+        provenance: GovernanceSubmissionProvenanceV1,
+    ) -> Result<u64, GovernancePublishError> {
+        self.enqueue_governance_outbox_with_optional_provenance(
+            kind,
+            payload_bytes,
+            Some(provenance),
+        )
+    }
+
+    fn enqueue_governance_outbox_with_optional_provenance(
+        &self,
+        kind: GovernanceOutboxKindV1,
+        payload_bytes: Vec<u8>,
+        provenance: Option<GovernanceSubmissionProvenanceV1>,
     ) -> Result<u64, GovernancePublishError> {
         let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
@@ -7247,7 +7495,14 @@ impl NodeHandle {
             .read()
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
             .clone();
-        let (sequence, inserted) = self.enqueue_governance_outbox_unlocked(kind, payload_bytes)?;
+        let (sequence, inserted) = match provenance {
+            Some(provenance) => self.enqueue_governance_outbox_unlocked_with_provenance(
+                kind,
+                payload_bytes,
+                provenance,
+            )?,
+            None => self.enqueue_governance_outbox_unlocked(kind, payload_bytes)?,
+        };
         if inserted && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
                 return Err(GovernancePublishError::other(err.to_string()));
@@ -7291,100 +7546,6 @@ impl NodeHandle {
             )?;
         }
         self.validate_gc_eviction_links_against_storage(storage)
-    }
-
-    fn enqueue_governance_outbox_with_transparency_entry(
-        &self,
-        kind: GovernanceOutboxKindV1,
-        payload_bytes: Vec<u8>,
-        source_entry: TransparencyLedgerSourceEntry,
-    ) -> Result<u64, GovernancePublishError> {
-        source_entry.validate().map_err(|err| {
-            GovernancePublishError::other(format!(
-                "invalid transparency ledger source entry: {err}"
-            ))
-        })?;
-        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
-            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
-        })?;
-        self.ensure_durability_healthy()
-            .map_err(GovernancePublishError::other)?;
-        let previous_outbox = self
-            .governance_outbox
-            .read()
-            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
-            .clone();
-        let previous_sources = self
-            .transparency_ledger_source_entries
-            .read()
-            .map_err(|_| GovernancePublishError::other("transparency source-entry index poisoned"))?
-            .clone();
-
-        let mut sources = self
-            .transparency_ledger_source_entries
-            .write()
-            .map_err(|_| {
-                GovernancePublishError::other("transparency source-entry index poisoned")
-            })?;
-        let source_inserted = match sources.get(&source_entry.event_id) {
-            Some(existing) if existing == &source_entry => false,
-            Some(_) => {
-                return Err(GovernancePublishError::other(format!(
-                    "transparency ledger source entry `{}` conflicts with retained canonical data",
-                    source_entry.event_id
-                )));
-            }
-            None => {
-                let limit = self.config.runtime_retention().state_entry_limit();
-                if sources.len() >= limit {
-                    return Err(GovernancePublishError::other(format!(
-                        "transparency source-entry retention exhausted (limit {limit})"
-                    )));
-                }
-                sources.insert(source_entry.event_id.clone(), source_entry);
-                true
-            }
-        };
-        drop(sources);
-
-        let (sequence, outbox_inserted) =
-            match self.enqueue_governance_outbox_unlocked(kind, payload_bytes) {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    if source_inserted {
-                        *self
-                            .transparency_ledger_source_entries
-                            .write()
-                            .map_err(|_| {
-                                GovernancePublishError::other(
-                                    "transparency source-entry rollback lock poisoned",
-                                )
-                            })? = previous_sources;
-                    }
-                    return Err(err);
-                }
-            };
-        if (source_inserted || outbox_inserted)
-            && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked()
-        {
-            if err.committed {
-                return Err(GovernancePublishError::other(err.to_string()));
-            }
-            *self.governance_outbox.write().map_err(|_| {
-                GovernancePublishError::other("governance outbox rollback lock poisoned")
-            })? = previous_outbox;
-            *self
-                .transparency_ledger_source_entries
-                .write()
-                .map_err(|_| {
-                    GovernancePublishError::other(
-                        "transparency source-entry rollback lock poisoned",
-                    )
-                })? = previous_sources;
-            return Err(GovernancePublishError::other(err.to_string()));
-        }
-        drop(checkpoint_guard);
-        Ok(sequence)
     }
 
     fn enqueue_sequenced_governance_outbox(
@@ -8056,10 +8217,25 @@ impl NodeHandle {
         Ok(())
     }
 
-    /// Publish a typed SoraFS appeal finance report to the governance pipeline.
-    pub fn publish_appeal_finance_report(
+    /// Publish an appeal-finance report with server-verified Torii provenance.
+    pub fn publish_authenticated_appeal_finance_report(
         &self,
         report: SoraFsAppealFinanceReportV1,
+        publisher_account: AccountId,
+    ) -> Result<(), GovernancePublishError> {
+        self.publish_appeal_finance_report_with_provenance(
+            report,
+            GovernanceSubmissionProvenanceV1::new(
+                publisher_account,
+                GovernanceSubmissionOriginV1::AppealFinanceReport,
+            ),
+        )
+    }
+
+    fn publish_appeal_finance_report_with_provenance(
+        &self,
+        report: SoraFsAppealFinanceReportV1,
+        provenance: GovernanceSubmissionProvenanceV1,
     ) -> Result<(), GovernancePublishError> {
         report.validate().map_err(|err| {
             GovernancePublishError::other(format!("invalid appeal finance report: {err}"))
@@ -8067,16 +8243,10 @@ impl NodeHandle {
         let encoded = norito::to_bytes(&report).map_err(|err| {
             GovernancePublishError::other(format!("encode appeal finance report: {err}"))
         })?;
-        let source_entry =
-            transparency::appeal_finance_report_source_entry(&report).map_err(|err| {
-                GovernancePublishError::other(format!(
-                    "derive appeal finance report transparency source entry: {err}"
-                ))
-            })?;
-        self.enqueue_governance_outbox_with_transparency_entry(
+        self.enqueue_governance_outbox_with_optional_provenance(
             GovernanceOutboxKindV1::AppealFinanceReport,
             encoded,
-            source_entry,
+            Some(provenance),
         )?;
         self.flush_governance_outbox()?;
         Ok(())
@@ -8115,13 +8285,25 @@ impl NodeHandle {
         &self,
         issuance: ProofTokenIssuanceV1,
     ) -> Result<(), GovernancePublishError> {
+        self.publish_proof_token_issuance_with_provenance(issuance, None)
+    }
+
+    fn publish_proof_token_issuance_with_provenance(
+        &self,
+        issuance: ProofTokenIssuanceV1,
+        provenance: Option<GovernanceSubmissionProvenanceV1>,
+    ) -> Result<(), GovernancePublishError> {
         issuance.validate().map_err(|err| {
             GovernancePublishError::other(format!("invalid proof-token issuance: {err}"))
         })?;
         let encoded = norito::to_bytes(&issuance).map_err(|err| {
             GovernancePublishError::other(format!("encode proof-token issuance: {err}"))
         })?;
-        self.enqueue_governance_outbox(GovernanceOutboxKindV1::ProofTokenIssuance, encoded)?;
+        self.enqueue_governance_outbox_with_optional_provenance(
+            GovernanceOutboxKindV1::ProofTokenIssuance,
+            encoded,
+            provenance,
+        )?;
         self.flush_governance_outbox()?;
         Ok(())
     }
@@ -8175,6 +8357,36 @@ impl NodeHandle {
             GovernancePublishError::other(format!("ingest proof-token issuance: {err}"))
         })?;
         self.publish_proof_token_issuance(issuance.clone())?;
+        Ok(issuance)
+    }
+
+    /// Derive and publish a proof-token issuance with verified Torii provenance.
+    pub fn publish_authenticated_proof_token_base64_issuance(
+        &self,
+        token_b64: &str,
+        signer_key: [u8; 32],
+        evidence_digest: Option<[u8; 32]>,
+        policy_digest: Option<[u8; 32]>,
+        metadata: Vec<ModerationLedgerMetadataV1>,
+        publisher_account: AccountId,
+    ) -> Result<ProofTokenIssuanceV1, GovernancePublishError> {
+        let issuance = transparency::proof_token_issuance_from_base64(
+            token_b64,
+            signer_key,
+            evidence_digest,
+            policy_digest,
+            metadata,
+        )
+        .map_err(|err| {
+            GovernancePublishError::other(format!("ingest proof-token issuance: {err}"))
+        })?;
+        self.publish_proof_token_issuance_with_provenance(
+            issuance.clone(),
+            Some(GovernanceSubmissionProvenanceV1::new(
+                publisher_account,
+                GovernanceSubmissionOriginV1::TransparencyTokenIssuance,
+            )),
+        )?;
         Ok(issuance)
     }
 
@@ -8388,7 +8600,32 @@ impl NodeHandle {
     }
 
     /// Record one source event for later SFM-4c privacy aggregate publication.
-    pub fn record_privacy_aggregate_source_event(
+    pub(crate) fn record_privacy_aggregate_source_event(
+        &self,
+        event: PrivacyAggregateSourceEvent,
+    ) -> Result<PrivacySourceEventRecordOutcomeV1, GovernancePublishError> {
+        if event.provenance.is_some() {
+            return Err(GovernancePublishError::other(
+                "state-derived privacy aggregate source events cannot supply authenticated provenance",
+            ));
+        }
+        self.record_privacy_aggregate_source_event_inner(event)
+    }
+
+    /// Record a privacy aggregate source event with server-verified Torii provenance.
+    pub fn record_authenticated_privacy_aggregate_source_event(
+        &self,
+        mut event: PrivacyAggregateSourceEvent,
+        publisher_account: AccountId,
+    ) -> Result<PrivacySourceEventRecordOutcomeV1, GovernancePublishError> {
+        event.provenance = Some(GovernanceSubmissionProvenanceV1::new(
+            publisher_account,
+            GovernanceSubmissionOriginV1::PrivacyAggregateSourceEvent,
+        ));
+        self.record_privacy_aggregate_source_event_inner(event)
+    }
+
+    fn record_privacy_aggregate_source_event_inner(
         &self,
         event: PrivacyAggregateSourceEvent,
     ) -> Result<PrivacySourceEventRecordOutcomeV1, GovernancePublishError> {
@@ -9006,6 +9243,27 @@ impl NodeHandle {
         config: PrivacyAggregateCycleConfig,
         composition_budget: Option<PrivacyCompositionBudgetPolicyV1>,
     ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
+        self.publish_due_privacy_aggregate_cycle_from_source_events_with_provenance(
+            now_unix,
+            expected_cycle_id,
+            idempotency_key,
+            schedule,
+            config,
+            composition_budget,
+            None,
+        )
+    }
+
+    fn publish_due_privacy_aggregate_cycle_from_source_events_with_provenance(
+        &self,
+        now_unix: u64,
+        expected_cycle_id: [u8; 16],
+        idempotency_key: String,
+        schedule: PrivacyAggregateScheduleConfig,
+        config: PrivacyAggregateCycleConfig,
+        composition_budget: Option<PrivacyCompositionBudgetPolicyV1>,
+        provenance: Option<GovernanceSubmissionProvenanceV1>,
+    ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
         let _mutation_guard = self.runtime_mutation_lock.lock().map_err(|_| {
             GovernancePublishError::other("runtime publication transaction lock poisoned")
         })?;
@@ -9078,7 +9336,10 @@ impl NodeHandle {
             .get(&idempotency_key)
             .cloned()
         {
-            if receipt.request_digest != request_digest || receipt.cycle_id != expected_cycle_id {
+            if receipt.request_digest != request_digest
+                || receipt.cycle_id != expected_cycle_id
+                || receipt.provenance != provenance
+            {
                 return Err(GovernancePublishError::other(
                     "privacy publish idempotency key equivocation",
                 ));
@@ -9182,6 +9443,7 @@ impl NodeHandle {
                         cycle_end_unix: window.cycle_end_unix,
                         publish_delay_seconds: schedule.publish_delay_seconds,
                         due_at_unix: window.due_at_unix,
+                        provenance: provenance.clone(),
                         outcome: PrivacyPublishRequestOutcomeV1::AllBucketsSuppressed,
                     };
                     self.commit_processed_privacy_cycle(
@@ -9230,6 +9492,7 @@ impl NodeHandle {
                 cycle_end_unix: window.cycle_end_unix,
                 publish_delay_seconds: schedule.publish_delay_seconds,
                 due_at_unix: window.due_at_unix,
+                provenance,
                 outcome: PrivacyPublishRequestOutcomeV1::Published { publication_bytes },
             };
             self.commit_published_privacy_cycle(
@@ -9452,6 +9715,7 @@ impl NodeHandle {
             event.occurred_at_unix < window.cycle_start_unix
                 || event.occurred_at_unix >= window.cycle_end_unix
         });
+        let outbox_provenance = request_receipt.provenance.clone();
         let mut next_request_receipts = previous_request_receipts.clone();
         if next_request_receipts.len() >= self.config.runtime_retention().state_entry_limit()
             || next_request_receipts
@@ -9474,6 +9738,7 @@ impl NodeHandle {
             &mut next_outbox,
             GovernanceOutboxKindV1::TransparencyLedgerPublication,
             encoded,
+            outbox_provenance,
             self.config.runtime_retention().state_entry_limit(),
             gc_reserved_slots,
         )?;
@@ -9741,6 +10006,36 @@ impl NodeHandle {
         expected_cycle_id: [u8; 16],
         idempotency_key: String,
     ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
+        self.publish_due_configured_privacy_aggregate_cycle(
+            expected_cycle_id,
+            idempotency_key,
+            None,
+        )
+    }
+
+    /// Publish the next due privacy cycle with server-verified Torii provenance.
+    pub fn publish_due_configured_privacy_aggregate_cycle_from_authenticated_request(
+        &self,
+        expected_cycle_id: [u8; 16],
+        idempotency_key: String,
+        publisher_account: AccountId,
+    ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
+        self.publish_due_configured_privacy_aggregate_cycle(
+            expected_cycle_id,
+            idempotency_key,
+            Some(GovernanceSubmissionProvenanceV1::new(
+                publisher_account,
+                GovernanceSubmissionOriginV1::PrivacyAggregatePublishDue,
+            )),
+        )
+    }
+
+    fn publish_due_configured_privacy_aggregate_cycle(
+        &self,
+        expected_cycle_id: [u8; 16],
+        idempotency_key: String,
+        provenance: Option<GovernanceSubmissionProvenanceV1>,
+    ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
         let Some(schedule) = self.configured_privacy_aggregate_schedule() else {
             return Ok(PrivacyAggregateScheduleOutcome::Disabled);
         };
@@ -9752,20 +10047,36 @@ impl NodeHandle {
             })?;
             (policy.cycle_config(), policy.composition_budget())
         };
-        self.publish_due_privacy_aggregate_cycle_from_source_events(
+        self.publish_due_privacy_aggregate_cycle_from_source_events_with_provenance(
             unix_now_secs(),
             expected_cycle_id,
             idempotency_key,
             schedule,
             config,
             Some(composition_budget),
+            provenance,
         )
     }
 
-    /// Publish a typed SoraFS weekly appeal finance rollup to the governance pipeline.
-    pub fn publish_appeal_finance_weekly_rollup(
+    /// Publish an appeal-finance weekly rollup with verified Torii provenance.
+    pub fn publish_authenticated_appeal_finance_weekly_rollup(
         &self,
         rollup: SoraFsAppealFinanceWeeklyRollupV1,
+        publisher_account: AccountId,
+    ) -> Result<(), GovernancePublishError> {
+        self.publish_appeal_finance_weekly_rollup_with_provenance(
+            rollup,
+            GovernanceSubmissionProvenanceV1::new(
+                publisher_account,
+                GovernanceSubmissionOriginV1::AppealFinanceWeeklyRollup,
+            ),
+        )
+    }
+
+    fn publish_appeal_finance_weekly_rollup_with_provenance(
+        &self,
+        rollup: SoraFsAppealFinanceWeeklyRollupV1,
+        provenance: GovernanceSubmissionProvenanceV1,
     ) -> Result<(), GovernancePublishError> {
         rollup.validate().map_err(|err| {
             GovernancePublishError::other(format!("invalid appeal finance weekly rollup: {err}"))
@@ -9773,7 +10084,11 @@ impl NodeHandle {
         let encoded = norito::to_bytes(&rollup).map_err(|err| {
             GovernancePublishError::other(format!("encode appeal finance weekly rollup: {err}"))
         })?;
-        self.enqueue_governance_outbox(GovernanceOutboxKindV1::AppealFinanceWeeklyRollup, encoded)?;
+        self.enqueue_governance_outbox_with_optional_provenance(
+            GovernanceOutboxKindV1::AppealFinanceWeeklyRollup,
+            encoded,
+            Some(provenance),
+        )?;
         self.flush_governance_outbox()?;
         Ok(())
     }
@@ -9793,16 +10108,9 @@ impl NodeHandle {
                 "encode appeal finance settlement receipt: {err}"
             ))
         })?;
-        let source_entry = transparency::appeal_finance_settlement_receipt_source_entry(&receipt)
-            .map_err(|err| {
-            GovernancePublishError::other(format!(
-                "derive appeal finance settlement receipt transparency source entry: {err}"
-            ))
-        })?;
-        self.enqueue_governance_outbox_with_transparency_entry(
+        self.enqueue_governance_outbox(
             GovernanceOutboxKindV1::AppealFinanceSettlementReceipt,
             encoded,
-            source_entry,
         )?;
         self.flush_governance_outbox()?;
         Ok(())
@@ -12002,7 +12310,7 @@ impl NodeHandle {
 
     fn export_auxiliary_runtime_checkpoint(
         &self,
-    ) -> Result<AuxiliaryRuntimeCheckpointV3, GovernancePublishError> {
+    ) -> Result<AuxiliaryRuntimeCheckpointV4, GovernancePublishError> {
         let capacity_runtime = self.capacity.checkpoint().map_err(|err| {
             GovernancePublishError::other(format!("export capacity runtime checkpoint: {err}"))
         })?;
@@ -12130,8 +12438,8 @@ impl NodeHandle {
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
         let governance_outbox_next_sequence = governance_outbox.next_sequence;
         let governance_outbox_entries = governance_outbox.entries.values().cloned().collect();
-        Ok(AuxiliaryRuntimeCheckpointV3 {
-            version: AUX_RUNTIME_STATE_VERSION_V3,
+        Ok(AuxiliaryRuntimeCheckpointV4 {
+            version: AUX_RUNTIME_STATE_VERSION_V4,
             capacity_runtime,
             por_tracker: self.por.checkpoint(),
             por_history,
@@ -12248,7 +12556,7 @@ impl NodeHandle {
             // for those sequences; domain restore validation still enforces
             // the configured state and event limits.
             .max(bytes.len());
-        let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV3>(
+        let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV4>(
             &bytes,
             retention.checkpoint_max_bytes(),
             maximum_sequence_elements,
@@ -12261,9 +12569,9 @@ impl NodeHandle {
 
     fn restore_auxiliary_runtime_checkpoint(
         &self,
-        checkpoint: AuxiliaryRuntimeCheckpointV3,
+        checkpoint: AuxiliaryRuntimeCheckpointV4,
     ) -> Result<(), GovernancePublishError> {
-        if checkpoint.version != AUX_RUNTIME_STATE_VERSION_V3 {
+        if checkpoint.version != AUX_RUNTIME_STATE_VERSION_V4 {
             return Err(GovernancePublishError::other(format!(
                 "unsupported auxiliary runtime checkpoint version {}",
                 checkpoint.version
@@ -15949,6 +16257,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn appeal_finance_publication_has_no_unauthenticated_node_handle_entrypoint() {
+        let source = include_str!("lib.rs");
+        for method in [
+            "publish_appeal_finance_report",
+            "publish_appeal_finance_weekly_rollup",
+        ] {
+            let retired = format!("pub fn {method}(");
+            assert!(
+                !source.contains(&retired),
+                "unauthenticated finance publication entrypoint reappeared: {retired}"
+            );
+            let authenticated = format!("pub fn publish_authenticated_{method}(");
+            assert!(
+                source.contains(&authenticated),
+                "authenticated finance publication entrypoint is missing: {authenticated}"
+            );
+        }
+    }
+
     #[derive(Debug)]
     struct SuccessfulPorRepairHandoff;
 
@@ -18696,6 +19024,14 @@ mod tests {
                 retired_auxiliary_runtime_checkpoint_path_v2 as fn(&Path) -> PathBuf,
                 "retired auxiliary runtime checkpoint",
             ),
+            (
+                retired_runtime_state_initialization_path_v3 as fn(&Path) -> PathBuf,
+                "retired runtime initialization marker",
+            ),
+            (
+                retired_auxiliary_runtime_checkpoint_path_v3 as fn(&Path) -> PathBuf,
+                "retired auxiliary runtime checkpoint",
+            ),
         ] {
             let (cfg, _dir) = storage_config_with_temp_dir();
             drop(NodeHandle::new(cfg.clone()));
@@ -18719,7 +19055,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_initialization_rejects_noncanonical_v3_marker() {
+    fn runtime_initialization_rejects_noncanonical_v4_marker() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         drop(NodeHandle::new(cfg.clone()));
         let marker = runtime_state_initialization_path(cfg.data_dir());
@@ -18730,7 +19066,7 @@ mod tests {
         .expect("replace runtime-state marker");
 
         let error = NodeHandle::try_new(cfg)
-            .expect_err("noncanonical runtime-state v3 marker must fail startup");
+            .expect_err("noncanonical runtime-state v4 marker must fail startup");
         assert!(
             matches!(
                 error,
@@ -18738,7 +19074,7 @@ mod tests {
                     component: "runtime initialization marker",
                     ref message,
                     ..
-                } if message.contains("runtime-state v3")
+                } if message.contains("runtime-state v4")
             ),
             "unexpected startup error: {error}"
         );
@@ -18750,8 +19086,8 @@ mod tests {
         drop(NodeHandle::new(cfg.clone()));
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read initialized auxiliary checkpoint");
-        for retired_version in [1, 2] {
-            let mut checkpoint = norito::decode_from_bytes::<AuxiliaryRuntimeCheckpointV3>(&bytes)
+        for retired_version in [1, 2, 3] {
+            let mut checkpoint = norito::decode_from_bytes::<AuxiliaryRuntimeCheckpointV4>(&bytes)
                 .expect("decode initialized auxiliary checkpoint");
             checkpoint.version = retired_version;
             let retired = norito::to_bytes(&checkpoint).expect("encode retired checkpoint version");
@@ -18785,11 +19121,13 @@ mod tests {
             sequence: 1,
             kind: GovernanceOutboxKindV1::DealSettlement,
             payload_digest,
+            provenance: None,
             binding_digest: governance_outbox_binding_digest(
                 1,
                 1,
                 GovernanceOutboxKindV1::DealSettlement,
                 payload_digest,
+                None,
             ),
             payload_bytes,
         };
@@ -18802,6 +19140,87 @@ mod tests {
                 .contains("unsupported governance outbox entry version 1"),
             "unexpected validation error: {error}"
         );
+    }
+
+    #[test]
+    fn governance_outbox_rejects_finance_submission_without_provenance() {
+        let cases = [
+            (
+                GovernanceOutboxKindV1::AppealFinanceReport,
+                norito::to_bytes(&appeal_finance_report_fixture()).expect("encode finance report"),
+            ),
+            (
+                GovernanceOutboxKindV1::AppealFinanceWeeklyRollup,
+                norito::to_bytes(&appeal_finance_weekly_rollup_fixture())
+                    .expect("encode finance rollup"),
+            ),
+        ];
+
+        for (kind, payload_bytes) in cases {
+            let payload_digest = *blake3::hash(&payload_bytes).as_bytes();
+            let entry = GovernanceOutboxEntryV1 {
+                version: GOVERNANCE_OUTBOX_VERSION_V3,
+                sequence: 1,
+                kind,
+                payload_digest,
+                provenance: None,
+                binding_digest: governance_outbox_binding_digest(
+                    GOVERNANCE_OUTBOX_VERSION_V3,
+                    1,
+                    kind,
+                    payload_digest,
+                    None,
+                ),
+                payload_bytes,
+            };
+
+            let error = validate_governance_outbox_entry(&entry)
+                .expect_err("unauthenticated finance entry must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("missing authenticated provenance"),
+                "unexpected validation error for {kind:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn governance_outbox_allows_trusted_internal_proof_and_transparency_producers() {
+        let cases = [
+            (
+                GovernanceOutboxKindV1::ProofTokenIssuance,
+                norito::to_bytes(&proof_token_issuance_fixture())
+                    .expect("encode proof-token issuance"),
+            ),
+            (
+                GovernanceOutboxKindV1::TransparencyLedgerPublication,
+                norito::to_bytes(&transparency_ledger_publication_fixture())
+                    .expect("encode transparency publication"),
+            ),
+        ];
+
+        for (kind, payload_bytes) in cases {
+            let payload_digest = *blake3::hash(&payload_bytes).as_bytes();
+            let entry = GovernanceOutboxEntryV1 {
+                version: GOVERNANCE_OUTBOX_VERSION_V3,
+                sequence: 1,
+                kind,
+                payload_digest,
+                provenance: None,
+                binding_digest: governance_outbox_binding_digest(
+                    GOVERNANCE_OUTBOX_VERSION_V3,
+                    1,
+                    kind,
+                    payload_digest,
+                    None,
+                ),
+                payload_bytes,
+            };
+
+            validate_governance_outbox_entry(&entry)
+                .unwrap_or_else(|error| panic!("trusted internal {kind:?} rejected: {error}"));
+        }
     }
 
     #[test]
@@ -19739,6 +20158,7 @@ mod tests {
             generated_at_unix: 1_800_604_800,
             population_label: format!("{aggregate_id}-population"),
             population_digest: [seed; 32],
+            source_commitment: [seed.wrapping_add(1); 32],
             privacy: ModerationPrivacyParametersV1 {
                 version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                 mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
@@ -19798,6 +20218,7 @@ mod tests {
                 },
             ],
             policy_digest: [0xC0; 32],
+            provenance: None,
         }
     }
 
@@ -19989,6 +20410,12 @@ mod tests {
             .canonicalize()
             .expect("canonical privacy aggregate temp dir");
         (privacy_aggregate_storage_config(&root), temp_dir)
+    }
+
+    fn governance_submission_account(seed: u8) -> AccountId {
+        let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive authenticated governance publisher key");
+        AccountId::new(key.public_key().clone())
     }
 
     fn appeal_finance_report_fixture() -> SoraFsAppealFinanceReportV1 {
@@ -22292,7 +22719,7 @@ mod tests {
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let original = fs::read(&path).expect("read auxiliary checkpoint");
         for tamper in 0..3 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
                 norito::decode_from_bytes(&original).expect("decode auxiliary checkpoint");
             let entry = checkpoint
                 .governance_outbox_entries
@@ -22341,7 +22768,7 @@ mod tests {
 
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
             norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
         let entry = checkpoint
             .governance_outbox_entries
@@ -22357,6 +22784,7 @@ mod tests {
             entry.sequence,
             entry.kind,
             entry.payload_digest,
+            entry.provenance.as_ref(),
         );
         write_local_checkpoint_atomic(
             &path,
@@ -22384,7 +22812,7 @@ mod tests {
 
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
             norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
         checkpoint.reputation_events[0].snapshot_id = [0x99; 16];
         write_local_checkpoint_atomic(
@@ -22414,7 +22842,7 @@ mod tests {
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let original = fs::read(&path).expect("read auxiliary checkpoint");
         for case in 0..7_u8 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
                 norito::decode_from_bytes(&original).expect("decode auxiliary checkpoint");
             match case {
                 0 => {
@@ -22447,6 +22875,7 @@ mod tests {
                         entry.sequence,
                         entry.kind,
                         entry.payload_digest,
+                        entry.provenance.as_ref(),
                     );
                 }
                 _ => unreachable!("bounded checkpoint tamper case"),
@@ -22477,11 +22906,78 @@ mod tests {
         let expected = to_bytes(&report).expect("encode appeal finance report");
 
         handle
-            .publish_appeal_finance_report(report.clone())
+            .publish_authenticated_appeal_finance_report(
+                report.clone(),
+                governance_submission_account(0xB3),
+            )
             .expect("publish appeal finance report");
 
         let published = publisher.take();
         assert_eq!(published, vec![expected]);
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 0);
+    }
+
+    #[test]
+    fn authenticated_governance_outbox_binds_publisher_and_rejects_reattribution() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let publisher_key = KeyPair::try_from_seed(vec![0xB4; 32], Algorithm::Ed25519)
+            .expect("derive finance publisher key");
+        let publisher = AccountId::new(publisher_key.public_key().clone());
+        let other_key = KeyPair::try_from_seed(vec![0xB5; 32], Algorithm::Ed25519)
+            .expect("derive alternate finance publisher key");
+        let other = AccountId::new(other_key.public_key().clone());
+        let report = appeal_finance_report_fixture();
+
+        handle
+            .publish_authenticated_appeal_finance_report(report.clone(), publisher.clone())
+            .expect("enqueue authenticated finance report");
+        handle
+            .publish_authenticated_appeal_finance_report(report.clone(), publisher.clone())
+            .expect("same publisher retry is idempotent");
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        let error = handle
+            .publish_authenticated_appeal_finance_report(report, other.clone())
+            .expect_err("another publisher cannot claim the retained canonical payload");
+        assert!(
+            error
+                .to_string()
+                .contains("conflicts with retained authenticated provenance")
+        );
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 0);
+
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let checkpoint_bytes = fs::read(&checkpoint_path).expect("read governance checkpoint");
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
+            norito::decode_from_bytes(&checkpoint_bytes).expect("decode governance checkpoint");
+        let entry = checkpoint
+            .governance_outbox_entries
+            .first_mut()
+            .expect("authenticated governance outbox entry");
+        let provenance = entry
+            .provenance
+            .as_mut()
+            .expect("governance entry retains authenticated provenance");
+        assert_eq!(provenance.publisher_account(), &publisher);
+        assert_eq!(
+            provenance.origin(),
+            GovernanceSubmissionOriginV1::AppealFinanceReport
+        );
+        provenance.publisher_account = other;
+        drop(handle);
+        write_local_checkpoint_atomic(
+            &checkpoint_path,
+            &norito::to_bytes(&checkpoint).expect("encode tampered governance checkpoint"),
+        )
+        .expect("write tampered governance checkpoint");
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::Checkpoint {
+                component: "auxiliary runtime",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -22980,6 +23476,60 @@ mod tests {
 
         assert!(err.to_string().contains("idempotency key equivocation"));
         assert_eq!(handle.privacy_aggregate_source_event_count(), 1);
+    }
+
+    #[test]
+    fn authenticated_privacy_source_event_binds_durable_publisher_provenance() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let publisher_key = KeyPair::try_from_seed(vec![0xA4; 32], Algorithm::Ed25519)
+            .expect("derive source publisher key");
+        let publisher = AccountId::new(publisher_key.public_key().clone());
+        let other_key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("derive alternate source publisher key");
+        let other = AccountId::new(other_key.public_key().clone());
+        let event = privacy_source_event(
+            "authenticated-event-a",
+            "jurisdiction-a",
+            0xA0,
+            1_800_000_010,
+        );
+
+        assert_eq!(
+            handle
+                .record_authenticated_privacy_aggregate_source_event(
+                    event.clone(),
+                    publisher.clone(),
+                )
+                .expect("record authenticated source event"),
+            PrivacySourceEventRecordOutcomeV1::Recorded
+        );
+        let checkpoint_bytes = fs::read(auxiliary_runtime_checkpoint_path(cfg.data_dir()))
+            .expect("read authenticated source checkpoint");
+        let checkpoint: AuxiliaryRuntimeCheckpointV4 =
+            norito::decode_from_bytes(&checkpoint_bytes).expect("decode source checkpoint");
+        let provenance = checkpoint.privacy_source_events[0]
+            .provenance
+            .as_ref()
+            .expect("source checkpoint retains authenticated provenance");
+        assert_eq!(provenance.publisher_account(), &publisher);
+        assert_eq!(
+            provenance.origin(),
+            GovernanceSubmissionOriginV1::PrivacyAggregateSourceEvent
+        );
+
+        drop(handle);
+        let restored = NodeHandle::new(cfg);
+        assert_eq!(
+            restored
+                .record_authenticated_privacy_aggregate_source_event(event.clone(), publisher,)
+                .expect("same publisher retry remains idempotent after restart"),
+            PrivacySourceEventRecordOutcomeV1::AlreadyRecorded
+        );
+        let error = restored
+            .record_authenticated_privacy_aggregate_source_event(event, other)
+            .expect_err("same event id from another publisher must conflict");
+        assert!(error.to_string().contains("idempotency key equivocation"));
     }
 
     #[test]
@@ -24172,7 +24722,7 @@ mod tests {
 
         let original = fs::read(&checkpoint_path).expect("read privacy receipt checkpoint");
         for tamper in 0..2 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
                 norito::decode_from_bytes(&original).expect("decode privacy receipt checkpoint");
             let receipt = checkpoint
                 .privacy_publish_request_receipts
@@ -24268,7 +24818,7 @@ mod tests {
         drop(source);
 
         let bytes = fs::read(&checkpoint_path).expect("read receipt-only checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
             norito::decode_from_bytes(&bytes).expect("decode receipt-only checkpoint");
         assert!(checkpoint.privacy_source_events.is_empty());
         checkpoint
@@ -24668,7 +25218,10 @@ mod tests {
             .fail_after_next_checkpoint_cas
             .store(true, Ordering::SeqCst);
         let error = node
-            .publish_appeal_finance_weekly_rollup(appeal_finance_weekly_rollup_fixture())
+            .publish_authenticated_appeal_finance_weekly_rollup(
+                appeal_finance_weekly_rollup_fixture(),
+                governance_submission_account(0xB6),
+            )
             .expect_err("ambiguous checkpoint CAS response must surface");
         assert!(error.to_string().contains("compare-and-swap failed"));
         assert!(
@@ -24981,11 +25534,15 @@ mod tests {
         let expected = to_bytes(&rollup).expect("encode appeal finance weekly rollup");
 
         handle
-            .publish_appeal_finance_weekly_rollup(rollup)
+            .publish_authenticated_appeal_finance_weekly_rollup(
+                rollup,
+                governance_submission_account(0xB7),
+            )
             .expect("publish appeal finance weekly rollup");
 
         let published = publisher.take();
         assert_eq!(published, vec![expected]);
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 0);
     }
 
     #[test]
@@ -25893,7 +26450,7 @@ mod tests {
             }
             let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
             let bytes = fs::read(&path).expect("read GC intent checkpoint");
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
                 norito::decode_from_bytes(&bytes).expect("decode GC intent checkpoint");
             let intent = checkpoint
                 .gc_eviction_intents
@@ -25954,7 +26511,7 @@ mod tests {
         assert_eq!(handle.pending_governance_publication_count(), 0);
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read linked GC checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV3 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV4 =
             norito::decode_from_bytes(&bytes).expect("decode linked GC checkpoint");
         let link = checkpoint
             .gc_eviction_audit_links
@@ -26329,7 +26886,10 @@ mod tests {
 
         let rollup = appeal_finance_weekly_rollup_fixture();
         handle
-            .publish_appeal_finance_weekly_rollup(rollup.clone())
+            .publish_authenticated_appeal_finance_weekly_rollup(
+                rollup.clone(),
+                governance_submission_account(0xB8),
+            )
             .expect("publish appeal finance weekly rollup");
 
         let reconciliation = handle
@@ -26357,7 +26917,10 @@ mod tests {
         let handle = reconciliation_handle_with_governance(&root);
         let rollup = appeal_finance_weekly_rollup_fixture();
         handle
-            .publish_appeal_finance_weekly_rollup(rollup.clone())
+            .publish_authenticated_appeal_finance_weekly_rollup(
+                rollup.clone(),
+                governance_submission_account(0xB9),
+            )
             .expect("publish appeal finance weekly rollup");
 
         let index_entry = weekly_rollup_publish_index_entry(&root);
@@ -26391,7 +26954,10 @@ mod tests {
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let handle = reconciliation_handle_with_governance(&root);
         handle
-            .publish_appeal_finance_weekly_rollup(appeal_finance_weekly_rollup_fixture())
+            .publish_authenticated_appeal_finance_weekly_rollup(
+                appeal_finance_weekly_rollup_fixture(),
+                governance_submission_account(0xBA),
+            )
             .expect("publish appeal finance weekly rollup");
 
         let index_entry = weekly_rollup_publish_index_entry(&root);
@@ -27901,6 +28467,7 @@ mod tests {
             _publication: &ModerationLedgerCyclePublicationV1,
             encoded: &[u8],
             _authorization: Option<&PrivacyPublicationAuthorizationV1>,
+            _provenance: Option<&GovernanceSubmissionProvenanceV1>,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.payloads.lock().expect("publisher lock poisoned");
             guard.push(encoded.to_vec());
@@ -27911,6 +28478,7 @@ mod tests {
             &self,
             _issuance: &ProofTokenIssuanceV1,
             encoded: &[u8],
+            _provenance: Option<&GovernanceSubmissionProvenanceV1>,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.payloads.lock().expect("publisher lock poisoned");
             guard.push(encoded.to_vec());
@@ -27921,6 +28489,7 @@ mod tests {
             &self,
             _report: &SoraFsAppealFinanceReportV1,
             encoded: &[u8],
+            _provenance: &GovernanceSubmissionProvenanceV1,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.payloads.lock().expect("publisher lock poisoned");
             guard.push(encoded.to_vec());
@@ -27931,6 +28500,7 @@ mod tests {
             &self,
             _rollup: &SoraFsAppealFinanceWeeklyRollupV1,
             encoded: &[u8],
+            _provenance: &GovernanceSubmissionProvenanceV1,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.payloads.lock().expect("publisher lock poisoned");
             guard.push(encoded.to_vec());
@@ -28045,6 +28615,7 @@ mod tests {
             _publication: &ModerationLedgerCyclePublicationV1,
             _encoded: &[u8],
             _authorization: Option<&PrivacyPublicationAuthorizationV1>,
+            _provenance: Option<&GovernanceSubmissionProvenanceV1>,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");
             *guard += 1;
@@ -28055,6 +28626,7 @@ mod tests {
             &self,
             _issuance: &ProofTokenIssuanceV1,
             _encoded: &[u8],
+            _provenance: Option<&GovernanceSubmissionProvenanceV1>,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");
             *guard += 1;
@@ -28065,6 +28637,7 @@ mod tests {
             &self,
             _report: &SoraFsAppealFinanceReportV1,
             _encoded: &[u8],
+            _provenance: &GovernanceSubmissionProvenanceV1,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");
             *guard += 1;
@@ -28075,6 +28648,7 @@ mod tests {
             &self,
             _rollup: &SoraFsAppealFinanceWeeklyRollupV1,
             _encoded: &[u8],
+            _provenance: &GovernanceSubmissionProvenanceV1,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");
             *guard += 1;

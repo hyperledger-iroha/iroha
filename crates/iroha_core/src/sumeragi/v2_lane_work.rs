@@ -1871,7 +1871,7 @@ pub(crate) struct V2LaneWorkAdapter {
         BTreeMap<HashOf<LaneHistoricalRecoveryRequestV1>, NativeAmxParticipantRecoveryMarkerV1>,
     native_participant_recovery_retry_cursor: usize,
     committed_lane_output_cursor: usize,
-    admitted_relays: BTreeSet<(LaneId, DataSpaceId, Hash, u64, Hash)>,
+    admitted_relays: BTreeSet<(LaneId, DataSpaceId, Hash, u64)>,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
     merge_signing_guard: MergeSigningGuard,
@@ -9186,7 +9186,6 @@ impl V2LaneWorkAdapter {
             envelope.dataspace_id,
             envelope.lane_incarnation,
             envelope.block_height,
-            Hash::from(envelope.settlement_hash),
         );
         if self.admitted_relays.contains(&key) {
             return Ok(V2LaneIngressOutcome::Duplicate);
@@ -11388,7 +11387,7 @@ impl V2LaneWorkAdapter {
             || self
                 .admitted_relays
                 .iter()
-                .any(|(lane_id, dataspace_id, incarnation, _, _)| {
+                .any(|(lane_id, dataspace_id, incarnation, _)| {
                     route_matches(*lane_id, *dataspace_id, *incarnation)
                 })
             || self
@@ -14040,7 +14039,6 @@ pub(super) mod tests {
             body.intent.dataspace_id,
             Hash::new(b"retired adapter-drain relay incarnation"),
             1,
-            Hash::new(b"retired adapter-drain relay settlement"),
         ));
         assert!(
             !adapter.lane_drain_has_local_blockers(&body),
@@ -14051,7 +14049,6 @@ pub(super) mod tests {
             body.intent.dataspace_id,
             body.intent.lane_incarnation,
             1,
-            Hash::new(b"active adapter-drain relay settlement"),
         ));
         assert!(
             adapter.lane_drain_has_local_blockers(&body),
@@ -28304,16 +28301,42 @@ pub(super) mod tests {
             "fixture must provide exact 3f+1 relay committee"
         );
 
-        let mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
-            lane_id,
-            dataspace_id,
-            crate::sumeragi::consensus::PERMISSIONED_TAG,
-        );
         let parent_state_root = Hash::new(b"v2 merge retry parent state");
         let post_state_root = Hash::new(b"v2 merge retry post state");
+        let settlement = LaneBlockCommitment {
+            block_height: lane_height,
+            lane_id,
+            lane_incarnation: adapter
+                .state
+                .lane_incarnation_at_height(lane_id, lane_height)
+                .expect("fixture lane incarnation is active"),
+            dataspace_id,
+            tx_count: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+            .expect("construct production-valid relay envelope")
+            .with_lane_block_descriptor_hash(Some(Hash::new(
+                b"v2 merge persistence retry lane descriptor",
+            )))
+            .with_manifest_root(Some([0x44; 32]))
+            .with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+                proof_digest: Hash::new(b"v2 merge persistence retry FastPQ proof"),
+                verified_at_height: lane_height,
+            }));
+        let mode_tag = envelope
+            .lane_finality_qc_mode_tag(crate::sumeragi::consensus::PERMISSIONED_TAG)
+            .expect("complete production relay finality statement");
         let mut qc = crate::sumeragi::consensus::Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: header.hash(),
+            subject_block_hash: envelope.block_header.hash(),
             parent_state_root,
             post_state_root,
             height: lane_height,
@@ -28362,34 +28385,7 @@ pub(super) mod tests {
             bls_aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
                 .expect("aggregate production-valid relay QC"),
         };
-
-        let settlement = LaneBlockCommitment {
-            block_height: lane_height,
-            lane_id,
-            lane_incarnation: adapter
-                .state
-                .lane_incarnation_at_height(lane_id, lane_height)
-                .expect("fixture lane incarnation is active"),
-            dataspace_id,
-            tx_count: 0,
-            total_local_amount: "0".parse().expect("valid settlement quantity"),
-            total_xor_due: "0".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
-            total_xor_variance: "0".parse().expect("valid settlement quantity"),
-            swap_metadata: None,
-            receipts: Vec::new(),
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
-            .expect("construct production-valid relay envelope")
-            .with_lane_block_descriptor_hash(Some(Hash::new(
-                b"v2 merge persistence retry lane descriptor",
-            )))
-            .with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
-                proof_digest: Hash::new(b"v2 merge persistence retry FastPQ proof"),
-                verified_at_height: lane_height,
-            }));
+        envelope.qc = Some(qc);
         adapter
             .state
             .record_lane_relay(&envelope)

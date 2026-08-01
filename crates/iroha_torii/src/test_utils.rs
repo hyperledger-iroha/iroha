@@ -22,7 +22,7 @@ use iroha_core::{
     state::{State, StateBlock, StateReadOnly, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     ChainId, Registrable,
     account::AccountId,
@@ -791,7 +791,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 .clone(),
             file: None,
             manifest_json: None,
-            expected_hash: None,
+            expected_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"Torii test genesis trust anchor",
+            )),
         },
         torii: A::Torii {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
@@ -873,10 +875,13 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             api_fee_asset_id: None,
             api_fee_amount: None,
             api_fee_receiver: None,
-            api_allow_cidrs: Vec::new(),
+            api_rate_limit_bypass_cidrs: Vec::new(),
+            internal_api_trusted_cidrs:
+                iroha_config::parameters::defaults::torii::internal_api_trusted_cidrs(),
             peer_telemetry_urls: Vec::new(),
             peer_geo: A::ToriiPeerGeo::default(),
             soranet_privacy_ingest: A::SoranetPrivacyIngest::default(),
+            privacy_bootle_lantern_issuer: None,
             debug_match_filters: false,
             operator_auth: A::ToriiOperatorAuth::default(),
             operator_signatures: A::ToriiOperatorSignatures::default(),
@@ -885,6 +890,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             preauth_rate_per_ip_per_sec: None,
             preauth_burst_per_ip: None,
             preauth_temp_ban: None,
+            preauth_ban_capacity: defaults::torii::PREAUTH_BAN_CAPACITY,
             preauth_allow_cidrs: Vec::new(),
             preauth_scheme_limits: Vec::new(),
             api_high_load_tx_threshold: None,

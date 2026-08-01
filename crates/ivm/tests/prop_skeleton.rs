@@ -1,6 +1,8 @@
 //! Deterministic IVM memory Merkle proof regression tests.
 
-use iroha_crypto::{Hash, HashOf};
+use std::num::NonZeroU64;
+
+use iroha_crypto::{Hash, HashOf, MerkleTreeCommitment};
 use ivm::Memory;
 use sha2::Digest as _;
 
@@ -42,16 +44,26 @@ fn memory_merkle_compact_proofs_verify_for_deterministic_chunks() {
                 .load_bytes((addr / CHUNK_BYTES as u64) * CHUNK_BYTES as u64, &mut chunk)
                 .expect("load proof chunk");
             let leaf = leaf_hash(&chunk);
+            let commitment = memory.merkle_commitment();
+            assert_eq!(commitment.root(), &root);
 
             assert!(
-                proof.clone().verify_sha256(&leaf, &root),
+                proof.verify_sha256(&leaf, &commitment),
                 "chunk_idx={chunk_idx} depth_cap={depth_cap:?}"
+            );
+
+            let wrong_leaf_count = NonZeroU64::new(commitment.leaf_count().get() / 2)
+                .expect("memory has more than one leaf");
+            let wrong_commitment = MerkleTreeCommitment::new(root.clone(), wrong_leaf_count);
+            assert!(
+                !proof.verify_sha256(&leaf, &wrong_commitment),
+                "wrong memory leaf count must fail"
             );
 
             let mut tampered = chunk;
             tampered[0] ^= 0x01;
             let tampered_leaf = leaf_hash(&tampered);
-            assert!(!proof.verify_sha256(&tampered_leaf, &root));
+            assert!(!proof.verify_sha256(&tampered_leaf, &commitment));
         }
     }
 }

@@ -1148,11 +1148,12 @@ authenticated semantic-only Coalesce defense.
 Subsequent source reconciliation and exact-ingress lifecycle, restart,
 provenance, and invalid-QC quarantine regressions bind one actor-global
 logical owner across its physical retries.
-Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
-regressions bring the current source-bound inventory to 813 exact tests across
-39 modules and 82 pre-network legs.
+After retiring five obsolete peer-genesis protocol regressions, seven
+physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
+regressions bring the current source-bound inventory to 808 exact tests across
+38 modules and 81 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f`.
+`cb95499094958be3368b27f6f9c4464ed5173a8be848201077c4bc21a6a8687a`.
 Nine of those legs execute the separate 309-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 310 TSV lines and has SHA-256
 `b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb`.
@@ -1389,18 +1390,18 @@ authenticated-non-validator, and two-anonymous owners (`4N+2H+2` total)
 capacity-negative boundary and the exact
 PrepareQC count-and-power quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-82 legs, including separate exact status and atomic lane-certificate decode
+81 legs, including separate exact status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
 fixture check, two `iroha_config` geometry modules, the two new `iroha_p2p`
-geometry modules, the shared-byte-budget module, the daemon genesis module,
-plus source-sealed workspace formatting, the legacy-codec guard, workspace
+geometry modules, the shared-byte-budget module, plus source-sealed workspace
+formatting, the legacy-codec guard, workspace
 build, Clippy, workspace tests, and feature-enabled `irohad` command-success
 legs, the G-SCALE runner/validator preflight, plus three proposal-origin
 data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 813-test inventory is a mechanically checked
+The current 808-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1585,8 +1586,8 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 813 exact production
-liveness tests and executes all 39 owning Rust modules serially. The release
+Before those longer scenarios, the PR gate inventories 808 exact production
+liveness tests and executes all 38 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 309-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
@@ -1673,13 +1674,15 @@ Those tests pin immutable
 delivery-to-minting-tenure binding through bounded tombstone churn, reject
 second-route overwrite at the rehydration boundary, and isolate actor-exit/`Drop`
 cancellation to the actor's own routes and waiters.
-The current reconciliation adds 16 exact tests and two P2P geometry modules
-plus the daemon genesis module. It separately replaces one obsolete lane-relay
-name in place, yielding a net total of 439 tests across 29 modules. Its Kura,
+The historical reconciliation added 16 exact tests, two P2P geometry modules,
+and a daemon peer-genesis module that is now retired. It separately replaced
+one obsolete lane-relay name in place, yielding the historical total of 439
+tests across 29 modules. At that checkpoint, its Kura,
 refinement, effects, recovery, runner, watchdog,
-P2P, and genesis entries pin replay metadata, successor authority/lifecycle,
+P2P, and peer-genesis entries pinned replay metadata, successor authority/lifecycle,
 discovered CommitQC admission, source geometry, and clone-safe producer/fanout
-ownership. The lane-relay saturation test was renamed in place, so the module
+ownership. The five peer-genesis regressions are not part of the current
+inventory. The lane-relay saturation test was renamed in place, so the module
 still contributes four tests. The subsequent in-flight sidecar redelivery
 regression raises that total to 440 without adding a module or corridor leg
 and binds one exact writer-flush owner per source chunk. Three subsequent
@@ -1728,9 +1731,10 @@ authenticated-Coalesce defense regressions produced the 782-test checkpoint
 without adding another module or leg. Subsequent source reconciliation and
 exact-ingress lifecycle, restart, provenance, and quarantine regressions bring
 the inventory to the 806-test checkpoint without adding another module or leg.
-Seven physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
-regressions bring the current inventory to 813 tests, again without adding a
-module or leg. The rollover slice covers
+Retiring five obsolete peer-genesis protocol regressions and adding seven
+physical-cut, adapter-capability, aggregate-rebase, and ineligible-driver
+regressions bring the current inventory to 808 tests and remove one module and
+one leg overall. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -2000,8 +2004,8 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 82 pre-network corridor legs and
-their exact 813-test production inventory, the separate 309-test G-UNIT
+evidence directory. That receipt binds the 81 pre-network corridor legs and
+their exact 808-test production inventory, the separate 309-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos

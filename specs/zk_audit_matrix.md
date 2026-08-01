@@ -16,7 +16,7 @@ statement before verification, and which paths are demo-only or non-ZK.
 | RAM-LFE execution receipts | Resolver signature or policy-published `halo2/ipa` verifier metadata, as required by policy | Non-consensus helper / application-facing | Policy/backend/mode binding; native backend-registry admission; canonical envelope; circuit, schema, and verifier-key hashes; public instance bound to the execution payload hash; runtime enablement and envelope/proof byte caps | Signature verification or `iroha_core::zk::verify_backend_with_timing_guardrails` | Low. Proof-mode receipts use the same node-configured guardrails as other native backend verification paths. |
 | Identifier receipts | Signed or policy-published Halo2 RAM-LFE execution attestation plus a signed output opening | Consensus-critical claim admission / application-facing verification | Policy/program linkage, output-opening signature, derived opaque identifier and receipt hash, plus the guarded RAM-LFE proof binding above | Signature verification or the shared guarded RAM-LFE verifier | Low. Consensus and stateless verification now share one proof-validation path, preventing policy or resource-limit drift. |
 | Lane relay / FASTPQ | Native FASTPQ prover/verifier | Safety-critical for lane proof checking | Rebuilt transition batch from binding, full `PublicIO` equality (`dsid`, `slot`, roots, hashes), transcript already seeded with `public_io` | `fastpq_prover::verify` | Medium-low. Claims are now checked field-for-field; remaining risk is in FASTPQ arithmetic/circuit correctness rather than omitted public claims. |
-| Torii `POST /v1/zk/verify-batch` | Standalone native IPA poly-open helper | Diagnostic only, not ledger-equivalent | Configured total-body cap before decode; finite batch/envelope/curve-`k`/label caps; exact deterministic V1 generator derivation for curve/`n`; transcript-bound statement (`transcript_label`, complete parameter fingerprint, curve/`n`, `z`, `t`, `p_g`, optional metadata); proof-round shape checks | `iroha_zkp_halo2::batch::verify_open_batch_with_limits` | Low for the standalone primitive. Callers cannot choose generator relations, the embedding surface has no unbounded handler, and resource use is bounded, but the diagnostic endpoint intentionally lacks ledger VK registry / circuit/schema policy enforcement. |
+| Torii `POST /v1/zk/verify-batch` | Standalone native IPA poly-open helper | Diagnostic only, not ledger-equivalent | Configured total-body cap before decode; finite batch/envelope/curve-`k`/label caps; the wire selects only curve/`n` and the verifier derives the deterministic V1 generators; transcript-bound statement (`transcript_label`, complete derived parameter fingerprint, curve/`n`, `z`, `t`, `p_g`, optional metadata); proof-round shape checks | `iroha_zkp_halo2::batch::verify_open_batch_with_limits` | Low for the standalone primitive. Callers cannot encode alternate generator relations, the embedding surface has no unbounded handler, and resource use is bounded, but the diagnostic endpoint intentionally lacks ledger VK registry / circuit/schema policy enforcement. |
 | IVM batch syscall (`SYSCALL_ZK_VERIFY_BATCH`) | Registry-backed `halo2/ipa` and `stark/fri/*` verifier on `CoreHost`; disabled on `DefaultHost` | Runtime helper with ledger-grade binding on the node host | Outer `OpenVerifyEnvelope` header checks, VK registry lookup, circuit/schema/manifest/curve/`max_k` or STARK profile enforcement, then backend verification with guardrails | `iroha_core::smartcontracts::ivm::host::CoreHost` -> `iroha_core::zk::verify_backend_with_timing_guardrails` | Low on the runtime host. `DefaultHost` intentionally returns `ERR_DISABLED`, so the remaining risk is misuse of a non-runtime host rather than a standalone verifier bypass. |
 
 ## Notes
@@ -45,9 +45,10 @@ statement before verification, and which paths are demo-only or non-ZK.
 - Local verifier elapsed time is reported for telemetry but is no longer a
   consensus rejection condition. Runtime limits that can change block validity
   are sourced from the committed ZK policy.
-- The standalone Halo2 helper now accepts only the deterministic V1 parameter
-  set for each `(curve, n)`, keeps those canonical sets in a bounded
-  process-local cache, and derives Fiat-Shamir challenges from a running
-  transcript state. That closes caller-chosen generator relations as well as
-  the previously noted unbounded-cache and quadratic-history rough edges
-  without changing its non-ledger status.
+- The standalone Halo2 helper's wire carries only `(version, curve, n)` and the
+  verifier derives the one deterministic V1 parameter set for that selector.
+  Canonical sets live in a bounded process-local cache and Fiat-Shamir
+  challenges come from a running transcript state. This removes the
+  caller-chosen generator surface entirely, as well as the previously noted
+  unbounded-cache and quadratic-history rough edges, without changing its
+  non-ledger status.

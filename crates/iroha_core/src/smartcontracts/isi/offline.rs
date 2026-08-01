@@ -64,6 +64,80 @@ const CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION: &str =
     "CanManageOfflineDeviceAttestationPolicy";
 const CAN_ACTIVATE_KAGEMUSHA_RECURSIVE_RELEASE_V4_PERMISSION: &str =
     "CanActivateKagemushaRecursiveReleaseV4";
+
+/// One-shot proof that an offline top-up debit passed the exact signed-request checks.
+pub(in crate::smartcontracts::isi) struct VerifiedKagemushaTopUpDebit {
+    source_authority: AccountId,
+    operation_id: [u8; 32],
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+
+impl VerifiedKagemushaTopUpDebit {
+    fn new(
+        source_authority: AccountId,
+        operation_id: [u8; 32],
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            source_authority,
+            operation_id,
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (AccountId, [u8; 32], AssetId, AssetId, Quantity) {
+        (
+            self.source_authority,
+            self.operation_id,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
+}
+
+/// One-shot proof that an offline redemption passed recursive-proof and retained-anchor checks.
+pub(in crate::smartcontracts::isi) struct VerifiedKagemushaRedemptionDebit {
+    operation_id: [u8; 32],
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+
+impl VerifiedKagemushaRedemptionDebit {
+    fn new(
+        operation_id: [u8; 32],
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            operation_id,
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> ([u8; 32], AssetId, AssetId, Quantity) {
+        (
+            self.operation_id,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
+}
 static OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY: LazyLock<StatePath> = LazyLock::new(|| {
     "offline_device_attestation_policy"
         .parse()
@@ -1142,6 +1216,8 @@ fn kagemusha_escrow_asset_id(source_asset: &AssetId, escrow_account: AccountId) 
 
 fn reserve_kagemusha_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
+    source_authority: &AccountId,
+    operation_id: [u8; 32],
     asset: &AssetId,
     amount: &Quantity,
 ) -> Result<(), Error> {
@@ -1166,11 +1242,16 @@ fn reserve_kagemusha_escrow(
     )?;
     let source_asset = canonical_kagemusha_asset_id(state_transaction, asset)?;
     let escrow_asset = kagemusha_escrow_asset_id(&source_asset, escrow_account);
-    crate::smartcontracts::isi::asset::isi::apply_resolved_numeric_asset_transfer_delta(
+    let authorization = VerifiedKagemushaTopUpDebit::new(
+        source_authority.clone(),
+        operation_id,
+        source_asset,
+        escrow_asset,
+        amount.clone(),
+    );
+    crate::smartcontracts::isi::asset::isi::execute_verified_offline_top_up_transfer(
         state_transaction,
-        &source_asset,
-        &escrow_asset,
-        amount,
+        authorization,
     )?;
     Ok(())
 }
@@ -4610,6 +4691,7 @@ pub mod isi {
 
     #[derive(Debug)]
     struct KagemushaV2EscrowCreditPlan {
+        operation_id: [u8; 32],
         escrow_asset: AssetId,
         recipient_asset: AssetId,
         amount: Quantity,
@@ -4617,17 +4699,22 @@ pub mod isi {
 
     impl KagemushaV2EscrowCreditPlan {
         fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
-            crate::smartcontracts::isi::asset::isi::apply_resolved_numeric_asset_transfer_delta(
+            let authorization = VerifiedKagemushaRedemptionDebit::new(
+                self.operation_id,
+                self.escrow_asset,
+                self.recipient_asset,
+                self.amount,
+            );
+            crate::smartcontracts::isi::asset::isi::execute_verified_offline_redemption_transfer(
                 state_transaction,
-                &self.escrow_asset,
-                &self.recipient_asset,
-                &self.amount,
+                authorization,
             )?;
             Ok(())
         }
     }
 
     fn plan_kagemusha_v2_escrow_credit(
+        operation_id: [u8; 32],
         source_asset: &AssetId,
         recipient: &AccountId,
         amount: &Quantity,
@@ -4679,6 +4766,7 @@ pub mod isi {
             .precheck_numeric_asset_transfer_delta_exact(&escrow_asset, &recipient_asset, amount)?;
 
         Ok(KagemushaV2EscrowCreditPlan {
+            operation_id,
             escrow_asset,
             recipient_asset,
             amount: amount.clone(),
@@ -7137,6 +7225,7 @@ pub mod isi {
             );
         }
         let escrow_credit = plan_kagemusha_v2_escrow_credit(
+            input.operation_id,
             input.source_asset,
             input.recipient,
             &input.amount,
@@ -7744,7 +7833,13 @@ pub mod isi {
                 .into());
             }
 
-            reserve_kagemusha_escrow(state_transaction, &request.asset, &amount)?;
+            reserve_kagemusha_escrow(
+                state_transaction,
+                &request.authorization.authority,
+                request.operation_id,
+                &request.asset,
+                &amount,
+            )?;
             let finalized_root =
                 crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
                     &mut zk_state,
@@ -8386,6 +8481,8 @@ pub mod isi {
 
             let error = reserve_kagemusha_escrow(
                 &mut state_transaction,
+                source_asset.account(),
+                [0x81; 32],
                 &source_asset,
                 &Quantity::from(1_u32),
             )
@@ -8411,6 +8508,7 @@ pub mod isi {
             let events_before = state_transaction.world.internal_event_buf.len();
 
             let error = plan_kagemusha_v2_escrow_credit(
+                [0x82; 32],
                 &source_asset,
                 &BOB_ID,
                 &Quantity::from(1_u32),
@@ -8435,6 +8533,7 @@ pub mod isi {
             let mut state_transaction = block.transaction();
             set_offline_holding_limit(&mut state_transaction, &BOB_ID, &definition_id, 1);
             let plan = plan_kagemusha_v2_escrow_credit(
+                [0x83; 32],
                 &source_asset,
                 &BOB_ID,
                 &Quantity::from(1_u32),

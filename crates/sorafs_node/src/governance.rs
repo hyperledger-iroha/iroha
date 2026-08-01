@@ -24,6 +24,8 @@ use ed25519_dalek::VerifyingKey as DalekVerifyingKey;
 use hex::ToHex;
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
+#[cfg(test)]
+use iroha_data_model::account::AccountId;
 use norito::json::{self, Map as JsonMap, Value as JsonValue};
 use norito::{
     core::DecodeLimits,
@@ -36,13 +38,13 @@ use sorafs_manifest::{
     GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
     GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1,
     GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1, GOVERNANCE_LOG_VERSION_V1,
-    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceExternalPayloadV1, GovernanceLogNodeV1,
-    GovernanceLogPayloadV1, GovernanceLogSignatureV1, GovernanceSignatureAlgorithm,
-    MAX_REPUTATION_TRUST_EDGES, ModerationLedgerCyclePublicationV1,
-    PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, SignedReputationSnapshotV1,
-    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
-    SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
-    SorafsReconciliationReportV1,
+    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceDagSubmissionProvenanceV1,
+    GovernanceExternalPayloadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
+    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, MAX_REPUTATION_TRUST_EDGES,
+    ModerationLedgerCyclePublicationV1, PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
+    SignedReputationSnapshotV1, SoraFsAppealFinanceReportV1,
+    SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
+    SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
     governance_dag_block_cid_v1,
     por::{PorChallengePublicationV1, PorWeeklyReportV1},
@@ -56,8 +58,9 @@ use crate::{
     FencedPrivacyPublicationRequestV1, FencedTransparencyHeadAncestryProofV1,
     FencedTransparencyPublicationInclusionV1, FencedTransparencyPublishErrorV1,
     FencedTransparencyPublisherV1, FencedTransparencyTargetHeadV1, GovernancePublishError,
-    GovernancePublisher, PdpGovernanceArchiveV1, PdpRejectionReasonV1, PdpTerminalDecisionV1,
-    PrivacyPublicationAuthorizationV1, governance_rooted_fs,
+    GovernancePublisher, GovernanceSubmissionProvenanceV1, PdpGovernanceArchiveV1,
+    PdpRejectionReasonV1, PdpTerminalDecisionV1, PrivacyPublicationAuthorizationV1,
+    governance_rooted_fs,
 };
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -2508,6 +2511,28 @@ impl FilesystemGovernancePublisher {
         digest_hex: &str,
         encoded_len: usize,
     ) -> Result<(), GovernancePublishError> {
+        self.record_runtime_signed_payload_with_provenance(
+            payload_kind,
+            payload,
+            encoded_path,
+            json_path,
+            digest_hex,
+            encoded_len,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_runtime_signed_payload_with_provenance(
+        &self,
+        payload_kind: &str,
+        payload: GovernanceLogPayloadV1,
+        encoded_path: &Path,
+        json_path: &Path,
+        digest_hex: &str,
+        encoded_len: usize,
+        provenance: Option<&GovernanceSubmissionProvenanceV1>,
+    ) -> Result<(), GovernancePublishError> {
         let Some(signer) = &self.runtime_dag_signer else {
             return Ok(());
         };
@@ -2528,6 +2553,7 @@ impl FilesystemGovernancePublisher {
                 test_timestamp
             }
         };
+        let provenance = provenance.map(GovernanceSubmissionProvenanceV1::to_dag_provenance);
         append_runtime_signed_dag_payload(
             &self.root,
             &self.root_guard,
@@ -2540,6 +2566,7 @@ impl FilesystemGovernancePublisher {
             digest_hex,
             encoded_len,
             observed_timestamp,
+            provenance,
         )
     }
 
@@ -2548,6 +2575,33 @@ impl FilesystemGovernancePublisher {
         payload: &GovernanceLogPayloadV1,
         source_payload_len: usize,
     ) -> Result<(), GovernancePublishError> {
+        let Some(signer) = &self.runtime_dag_signer else {
+            return Ok(());
+        };
+        let checkpoint_store = self.runtime_dag_checkpoint_store.as_ref().ok_or_else(|| {
+            GovernancePublishError::other(
+                "signed governance runtime DAG publication requires a sealed producer checkpoint store",
+            )
+        })?;
+        signer.assert_qualification()?;
+        checkpoint_store.assert_qualification()?;
+        preflight_runtime_signed_dag_payload(payload, source_payload_len)
+    }
+
+    fn preflight_runtime_signed_payload_with_provenance(
+        &self,
+        payload: &GovernanceLogPayloadV1,
+        source_payload_len: usize,
+        provenance: Option<&GovernanceSubmissionProvenanceV1>,
+    ) -> Result<(), GovernancePublishError> {
+        let provenance = provenance.map(GovernanceSubmissionProvenanceV1::to_dag_provenance);
+        payload
+            .validate_submission_provenance(provenance.as_ref())
+            .map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "invalid authenticated governance submission provenance: {error}"
+                ))
+            })?;
         let Some(signer) = &self.runtime_dag_signer else {
             return Ok(());
         };
@@ -4376,10 +4430,12 @@ fn update_publish_index(
     };
     let encoded_path = index_path_string(root, encoded_path);
     let json_path = index_path_string(root, json_path);
+    let labels = JsonValue::Object(labels);
     let duplicate_position = entries.iter().position(|entry| {
         entry.get("payload_kind").and_then(JsonValue::as_str) == Some(payload_kind)
             && entry.get("encoded_blake3").and_then(JsonValue::as_str) == Some(digest_hex)
             && entry.get("encoded_path").and_then(JsonValue::as_str) == Some(encoded_path.as_str())
+            && entry.get("labels") == Some(&labels)
     });
     let position = duplicate_position.unwrap_or(entries.len());
     if duplicate_position.is_none() {
@@ -4400,7 +4456,7 @@ fn update_publish_index(
             "published_at_unix".into(),
             JsonValue::from(current_unix_timestamp_seconds()),
         );
-        entry.insert("labels".into(), JsonValue::Object(labels));
+        entry.insert("labels".into(), labels);
         entries.push(JsonValue::Object(entry));
     }
     rebuild_publish_index(root, root_guard, index, entries, &index_path)?;
@@ -5108,6 +5164,7 @@ fn append_runtime_signed_dag_payload(
     digest_hex: &str,
     encoded_len: usize,
     observed_timestamp: u64,
+    submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
 ) -> Result<(), GovernancePublishError> {
     root_guard.revalidate()?;
     reconcile_runtime_dag_producer_state(root, root_guard, signer, checkpoint_store)?;
@@ -5126,12 +5183,26 @@ fn append_runtime_signed_dag_payload(
         None => Vec::new(),
     };
 
+    let expected_submission_account_digest = submission_provenance
+        .as_ref()
+        .map(|provenance| hex::encode(provenance.publisher_account_digest));
+    let expected_submission_origin = submission_provenance
+        .as_ref()
+        .map(|provenance| provenance.origin.label());
     let duplicate_position = blocks.iter().position(|entry| {
         entry.get("payload_kind").and_then(JsonValue::as_str) == Some(payload_kind)
             && entry
                 .get("source_payload_blake3")
                 .and_then(JsonValue::as_str)
                 == Some(digest_hex)
+            && json_optional_string_matches(
+                entry.get("submission_publisher_account_digest_hex"),
+                expected_submission_account_digest.as_deref(),
+            )
+            && json_optional_string_matches(
+                entry.get("submission_origin"),
+                expected_submission_origin,
+            )
     });
     if let Some(position) = duplicate_position {
         if runtime_dag_index_entry_files_exist(root, &blocks[position]) {
@@ -5159,6 +5230,7 @@ fn append_runtime_signed_dag_payload(
         prev_cid: tip.as_ref().map(|tip| tip.node_cid.clone()),
         timestamp,
         publisher_peer_id: signer.publisher_peer_id.clone(),
+        submission_provenance,
         payload,
         publisher_signature: empty_governance_ed25519_signature(),
     };
@@ -5268,6 +5340,26 @@ fn append_runtime_signed_dag_payload(
     entry.insert(
         "source_payload_len".into(),
         JsonValue::from(source_payload_len),
+    );
+    entry.insert(
+        "submission_publisher_account_digest_hex".into(),
+        block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| {
+                JsonValue::from(hex::encode(provenance.publisher_account_digest))
+            })
+            .unwrap_or(JsonValue::Null),
+    );
+    entry.insert(
+        "submission_origin".into(),
+        block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| JsonValue::from(provenance.origin.label()))
+            .unwrap_or(JsonValue::Null),
     );
     entry.insert(
         "encoded_path".into(),
@@ -6026,6 +6118,24 @@ pub(crate) fn authoritative_appeal_finance_weekly_rollups(
         if required_runtime_string(entry, "payload_kind")? != payload_kind {
             return Err(GovernancePublishError::other(
                 "governance runtime DAG index payload kind does not match the signed payload",
+            ));
+        }
+        let submission_account_digest = block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| hex::encode(provenance.publisher_account_digest));
+        let submission_origin = block
+            .node
+            .submission_provenance
+            .as_ref()
+            .map(|provenance| provenance.origin.label().to_owned());
+        if required_optional_runtime_string(entry, "submission_publisher_account_digest_hex")?
+            != submission_account_digest
+            || required_optional_runtime_string(entry, "submission_origin")? != submission_origin
+        {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG index submission provenance does not match the signed node",
             ));
         }
 
@@ -10083,6 +10193,36 @@ fn optional_runtime_string(
     }
 }
 
+fn required_optional_runtime_string(
+    map: &JsonMap,
+    field: &str,
+) -> Result<Option<String>, GovernancePublishError> {
+    let value = map.get(field).ok_or_else(|| {
+        GovernancePublishError::other(format!(
+            "governance runtime DAG index entry is missing `{field}`"
+        ))
+    })?;
+    match value {
+        JsonValue::Null => Ok(None),
+        value => value
+            .as_str()
+            .map(|value| Some(value.to_owned()))
+            .ok_or_else(|| {
+                GovernancePublishError::other(format!(
+                    "governance runtime DAG index entry field `{field}` is not a string or null"
+                ))
+            }),
+    }
+}
+
+fn json_optional_string_matches(value: Option<&JsonValue>, expected: Option<&str>) -> bool {
+    match (value, expected) {
+        (Some(JsonValue::Null), None) => true,
+        (Some(value), Some(expected)) => value.as_str() == Some(expected),
+        _ => false,
+    }
+}
+
 fn required_runtime_u64(map: &JsonMap, field: &str) -> Result<u64, GovernancePublishError> {
     map.get(field).and_then(JsonValue::as_u64).ok_or_else(|| {
         GovernancePublishError::other(format!(
@@ -10174,6 +10314,101 @@ fn ensure_canonical_governance_encoding<T: norito::NoritoSerialize>(
         )));
     }
     Ok(())
+}
+
+fn bind_authenticated_submission_labels(
+    labels: &mut JsonMap,
+    provenance: Option<&GovernanceSubmissionProvenanceV1>,
+) {
+    let Some(provenance) = provenance else {
+        return;
+    };
+    let signed_provenance = provenance.to_dag_provenance();
+    labels.insert(
+        "authenticated_publisher_account_digest_hex".into(),
+        JsonValue::from(hex::encode(signed_provenance.publisher_account_digest)),
+    );
+    labels.insert(
+        "authenticated_publisher_origin".into(),
+        JsonValue::from(provenance.origin().label()),
+    );
+}
+
+#[cfg(test)]
+impl FilesystemGovernancePublisher {
+    fn publish_transparency_ledger_publication(
+        &self,
+        publication: &ModerationLedgerCyclePublicationV1,
+        encoded: &[u8],
+        authorization: Option<&PrivacyPublicationAuthorizationV1>,
+    ) -> Result<(), GovernancePublishError> {
+        let provenance = test_submission_provenance(
+            crate::GovernanceSubmissionOriginV1::PrivacyAggregatePublishDue,
+        );
+        <Self as GovernancePublisher>::publish_transparency_ledger_publication(
+            self,
+            publication,
+            encoded,
+            authorization,
+            Some(&provenance),
+        )
+    }
+
+    fn publish_proof_token_issuance(
+        &self,
+        issuance: &ProofTokenIssuanceV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let provenance = test_submission_provenance(
+            crate::GovernanceSubmissionOriginV1::TransparencyTokenIssuance,
+        );
+        <Self as GovernancePublisher>::publish_proof_token_issuance(
+            self,
+            issuance,
+            encoded,
+            Some(&provenance),
+        )
+    }
+
+    fn publish_appeal_finance_report(
+        &self,
+        report: &SoraFsAppealFinanceReportV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let provenance =
+            test_submission_provenance(crate::GovernanceSubmissionOriginV1::AppealFinanceReport);
+        <Self as GovernancePublisher>::publish_appeal_finance_report(
+            self,
+            report,
+            encoded,
+            &provenance,
+        )
+    }
+
+    fn publish_appeal_finance_weekly_rollup(
+        &self,
+        rollup: &SoraFsAppealFinanceWeeklyRollupV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let provenance = test_submission_provenance(
+            crate::GovernanceSubmissionOriginV1::AppealFinanceWeeklyRollup,
+        );
+        <Self as GovernancePublisher>::publish_appeal_finance_weekly_rollup(
+            self,
+            rollup,
+            encoded,
+            &provenance,
+        )
+    }
+}
+
+#[cfg(test)]
+fn test_submission_provenance(
+    origin: crate::GovernanceSubmissionOriginV1,
+) -> GovernanceSubmissionProvenanceV1 {
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &[0xA5; 32])
+        .expect("fixed test publisher key must be valid");
+    GovernanceSubmissionProvenanceV1::new(AccountId::new(public_key), origin)
 }
 
 impl GovernancePublisher for FilesystemGovernancePublisher {
@@ -11065,6 +11300,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         publication: &ModerationLedgerCyclePublicationV1,
         encoded: &[u8],
         authorization: Option<&PrivacyPublicationAuthorizationV1>,
+        provenance: Option<&GovernanceSubmissionProvenanceV1>,
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
             let _publication_guard = self.lock_publication()?;
@@ -11172,7 +11408,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 )
                 .map_err(|err| GovernancePublishError::other(err.to_string()))?;
                 let payload = GovernanceLogPayloadV1::ExternalPayload(external);
-                self.preflight_runtime_signed_payload(&payload, encoded.len())?;
+                self.preflight_runtime_signed_payload_with_provenance(
+                    &payload,
+                    encoded.len(),
+                    provenance,
+                )?;
                 Some(payload)
             } else {
                 None
@@ -11315,6 +11555,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                     JsonValue::from(hex::encode(receipt.head_inclusion_digest())),
                 );
             }
+            bind_authenticated_submission_labels(&mut labels, provenance);
             self.record_publish_index(
                 "transparency_ledger_publication",
                 &encoded_path,
@@ -11324,13 +11565,14 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 labels,
             )?;
             if let Some(runtime_payload) = runtime_payload {
-                self.record_runtime_signed_payload(
+                self.record_runtime_signed_payload_with_provenance(
                     "transparency_ledger_publication",
                     runtime_payload,
                     &encoded_path,
                     &json_path,
                     &digest_hex,
                     encoded.len(),
+                    provenance,
                 )?;
             } else {
                 remove_fenced_privacy_pending_request(&self.root)?;
@@ -11350,6 +11592,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         &self,
         issuance: &ProofTokenIssuanceV1,
         encoded: &[u8],
+        provenance: Option<&GovernanceSubmissionProvenanceV1>,
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
             let _publication_guard = self.lock_publication()?;
@@ -11361,7 +11604,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 GovernanceExternalPayloadV1::from_proof_token_issuance(issuance, encoded)
                     .map_err(|err| GovernancePublishError::other(err.to_string()))?;
             let runtime_payload = GovernanceLogPayloadV1::ExternalPayload(external);
-            self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
+            self.preflight_runtime_signed_payload_with_provenance(
+                &runtime_payload,
+                encoded.len(),
+                provenance,
+            )?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.proof_token_issuance_path(issuance, &digest_hex);
@@ -11425,6 +11672,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                     JsonValue::from(hex::encode(policy_digest)),
                 );
             }
+            bind_authenticated_submission_labels(&mut labels, provenance);
             self.record_publish_index(
                 "proof_token_issuance",
                 &encoded_path,
@@ -11433,13 +11681,14 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 labels,
             )?;
-            self.record_runtime_signed_payload(
+            self.record_runtime_signed_payload_with_provenance(
                 "proof_token_issuance",
                 runtime_payload,
                 &encoded_path,
                 &json_path,
                 &digest_hex,
                 encoded.len(),
+                provenance,
             )?;
 
             Ok(())
@@ -11452,6 +11701,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         &self,
         report: &SoraFsAppealFinanceReportV1,
         encoded: &[u8],
+        provenance: &GovernanceSubmissionProvenanceV1,
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
             let _publication_guard = self.lock_publication()?;
@@ -11460,7 +11710,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 GovernancePublishError::other(format!("invalid appeal finance report: {err}"))
             })?;
             let runtime_payload = GovernanceLogPayloadV1::AppealFinanceReport(report.clone());
-            self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
+            self.preflight_runtime_signed_payload_with_provenance(
+                &runtime_payload,
+                encoded.len(),
+                Some(provenance),
+            )?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.appeal_finance_report_path(report, &digest_hex);
@@ -11532,6 +11786,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "no_show_count".into(),
                 JsonValue::from(report.no_show_juror_ids.len() as u64),
             );
+            bind_authenticated_submission_labels(&mut labels, Some(provenance));
             self.record_publish_index(
                 "appeal_finance_report",
                 &encoded_path,
@@ -11540,13 +11795,14 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 labels,
             )?;
-            self.record_runtime_signed_payload(
+            self.record_runtime_signed_payload_with_provenance(
                 "appeal_finance_report",
                 runtime_payload,
                 &encoded_path,
                 &json_path,
                 &digest_hex,
                 encoded.len(),
+                Some(provenance),
             )?;
 
             Ok(())
@@ -11559,6 +11815,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         &self,
         rollup: &SoraFsAppealFinanceWeeklyRollupV1,
         encoded: &[u8],
+        provenance: &GovernanceSubmissionProvenanceV1,
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
             let _publication_guard = self.lock_publication()?;
@@ -11569,7 +11826,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 ))
             })?;
             let runtime_payload = GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(rollup.clone());
-            self.preflight_runtime_signed_payload(&runtime_payload, encoded.len())?;
+            self.preflight_runtime_signed_payload_with_provenance(
+                &runtime_payload,
+                encoded.len(),
+                Some(provenance),
+            )?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.appeal_finance_weekly_rollup_path(rollup, &digest_hex);
@@ -11615,6 +11876,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "total_rewards_forfeited_treasury_xor".into(),
                 JsonValue::from(rollup.total_rewards_forfeited_treasury_xor.to_string()),
             );
+            bind_authenticated_submission_labels(&mut labels, Some(provenance));
             self.record_publish_index(
                 "appeal_finance_weekly_rollup",
                 &encoded_path,
@@ -11623,13 +11885,14 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 labels,
             )?;
-            self.record_runtime_signed_payload(
+            self.record_runtime_signed_payload_with_provenance(
                 "appeal_finance_weekly_rollup",
                 runtime_payload,
                 &encoded_path,
                 &json_path,
                 &digest_hex,
                 encoded.len(),
+                Some(provenance),
             )?;
 
             Ok(())
@@ -13092,6 +13355,7 @@ mod tests {
             generated_at_unix: spec.cycle_end_unix,
             population_label: "fenced-population".to_owned(),
             population_digest: [0x92; 32],
+            source_commitment: [0x91; 32],
             privacy: ModerationPrivacyParametersV1 {
                 version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                 mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
@@ -16297,6 +16561,13 @@ mod tests {
         validate_governance_dag_head_against_chain_v1(&head, &blocks)
             .expect("runtime head validates against signed blocks");
         assert_eq!(blocks.len(), 1);
+        let expected_provenance =
+            test_submission_provenance(crate::GovernanceSubmissionOriginV1::AppealFinanceReport)
+                .to_dag_provenance();
+        assert_eq!(
+            blocks[0].node.submission_provenance.as_ref(),
+            Some(&expected_provenance)
+        );
         match &blocks[0].node.payload {
             GovernanceLogPayloadV1::ModerationBallotEvent(value) => {
                 assert_eq!(value.case_id, event.case_id);
@@ -17409,6 +17680,69 @@ mod tests {
             }
             other => panic!("unexpected runtime DAG payload: {other:?}"),
         }
+    }
+
+    #[test]
+    fn signed_runtime_dag_rejects_missing_authenticated_submission_provenance_before_writes() {
+        let temp = tempdir().expect("tempdir");
+        let publisher = signed_runtime_publisher(temp.path());
+        let (report, encoded) = sample_appeal_finance_report();
+        let payload = GovernanceLogPayloadV1::AppealFinanceReport(report);
+
+        let error = publisher
+            .preflight_runtime_signed_payload_with_provenance(&payload, encoded.len(), None)
+            .expect_err("signed caller-supplied payload must retain authenticated provenance");
+        assert!(
+            error
+                .to_string()
+                .contains("requires authenticated submission provenance")
+        );
+        assert!(!temp.path().join("appeals").exists());
+        assert!(!temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE).exists());
+        assert!(!temp.path().join(GOVERNANCE_RUNTIME_DAG_DIR).exists());
+    }
+
+    #[test]
+    fn authenticated_submission_identity_participates_in_publication_idempotency() {
+        let temp = tempdir().expect("tempdir");
+        let publisher = signed_runtime_publisher(temp.path());
+        let (report, encoded) = sample_appeal_finance_report();
+        let first =
+            test_submission_provenance(crate::GovernanceSubmissionOriginV1::AppealFinanceReport);
+        let other_key = PublicKey::from_bytes(Algorithm::Ed25519, &[0xA6; 32])
+            .expect("fixed second publisher key must be valid");
+        let second = GovernanceSubmissionProvenanceV1::new(
+            AccountId::new(other_key),
+            crate::GovernanceSubmissionOriginV1::AppealFinanceReport,
+        );
+
+        for provenance in [&first, &second] {
+            <FilesystemGovernancePublisher as GovernancePublisher>::publish_appeal_finance_report(
+                &publisher, &report, &encoded, provenance,
+            )
+            .expect("distinct authenticated publisher is a distinct attestation");
+        }
+
+        let publish_index_bytes =
+            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("read publish index");
+        let publish_index: JsonValue =
+            json::from_slice(&publish_index_bytes).expect("decode publish index");
+        assert_eq!(
+            publish_index
+                .get("entries")
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+
+        let runtime_index = runtime_index(temp.path());
+        let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
+        assert_eq!(blocks.len(), 2);
+        assert_ne!(
+            blocks[0].node.submission_provenance,
+            blocks[1].node.submission_provenance
+        );
+        assert_ne!(blocks[0].node.node_cid, blocks[1].node.node_cid);
     }
 
     #[test]

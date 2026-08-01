@@ -117,6 +117,8 @@ pub mod merge;
 pub mod merge_sidecar;
 /// Minimal Merkle Mountain Range for bridge commitments.
 pub mod mmr;
+/// Rebuildable, non-consensus Musubi description and keyword search projection.
+pub mod musubi_search;
 /// Native AMX participant attestation control plane.
 pub mod native_amx;
 /// Nexus helpers (UAID portfolio aggregation, etc.).

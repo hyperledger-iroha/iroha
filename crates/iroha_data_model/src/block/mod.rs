@@ -467,11 +467,11 @@ impl SignedBlock {
             Vec<crate::events::data::prelude::AssetBatchTransferOutcome>,
         >,
     ) -> Result<(), SetBatchTransferOutcomesError> {
+        let entrypoint_hashes = self.entrypoint_hashes().collect::<Vec<_>>();
         let result = self
             .result
             .as_mut()
             .ok_or(SetBatchTransferOutcomesError::MissingTransactionResults)?;
-        let entrypoint_hashes = result.merkle.leaves().collect::<Vec<_>>();
         if entrypoint_hashes.len() != result.transaction_results.len() {
             return Err(SetBatchTransferOutcomesError::ResultCountMismatch {
                 entrypoints: entrypoint_hashes.len(),
@@ -555,40 +555,40 @@ impl SignedBlock {
             .find(|(_, hash)| hash == entry_hash)?;
         let idx_u32: u32 = idx.try_into().ok()?;
 
-        let external_count = self.external_entrypoint_count();
-        let (entry_root, entry_merkle_proof) = if idx < external_count {
-            let external_merkle: MerkleTree<TransactionEntrypoint> = self
-                .external_entrypoints_cloned()
-                .map(|entrypoint| entrypoint.hash())
-                .collect();
-            (
-                self.payload.header.merkle_root?,
-                external_merkle.get_proof(idx_u32)?,
-            )
-        } else {
-            (
-                self.full_entry_merkle_root()?,
-                result_state.merkle.get_proof(idx_u32)?,
-            )
-        };
+        // The execution commitment authenticates the exact result-bearing
+        // block wire, so every entrypoint (including external transactions)
+        // uses the same full executed-entry tree. This avoids two proof-root
+        // semantics selected by an untrusted entry index.
+        let expected_entry_root = self.full_entry_merkle_root()?;
+        let entry_commitment = result_state.merkle.commitment()?;
+        if entry_commitment.root() != &expected_entry_root {
+            return None;
+        }
+        let entry_merkle_proof = result_state.merkle.get_proof(idx_u32)?;
         let entry_proof = BlockReceiptProof::new(*entry_hash, entry_merkle_proof);
 
-        let result_root = self.payload.header.result_merkle_root;
-        let result_proof = if result_root.is_some() {
-            let tx_result = result_state.transaction_results.get(idx)?;
-            let result_hash = tx_result.hash();
-            let proof = result_state.result_merkle.get_proof(idx_u32)?;
-            Some(ExecutionReceiptProof::new(result_hash, proof))
-        } else {
-            None
-        };
+        let expected_result_root = self.payload.header.result_merkle_root?;
+        let result_commitment = result_state.result_merkle.commitment()?;
+        if result_commitment.root() != &expected_result_root
+            || result_commitment.leaf_count() != entry_commitment.leaf_count()
+        {
+            return None;
+        }
+        let tx_result = result_state.transaction_results.get(idx)?;
+        let result_hash = tx_result.hash();
+        let proof = result_state.result_merkle.get_proof(idx_u32)?;
+        let result_proof = ExecutionReceiptProof::new(result_hash, proof);
+        let block_hash = self.hash();
+        let executed_block_wire_hash = self.executed_block_wire_hash().ok()?;
 
         Some(crate::block::proofs::BlockProofs {
             block_height: self.payload.header.height(),
+            block_hash,
+            executed_block_wire_hash,
             entry_hash: *entry_hash,
-            entry_root,
+            entry_commitment,
             entry_proof,
-            result_root,
+            result_commitment,
             result_proof,
             fastpq_transcripts: self.fastpq_transcripts().clone(),
         })
@@ -3868,31 +3868,40 @@ mod tests {
         let proofs = block
             .proofs_for_entry_hash(&entry_hash)
             .expect("proofs should exist");
-        let entry_root = proofs.entry_root;
+        assert_eq!(proofs.block_hash, block.hash());
         assert_eq!(
-            entry_root,
-            block.header().merkle_root().expect("entry root"),
-            "entry root should match consensus root for external transactions"
-        );
-        assert!(proofs.entry_proof.verify(&entry_root));
-        assert_eq!(entry_root, expected_entry_root);
-
-        let result_root = proofs.result_root.expect("result root");
-        assert_eq!(
-            result_root,
+            proofs.executed_block_wire_hash,
             block
+                .executed_block_wire_hash()
+                .expect("executed block wire hash")
+        );
+        let entry_commitment = &proofs.entry_commitment;
+        assert_eq!(
+            entry_commitment.root(),
+            &block.header().merkle_root().expect("entry root"),
+            "without scheduled entries the full executed root equals the consensus root"
+        );
+        assert_eq!(entry_commitment.leaf_count().get(), 1);
+        assert!(proofs.entry_proof.verify(entry_commitment));
+        assert_eq!(entry_commitment.root(), &expected_entry_root);
+
+        let result_commitment = &proofs.result_commitment;
+        assert_eq!(
+            result_commitment.root(),
+            &block
                 .header()
                 .result_merkle_root()
                 .expect("result root in header")
         );
-        let result_proof = proofs.result_proof.expect("result proof");
-        assert!(result_proof.verify(&result_root));
-        assert_eq!(result_root, expected_result_root);
+        assert_eq!(result_commitment.leaf_count().get(), 1);
+        let result_proof = &proofs.result_proof;
+        assert!(result_proof.verify(result_commitment));
+        assert_eq!(result_commitment.root(), &expected_result_root);
     }
 
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn proofs_for_external_entry_with_time_trigger_use_consensus_root() {
+    fn proofs_for_external_entry_with_time_trigger_use_full_executed_root() {
         use std::num::NonZeroU64;
 
         use iroha_crypto::MerkleTree;
@@ -3950,13 +3959,20 @@ mod tests {
         let consensus_root = block.header().merkle_root().expect("consensus root");
         let full_root = block.full_entry_merkle_root().expect("full root");
         assert_ne!(consensus_root, full_root);
-        assert_eq!(proofs.entry_root, consensus_root);
-        assert!(proofs.entry_proof.verify(&proofs.entry_root));
+        assert_eq!(proofs.entry_commitment.root(), &full_root);
+        assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
+        assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
 
-        let result_root = proofs.result_root.expect("result root");
-        assert_eq!(result_root, expected_result_root);
-        let result_proof = proofs.result_proof.expect("result proof");
-        assert!(result_proof.verify(&result_root));
+        let result_commitment = &proofs.result_commitment;
+        assert_eq!(result_commitment.root(), &expected_result_root);
+        assert_eq!(result_commitment.leaf_count().get(), 2);
+        assert_eq!(
+            result_commitment.leaf_count(),
+            proofs.entry_commitment.leaf_count(),
+            "full entry and result geometries must stay aligned"
+        );
+        let result_proof = &proofs.result_proof;
+        assert!(result_proof.verify(result_commitment));
     }
 
     #[cfg(feature = "transparent_api")]
@@ -4032,16 +4048,19 @@ mod tests {
             "time triggers extend the entrypoint root beyond consensus root"
         );
         assert_eq!(
-            proofs.entry_root, full_root,
+            proofs.entry_commitment.root(),
+            &full_root,
             "entry root for time trigger should match extended root"
         );
-        assert!(proofs.entry_proof.verify(&proofs.entry_root));
-        assert_eq!(proofs.entry_root, expected_full_root);
+        assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
+        assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
+        assert_eq!(proofs.entry_commitment.root(), &expected_full_root);
 
-        let result_root = proofs.result_root.expect("result root");
-        assert_eq!(result_root, expected_result_root);
-        let result_proof = proofs.result_proof.expect("result proof");
-        assert!(result_proof.verify(&result_root));
+        let result_commitment = &proofs.result_commitment;
+        assert_eq!(result_commitment.root(), &expected_result_root);
+        assert_eq!(result_commitment.leaf_count().get(), 2);
+        let result_proof = &proofs.result_proof;
+        assert!(result_proof.verify(result_commitment));
     }
 
     #[cfg(feature = "transparent_api")]

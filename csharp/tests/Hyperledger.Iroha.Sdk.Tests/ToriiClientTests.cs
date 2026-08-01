@@ -76,7 +76,12 @@ public sealed class ToriiClientTests
     private static readonly string VpnQuoteSessionIdHex = new('6', 32);
     private static readonly string VpnPaymentTransactionHashHex = new('2', 64);
     private static readonly string VpnMeteringPublicKeyHex = new('3', 64);
-    private static readonly string VpnSpkiSha256Hex = new('7', 64);
+    private static readonly string VpnSpkiSha256Hex = string.Concat(Enumerable.Repeat("ab", 32));
+    private const string VpnRelayIdHex =
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+    private static readonly string VpnDescriptorCommitHex = string.Concat(Enumerable.Repeat("cd", 32));
+    private static readonly string VpnRelayCertificateSha256Hex = string.Concat(Enumerable.Repeat("ef", 32));
+    private static readonly string VpnDirectorySnapshotDigestHex = string.Concat(Enumerable.Repeat("42", 32));
     private static readonly string VpnHelperTicketHex = "5356504e48543100" + new string('0', (664 - 8) * 2);
     private static readonly string SoraFsManifestDigestHex = new('d', 64);
     private static readonly string SoraFsManifestIdHex = new('e', 64);
@@ -6538,7 +6543,7 @@ public sealed class ToriiClientTests
             Content = new StringContent($$"""
                 {
                   "available": true,
-                  "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                  "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                   "supported_exit_classes": ["standard", "low-latency", "high-security"],
                   "default_exit_class": "standard",
                   "lease_secs": 3600,
@@ -6557,7 +6562,12 @@ public sealed class ToriiClientTests
                   "settlement_grace_secs": 120,
                   "flow_label_bits": 24,
                   "padding_budget_ms": 80,
-                  "relay_tls_spki_sha256_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+                  "relay_id_hex": "{{VpnRelayIdHex}}",
+                  "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
+                  "tls_server_name": "vpn.sora.org",
+                  "relay_tls_spki_sha256_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+                  "relay_certificate_sha256_hex": "{{VpnRelayCertificateSha256Hex}}",
+                  "directory_snapshot_digest_hex": "{{VpnDirectorySnapshotDigestHex}}"
                 }
                 """),
         });
@@ -6826,7 +6836,7 @@ public sealed class ToriiClientTests
                       "payment_reference": "{{quoteId}}",
                       "account_id": "{{VpnAccountId}}",
                       "exit_class": "low-latency",
-                      "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                      "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                       "lease_secs": 3600,
                       "quote_expires_at_ms": 1700000000000,
                       "fee_asset_id": "xor#universal.universal",
@@ -6841,7 +6851,12 @@ public sealed class ToriiClientTests
                       "meter_family": "vpn-standard",
                       "flow_label_bits": 24,
                       "padding_budget_ms": 80,
+                      "relay_id_hex": "{{VpnRelayIdHex}}",
+                      "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
+                      "tls_server_name": "vpn.sora.org",
                       "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
+                      "relay_certificate_sha256_hex": "{{VpnRelayCertificateSha256Hex}}",
+                      "directory_snapshot_digest_hex": "{{VpnDirectorySnapshotDigestHex}}",
                       "metering_public_key_hex": "{{meteringPublicKeyHex}}",
                       "open_lease_instruction": {
                         "wire_id": "OpenVpnLeaseEscrow",
@@ -6941,7 +6956,7 @@ public sealed class ToriiClientTests
                       "session_id": "{{sessionId}}",
                       "account_id": "{{VpnAccountId}}",
                       "exit_class": "low-latency",
-                      "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                      "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                       "lease_secs": 3600,
                       "expires_at_ms": 1700000000000,
                       "connected_at_ms": 1699999400000,
@@ -6955,7 +6970,12 @@ public sealed class ToriiClientTests
                       "lease_fee": "1000000.25",
                       "flow_label_bits": 24,
                       "padding_budget_ms": 80,
+                      "relay_id_hex": "{{VpnRelayIdHex}}",
+                      "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
+                      "tls_server_name": "vpn.sora.org",
                       "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
+                      "relay_certificate_sha256_hex": "{{VpnRelayCertificateSha256Hex}}",
+                      "directory_snapshot_digest_hex": "{{VpnDirectorySnapshotDigestHex}}",
                       "route_pushes": ["10.0.0.0/8"],
                       "excluded_routes": ["127.0.0.0/8"],
                       "dns_servers": ["1.1.1.1"],
@@ -7065,7 +7085,7 @@ public sealed class ToriiClientTests
                       "session_id": "{{sessionId}}",
                       "account_id": "{{VpnAccountId}}",
                       "exit_class": "standard",
-                      "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
+                      "relay_endpoint": "/dns4/vpn.sora.org/udp/443/quic",
                       "lease_secs": 3600,
                       "expires_at_ms": 1700000000000,
                       "connected_at_ms": 1699999400000,
@@ -7079,7 +7099,12 @@ public sealed class ToriiClientTests
                       "lease_fee": "1000000.25",
                       "flow_label_bits": 24,
                       "padding_budget_ms": 80,
-                      "relay_tls_spki_sha256_hex": null,
+                      "relay_id_hex": "{{VpnRelayIdHex}}",
+                      "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
+                      "tls_server_name": "vpn.sora.org",
+                      "relay_tls_spki_sha256_hex": "{{VpnSpkiSha256Hex}}",
+                      "relay_certificate_sha256_hex": "{{VpnRelayCertificateSha256Hex}}",
+                      "directory_snapshot_digest_hex": "{{VpnDirectorySnapshotDigestHex}}",
                       "route_pushes": [],
                       "excluded_routes": [],
                       "dns_servers": [],
@@ -29118,7 +29143,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ["payment_reference"] = VpnQuoteIdHex,
                 ["account_id"] = VpnAccountId,
                 ["exit_class"] = "standard",
-                ["relay_endpoint"] = "/dns4/vpn.sora.org/tcp/443/wss",
+                ["relay_endpoint"] = "/dns4/vpn.sora.org/udp/443/quic",
                 ["lease_secs"] = 3600,
                 ["quote_expires_at_ms"] = 1700000000000,
                 ["fee_asset_id"] = "xor#universal.universal",
@@ -29133,7 +29158,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ["meter_family"] = "vpn-standard",
                 ["flow_label_bits"] = 24,
                 ["padding_budget_ms"] = 80,
+                ["relay_id_hex"] = VpnRelayIdHex,
+                ["descriptor_commit_hex"] = VpnDescriptorCommitHex,
+                ["tls_server_name"] = "vpn.sora.org",
                 ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
+                ["relay_certificate_sha256_hex"] = VpnRelayCertificateSha256Hex,
+                ["directory_snapshot_digest_hex"] = VpnDirectorySnapshotDigestHex,
                 ["metering_public_key_hex"] = meteringPublicKeyHex,
                 ["open_lease_instruction"] = VpnTxInstructionJson("OpenVpnLeaseEscrow", openLeasePayloadHex),
                 ["tx_instructions"] = new JsonArray(VpnTxInstructionJson("OpenVpnLeaseEscrow", quoteTxPayloadHex)),
@@ -29186,7 +29216,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new JsonObject
         {
             ["available"] = true,
-            ["relay_endpoint"] = "/dns4/vpn.sora.org/tcp/443/wss",
+            ["relay_endpoint"] = "/dns4/vpn.sora.org/udp/443/quic",
             ["supported_exit_classes"] = new JsonArray("standard", "low-latency", "high-security"),
             ["default_exit_class"] = "standard",
             ["lease_secs"] = 3600,
@@ -29205,7 +29235,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["settlement_grace_secs"] = 120,
             ["flow_label_bits"] = 24,
             ["padding_budget_ms"] = 80,
+            ["relay_id_hex"] = VpnRelayIdHex,
+            ["descriptor_commit_hex"] = VpnDescriptorCommitHex,
+            ["tls_server_name"] = "vpn.sora.org",
             ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
+            ["relay_certificate_sha256_hex"] = VpnRelayCertificateSha256Hex,
+            ["directory_snapshot_digest_hex"] = VpnDirectorySnapshotDigestHex,
         };
     }
 
@@ -29221,7 +29256,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["session_id"] = sessionId,
             ["account_id"] = VpnAccountId,
             ["exit_class"] = "standard",
-            ["relay_endpoint"] = "/dns4/vpn.sora.org/tcp/443/wss",
+            ["relay_endpoint"] = "/dns4/vpn.sora.org/udp/443/quic",
             ["lease_secs"] = 3600,
             ["expires_at_ms"] = 1700000000000,
             ["connected_at_ms"] = 1699999400000,
@@ -29235,7 +29270,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["lease_fee"] = "1000000.25",
             ["flow_label_bits"] = 24,
             ["padding_budget_ms"] = 80,
+            ["relay_id_hex"] = VpnRelayIdHex,
+            ["descriptor_commit_hex"] = VpnDescriptorCommitHex,
+            ["tls_server_name"] = "vpn.sora.org",
             ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
+            ["relay_certificate_sha256_hex"] = VpnRelayCertificateSha256Hex,
+            ["directory_snapshot_digest_hex"] = VpnDirectorySnapshotDigestHex,
             ["route_pushes"] = new JsonArray("10.0.0.0/8"),
             ["excluded_routes"] = new JsonArray("127.0.0.0/8"),
             ["dns_servers"] = new JsonArray("1.1.1.1"),
@@ -29329,7 +29369,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             SessionId = VpnSessionIdHex,
             AccountId = VpnAccountId,
             ExitClass = "standard",
-            RelayEndpoint = "/dns4/vpn.sora.org/tcp/443/wss",
+            RelayEndpoint = "/dns4/vpn.sora.org/udp/443/quic",
             LeaseSeconds = 3600,
             ExpiresAtMilliseconds = 1700000000000,
             ConnectedAtMilliseconds = 1699999400000,
@@ -29343,7 +29383,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             LeaseFee = "1000000.25",
             FlowLabelBits = 24,
             PaddingBudgetMilliseconds = 80,
+            RelayIdHex = VpnRelayIdHex,
+            DescriptorCommitHex = VpnDescriptorCommitHex,
+            TlsServerName = "vpn.sora.org",
             RelayTlsSpkiSha256Hex = VpnSpkiSha256Hex,
+            RelayCertificateSha256Hex = VpnRelayCertificateSha256Hex,
+            DirectorySnapshotDigestHex = VpnDirectorySnapshotDigestHex,
             RoutePushes = new[] { "10.0.0.0/8" },
             ExcludedRoutes = new[] { "127.0.0.0/8" },
             DnsServers = new[] { "1.1.1.1" },

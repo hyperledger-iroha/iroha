@@ -623,15 +623,74 @@ import {
 
 const torii = new ToriiBrowserClient("https://taira.sora.org");
 const proofs = await torii.getLedgerBlockProof(blockHeight, transactionHash);
-const verification = verifyBlockProofs(proofs);
+// Obtain this from the application's authenticated block/finality verifier,
+// never from the same Torii proof response.
+const trustedAnchor = authenticatedLedger.blockProofAnchor(blockHeight);
+const verification = verifyBlockProofs(proofs, trustedAnchor);
 
 if (!verification.valid) throw new Error("invalid transaction Merkle evidence");
 ```
 
-This verifies the entry and optional execution-result Merkle paths only. State
-roots and commit QCs returned by `getLedgerStateRoot()` and
-`getLedgerStateProof()` remain node-provided evidence until an official
-browser QC/BLS verifier is available.
+The trusted anchor binds the requested entry hash and execution-order index,
+the block height and hash, authenticated executed-block wire hash, and exact
+`{root, leaf_count}` entry/result commitments, plus the exact FASTPQ transcript
+projection from that authenticated executed block. Entry proofs use the full
+executed-entrypoint tree so their indices are identical to result-proof indices.
+Verification fails closed when the anchor is omitted or when Torii returns a
+locally valid proof for another entry, index, or root. This SDK deliberately
+exposes no helper that derives a trusted anchor from `proofs`: copying those
+fields is circular evidence, not authentication. `verification.valid` means
+only that the response is consistent with the independently authenticated
+anchor supplied by the caller; it is not a finality verdict. Browser callers
+therefore need an application-provided native/WASM or otherwise authenticated
+finality bridge before calling this helper. Application Merkle leaves and
+internal nodes use
+distinct `iroha:merkle:leaf:v1\0` and `iroha:merkle:internal:v1\0` hash domains;
+the raw transaction/result hash is passed as the proof leaf and the verifier
+applies the leaf boundary itself. State roots and commit QCs returned by
+`getLedgerStateRoot()` and `getLedgerStateProof()` remain node-provided evidence
+until an official browser QC/BLS verifier is available.
+
+Node callers can authenticate the finality anchor and the proof together with
+the native Rust bridge. `expectedEntryHash` is the application-selected
+32-byte entrypoint hash, not a value copied from the proof response:
+
+```js
+import {
+  AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
+  ToriiClient,
+  verifyAuthenticatedBlockProofsV1,
+} from "@iroha/iroha-js";
+
+const torii = new ToriiClient("https://taira.sora.org");
+const executedBlockWire = await torii.getLedgerExecutedBlockWire(blockHeight);
+const verdict = await verifyAuthenticatedBlockProofsV1({
+  version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
+  chainId: pinnedChainId,
+  trustedContextId: pinnedHeightContextId,
+  expectedEntryHash: requestedTransactionEntrypointHash,
+  // Include the last accepted proof only when advancing one exact height.
+  previousFinalityProofNorito,
+  finalityProofNorito,
+  executedBlockWire,
+  blockProofsNorito,
+});
+
+if (!verdict.valid) throw new Error(verdict.code);
+```
+
+Malformed archives and wrong-chain, wrong-context, stale, skipped, forged-QC,
+or executed-wire mismatches reject the promise. Authenticated finality with a
+substituted entry or invalid Merkle/result/transcript proof resolves with
+`valid: false`. Retain the accepted finality proof and
+`heightContextIdHex` together as the next application-pinned successor state.
+The canonical finality and `BlockProofs` archives are available from Torii,
+and `getLedgerExecutedBlockWire(height)` fetches the exact result-bearing
+`SignedBlockWire` from `/v1/ledger/block/{height}`. Torii binds the body to the
+finalized state hash journal before returning it; staged, resultless, missing,
+or hash-inconsistent bodies fail closed. Both the route and SDK enforce the
+native verifier's 32 MiB carrier bound. Explorer/header JSON and
+`/v1/blocks/stream` are not equivalent carriers.
 
 `createConnectCanonicalRequestAuth()` passes the exact canonical request
 message (including its timestamp and nonce) to `signRaw()` under
@@ -3548,7 +3607,7 @@ console.log(`Connect enabled: ${features.connect?.enabled ?? false}`);
 - Cache both `npm` and `cargo` directories so native bindings rebuild quickly across matrix runs.
 - Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the Node test suite so the JS-10 gate matches what the publish workflow executes.
 - Test the declared minimum Node 18 runtime plus the maintained even-numbered Node release lines alongside the `rust-toolchain.toml` version to minimise drift across environments.
-- Use `node --test` for quick smoke runs when native artifacts are already built (for example after `npm run build:native` in a cached workspace); keep `npm run lint:test` in CI to cover the full pipeline.
+- Use `node ./scripts/run-tests.mjs` for quick smoke runs when native artifacts are already built (for example after `npm run build:native` in a cached workspace). The runner selects only `*.test.js` and `*.test.mjs`, so TypeScript compiler fixtures are never executed as runtime tests. Keep `npm run lint:test` in CI to cover the full pipeline.
 - Layer any project-specific linting or formatting checks on top of `npm run lint:test` if your monorepo enforces stricter policies.
 - See `specs/examples/iroha_js_ci.md` for extended guidance and optional smoke-job templates.
 
@@ -3566,7 +3625,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18, 20]
+        node-version: [18, 20, 22, 24]
     steps:
       - uses: actions/checkout@v4
 
@@ -3590,9 +3649,8 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - run: npm install
-      - run: npm run build:native
-      - run: npm test
+      - run: npm ci --ignore-scripts
+      - run: npm run lint:test
 ```
 
 ## Integration Smoke Tests
@@ -3644,15 +3702,18 @@ Use the bundled integration harness to spin up the single-node Docker Compose
 topology, wait for `/status`, and run the mutation-enabled smoke suite:
 
 ```bash
-target/debug/kagami keys --out-dir target/js-integration-genesis
-export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/js-integration-genesis/public.key"
-export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/js-integration-genesis/private.key"
+export IROHA_GENESIS_SIGNED_FILE="$PWD/target/js-integration-genesis/genesis.signed.nrt"
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/js-integration-genesis/genesis.public_key"
+export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/target/js-integration-genesis/genesis.expected_hash"
 npm run test:integration
 ```
 
-Build `kagami` first if it is not already available. The default Compose stack
-contains no genesis signing key; the harness validates both runtime file paths
-before starting it. Never commit the private file.
+The default stack is an explicitly seeded development fixture. Prepare those
+artifacts for its exact validator roster with Kagami beforehand; do not reuse a
+random localnet body. The stack contains no genesis signing key or runtime
+signer; the harness validates all three read-only inputs before starting it.
+Normal generated deployments use seedless `kagami docker` prepared-bundle mode
+and embed validated artifact paths directly.
 
 `scripts/run_integration.mjs` performs the following steps:
 
@@ -3670,8 +3731,9 @@ Flags/environment variables:
 - `--compose-file` (or `JS_TORII_COMPOSE_FILE`) to point at a custom compose manifest.
 - `--service` / `COMPOSE_SERVICE` to target a different service name.
 - `--compose-bin` / `JS_TORII_COMPOSE_BIN` to use a non-default compose command.
-- `IROHA_GENESIS_PUBLIC_KEY_FILE` and `IROHA_GENESIS_PRIVATE_KEY_FILE` supply
-  the runtime-only genesis custody required by the default Compose manifest.
+- `IROHA_GENESIS_SIGNED_FILE`, `IROHA_GENESIS_PUBLIC_KEY_FILE`, and
+  `IROHA_GENESIS_EXPECTED_HASH_FILE` supply the runtime-only trust-root bundle
+  required by the default Compose manifest.
 - `--no-start` to reuse an existing node (the harness still waits for `/status`).
 - Pass additional `node --test` arguments after `--`, for example:
 

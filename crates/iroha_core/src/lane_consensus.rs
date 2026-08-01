@@ -743,11 +743,11 @@ impl LaneExecutablePayloadV1 {
             producer_signature: Vec::new(),
         };
         payload.payload_hash = payload.computed_payload_hash()?;
-        payload.producer_signature =
-            Signature::try_new(private_key, &payload.producer_signature_preimage())
-                .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)?
-                .payload()
-                .to_vec();
+        let producer_signature_preimage = payload.producer_signature_preimage()?;
+        payload.producer_signature = Signature::try_new(private_key, &producer_signature_preimage)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)?
+            .payload()
+            .to_vec();
         payload.validate(chain_id_hash, epoch)?;
         Ok(payload)
     }
@@ -766,7 +766,7 @@ impl LaneExecutablePayloadV1 {
         )
     }
 
-    fn producer_signature_preimage(&self) -> Vec<u8> {
+    fn producer_signature_preimage(&self) -> Result<Vec<u8>, LaneAutonomousArtifactError> {
         let descriptor = &self.origin_proposal.descriptor;
         norito::encode_canonical(&LaneExecutablePayloadSignaturePreimage {
             purpose: "nexus:lane-executable-payload-signature:v2".to_owned(),
@@ -779,7 +779,7 @@ impl LaneExecutablePayloadV1 {
             payload_hash: self.payload_hash,
             producer: self.producer.clone(),
         })
-        .expect("lane executable payload signature preimage must encode")
+        .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)
     }
 
     /// Validate shape, chain/epoch binding, transaction hashes, producer
@@ -814,12 +814,10 @@ impl LaneExecutablePayloadV1 {
         if !peer_uses_bls_normal(&self.producer) {
             return Err(LaneAutonomousArtifactError::ProducerNotBlsNormal);
         }
+        let producer_signature_preimage = self.producer_signature_preimage()?;
         Signature::try_from_bytes(&self.producer_signature)
             .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)?
-            .verify(
-                self.producer.public_key(),
-                &self.producer_signature_preimage(),
-            )
+            .verify(self.producer.public_key(), &producer_signature_preimage)
             .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)
     }
 
@@ -6291,7 +6289,9 @@ mod tests {
         let payload_hash = payload
             .computed_payload_hash()
             .expect("compute canonical payload identity");
-        let producer_preimage = payload.producer_signature_preimage();
+        let producer_preimage = payload
+            .producer_signature_preimage()
+            .expect("producer signature preimage encodes canonically");
         {
             let alternate_flags =
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -6314,7 +6314,9 @@ mod tests {
                 payload_hash
             );
             assert_eq!(
-                payload.producer_signature_preimage(),
+                payload
+                    .producer_signature_preimage()
+                    .expect("producer signature preimage encodes under alternate ambient layout"),
                 producer_preimage,
                 "producer signature identity must ignore the caller's ambient Norito layout"
             );

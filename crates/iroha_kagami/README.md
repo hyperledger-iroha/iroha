@@ -57,16 +57,18 @@ Direct NPoS localnet:
 kagami localnet --consensus-mode npos --peers 4 --out-dir ./localnet-npos
 ```
 
-Docker Compose from an existing config/genesis directory:
+Docker Compose from one authoritative prepared bundle:
 
 ```bash
+kagami localnet \
+  --fresh-random-keys \
+  --peers 4 \
+  --out-dir ./localnet
 kagami docker \
   --peers 4 \
   --config-dir ./localnet \
   --image hyperledger/iroha:dev \
   --out-file docker-compose.yml
-export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/localnet/genesis.public_key"
-export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/localnet/genesis.private_key"
 docker compose -f docker-compose.yml up
 ```
 
@@ -95,8 +97,8 @@ generated `README.md` into the output directory.
   output directory
 - Defaults the output to the canonical OS temporary directory so owner-only
   custody checks do not traverse platform temporary-directory symlinks
-- Writes genesis, signed genesis, per-peer configs, `client.toml`, `start.sh`,
-  `stop.sh`, and a generated guide
+- Writes genesis, signed genesis, its exact hash, per-peer configs,
+  `client.toml`, `start.sh`, `stop.sh`, and a generated guide
 - Generated stop scripts validate pidfiles against the expected peer config
   path before signalling a live process, so stale or reused pids are left alone.
 
@@ -112,9 +114,9 @@ generated `README.md` into the output directory.
   DA/RBC topology
 - Protects validator/client configs and runtime signer/token sidecars with
   owner-only permissions and emits a bundle-wide `.gitignore`
-- Emits `genesis.public_key` and an owner-only `genesis.private_key`; generated
-  Compose files consume these through runtime secret-file paths and never
-  contain the signing key
+- Emits `genesis.signed.nrt`, `genesis.public_key`, and
+  `genesis.expected_hash` as a cross-checked runtime bundle, plus an owner-only
+  `genesis.private_key` that generated Compose files never mount
 - Fresh-custody bundles keep directories and lifecycle scripts at `0700`, all
   other files at `0600`, and lifecycle scripts enforce `umask 077` for new
   logs, pidfiles, and runtime state
@@ -123,12 +125,15 @@ generated `README.md` into the output directory.
 - `--sora-profile nexus` enforces public-dataspace rules and requires `npos`
 
 `kagami docker`
-- Docker Compose generator for an existing config directory containing
-  `genesis.json`
-- Use this after `kagami localnet` or after preparing/signing genesis manually
-- Requires `IROHA_GENESIS_PUBLIC_KEY_FILE` and
-  `IROHA_GENESIS_PRIVATE_KEY_FILE` when Compose is evaluated. Missing files,
-  malformed public-key records, and mismatched signing keys fail closed.
+- Docker Compose generator for an authoritative prepared bundle from
+  `kagami localnet` (or equivalent peer configs plus signed genesis artifacts)
+- Normal mode omits `--seed`: Kagami parses every `peerN.toml`, verifies the
+  exact signer/hash/validator/PoP binding, and embeds the three public artifact
+  paths read-only. It does not generate replacement validator identities.
+- `--seed` is an explicit deterministic development mode for relocatable sample
+  manifests. That mode requires `IROHA_GENESIS_SIGNED_FILE`,
+  `IROHA_GENESIS_PUBLIC_KEY_FILE`, and `IROHA_GENESIS_EXPECTED_HASH_FILE` when
+  Compose is evaluated; those artifacts must match the seeded validator roster.
 
 `kagami genesis`
 - Power-user genesis generation, PoP embedding, validation, normalization, and
@@ -190,8 +195,13 @@ target/debug/kagami genesis sign \
   --private-key-file "$GENESIS_PRIVATE_KEY_FILE" \
   --expected-public-key "$GENESIS_PUBLIC_KEY" \
   --algorithm ed25519 \
-  --out-file genesis.signed.nrt
+  --out-file genesis.signed.nrt \
+  --expected-hash-out genesis.expected_hash
 ```
+
+For seedless `kagami docker`, place that body and hash beside the canonical
+`genesis.public_key` and exact `peerN.toml` validator configs. Generation rejects
+any signer, hash, identity, trusted-roster, or PoP disagreement.
 
 ## Streaming Identities
 

@@ -22,10 +22,54 @@ from sorafs_rollout_runner_test_support import (  # noqa: E402
     write_topology_qualification,
 )
 
+TRANSPARENCY_SOURCE_KINDS = (
+    "moderation-reviewed-quarantine",
+    "moderation-appeal-handoff",
+    "moderation-appeal-ballot",
+    "moderation-juror-plan",
+    "moderation-juror-notifications-delivery",
+    "moderation-juror-notifications-canary",
+    "moderation-commit-reveal-status",
+    "moderation-ballots-executor",
+)
+
 
 def write_payload(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{}", encoding="utf-8")
+    return path
+
+
+def write_transparency_producer_evidence(path: Path) -> Path:
+    producers = [
+        {
+            "source_kind": source_kind,
+            "producer_id": f"moderation-{index}",
+            "producer_route": f"internal:moderation/{index}",
+            "provenance_digest_hex": f"{index + 1:x}" * 64,
+            "durable_checkpoint_verified": True,
+        }
+        for index, source_kind in enumerate(TRANSPARENCY_SOURCE_KINDS)
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "sorafs.moderation.transparency_source.producer_evidence.v1",
+                "status": "passed",
+                "generated_at_unix": 1_800_400_000,
+                "deployment_id": "ai-prescreen-production-20260701",
+                "environment": "production",
+                "deployment_context_reviewed": True,
+                "workflow_digest_hex": "a" * 64,
+                "producer_count": len(producers),
+                "generic_public_ingress_absent": True,
+                "payload_bytes_included": False,
+                "private_payloads_included": False,
+                "producers": producers,
+            }
+        ),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -123,14 +167,17 @@ def complete_args(tmp_path: Path) -> list[str]:
         str(bundle_dir),
         "--executor-execution-summary",
         str(write_payload(payload_dir / "execution-summary.json")),
+        "--transparency-producer-evidence",
+        str(
+            write_transparency_producer_evidence(
+                payload_dir / "transparency-producers.json"
+            )
+        ),
         "--governance-dag-evidence",
         str(write_payload(payload_dir / "governance-dag.json")),
         "--e2e-evidence",
         str(write_payload(payload_dir / "e2e.json")),
     ]
-    for source_kind in MODULE.REQUIRED_TRANSPARENCY_SOURCE_KINDS:
-        path = write_payload(payload_dir / f"{source_kind}.json")
-        args.extend(["--source-entry", f"{source_kind}={path}"])
     return args
 
 
@@ -169,7 +216,6 @@ def test_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None
         "operator_workflow_canary",
         "notification_transport_canary",
         "commit_reveal_executor_canary",
-        "transparency_source_entry_canary",
         "rollout_evidence_gate",
     ]
     runner = plan["steps"][0]["command"]
@@ -203,13 +249,16 @@ def test_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None
     operator = plan["steps"][2]["command"]
     assert operator[:4] == ["/usr/local/bin/iroha", "--config", "/runtime/client.toml", "sorafs"]
     assert "operator-canary" in operator
-    verifier = plan["steps"][6]["command"]
+    verifier = plan["steps"][5]["command"]
     assert "check_sorafs_ai_prescreen_rollout_evidence.py" in verifier[1]
     assert "--now-unix" in verifier
     assert "1800400000" in verifier
     assert "--max-evidence-age-secs" in verifier
     assert "604800" in verifier
     assert str(plan["external_evidence"]["governance_dag"]).endswith("governance-dag.json")
+    assert str(plan["external_evidence"]["transparency_publication"]).endswith(
+        "transparency-producers.json"
+    )
     assert plan["evidence_contract"]["runner"]["schema"] == (
         "sorafs.moderation.runner.rollout_evidence.v1"
     )
@@ -424,7 +473,7 @@ def test_response_file_dry_run_prints_complete_collection_plan(tmp_path: Path, c
 
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][0]["label"] == "runner_canary"
-    assert plan["steps"][6]["label"] == "rollout_evidence_gate"
+    assert plan["steps"][5]["label"] == "rollout_evidence_gate"
     assert "end_to_end_workflow" in plan["evidence_contract"]
 
 
@@ -440,65 +489,71 @@ def test_split_response_file_dry_run_prints_complete_collection_plan(
     assert "notification_transport" in plan["evidence_contract"]
 
 
-def test_missing_transparency_source_kind_fails_before_plan(tmp_path: Path, capsys) -> None:
-    args = complete_args(tmp_path)
-    source_index = args.index("--source-entry")
-    del args[source_index : source_index + 2]
-
-    assert MODULE.main([*args, "--dry-run"]) == 2
-
-    captured = capsys.readouterr()
-    assert "missing required source-entry coverage" in captured.err
-    assert "dataset_manifest" not in captured.err
-    assert captured.out == ""
-
-
-def test_unknown_source_kind_fails_before_plan_without_leaking(
+def test_missing_transparency_producer_evidence_fails_before_plan(
     tmp_path: Path, capsys
 ) -> None:
     args = complete_args(tmp_path)
-    source_kind = "source-entry-private-key-placeholder"
-    path = write_payload(tmp_path / "payloads" / "unsupported-source.json")
-    args.extend(["--source-entry", f"{source_kind}={path}"])
+    source_index = args.index("--transparency-producer-evidence") + 1
+    args[source_index] = str(tmp_path / "missing-producer-evidence.json")
 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "source-entry supplied for unsupported kind" in captured.err
-    assert source_kind not in captured.err
+    assert "input evidence file must exist and be a file" in captured.err
+    assert "missing-producer-evidence.json" not in captured.err
+    assert captured.out == ""
+
+
+def test_invalid_transparency_producer_evidence_fails_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    path = Path(args[args.index("--transparency-producer-evidence") + 1])
+    path.write_text(
+        json.dumps({"schema": "private-key-placeholder"}),
+        encoding="utf-8",
+    )
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert MODULE.TRANSPARENCY_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC in captured.err
+    assert "private-key-placeholder" not in captured.err
     assert str(path) not in captured.err
     assert captured.out == ""
 
 
-def test_duplicate_source_kind_fails_before_plan_without_leaking(
+def test_transparency_producer_evidence_must_match_rollout_context(
     tmp_path: Path, capsys
 ) -> None:
     args = complete_args(tmp_path)
-    duplicate = MODULE.REQUIRED_TRANSPARENCY_SOURCE_KINDS[0]
-    path = write_payload(tmp_path / "payloads" / "duplicate-source.json")
-    args.extend(["--source-entry", f"{duplicate}={path}"])
+    path = Path(args[args.index("--transparency-producer-evidence") + 1])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["deployment_id"] = "different-production"
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "duplicate source-entry kind" in captured.err
-    assert duplicate not in captured.err
+    assert MODULE.TRANSPARENCY_PRODUCER_EVIDENCE_CONTEXT_DIAGNOSTIC in captured.err
+    assert "different-production" not in captured.err
     assert str(path) not in captured.err
     assert captured.out == ""
 
 
-def test_malformed_source_entry_sanitizes_exception_text(
+def test_transparency_producer_evidence_read_error_is_sanitized(
     tmp_path: Path, monkeypatch
 ) -> None:
-    bad_message = "transparency\nsource"
+    args = MODULE.parse_args(complete_args(tmp_path))
+    bad_message = "transparency\nprivate-key-placeholder"
 
-    def raise_malformed_source_entry(_spec: str):
+    def load_raises(_path: Path, _max_bytes: int):
         raise ValueError(bad_message)
 
-    monkeypatch.setattr(MODULE, "split_source_entry_spec", raise_malformed_source_entry)
-    errors = MODULE.validate_inputs(MODULE.parse_args(complete_args(tmp_path)))
+    monkeypatch.setattr(MODULE, "load_evidence_json", load_raises)
+    errors = MODULE.validate_transparency_producer_evidence(args)
 
-    assert "<non-canonical-error>" in errors
+    assert errors == [MODULE.TRANSPARENCY_PRODUCER_EVIDENCE_READ_DIAGNOSTIC]
     assert bad_message not in "\n".join(errors)
 
 
@@ -522,41 +577,21 @@ def test_invalid_freshness_args_fail_before_plan(tmp_path: Path, capsys) -> None
         assert captured.out == ""
 
 
-def test_malformed_source_entry_does_not_echo_spec(tmp_path: Path) -> None:
+def test_transparency_producer_evidence_rejects_generic_public_ingress(
+    tmp_path: Path,
+) -> None:
     args = complete_args(tmp_path)
-    bad_spec = "source-entry-private-key-placeholder"
-    source_index = args.index("--source-entry") + 1
-    args[source_index] = bad_spec
+    path = Path(args[args.index("--transparency-producer-evidence") + 1])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["generic_public_ingress_absent"] = False
+    payload["producers"][0]["producer_route"] = (
+        "/v1/sorafs/transparency/source-entries/moderation-reviewed-quarantine"
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
     errors = MODULE.validate_inputs(MODULE.parse_args(args))
 
-    diagnostics = "\n".join(errors)
-    assert "--source-entry must use KIND=PATH form" in diagnostics
-    assert bad_spec not in diagnostics
-
-
-def test_source_entry_rejects_padded_or_unicode_components_without_trimming(
-    tmp_path: Path,
-) -> None:
-    parsed_args = MODULE.parse_args(complete_args(tmp_path))
-    source_kind = MODULE.REQUIRED_TRANSPARENCY_SOURCE_KINDS[0]
-    source_path = tmp_path / "payloads" / "source-entry-0.json"
-    cases = (
-        f" {source_kind}={source_path}",
-        f"{source_kind}={source_path} ",
-        f"{source_kind}\u200d={source_path}",
-        f"{source_kind}={source_path}\u202e",
-    )
-
-    for spec in cases:
-        parsed_args.source_entry = [spec]
-        errors = MODULE.validate_inputs(parsed_args)
-        diagnostics = "\n".join(errors)
-        escaped_spec = spec.encode("unicode_escape").decode("ascii")
-
-        assert "--source-entry must use KIND=PATH form" in diagnostics
-        assert spec not in diagnostics
-        assert escaped_spec not in diagnostics
+    assert errors == [MODULE.TRANSPARENCY_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC]
 
 
 def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:

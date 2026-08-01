@@ -2972,7 +2972,7 @@ async fn run_realistic_30tps_localnet(
                     ]),
                 )
                 .write(
-                    ["torii", "api_allow_cidrs"],
+                    ["torii", "api_rate_limit_bypass_cidrs"],
                     TomlValue::Array(vec![
                         TomlValue::String("127.0.0.0/8".into()),
                         TomlValue::String("::1/128".into()),
@@ -4877,7 +4877,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     ]),
                 )
                 .write(
-                    ["torii", "api_allow_cidrs"],
+                    ["torii", "api_rate_limit_bypass_cidrs"],
                     TomlValue::Array(vec![
                         TomlValue::String("127.0.0.0/8".into()),
                         TomlValue::String("::1/128".into()),
@@ -5547,7 +5547,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                     ]),
                 )
                 .write(
-                    ["torii", "api_allow_cidrs"],
+                    ["torii", "api_rate_limit_bypass_cidrs"],
                     TomlValue::Array(vec![
                         TomlValue::String("127.0.0.0/8".into()),
                         TomlValue::String("::1/128".into()),

@@ -36,6 +36,7 @@ import {
   verifyEd25519,
   ValidationError,
   ValidationErrorCode,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
 } from "../src/index.js";
 import {
   AccountAddress,
@@ -417,6 +418,30 @@ const SAMPLE_ACCOUNT_FORMS = sampleAccountForms();
 const SAMPLE_ACCOUNT_ID = SAMPLE_ACCOUNT_FORMS.canonical;
 const CANONICAL_AUTH_ALIAS = "alice-1@wonderland";
 const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(656)}`;
+const SAMPLE_VPN_RELAY_ID_HEX =
+  "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+
+function sampleVpnTrustPayload(spki = "ab".repeat(32)) {
+  return {
+    relay_id_hex: SAMPLE_VPN_RELAY_ID_HEX,
+    descriptor_commit_hex: "cd".repeat(32),
+    tls_server_name: "relay.example",
+    relay_tls_spki_sha256_hex: spki,
+    relay_certificate_sha256_hex: "ef".repeat(32),
+    directory_snapshot_digest_hex: "42".repeat(32),
+  };
+}
+
+function sampleVpnTrustModel(spki = "ab".repeat(32)) {
+  return {
+    relayIdHex: SAMPLE_VPN_RELAY_ID_HEX,
+    descriptorCommitHex: "cd".repeat(32),
+    tlsServerName: "relay.example",
+    relayTlsSpkiSha256Hex: spki,
+    relayCertificateSha256Hex: "ef".repeat(32),
+    directorySnapshotDigestHex: "42".repeat(32),
+  };
+}
 
 function canonicalReadOptions(options = {}) {
   return {
@@ -450,7 +475,7 @@ function sampleVpnProfilePayload() {
     settlement_grace_secs: 120,
     flow_label_bits: 24,
     padding_budget_ms: 80,
-    relay_tls_spki_sha256_hex: "ac".repeat(32),
+    ...sampleVpnTrustPayload("ac".repeat(32)),
   };
 }
 
@@ -475,7 +500,7 @@ function sampleVpnSessionPayload(helperTicketHex = SAMPLE_VPN_HELPER_TICKET_HEX)
     lease_fee: "1000000.25",
     flow_label_bits: 24,
     padding_budget_ms: 80,
-    relay_tls_spki_sha256_hex: "ac".repeat(32),
+    ...sampleVpnTrustPayload("ac".repeat(32)),
     route_pushes: [],
     excluded_routes: [],
     dns_servers: ["1.1.1.1"],
@@ -516,7 +541,7 @@ function sampleVpnQuotePayload() {
     meter_family: profile.meter_family,
     flow_label_bits: profile.flow_label_bits,
     padding_budget_ms: profile.padding_budget_ms,
-    relay_tls_spki_sha256_hex: profile.relay_tls_spki_sha256_hex,
+    ...sampleVpnTrustPayload(profile.relay_tls_spki_sha256_hex),
     metering_public_key_hex: "12".repeat(32),
     open_lease_instruction: instruction,
     tx_instructions: [instruction],
@@ -16677,6 +16702,112 @@ test("getBlock fetches block by height", async () => {
   });
 });
 
+test("getLedgerExecutedBlockWire fetches exact bounded Norito bytes", async () => {
+  const expectedWire = Buffer.from([1, 0x4e, 0x52, 0x54, 0x30, 0xaa]);
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      arrayData: expectedWire,
+      headers: { "content-type": "application/x-norito" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const actualWire = await client.getLedgerExecutedBlockWire("7");
+  assert.equal(captured.url, `${BASE_URL}/v1/ledger/block/7`);
+  assert.equal(captured.init.headers.Accept, "application/x-norito");
+  assert.deepEqual(actualWire, expectedWire);
+
+  const maximumHeightWire = await client.getLedgerExecutedBlockWire(
+    "18446744073709551615",
+  );
+  assert.equal(
+    captured.url,
+    `${BASE_URL}/v1/ledger/block/18446744073709551615`,
+  );
+  assert.deepEqual(maximumHeightWire, expectedWire);
+});
+
+test("getLedgerExecutedBlockWire rejects selectors, media, empty bodies, and oversize claims", async () => {
+  let fetchCalls = 0;
+  const localRejectClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  await assert.rejects(
+    localRejectClient.getLedgerExecutedBlockWire(0),
+    /positive integer/u,
+  );
+  await assert.rejects(
+    localRejectClient.getLedgerExecutedBlockWire(1n << 64n),
+    /must be at most 18446744073709551615/u,
+  );
+  await assert.rejects(
+    localRejectClient.getLedgerExecutedBlockWire(1, { offset: 1 }),
+    /unsupported fields: offset/u,
+  );
+  assert.equal(fetchCalls, 0);
+
+  const wrongMediaClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      arrayData: Uint8Array.of(1),
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await assert.rejects(
+    wrongMediaClient.getLedgerExecutedBlockWire(1),
+    /must use the application\/x-norito media type/u,
+  );
+
+  const emptyClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      arrayData: new Uint8Array(),
+      headers: { "content-type": "application/x-norito" },
+    }),
+  });
+  await assert.rejects(
+    emptyClient.getLedgerExecutedBlockWire(1),
+    /must not be empty/u,
+  );
+
+  const oversizedClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      arrayData: Uint8Array.of(1),
+      headers: {
+        "content-type": "application/x-norito",
+        "content-length": String(
+          AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 + 1,
+        ),
+      },
+    }),
+  });
+  await assert.rejects(
+    oversizedClient.getLedgerExecutedBlockWire(1),
+    /33554432-byte response limit/u,
+  );
+
+  const lengthMismatchClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      arrayData: Uint8Array.of(1),
+      headers: {
+        "content-type": "application/x-norito",
+        "content-length": "2",
+      },
+    }),
+  });
+  await assert.rejects(
+    lengthMismatchClient.getLedgerExecutedBlockWire(1),
+    /Content-Length does not match/u,
+  );
+});
+
 test("getBlock forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
@@ -17856,7 +17987,15 @@ test("listAccountPermissions encodes pagination and parses response", async () =
     return createResponse({
       status: 200,
       jsonData: {
-        items: [{ name: "CanMintAsset", payload: { asset: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }],
+        items: [
+          {
+            name: "CanMintAssetToAccount",
+            payload: {
+              asset_definition: "xor#wonderland",
+              account: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            },
+          },
+        ],
         total: 1,
       },
       headers: { "content-type": "application/json" },
@@ -17868,7 +18007,15 @@ test("listAccountPermissions encodes pagination and parses response", async () =
     offset: 2,
   });
   assert.deepEqual(result, {
-    items: [{ name: "CanMintAsset", payload: { asset: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }],
+    items: [
+      {
+        name: "CanMintAssetToAccount",
+        payload: {
+          asset_definition: "xor#wonderland",
+          account: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        },
+      },
+    ],
     total: 1,
   });
   await assert.rejects(
@@ -17951,11 +18098,11 @@ test("iterateAccountPermissions paginates account-scoped permissions", async () 
     let items = [];
     if (offset === 0) {
       items = Array.from({ length: limit }, (_, idx) => ({
-        name: `CanMintAsset${idx}`,
+        name: `Permission${idx}`,
         payload: {},
       }));
     } else if (offset === 2) {
-      items = [{ name: "CanMintAsset2", payload: {} }];
+      items = [{ name: "Permission2", payload: {} }];
     }
     return createResponse({
       status: 200,
@@ -17971,7 +18118,7 @@ test("iterateAccountPermissions paginates account-scoped permissions", async () 
   })) {
     collected.push(item.name);
   }
-  assert.deepEqual(collected, ["CanMintAsset0", "CanMintAsset1", "CanMintAsset2"]);
+  assert.deepEqual(collected, ["Permission0", "Permission1", "Permission2"]);
   assert.equal(callCount, 2);
 });
 
@@ -26796,6 +26943,7 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
     assert.equal(url, `${BASE_URL}/v1/vpn/profile`);
     assert.equal(init.method, "GET");
     assert.equal(init.headers.Accept, "application/json");
+    assert.equal(init.redirect, "error");
     if (callCount === 1) {
       return createResponse({
         status: 200,
@@ -26820,7 +26968,7 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
           settlement_grace_secs: 120,
           flow_label_bits: 24,
           padding_budget_ms: 80,
-          relay_tls_spki_sha256_hex: "11".repeat(32),
+          ...sampleVpnTrustPayload("11".repeat(32)),
         },
         headers: { "content-type": "application/json" },
       });
@@ -26855,10 +27003,78 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
     settlementGraceSecs: 120,
     flowLabelBits: 24,
     paddingBudgetMs: 80,
-    relayTlsSpkiSha256Hex: "11".repeat(32),
+    ...sampleVpnTrustModel("11".repeat(32)),
   });
   const missing = await client.getVpnProfile();
   assert.equal(missing, null);
+});
+
+test("VPN requests reject insecure transport before dispatch", async () => {
+  let dispatched = false;
+  const client = new ToriiClient("http://torii.example", {
+    fetchImpl: async () => {
+      dispatched = true;
+      throw new Error("insecure VPN request reached dispatch");
+    },
+  });
+
+  await assert.rejects(
+    () => client.getVpnProfile(),
+    /require an HTTPS Torii base URL/u,
+  );
+  assert.equal(dispatched, false);
+});
+
+test("unavailable VPN profile accepts only the explicit empty trust tuple", async () => {
+  const payload = {
+    ...sampleVpnProfilePayload(),
+    available: false,
+    relay_endpoint: "",
+    relay_id_hex: "",
+    descriptor_commit_hex: "",
+    tls_server_name: "",
+    relay_tls_spki_sha256_hex: "",
+    relay_certificate_sha256_hex: "",
+    directory_snapshot_digest_hex: "",
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: payload,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  const profile = await client.getVpnProfile();
+
+  assert.equal(profile.available, false);
+  assert.equal(profile.relayEndpoint, "");
+  assert.equal(profile.relayIdHex, "");
+});
+
+test("available VPN profile rejects malformed trust tuple values", async () => {
+  const invalidValues = [
+    ["relay_id_hex", "00".repeat(32)],
+    ["descriptor_commit_hex", "00".repeat(32)],
+    ["descriptor_commit_hex", `0x${"cd".repeat(32)}`],
+    ["tls_server_name", "Relay.Example"],
+    ["tls_server_name", "-relay.example"],
+    ["relay_endpoint", "/dns4/Relay.Example/udp/443/quic"],
+    ["relay_endpoint", "/dns4/relay.example/udp/0443/quic"],
+    ["relay_endpoint", "/dns4/relay.example/tcp/443/quic"],
+  ];
+  for (const [field, value] of invalidValues) {
+    const payload = { ...sampleVpnProfilePayload(), [field]: value };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+
+    await assert.rejects(() => client.getVpnProfile(), undefined, field);
+  }
 });
 
 test("getVpnProfile rejects noncanonical exact fee quantities", async () => {
@@ -26888,7 +27104,7 @@ test("getVpnProfile rejects noncanonical exact fee quantities", async () => {
             settlement_grace_secs: 120,
             flow_label_bits: 24,
             padding_budget_ms: 80,
-            relay_tls_spki_sha256_hex: null,
+            ...sampleVpnTrustPayload(),
           },
           headers: { "content-type": "application/json" },
         }),
@@ -27295,7 +27511,7 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
         meter_family: "soranet.vpn.low-latency",
         flow_label_bits: 24,
         padding_budget_ms: 80,
-        relay_tls_spki_sha256_hex: "55".repeat(32),
+        ...sampleVpnTrustPayload("55".repeat(32)),
         metering_public_key_hex: meteringPublicKeyHex,
         open_lease_instruction: openInstruction,
         tx_instructions: [openInstruction],
@@ -27335,7 +27551,7 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
     meterFamily: "soranet.vpn.low-latency",
     flowLabelBits: 24,
     paddingBudgetMs: 80,
-    relayTlsSpkiSha256Hex: "55".repeat(32),
+    ...sampleVpnTrustModel("55".repeat(32)),
     meteringPublicKeyHex,
     openLeaseInstruction: { wireId: "OpenVpnLeaseEscrow", payloadHex: "abcd" },
     txInstructions: [{ wireId: "OpenVpnLeaseEscrow", payloadHex: "abcd" }],
@@ -27384,7 +27600,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
         lease_fee: "1000000.25",
         flow_label_bits: 24,
         padding_budget_ms: 80,
-        relay_tls_spki_sha256_hex: "99".repeat(32),
+        ...sampleVpnTrustPayload("99".repeat(32)),
         route_pushes: [],
         excluded_routes: [],
         dns_servers: ["1.1.1.1"],
@@ -27428,7 +27644,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
     leaseFee: "1000000.25",
     flowLabelBits: 24,
     paddingBudgetMs: 80,
-    relayTlsSpkiSha256Hex: "99".repeat(32),
+    ...sampleVpnTrustModel("99".repeat(32)),
     routePushes: [],
     excludedRoutes: [],
     dnsServers: ["1.1.1.1"],
@@ -27551,7 +27767,7 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
           lease_fee: "1000000.25",
           flow_label_bits: 24,
           padding_budget_ms: 80,
-          relay_tls_spki_sha256_hex: "cc".repeat(32),
+          ...sampleVpnTrustPayload("cc".repeat(32)),
           route_pushes: ["0.0.0.0/0"],
           excluded_routes: ["127.0.0.0/8"],
           dns_servers: ["1.1.1.1"],
@@ -27623,7 +27839,7 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
     leaseFee: "1000000.25",
     flowLabelBits: 24,
     paddingBudgetMs: 80,
-    relayTlsSpkiSha256Hex: "cc".repeat(32),
+    ...sampleVpnTrustModel("cc".repeat(32)),
     routePushes: ["0.0.0.0/0"],
     excludedRoutes: ["127.0.0.0/8"],
     dnsServers: ["1.1.1.1"],

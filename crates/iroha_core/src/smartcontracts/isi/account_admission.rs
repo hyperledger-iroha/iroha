@@ -141,6 +141,7 @@ fn load_account_admission_policy(
 
 fn apply_implicit_creation_fee(
     authority: &AccountId,
+    created_account: &AccountId,
     fee: &ImplicitAccountCreationFee,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
@@ -168,15 +169,15 @@ fn apply_implicit_creation_fee(
         );
     }
 
-    state_transaction
-        .world
-        .withdraw_numeric_asset(&payer_asset_id, &fee.amount)?;
-
     match &fee.destination {
         ImplicitAccountFeeDestination::Burn => {
-            state_transaction
-                .world
-                .decrease_asset_total_amount(&fee.asset_definition_id, &fee.amount)?;
+            crate::smartcontracts::isi::asset::isi::execute_account_admission_fee_burn(
+                state_transaction,
+                authority,
+                created_account,
+                payer_asset_id,
+                fee.amount.clone(),
+            )?;
         }
         ImplicitAccountFeeDestination::Account(sink) => {
             let sink = resolve_existing_account_for_subject(state_transaction, sink)?;
@@ -187,9 +188,14 @@ fn apply_implicit_creation_fee(
                         fee.asset_definition_id.clone(),
                         sink,
                     ))?;
-            state_transaction
-                .world
-                .deposit_numeric_asset(&sink_asset_id, &fee.amount)?;
+            crate::smartcontracts::isi::asset::isi::execute_account_admission_fee_transfer(
+                state_transaction,
+                authority,
+                created_account,
+                payer_asset_id,
+                sink_asset_id,
+                fee.amount.clone(),
+            )?;
         }
     }
 
@@ -364,7 +370,7 @@ pub(super) fn ensure_receiving_account(
     )?;
 
     if let Some(fee) = policy.implicit_creation_fee() {
-        apply_implicit_creation_fee(authority, fee, state_transaction)?;
+        apply_implicit_creation_fee(authority, destination, fee, state_transaction)?;
     }
 
     create_implicit_account(

@@ -59,6 +59,7 @@ enforcement_mode = "reject"
 
 [torii]
 address = "addr:0.0.0.0:18080#2F16"
+preauth_ban_capacity = 4096
 preauth_allow_cidrs = ["127.0.0.1/32", "207.254.29.242/32"]
 max_content_len = 1_073_741_824
 deploy_rate_per_origin_per_sec = 4
@@ -304,6 +305,7 @@ volatility_class = "stable"
 
 [genesis]
 public_key = "ed0120CEF83A365F125EF1CB8F040290A4C5D23561A24CC4C6782AC07506C77003AF00"
+expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
 
 [streaming]
 identity_public_key = "REPLACE_WITH_STREAMING_IDENTITY_PUBLIC_KEY"

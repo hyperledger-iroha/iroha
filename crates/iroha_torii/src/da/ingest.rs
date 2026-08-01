@@ -649,6 +649,9 @@ pub async fn handler_post_da_ingest(
                     &taikai.envelope_bytes,
                     taikai.telemetry.segment_sequence,
                     &app.sorafs_alias_cache_policy,
+                    app.sorafs_admission
+                        .as_deref()
+                        .and_then(crate::sorafs::AdmissionRegistry::council_policy),
                     &telemetry,
                 )
                 .map_err(|(status, message)| {

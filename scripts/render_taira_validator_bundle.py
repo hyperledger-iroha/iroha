@@ -18,6 +18,8 @@ DEFAULT_INSTALL_ROOT = Path("/etc/iroha/taira-validator")
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
 MAX_VALIDATORS = 128
+GENESIS_EXPECTED_HASH_PLACEHOLDER = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
+GENESIS_EXPECTED_HASH_RE = re.compile(r"[0-9a-f]{64}")
 TAIRA_CHAIN_DISCRIMINANT = 369
 TAIRA_DS_ASSET_ALIAS = "ds#boi.is"
 TAIRA_DS_ASSET_SCALE = 2
@@ -1267,12 +1269,15 @@ def render_validator_config(
         DEFAULT_INSTALL_ROOT / "kagemusha" / "release-policy.norito"
     ),
     sumeragi_body_bytes: int | None = None,
+    genesis_expected_hash: str | None = None,
 ) -> str:
     """Rewrite the checked-in peer-1 baseline for one validator."""
 
     current_section: str | None = None
     skipping_array: str | None = None
     body_bytes_rewritten = False
+    staged_genesis_hash_placeholder = False
+    genesis_expected_hash_rewritten = False
     rendered: list[str] = []
     trusted_peers_lines = _render_trusted_peers(validators)
     trusted_peers_pop_lines = _render_trusted_peers_pop(validators)
@@ -1304,6 +1309,17 @@ def render_validator_config(
         if current_section is None and stripped == "trusted_peers_pop = [":
             rendered.extend(trusted_peers_pop_lines)
             skipping_array = "trusted_peers_pop"
+            continue
+
+        if current_section == "[genesis]" and stripped.startswith("expected_hash = "):
+            genesis_expected_hash_rewritten = True
+            if genesis_expected_hash is None:
+                rendered.append(
+                    f'expected_hash = "{GENESIS_EXPECTED_HASH_PLACEHOLDER}"'
+                )
+                staged_genesis_hash_placeholder = True
+            else:
+                rendered.append(f'expected_hash = "{genesis_expected_hash}"')
             continue
 
         if current_section == "[network]" and stripped.startswith("address = "):
@@ -1519,7 +1535,17 @@ def render_validator_config(
             f"rendered config for `{validator.slug}` could not rewrite the "
             "`[sumeragi.queues] body_bytes` assignment"
         )
-    if "REPLACE_WITH_" in rendered_text:
+    if not genesis_expected_hash_rewritten:
+        raise ValueError(
+            f"rendered config for `{validator.slug}` lacks the mandatory "
+            "`[genesis] expected_hash` assignment"
+        )
+    unresolved_text = rendered_text
+    if staged_genesis_hash_placeholder:
+        unresolved_text = unresolved_text.replace(
+            f'expected_hash = "{GENESIS_EXPECTED_HASH_PLACEHOLDER}"', "", 1
+        )
+    if "REPLACE_WITH_" in unresolved_text:
         raise ValueError(
             f"rendered config for `{validator.slug}` still contains template placeholder "
             "values; provide the matching validator/shared secrets in the roster or "
@@ -1536,9 +1562,17 @@ def render_bundle(
     only: str | None = None,
     base_genesis_path: Path | None = None,
     install_root: Path = DEFAULT_INSTALL_ROOT,
+    genesis_expected_hash: str | None = None,
 ) -> list[Path]:
     """Render one config.toml per validator into output_dir."""
 
+    if genesis_expected_hash is not None and (
+        GENESIS_EXPECTED_HASH_RE.fullmatch(genesis_expected_hash) is None
+        or int(genesis_expected_hash[-2:], 16) & 1 == 0
+    ):
+        raise ValueError(
+            "genesis_expected_hash must be a lowercase 32-byte Iroha hash with its marker bit set"
+        )
     secret_material = (
         load_secret_material(secrets_path) if secrets_path is not None else None
     )
@@ -1630,6 +1664,7 @@ def render_bundle(
                 sorafs_admission_directory=installed_sorafs_admission_dir,
                 kagemusha_release_policy_path=installed_kagemusha_release_policy,
                 sumeragi_body_bytes=sumeragi_body_bytes,
+                genesis_expected_hash=genesis_expected_hash,
             ),
         )
         (manifest_dir / "governance.manifest.json").write_text(
@@ -1687,6 +1722,13 @@ def main(argv: list[str] | None = None) -> int:
         "--only",
         help="render only one validator slug instead of the full bundle",
     )
+    parser.add_argument(
+        "--genesis-expected-hash",
+        help=(
+            "exact lowercase consensus-header hash printed by `kagami genesis sign`; "
+            "omit only for the non-runnable pre-signing bundle"
+        ),
+    )
     args = parser.parse_args(argv)
 
     written = render_bundle(
@@ -1697,6 +1739,7 @@ def main(argv: list[str] | None = None) -> int:
         only=args.only,
         base_genesis_path=Path(args.base_genesis),
         install_root=Path(args.install_root),
+        genesis_expected_hash=args.genesis_expected_hash,
     )
     for path in written:
         print(f"config: {path}")

@@ -23,6 +23,7 @@ use crate::{
         bridge::SccpRouteGovernanceActionV1,
         governance::{CouncilDerivationKind, VotingMode},
     },
+    musubi::MusubiParliamentActionV1,
     runtime::RuntimeUpgradeManifest,
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
     validation_fee::{
@@ -421,6 +422,9 @@ pub enum ProposalKind {
     /// Authorize one exact validation-fee treasury payout lifecycle.
     #[codec(index = 4)]
     ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal),
+    /// Enact one exact Musubi registry recovery, alias-retarget, or takedown action.
+    #[codec(index = 5)]
+    MusubiRegistryGovernance(MusubiParliamentActionV1),
 }
 
 /// Proposal payload for deploying an IVM contract via governance.
@@ -1000,6 +1004,9 @@ impl ProposalKind {
             Self::ValidationFeePayoutLifecycle(_) => {
                 crate::governance_fingerprint::VALIDATION_FEE_PAYOUT_LIFECYCLE_V1
             }
+            Self::MusubiRegistryGovernance(_) => {
+                crate::governance_fingerprint::MUSUBI_REGISTRY_GOVERNANCE_V1
+            }
         };
         crate::governance_fingerprint::fingerprint(domain, self)
     }
@@ -1128,6 +1135,9 @@ mod tests {
             ProposalKind::ValidationFeePayoutLifecycle(_) => {
                 panic!("unexpected validation-fee payout lifecycle proposal")
             }
+            ProposalKind::MusubiRegistryGovernance(_) => {
+                panic!("unexpected Musubi registry proposal")
+            }
         }
     }
 
@@ -1164,6 +1174,9 @@ mod tests {
             }
             ProposalKind::ValidationFeePayoutLifecycle(_) => {
                 panic!("unexpected validation-fee payout lifecycle proposal")
+            }
+            ProposalKind::MusubiRegistryGovernance(_) => {
+                panic!("unexpected Musubi registry proposal")
             }
         }
     }

@@ -415,10 +415,16 @@ pub mod asset {
     }
 
     permission! {
-        /// Permission to mint the specified asset instance.
-        pub struct CanMintAsset {
-            /// Identifier of the asset instance that may be minted.
-            pub asset: AssetId,
+        /// Permission to mint one asset definition into one exact account.
+        ///
+        /// Mint authority belongs to the asset-definition owner. Keeping the
+        /// destination account separate from the definition makes both the
+        /// authority root and the least-privilege scope explicit.
+        pub struct CanMintAssetToAccount {
+            /// Definition whose supply may be minted.
+            pub asset_definition: AssetDefinitionId,
+            /// Exact account that may receive the minted supply.
+            pub account: AccountId,
         }
     }
 
@@ -992,17 +998,6 @@ pub mod sorafs {
     }
 }
 
-/// Permission tokens governing `Musubi` package-registry operations.
-pub mod musubi {
-    use super::*;
-
-    permission! {
-        /// Permission to bind or update a curated global `Musubi` short alias.
-        #[derive(Copy)]
-        pub struct CanSetMusubiShortAlias;
-    }
-}
-
 /// Permission tokens governing `SoraNet` privacy ingestion.
 pub mod soranet {
     use super::*;
@@ -1070,9 +1065,7 @@ mod tests {
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
-    use super::query::{
-        CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace,
-    };
+    use super::query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace};
     use crate::permission::Permission as _;
     use iroha_crypto::KeyPair;
     use iroha_data_model::oracle::OracleChangeStage;

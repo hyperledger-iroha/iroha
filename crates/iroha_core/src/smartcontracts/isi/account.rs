@@ -3306,9 +3306,12 @@ pub mod query {
             .unwrap();
 
             let zero_asset_id = AssetId::new(definition_id.clone(), zero_holder);
-            stx.world
-                .deposit_numeric_asset(&zero_asset_id, &Quantity::zero())
-                .expect("zero placeholder inserted");
+            crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+                &mut stx.world,
+                &zero_asset_id,
+                &Quantity::zero(),
+            )
+            .expect("zero placeholder inserted");
             Mint::asset_quantity(
                 1u32,
                 AssetId::new(definition_id.clone(), nonzero_holder.clone()),

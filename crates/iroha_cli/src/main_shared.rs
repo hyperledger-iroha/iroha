@@ -6636,7 +6636,7 @@ mod trigger {
 
             let action = iroha::data_model::trigger::action::Action::new(
                 executable, repeats, authority, filter_box,
-            );
+            )?;
             let trigger = iroha::data_model::trigger::Trigger::new(self.id, action);
             let instruction = iroha::data_model::isi::Register::trigger(trigger);
             context.finish([instruction])
@@ -14315,7 +14315,8 @@ mod cli_integration_harness {
             Repeats::Exactly(1),
             authority.account().clone(),
             ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let trigger = Trigger::new(trigger_id.clone(), action);
 
         let mut server = MockQueryServer::default();

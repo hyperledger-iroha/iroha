@@ -133,7 +133,8 @@ fn build_existing_billing_trigger(
                 start_ms: 3_000,
                 period_ms: None,
             })),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     )
 }
 

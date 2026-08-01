@@ -286,7 +286,8 @@ async fn mint_asset_after_3_sec_scenario(
                 Repeats::from(1_u32),
                 account_id.clone(),
                 TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         ));
         submit_with_context(
             network,
@@ -389,7 +390,8 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                     Repeats::Indefinitely,
                     account_id.clone(),
                     TimeEventFilter::new(ExecutionTime::PreCommit),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             ));
             let mut target_height = network
                 .peers()
@@ -576,6 +578,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
                 alice_id.clone(),
                 filter,
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(contract_entrypoint_metadata("run")),
         ));
         submit_with_context(

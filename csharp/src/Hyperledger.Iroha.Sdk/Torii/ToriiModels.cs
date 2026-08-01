@@ -572,7 +572,12 @@ public sealed record class ToriiVpnProfile
     private string escrowAccountId = string.Empty;
     private string operatorAccountId = string.Empty;
     private string leaseFee = string.Empty;
-    private string? relayTlsSpkiSha256Hex;
+    private string relayIdHex = string.Empty;
+    private string descriptorCommitHex = string.Empty;
+    private string tlsServerName = string.Empty;
+    private string relayTlsSpkiSha256Hex = string.Empty;
+    private string relayCertificateSha256Hex = string.Empty;
+    private string directorySnapshotDigestHex = string.Empty;
 
     [JsonPropertyName("available")]
     public bool Available { get; init; }
@@ -581,7 +586,7 @@ public sealed record class ToriiVpnProfile
     public string RelayEndpoint
     {
         get => relayEndpoint;
-        init => relayEndpoint = ToriiVpnDirectMetadata.RequireExactTokenText(value, nameof(RelayEndpoint));
+        init => relayEndpoint = ToriiVpnDirectMetadata.RequireEmptyOrExactTokenText(value, nameof(RelayEndpoint));
     }
 
     [JsonPropertyName("supported_exit_classes")]
@@ -705,14 +710,46 @@ public sealed record class ToriiVpnProfile
     [JsonPropertyName("padding_budget_ms")]
     public ushort PaddingBudgetMilliseconds { get; init; }
 
+    [JsonPropertyName("relay_id_hex")]
+    public string RelayIdHex
+    {
+        get => relayIdHex;
+        init => relayIdHex = ToriiVpnDirectMetadata.RequireEmptyOrExactSizedHex(value, nameof(RelayIdHex), 32);
+    }
+
+    [JsonPropertyName("descriptor_commit_hex")]
+    public string DescriptorCommitHex
+    {
+        get => descriptorCommitHex;
+        init => descriptorCommitHex = ToriiVpnDirectMetadata.RequireEmptyOrExactSizedHex(value, nameof(DescriptorCommitHex), 32);
+    }
+
+    [JsonPropertyName("tls_server_name")]
+    public string TlsServerName
+    {
+        get => tlsServerName;
+        init => tlsServerName = ToriiVpnDirectMetadata.RequireEmptyOrExactTokenText(value, nameof(TlsServerName));
+    }
+
     [JsonPropertyName("relay_tls_spki_sha256_hex")]
-    public string? RelayTlsSpkiSha256Hex
+    public string RelayTlsSpkiSha256Hex
     {
         get => relayTlsSpkiSha256Hex;
-        init => relayTlsSpkiSha256Hex = ToriiVpnDirectMetadata.RequireOptionalExactSizedHex(
-            value,
-            nameof(RelayTlsSpkiSha256Hex),
-            32);
+        init => relayTlsSpkiSha256Hex = ToriiVpnDirectMetadata.RequireEmptyOrExactSizedHex(value, nameof(RelayTlsSpkiSha256Hex), 32);
+    }
+
+    [JsonPropertyName("relay_certificate_sha256_hex")]
+    public string RelayCertificateSha256Hex
+    {
+        get => relayCertificateSha256Hex;
+        init => relayCertificateSha256Hex = ToriiVpnDirectMetadata.RequireEmptyOrExactSizedHex(value, nameof(RelayCertificateSha256Hex), 32);
+    }
+
+    [JsonPropertyName("directory_snapshot_digest_hex")]
+    public string DirectorySnapshotDigestHex
+    {
+        get => directorySnapshotDigestHex;
+        init => directorySnapshotDigestHex = ToriiVpnDirectMetadata.RequireEmptyOrExactSizedHex(value, nameof(DirectorySnapshotDigestHex), 32);
     }
 }
 
@@ -769,7 +806,12 @@ public sealed record class ToriiVpnQuote
     private string[]? tunnelAddresses = Array.Empty<string>();
     private ulong mtuBytes;
     private string meterFamily = string.Empty;
-    private string? relayTlsSpkiSha256Hex;
+    private string relayIdHex = string.Empty;
+    private string descriptorCommitHex = string.Empty;
+    private string tlsServerName = string.Empty;
+    private string relayTlsSpkiSha256Hex = string.Empty;
+    private string relayCertificateSha256Hex = string.Empty;
+    private string directorySnapshotDigestHex = string.Empty;
     private string meteringPublicKeyHex = string.Empty;
     private ToriiVpnTxInstruction? openLeaseInstruction;
     private ToriiVpnTxInstruction[] txInstructions = Array.Empty<ToriiVpnTxInstruction>();
@@ -915,14 +957,46 @@ public sealed record class ToriiVpnQuote
     [JsonPropertyName("padding_budget_ms")]
     public ushort PaddingBudgetMilliseconds { get; init; }
 
+    [JsonPropertyName("relay_id_hex")]
+    public string RelayIdHex
+    {
+        get => relayIdHex;
+        init => relayIdHex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(RelayIdHex), 32);
+    }
+
+    [JsonPropertyName("descriptor_commit_hex")]
+    public string DescriptorCommitHex
+    {
+        get => descriptorCommitHex;
+        init => descriptorCommitHex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(DescriptorCommitHex), 32);
+    }
+
+    [JsonPropertyName("tls_server_name")]
+    public string TlsServerName
+    {
+        get => tlsServerName;
+        init => tlsServerName = ToriiVpnDirectMetadata.RequireExactTokenText(value, nameof(TlsServerName));
+    }
+
     [JsonPropertyName("relay_tls_spki_sha256_hex")]
-    public string? RelayTlsSpkiSha256Hex
+    public string RelayTlsSpkiSha256Hex
     {
         get => relayTlsSpkiSha256Hex;
-        init => relayTlsSpkiSha256Hex = ToriiVpnDirectMetadata.RequireOptionalExactSizedHex(
-            value,
-            nameof(RelayTlsSpkiSha256Hex),
-            32);
+        init => relayTlsSpkiSha256Hex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(RelayTlsSpkiSha256Hex), 32);
+    }
+
+    [JsonPropertyName("relay_certificate_sha256_hex")]
+    public string RelayCertificateSha256Hex
+    {
+        get => relayCertificateSha256Hex;
+        init => relayCertificateSha256Hex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(RelayCertificateSha256Hex), 32);
+    }
+
+    [JsonPropertyName("directory_snapshot_digest_hex")]
+    public string DirectorySnapshotDigestHex
+    {
+        get => directorySnapshotDigestHex;
+        init => directorySnapshotDigestHex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(DirectorySnapshotDigestHex), 32);
     }
 
     [JsonPropertyName("metering_public_key_hex")]
@@ -986,7 +1060,12 @@ public sealed record class ToriiVpnSession
     private string escrowAccountId = string.Empty;
     private string operatorAccountId = string.Empty;
     private string leaseFee = string.Empty;
-    private string? relayTlsSpkiSha256Hex;
+    private string relayIdHex = string.Empty;
+    private string descriptorCommitHex = string.Empty;
+    private string tlsServerName = string.Empty;
+    private string relayTlsSpkiSha256Hex = string.Empty;
+    private string relayCertificateSha256Hex = string.Empty;
+    private string directorySnapshotDigestHex = string.Empty;
     private string[]? routePushes = Array.Empty<string>();
     private string[]? excludedRoutes = Array.Empty<string>();
     private string[]? dnsServers = Array.Empty<string>();
@@ -1111,14 +1190,46 @@ public sealed record class ToriiVpnSession
     [JsonPropertyName("padding_budget_ms")]
     public ushort PaddingBudgetMilliseconds { get; init; }
 
+    [JsonPropertyName("relay_id_hex")]
+    public string RelayIdHex
+    {
+        get => relayIdHex;
+        init => relayIdHex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(RelayIdHex), 32);
+    }
+
+    [JsonPropertyName("descriptor_commit_hex")]
+    public string DescriptorCommitHex
+    {
+        get => descriptorCommitHex;
+        init => descriptorCommitHex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(DescriptorCommitHex), 32);
+    }
+
+    [JsonPropertyName("tls_server_name")]
+    public string TlsServerName
+    {
+        get => tlsServerName;
+        init => tlsServerName = ToriiVpnDirectMetadata.RequireExactTokenText(value, nameof(TlsServerName));
+    }
+
     [JsonPropertyName("relay_tls_spki_sha256_hex")]
-    public string? RelayTlsSpkiSha256Hex
+    public string RelayTlsSpkiSha256Hex
     {
         get => relayTlsSpkiSha256Hex;
-        init => relayTlsSpkiSha256Hex = ToriiVpnDirectMetadata.RequireOptionalExactSizedHex(
-            value,
-            nameof(RelayTlsSpkiSha256Hex),
-            32);
+        init => relayTlsSpkiSha256Hex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(RelayTlsSpkiSha256Hex), 32);
+    }
+
+    [JsonPropertyName("relay_certificate_sha256_hex")]
+    public string RelayCertificateSha256Hex
+    {
+        get => relayCertificateSha256Hex;
+        init => relayCertificateSha256Hex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(RelayCertificateSha256Hex), 32);
+    }
+
+    [JsonPropertyName("directory_snapshot_digest_hex")]
+    public string DirectorySnapshotDigestHex
+    {
+        get => directorySnapshotDigestHex;
+        init => directorySnapshotDigestHex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(DirectorySnapshotDigestHex), 32);
     }
 
     [JsonPropertyName("route_pushes")]
@@ -1424,6 +1535,16 @@ internal static class ToriiVpnDirectMetadata
         return ToriiExplorerDirectMetadata.RequireExactTokenText(value, paramName);
     }
 
+    internal static string RequireEmptyOrExactTokenText(string? value, string paramName)
+    {
+        if (value is null)
+        {
+            throw new ArgumentNullException(paramName);
+        }
+
+        return value.Length == 0 ? value : RequireExactTokenText(value, paramName);
+    }
+
     internal static string RequireExactNonEmptyText(string? value, string paramName)
     {
         return ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, paramName);
@@ -1432,6 +1553,16 @@ internal static class ToriiVpnDirectMetadata
     internal static string RequireExactSizedHex(string? value, string paramName, int expectedBytes)
     {
         return ToriiExplorerDirectMetadata.RequireExactSizedHex(value, paramName, expectedBytes);
+    }
+
+    internal static string RequireEmptyOrExactSizedHex(string? value, string paramName, int expectedBytes)
+    {
+        if (value is null)
+        {
+            throw new ArgumentNullException(paramName);
+        }
+
+        return value.Length == 0 ? value : RequireExactSizedHex(value, paramName, expectedBytes);
     }
 
     internal static string? RequireOptionalExactSizedHex(string? value, string paramName, int expectedBytes)

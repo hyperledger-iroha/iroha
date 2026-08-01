@@ -5619,8 +5619,11 @@ seiyaku DynamicAccessCounter {
         let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let role_id: RoleId = "auditor".parse().unwrap();
         let perm = Permission::new(
-            "CanMintAsset".to_string(),
-            norito::json!({"asset":"coin#wonderland"}),
+            "CanMintAssetToAccount".to_string(),
+            norito::json!({
+                "asset_definition": "coin#wonderland",
+                "account": (alice.to_string()),
+            }),
         );
 
         // Build ISI batch with grant/revoke combinations
@@ -5739,7 +5742,8 @@ seiyaku DynamicAccessCounter {
                     iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
                         .for_trigger(trigger_id.clone())
                         .under_authority(alice.clone()),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             );
             Register::trigger(trigger)
                 .execute(&alice, &mut stx)
@@ -5811,7 +5815,8 @@ seiyaku DynamicAccessCounter {
                     iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
                         .for_trigger(trigger_id.clone())
                         .under_authority(alice.clone()),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             );
             Register::trigger(trigger)
                 .execute(&alice, &mut stx)
@@ -5898,6 +5903,7 @@ seiyaku DynamicAccessCounter {
                         .for_trigger(trigger_id.clone())
                         .under_authority(alice.clone()),
                 )
+                .expect("trigger action fixture satisfies validation invariants")
                 .with_metadata(trigger_metadata),
             );
             Register::trigger(trigger)
@@ -6021,7 +6027,8 @@ seiyaku DynamicAccessCounter {
                     iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
                         .for_trigger(trigger_id.clone())
                         .under_authority(alice.clone()),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             );
             Register::trigger(trigger)
                 .execute(&alice, &mut stx)
@@ -6076,7 +6083,8 @@ seiyaku DynamicAccessCounter {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trig.clone())
                     .under_authority(alice.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let tx = TransactionBuilder::new(
             "chain".parse().unwrap(),

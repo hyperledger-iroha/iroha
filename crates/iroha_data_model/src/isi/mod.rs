@@ -1440,27 +1440,38 @@ impl From<crate::isi::contract_alias::SetContractAlias> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-// Allow direct boxing of Musubi package registry instructions.
-impl From<crate::isi::musubi::PublishMusubiRelease> for InstructionBox {
-    fn from(i: crate::isi::musubi::PublishMusubiRelease) -> Self {
-        InstructionBox(Box::new(i))
-    }
+// Allow direct boxing of first-release Musubi registry instructions.
+macro_rules! impl_musubi_instruction_box {
+    ($($instruction:ident),+ $(,)?) => {
+        $(
+            impl From<crate::isi::musubi::$instruction> for InstructionBox {
+                fn from(i: crate::isi::musubi::$instruction) -> Self {
+                    InstructionBox(Box::new(i))
+                }
+            }
+        )+
+    };
 }
-impl From<crate::isi::musubi::YankMusubiRelease> for InstructionBox {
-    fn from(i: crate::isi::musubi::YankMusubiRelease) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::musubi::SetMusubiShortAlias> for InstructionBox {
-    fn from(i: crate::isi::musubi::SetMusubiShortAlias) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
-    fn from(i: crate::isi::musubi::AssertMusubiReleaseExists) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
+
+impl_musubi_instruction_box!(
+    RegisterMusubiNamespaceBindingV1,
+    RegisterMusubiArchiveV1,
+    AddMusubiArchiveLocationV1,
+    RetireMusubiArchiveLocationV1,
+    PublishMusubiReleaseV1,
+    SetMusubiReleaseYankV1,
+    SetMusubiPackageMetadataV1,
+    InviteMusubiPackageMaintainerV1,
+    AcceptMusubiPackageMaintainerV1,
+    SetMusubiPackageMaintainerRoleV1,
+    RemoveMusubiPackageMaintainerV1,
+    RegisterMusubiAliasV1,
+    RecoverMusubiPackageV1,
+    RetargetMusubiAliasV1,
+    SetMusubiArtifactTakedownV1,
+    SetMusubiRegistryPolicyV1,
+    AssertMusubiReleaseDigestV1,
+);
 impl From<crate::isi::offline::TopUpKagemushaRecursiveV4> for InstructionBox {
     fn from(i: crate::isi::offline::TopUpKagemushaRecursiveV4) -> Self {
         InstructionBox(Box::new(i))

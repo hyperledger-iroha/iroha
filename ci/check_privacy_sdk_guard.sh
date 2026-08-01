@@ -1612,6 +1612,27 @@ def check(overrides: dict[str, str] | None = None) -> None:
                 errors,
             )
 
+    swift_native_bridge = read(
+        "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift", overrides
+    )
+    require(
+        "privacyFreeFn ?? freeFn" not in swift_native_bridge,
+        "Swift privacy buffers must never fall back to connect_norito_free",
+        errors,
+    )
+    require(
+        "&& privacyFreeFn != nil" in swift_native_bridge
+        and "let privacyFreeFn else" in swift_native_bridge,
+        "Swift privacy availability and archive consumers must require the dedicated zeroizing free",
+        errors,
+    )
+    require(
+        "loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion"
+        in swift_native_bridge,
+        "Swift privacy availability must require exact first-release ABI 21",
+        errors,
+    )
+
     c_header = read(
         "crates/connect_norito_bridge/include/connect_norito_bridge.h", overrides
     )

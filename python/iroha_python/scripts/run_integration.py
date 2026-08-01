@@ -12,6 +12,7 @@ import argparse
 import atexit
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -26,31 +27,51 @@ DEFAULT_TORII_URL = "http://127.0.0.1:8080"
 DEFAULT_SERVICE = "irohad0"
 DEFAULT_WAIT_SECONDS = 90
 DEFAULT_PYTEST_PATH = "python/iroha_python/tests/integration"
-GENESIS_KEY_FILE_ENV = (
+GENESIS_ARTIFACT_FILE_ENV = (
     "IROHA_GENESIS_PUBLIC_KEY_FILE",
-    "IROHA_GENESIS_PRIVATE_KEY_FILE",
+    "IROHA_GENESIS_SIGNED_FILE",
+    "IROHA_GENESIS_EXPECTED_HASH_FILE",
 )
 
 
-def _validate_default_compose_genesis_custody(compose_file: pathlib.Path) -> None:
+def _validate_default_compose_genesis_artifacts(compose_file: pathlib.Path) -> None:
     if compose_file.resolve() != DEFAULT_COMPOSE_FILE.resolve():
         return
-    for name in GENESIS_KEY_FILE_ENV:
+    for name in GENESIS_ARTIFACT_FILE_ENV:
         raw_path = os.environ.get(name)
         if not raw_path:
             raise RuntimeError(
                 f"{name} is required by the default Compose stack; generate "
-                "runtime-only genesis key files with kagami and never commit "
-                "the private file"
+                "a signed genesis, verifier key, and exact hash with kagami"
             )
         path = pathlib.Path(raw_path)
+        if name == "IROHA_GENESIS_SIGNED_FILE":
+            try:
+                if not path.is_file() or path.stat().st_size == 0:
+                    raise RuntimeError(f"{name} must point to a non-empty file")
+            except OSError as error:
+                raise RuntimeError(f"{name} cannot be read") from error
+            continue
         try:
             record = path.read_text(encoding="utf-8")
-        except OSError as error:
+        except (OSError, UnicodeError) as error:
             raise RuntimeError(f"{name} cannot be read") from error
-        if not record.endswith("\n") or not record.strip() or "\n" in record.strip():
+        payload = record.removesuffix("\n") if record.endswith("\n") else record
+        if (
+            not record.endswith("\n")
+            or not payload
+            or "\n" in payload
+            or "\r" in payload
+            or payload != payload.strip()
+        ):
             raise RuntimeError(
-                f"{name} must contain exactly one non-empty key record and a final newline"
+                f"{name} must contain exactly one non-empty record and a final newline"
+            )
+        if name == "IROHA_GENESIS_EXPECTED_HASH_FILE" and re.fullmatch(
+            r"[0-9a-f]{63}[13579bdf]\n", record
+        ) is None:
+            raise RuntimeError(
+                f"{name} must contain one canonical lowercase Iroha hash record"
             )
 
 
@@ -219,7 +240,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise FileNotFoundError(f"compose file not found: {compose_file}")
 
     if args.start:
-        _validate_default_compose_genesis_custody(compose_file)
+        _validate_default_compose_genesis_artifacts(compose_file)
         compose_cmd = _find_compose_binary(args.compose_bin)
         compose_args = ["-f", str(compose_file), "up", "-d", args.service]
         _run_compose(compose_cmd, compose_args)

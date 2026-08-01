@@ -67,6 +67,14 @@ pub trait Visit {
     fn visit_instruction(&mut self, operation: &InstructionBox) {
         visit_instruction(self, operation);
     }
+    /// Visit an instruction for which this generic walker has no typed hook.
+    ///
+    /// This is distinct from an invalid instruction: an [`InstructionBox`] may
+    /// contain a registered native extension that was added after this walker.
+    /// Override this hook when complete instruction coverage matters.
+    fn visit_unclassified_instruction(&mut self, operation: &InstructionBox) {
+        visit_unclassified_instruction(self, operation);
+    }
     /// Visit IVM bytecode payload.
     fn visit_ivm(&mut self, operation: &IvmBytecode) {
         visit_ivm(self, operation);

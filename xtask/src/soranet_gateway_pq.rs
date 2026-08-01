@@ -440,9 +440,10 @@ mod tests {
     ];
 
     fn sample_certificate() -> RelayCertificateV2 {
+        let identity_ed25519 = [0x22; 32];
         RelayCertificateV2 {
-            relay_id: [0x11; 32],
-            identity_ed25519: [0x22; 32],
+            relay_id: identity_ed25519,
+            identity_ed25519,
             identity_mldsa65: vec![0x33; 1952],
             descriptor_commit: [0x44; 32],
             roles: iroha_crypto::soranet::certificate::RelayRolesV2 {
@@ -454,7 +455,9 @@ mod tests {
             bandwidth_bytes_per_sec: 500_000,
             reputation_weight: 50,
             endpoints: vec![iroha_crypto::soranet::certificate::RelayEndpointV2 {
-                url: "soranet://relay.example:443".to_string(),
+                quic_multiaddr: "/dns/relay.example/udp/443/quic".to_string(),
+                tls_server_name: "relay.example".to_string(),
+                tls_spki_sha256: [0xA5; 32],
                 priority: 1,
                 tags: vec!["norito-stream".into()],
             }],

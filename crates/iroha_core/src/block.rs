@@ -1004,8 +1004,8 @@ fn validate_native_amx_receipt_against_plan_with_predecessor_policy(
             expected_chain_id_hash,
             dataspace_catalog,
             authority,
-            Some(expected_v2_context),
-            Some(&authoritative_validators),
+            expected_v2_context,
+            &authoritative_validators,
         )?;
         validate_native_amx_attestation_qc(
             receipt,
@@ -1016,8 +1016,8 @@ fn validate_native_amx_receipt_against_plan_with_predecessor_policy(
             expected_chain_id_hash,
             dataspace_catalog,
             authority,
-            Some(expected_v2_context),
-            Some(&authoritative_validators),
+            expected_v2_context,
+            &authoritative_validators,
         )?;
         crate::native_amx::NativeAmxCommitRequestV2 {
             request: crate::native_amx::NativeAmxAttestationRequestV2 {
@@ -1071,16 +1071,14 @@ fn validate_native_amx_attestation_qc(
     expected_chain_id_hash: Hash,
     dataspace_catalog: &DataSpaceCatalog,
     authority: &impl NativeAmxAuthorityContext,
-    expected_v2_context: Option<ExpectedNativeAmxV2Context>,
-    authoritative_validator_set: Option<&[PeerId]>,
+    expected_v2_context: ExpectedNativeAmxV2Context,
+    authoritative_validator_set: &[PeerId],
 ) -> Result<(), String> {
     let body = &qc.body;
-    if let Some(expected) = expected_v2_context
-        && (body.round != expected.round || body.epoch != expected.epoch)
-    {
+    if body.round != expected_v2_context.round || body.epoch != expected_v2_context.epoch {
         return Err(format!(
             "native AMX attestation context mismatch: expected round {:?} epoch {}, got round {:?} epoch {}",
-            expected.round, expected.epoch, body.round, body.epoch
+            expected_v2_context.round, expected_v2_context.epoch, body.round, body.epoch
         ));
     }
     if qc.validator_set().is_empty()
@@ -1186,7 +1184,7 @@ fn validate_native_amx_attestation_qc(
                 .to_owned(),
         );
     }
-    if authoritative_validator_set.is_some_and(|expected| qc.validator_set() != expected) {
+    if qc.validator_set() != authoritative_validator_set {
         return Err(
             "native AMX attestation validator set is not the authoritative height committee"
                 .to_owned(),
@@ -3186,6 +3184,8 @@ pub enum SignatureVerificationError {
 pub enum InvalidGenesisError {
     /// Genesis block must be signed with genesis private key and not signed by any peer
     InvalidSignature,
+    /// Every genesis transaction must carry a valid authorization proof for the genesis account
+    InvalidTransactionSignature,
     /// Genesis authority must use a single-key account controller
     GenesisAuthorityNotSingleKey,
     /// Genesis transaction must be authorized by genesis account
@@ -3224,20 +3224,30 @@ pub fn check_genesis_block(
     genesis_account: &iroha_data_model::account::AccountId,
     expected_chain_id: &ChainId,
 ) -> Result<(), InvalidGenesisError> {
+    authenticate_genesis_block_intents(block, genesis_account, expected_chain_id)?;
+    check_genesis_execution_results(block)
+}
+
+/// Authenticate the immutable genesis intent before any bootstrap instruction executes.
+///
+/// Consensus proposals deliberately omit deterministic execution results. The configured
+/// genesis key must therefore authenticate the height-one header and its ordered transaction
+/// intents independently of whether those results have already been attached.
+#[allow(clippy::too_many_lines)]
+fn authenticate_genesis_block_intents(
+    block: &SignedBlock,
+    genesis_account: &iroha_data_model::account::AccountId,
+    expected_chain_id: &ChainId,
+) -> Result<(), InvalidGenesisError> {
     const MAX_GENESIS_TRANSACTIONS: usize = 16;
-
-    if !block.has_results() {
-        return Err(InvalidGenesisError::ContainsErrors);
-    }
-
-    if block.results().any(|result| result.as_ref().is_err()) {
-        return Err(InvalidGenesisError::ContainsErrors);
-    }
 
     let signatures = block.signatures().collect::<Vec<_>>();
     let [signature] = signatures.as_slice() else {
         return Err(InvalidGenesisError::InvalidSignature);
     };
+    if signature.index() != 0 {
+        return Err(InvalidGenesisError::InvalidSignature);
+    }
     let genesis_signatory = genesis_account
         .try_signatory()
         .ok_or(InvalidGenesisError::GenesisAuthorityNotSingleKey)?;
@@ -3273,10 +3283,6 @@ pub fn check_genesis_block(
         .root();
     if block.header().merkle_root() != expected_merkle_root {
         return Err(InvalidGenesisError::MerkleRootMismatch);
-    }
-    let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
-    if block.header().result_merkle_root() != expected_result_root {
-        return Err(InvalidGenesisError::ResultMerkleMismatch);
     }
     match (
         block.header().da_proof_policies_hash(),
@@ -3316,11 +3322,26 @@ pub fn check_genesis_block(
         if transaction.authority() != genesis_account {
             return Err(InvalidGenesisError::UnexpectedAuthority);
         }
+        transaction
+            .verify_signature()
+            .map_err(|_| InvalidGenesisError::InvalidTransactionSignature)?;
         let iroha_data_model::transaction::Executable::Instructions(_isi) =
             transaction.instructions()
         else {
             return Err(InvalidGenesisError::NotInstructions);
         };
+    }
+    Ok(())
+}
+
+fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGenesisError> {
+    if !block.has_results() || block.results().any(|result| result.as_ref().is_err()) {
+        return Err(InvalidGenesisError::ContainsErrors);
+    }
+
+    let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
+    if block.header().result_merkle_root() != expected_result_root {
+        return Err(InvalidGenesisError::ResultMerkleMismatch);
     }
     Ok(())
 }
@@ -6610,9 +6631,9 @@ pub(crate) mod valid {
         /// authenticated height context and its parent CommitQC are the v2
         /// reconfiguration proof; malformed evidence is still rejected when
         /// a body carries it.
-        /// Non-genesis transaction signatures, stateless checks, state-dependent
-        /// invariants, and deterministic execution all remain mandatory. Genesis
-        /// retains its single authority block signature over the ordered intents.
+        /// Transaction signatures, stateless checks, state-dependent invariants,
+        /// and deterministic execution all remain mandatory. Genesis additionally
+        /// retains its configured-authority block signature over the ordered intents.
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_sumeragi_v2_candidate_keep_voting_block<'state>(
             block: SignedBlock,
@@ -6650,7 +6671,7 @@ pub(crate) mod valid {
         ///
         /// Callers must only use this after independently verifying that local validation roots
         /// and commit-certificate roots agree for the same block. The path still checks
-        /// non-genesis transaction signatures, state-dependent block invariants,
+        /// transaction signatures, state-dependent block invariants,
         /// transaction limits, duplicate detection, and execution-context alignment.
         /// It skips only the block signature set authenticated by the commit certificate.
         #[cfg(test)]
@@ -7307,6 +7328,12 @@ pub(crate) mod valid {
                     actual: actual_prev_block_hash,
                 });
             }
+            if block.header().is_genesis() {
+                // A consensus proposal is canonically resultless. Authenticate the configured
+                // genesis root and every intent it commits before any genesis-only instruction
+                // is allowed to execute against the bootstrap state.
+                authenticate_genesis_block_intents(block, genesis_account, chain_id)?;
+            }
             Self::validate_previous_roster_evidence(
                 block,
                 block.header().height().get(),
@@ -7355,7 +7382,7 @@ pub(crate) mod valid {
 
             if block.header().is_genesis() {
                 if block.has_results() {
-                    check_genesis_block(block, genesis_account, chain_id)?;
+                    check_genesis_execution_results(block)?;
                 }
             } else {
                 let prev_block = if soft_fork {
@@ -13873,21 +13900,20 @@ pub(crate) mod valid {
                             result
                         };
 
-                    let simple_transfer_batch = !prepared.is_empty()
-                        && {
-                            let precheck_tx = state_block.transaction();
-                            prepared.iter().all(|p| {
-                                !fee_postprocessing_required[p.idx]
-                                    && !crate::validation_fee::transaction_has_validation_fee_metadata(
-                                        txs[p.idx],
-                                    )
-                                    && matches!(
-                                        deltas.get(p.idx),
-                                        Some(Some(Ok(delta)))
-                                            if delta.supports_uncontrolled_single_transfer_batch(&precheck_tx)
-                                    )
-                            })
-                        };
+                    let simple_transfer_batch = !prepared.is_empty() && {
+                        let precheck_tx = state_block.transaction();
+                        prepared.iter().all(|p| {
+                            !fee_postprocessing_required[p.idx]
+                                && !crate::validation_fee::transaction_has_validation_fee_metadata(
+                                    txs[p.idx],
+                                )
+                                && matches!(
+                                    deltas.get(p.idx),
+                                    Some(Some(Ok(delta)))
+                                        if delta.supports_numeric_transfer_batch_merge(&precheck_tx)
+                                )
+                        })
+                    };
 
                     if simple_transfer_batch {
                         const SIMPLE_TRANSFER_BATCH_CHUNK: usize = 4_096;
@@ -13972,7 +13998,7 @@ pub(crate) mod valid {
 
                                 let result = match deltas.get(p.idx) {
                                     Some(Some(Ok(delta))) => delta
-                                        .merge_uncontrolled_single_transfer_into_transaction(
+                                        .merge_numeric_transfer_batch_into_transaction(
                                             &mut state_tx,
                                             &p.authority,
                                         )
@@ -25002,9 +25028,105 @@ pub(crate) mod valid {
             );
         }
 
+        #[test]
+        fn resultless_genesis_proposal_is_authenticated_before_execution() {
+            use iroha_data_model::prelude::*;
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let chain_id = ChainId::from("resultless-genesis-authentication");
+            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+            let transaction = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let block = SignedBlock::genesis(
+                vec![transaction],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                None,
+            );
+            let proposal = block.canonical_resultless_proposal();
+
+            assert!(proposal.is_resultless_proposal());
+            authenticate_genesis_block_intents(&proposal, &genesis_account, &chain_id)
+                .expect("the configured genesis key must authenticate a resultless proposal");
+
+            let mut noncanonical_index = proposal.clone();
+            noncanonical_index
+                .replace_signatures(
+                    [BlockSignature::new(
+                        1,
+                        checked_block_signature(
+                            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                            noncanonical_index.hash(),
+                        ),
+                    )]
+                    .into_iter()
+                    .collect(),
+                )
+                .expect("replace the proposal signature index for the adversarial fixture");
+            assert_eq!(
+                authenticate_genesis_block_intents(
+                    &noncanonical_index,
+                    &genesis_account,
+                    &chain_id,
+                ),
+                Err(InvalidGenesisError::InvalidSignature)
+            );
+
+            let unrelated = crate::block::checked_keypair();
+            let mut forged = proposal;
+            let forged_hash = forged.hash();
+            forged
+                .replace_signatures(
+                    [BlockSignature::new(
+                        0,
+                        checked_block_signature(unrelated.private_key(), forged_hash),
+                    )]
+                    .into_iter()
+                    .collect(),
+                )
+                .expect("replace the proposal signature for the adversarial fixture");
+            assert_eq!(
+                authenticate_genesis_block_intents(&forged, &genesis_account, &chain_id),
+                Err(InvalidGenesisError::InvalidSignature)
+            );
+        }
+
+        #[test]
+        fn genesis_block_signature_does_not_replace_transaction_signature() {
+            use iroha_data_model::prelude::*;
+
+            let chain_id = ChainId::from("individually-signed-genesis");
+            let genesis_keypair = crate::block::checked_keypair();
+            let unrelated = crate::block::checked_keypair();
+            let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
+            let mut transaction = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(genesis_keypair.private_key());
+            transaction.set_signature(iroha_data_model::transaction::TransactionSignature(
+                SignatureOf::try_new(unrelated.private_key(), transaction.payload())
+                    .expect("unrelated key can sign the adversarial fixture payload"),
+            ));
+            let block =
+                SignedBlock::genesis(vec![transaction], genesis_keypair.private_key(), None, None);
+
+            assert_eq!(
+                check_genesis_block(&block, &genesis_account, &chain_id),
+                Err(InvalidGenesisError::InvalidTransactionSignature)
+            );
+        }
+
         #[cfg(feature = "bls")]
         #[test]
-        fn block_authenticated_genesis_ignores_invalid_per_transaction_bls_proof() {
+        fn block_authenticated_genesis_rejects_invalid_per_transaction_bls_proof() {
             use iroha_data_model::prelude::*;
 
             let chain_id = ChainId::from("block-authenticated-bls-genesis");
@@ -25080,9 +25202,17 @@ pub(crate) mod valid {
             )
             .unpack(|_| {});
 
-            result.expect(
-                "the genesis block signature authenticates the intent; its transaction proof is non-authoritative",
-            );
+            let Err(error) = result else {
+                panic!(
+                    "a valid genesis block signature must not replace each transaction's authorization proof"
+                );
+            };
+            assert!(matches!(
+                *error.1,
+                BlockValidationError::InvalidGenesis(
+                    InvalidGenesisError::InvalidTransactionSignature
+                )
+            ));
         }
 
         #[test]
@@ -30895,7 +31025,8 @@ mod tests {
             Repeats::Exactly(1),
             authority.clone(),
             filter,
-        );
+        )
+        .expect("test pipeline-trigger action satisfies its authority invariant");
         let mut trigger_block = world.triggers.block();
         let mut trigger_transaction = trigger_block.transaction();
         trigger_transaction
@@ -33622,7 +33753,8 @@ seiyaku MeteredFailure {
                 DataEventFilter::Asset(
                     AssetEventFilter::new().for_asset(payer_transfer_asset.clone()),
                 ),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (_leader_public, leader_private) = leader.into_parts();
@@ -34893,7 +35025,8 @@ seiyaku MeteredFailure {
                 Repeats::Indefinitely,
                 payer_id.clone(),
                 DataEventFilter::Any,
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
             vec![iroha_data_model::transaction::FeeChargeLimit::new(

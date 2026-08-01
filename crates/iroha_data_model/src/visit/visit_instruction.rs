@@ -50,9 +50,16 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         || visit_soracloud_agent_instruction(visitor, isi)
         || visit_soracloud_training_instruction(visitor, isi))
     {
-        unreachable!("Unknown instruction type");
+        visitor.visit_unclassified_instruction(isi);
     }
 }
+
+/// Visit an instruction that has no typed hook in the generic data-model walker.
+///
+/// Registered native extensions are valid [`InstructionBox`] values even when
+/// this intentionally small walker does not expose their semantics. The default
+/// is therefore a leaf visit instead of a process-terminating assertion.
+pub fn visit_unclassified_instruction<V: Visit + ?Sized>(_visitor: &mut V, _isi: &InstructionBox) {}
 
 fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     visit_core_setup_instruction(visitor, isi)
@@ -1007,6 +1014,31 @@ mod tests {
         });
         visit_instruction(&mut visitor, &isi);
         assert_eq!(visitor.logs, 1);
+    }
+
+    #[test]
+    fn unclassified_native_instruction_uses_fallback_hook() {
+        struct FallbackVisitor {
+            calls: usize,
+        }
+
+        impl Visit for FallbackVisitor {
+            fn visit_unclassified_instruction(&mut self, _: &InstructionBox) {
+                self.calls += 1;
+            }
+        }
+
+        let isi = Box::new(crate::isi::ram_lfe::ActivateRamLfeProgramPolicy {
+            program_id: "visitor_fallback"
+                .parse()
+                .expect("valid RAM-LFE program id"),
+        })
+        .into_instruction_box();
+        let mut visitor = FallbackVisitor { calls: 0 };
+
+        visit_instruction(&mut visitor, &isi);
+
+        assert_eq!(visitor.calls, 1);
     }
 
     #[test]

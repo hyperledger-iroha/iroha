@@ -167,7 +167,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::asset::{CanBurnAssetWithDefinition},
     iroha_executor_data_model::permission::asset::{CanTransferAssetWithDefinition},
     iroha_executor_data_model::permission::asset::{CanModifyAssetMetadataWithDefinition},
-    iroha_executor_data_model::permission::asset::{CanMintAsset},
+    iroha_executor_data_model::permission::asset::{CanMintAssetToAccount},
     iroha_executor_data_model::permission::asset::{CanBurnAsset},
     iroha_executor_data_model::permission::asset::{CanTransferAsset},
     iroha_executor_data_model::permission::asset::{CanModifyAssetMetadata},
@@ -1132,10 +1132,10 @@ pub mod asset {
     //! Module with pass conditions for asset related tokens
 
     use iroha_executor_data_model::permission::asset::{
-        CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanSetAssetHoldingLimit,
-        CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit, CanTransferAsset,
-        CanTransferAssetWithDefinition,
+        CanBurnAsset, CanBurnAssetWithDefinition, CanMintAssetToAccount,
+        CanMintAssetWithDefinition, CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
+        CanSetAssetHoldingLimit, CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit,
+        CanTransferAsset, CanTransferAssetWithDefinition,
     };
 
     use super::*;
@@ -1253,10 +1253,10 @@ pub mod asset {
     impl_asset_definition_control_permission!(CanSetAssetTransferDailyLimit);
     impl_asset_definition_control_permission!(CanSetAssetHoldingLimit);
 
-    impl ValidateGrantRevoke for CanMintAsset {
+    impl ValidateGrantRevoke for CanMintAssetToAccount {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             super::asset_definition::Owner {
-                asset_definition: self.asset.definition(),
+                asset_definition: &self.asset_definition,
             }
             .validate(authority, host, context)
         }
@@ -1267,7 +1267,7 @@ pub mod asset {
             host: &Iroha,
         ) -> Result {
             super::asset_definition::Owner {
-                asset_definition: self.asset.definition(),
+                asset_definition: &self.asset_definition,
             }
             .validate(authority, host, context)
         }
@@ -1311,12 +1311,7 @@ pub mod asset {
         };
     }
 
-    impl_froms!(
-        CanMintAsset,
-        CanBurnAsset,
-        CanTransferAsset,
-        CanModifyAssetMetadata
-    );
+    impl_froms!(CanBurnAsset, CanTransferAsset, CanModifyAssetMetadata);
 
     impl ValidateGrantRevoke for CanModifyAssetMetadata {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
@@ -2289,7 +2284,7 @@ mod tests {
         account::{
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
         },
-        asset::{CanMintAsset, CanMintAssetWithDefinition},
+        asset::{CanMintAssetToAccount, CanMintAssetWithDefinition},
         domain::CanRegisterDomain,
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
@@ -2705,10 +2700,11 @@ mod tests {
         .expect("contract address");
         let dataspace = DataSpaceId::new(7);
         let permissions = vec![
-            PermissionObject::from(CanMintAsset {
+            PermissionObject::from(CanMintAssetToAccount {
                 // Possessing this exact token authorizes propagation even though the authority is
-                // neither the bucket account nor queried as the definition owner.
-                asset: AssetId::new(asset_definition, adjacent_owner),
+                // neither the destination account nor queried as the definition owner.
+                asset_definition,
+                account: adjacent_owner,
             }),
             PermissionObject::from(CanInvokeContractEntrypoint {
                 contract,

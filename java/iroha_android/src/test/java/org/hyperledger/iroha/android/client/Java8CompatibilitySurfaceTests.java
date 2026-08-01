@@ -26,9 +26,11 @@ import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.privacy.PrivacyConfidentialWitness;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.junit.Test;
 
 public final class Java8CompatibilitySurfaceTests {
+  private static final String VPN_RELAY_ID_HEX = TestEd25519Keys.publicKeyHex(0x22);
 
   @Test
   public void clientResponseDropsWhitespaceRejectCode() {
@@ -387,7 +389,22 @@ public final class Java8CompatibilitySurfaceTests {
         + "\"settlement_grace_secs\":120,"
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
-        + "\"relay_tls_spki_sha256_hex\":null"
+        + "\"relay_id_hex\":\""
+        + VPN_RELAY_ID_HEX
+        + "\","
+        + "\"descriptor_commit_hex\":\""
+        + "cd".repeat(32)
+        + "\","
+        + "\"tls_server_name\":\"relay.example\","
+        + "\"relay_tls_spki_sha256_hex\":\""
+        + "ab".repeat(32)
+        + "\","
+        + "\"relay_certificate_sha256_hex\":\""
+        + "ef".repeat(32)
+        + "\","
+        + "\"directory_snapshot_digest_hex\":\""
+        + "42".repeat(32)
+        + "\""
         + "}";
   }
 

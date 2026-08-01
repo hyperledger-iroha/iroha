@@ -779,6 +779,7 @@ class RecordingSession(requests.Session):
                 "params": params,
                 "headers": headers,
                 "data": data,
+                "allow_redirects": kwargs.get("allow_redirects"),
             }
         )
         if not self._responses:
@@ -1328,6 +1329,18 @@ VPN_PAYMENT_HASH = "22" * 32
 VPN_METERING_KEY = "33" * 32
 VPN_LEASE_ID = VPN_QUOTE_ID
 VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 656
+VPN_RELAY_ID_HEX = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+
+
+def _vpn_trust_fields(spki: str = "ab" * 32) -> Dict[str, str]:
+    return {
+        "relay_id_hex": VPN_RELAY_ID_HEX,
+        "descriptor_commit_hex": "cd" * 32,
+        "tls_server_name": "relay.example",
+        "relay_tls_spki_sha256_hex": spki,
+        "relay_certificate_sha256_hex": "ef" * 32,
+        "directory_snapshot_digest_hex": "42" * 32,
+    }
 
 
 def _vpn_instruction(wire_id: str = "OpenVpnLeaseEscrow") -> Dict[str, str]:
@@ -1337,7 +1350,7 @@ def _vpn_instruction(wire_id: str = "OpenVpnLeaseEscrow") -> Dict[str, str]:
 def _vpn_profile_payload() -> Dict[str, Any]:
     return {
         "available": True,
-        "relay_endpoint": "/dns4/relay.example/tcp/443",
+        "relay_endpoint": "/dns4/relay.example/udp/443/quic",
         "supported_exit_classes": ["standard", "low-latency", "high-security"],
         "default_exit_class": "standard",
         "lease_secs": 3600,
@@ -1356,7 +1369,7 @@ def _vpn_profile_payload() -> Dict[str, Any]:
         "settlement_grace_secs": 300,
         "flow_label_bits": 24,
         "padding_budget_ms": 250,
-        "relay_tls_spki_sha256_hex": "44" * 32,
+        **_vpn_trust_fields(),
     }
 
 
@@ -1384,7 +1397,7 @@ def _vpn_quote_payload() -> Dict[str, Any]:
         "meter_family": payload["meter_family"],
         "flow_label_bits": payload["flow_label_bits"],
         "padding_budget_ms": payload["padding_budget_ms"],
-        "relay_tls_spki_sha256_hex": payload["relay_tls_spki_sha256_hex"],
+        **_vpn_trust_fields(payload["relay_tls_spki_sha256_hex"]),
         "metering_public_key_hex": VPN_METERING_KEY,
         "open_lease_instruction": _vpn_instruction(),
         "tx_instructions": [_vpn_instruction()],
@@ -1411,7 +1424,7 @@ def _vpn_session_payload() -> Dict[str, Any]:
         "lease_fee": quote_payload["lease_fee"],
         "flow_label_bits": quote_payload["flow_label_bits"],
         "padding_budget_ms": quote_payload["padding_budget_ms"],
-        "relay_tls_spki_sha256_hex": quote_payload["relay_tls_spki_sha256_hex"],
+        **_vpn_trust_fields(quote_payload["relay_tls_spki_sha256_hex"]),
         "route_pushes": quote_payload["route_pushes"],
         "excluded_routes": quote_payload["excluded_routes"],
         "dns_servers": quote_payload["dns_servers"],
@@ -1469,7 +1482,7 @@ def _vpn_auth(captured: List[bytes]) -> ToriiCanonicalRequestAuth:
 def test_vpn_profile_deserializes_native_lease_fields() -> None:
     session = RecordingSession()
     session.queue(StubResponse(payload=_vpn_profile_payload()))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
 
     profile = client.get_vpn_profile()
 
@@ -1478,8 +1491,64 @@ def test_vpn_profile_deserializes_native_lease_fields() -> None:
     assert profile.escrow_account_id == VPN_ESCROW
     assert profile.operator_account_id == VPN_OPERATOR
     assert profile.route_pushes == ["0.0.0.0/0"]
-    assert session.calls[0]["url"] == "http://node.test/v1/vpn/profile"
+    assert session.calls[0]["url"] == "https://node.test/v1/vpn/profile"
     assert session.calls[0]["headers"] == {"Accept": "application/json"}
+    assert session.calls[0]["allow_redirects"] is False
+
+
+def test_vpn_profile_rejects_insecure_transport_before_dispatch() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="HTTPS"):
+        client.get_vpn_profile()
+
+    assert session.calls == []
+
+
+def test_unavailable_vpn_profile_accepts_only_the_explicit_empty_trust_tuple() -> None:
+    payload = _vpn_profile_payload()
+    payload["available"] = False
+    for field in (
+        "relay_endpoint",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
+        "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
+    ):
+        payload[field] = ""
+
+    profile = ToriiClient._parse_vpn_profile(payload, context="vpn profile")
+
+    assert profile.available is False
+    assert profile.relay_endpoint == ""
+    assert profile.relay_id_hex == ""
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("relay_id_hex", "00" * 32),
+        ("descriptor_commit_hex", "00" * 32),
+        ("descriptor_commit_hex", "0x" + "cd" * 32),
+        ("tls_server_name", "Relay.Example"),
+        ("tls_server_name", "-relay.example"),
+        ("relay_endpoint", "/dns4/Relay.Example/udp/443/quic"),
+        ("relay_endpoint", "/dns4/relay.example/udp/0443/quic"),
+        ("relay_endpoint", "/dns4/relay.example/tcp/443/quic"),
+    ],
+)
+def test_available_vpn_profile_rejects_malformed_trust_tuple(
+    field: str,
+    value: str,
+) -> None:
+    payload = _vpn_profile_payload()
+    payload[field] = value
+
+    with pytest.raises(RuntimeError):
+        ToriiClient._parse_vpn_profile(payload, context="vpn profile")
 
 
 @pytest.mark.parametrize("invalid_fee", [100, "01", "-1", "1.0"])
@@ -1488,7 +1557,7 @@ def test_vpn_profile_rejects_noncanonical_quantity_fee(invalid_fee: Any) -> None
     payload["lease_fee"] = invalid_fee
     session = RecordingSession()
     session.queue(StubResponse(payload=payload))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
 
     with pytest.raises(RuntimeError, match="lease_fee"):
         client.get_vpn_profile()
@@ -1510,7 +1579,7 @@ def test_vpn_profile_requires_dns_push_interval_of_at_least_30(
 
 def test_signed_vpn_methods_require_canonical_auth_before_dispatch() -> None:
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     omitted_auth_calls = [
         lambda: client.create_vpn_quote(
             VpnQuoteCreateRequest(metering_public_key_hex=VPN_METERING_KEY)
@@ -1577,7 +1646,7 @@ def test_signed_vpn_methods_require_canonical_auth_before_dispatch() -> None:
 
 def test_vpn_request_mappings_reject_unknown_fields_before_dispatch() -> None:
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     auth = _vpn_auth([])
     calls = [
         lambda: client.create_vpn_quote(
@@ -1668,7 +1737,7 @@ def test_create_vpn_quote_signs_body_and_parses_open_lease_instruction() -> None
     session.queue(StubResponse(status_code=201, payload=_vpn_quote_payload()))
     captured: List[bytes] = []
     auth = _vpn_auth(captured)
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
 
     quote = client.create_vpn_quote(
         VpnQuoteCreateRequest(
@@ -1738,7 +1807,7 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
         )
 
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     with pytest.raises(ValueError, match="surrounding whitespace"):
         client.create_vpn_quote(
             VpnQuoteCreateRequest(
@@ -2375,7 +2444,7 @@ def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
         )
     )
     session.queue(StubResponse(status_code=404))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     captured: List[bytes] = []
     auth = _vpn_auth(captured)
 
@@ -2406,7 +2475,7 @@ def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
 def test_submit_vpn_receipt_parses_settlement_instruction() -> None:
     session = RecordingSession()
     session.queue(StubResponse(status_code=201, payload=_vpn_receipt_payload()))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     captured: List[bytes] = []
 
     receipt = client.submit_vpn_receipt(
@@ -2455,6 +2524,7 @@ def test_list_peers_returns_typed_records() -> None:
             "params": {},
             "headers": {},
             "data": None,
+            "allow_redirects": True,
         }
     ]
 
@@ -2480,13 +2550,13 @@ def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
         timestamp_ms=123,
         nonce="fee-quote-nonce",
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     draft = {"authority": CANONICAL_OWNER, "fee_payment": _authority_fee_payment()}
 
     assert client.quote_fees(draft, canonical_auth=auth) == quote
 
     call = session.calls[0]
-    assert call["url"] == "http://node.test/v1/fees/quote"
+    assert call["url"] == "https://node.test/v1/fees/quote"
     assert json.loads(call["data"].decode("utf-8")) == {"payload": draft}
     assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
     assert call["headers"]["X-Iroha-Timestamp-Ms"] == "123"
@@ -2544,7 +2614,7 @@ def test_fee_quote_rejects_substituted_selection(
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     auth = ToriiCanonicalRequestAuth(
         account_id=CANONICAL_OWNER,
         signer=lambda _message: b"signature",
@@ -2573,7 +2643,7 @@ def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
         timestamp_ms=124,
         nonce="program-lookup-nonce",
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
 
     result = client.get_fee_sponsor_program(
         f"{CANONICAL_OWNER}/retail",
@@ -2597,7 +2667,7 @@ def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     auth = ToriiCanonicalRequestAuth(
         account_id=CANONICAL_OWNER,
         signer=lambda _message: b"signature",

@@ -13,7 +13,7 @@ use iroha_data_model::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
         NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction, VrfEpochRecord,
     },
-    nexus::{DataSpaceCatalog, LaneId, PublicLaneValidatorStatus},
+    nexus::{LaneId, PublicLaneValidatorStatus},
     prelude::{AccountId, PeerId},
     transaction::TransactionSubmissionReceipt,
 };
@@ -301,13 +301,10 @@ impl<'a> PenaltyApplier<'a> {
 pub(crate) fn apply_npos_consensus_effects_to_transaction(
     tx: &mut StateTransaction<'_, '_>,
     effects: &NposConsensusEffects,
-    dataspace_catalog: &DataSpaceCatalog,
-    staking_cfg: &iroha_config::parameters::actual::NexusStaking,
     current_height: u64,
     current_view: u64,
     now_ms: u64,
     #[cfg(feature = "telemetry")] telemetry: Option<&StateTelemetry>,
-    #[cfg(not(feature = "telemetry"))] telemetry: Option<&crate::telemetry::StateTelemetry>,
 ) -> Result<PenaltyOutcome> {
     let mut outcome = PenaltyOutcome::default();
     for record in &effects.vrf_epoch_seals {
@@ -369,15 +366,12 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
                     continue;
                 }
                 apply_slash_to_validator(
-                    &mut tx.world,
-                    dataspace_catalog,
-                    staking_cfg,
+                    tx,
                     action.lane_id,
                     &action.validator,
                     action.slash_id,
                     &action.amount,
                     now_ms,
-                    telemetry,
                 )?;
                 outcome.applied = outcome.applied.saturating_add(1);
                 outcome.slashed = outcome.slashed.saturating_add(1);

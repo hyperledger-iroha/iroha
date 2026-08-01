@@ -239,7 +239,7 @@ mod tests {
         npos.vrf_reveal_window_blocks = 2;
         let error = compute(&ChainId::from("invalid-vrf-windows"), &params)
             .expect_err("VRF windows outside the signed epoch must fail closed");
-        assert!(error.contains("fit within the epoch"));
+        assert!(error.contains("close before the epoch boundary"));
     }
 
     #[test]

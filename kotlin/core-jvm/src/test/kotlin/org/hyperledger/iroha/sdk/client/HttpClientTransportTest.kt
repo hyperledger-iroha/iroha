@@ -1926,7 +1926,12 @@ class HttpClientTransportTest {
                   "settlement_grace_secs": 120,
                   "flow_label_bits": 24,
                   "padding_budget_ms": 15,
-                  "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}"
+                  "relay_id_hex": "$validEd25519PublicKeyHex",
+                  "descriptor_commit_hex": "${"cd".repeat(32)}",
+                  "tls_server_name": "relay.example",
+                  "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+                  "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+                  "directory_snapshot_digest_hex": "${"42".repeat(32)}"
                 }
             """.trimIndent()
         val executor = StubResponseExecutor(
@@ -1947,7 +1952,12 @@ class HttpClientTransportTest {
         assertEquals("1000000.25", profile.leaseFee)
         assertEquals(60L, profile.dnsPushIntervalSecs)
         assertEquals(120L, profile.settlementGraceSecs)
+        assertEquals(validEd25519PublicKeyHex, profile.relayIdHex)
+        assertEquals("cd".repeat(32), profile.descriptorCommitHex)
+        assertEquals("relay.example", profile.tlsServerName)
         assertEquals("ab".repeat(32), profile.relayTlsSpkiSha256Hex)
+        assertEquals("ef".repeat(32), profile.relayCertificateSha256Hex)
+        assertEquals("42".repeat(32), profile.directorySnapshotDigestHex)
         assertEquals("GET", executor.lastRequest.method)
         assertEquals("https://torii.example/v1/vpn/profile", executor.lastRequest.uri.toString())
 
@@ -1968,6 +1978,58 @@ class HttpClientTransportTest {
         val uppercaseTlsPin = responseJson.replace("ab".repeat(32), "AB".repeat(32))
         assertFailsWith<IllegalStateException> {
             VpnJsonParser.parseProfile(uppercaseTlsPin.toByteArray(StandardCharsets.UTF_8))
+        }
+    }
+
+    @Test
+    fun vpnProfileRequiresHttpsAndValidatesTheAvailabilityBoundTrustTuple() {
+        val insecureExecutor = StubResponseExecutor(
+            statusCode = 200,
+            body = vpnProfileJson().toByteArray(StandardCharsets.UTF_8),
+        )
+        val insecureTransport = HttpClientTransport.withExecutor(
+            executor = insecureExecutor,
+            config = ClientConfig.builder().setBaseUri(URI.create("http://torii.example")).build(),
+        )
+        assertFailsWith<IllegalArgumentException> { insecureTransport.getVpnProfile() }
+
+        @Suppress("UNCHECKED_CAST")
+        fun profileObject(): MutableMap<String, Any?> =
+            (JsonParser.parse(vpnProfileJson()) as Map<String, Any?>).toMutableMap()
+
+        fun parse(payload: Map<String, Any?>): VpnProfile =
+            VpnJsonParser.parseProfile(
+                JsonEncoder.encode(payload).toByteArray(StandardCharsets.UTF_8),
+            )
+
+        val unavailable = profileObject().apply {
+            this["available"] = false
+            listOf(
+                "relay_endpoint",
+                "relay_id_hex",
+                "descriptor_commit_hex",
+                "tls_server_name",
+                "relay_tls_spki_sha256_hex",
+                "relay_certificate_sha256_hex",
+                "directory_snapshot_digest_hex",
+            ).forEach { this[it] = "" }
+        }
+        assertEquals("", parse(unavailable).relayIdHex)
+
+        val invalidValues = listOf(
+            "relay_id_hex" to "00".repeat(32),
+            "descriptor_commit_hex" to "00".repeat(32),
+            "descriptor_commit_hex" to "0x${"cd".repeat(32)}",
+            "tls_server_name" to "Relay.Example",
+            "tls_server_name" to "-relay.example",
+            "relay_endpoint" to "/dns4/Relay.Example/udp/443/quic",
+            "relay_endpoint" to "/dns4/relay.example/udp/0443/quic",
+            "relay_endpoint" to "/dns4/relay.example/tcp/443/quic",
+        )
+        invalidValues.forEach { (field, value) ->
+            assertFailsWith<IllegalStateException>(field) {
+                parse(profileObject().apply { this[field] = value })
+            }
         }
     }
 
@@ -3671,7 +3733,12 @@ class HttpClientTransportTest {
               "settlement_grace_secs": 120,
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
-              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}"
+              "relay_id_hex": "$validEd25519PublicKeyHex",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
+              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}"
             }
         """.trimIndent()
 
@@ -3699,7 +3766,12 @@ class HttpClientTransportTest {
               "meter_family": "soranet.vpn.standard",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
+              "relay_id_hex": "$meteringKey",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}",
               "metering_public_key_hex": "$meteringKey",
               "open_lease_instruction": {
                 "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
@@ -3736,7 +3808,12 @@ class HttpClientTransportTest {
               "lease_fee": "1000000.25",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
+              "relay_id_hex": "$validEd25519PublicKeyHex",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}",
               "route_pushes": ["0.0.0.0/0"],
               "excluded_routes": [],
               "dns_servers": ["1.1.1.1"],

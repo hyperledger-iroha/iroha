@@ -72,6 +72,11 @@ use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
 use iroha_telemetry::metrics::GaugeVec;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::global_sorafs_node_otel;
+pub use iroha_telemetry::metrics::musubi::{
+    MusubiCacheOperationV1, MusubiCursorFailureReasonV1, MusubiGovernanceActionV1,
+    MusubiGovernanceRejectionReasonV1, MusubiIngestDeadletterReasonV1, MusubiIntegritySurfaceV1,
+    MusubiPublicationPhaseMetricV1,
+};
 pub use iroha_telemetry::metrics::{
     GOVERNANCE_MANIFEST_RECENT_CAP, GovernanceManifestActivation, Halo2Status,
     LaneSettlementBuffer, LaneSettlementSnapshot, LaneSwaplineSnapshot, Metrics,
@@ -2062,6 +2067,44 @@ impl StateTelemetry {
     pub fn inc_sorafs_disputes(&self, result: &'static str) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics.inc_sorafs_disputes(result);
+        }
+    }
+
+    /// Adjust the number of Musubi releases currently below fresh-selection quorum.
+    ///
+    /// Callers derive `added` and `removed` from exact archive reverse references
+    /// when one archive crosses the selectable boundary. The saturating projection
+    /// is telemetry-only and never feeds consensus state.
+    pub fn adjust_musubi_replication_shortfall_releases(&self, added: u64, removed: u64) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let gauge = &self.metrics.musubi;
+        gauge.adjust_replication_shortfall_releases(added, removed);
+    }
+
+    /// Record a rejected Musubi package, alias, or Parliament mutation.
+    pub fn record_musubi_governance_rejection(
+        &self,
+        action: MusubiGovernanceActionV1,
+        reason: MusubiGovernanceRejectionReasonV1,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.musubi.inc_governance_rejection(action, reason);
+        }
+    }
+
+    /// Record one Musubi commitment verification failure.
+    pub fn record_musubi_integrity_failure(&self, surface: MusubiIntegritySurfaceV1) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.musubi.inc_integrity_failure(surface);
+        }
+    }
+
+    /// Record one bounded Musubi finalized-query cursor failure.
+    pub fn record_musubi_cursor_failure(&self, reason: MusubiCursorFailureReasonV1) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.musubi.inc_cursor_failure(reason);
         }
     }
 
@@ -14136,7 +14179,8 @@ mod tests {
             Repeats::Indefinitely,
             sut.account_id.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let trigger = Trigger::new(trigger_id, action);
 
         let register_tx = sut.accepted_transaction([Register::trigger(trigger)]);

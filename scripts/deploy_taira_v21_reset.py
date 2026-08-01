@@ -150,6 +150,7 @@ TOP_LEVEL_NAMES = {
 VALIDATOR_NAMES = {"codec", "config.toml", "configs", "manifests", "runtime", "storage"}
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+GENESIS_PUBLIC_KEY_RE = re.compile(r"ed0120[0-9A-F]{64}")
 BLOCK_HASH_RE = re.compile(
     r"(?:hash:)?([0-9A-Fa-f]{64})(?:#[0-9A-Fa-f]{4})?"
 )
@@ -193,6 +194,15 @@ def require_sha256(value: object, label: str) -> str:
 
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         fail(f"{label} must be one lowercase SHA-256 digest")
+    return value
+
+
+def require_genesis_expected_hash(value: object) -> str:
+    """Require one canonical Iroha hash suitable as a genesis trust root."""
+
+    value = require_sha256(value, "genesis expected hash")
+    if int(value[-2:], 16) & 1 == 0:
+        fail("genesis expected hash must carry the Iroha marker bit")
     return value
 
 
@@ -511,7 +521,11 @@ CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
         "kagemusha_artifact_dir": "string",
         "kagemusha_catalog_qualification_seal_path": "string",
     },
-    ("genesis",): {"file": "string"},
+    ("genesis",): {
+        "file": "string",
+        "public_key": "string",
+        "expected_hash": "string",
+    },
 }
 TOML_TABLE_RE = re.compile(r"^\[([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\]$")
 TOML_ARRAY_TABLE_RE = re.compile(r"^\[\[([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\]\]$")
@@ -968,6 +982,8 @@ def validate_config_projection(
     *,
     torii_port: int,
     p2p_port: int,
+    genesis_public_key: str,
+    genesis_expected_hash: str,
 ) -> None:
     """Require exact public-Taira, storage, port, and mandatory-offline config."""
 
@@ -1024,8 +1040,15 @@ def validate_config_projection(
         != str(qualification_seal_path(release_root.name))
     ):
         fail("validator config does not bind the authenticated Kagemusha catalog")
-    if genesis.get("file") != str(bundle / "genesis.signed.nrt"):
-        fail("validator config does not bind the reset bundle signed genesis")
+    if (
+        genesis.get("file") != str(bundle / "genesis.signed.nrt")
+        or genesis.get("public_key") != genesis_public_key
+        or genesis.get("expected_hash") != genesis_expected_hash
+    ):
+        fail(
+            "validator config does not bind the reset bundle signed genesis, "
+            "public key, and exact expected hash"
+        )
 
 
 def measure_read_only_fsync(path: Path, maximum_ms: int) -> float:
@@ -1158,6 +1181,15 @@ def validate_bundle(
         fail("reset manifest source commit does not match verified admission")
     if manifest.get("irohad_sha256") != expected_binary_sha256:
         fail("reset manifest binary does not match the verified admission receipt")
+    genesis_public_key = manifest.get("genesis_public_key")
+    if (
+        not isinstance(genesis_public_key, str)
+        or GENESIS_PUBLIC_KEY_RE.fullmatch(genesis_public_key) is None
+    ):
+        fail("reset manifest lacks one canonical genesis public key")
+    genesis_expected_hash = require_genesis_expected_hash(
+        manifest.get("genesis_expected_hash")
+    )
     _, signed_genesis_info = require_manifest_hash(
         manifest,
         "signed_genesis_sha256",
@@ -1244,6 +1276,8 @@ def validate_bundle(
             release.installed_root,
             torii_port=torii_port,
             p2p_port=p2p_port,
+            genesis_public_key=genesis_public_key,
+            genesis_expected_hash=genesis_expected_hash,
         )
         peers.append(
             PeerPlan(

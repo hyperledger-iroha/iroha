@@ -13,6 +13,7 @@
 use std::{
     collections::HashSet,
     convert::TryInto,
+    num::NonZeroU64,
     sync::{
         LazyLock,
         atomic::{AtomicU64, Ordering},
@@ -20,7 +21,9 @@ use std::{
     time::Instant,
 };
 
-use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree};
+use iroha_crypto::{
+    CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
+};
 use iroha_telemetry::metrics::record_stack_budget_hit;
 use likely_stable::{likely, unlikely};
 use parking_lot::Mutex;
@@ -269,9 +272,11 @@ impl Memory {
     }
 
     /// Build a compact Merkle proof for the memory chunk containing `addr`.
-    /// Returns the compact proof and the current typed Merkle root. Pending
-    /// writes are committed before construction. `depth_cap` can restrict the
-    /// number of levels used (at most 32).
+    ///
+    /// Pending writes are committed before construction. Without truncation
+    /// the returned root is the full memory-tree root. When `depth_cap`
+    /// truncates the path, the returned root commits only to that path fragment
+    /// and is not a membership commitment.
     pub fn merkle_compact(
         &mut self,
         addr: u64,
@@ -299,7 +304,7 @@ impl Memory {
                 }
             })
             .collect();
-        let proof_for_root = MerkleProof::from_audit_path(leaf_index, typed_siblings.clone());
+        let proof_for_root = MerkleProof::from_audit_path(dirs, typed_siblings.clone());
         let compact = CompactMerkleProof::from_parts(depth as u8, dirs, typed_siblings);
         let root: HashOf<MerkleTree<[u8; 32]>> = if depth < path.len() {
             let base = (addr / 32) * 32;
@@ -311,13 +316,28 @@ impl Memory {
             let leaf_hash =
                 HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_digest));
             proof_for_root
-                .compute_root_sha256(&leaf_hash, depth)
-                .unwrap_or(full_root)
+                .compute_partial_root_sha256(&leaf_hash, depth)
+                .expect("proof height equals compact depth")
         } else {
             full_root
         };
 
         (compact, root)
+    }
+
+    /// Return the current full-tree root and exact local memory geometry as one
+    /// membership commitment.
+    ///
+    /// This commitment is authoritative only for this in-process [`Memory`]
+    /// instance. Protocols transporting a root must authenticate the count
+    /// alongside it rather than reconstructing a count from the proof depth.
+    pub fn merkle_commitment(&mut self) -> MerkleTreeCommitment<[u8; 32]> {
+        self.commit();
+        let leaf_count = u64::try_from(self.tree.leaf_count())
+            .ok()
+            .and_then(NonZeroU64::new)
+            .expect("memory tree always has a non-zero leaf count representable as u64");
+        MerkleTreeCommitment::new(self.root, leaf_count)
     }
 
     /// Current typed Merkle root, recomputing pending dirty ranges if needed.
@@ -1487,6 +1507,11 @@ mod tests {
         let (proof, root) = mem.merkle_compact(addr, Some(12));
         let depth = proof.depth() as usize;
         assert_eq!(proof.siblings().len(), depth);
+        assert_ne!(
+            proof.dirs(),
+            (addr / 32) as u32,
+            "depth-capped proof must use only its encoded direction bits"
+        );
 
         let (expected_root, expected_path) = reference.merkle_root_and_path(addr);
 
@@ -1497,7 +1522,7 @@ mod tests {
         let leaf_digest = compute_memory_leaf_digest(&chunk);
         let leaf_hash = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_digest));
         let partial_proof = MerkleProof::from_audit_path(
-            (addr / 32) as u32,
+            proof.dirs(),
             expected_path
                 .iter()
                 .take(depth)
@@ -1512,8 +1537,8 @@ mod tests {
         );
         let expected_compact_root = if depth < expected_path.len() {
             partial_proof
-                .compute_root_sha256(&leaf_hash, depth)
-                .unwrap_or(expected_root)
+                .compute_partial_root_sha256(&leaf_hash, depth)
+                .expect("proof height equals compact depth")
         } else {
             expected_root
         };

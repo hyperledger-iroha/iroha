@@ -623,13 +623,15 @@ mod tests {
         },
     };
     use iroha_crypto::{
-        Algorithm, KeyPair,
+        Algorithm, Hash, HashOf, KeyPair,
         soranet::handshake::{
             DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         },
         streaming::StreamingKeyMaterial,
     };
-    use iroha_data_model::{ChainId, peer::Peer, sorafs::pricing::PricingScheduleRecord};
+    use iroha_data_model::{
+        ChainId, block::BlockHeader, peer::Peer, sorafs::pricing::PricingScheduleRecord,
+    };
     use iroha_logger::Level;
     use iroha_primitives::addr::socket_addr;
 
@@ -900,7 +902,9 @@ mod tests {
                 public_key: checked_public_key(),
                 file: None,
                 manifest_json: None,
-                expected_hash: None,
+                expected_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"Kiso test genesis trust anchor",
+                )),
             },
             torii: Torii {
                 address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
@@ -947,10 +951,13 @@ mod tests {
                 api_fee_asset_id: None,
                 api_fee_amount: None,
                 api_fee_receiver: None,
-                api_allow_cidrs: Vec::new(),
+                api_rate_limit_bypass_cidrs: Vec::new(),
+                internal_api_trusted_cidrs:
+                    iroha_config::parameters::defaults::torii::internal_api_trusted_cidrs(),
                 peer_telemetry_urls: Vec::new(),
                 peer_geo: iroha_config::parameters::actual::ToriiPeerGeo::default(),
                 soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
+                privacy_bootle_lantern_issuer: None,
                 debug_match_filters: false,
                 webhooks_enabled: iroha_config::parameters::defaults::torii::WEBHOOKS_ENABLED,
                 zk_attachments_enabled:
@@ -962,6 +969,8 @@ mod tests {
                 preauth_rate_per_ip_per_sec: None,
                 preauth_burst_per_ip: None,
                 preauth_temp_ban: None,
+                preauth_ban_capacity:
+                    iroha_config::parameters::defaults::torii::PREAUTH_BAN_CAPACITY,
                 preauth_allow_cidrs: Vec::new(),
                 preauth_scheme_limits: Vec::new(),
                 api_high_load_tx_threshold: None,

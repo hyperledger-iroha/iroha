@@ -35,12 +35,13 @@ pub mod isi {
     use iroha_executor_data_model::permission::{
         account::CanRegisterAccount,
         asset::{
-            CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-            CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanTransferAsset,
-            CanTransferAssetWithDefinition,
+            CanBurnAsset, CanBurnAssetWithDefinition, CanMintAssetToAccount,
+            CanMintAssetWithDefinition, CanModifyAssetMetadata,
+            CanModifyAssetMetadataWithDefinition, CanTransferAsset, CanTransferAssetWithDefinition,
         },
         asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
+        executor::CanUpgradeExecutor,
         governance::{CanEnactGovernance, CanManageVerifyingKeys},
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanWithdrawFeeSponsorProgram,
@@ -139,6 +140,107 @@ pub mod isi {
             OpenVerifyEnvelopeValidationError, StarkFriOpenProofV1,
         },
     };
+
+    /// Exact governance purpose carried by a one-shot retained movement capability.
+    pub(in crate::smartcontracts::isi) enum VerifiedGovernanceNumericPurpose {
+        LockSlash {
+            referendum_id: String,
+            owner: AccountId,
+            reason: GovernanceSlashReason,
+        },
+        LockRestitution {
+            referendum_id: String,
+            owner: AccountId,
+            reason: GovernanceSlashReason,
+        },
+        CitizenshipSlash {
+            owner: AccountId,
+            slash_bps: u16,
+        },
+        CitizenshipRelease {
+            owner: AccountId,
+        },
+    }
+
+    /// Non-reusable proof that governance validated one exact retained balance movement.
+    pub(in crate::smartcontracts::isi) struct VerifiedGovernanceNumericMovement {
+        purpose: VerifiedGovernanceNumericPurpose,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    }
+
+    /// Non-reusable proof that a sponsor-vault withdrawal passed program authorization.
+    pub(in crate::smartcontracts::isi) struct VerifiedFeeSponsorVaultWithdrawal {
+        authority: AccountId,
+        program_id: iroha_data_model::nexus::FeeSponsorProgramId,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Quantity,
+    }
+
+    impl VerifiedFeeSponsorVaultWithdrawal {
+        fn new(
+            authority: AccountId,
+            program_id: iroha_data_model::nexus::FeeSponsorProgramId,
+            source_id: AssetId,
+            destination: AccountId,
+            amount: Quantity,
+        ) -> Self {
+            Self {
+                authority,
+                program_id,
+                source_id,
+                destination,
+                amount,
+            }
+        }
+
+        pub(in crate::smartcontracts::isi) fn into_parts(
+            self,
+        ) -> (
+            AccountId,
+            iroha_data_model::nexus::FeeSponsorProgramId,
+            AssetId,
+            AccountId,
+            Quantity,
+        ) {
+            (
+                self.authority,
+                self.program_id,
+                self.source_id,
+                self.destination,
+                self.amount,
+            )
+        }
+    }
+
+    impl VerifiedGovernanceNumericMovement {
+        fn new(
+            purpose: VerifiedGovernanceNumericPurpose,
+            source_id: AssetId,
+            destination_id: AssetId,
+            amount: Quantity,
+        ) -> Self {
+            Self {
+                purpose,
+                source_id,
+                destination_id,
+                amount,
+            }
+        }
+
+        pub(in crate::smartcontracts::isi) fn into_parts(
+            self,
+        ) -> (VerifiedGovernanceNumericPurpose, AssetId, AssetId, Quantity) {
+            (
+                self.purpose,
+                self.source_id,
+                self.destination_id,
+                self.amount,
+            )
+        }
+    }
     #[cfg(test)]
     use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
@@ -601,6 +703,12 @@ pub mod isi {
                     trigger_authority,
                     descriptor.filter.clone(),
                 )
+                .map_err(|error| {
+                    invalid_smart_contract_parameter(format!(
+                        "invalid manifest trigger `{}` action: {error}",
+                        descriptor.id
+                    ))
+                })?
                 .with_metadata(metadata);
                 let trigger = Trigger::new(descriptor.id.clone(), action);
                 // The lifecycle path may register only a manifest trigger owned
@@ -2401,6 +2509,7 @@ pub mod isi {
     }
 
     fn slash_citizenship_bond(
+        owner: &AccountId,
         record: &mut crate::state::CitizenshipRecord,
         slash_bps: u16,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -2426,12 +2535,19 @@ pub mod isi {
             slash_amount.as_numeric(),
             spec,
         )?;
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&escrow_asset_id, &slash_amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&receiver_asset_id, &slash_amount)?;
+        let movement = VerifiedGovernanceNumericMovement::new(
+            VerifiedGovernanceNumericPurpose::CitizenshipSlash {
+                owner: owner.clone(),
+                slash_bps,
+            },
+            escrow_asset_id,
+            receiver_asset_id,
+            slash_amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
+            state_transaction,
+            movement,
+        )?;
         record.amount = record
             .amount
             .try_sub(&slash_amount)
@@ -2658,10 +2774,13 @@ pub mod isi {
         );
         let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(delta.as_numeric(), spec)?;
-        state_transaction.world.transfer_numeric_asset_exact(
-            &owner_asset_id,
-            &escrow_asset_id,
-            &delta,
+        crate::smartcontracts::isi::asset::isi::execute_governance_bond_transfer(
+            state_transaction,
+            authority,
+            referendum_id,
+            owner_asset_id,
+            escrow_asset_id,
+            delta,
         )?;
         Ok(())
     }
@@ -2839,10 +2958,19 @@ pub mod isi {
         }
 
         // No fallible lock or ledger arithmetic may remain after custody moves.
-        state_transaction.world.transfer_numeric_asset_exact(
-            &escrow_asset_id,
-            &receiver_asset_id,
-            &request.amount,
+        let movement = VerifiedGovernanceNumericMovement::new(
+            VerifiedGovernanceNumericPurpose::LockSlash {
+                referendum_id: request.referendum_id.to_owned(),
+                owner: request.owner.clone(),
+                reason: request.reason,
+            },
+            escrow_asset_id,
+            receiver_asset_id,
+            request.amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
+            state_transaction,
+            movement,
         )?;
         rec.amount = next_amount;
         rec.slashed = next_slashed;
@@ -2969,10 +3097,19 @@ pub mod isi {
         entry.last_height = state_transaction._curr_block.height().get();
 
         // No fallible lock or ledger validation may remain after custody moves.
-        state_transaction.world.transfer_numeric_asset_exact(
-            &receiver_asset_id,
-            &escrow_asset_id,
-            &amount,
+        let movement = VerifiedGovernanceNumericMovement::new(
+            VerifiedGovernanceNumericPurpose::LockRestitution {
+                referendum_id: referendum_id.to_owned(),
+                owner: owner.clone(),
+                reason,
+            },
+            receiver_asset_id,
+            escrow_asset_id,
+            amount.clone(),
+        );
+        crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
+            state_transaction,
+            movement,
         )?;
         rec.amount = next_amount;
         rec.slashed = next_slashed;
@@ -4118,7 +4255,8 @@ pub mod isi {
             }
             ProposalKind::DeployContract(_)
             | ProposalKind::RuntimeUpgrade(_)
-            | ProposalKind::SccpRouteGovernance(_) => None,
+            | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::MusubiRegistryGovernance(_) => None,
         }
     }
 
@@ -7665,6 +7803,16 @@ pub mod isi {
                         state_transaction,
                     )?;
                 }
+                ProposalKind::MusubiRegistryGovernance(action) => {
+                    action.validate().map_err(|error| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(error.reason().to_owned()),
+                        )
+                    })?;
+                    // Musubi recovery actions retain the enacted proposal as their
+                    // action-bound authorization and execute only after the separate
+                    // mandatory delay enforced by the target Musubi instruction.
+                }
                 ProposalKind::ValidationFeePolicy(payload) => {
                     if !enact_validation_fee_policy(pid, &proposal, payload, state_transaction)? {
                         close_referendum_if_open(state_transaction, &pid_hex);
@@ -9532,6 +9680,7 @@ pub mod isi {
             ],
             ProposalKind::RuntimeUpgrade(_)
             | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::MusubiRegistryGovernance(_)
             | ProposalKind::ValidationFeePolicy(_)
             | ProposalKind::ValidationFeePayoutLifecycle(_) => &[
                 ParliamentBody::RulesCommittee,
@@ -9802,12 +9951,14 @@ pub mod isi {
                     delta.as_numeric(),
                     spec,
                 )?;
-                state_transaction
-                    .world
-                    .withdraw_numeric_asset(&owner_asset_id, &delta)?;
-                state_transaction
-                    .world
-                    .deposit_numeric_asset(&escrow_asset_id, &delta)?;
+                crate::smartcontracts::isi::asset::isi::execute_citizenship_bond_transfer(
+                    state_transaction,
+                    authority,
+                    &self.owner,
+                    owner_asset_id,
+                    escrow_asset_id,
+                    delta,
+                )?;
             }
             let record = if let Some(mut record) = existing {
                 // A top-up (including a same-amount no-op) continues the
@@ -9869,12 +10020,18 @@ pub mod isi {
                 record.amount.as_numeric(),
                 spec,
             )?;
-            state_transaction
-                .world
-                .withdraw_numeric_asset(&escrow_asset_id, &record.amount)?;
-            state_transaction
-                .world
-                .deposit_numeric_asset(&owner_asset_id, &record.amount)?;
+            let movement = VerifiedGovernanceNumericMovement::new(
+                VerifiedGovernanceNumericPurpose::CitizenshipRelease {
+                    owner: self.owner.clone(),
+                },
+                escrow_asset_id,
+                owner_asset_id,
+                record.amount.clone(),
+            );
+            crate::smartcontracts::isi::asset::isi::execute_verified_governance_numeric_movement(
+                state_transaction,
+                movement,
+            )?;
             state_transaction.world.citizens.remove(self.owner.clone());
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::CitizenRevoked(
@@ -9936,6 +10093,7 @@ pub mod isi {
                 gov::CitizenServiceEvent::Decline => {
                     let penalty = if record.declines_used >= citizen_cfg.free_declines_per_epoch {
                         slash_citizenship_bond(
+                            &self.owner,
                             &mut record,
                             citizen_cfg.decline_slash_bps,
                             state_transaction,
@@ -9953,6 +10111,7 @@ pub mod isi {
                     let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
                     record.cooldown_until = record.cooldown_until.max(cooldown);
                     slash_citizenship_bond(
+                        &self.owner,
                         &mut record,
                         citizen_cfg.no_show_slash_bps,
                         state_transaction,
@@ -9963,6 +10122,7 @@ pub mod isi {
                     let cooldown = current_height.saturating_add(citizen_cfg.seat_cooldown_blocks);
                     record.cooldown_until = record.cooldown_until.max(cooldown);
                     slash_citizenship_bond(
+                        &self.owner,
                         &mut record,
                         citizen_cfg.misconduct_slash_bps,
                         state_transaction,
@@ -17645,6 +17805,56 @@ pub mod isi {
                 .into());
             }
 
+            // Derive the exact post-execution effect before consulting either
+            // proof carrier. The QC vote preimage commits this hash through its
+            // strict mode tag; authentication is required before state mutation.
+            let lane_finality_statement_hash =
+                envelope.lane_finality_statement_hash().map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane relay finality statement is invalid: {err}"
+                        )),
+                    )
+                })?;
+            let relay_ref = envelope.relay_ref();
+            let key = verified_lane_relay_state_key(&relay_ref)?;
+            let contract_map_key = verified_lane_relay_contract_map_state_key(&key)?;
+
+            // The durable identity is one effect per
+            // (lane, dataspace, incarnation, lane-local height). Never allow a
+            // second effect to hide behind a proof-controlled settlement hash.
+            for existing_key in [&key, &contract_map_key] {
+                let Some(existing) = state_transaction
+                    .world
+                    .smart_contract_state
+                    .get(existing_key)
+                else {
+                    continue;
+                };
+                let decoded = decode_verified_lane_relay_record_state(existing).map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!("stored {err}")),
+                    )
+                })?;
+                let existing_statement_hash = decoded
+                    .relay_envelope
+                    .lane_finality_statement_hash()
+                    .map_err(|err| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("stored lane relay finality statement is invalid: {err}")
+                                .into(),
+                        )
+                    })?;
+                if decoded.relay_ref != relay_ref
+                    || existing_statement_hash != lane_finality_statement_hash
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "conflicting verified lane relay effect already exists".into(),
+                    )
+                    .into());
+                }
+            }
+
             let proof_blob = self.proof_blob().clone();
             if proof_blob.payload.is_empty() {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -17701,10 +17911,14 @@ pub mod isi {
                 })?;
             if proof_envelope.dsid != envelope.dataspace_id
                 || proof_envelope.manifest_root != manifest_root
+                || proof_envelope.da_commitment
+                    != envelope
+                        .da_commitment_hash
+                        .map(|commitment| Hash::from(commitment).into())
             {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
-                        "verified lane relay proof does not match the declared manifest_root"
+                        "verified lane relay proof does not match the declared manifest_root or DA commitment"
                             .into(),
                     ),
                 )
@@ -17765,6 +17979,35 @@ pub mod isi {
                         format!("verified lane relay FASTPQ verification failed: {err}").into(),
                     )
                 })?;
+            state_transaction
+                .authenticate_finalized_lane_relay(&envelope)
+                .map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane relay finality authentication failed: {err}"
+                        )),
+                    )
+                })?;
+            let qc = envelope.qc.as_ref().ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "lane relay finality authentication requires a QC".into(),
+                ))
+            })?;
+            let expected_old_root: [u8; 32] = qc.parent_state_root.into();
+            let expected_new_root: [u8; 32] = qc.post_state_root.into();
+            let expected_tx_set_hash: [u8; 32] = lane_finality_statement_hash.into();
+            if verified_fastpq.old_root != expected_old_root
+                || verified_fastpq.new_root != expected_new_root
+                || verified_fastpq.tx_set_hash != expected_tx_set_hash
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay FastPQ roots do not match the finalized lane effect"
+                            .into(),
+                    ),
+                )
+                .into());
+            }
             let record_statement_digest = verified_fastpq.statement_digest;
             let record_proof_digest = verified_fastpq.proof_digest;
             let record_binding = binding;
@@ -17773,13 +18016,15 @@ pub mod isi {
                 envelope,
                 proof_payload_hash,
                 record_statement_digest,
+                lane_finality_statement_hash,
+                verified_fastpq.old_root,
+                verified_fastpq.new_root,
+                verified_fastpq.tx_set_hash,
                 record_proof_digest,
                 verified_at_height,
                 manifest_root,
                 record_binding,
             );
-            let key = verified_lane_relay_state_key(&record.relay_ref)?;
-            let contract_map_key = verified_lane_relay_contract_map_state_key(&key)?;
             let encoded = encode_verified_lane_relay_record_state(&record).map_err(|err| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     err,
@@ -17812,16 +18057,6 @@ pub mod isi {
                     .into());
                 }
             }
-
-            state_transaction
-                .authenticate_finalized_lane_relay(&record.relay_envelope)
-                .map_err(|err| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(format!(
-                            "lane relay finality authentication failed: {err}"
-                        )),
-                    )
-                })?;
 
             let mut inserted = false;
             if state_transaction
@@ -19069,12 +19304,16 @@ pub mod isi {
                     .clone(),
                 fee_sponsor_asset_scope(&definition, dataspace),
             );
-            crate::smartcontracts::isi::asset::isi::execute_fee_sponsor_custody_transfer(
-                state_transaction,
-                authority,
+            let withdrawal = VerifiedFeeSponsorVaultWithdrawal::new(
+                authority.clone(),
+                program_id.clone(),
                 source,
                 self.destination().clone(),
                 self.amount().clone(),
+            );
+            crate::smartcontracts::isi::asset::isi::execute_verified_fee_sponsor_vault_withdrawal(
+                state_transaction,
+                withdrawal,
             )?;
             if vault.balance.is_zero() {
                 state_transaction.world.fee_sponsor_vaults.remove(key);
@@ -19127,8 +19366,8 @@ pub mod isi {
         if let Ok(permission) = CanModifyAssetMetadataWithDefinition::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
-        if let Ok(permission) = CanMintAsset::try_from(permission) {
-            return asset_definition_matches_domain(permission.asset.definition());
+        if let Ok(permission) = CanMintAssetToAccount::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
         }
         if let Ok(permission) = CanBurnAsset::try_from(permission) {
             return asset_definition_matches_domain(permission.asset.definition());
@@ -20167,6 +20406,15 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            let required: Permission = CanUpgradeExecutor.into();
+            if !crate::executor::is_initial_genesis_context(state_transaction)
+                && !has_exact_permission(&state_transaction.world, authority, &required)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: CanUpgradeExecutor".into(),
+                ));
+            }
+
             let raw_executor = self.executor();
 
             // Cloning executor to avoid multiple mutable borrows of `state_transaction`.
@@ -20337,6 +20585,56 @@ pub mod isi {
                         + 1,
                 )
                 .is_err()
+            );
+        }
+
+        #[test]
+        fn upgrade_execute_enforces_capability_at_the_mutation_boundary() {
+            use iroha_data_model::permission::Permissions;
+            use iroha_executor_data_model::permission::executor::CanUpgradeExecutor;
+
+            fn invalid_upgrade() -> iroha_data_model::isi::Upgrade {
+                iroha_data_model::isi::Upgrade::new(iroha_data_model::executor::Executor::new(
+                    IvmBytecode::from_compiled(Vec::new()),
+                ))
+            }
+
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+
+            let error = invalid_upgrade()
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("direct native dispatch must not bypass executor-upgrade authority");
+            assert!(
+                matches!(error, InstructionExecutionError::InvariantViolation(ref message)
+                    if message.as_ref().contains("CanUpgradeExecutor")),
+                "unexpected upgrade denial: {error:?}"
+            );
+
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                Permissions::from([Permission::from(CanUpgradeExecutor)]),
+            );
+            let error = invalid_upgrade()
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("the intentionally empty executor bytecode must fail migration");
+            assert!(
+                !matches!(error, InstructionExecutionError::InvariantViolation(ref message)
+                    if message.as_ref().contains("CanUpgradeExecutor")),
+                "an exact capability holder must reach migration: {error:?}"
             );
         }
 
@@ -24527,7 +24825,10 @@ seiyaku GovernanceLifecycle {
                 0,
             )
             .expect("valid envelope")
-            .with_manifest_root(Some(manifest_root));
+            .with_manifest_root(Some(manifest_root))
+            .with_lane_block_descriptor_hash(Some(Hash::new(
+                b"world-isi-test-lane-block-descriptor",
+            )));
             let verified_at_height = base_envelope.block_height;
             let proof_digest =
                 Hash::new(b"sample-verified-lane-relay-external-fastpq-proof-payload");
@@ -24559,10 +24860,17 @@ seiyaku GovernanceLifecycle {
                 target_dsids: vec![10],
                 effect_binding: None,
             };
+            let lane_finality_statement_hash = envelope
+                .lane_finality_statement_hash()
+                .expect("complete test lane finality statement");
             VerifiedLaneRelayRecord::new(
                 envelope,
                 Hash::new(b"proof"),
                 [0xAB; 32],
+                lane_finality_statement_hash,
+                [0; 32],
+                [0; 32],
+                lane_finality_statement_hash.into(),
                 Hash::new(b"fastpq-proof"),
                 42,
                 manifest_root,
@@ -24575,18 +24883,19 @@ seiyaku GovernanceLifecycle {
             let record = sample_verified_lane_relay_record();
             let key = super::verified_lane_relay_state_key(&record.relay_ref).expect("state key");
             let key = key.to_string();
-            let expected_prefix = format!(
-                "{}_{}_{}_{}_",
+            let expected = format!(
+                "{}_{}_{}_{}_{}",
                 iroha_data_model::nexus::VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
                 record.relay_ref.dataspace_id.as_u64(),
                 record.relay_ref.lane_id.as_u32(),
+                hex::encode(record.relay_ref.lane_incarnation.as_ref()),
                 record.relay_ref.block_height,
             );
-            assert!(key.starts_with(&expected_prefix));
+            assert_eq!(key, expected);
             assert!(!key.contains('/'));
-            let suffix = key.rsplit('_').next().expect("hash suffix");
-            assert_eq!(suffix.len(), 64);
-            assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
+            let incarnation = key.split('_').nth_back(1).expect("incarnation segment");
+            assert_eq!(incarnation.len(), 64);
+            assert!(incarnation.chars().all(|ch| ch.is_ascii_hexdigit()));
         }
 
         #[test]

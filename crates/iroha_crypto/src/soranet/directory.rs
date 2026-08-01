@@ -467,13 +467,14 @@ mod tests {
     fn sample_relay_certificate(
         directory_hash: [u8; 32],
         issuer_fingerprint: [u8; 32],
-        relay_id: [u8; 32],
+        relay_identity_seed: [u8; 32],
     ) -> RelayCertificateV2 {
+        let identity_ed25519 = SigningKey::from_bytes(&relay_identity_seed)
+            .verifying_key()
+            .to_bytes();
         RelayCertificateV2 {
-            relay_id,
-            identity_ed25519: SigningKey::from_bytes(&[0x22; SECRET_KEY_LENGTH])
-                .verifying_key()
-                .to_bytes(),
+            relay_id: identity_ed25519,
+            identity_ed25519,
             identity_mldsa65: vec![0x55; MlDsaSuite::MlDsa65.public_key_len()],
             descriptor_commit: [0x33; 32],
             roles: RelayRolesV2 {
@@ -485,7 +486,9 @@ mod tests {
             bandwidth_bytes_per_sec: 1_000_000,
             reputation_weight: 50,
             endpoints: vec![RelayEndpointV2 {
-                url: "quic://relay.example.test:443".to_string(),
+                quic_multiaddr: "/dns/relay.example.test/udp/443/quic".to_string(),
+                tls_server_name: "relay.example.test".to_string(),
+                tls_spki_sha256: [0xA5; 32],
                 priority: 0,
                 tags: vec!["nk3".to_string()],
             }],

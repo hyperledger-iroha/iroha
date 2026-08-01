@@ -3,39 +3,67 @@
 use std::str::FromStr;
 
 use eyre::Result;
+use iroha_crypto::derive_non_signing_ed25519_public_key;
+#[cfg(test)]
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     IntoKeyValue,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    fastpq::TransferDeltaTranscript,
     isi::vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     name::Name,
     prelude::*,
     soranet::vpn::{
-        VpnLeaseRecordV1, VpnLeaseStatusV1, VpnSessionReceiptV1, VpnUsageVoucherBodyV1,
-        VpnUsageVoucherV1,
+        VpnLeaseRecordV1, VpnLeaseStatusV1, VpnQuotePolicyV1, VpnSessionReceiptV1,
+        VpnUsageVoucherBodyV1, VpnUsageVoucherV1,
     },
     transaction::SignedTransaction,
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 
-use super::{
-    Error, Execute,
-    asset::isi::{
-        NumericAssetTransferSourcePolicy, apply_numeric_asset_transfer_delta,
-        assert_numeric_spec_with, emit_numeric_asset_transfer_events,
-        prepare_outbound_asset_transfer_control_update, update_control_record,
-    },
-};
+use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
 use crate::{
     smartcontracts::isi::domain::isi::ensure_controller_capabilities,
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
 };
 
-const VPN_LEASE_CUSTODY_SEED_LABEL: &str = "iroha-soranet-vpn-lease-v1";
+/// Exact VPN purpose carried by a one-shot numeric movement capability.
+pub(in crate::smartcontracts::isi) enum VerifiedVpnNumericPurpose {
+    Funding {
+        lease_id: [u8; 32],
+        authority: AccountId,
+    },
+    Settlement {
+        lease_id: [u8; 32],
+        authority: AccountId,
+    },
+    Refund {
+        lease_id: [u8; 32],
+        authority: AccountId,
+    },
+}
+
+/// Non-reusable proof that VPN admission selected an exact atomic movement batch.
+pub(in crate::smartcontracts::isi) struct VerifiedVpnNumericBatch {
+    purpose: VerifiedVpnNumericPurpose,
+    legs: Vec<(AssetId, AssetId, Quantity)>,
+}
+
+impl VerifiedVpnNumericBatch {
+    fn new(purpose: VerifiedVpnNumericPurpose, legs: Vec<(AssetId, AssetId, Quantity)>) -> Self {
+        Self { purpose, legs }
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (VerifiedVpnNumericPurpose, Vec<(AssetId, AssetId, Quantity)>) {
+        (self.purpose, self.legs)
+    }
+}
+
+const VPN_LEASE_CUSTODY_ACCOUNT_DOMAIN: &str = "iroha-soranet-vpn-lease-v1";
 
 fn validation_err(message: impl Into<String>) -> Error {
     iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
@@ -60,6 +88,24 @@ fn ensure_non_zero_16(label: &str, value: &[u8; 16]) -> Result<(), Error> {
 fn ensure_positive(value: &Quantity) -> Result<(), Error> {
     if value.is_zero() {
         return Err(validation_err("vpn lease fee must be positive"));
+    }
+    Ok(())
+}
+
+fn ensure_relay_trust_covers_lease(
+    relay_id: &[u8; 32],
+    quote_policy: &VpnQuotePolicyV1,
+    expires_at_ms: u64,
+) -> Result<(), Error> {
+    if &quote_policy.relay_id != relay_id {
+        return Err(validation_err(
+            "vpn quote policy relay id must match the lease relay id",
+        ));
+    }
+    if expires_at_ms > quote_policy.relay_trust_valid_until_ms {
+        return Err(validation_err(
+            "vpn relay trust must remain valid for the complete lease",
+        ));
     }
     Ok(())
 }
@@ -97,18 +143,16 @@ pub fn vpn_lease_custody_account_id(
     lease_id: &[u8; 32],
     asset_definition: &AssetDefinitionId,
 ) -> Result<AccountId, Error> {
-    let seed_material = format!(
-        "{VPN_LEASE_CUSTODY_SEED_LABEL}|{}|{}|{asset_definition}",
-        chain_id.as_str(),
-        hex::encode(lease_id),
+    let asset_definition = asset_definition.to_string();
+    let public_key = derive_non_signing_ed25519_public_key(
+        VPN_LEASE_CUSTODY_ACCOUNT_DOMAIN.as_bytes(),
+        &[
+            chain_id.as_str().as_bytes(),
+            lease_id,
+            asset_definition.as_bytes(),
+        ],
     );
-    let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
-    let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).map_err(|err| {
-        validation_err(format!(
-            "vpn lease custody account seed was rejected: {err}"
-        ))
-    })?;
-    Ok(AccountId::new(keypair.public_key().clone()))
+    Ok(AccountId::new(public_key))
 }
 
 fn ensure_custody_account(
@@ -137,38 +181,12 @@ fn ensure_custody_account(
 
 fn transfer_numeric_asset_for_vpn(
     state_transaction: &mut StateTransaction<'_, '_>,
-    source_id: &AssetId,
-    destination_id: &AssetId,
-    amount: &Quantity,
-    source_policy: NumericAssetTransferSourcePolicy,
-) -> Result<TransferDeltaTranscript, Error> {
-    let control_update =
-        prepare_outbound_asset_transfer_control_update(state_transaction, source_id, amount)?;
-    let (source_id, destination_id, delta) = apply_numeric_asset_transfer_delta(
+    authorization: VerifiedVpnNumericBatch,
+) -> Result<(), Error> {
+    crate::smartcontracts::isi::asset::isi::execute_verified_vpn_numeric_batch(
         state_transaction,
-        source_id,
-        destination_id,
-        amount,
-        source_policy,
-    )?;
-    if let Some(record) = control_update {
-        update_control_record(state_transaction, source_id.account(), record)?;
-    }
-
-    #[allow(clippy::float_arithmetic)]
-    #[cfg(feature = "telemetry")]
-    state_transaction
-        .telemetry
-        .observe_tx_amount(amount.as_numeric().to_f64_lossy());
-
-    emit_numeric_asset_transfer_events(
-        state_transaction,
-        source_id,
-        destination_id,
-        amount.clone(),
-    );
-
-    Ok(delta)
+        authorization,
+    )
 }
 
 fn custody_asset(record: &VpnLeaseRecordV1) -> AssetId {
@@ -305,6 +323,7 @@ impl Execute for OpenVpnLeaseEscrow {
         if self.expires_at_ms <= now_ms {
             return Err(validation_err("vpn lease expiry must be in the future"));
         }
+        ensure_relay_trust_covers_lease(&self.relay_id, &self.quote_policy, self.expires_at_ms)?;
         if self.settlement_grace_ms == 0 {
             return Err(validation_err(
                 "vpn lease settlement grace window must be non-zero",
@@ -326,16 +345,18 @@ impl Execute for OpenVpnLeaseEscrow {
         let custody_created = ensure_custody_account(&custody, state_transaction)?;
         let transfer_result = transfer_numeric_asset_for_vpn(
             state_transaction,
-            &client_asset,
-            &custody_asset,
-            &self.lease_fee,
-            NumericAssetTransferSourcePolicy::User,
+            VerifiedVpnNumericBatch::new(
+                VerifiedVpnNumericPurpose::Funding {
+                    lease_id: self.lease_id,
+                    authority: authority.clone(),
+                },
+                vec![(client_asset, custody_asset, self.lease_fee.clone())],
+            ),
         );
         if transfer_result.is_err() && custody_created {
             state_transaction.world.accounts.remove(custody.clone());
         }
-        let delta = transfer_result?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
+        transfer_result?;
 
         let record = VpnLeaseRecordV1 {
             lease_id: self.lease_id,
@@ -403,30 +424,25 @@ impl Execute for SettleVpnLease {
             .checked_sub(&earned_fee)
             .map_err(|err| validation_err(format!("vpn refund arithmetic failed: {err}")))?;
         let escrow_asset = custody_asset(&record);
-        let mut deltas = Vec::new();
+        let mut legs = Vec::new();
         if !earned_fee.is_zero() {
             let operator_asset = operator_asset(&record);
-            let delta = transfer_numeric_asset_for_vpn(
-                state_transaction,
-                &escrow_asset,
-                &operator_asset,
-                &earned_fee,
-                NumericAssetTransferSourcePolicy::NativeEscrowCustody,
-            )?;
-            deltas.push(delta);
+            legs.push((escrow_asset.clone(), operator_asset, earned_fee.clone()));
         }
         if !refund_fee.is_zero() {
             let client_asset = client_asset(&record);
-            let delta = transfer_numeric_asset_for_vpn(
-                state_transaction,
-                &escrow_asset,
-                &client_asset,
-                &refund_fee,
-                NumericAssetTransferSourcePolicy::NativeEscrowCustody,
-            )?;
-            deltas.push(delta);
+            legs.push((escrow_asset, client_asset, refund_fee.clone()));
         }
-        state_transaction.record_transfer_transcripts(authority, deltas)?;
+        transfer_numeric_asset_for_vpn(
+            state_transaction,
+            VerifiedVpnNumericBatch::new(
+                VerifiedVpnNumericPurpose::Settlement {
+                    lease_id: record.lease_id,
+                    authority: authority.clone(),
+                },
+                legs,
+            ),
+        )?;
 
         record.status = VpnLeaseStatusV1::Settled;
         record.settled_at_ms = Some(now_ms);
@@ -467,14 +483,16 @@ impl Execute for RefundExpiredVpnLease {
         }
         let escrow_asset = custody_asset(&record);
         let client_asset = client_asset(&record);
-        let delta = transfer_numeric_asset_for_vpn(
+        transfer_numeric_asset_for_vpn(
             state_transaction,
-            &escrow_asset,
-            &client_asset,
-            &record.lease_fee,
-            NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+            VerifiedVpnNumericBatch::new(
+                VerifiedVpnNumericPurpose::Refund {
+                    lease_id: record.lease_id,
+                    authority: authority.clone(),
+                },
+                vec![(escrow_asset, client_asset, record.lease_fee.clone())],
+            ),
         )?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
 
         record.status = VpnLeaseStatusV1::Refunded;
         record.refunded_at_ms = Some(now_ms);
@@ -517,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn vpn_lease_custody_account_id_uses_checked_deterministic_seed() {
+    fn vpn_lease_custody_account_id_is_stable_without_a_public_signing_seed() {
         let chain_id = iroha_data_model::ChainId::from("vpn-custody-chain");
         let asset_definition = xor_asset_definition_id();
         let lease_id = [0x11; 32];
@@ -534,6 +552,20 @@ mod tests {
             vpn_lease_custody_account_id(&chain_id, &different_lease_id, &asset_definition)
                 .expect("different custody account derivation succeeds");
         assert_ne!(first, different);
+
+        let legacy_seed_material = format!(
+            "{VPN_LEASE_CUSTODY_ACCOUNT_DOMAIN}|{}|{}|{asset_definition}",
+            chain_id.as_str(),
+            hex::encode(lease_id),
+        );
+        let legacy_seed: [u8; Hash::LENGTH] = Hash::new(legacy_seed_material).into();
+        let legacy_keypair = KeyPair::try_from_seed(legacy_seed.to_vec(), Algorithm::Ed25519)
+            .expect("legacy public seed derives");
+        assert_ne!(
+            first,
+            AccountId::new(legacy_keypair.public_key().clone()),
+            "VPN custody must not expose a signing key through public seed derivation"
+        );
     }
 
     fn settlement_record_and_voucher(
@@ -586,6 +618,13 @@ mod tests {
             quote_policy: iroha_data_model::soranet::vpn::VpnQuotePolicyV1 {
                 exit_class: iroha_data_model::soranet::vpn::VpnExitClassV1::Standard,
                 relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
+                relay_id: voucher.body.relay_id,
+                descriptor_commit: [0x22; 32],
+                tls_server_name: "relay.example".to_owned(),
+                relay_tls_spki_sha256: [0xAB; 32],
+                relay_certificate_sha256: [0x33; 32],
+                directory_snapshot_digest: [0x66; 32],
+                relay_trust_valid_until_ms: 10_000,
                 lease_secs: 600,
                 meter_family: "soranet.vpn.standard".to_owned(),
                 fee_asset_id: "xor#universal.universal".to_owned(),
@@ -597,7 +636,6 @@ mod tests {
                 mtu_bytes: u64::from(iroha_data_model::soranet::vpn::VPN_DEFAULT_TUNNEL_MTU_BYTES),
                 flow_label_bits: 24,
                 padding_budget_ms: 15,
-                relay_tls_spki_sha256_hex: Some("ab".repeat(32)),
             },
             open_tx_hash: [0x44; 32],
             status: VpnLeaseStatusV1::Active,
@@ -655,5 +693,34 @@ mod tests {
             .expect("test overclaim remains representable");
 
         assert!(verify_vpn_settlement(&record, &receipt, &voucher).is_err());
+    }
+
+    #[test]
+    fn relay_trust_must_cover_complete_lease() {
+        let body = VpnUsageVoucherBodyV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            relay_id: [0x33; 32],
+            sequence: 0,
+            ingress_bytes: 0,
+            egress_bytes: 0,
+            active_ms: 0,
+            issued_at_ms: 2_000,
+        };
+        let (record, _, _) = settlement_record_and_voucher(body);
+
+        ensure_relay_trust_covers_lease(
+            &record.relay_id,
+            &record.quote_policy,
+            record.expires_at_ms,
+        )
+        .expect("trust valid through the exclusive lease end is accepted");
+        let error = ensure_relay_trust_covers_lease(
+            &record.relay_id,
+            &record.quote_policy,
+            record.expires_at_ms + 1,
+        )
+        .expect_err("trust expiring before the lease must be rejected");
+        assert!(error.to_string().contains("complete lease"));
     }
 }

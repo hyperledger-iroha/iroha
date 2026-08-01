@@ -7,7 +7,7 @@
 //! bindings exactly match the proposed activation record. A protocol whose
 //! complete verifier is not compiled is rejected before it enters world state.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::OnceLock};
 
 #[cfg(feature = "zk-stark")]
 use iroha_data_model::privacy::ZkAcePqAuthorizationStatementV1;
@@ -91,9 +91,43 @@ use crate::privacy_engines::{
         },
     },
     bootle_lantern::{
-        BOOTLE_LANTERN_FULL_ENGINE_AVAILABLE_V1,
+        BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1,
+        BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1,
+        BOOTLE_LANTERN_FALCON512_DEFAULT_KEYGEN_CANDIDATES_V1,
+        BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1,
+        BOOTLE_LANTERN_FALCON512_KEYGEN_PARITY_ATTEMPTS_V1,
+        BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1,
+        BOOTLE_LANTERN_FALCON512_PREIMAGE_PROPOSALS_PER_COEFFICIENT_V1,
+        BOOTLE_LANTERN_FALCON512_PREIMAGE_TOTAL_PROPOSALS_V1,
+        BOOTLE_LANTERN_FALCON512_PROFILE_DESCRIPTOR_V1, BOOTLE_LANTERN_FULL_ENGINE_AVAILABLE_V1,
+        BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1,
+        BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1,
+        BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1, CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1,
+        CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1, MAX_CREDENTIAL_RANDOMNESS_COEFFICIENT_PROPOSALS_V1,
+        MAX_CREDENTIAL_RANDOMNESS_VECTOR_ATTEMPTS_V1,
         codec::{
-            PROOF_BYTES_V1 as BOOTLE_LANTERN_PROOF_BYTES_V1, PROOF_MAGIC_V1, PROOF_VERSION_V1,
+            BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1, BLIND_ISSUANCE_REQUEST_BYTES_V1,
+            BLIND_ISSUANCE_REQUEST_HEADER_BYTES_V1, BLIND_ISSUANCE_REQUEST_MAGIC_V1,
+            BLIND_ISSUANCE_REQUEST_PROOF_MAGIC_V1, BLIND_ISSUANCE_REQUEST_PROOF_PURPOSE_TAG_V1,
+            BLIND_ISSUANCE_REQUEST_PURPOSE_TAG_V1, BLIND_ISSUANCE_REQUEST_RING_DEGREE_V1,
+            BLIND_ISSUANCE_REQUEST_TARGET_POLYNOMIALS_V1, BLIND_ISSUANCE_REQUEST_VERSION_V1,
+            BLIND_ISSUANCE_RESPONSE_BYTES_V1, PROOF_BYTES_V1 as BOOTLE_LANTERN_PROOF_BYTES_V1,
+            PROOF_MAGIC_V1, PROOF_VERSION_V1,
+        },
+        issuance_store::{
+            BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_MAX_RECORDS_V1,
+            BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_MAX_TOTAL_BYTES_V1,
+            BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_RETENTION_BLOCKS_V1,
+            BOOTLE_LANTERN_ISSUANCE_STORE_HARD_MAX_RECORDS_V1,
+            BOOTLE_LANTERN_ISSUANCE_STORE_HARD_MAX_TOTAL_BYTES_V1,
+            BOOTLE_LANTERN_ISSUANCE_STORE_MAX_RECORD_BYTES_V1,
+        },
+        issuer::{
+            BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1,
+            MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1,
+            MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1,
+            MAX_BOOTLE_LANTERN_ISSUER_KEYGEN_CANDIDATES_V1,
+            MAX_BOOTLE_LANTERN_PREIMAGE_ATTEMPTS_V1, bootle_lantern_issuer_profile_digest_v1,
         },
         params::{
             APPLICATION_MODULUS_V1 as BOOTLE_LANTERN_APPLICATION_MODULUS_V1,
@@ -107,7 +141,7 @@ use crate::privacy_engines::{
         },
         sampling::{BOOTLE_SAMPLING_PROFILE_DESCRIPTOR_V1, bootle_sampling_profile_digest_v1},
         scope::{
-            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1,
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1, BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1,
             BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1,
             BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1,
         },
@@ -231,10 +265,10 @@ const BOOTLE_LANTERN_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:BLNS-specialization-no-main-construction-reduction:eprint-2023-560:lazer-10eafeca4cd53ff4fc54193dce904dbd0026fefd:lantern-lnp22-figure18-full-centered-makeghint:vendored-Unlicense-rust-fn-dsa-workspace-0.3-daf14859b5aa3f8d75c42966ba7de83e6eb59997:portable-safe-rust-no-SIMD:v1";
 const BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1: &[u8] = b"Falcon-512:NTRUGen(f,g,F,G):f*G-g*F=12289|public:h=g/f mod(X^512+1,12289)|R512-to-rank8-R64:H_i[j]=h[8*j+i]|policy-matrix:canonical-8x8-one-key-negacyclic-block-embedding|signature:[s1|s2]:s1+h*s2=target|target:t+A_tau*tau+credential-scope|norm2(s1,s2)<=34034726";
 const BOOTLE_LANTERN_RELATION_SCHEMA_V1: &[u8] = b"active-self-digested-policy:H[8x8x64]mod12289-from-one-Falcon-h|required-disclosures:u8|allowed-values[8][<=32x8]|statement:issuer+policy+epoch+record-digest+issuer-parameter+ordered-disclosures|credential-scope:reusable-equation-term|relation:A_r*r+A_tau*tau+A_m*m+scope-s1-H*s2=0:8x48-ring64-linear|norms:randomness<=11881+signature<=34034726";
-const BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1: &[u8] = b"scope-xof:SHAKE256-framed-u32be-uniform-mod12289-accept<61445-max4096-per-coefficient|included:protocol+concrete-profile+version+chain-id+canonical-genesis-hash+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+policy-id+epoch+policy-record-digest+issuer-parameter-id+issuer-parameter-digest|excluded:action-index+transaction-intent-digest|rotation:every-included-field-invalidates-existing-credential";
-const BOOTLE_LANTERN_BLIND_ISSUANCE_SCHEMA_V1: &[u8] = b"canonical-first-release-only:keygen->holder-sample-r->blind-request-t=A_r*r+A_m*m->P1-proof-of-r,m->issuer-verify-P1->sample-one-512-bit-MSB-first-tau->bounded-Falcon-preimage-for-t+A_tau*tau+scope->holder-finalize->P2-presentation|P1-and-P2-distinct-typed-transcripts-and-wire-wrappers|no-public-direct-or-trusted-issuance-shortcut";
-const BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1: &[u8] = b"P1:typed-blind-issuance-binding=parameter-digest+issuer-profile-digest+genesis-hash+credential-scope-digest+issuer-policy-record-digest+masked-target-digest+request-nonce+relation-digest+matrix-seed+public-parameter-seed:no-statement-or-transaction-intent|P2:challenge-binding=parameter-digest+genesis-hash+statement-digest+issuer-policy-record-digest+transaction-intent-digest+relation-digest+matrix-seed+public-parameter-seed|challenge-xof:SHAKE256;first32=sequential-rejection-bytes<255,byte%17-8;max-rejected-uniform-draws-per-coefficient=4096;c[32]=0;c[64-i]=-c[i]for-i=1..31;candidate-retry=next-sequential-single-XOF-bytes;max-candidates=4096|eta-check:integer-negacyclic-ring=Z[X]/(X^64+1);k=32;root-degree=64;L1(sigma_-1(c^32)*c^32)<=140^64|framing:u32-be";
-const BOOTLE_LANTERN_NATIVE_PRODUCER_SCHEMA_V1: &[u8] = b"native-producers:keygen+blind-request/P1+issuer-verify-and-issue+holder-finalize+presentation/P2|fallible-health-checked-distinct-randomness-substreams:keygen,holder-r,P1,issuer-tau,issuer-preimage,P2|bounded-fail-closed-no-fallback|self-check:NTRU+public-key+P1+Falcon-equation+P2";
+const BOOTLE_LANTERN_ISSUANCE_WIRE_SCHEMA_V1: &[u8] = b"ILQ1:fixed71576-byte-purpose1-strict-exact-allocation-bounded-complete-holder-request-with-count8-degree64-and-fixed70344-byte-ILB1|ILB1:fixed70344-byte-purpose1-strict-exact-inner-P1|ILN1:fixed70344-byte-purpose0-strict-exact|direct-cross-purpose-wire-decode-rejected|complete-header-splice=structurally-decodable-but-purpose-separated-transcript-verification-rejects|caller-cap-before-exact-length-before-allocation|no-trailing-bytes";
+const BOOTLE_LANTERN_BLIND_ISSUANCE_SCHEMA_V1: &[u8] = b"canonical-first-release-only:keygen->issuer-authorize-ILA1-and-atomically-register-Fresh-in-bounded-ILS1->holder-one-master64-derived-r-and-P1->blind-request-t=A_r*r+A_m*m->encode-complete-ILQ1-with-strict-ILB1-P1-proof-of-r,m-bound-to-authorization-digest->issuer-decode-exact-ILQ1-before-nonmutating-store-preflight-before-P1-verification->atomic-height-aware-Fresh-to-Processing-before-one-master64-derived-tau-and-preimage->bounded-Falcon-preimage-for-t+A_tau*tau+scope->durably-commit-exact-ILR1-as-Completed-before-release->holder-finalize->ILN1-P2-presentation|identical-completed-replay=byte-identical-cached-ILR1-after-process-reopen-and-authorization-expiry-without-P1-or-rng|processing-same-request=Busy|different-request-or-Failed=AuthorizationConsumed|post-claim-failure=terminal-never-Fresh|explicit-authoritative-height-pruning-only|no-public-direct-or-trusted-issuance-shortcut";
+const BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1: &[u8] = b"P1:typed-blind-issuance-binding=parameter-digest+genesis-hash+issuer-profile-digest+credential-scope-digest+issuer-policy-record-digest+masked-target-digest+issuer-generated-one-shot-issuance-authorization-digest+relation-digest+matrix-seed+public-parameter-seed:no-statement-or-transaction-intent|P2:challenge-binding=parameter-digest+genesis-hash+statement-digest+issuer-policy-record-digest+transaction-intent-digest+relation-digest+matrix-seed+public-parameter-seed|challenge-xof:SHAKE256;first32=sequential-rejection-bytes<255,byte%17-8;max-rejected-uniform-draws-per-coefficient=4096;c[32]=0;c[64-i]=-c[i]for-i=1..31;candidate-retry=next-sequential-single-XOF-bytes;max-candidates=4096|eta-check:integer-negacyclic-ring=Z[X]/(X^64+1);k=32;root-degree=64;L1(sigma_-1(c^32)*c^32)<=140^64|framing:u32-be";
+const BOOTLE_LANTERN_NATIVE_PRODUCER_SCHEMA_V1: &[u8] = b"native-producers:keygen+issuer-authorization+blind-request/ILQ1-with-ILB1-P1+issuer-strict-byte-ingress/preflight/atomic-height-claim/issue/durable-complete+holder-finalize+presentation/P2|fallible-health-checked-source-boundaries:keygen,authorization-id,holder-master64,issuer-master64,P2|closed-purpose-separated-context-bound-substreams:holder-master->{holder-r,P1};issuer-master->{issuer-tau,issuer-preimage}|bounded-fail-closed-no-fallback|completed-replay-check-before-P1|cached-completed-replay-does-not-touch-rng-and-survives-authorization-expiry|self-check:NTRU+public-key+ILQ1+P1+Falcon-equation+ILR1+P2";
 const BOOTLE_LANTERN_COMPRESSION_SCHEMA_V1: &[u8] = b"lnp22-figure18:power2round-q-D15:decompose-q-gamma:makeghint-full-canonical-centered-z22:useghint-centered-mod-m:hint-infinity-bound=floor(m/2)";
 const JINDO_PROTOCOL_LABEL_V1: &[u8] = b"iroha-jindo-polynomial-commitment-v0";
 const JINDO_PARAMETER_SET_LABEL_V1: &[u8] = b"jindo-univariate-batch4-degree256-transparent-v1";
@@ -426,6 +460,17 @@ pub fn compiled_privacy_profile_snapshot_result_v1(
 /// Returns a deterministic validation error if an internal compiled profile
 /// violates the closed catalog contract.
 pub fn compiled_privacy_profile_catalog_v1()
+-> Result<PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1> {
+    static CATALOG: OnceLock<
+        Result<PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1>,
+    > = OnceLock::new();
+
+    CATALOG
+        .get_or_init(build_compiled_privacy_profile_catalog_v1)
+        .clone()
+}
+
+fn build_compiled_privacy_profile_catalog_v1()
 -> Result<PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1> {
     let catalog = PrivacyCompiledProfileCatalogV1 {
         version: PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
@@ -2189,6 +2234,62 @@ fn bootle_lantern_parameter_digest_v1(
     let challenge_candidate_attempts = MAX_CHALLENGE_CANDIDATE_ATTEMPTS_V1.to_be_bytes();
     let scope_acceptance_limit = BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1.to_be_bytes();
     let scope_coefficient_attempts = BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1.to_be_bytes();
+    let credential_randomness_polynomials = u64::try_from(CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1)
+        .expect("fixed credential-randomness width fits u64")
+        .to_be_bytes();
+    let credential_randomness_norm = CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1.to_be_bytes();
+    let credential_vector_attempts = MAX_CREDENTIAL_RANDOMNESS_VECTOR_ATTEMPTS_V1.to_be_bytes();
+    let credential_coefficient_proposals =
+        MAX_CREDENTIAL_RANDOMNESS_COEFFICIENT_PROPOSALS_V1.to_be_bytes();
+    let falcon_keygen_candidates =
+        BOOTLE_LANTERN_FALCON512_DEFAULT_KEYGEN_CANDIDATES_V1.to_be_bytes();
+    let falcon_keygen_parity_attempts =
+        BOOTLE_LANTERN_FALCON512_KEYGEN_PARITY_ATTEMPTS_V1.to_be_bytes();
+    let falcon_preimage_coefficient_proposals =
+        BOOTLE_LANTERN_FALCON512_PREIMAGE_PROPOSALS_PER_COEFFICIENT_V1.to_be_bytes();
+    let falcon_preimage_total_proposals =
+        BOOTLE_LANTERN_FALCON512_PREIMAGE_TOTAL_PROPOSALS_V1.to_be_bytes();
+    let issuer_keygen_candidates = MAX_BOOTLE_LANTERN_ISSUER_KEYGEN_CANDIDATES_V1.to_be_bytes();
+    let authorization_id_attempts = MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1.to_be_bytes();
+    let authorization_lifetime = MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1.to_be_bytes();
+    let issuer_preimage_attempts = MAX_BOOTLE_LANTERN_PREIMAGE_ATTEMPTS_V1.to_be_bytes();
+    let authorization_wire_bytes = u64::try_from(BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1)
+        .expect("fixed ILA1 length fits u64")
+        .to_be_bytes();
+    let request_wire_bytes = u64::try_from(BLIND_ISSUANCE_REQUEST_BYTES_V1)
+        .expect("fixed ILQ1 length fits u64")
+        .to_be_bytes();
+    let request_header_bytes = u64::try_from(BLIND_ISSUANCE_REQUEST_HEADER_BYTES_V1)
+        .expect("fixed ILQ1 header length fits u64")
+        .to_be_bytes();
+    let request_version = [BLIND_ISSUANCE_REQUEST_VERSION_V1];
+    let request_purpose = [BLIND_ISSUANCE_REQUEST_PURPOSE_TAG_V1];
+    let request_target_polynomials = BLIND_ISSUANCE_REQUEST_TARGET_POLYNOMIALS_V1.to_be_bytes();
+    let request_ring_degree = BLIND_ISSUANCE_REQUEST_RING_DEGREE_V1.to_be_bytes();
+    let request_proof_bytes = u32::try_from(BOOTLE_LANTERN_PROOF_BYTES_V1)
+        .expect("fixed ILB1 length fits u32")
+        .to_be_bytes();
+    let response_wire_bytes = u64::try_from(BLIND_ISSUANCE_RESPONSE_BYTES_V1)
+        .expect("fixed ILR1 length fits u64")
+        .to_be_bytes();
+    let p1_purpose = [BLIND_ISSUANCE_REQUEST_PROOF_PURPOSE_TAG_V1];
+    let issuer_profile_digest = bootle_lantern_issuer_profile_digest_v1();
+    let issuance_store_max_record_bytes =
+        BOOTLE_LANTERN_ISSUANCE_STORE_MAX_RECORD_BYTES_V1.to_be_bytes();
+    let issuance_store_hard_max_records =
+        u64::try_from(BOOTLE_LANTERN_ISSUANCE_STORE_HARD_MAX_RECORDS_V1)
+            .expect("issuance-store hard record cap fits u64")
+            .to_be_bytes();
+    let issuance_store_hard_max_total_bytes =
+        BOOTLE_LANTERN_ISSUANCE_STORE_HARD_MAX_TOTAL_BYTES_V1.to_be_bytes();
+    let issuance_store_default_max_records =
+        u64::try_from(BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_MAX_RECORDS_V1)
+            .expect("issuance-store default record cap fits u64")
+            .to_be_bytes();
+    let issuance_store_default_max_total_bytes =
+        BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_MAX_TOTAL_BYTES_V1.to_be_bytes();
+    let issuance_store_default_retention_blocks =
+        BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_RETENTION_BLOCKS_V1.to_be_bytes();
 
     digest_fields_v1(
         PARAMETER_DIGEST_DOMAIN_V1,
@@ -2197,11 +2298,52 @@ fn bootle_lantern_parameter_digest_v1(
             BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
             SOURCE_PROFILE_V1,
             BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1,
+            BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1,
+            BOOTLE_LANTERN_FALCON512_PROFILE_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1,
+            &falcon_keygen_candidates,
+            &falcon_keygen_parity_attempts,
+            &falcon_preimage_coefficient_proposals,
+            &falcon_preimage_total_proposals,
+            BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1,
+            &credential_randomness_polynomials,
+            &credential_randomness_norm,
+            &credential_vector_attempts,
+            &credential_coefficient_proposals,
             BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1,
             BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1,
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1,
             &scope_acceptance_limit,
             &scope_coefficient_attempts,
             BOOTLE_LANTERN_BLIND_ISSUANCE_SCHEMA_V1,
+            BOOTLE_LANTERN_ISSUANCE_WIRE_SCHEMA_V1,
+            BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1,
+            &issuance_store_max_record_bytes,
+            &issuance_store_hard_max_records,
+            &issuance_store_hard_max_total_bytes,
+            &issuance_store_default_max_records,
+            &issuance_store_default_max_total_bytes,
+            &issuance_store_default_retention_blocks,
+            &issuer_profile_digest,
+            &issuer_keygen_candidates,
+            &authorization_id_attempts,
+            &authorization_lifetime,
+            &issuer_preimage_attempts,
+            &BLIND_ISSUANCE_REQUEST_PROOF_MAGIC_V1,
+            &p1_purpose,
+            &authorization_wire_bytes,
+            &BLIND_ISSUANCE_REQUEST_MAGIC_V1,
+            &request_version,
+            &request_purpose,
+            &request_header_bytes,
+            &request_wire_bytes,
+            &request_target_polynomials,
+            &request_ring_degree,
+            &request_proof_bytes,
+            &response_wire_bytes,
             PUBLIC_PARAMETER_SEED_DOMAIN_V1,
             public_parameter_seed,
             &ring_degree,
@@ -2260,6 +2402,69 @@ fn compiled_bootle_lantern_profile_material_v1()
     let compression_modulus = COMPRESSION_MODULUS_V1.to_be_bytes();
     let scope_acceptance_limit = BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1.to_be_bytes();
     let scope_coefficient_attempts = BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1.to_be_bytes();
+    let credential_randomness_polynomials = u64::try_from(CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?
+        .to_be_bytes();
+    let credential_randomness_norm = CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1.to_be_bytes();
+    let credential_vector_attempts = MAX_CREDENTIAL_RANDOMNESS_VECTOR_ATTEMPTS_V1.to_be_bytes();
+    let credential_coefficient_proposals =
+        MAX_CREDENTIAL_RANDOMNESS_COEFFICIENT_PROPOSALS_V1.to_be_bytes();
+    let falcon_keygen_candidates =
+        BOOTLE_LANTERN_FALCON512_DEFAULT_KEYGEN_CANDIDATES_V1.to_be_bytes();
+    let falcon_keygen_parity_attempts =
+        BOOTLE_LANTERN_FALCON512_KEYGEN_PARITY_ATTEMPTS_V1.to_be_bytes();
+    let falcon_preimage_coefficient_proposals =
+        BOOTLE_LANTERN_FALCON512_PREIMAGE_PROPOSALS_PER_COEFFICIENT_V1.to_be_bytes();
+    let falcon_preimage_total_proposals =
+        BOOTLE_LANTERN_FALCON512_PREIMAGE_TOTAL_PROPOSALS_V1.to_be_bytes();
+    let issuer_keygen_candidates = MAX_BOOTLE_LANTERN_ISSUER_KEYGEN_CANDIDATES_V1.to_be_bytes();
+    let authorization_id_attempts = MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1.to_be_bytes();
+    let authorization_lifetime = MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1.to_be_bytes();
+    let issuer_preimage_attempts = MAX_BOOTLE_LANTERN_PREIMAGE_ATTEMPTS_V1.to_be_bytes();
+    let authorization_wire_bytes = u64::try_from(BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?
+        .to_be_bytes();
+    let request_wire_bytes = u64::try_from(BLIND_ISSUANCE_REQUEST_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?
+        .to_be_bytes();
+    let request_header_bytes = u64::try_from(BLIND_ISSUANCE_REQUEST_HEADER_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?
+        .to_be_bytes();
+    let request_version = [BLIND_ISSUANCE_REQUEST_VERSION_V1];
+    let request_purpose = [BLIND_ISSUANCE_REQUEST_PURPOSE_TAG_V1];
+    let request_target_polynomials = BLIND_ISSUANCE_REQUEST_TARGET_POLYNOMIALS_V1.to_be_bytes();
+    let request_ring_degree = BLIND_ISSUANCE_REQUEST_RING_DEGREE_V1.to_be_bytes();
+    let request_proof_bytes = u32::try_from(BOOTLE_LANTERN_PROOF_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?
+        .to_be_bytes();
+    let response_wire_bytes = u64::try_from(BLIND_ISSUANCE_RESPONSE_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?
+        .to_be_bytes();
+    let p1_purpose = [BLIND_ISSUANCE_REQUEST_PROOF_PURPOSE_TAG_V1];
+    let issuer_profile_digest = bootle_lantern_issuer_profile_digest_v1();
+    let issuance_store_max_record_bytes =
+        BOOTLE_LANTERN_ISSUANCE_STORE_MAX_RECORD_BYTES_V1.to_be_bytes();
+    let issuance_store_hard_max_records =
+        u64::try_from(BOOTLE_LANTERN_ISSUANCE_STORE_HARD_MAX_RECORDS_V1)
+            .map_err(
+                |_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id },
+            )?
+            .to_be_bytes();
+    let issuance_store_hard_max_total_bytes =
+        BOOTLE_LANTERN_ISSUANCE_STORE_HARD_MAX_TOTAL_BYTES_V1.to_be_bytes();
+    let issuance_store_default_max_records =
+        u64::try_from(BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_MAX_RECORDS_V1)
+            .map_err(
+                |_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id },
+            )?
+            .to_be_bytes();
+    let issuance_store_default_max_total_bytes =
+        BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_MAX_TOTAL_BYTES_V1.to_be_bytes();
+    let issuance_store_default_retention_blocks =
+        BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_RETENTION_BLOCKS_V1.to_be_bytes();
+    if issuer_profile_digest == [0; 32] {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
     let public_parameter_seed = public_parameter_seed_v1();
     let sampling_profile_digest = bootle_sampling_profile_digest_v1();
     if sampling_profile_digest == [0; 32] {
@@ -2274,6 +2479,28 @@ fn compiled_bootle_lantern_profile_material_v1()
             BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
             SOURCE_PROFILE_V1,
             BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1,
+            BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1,
+            BOOTLE_LANTERN_FALCON512_PROFILE_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1,
+            &issuance_store_max_record_bytes,
+            &issuance_store_hard_max_records,
+            &issuance_store_hard_max_total_bytes,
+            &issuance_store_default_max_records,
+            &issuance_store_default_max_total_bytes,
+            &issuance_store_default_retention_blocks,
+            &issuer_profile_digest,
+            BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1,
+            &BLIND_ISSUANCE_REQUEST_MAGIC_V1,
+            &request_version,
+            &request_purpose,
+            &request_header_bytes,
+            &request_wire_bytes,
+            &request_target_polynomials,
+            &request_ring_degree,
+            &request_proof_bytes,
             PUBLIC_PARAMETER_SEED_DOMAIN_V1,
             &public_parameter_seed,
         ],
@@ -2302,7 +2529,10 @@ fn compiled_bootle_lantern_profile_material_v1()
             BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
             SOURCE_PROFILE_V1,
             BOOTLE_LANTERN_PROOF_WIRE_LABEL_V1,
+            BOOTLE_LANTERN_ISSUANCE_WIRE_SCHEMA_V1,
+            BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1,
             BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1,
+            BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1,
             BOOTLE_LANTERN_COMPRESSION_SCHEMA_V1,
             &decomposition_bits,
             &compression_gamma,
@@ -2315,11 +2545,34 @@ fn compiled_bootle_lantern_profile_material_v1()
             BOOTLE_LANTERN_RELATION_SCHEMA_V1,
             BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1,
             BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1,
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1,
             &scope_acceptance_limit,
             &scope_coefficient_attempts,
             BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1,
+            BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1,
+            &issuance_store_max_record_bytes,
+            &issuance_store_hard_max_records,
+            &issuance_store_hard_max_total_bytes,
+            &issuance_store_default_max_records,
+            &issuance_store_default_max_total_bytes,
+            &issuance_store_default_retention_blocks,
+            &issuer_profile_digest,
             BOOTLE_SAMPLING_PROFILE_DESCRIPTOR_V1,
             &sampling_profile_digest,
+            &BLIND_ISSUANCE_REQUEST_PROOF_MAGIC_V1,
+            &p1_purpose,
+            &authorization_wire_bytes,
+            &BLIND_ISSUANCE_REQUEST_MAGIC_V1,
+            &request_version,
+            &request_purpose,
+            &request_header_bytes,
+            &request_wire_bytes,
+            &request_target_polynomials,
+            &request_ring_degree,
+            &request_proof_bytes,
+            &response_wire_bytes,
             &issuer_policy_schema_digest,
             &statement_schema_digest,
             &global_proof_cap,
@@ -2331,22 +2584,63 @@ fn compiled_bootle_lantern_profile_material_v1()
             BOOTLE_LANTERN_PROTOCOL_LABEL_V1,
             BOOTLE_LANTERN_IMPLEMENTATION_PROVENANCE_V1,
             b"proof-system:lantern-lnp22-module-linear-norm",
-            b"engine:native-lantern-lnp22",
+            b"engine:native-lantern-lnp22-falcon512-one-shot-blind-issuance",
             BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
             SOURCE_PROFILE_V1,
             BOOTLE_LANTERN_PROOF_WIRE_LABEL_V1,
+            BOOTLE_LANTERN_ISSUANCE_WIRE_SCHEMA_V1,
+            BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1,
             BOOTLE_LANTERN_ISSUER_PARAMETER_SCHEMA_V1,
+            BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1,
+            BOOTLE_LANTERN_FALCON512_PROFILE_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1,
+            &falcon_keygen_candidates,
+            &falcon_keygen_parity_attempts,
+            &falcon_preimage_coefficient_proposals,
+            &falcon_preimage_total_proposals,
             BOOTLE_LANTERN_RELATION_SCHEMA_V1,
             BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1,
             BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1,
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1,
             &scope_acceptance_limit,
             &scope_coefficient_attempts,
             BOOTLE_LANTERN_BLIND_ISSUANCE_SCHEMA_V1,
             BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1,
             BOOTLE_LANTERN_COMPRESSION_SCHEMA_V1,
             BOOTLE_LANTERN_NATIVE_PRODUCER_SCHEMA_V1,
+            BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1,
+            BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1,
+            &issuance_store_max_record_bytes,
+            &issuance_store_hard_max_records,
+            &issuance_store_hard_max_total_bytes,
+            &issuance_store_default_max_records,
+            &issuance_store_default_max_total_bytes,
+            &issuance_store_default_retention_blocks,
+            &issuer_profile_digest,
+            &issuer_keygen_candidates,
+            &authorization_id_attempts,
+            &authorization_lifetime,
+            &issuer_preimage_attempts,
             BOOTLE_SAMPLING_PROFILE_DESCRIPTOR_V1,
             &sampling_profile_digest,
+            BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1,
+            &credential_randomness_polynomials,
+            &credential_randomness_norm,
+            &credential_vector_attempts,
+            &credential_coefficient_proposals,
+            &BLIND_ISSUANCE_REQUEST_PROOF_MAGIC_V1,
+            &p1_purpose,
+            &authorization_wire_bytes,
+            &BLIND_ISSUANCE_REQUEST_MAGIC_V1,
+            &request_version,
+            &request_purpose,
+            &request_header_bytes,
+            &request_wire_bytes,
+            &request_target_polynomials,
+            &request_ring_degree,
+            &request_proof_bytes,
+            &response_wire_bytes,
             &decomposition_bits,
             &compression_gamma,
             &compression_modulus,
@@ -3371,6 +3665,42 @@ mod tests {
     }
 
     #[test]
+    fn compiled_profile_catalog_cache_returns_owned_isolated_clones() {
+        let canonical = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
+        canonical.validate().expect("canonical compiled catalog");
+        assert_eq!(canonical.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        let canonical_archive =
+            norito::encode_canonical(&canonical).expect("canonical compiled catalog archive");
+
+        let mut caller_owned = canonical;
+        caller_owned.protocols.rotate_left(1);
+        assert!(
+            caller_owned.validate().is_err(),
+            "mutating one returned clone must make only that caller's copy noncanonical"
+        );
+
+        let subsequent =
+            compiled_privacy_profile_catalog_v1().expect("subsequent compiled profile catalog");
+        subsequent
+            .validate()
+            .expect("the cached canonical catalog must remain valid");
+        assert_eq!(subsequent.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert!(
+            subsequent
+                .protocols
+                .iter()
+                .map(|row| row.protocol_id)
+                .eq(PrivacyProtocolIdV1::ALL)
+        );
+        assert_eq!(
+            norito::encode_canonical(&subsequent)
+                .expect("subsequent canonical compiled catalog archive"),
+            canonical_archive,
+            "a caller mutation must not alias or modify the immutable cache"
+        );
+    }
+
+    #[test]
     fn local_compiled_profile_catalog_archive_rejects_canonical_substitution() {
         use PrivacyCompiledProfileCatalogArchiveValidationStatusV1 as Status;
 
@@ -3826,11 +4156,55 @@ mod tests {
             ),
             (
                 BOOTLE_LANTERN_BLIND_ISSUANCE_SCHEMA_V1,
-                &b"keygen->holder-sample-r->blind-request"[..],
+                &b"atomic-height-aware-Fresh-to-Processing-before-one-master64"[..],
             ),
             (
                 BOOTLE_LANTERN_NATIVE_PRODUCER_SCHEMA_V1,
-                &b"bounded-fail-closed-no-fallback"[..],
+                &b"cached-completed-replay-does-not-touch-rng"[..],
+            ),
+            (
+                BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1,
+                &b"issuer-generated-one-shot-issuance-authorization-digest"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1,
+                &b"ILA1:fixed320"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1,
+                &b"ILR1:fixed3176"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1,
+                &b"ILQ1:fixed71576"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_WIRE_SCHEMA_V1,
+                &b"caller-cap-before-exact-length-before-allocation"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUER_PROFILE_DESCRIPTOR_V1,
+                &b"authorization-state:Fresh-Processing-Completed-or-Failed"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1,
+                &b"closed-purpose-enum:no-caller-selected-labels"[..],
+            ),
+            (
+                BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1,
+                &b"canonical-process-lease+unix-nonblocking-exclusive-flock-held-for-lifetime"[..],
+            ),
+            (
+                BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1,
+                &b"H_i[j]=h[8*j+i]"[..],
+            ),
+            (
+                BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1,
+                &b"arbitrary-R512-target"[..],
+            ),
+            (
+                BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1,
+                &b"sign-cache:issuance-local-persistent"[..],
             ),
         ] {
             assert!(
@@ -3846,6 +4220,51 @@ mod tests {
             BOOTLE_LANTERN_APPLICATION_MODULUS_V1 * 5
         );
         assert_eq!(BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1, 4_096);
+        assert_eq!(CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1, 16);
+        assert_eq!(
+            CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1,
+            RANDOMNESS_NORM_SQUARED_BOUND_V1
+        );
+        assert_eq!(MAX_CREDENTIAL_RANDOMNESS_VECTOR_ATTEMPTS_V1, 64);
+        assert_eq!(MAX_CREDENTIAL_RANDOMNESS_COEFFICIENT_PROPOSALS_V1, 256);
+        assert_eq!(
+            MAX_BOOTLE_LANTERN_ISSUER_KEYGEN_CANDIDATES_V1,
+            BOOTLE_LANTERN_FALCON512_DEFAULT_KEYGEN_CANDIDATES_V1
+        );
+        assert_eq!(MAX_BOOTLE_LANTERN_AUTHORIZATION_ID_ATTEMPTS_V1, 4);
+        assert_eq!(MAX_BOOTLE_LANTERN_AUTHORIZATION_LIFETIME_BLOCKS_V1, 4_096);
+        assert_eq!(MAX_BOOTLE_LANTERN_PREIMAGE_ATTEMPTS_V1, 64);
+        assert_eq!(BOOTLE_LANTERN_ISSUANCE_STORE_MAX_RECORD_BYTES_V1, 3_310);
+        assert_eq!(BOOTLE_LANTERN_ISSUANCE_STORE_HARD_MAX_RECORDS_V1, 1_000_000);
+        assert_eq!(
+            BOOTLE_LANTERN_ISSUANCE_STORE_HARD_MAX_TOTAL_BYTES_V1,
+            3_310_000_000
+        );
+        assert_eq!(BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_MAX_RECORDS_V1, 4_096);
+        assert_eq!(
+            BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_MAX_TOTAL_BYTES_V1,
+            13_557_760
+        );
+        assert_eq!(
+            BOOTLE_LANTERN_ISSUANCE_STORE_DEFAULT_RETENTION_BLOCKS_V1,
+            4_096
+        );
+        assert_eq!(BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1, 320);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_BYTES_V1, 71_576);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_HEADER_BYTES_V1, 16);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_MAGIC_V1, *b"ILQ1");
+        assert_eq!(BLIND_ISSUANCE_REQUEST_VERSION_V1, 1);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_PURPOSE_TAG_V1, 1);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_TARGET_POLYNOMIALS_V1, 8);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_RING_DEGREE_V1, 64);
+        assert_eq!(BLIND_ISSUANCE_RESPONSE_BYTES_V1, 3_176);
+        assert_eq!(BLIND_ISSUANCE_REQUEST_PROOF_MAGIC_V1, *b"ILB1");
+        assert_eq!(BLIND_ISSUANCE_REQUEST_PROOF_PURPOSE_TAG_V1, 1);
+        assert_eq!(
+            BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1,
+            b"iroha.privacy.bootle-lantern.credential-scope-digest.v1"
+        );
+        assert_ne!(bootle_lantern_issuer_profile_digest_v1(), [0; 32]);
         assert_eq!(BOOTLE_LANTERN_PROOF_BYTES_V1, 70_344);
         assert!(
             u64::try_from(BOOTLE_LANTERN_PROOF_BYTES_V1).expect("proof size fits u64")
@@ -3870,11 +4289,11 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "c27b9c1fd4fcb0f157fbd2b5c4894ef0c78b15acf0c450512051c8dee8b69380".to_owned(),
-                "bfc9ca1f8ebb1973832be82566946d0713bddaeccdd88937427a376ad6a96ec9".to_owned(),
-                "7e4b05295311d3758e8facc0b68a365fbeac957af9153646867258198539532d".to_owned(),
+                "55bea016d0919cde8d24b54bb35eb01f7578a9a91189aececa34c7fc1b90e75c".to_owned(),
+                "6a0b33463d71f6aec27ad330ae4424e3ed317a841dc1a0d79c5389905072ffc9".to_owned(),
+                "7733ada1295556a13c3f626f270d1287324e28e987613d97e1e1605ff4d22ce8".to_owned(),
                 "9c7c4f65128a4d924955b8b0fb6bfcc56ec34d14224ddfefebe32771c19a9e54".to_owned(),
-                "588a0496f64fd6b4ea3c292db0f713c3c4325b33198cc5e2a99240730302504d".to_owned(),
+                "e613fbbaf3e0470524a2924e72e5f8adc93c3950a26c5a4e9af8b7a74b88078b".to_owned(),
             ),
             "every consensus-critical Bootle/Lantern binding is a pinned KAT"
         );
@@ -3959,7 +4378,7 @@ mod tests {
             bootle_lantern_parameter_digest_v1(&public_parameter_seed, &sampling_profile_digest);
         assert_eq!(
             hex::encode(governed),
-            "bfc9ca1f8ebb1973832be82566946d0713bddaeccdd88937427a376ad6a96ec9"
+            "6a0b33463d71f6aec27ad330ae4424e3ed317a841dc1a0d79c5389905072ffc9"
         );
         for index in 0..sampling_profile_digest.len() {
             let mut mutated_sampling_profile_digest = sampling_profile_digest;

@@ -500,6 +500,8 @@ struct PrivateKaigiFeeBinding {
     fee_amount: Quantity,
 }
 
+const PRIVATE_KAIGI_FEE_PAYER_ACCOUNT_DOMAIN: &[u8] = b"iroha:private-kaigi:fee-payer-account:v1";
+
 fn json_object_string(
     map: &norito::json::Map,
     key: &str,
@@ -2045,7 +2047,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(tx.fee_spend.anchor_root.into()),
         );
 
-        let fee_payer = Self::private_kaigi_fee_payer_account(tx)?;
+        let fee_payer = Self::private_kaigi_fee_payer_account(tx);
 
         transfer
             .execute(&fee_payer, state_transaction)
@@ -2054,23 +2056,15 @@ impl<'tx> AcceptedTransaction<'tx> {
             })
     }
 
-    fn private_kaigi_fee_payer_account(
-        tx: &PrivateKaigiTransaction,
-    ) -> Result<AccountId, TransactionRejectionReason> {
-        let fee_payer_seed = iroha_crypto::Hash::new(tx.action_hash().as_ref());
-        let fee_payer_keypair = iroha_crypto::KeyPair::try_from_seed(
-            fee_payer_seed.as_ref().to_vec(),
-            Algorithm::Ed25519,
-        )
-        .map_err(|err| {
-            TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
-                "failed to derive private Kaigi fee payer account: {err}"
-            )))
-        })?;
-        Ok(AccountId::new(fee_payer_keypair.public_key().clone()))
+    fn private_kaigi_fee_payer_account(tx: &PrivateKaigiTransaction) -> AccountId {
+        let public_key = iroha_crypto::derive_non_signing_ed25519_public_key(
+            PRIVATE_KAIGI_FEE_PAYER_ACCOUNT_DOMAIN,
+            &[tx.action_hash().as_ref()],
+        );
+        AccountId::new(public_key)
     }
 
-    /// Like [`Self::accept_genesis`], but without wrapping.
+    /// Validate a genesis transaction, including its individual authorization proof.
     ///
     /// # Errors
     ///
@@ -2113,6 +2107,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         }
 
         Self::ensure_signing_allowed(tx, crypto)?;
+        Self::verify_signature_for_check(tx, SignatureCheck::Verify, None)?;
 
         Ok(())
     }
@@ -2308,19 +2303,22 @@ impl<'tx> AcceptedTransaction<'tx> {
         validate_proof_attachment_shapes(tx)?;
 
         let decompressed_len = tx.attachments().map_or(0usize, |attachments| {
-            attachments.as_slice().iter().fold(0usize, |acc, attachment| {
-                let mut subtotal = attachment.proof.bytes.len();
-                if attachment.vk_commitment.is_some() {
-                    subtotal = subtotal.saturating_add(32);
-                }
-                if attachment.envelope_hash.is_some() {
-                    subtotal = subtotal.saturating_add(32);
-                }
-                if let Some(privacy) = &attachment.lane_privacy {
-                    subtotal = subtotal.saturating_add(privacy.encoded_len());
-                }
-                acc.saturating_add(subtotal)
-            })
+            attachments
+                .as_slice()
+                .iter()
+                .fold(0usize, |acc, attachment| {
+                    let mut subtotal = attachment.proof.bytes.len();
+                    if attachment.vk_commitment.is_some() {
+                        subtotal = subtotal.saturating_add(32);
+                    }
+                    if attachment.envelope_hash.is_some() {
+                        subtotal = subtotal.saturating_add(32);
+                    }
+                    if let Some(privacy) = &attachment.lane_privacy {
+                        subtotal = subtotal.saturating_add(privacy.encoded_len());
+                    }
+                    acc.saturating_add(subtotal)
+                })
         });
         let decompressed_len = u64::try_from(decompressed_len).unwrap_or(u64::MAX);
         let max_decompressed_bytes = limits.max_decompressed_bytes().get();
@@ -6179,6 +6177,41 @@ pub mod tests {
     }
 
     #[test]
+    fn validate_genesis_with_now_rejects_invalid_transaction_signature() {
+        let now = Duration::from_secs(10_000);
+        let (_handle, time_source) = TimeSource::new_mock(now);
+        let mut tx = TransactionBuilder::new_with_time_source(
+            CHAIN_ID.clone(),
+            GENESIS_ACCOUNT.id.clone(),
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::DEBUG,
+            "genesis signature check".to_string(),
+        )])
+        .sign(&GENESIS_ACCOUNT.key);
+        let unrelated = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
+        tx.set_signature(TransactionSignature(checked_signature_of(
+            unrelated.private_key(),
+            tx.payload(),
+        )));
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        assert!(matches!(
+            AcceptedTransaction::validate_genesis_with_now(
+                &tx,
+                &CHAIN_ID,
+                Duration::from_secs(1),
+                &GENESIS_ACCOUNT.id,
+                &crypto_cfg,
+                now,
+            ),
+            Err(AcceptTransactionFail::SignatureVerification(_))
+        ));
+    }
+
+    #[test]
     fn signature_limit_allows_count_at_cap() {
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
@@ -8190,17 +8223,24 @@ pub mod tests {
     }
 
     #[test]
-    fn private_kaigi_fee_payer_account_uses_checked_ed25519_derivation() {
+    fn private_kaigi_fee_payer_account_has_no_publicly_derived_signing_key() {
         let tx = sample_private_kaigi_transaction("private-kaigi-chain".parse().expect("chain id"));
-        let fee_payer = AcceptedTransaction::private_kaigi_fee_payer_account(&tx)
-            .expect("checked private Kaigi fee payer derivation");
+        let fee_payer = AcceptedTransaction::private_kaigi_fee_payer_account(&tx);
+        let repeated = AcceptedTransaction::private_kaigi_fee_payer_account(&tx);
         let seed = Hash::new(tx.action_hash().as_ref());
-        let expected_keypair = KeyPair::try_from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519)
-            .expect("expected checked fee payer seed derivation");
+        let legacy_keypair = KeyPair::try_from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519)
+            .expect("legacy public seed derives");
 
+        assert_eq!(fee_payer, repeated);
         assert_eq!(
+            fee_payer.expect_single_signatory().algorithm(),
+            Algorithm::Ed25519,
+            "protocol account remains a valid Ed25519 account identity"
+        );
+        assert_ne!(
             fee_payer,
-            AccountId::new(expected_keypair.public_key().clone())
+            AccountId::new(legacy_keypair.public_key().clone()),
+            "the public action hash must not yield a signing key for the protocol account"
         );
     }
 
@@ -8520,7 +8560,8 @@ pub mod tests {
             iroha_data_model::events::EventFilterBox::ExecuteTrigger(
                 iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new(),
             ),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let trigger = iroha_data_model::trigger::Trigger::new(trigger_id, action);
         let register = iroha_data_model::isi::register::Register::trigger(trigger);
         let boxed = InstructionBox::from(register);
@@ -13763,6 +13804,7 @@ pub mod tests {
                     GENESIS_ACCOUNT.id.clone(),
                     TimeEventFilter::new(ExecutionTime::PreCommit),
                 )
+                .expect("sandbox time-trigger action satisfies validation invariants")
                 .with_metadata(self.trigger_registration_metadata()),
             )
             .try_into()
@@ -13857,6 +13899,7 @@ pub mod tests {
                         .for_events(AssetEventSet::Added)
                         .for_asset(asset(src)),
                 )
+                .expect("sandbox data-trigger action satisfies validation invariants")
                 .with_metadata(self.trigger_registration_metadata()),
             )
             .try_into()

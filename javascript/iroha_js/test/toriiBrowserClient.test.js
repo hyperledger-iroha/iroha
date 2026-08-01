@@ -104,12 +104,47 @@ function blockProofResponseFixture() {
   };
   const field = (payload) => Buffer.concat([compact(payload.length), payload]);
   const struct = (...fields) => Buffer.concat(fields.map(field));
-  const leaf = Buffer.alloc(32, 0x20);
-  leaf[31] |= 1;
+  const entryHash = Buffer.alloc(32, 0x20);
+  entryHash[31] |= 1;
+  const resultHash = Buffer.alloc(32, 0x50);
+  resultHash[31] |= 1;
+  const blockHash = Buffer.alloc(32, 0x30);
+  blockHash[31] |= 1;
+  const executedBlockWireHash = Buffer.alloc(32, 0x40);
+  executedBlockWireHash[31] |= 1;
+  const entryRoot = Buffer.from(
+    blake2b256(
+      Buffer.concat([
+        Buffer.from("iroha:merkle:leaf:v1\0", "utf8"),
+        entryHash,
+      ]),
+    ),
+  );
+  entryRoot[31] |= 1;
+  const resultRoot = Buffer.from(
+    blake2b256(
+      Buffer.concat([
+        Buffer.from("iroha:merkle:leaf:v1\0", "utf8"),
+        resultHash,
+      ]),
+    ),
+  );
+  resultRoot[31] |= 1;
   const leafIndex = Buffer.alloc(4);
-  const receipt = struct(leaf, struct(leafIndex, u64(0)));
+  const entryCommitment = struct(entryRoot, u64(1));
+  const receipt = struct(entryHash, struct(leafIndex, u64(0)));
+  const resultCommitment = struct(resultRoot, u64(1));
+  const resultReceipt = struct(resultHash, struct(leafIndex, u64(0)));
   const payload = struct(
-    u64(7), leaf, leaf, receipt, Buffer.of(0), Buffer.of(0), u64(0),
+    u64(7),
+    blockHash,
+    executedBlockWireHash,
+    entryHash,
+    entryCommitment,
+    receipt,
+    resultCommitment,
+    resultReceipt,
+    u64(0),
   );
   const schemaHash = Buffer.from(
     sha256(Buffer.from(
@@ -137,6 +172,36 @@ function blockProofResponseFixture() {
     Buffer.of(0x02),
     payload,
   ]);
+}
+
+function authenticatedBlockProofAnchorFixture() {
+  const entryHash = Buffer.alloc(32, 0x20);
+  entryHash[31] |= 1;
+  const resultHash = Buffer.alloc(32, 0x50);
+  resultHash[31] |= 1;
+  const blockHash = Buffer.alloc(32, 0x30);
+  blockHash[31] |= 1;
+  const executedBlockWireHash = Buffer.alloc(32, 0x40);
+  executedBlockWireHash[31] |= 1;
+  const merkleLeafDomain = Buffer.from("iroha:merkle:leaf:v1\0", "utf8");
+  const entryRoot = Buffer.from(
+    blake2b256(Buffer.concat([merkleLeafDomain, entryHash])),
+  );
+  entryRoot[31] |= 1;
+  const resultRoot = Buffer.from(
+    blake2b256(Buffer.concat([merkleLeafDomain, resultHash])),
+  );
+  resultRoot[31] |= 1;
+  return {
+    block_height: "7",
+    block_hash: blockHash.toString("hex"),
+    executed_block_wire_hash: executedBlockWireHash.toString("hex"),
+    entry_hash: entryHash.toString("hex"),
+    entry_index: 0,
+    entry_commitment: { root: entryRoot.toString("hex"), leaf_count: "1" },
+    result_commitment: { root: resultRoot.toString("hex"), leaf_count: "1" },
+    fastpq_transcripts: {},
+  };
 }
 
 function sseResponse(chunks, { close = true, onCancel } = {}) {
@@ -219,8 +284,69 @@ test("ToriiBrowserClient fetches ledger BlockProofs only as canonical Norito", a
   );
   assert.equal(captured.init.headers.Accept, "application/x-norito");
   assert.equal(captured.init.headers["x-test-client"], "ledger");
+  assert.deepEqual(Object.keys(proof), [
+    "block_height",
+    "block_hash",
+    "executed_block_wire_hash",
+    "entry_hash",
+    "entry_commitment",
+    "entry_proof",
+    "result_commitment",
+    "result_proof",
+    "fastpq_transcripts",
+  ]);
   assert.equal(proof.block_height, "7");
-  assert.equal(proof.entry_hash, proof.entry_root);
+  assert.match(proof.block_hash, /^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u);
+  assert.match(
+    proof.executed_block_wire_hash,
+    /^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u,
+  );
+  assert.equal(proof.entry_proof.leaf, proof.entry_hash);
+  assert.deepEqual(proof.entry_proof.proof, { leaf_index: 0, audit_path: [] });
+  assert.equal(proof.entry_commitment.leaf_count, "1");
+  assert.notEqual(proof.entry_commitment.root, proof.entry_hash);
+  assert.equal(proof.result_commitment.leaf_count, "1");
+  assert.equal(proof.result_proof.proof.leaf_index, 0);
+  assert.notEqual(proof.result_commitment.root, proof.result_proof.leaf);
+  assert.deepEqual(proof.fastpq_transcripts, {});
+
+  assert.equal(
+    browserSdk.verifyBlockProofs(
+      proof,
+      authenticatedBlockProofAnchorFixture(),
+    ).valid,
+    true,
+  );
+  assert.equal(browserSdk.verifyBlockProofs(proof).valid, false);
+});
+
+test("ToriiBrowserClient fetches the bounded exact executed block wire", async () => {
+  const expectedWire = Buffer.from([1, 0x4e, 0x52, 0x54, 0x30, 0xaa]);
+  let captured;
+  const client = new ToriiBrowserClient(BASE_URL, {
+    defaultHeaders: { Accept: "application/json", "x-test-client": "ledger" },
+    fetchImpl: async (url, init) => {
+      captured = { url: String(url), init };
+      return new Response(expectedWire, {
+        headers: { "content-type": "application/x-norito" },
+      });
+    },
+  });
+
+  const actualWire = await client.getLedgerExecutedBlockWire(7);
+  assert.equal(captured.url, "https://localhost:8080/v1/ledger/block/7");
+  assert.equal(captured.init.headers.Accept, "application/x-norito");
+  assert.equal(captured.init.headers["x-test-client"], "ledger");
+  assert.deepEqual(actualWire, expectedWire);
+
+  const maximumHeightWire = await client.getLedgerExecutedBlockWire(
+    "18446744073709551615",
+  );
+  assert.equal(
+    captured.url,
+    "https://localhost:8080/v1/ledger/block/18446744073709551615",
+  );
+  assert.deepEqual(maximumHeightWire, expectedWire);
 });
 
 test("ToriiBrowserClient rejects malformed ledger selectors and representations locally", async () => {
@@ -232,9 +358,21 @@ test("ToriiBrowserClient rejects malformed ledger selectors and representations 
     },
   });
 
-  assert.throws(() => client.listLedgerHeaders({ from: 0 }), /positive safe integer/u);
+  assert.throws(() => client.listLedgerHeaders({ from: 0 }), /positive decimal integer/u);
   assert.throws(() => client.listLedgerHeaders({ offset: 1 }), /unsupported option offset/u);
-  assert.throws(() => client.getLedgerStateRoot(0), /positive safe integer/u);
+  assert.throws(() => client.getLedgerStateRoot(0), /positive decimal integer/u);
+  await assert.rejects(
+    client.getLedgerExecutedBlockWire(0),
+    /positive decimal integer/u,
+  );
+  await assert.rejects(
+    client.getLedgerExecutedBlockWire(1n << 64n),
+    /must not exceed 18446744073709551615/u,
+  );
+  await assert.rejects(
+    client.getLedgerExecutedBlockWire(1, { offset: 1 }),
+    /unsupported option offset/u,
+  );
   await assert.rejects(
     client.getLedgerBlockProof(1, "abc"),
     /exactly 32 bytes of hexadecimal/u,
@@ -247,6 +385,65 @@ test("ToriiBrowserClient rejects malformed ledger selectors and representations 
   await assert.rejects(
     wrongContentTypeClient.getLedgerBlockProof(1, "ab".repeat(32)),
     /must return application\/x-norito/u,
+  );
+  await assert.rejects(
+    wrongContentTypeClient.getLedgerExecutedBlockWire(1),
+    /must return application\/x-norito/u,
+  );
+
+  const emptyClient = new ToriiBrowserClient(BASE_URL, {
+    fetchImpl: async () => new Response(new Uint8Array(), {
+      headers: { "content-type": "application/x-norito" },
+    }),
+  });
+  await assert.rejects(
+    emptyClient.getLedgerExecutedBlockWire(1),
+    /must not be empty/u,
+  );
+
+  const oversizedClient = new ToriiBrowserClient(BASE_URL, {
+    fetchImpl: async () => new Response(Uint8Array.of(1), {
+      headers: {
+        "content-type": "application/x-norito",
+        "content-length": String(
+          browserSdk.AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 + 1,
+        ),
+      },
+    }),
+  });
+  await assert.rejects(
+    oversizedClient.getLedgerExecutedBlockWire(1),
+    /33554432-byte response limit/u,
+  );
+
+  const lengthMismatchClient = new ToriiBrowserClient(BASE_URL, {
+    fetchImpl: async () => new Response(Uint8Array.of(1), {
+      headers: {
+        "content-type": "application/x-norito",
+        "content-length": "2",
+      },
+    }),
+  });
+  await assert.rejects(
+    lengthMismatchClient.getLedgerExecutedBlockWire(1),
+    /Content-Length does not match/u,
+  );
+
+  const fragmentedClient = new ToriiBrowserClient(BASE_URL, {
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        for (let index = 0; index <= 16_384; index += 1) {
+          controller.enqueue(Uint8Array.of(index & 0xff));
+        }
+        controller.close();
+      },
+    }), {
+      headers: { "content-type": "application/x-norito" },
+    }),
+  });
+  await assert.rejects(
+    fragmentedClient.getLedgerExecutedBlockWire(1),
+    /too many fragmented response chunks/u,
   );
 });
 

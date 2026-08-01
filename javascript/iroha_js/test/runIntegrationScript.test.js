@@ -7,30 +7,40 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { validateDefaultComposeGenesisCustody } from "../scripts/run_integration.mjs";
+import { validateDefaultComposeGenesisArtifacts } from "../scripts/run_integration.mjs";
 
-test("default Compose custody preflight fails closed and accepts exact records", async (t) => {
+test("default Compose artifact preflight fails closed and accepts exact records", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "iroha-js-compose-custody-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
 
   await assert.rejects(
-    validateDefaultComposeGenesisCustody({}),
+    validateDefaultComposeGenesisArtifacts({}),
     /IROHA_GENESIS_PUBLIC_KEY_FILE is required/,
   );
 
   const publicPath = path.join(directory, "public.key");
-  const privatePath = path.join(directory, "private.key");
+  const signedPath = path.join(directory, "genesis.signed.nrt");
+  const hashPath = path.join(directory, "genesis.expected_hash");
   await writeFile(publicPath, "public-without-newline");
-  await writeFile(privatePath, "private\n");
+  await writeFile(signedPath, "signed-genesis");
+  await writeFile(hashPath, `${"0".repeat(63)}1\n`);
   const env = {
     IROHA_GENESIS_PUBLIC_KEY_FILE: publicPath,
-    IROHA_GENESIS_PRIVATE_KEY_FILE: privatePath,
+    IROHA_GENESIS_SIGNED_FILE: signedPath,
+    IROHA_GENESIS_EXPECTED_HASH_FILE: hashPath,
   };
   await assert.rejects(
-    validateDefaultComposeGenesisCustody(env),
-    /exactly one non-empty key record/,
+    validateDefaultComposeGenesisArtifacts(env),
+    /exactly one non-empty record/,
   );
 
   await writeFile(publicPath, "public\n");
-  await validateDefaultComposeGenesisCustody(env);
+  await writeFile(hashPath, `${"0".repeat(63)}2\n`);
+  await assert.rejects(
+    validateDefaultComposeGenesisArtifacts(env),
+    /canonical lowercase Iroha hash/,
+  );
+
+  await writeFile(hashPath, `${"0".repeat(63)}1\n`);
+  await validateDefaultComposeGenesisArtifacts(env);
 });

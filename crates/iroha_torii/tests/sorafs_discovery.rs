@@ -103,6 +103,25 @@ const TTL_SECS: u64 = 3_600;
 const STATUS_TIMESTAMP_KEY: &str = "sorafs_status_timestamp_unix";
 const GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
 
+trait ProviderAdvertCacheTestExt {
+    fn ingest(
+        &mut self,
+        advert: ProviderAdvertV1,
+        now: u64,
+    ) -> Result<AdvertIngestResult, AdvertError>;
+}
+
+impl ProviderAdvertCacheTestExt for ProviderAdvertCache {
+    fn ingest(
+        &mut self,
+        advert: ProviderAdvertV1,
+        now: u64,
+    ) -> Result<AdvertIngestResult, AdvertError> {
+        let prepared = self.validation_policy().prepare(advert, now)?;
+        self.commit_prepared(prepared, now)
+    }
+}
+
 fn ingest_tests_enabled() -> bool {
     std::env::var("SORAFS_TORII_SKIP_INGEST_TESTS").map_or(true, |value| value != "1")
 }

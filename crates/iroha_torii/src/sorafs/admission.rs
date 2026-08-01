@@ -52,6 +52,15 @@ impl AdmissionRegistry {
         }
     }
 
+    /// Borrow the operator-controlled council policy used to verify this registry.
+    ///
+    /// Empty optional registries have no trust policy and therefore cannot be
+    /// used to authorize alias proofs or other governance-signed payloads.
+    #[must_use]
+    pub fn council_policy(&self) -> Option<&ProviderAdmissionCouncilPolicy> {
+        self.policy.as_deref()
+    }
+
     /// Construct a registry from an iterator of admission envelopes.
     ///
     /// # Errors
@@ -612,6 +621,18 @@ mod tests {
     fn write_fixture(dir: &Path, name: &str) {
         fs::write(dir.join(name), fixture_bytes("envelope_v1.to"))
             .expect("write provider admission fixture");
+    }
+
+    #[test]
+    fn registry_exposes_only_explicit_council_policy() {
+        assert!(AdmissionRegistry::empty().council_policy().is_none());
+
+        let registry = AdmissionRegistry::with_policy(fixture_policy());
+        let policy = registry
+            .council_policy()
+            .expect("explicit registry policy must remain available");
+        assert_eq!(policy.trusted_signer_count(), 1);
+        assert_eq!(policy.signature_threshold().get(), 1);
     }
 
     #[test]

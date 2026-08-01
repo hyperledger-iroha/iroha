@@ -286,10 +286,23 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::account_recovery::CancelAccountRecovery>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::FinalizeAccountRecovery>,
     dispatch_instruction::<iroha_data_model::isi::contract_alias::SetContractAlias>,
-    dispatch_instruction::<iroha_data_model::isi::musubi::PublishMusubiRelease>,
-    dispatch_instruction::<iroha_data_model::isi::musubi::YankMusubiRelease>,
-    dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiShortAlias>,
-    dispatch_instruction::<iroha_data_model::isi::musubi::AssertMusubiReleaseExists>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiArchiveV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::AddMusubiArchiveLocationV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::RetireMusubiArchiveLocationV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::PublishMusubiReleaseV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiReleaseYankV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiPackageMetadataV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::InviteMusubiPackageMaintainerV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::AcceptMusubiPackageMaintainerV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiPackageMaintainerRoleV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::RemoveMusubiPackageMaintainerV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::RegisterMusubiAliasV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::RecoverMusubiPackageV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::RetargetMusubiAliasV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiArtifactTakedownV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiRegistryPolicyV1>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::AssertMusubiReleaseDigestV1>,
     dispatch_instruction::<iroha_data_model::isi::identifier::RegisterIdentifierPolicy>,
     dispatch_instruction::<iroha_data_model::isi::identifier::ActivateIdentifierPolicy>,
     dispatch_instruction::<iroha_data_model::isi::identifier::ClaimIdentifier>,
@@ -1055,6 +1068,9 @@ mod tests {
             axt_test_digest(b"axt-isi-test:lane-relay-source-tx", &[&relay_ref_bytes]);
         let claim_digest =
             lane_relay_fastpq_claim_digest(envelope).expect("lane relay claim digest");
+        let lane_finality_statement_hash = envelope
+            .lane_finality_statement_hash()
+            .expect("lane relay finality statement");
         let witness_commitment = axt_test_digest(
             b"axt-isi-test:lane-relay-witness",
             &[envelope.settlement_hash.as_ref()],
@@ -1081,21 +1097,25 @@ mod tests {
         };
         let mut dsid_bytes = [0_u8; 16];
         dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
+        let (old_root, new_root) = envelope.qc.as_ref().map_or_else(
+            || {
+                (
+                    axt_test_digest(b"axt-isi-test:lane-relay-old-root", &[proof_seed]).into(),
+                    axt_test_digest(b"axt-isi-test:lane-relay-new-root", &[proof_seed]).into(),
+                )
+            },
+            |qc| (qc.parent_state_root.into(), qc.post_state_root.into()),
+        );
         let mut batch = fastpq_prover::TransitionBatch::new(
             fastpq_prover::AXT_DEFAULT_PARAMETER,
             fastpq_prover::PublicInputs {
                 dsid: dsid_bytes,
                 slot: expiry_slot,
-                old_root: axt_test_digest(b"axt-isi-test:lane-relay-old-root", &[proof_seed])
-                    .into(),
-                new_root: manifest_root,
+                old_root,
+                new_root,
                 perm_root: axt_test_digest(b"axt-isi-test:lane-relay-perm-root", &[proof_seed])
                     .into(),
-                tx_set_hash: axt_test_digest(
-                    b"axt-isi-test:lane-relay-tx-set",
-                    &[claim_digest.as_ref()],
-                )
-                .into(),
+                tx_set_hash: lane_finality_statement_hash.into(),
             },
         );
         batch.push(fastpq_prover::StateTransition::new(
@@ -1123,7 +1143,9 @@ mod tests {
         let proof_envelope = AxtProofEnvelope {
             dsid,
             manifest_root,
-            da_commitment: None,
+            da_commitment: envelope
+                .da_commitment_hash
+                .map(|commitment| iroha_crypto::Hash::from(commitment).into()),
             proof: fastpq_payload,
             fastpq_binding: Some(binding),
             committed_amount: None,
@@ -1330,7 +1352,10 @@ mod tests {
         };
         let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)
             .expect("valid lane relay envelope")
-            .with_manifest_root(Some(manifest_root));
+            .with_manifest_root(Some(manifest_root))
+            .with_lane_block_descriptor_hash(Some(iroha_crypto::Hash::new(
+                b"isi-test-lane-block-descriptor",
+            )));
         let verified_at_height = envelope.block_height;
         envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
             proof_digest,
@@ -1370,10 +1395,17 @@ mod tests {
             .expect("test fastpq binding");
         let verified_fastpq = fastpq_prover::verify_axt_proof_envelope(&proof_envelope)
             .expect("verify test fastpq proof");
+        let lane_finality_statement_hash = envelope
+            .lane_finality_statement_hash()
+            .expect("test relay finality statement");
         VerifiedLaneRelayRecord::new(
             envelope,
             iroha_crypto::Hash::new(&proof_blob.payload),
             verified_fastpq.statement_digest,
+            lane_finality_statement_hash,
+            verified_fastpq.old_root,
+            verified_fastpq.new_root,
+            verified_fastpq.tx_set_hash,
             verified_fastpq.proof_digest,
             verified_at_height,
             proof_envelope.manifest_root,
@@ -1408,7 +1440,10 @@ mod tests {
         };
         let manifest_root = [0x42; 32];
         let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)?
-            .with_manifest_root(Some(manifest_root));
+            .with_manifest_root(Some(manifest_root))
+            .with_lane_block_descriptor_hash(Some(iroha_crypto::Hash::new(
+                b"isi-test-lane-block-descriptor",
+            )));
         let proof_blob = axt_lane_relay_proof_blob_for(
             &envelope,
             b"register-lane-relay",
@@ -3385,7 +3420,8 @@ mod tests {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(account_id.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         ));
         register_trigger.execute(&account_id, &mut state_transaction)?;
 
@@ -3430,7 +3466,8 @@ mod tests {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(account_id.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         ));
         let error = register_trigger
             .execute(&account_id, &mut state_transaction)
@@ -3477,7 +3514,8 @@ mod tests {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(ALICE_ID.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         RegisterBox::Trigger(Register::trigger(trigger))
             .execute(&ALICE_ID, &mut state_transaction)?;
@@ -3643,7 +3681,8 @@ mod tests {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(account_id.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         ));
 
         register_trigger.execute(&account_id, &mut state_transaction)?;
@@ -3692,7 +3731,8 @@ mod tests {
                 Repeats::Exactly(2), // invalid for non-mintable filter
                 account_id.clone(),
                 filter,
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         ));
         assert!(matches!(
             bad.execute(&account_id, &mut state_transaction)

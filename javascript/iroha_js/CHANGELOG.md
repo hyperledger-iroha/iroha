@@ -4,6 +4,15 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added a Node-only native authenticated `BlockProofs` verifier. It accepts
+  bounded canonical bridge-finality, exact executed-`SignedBlockWire`, and
+  proof archives; pins the application-selected chain, height context, and
+  expected entry hash; verifies Sumeragi-v2 roster PoPs and aggregate finality
+  in Rust; derives the non-serializable proof anchor only from that verified
+  artifact; and enforces immediate successor state. Browser builds fail closed
+  until a digest-pinned Rust finality-verifier WASM is shipped. Torii exposes
+  the finality and `BlockProofs` archives but not yet the exact executed block
+  wire required to assemble this verification input from public routes alone.
 - Bound validation-fee policy and payout-lifecycle proposal fingerprints to
   the complete first-release PLAIN electorate rules. Both native exports now
   validate exact JSON and compute canonical `ProposalKind` fingerprints, and
@@ -27,9 +36,12 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   before account derivation, closing an untrusted-input CPU exhaustion path.
 - Added browser ledger evidence reads for headers, state roots, state QCs, and
   canonical Norito `BlockProofs`. The SDK validates the exact proof schema and
-  frame checksum, decodes bounded entry/result audit paths plus FASTPQ
-  transcripts, and locally verifies the Iroha BLAKE2b Merkle paths without
-  claiming to verify the node-provided finality QC.
+  frame checksum, requires aligned entry/result commitments and proofs, decodes
+  bounded audit paths plus FASTPQ transcripts, and binds those transcripts to
+  a caller-supplied, independently authenticated executed-block projection
+  while locally verifying the Iroha BLAKE2b Merkle paths. The SDK exposes no
+  response-to-anchor factory and does not claim to authenticate that anchor or
+  verify the node-provided finality QC.
 - Added browser Connect `SignRequestRaw` support and a canonical-request auth
   adapter. Apps can request the explicit `sign_raw` permission, keep account
   keys inside the approved wallet, and sign the exact Torii canonical message

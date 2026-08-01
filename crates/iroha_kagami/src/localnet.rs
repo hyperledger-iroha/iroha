@@ -14,7 +14,7 @@ use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_core::zk::confidential_v2;
-use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair};
+use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     alias_setup::{
@@ -24,7 +24,7 @@ use iroha_data_model::{
         ResolvedDomainV1,
     },
     asset::AssetDefinitionAlias,
-    block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT,
+    block::{BlockHeader, consensus_v2::MAX_VALIDATORS_PER_HEIGHT},
     da::commitment::DaProofPolicyBundle,
     isi::{
         GrantBox, RegisterBox, RevokeBox, SetAssetDefinitionAlias,
@@ -530,6 +530,8 @@ const LOCALNET_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
 /// Torii pre-auth allowlist to keep localnet CLI traffic from tripping bans.
 const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
+/// Exact Torii transport sources trusted for internal localnet reads and routing.
+const LOCALNET_INTERNAL_API_TRUSTED_CIDRS: [&str; 2] = ["127.0.0.1/32", "::1/128"];
 /// Default localnet telemetry toggle (mirrors config defaults).
 const LOCALNET_TELEMETRY_ENABLED: bool = true;
 /// Default localnet telemetry profile (mirrors config defaults).
@@ -1365,6 +1367,7 @@ fn generate_localnet_with_line<T: Write>(
         write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
+    let genesis_expected_hash_path = out_dir.join(GENESIS_EXPECTED_HASH_FILE);
     let gas_account_id = gas_account_id
         .as_ref()
         .map(|account_id| account_id_runtime_literal(account_id, chain_discriminant));
@@ -1402,6 +1405,7 @@ fn generate_localnet_with_line<T: Write>(
         &peer_telemetry_urls,
         &genesis_public_key,
         &genesis_signed_path,
+        HashOf::from_untyped_unchecked(Hash::new(b"Kagami localnet policy-derivation placeholder")),
         &bls_entries,
         &bootstrap_kura_dir,
         &bootstrap_runtime_state_dir,
@@ -1448,7 +1452,7 @@ fn generate_localnet_with_line<T: Write>(
         &genesis_private,
         redact_seed_metadata,
     )?;
-    write_genesis(GenesisWriteContext {
+    let genesis_expected_hash = write_genesis(GenesisWriteContext {
         manifest: &genesis,
         public_key: &genesis_public_key,
         private_key: genesis_private.clone(),
@@ -1461,6 +1465,11 @@ fn generate_localnet_with_line<T: Write>(
             confidential_policy_hash,
         },
     })?;
+    write_and_validate_genesis_expected_hash(
+        &genesis_expected_hash_path,
+        &genesis_signed_path,
+        genesis_expected_hash,
+    )?;
     tui::status("Genesis staged and bootstrap-validated");
 
     tui::status("Writing peer configs");
@@ -1496,6 +1505,7 @@ fn generate_localnet_with_line<T: Write>(
             &peer_telemetry_urls,
             &genesis_public_key,
             &genesis_signed_path,
+            genesis_expected_hash,
             &bls_entries,
             &kura_dir,
             &runtime_state_dir,
@@ -1526,9 +1536,16 @@ fn generate_localnet_with_line<T: Write>(
             queue_capacity,
             sumeragi_body_bytes,
         );
-        parse_localnet_peer_config(&rendered).wrap_err_with(|| {
+        let parsed_config = parse_localnet_peer_config(&rendered).wrap_err_with(|| {
             format!("generated validator config peer{idx}.toml failed Config/Catalog validation")
         })?;
+        if parsed_config.genesis.expected_hash != genesis_expected_hash {
+            return Err(eyre!(
+                "generated validator config peer{idx}.toml has genesis hash {}, expected {}",
+                parsed_config.genesis.expected_hash,
+                genesis_expected_hash
+            ));
+        }
         let path = out_dir.join(format!("peer{idx}.toml"));
         write_owner_only_localnet_file(&path, rendered.as_bytes())
             .wrap_err_with(|| format!("write validator config {}", path.display()))?;
@@ -1574,6 +1591,7 @@ fn generate_localnet_with_line<T: Write>(
         &primary_torii_url,
         &genesis_json_path,
         &genesis_signed_path,
+        &genesis_expected_hash_path,
         &genesis_public_key_path,
         &genesis_private_key_path,
         &client_config_path,
@@ -1605,6 +1623,11 @@ fn generate_localnet_with_line<T: Write>(
     writeln!(writer, "torii_url: {}", primary_torii_url)?;
     writeln!(writer, "genesis_json: {}", genesis_json_path.display())?;
     writeln!(writer, "genesis_signed: {}", genesis_signed_path.display())?;
+    writeln!(
+        writer,
+        "genesis_expected_hash: {}",
+        genesis_expected_hash_path.display()
+    )?;
     writeln!(
         writer,
         "genesis_public_key: {}",
@@ -2199,6 +2222,7 @@ fn render_peer_config(
     peer_telemetry_urls: &[String],
     genesis_public_key: &iroha_crypto::PublicKey,
     genesis_signed_path: &Path,
+    genesis_expected_hash: HashOf<BlockHeader>,
     bls_entries: &[BlsEntry],
     kura_store_dir: &Path,
     runtime_state_root: &Path,
@@ -2688,6 +2712,10 @@ fn render_peer_config(
         "public_key".into(),
         Value::String(genesis_public_key.to_string()),
     );
+    genesis.insert(
+        "expected_hash".into(),
+        Value::String(genesis_expected_hash.to_string()),
+    );
     root.insert("genesis".into(), Value::Table(genesis));
 
     let mut logger = Table::new();
@@ -2869,9 +2897,18 @@ fn render_peer_config(
         Value::Integer(i64::from(LOCALNET_TORII_PREAUTH_BURST_PER_IP)),
     );
     torii.insert(
-        "api_allow_cidrs".into(),
+        "api_rate_limit_bypass_cidrs".into(),
         Value::Array(
             LOCALNET_PREAUTH_ALLOW_CIDRS
+                .iter()
+                .map(|cidr| Value::String((*cidr).to_string()))
+                .collect::<Vec<_>>(),
+        ),
+    );
+    torii.insert(
+        "internal_api_trusted_cidrs".into(),
+        Value::Array(
+            LOCALNET_INTERNAL_API_TRUSTED_CIDRS
                 .iter()
                 .map(|cidr| Value::String((*cidr).to_string()))
                 .collect::<Vec<_>>(),
@@ -4101,7 +4138,7 @@ struct GenesisWriteContext<'a> {
     policies: GenesisConsensusPolicies,
 }
 
-fn write_genesis(context: GenesisWriteContext<'_>) -> Result<()> {
+fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>> {
     let GenesisWriteContext {
         manifest,
         public_key,
@@ -4134,9 +4171,73 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<()> {
         policies.confidential_policy_hash,
     )
     .wrap_err("stage and sign genesis block")?;
+    let expected_hash = block.0.hash();
     let framed = block.0.encode_wire().wrap_err("frame genesis block")?;
     let mut file = BufWriter::new(File::create(signed_path)?);
     file.write_all(&framed)?;
+    Ok(expected_hash)
+}
+
+fn write_and_validate_genesis_expected_hash(
+    expected_hash_path: &Path,
+    signed_path: &Path,
+    expected_hash: HashOf<BlockHeader>,
+) -> Result<()> {
+    let signed = fs::read(signed_path)
+        .wrap_err_with(|| format!("read signed genesis body {}", signed_path.display()))?;
+    let decoded = iroha_data_model::block::decode_framed_signed_block(&signed)
+        .wrap_err("decode the generated signed genesis body")?;
+    if decoded.hash() != expected_hash {
+        return Err(eyre!(
+            "generated signed genesis body hashes to {}, expected {}",
+            decoded.hash(),
+            expected_hash
+        ));
+    }
+
+    let canonical = expected_hash.to_string();
+    let canonical_bytes = canonical.as_bytes();
+    let has_canonical_syntax = canonical_bytes.len() == 64
+        && canonical_bytes
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        && canonical_bytes.last().is_some_and(|byte| {
+            matches!(*byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f')
+        });
+    if !has_canonical_syntax {
+        return Err(eyre!(
+            "generated genesis hash is not a canonical Iroha hash record: {canonical}"
+        ));
+    }
+
+    let record = format!("{canonical}\n");
+    write_owner_only_localnet_file(expected_hash_path, record.as_bytes()).wrap_err_with(|| {
+        format!(
+            "write exact genesis hash file {}",
+            expected_hash_path.display()
+        )
+    })?;
+    let persisted = fs::read_to_string(expected_hash_path).wrap_err_with(|| {
+        format!(
+            "read exact genesis hash file {}",
+            expected_hash_path.display()
+        )
+    })?;
+    if persisted != record {
+        return Err(eyre!(
+            "persisted exact genesis hash file is not the canonical generated record"
+        ));
+    }
+    let parsed = persisted
+        .strip_suffix('\n')
+        .expect("canonical record always ends in a newline")
+        .parse::<HashOf<BlockHeader>>()
+        .wrap_err("parse persisted exact genesis hash")?;
+    if parsed != expected_hash {
+        return Err(eyre!(
+            "persisted exact genesis hash changed from {expected_hash} to {parsed}"
+        ));
+    }
     Ok(())
 }
 
@@ -4697,7 +4798,9 @@ const CLIENT_ACCOUNT_PRIVATE: &str =
     "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
 /// Public genesis verifier key emitted for runtime configuration.
 pub const GENESIS_PUBLIC_KEY_FILE: &str = "genesis.public_key";
-/// Owner-only genesis signing key emitted for runtime custody.
+/// Exact signed-genesis consensus-header hash emitted for runtime configuration.
+pub const GENESIS_EXPECTED_HASH_FILE: &str = "genesis.expected_hash";
+/// Owner-only genesis signing key emitted for offline custody.
 pub const GENESIS_PRIVATE_KEY_FILE: &str = "genesis.private_key";
 
 struct LocalnetClientIdentity {
@@ -4909,6 +5012,7 @@ fn write_localnet_readme(
     torii_url: &str,
     genesis_json_path: &Path,
     genesis_signed_path: &Path,
+    genesis_expected_hash_path: &Path,
     genesis_public_key_path: &Path,
     genesis_private_key_path: &Path,
     client_config_path: &Path,
@@ -4941,6 +5045,7 @@ fn write_localnet_readme(
             "- Primary Torii URL: `{torii_url}`\n",
             "- Genesis JSON: `{genesis_json}`\n",
             "- Signed genesis: `{genesis_signed}`\n",
+            "- Approved exact genesis hash: `{genesis_expected_hash}`\n",
             "- Genesis verifier key: `{genesis_public_key}`\n",
             "- Owner-held genesis signing key: `{genesis_private_key}`\n",
             "- Client config: `{client_config}`\n\n",
@@ -4956,8 +5061,11 @@ fn write_localnet_readme(
             "- Offline escrow account: deterministic account derived from the chain id and asset definition\n",
             "- Generated peer configs enable structural `torii.account_onboarding` and Kagemusha escrow routing\n",
             "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
-            "The genesis key files can be supplied directly to `kagami docker` output through ",
-            "`IROHA_GENESIS_PUBLIC_KEY_FILE` and `IROHA_GENESIS_PRIVATE_KEY_FILE`. Never commit the private file.\n\n",
+            "Run `kagami docker` without `--seed` against this directory to validate the exact ",
+            "validator identities, PoPs, signed body, verifier key, and expected hash as one ",
+            "authoritative prepared bundle. The resulting Compose manifest embeds only read-only ",
+            "paths to the three public runtime artifacts. The signing key is never mounted at ",
+            "runtime; keep it offline and never commit it.\n\n",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
             "## Next steps\n\n",
@@ -4977,6 +5085,7 @@ fn write_localnet_readme(
         torii_url = torii_url,
         genesis_json = genesis_json_path.display(),
         genesis_signed = genesis_signed_path.display(),
+        genesis_expected_hash = genesis_expected_hash_path.display(),
         genesis_public_key = genesis_public_key_path.display(),
         genesis_private_key = genesis_private_key_path.display(),
         client_config = client_config_path.display(),
@@ -5776,9 +5885,29 @@ mod tests {
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
-        let source =
-            TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
-        actual::Root::from_toml_source(source).expect("generated config must parse");
+        let expected_hash_record = fs::read_to_string(temp.path().join(GENESIS_EXPECTED_HASH_FILE))
+            .expect("read generated exact genesis hash");
+        assert!(expected_hash_record.ends_with('\n'));
+        assert_eq!(expected_hash_record.matches('\n').count(), 1);
+        let expected_hash = expected_hash_record
+            .strip_suffix('\n')
+            .expect("hash record has final newline")
+            .parse::<HashOf<BlockHeader>>()
+            .expect("exact genesis hash parses");
+        assert_eq!(expected_hash_record, format!("{expected_hash}\n"));
+
+        let signed = fs::read(temp.path().join("genesis.signed.nrt"))
+            .expect("read generated signed genesis");
+        let decoded = decode_framed_signed_block(&signed).expect("decode generated signed genesis");
+        assert_eq!(decoded.hash(), expected_hash);
+
+        for index in 0..opts.peers.get() {
+            let source = TomlSource::from_file(temp.path().join(format!("peer{index}.toml")))
+                .expect("read generated config");
+            let config =
+                actual::Root::from_toml_source(source).expect("generated config must parse");
+            assert_eq!(config.genesis.expected_hash, expected_hash);
+        }
     }
 
     #[test]
@@ -6664,14 +6793,26 @@ mod tests {
         let allowlist = peer_cfg
             .get("torii")
             .and_then(toml::Value::as_table)
-            .and_then(|torii| torii.get("api_allow_cidrs"))
+            .and_then(|torii| torii.get("api_rate_limit_bypass_cidrs"))
             .and_then(toml::Value::as_array)
-            .expect("api_allow_cidrs array");
+            .expect("api_rate_limit_bypass_cidrs array");
         let allowlist = allowlist
             .iter()
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>();
         assert_eq!(allowlist, LOCALNET_PREAUTH_ALLOW_CIDRS);
+
+        let internal_trust = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("internal_api_trusted_cidrs"))
+            .and_then(toml::Value::as_array)
+            .expect("internal_api_trusted_cidrs array");
+        let internal_trust = internal_trust
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(internal_trust, LOCALNET_INTERNAL_API_TRUSTED_CIDRS);
 
         assert_eq!(
             peer_cfg
@@ -9019,6 +9160,7 @@ mod tests {
             "http://127.0.0.1:29080/",
             &tmp.path().join("genesis.json"),
             &tmp.path().join("genesis.signed.nrt"),
+            &tmp.path().join(GENESIS_EXPECTED_HASH_FILE),
             &tmp.path().join(GENESIS_PUBLIC_KEY_FILE),
             &tmp.path().join(GENESIS_PRIVATE_KEY_FILE),
             &tmp.path().join("client.toml"),
@@ -9036,6 +9178,11 @@ mod tests {
         assert!(!contents.contains("- Base seed: `Iroha`"));
         assert!(!contents.contains("`Iroha`"));
         assert!(contents.contains(LOCALNET_KAGEMUSHA_ASSET_ALIAS));
+        assert!(contents.contains("genesis.expected_hash"));
+        assert!(contents.contains("`kagami docker` without `--seed`"));
+        assert!(!contents.contains("IROHA_GENESIS_SIGNED_FILE"));
+        assert!(!contents.contains("IROHA_GENESIS_EXPECTED_HASH_FILE"));
+        assert!(!contents.contains("IROHA_GENESIS_PRIVATE_KEY_FILE"));
         assert!(contents.contains("- Ephemeral operator authority: `"));
         assert!(contents.contains("- Ephemeral onboarding authority: `"));
         assert!(
@@ -9066,6 +9213,7 @@ mod tests {
             "http://127.0.0.1:29080/",
             &tmp.path().join("genesis.json"),
             &tmp.path().join("genesis.signed.nrt"),
+            &tmp.path().join(GENESIS_EXPECTED_HASH_FILE),
             &tmp.path().join(GENESIS_PUBLIC_KEY_FILE),
             &tmp.path().join(GENESIS_PRIVATE_KEY_FILE),
             &tmp.path().join("client.toml"),

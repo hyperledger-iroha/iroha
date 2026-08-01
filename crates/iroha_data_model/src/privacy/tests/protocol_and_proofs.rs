@@ -277,6 +277,11 @@ fn first_release_privacy_schema_names_and_old_headers_are_frozen() {
         PRIVACY_PROOF_ENVELOPE_SCHEMA_NAME_V1,
         hex!("3956178024ddd2abae83d3a5b59827fb"),
     );
+    assert_stable_schema_wire(
+        &compiled_profile_catalog(),
+        PRIVACY_COMPILED_PROFILE_CATALOG_SCHEMA_NAME_V1,
+        hex!("f3addcc8d28f55b9119e6cc22e5e5b57"),
+    );
 }
 
 fn activation(envelope: &PrivacyProofEnvelopeV1) -> PrivacyProtocolActivationRecordV1 {

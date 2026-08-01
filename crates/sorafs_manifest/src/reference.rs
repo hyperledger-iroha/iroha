@@ -1761,6 +1761,16 @@ fn governance_log_node_context(node: &GovernanceLogNodeV1) -> Vec<ValidationCont
             prev_cid.len().to_string(),
         ));
     }
+    if let Some(provenance) = &node.submission_provenance {
+        context.push(ValidationContextFieldV1::new(
+            "submission_publisher_account_digest_hex",
+            hex::encode(provenance.publisher_account_digest),
+        ));
+        context.push(ValidationContextFieldV1::new(
+            "submission_origin",
+            provenance.origin.label(),
+        ));
+    }
     context
 }
 
@@ -2450,7 +2460,10 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         | GovernanceLogValidationError::InvalidNodeCidLength { .. }
         | GovernanceLogValidationError::InvalidPrevCidLength { .. }
         | GovernanceLogValidationError::MissingPublisherPeerId
-        | GovernanceLogValidationError::PublisherPeerIdTooLong { .. } => "SFS-GOV-001",
+        | GovernanceLogValidationError::PublisherPeerIdTooLong { .. }
+        | GovernanceLogValidationError::MissingSubmissionProvenance { .. }
+        | GovernanceLogValidationError::UnexpectedSubmissionProvenance { .. }
+        | GovernanceLogValidationError::SubmissionOriginMismatch { .. } => "SFS-GOV-001",
     }
 }
 
@@ -2487,6 +2500,9 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         | GovernanceLogValidationError::InvalidPrevCidLength { .. }
         | GovernanceLogValidationError::MissingPublisherPeerId
         | GovernanceLogValidationError::PublisherPeerIdTooLong { .. }
+        | GovernanceLogValidationError::MissingSubmissionProvenance { .. }
+        | GovernanceLogValidationError::UnexpectedSubmissionProvenance { .. }
+        | GovernanceLogValidationError::SubmissionOriginMismatch { .. }
         | GovernanceLogValidationError::InvalidNodeCid => CATEGORY_VALIDATION,
     }
 }
@@ -7883,6 +7899,31 @@ mod tests {
     }
 
     #[test]
+    fn governance_log_node_context_exposes_signed_submission_provenance() {
+        let mut node = governance_node();
+        node.submission_provenance = Some(crate::GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: crate::governance_dag_submission_account_digest_v1(
+                b"canonical-norito-reference-publisher",
+            ),
+            origin: crate::GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+        });
+
+        let context = governance_log_node_context(&node);
+        assert!(context.iter().any(|field| {
+            field.key == "submission_publisher_account_digest_hex"
+                && field.value
+                    == hex::encode(
+                        crate::governance_dag_submission_account_digest_v1(
+                            b"canonical-norito-reference-publisher",
+                        ),
+                    )
+        }));
+        assert!(context.iter().any(|field| {
+            field.key == "submission_origin" && field.value == "appeal_finance_report"
+        }));
+    }
+
+    #[test]
     fn validate_governance_log_node_bytes_verifies_ed25519_publisher_signature() {
         let node = ed25519_signed_governance_node();
         let bytes = to_bytes(&node).expect("encode governance node");
@@ -8012,6 +8053,32 @@ mod tests {
             GovernanceLogValidationError::PdpArchiveDecisionAfterNode {
                 decided_at: 2,
                 node_timestamp: 1,
+            },
+        ];
+
+        for error in errors {
+            assert_eq!(governance_log_validation_code(&error), "SFS-GOV-001");
+            assert_eq!(
+                governance_log_validation_category(&error),
+                CATEGORY_VALIDATION
+            );
+        }
+    }
+
+    #[test]
+    fn submission_provenance_errors_have_stable_reference_mappings() {
+        use crate::GovernanceDagSubmissionOriginV1;
+
+        let errors = [
+            GovernanceLogValidationError::MissingSubmissionProvenance {
+                expected: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+            },
+            GovernanceLogValidationError::UnexpectedSubmissionProvenance {
+                found: GovernanceDagSubmissionOriginV1::TransparencyTokenIssuance,
+            },
+            GovernanceLogValidationError::SubmissionOriginMismatch {
+                expected: GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup,
+                found: GovernanceDagSubmissionOriginV1::PrivacyAggregatePublishDue,
             },
         ];
 

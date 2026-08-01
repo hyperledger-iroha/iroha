@@ -1193,7 +1193,8 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
                 Repeats::Indefinitely,
                 authority_id.clone(),
                 TimeEventFilter::new(ExecutionTime::PreCommit),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(t)
             .execute(&authority_id, &mut stx)
@@ -1211,7 +1212,8 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
                 Repeats::Indefinitely,
                 authority_id.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trig_id),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(t)
             .execute(&authority_id, &mut stx)

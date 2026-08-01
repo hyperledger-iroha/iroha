@@ -103,15 +103,20 @@ ANDROID_SDK_ROOT=~/Library/Android/sdk \
 Start the provided Docker Compose network:
 
 ```bash
-cargo run --bin kagami -- keys --out-dir target/compose-genesis
-export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/public.key"
-export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/compose-genesis/private.key"
+export IROHA_GENESIS_SIGNED_FILE="$PWD/target/compose-genesis/genesis.signed.nrt"
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/genesis.public_key"
+export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/target/compose-genesis/genesis.expected_hash"
 docker compose -f defaults/docker-compose.yml up
 ```
 
-The checked-in Compose files are development manifests and contain no genesis
-signing key. Kagami creates fresh owner-only custody and Compose fails closed
-when either runtime key-file path is missing.
+The checked-in manifest is an explicit deterministic development fixture, so
+prepare those artifacts for its exact seeded validator roster before startup.
+It contains no genesis signing key or runtime signer and fails closed when any
+read-only trust-root input is missing. For a normal generated network, use
+`kagami localnet` followed by `kagami docker` without `--seed`; Kagami validates
+and reuses the authoritative validator bundle, then embeds the three artifact
+paths directly. See the
+[Kagami swarm guide](./crates/iroha_kagami/docs/swarm.md).
 
 Use the CLI against the default client config:
 

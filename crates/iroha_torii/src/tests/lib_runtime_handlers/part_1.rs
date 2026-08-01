@@ -1911,7 +1911,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         soranet_privacy_tokens: Arc::new(soranet_privacy_tokens),
         soranet_privacy_allow_nets: Arc::new(soranet_privacy_allow_nets),
         soranet_privacy_rate_limiter,
-        allow_nets: Arc::new(vec![]),
+        api_rate_limit_bypass_nets: Arc::new(vec![]),
+        internal_api_trusted_nets: Arc::new(limits::parse_cidrs(
+            &defaults::torii::internal_api_trusted_cidrs(),
+        )),
         trusted_proxy_nets: Arc::new(vec![]),
         norito_rpc_mtls_trusted_proxy_nets: Arc::new(limits::parse_cidrs(
             &norito_rpc_cfg.mtls_trusted_proxy_cidrs,
@@ -2063,6 +2066,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         #[cfg(feature = "app_api")]
         account_onboarding: None,
         vpn_helper_ticket_secret: None,
+        vpn_relay_trust: None,
         vpn_quotes: Arc::new(DashMap::new()),
         vpn_used_payments: Arc::new(DashMap::new()),
         vpn_sessions: Arc::new(DashMap::new()),
@@ -2295,9 +2299,10 @@ async fn torii_ram_lfe_uses_config_runtime() {
     cfg.torii.ram_lfe = Some(iroha_config::parameters::actual::ToriiRamLfe {
         programs: vec![iroha_config::parameters::actual::ToriiRamLfeProgram {
             program_id: "phone_retail".parse().expect("program id"),
-            secret: vec![0x01, 0x02, 0x03, 0x04],
+            secret: iroha_crypto::RamLfeSecret::try_from(vec![0x01, 0x02, 0x03, 0x04])
+                .expect("valid RAM-LFE test secret"),
             hidden_program: iroha_crypto::default_bfv_programmed_hidden_program(),
-            signer_private_key: iroha_crypto::ExposedPrivateKey(signer.private_key().clone()),
+            signer_private_key: signer.private_key().clone(),
             receipt_ttl: Some(Duration::from_secs(30)),
         }],
     });

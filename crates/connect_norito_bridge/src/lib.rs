@@ -1541,6 +1541,7 @@ fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
 
 const PRIVACY_BUFFER_HEADER_MAGIC: u64 = 0x4952_5041_484f_5249;
 const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHeader>();
+const PRIVACY_COMPILED_PROFILE_CATALOG_WORKER_STACK_BYTES_V1: usize = 8 * 1024 * 1024;
 const PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1: usize =
     if PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
         > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
@@ -1556,6 +1557,11 @@ struct PrivacyBufferHeader {
     len: usize,
 }
 
+static PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1: OnceLock<Result<Vec<u8>, c_int>> =
+    OnceLock::new();
+#[cfg(test)]
+static PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_INITIALIZATIONS_V1: AtomicU64 = AtomicU64::new(0);
+
 fn privacy_compiled_profile_catalog() -> Result<PrivacyCompiledProfileCatalogV1, c_int> {
     let catalog = compiled_privacy_profile_catalog_v1().map_err(|_| ERR_CONNECT_ENCODE)?;
     debug_assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::ALL.len());
@@ -1567,6 +1573,38 @@ fn privacy_compiled_profile_catalog() -> Result<PrivacyCompiledProfileCatalogV1,
             .eq(PrivacyProtocolIdV1::ALL)
     );
     Ok(catalog)
+}
+
+fn build_privacy_compiled_profile_catalog_archive_v1() -> Result<Vec<u8>, c_int> {
+    let catalog = privacy_compiled_profile_catalog()?;
+    let bytes = norito::encode_canonical(&catalog).map_err(|_| ERR_CONNECT_ENCODE)?;
+    if bytes.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
+        || !validate_local_privacy_compiled_profile_catalog_archive_v1(&bytes).is_valid()
+    {
+        return Err(ERR_CONNECT_ENCODE);
+    }
+    Ok(bytes)
+}
+
+fn privacy_compiled_profile_catalog_archive_v1() -> Result<&'static [u8], c_int> {
+    // The catalog is immutable build metadata, but its first derivation
+    // initializes several native cryptographic profiles. Own that one-time
+    // stack budget at the FFI boundary instead of inheriting an arbitrary
+    // mobile/runtime caller stack. Initialization, including deterministic
+    // failure, is serialized and cached so concurrent cold callers cannot
+    // amplify the owned worker-stack allocation.
+    let archive = PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1.get_or_init(|| {
+        #[cfg(test)]
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_INITIALIZATIONS_V1.fetch_add(1, Ordering::Relaxed);
+
+        let worker = std::thread::Builder::new()
+            .name("iroha-privacy-profile-catalog-v1".to_owned())
+            .stack_size(PRIVACY_COMPILED_PROFILE_CATALOG_WORKER_STACK_BYTES_V1)
+            .spawn(build_privacy_compiled_profile_catalog_archive_v1)
+            .map_err(|_| ERR_CONNECT_ENCODE)?;
+        worker.join().map_err(|_| ERR_CONNECT_ENCODE)?
+    });
+    archive.as_ref().map(Vec::as_slice).map_err(|code| *code)
 }
 
 fn clear_privacy_output(out_ptr: *mut *mut c_uchar, out_len: *mut c_ulong) {
@@ -1661,26 +1699,13 @@ fn write_privacy_compiled_profile_catalog(
     if out_ptr.is_null() || out_len.is_null() {
         return ERR_NULL_PTR;
     }
-    let Ok(catalog) = privacy_compiled_profile_catalog() else {
+    let Ok(bytes) = privacy_compiled_profile_catalog_archive_v1() else {
         return ERR_CONNECT_ENCODE;
     };
-    let bytes = match norito::encode_canonical(&catalog) {
-        Ok(bytes) => bytes,
-        Err(_) => return ERR_CONNECT_ENCODE,
-    };
-    let mut bytes = bytes;
-    let result = if bytes.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
-        || !validate_local_privacy_compiled_profile_catalog_archive_v1(&bytes).is_valid()
-    {
-        ERR_CONNECT_ENCODE
-    } else {
-        match unsafe { write_privacy_bytes(out_ptr, out_len, &bytes) } {
-            Ok(()) => 0,
-            Err(code) => code,
-        }
-    };
-    bytes.fill(0);
-    result
+    match unsafe { write_privacy_bytes(out_ptr, out_len, bytes) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
 }
 
 /// Return this binary's canonical local compiled-profile catalog.
@@ -39161,37 +39186,10 @@ fn java_native_kagemusha_project_operation_status_v4(
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_privacy_public_archive(
-    payload: &PrivacyCompiledProfileCatalogV1,
-    context: &str,
-) -> Result<Vec<u8>, String> {
-    let mut archive = norito::encode_canonical(payload)
-        .map_err(|err| format!("failed to encode {context}: {err}"))?;
-    if archive.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1 {
-        archive.fill(0);
-        return Err(format!("{context} archive exceeds maximum length"));
-    }
-    let status = validate_local_privacy_compiled_profile_catalog_archive_v1(&archive);
-    if !status.is_valid() {
-        archive.fill(0);
-        return Err(format!(
-            "{context} archive validation failed with status {}",
-            status.code()
-        ));
-    }
-    Ok(archive)
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
 fn java_privacy_compiled_profile_catalog_archive() -> Result<Vec<u8>, String> {
-    let catalog = privacy_compiled_profile_catalog()
-        .map_err(|_| "failed to derive local compiled-profile catalog".to_owned())?;
-    java_privacy_public_archive(&catalog, "privacy compiled-profile catalog")
+    privacy_compiled_profile_catalog_archive_v1()
+        .map(<[u8]>::to_vec)
+        .map_err(|_| "failed to derive local compiled-profile catalog archive".to_owned())
 }
 
 #[cfg(any(
@@ -47191,6 +47189,165 @@ mod tests {
                 )
             },
             PrivacyCompiledProfileCatalogArchiveValidationStatusV1::InvalidCatalog.code()
+        );
+    }
+
+    #[test]
+    fn privacy_compiled_profile_catalog_ffi_initializes_from_small_stack_in_fresh_process() {
+        const CHILD_ENV: &str = "IROHA_TEST_PRIVACY_CATALOG_SMALL_STACK_CHILD_V1";
+        const CALLER_STACK_BYTES: usize = 512 * 1024;
+        const CONCURRENT_CALLERS: usize = 8;
+        const TEST_NAME: &str = "tests::privacy_compiled_profile_catalog_ffi_initializes_from_small_stack_in_fresh_process";
+
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("resolve the current Rust test executable"),
+            )
+            .args(["--exact", TEST_NAME, "--nocapture", "--test-threads=1"])
+            .env(CHILD_ENV, "1")
+            .output()
+            .expect("launch a fresh catalog-export test process");
+            assert!(
+                output.status.success(),
+                "fresh small-stack catalog export failed with {status}; stdout:\n{stdout}\nstderr:\n{stderr}",
+                status = output.status,
+                stdout = String::from_utf8_lossy(&output.stdout),
+                stderr = String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
+        assert!(
+            PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1.get().is_none(),
+            "the child process must exercise first initialization, not a warmed archive cache"
+        );
+        std::thread::Builder::new()
+            .name("privacy-catalog-ffi-null-small-stack-caller".to_owned())
+            .stack_size(CALLER_STACK_BYTES)
+            .spawn(|| {
+                let mut cleared_ptr = 1_usize as *mut c_uchar;
+                let mut cleared_len = c_ulong::MAX;
+                assert_eq!(
+                    unsafe {
+                        iroha_privacy_compiled_profile_catalog_v1(ptr::null_mut(), &mut cleared_len)
+                    },
+                    ERR_NULL_PTR
+                );
+                assert_eq!(cleared_len, 0);
+                assert_eq!(
+                    unsafe {
+                        iroha_privacy_compiled_profile_catalog_v1(&mut cleared_ptr, ptr::null_mut())
+                    },
+                    ERR_NULL_PTR
+                );
+                assert!(cleared_ptr.is_null());
+                assert!(
+                    PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1.get().is_none(),
+                    "null outputs must reject before initializing the catalog"
+                );
+            })
+            .expect("spawn the 512 KiB null-output caller thread")
+            .join()
+            .expect("null-output rejection must not exhaust the 512 KiB caller stack");
+
+        let start = Arc::new(std::sync::Barrier::new(CONCURRENT_CALLERS));
+        let callers = (0..CONCURRENT_CALLERS)
+            .map(|index| {
+                let start = Arc::clone(&start);
+                std::thread::Builder::new()
+                    .name(format!("privacy-catalog-ffi-small-stack-caller-{index}"))
+                    .stack_size(CALLER_STACK_BYTES)
+                    .spawn(move || {
+                        start.wait();
+                        let mut out_ptr = ptr::null_mut();
+                        let mut out_len = 0;
+                        assert_eq!(
+                            unsafe {
+                                iroha_privacy_compiled_profile_catalog_v1(
+                                    &mut out_ptr,
+                                    &mut out_len,
+                                )
+                            },
+                            0
+                        );
+                        assert!(!out_ptr.is_null());
+                        assert!(out_len > 0);
+                        let out_len = usize::try_from(out_len).expect("catalog length fits usize");
+                        assert!(out_len <= PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1);
+                        assert_eq!(
+                            unsafe {
+                                iroha_privacy_validate_compiled_profile_catalog_v1(
+                                    out_ptr,
+                                    c_ulong::try_from(out_len)
+                                        .expect("catalog length fits c_ulong"),
+                                )
+                            },
+                            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid.code()
+                        );
+                        let archive = unsafe { slice::from_raw_parts(out_ptr, out_len).to_vec() };
+                        (out_ptr as usize, archive)
+                    })
+                    .expect("spawn a 512 KiB concurrent catalog caller")
+            })
+            .collect::<Vec<_>>();
+        let outputs = callers
+            .into_iter()
+            .map(|caller| {
+                caller
+                    .join()
+                    .expect("catalog export must not exhaust a 512 KiB caller stack")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_INITIALIZATIONS_V1.load(Ordering::Relaxed),
+            1,
+            "concurrent cold callers must serialize one owned-stack initialization"
+        );
+        let cached = PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1
+            .get()
+            .expect("successful first export initializes the bounded archive cache")
+            .as_ref()
+            .expect("the catalog archive must initialize successfully");
+        assert!(outputs.iter().all(|(_, archive)| archive == cached));
+        assert_eq!(
+            outputs
+                .iter()
+                .map(|(address, _)| *address)
+                .collect::<HashSet<_>>()
+                .len(),
+            CONCURRENT_CALLERS,
+            "each simultaneous FFI caller must own an independent output allocation"
+        );
+        for (address, _) in outputs {
+            iroha_privacy_free_buffer(address as *mut c_uchar);
+        }
+    }
+
+    #[test]
+    fn privacy_compiled_profile_catalog_c_and_java_archives_are_byte_identical() {
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0;
+        assert_eq!(
+            unsafe { iroha_privacy_compiled_profile_catalog_v1(&mut out_ptr, &mut out_len) },
+            0
+        );
+        assert!(!out_ptr.is_null());
+        let c_archive = unsafe {
+            slice::from_raw_parts(
+                out_ptr,
+                usize::try_from(out_len).expect("C catalog length fits usize"),
+            )
+            .to_vec()
+        };
+        iroha_privacy_free_buffer(out_ptr);
+
+        let java_archive = java_privacy_compiled_profile_catalog_archive()
+            .expect("Java catalog helper must clone the shared archive");
+        assert_eq!(java_archive, c_archive);
+        assert_eq!(
+            validate_local_privacy_compiled_profile_catalog_archive_v1(&java_archive),
+            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
         );
     }
 

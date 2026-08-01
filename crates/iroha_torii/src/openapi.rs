@@ -4,7 +4,7 @@
 //! of relying on `serde_json`) to keep the toolchain consistent with on-wire
 //! serialization.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::LazyLock};
 
 use iroha_torii_shared::{
     route_catalog::{
@@ -27,6 +27,8 @@ mod sorafs_evidence;
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
 const SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION: &str = "x-iroha-soracloud-hf-deploy-contract";
 const SORACLOUD_HF_DEPLOY_CONTRACT_V1: &str = "cap-bound-local-signing-v1";
+const OPENAPI_GENERATOR_STACK_BYTES: usize = 8 * 1024 * 1024;
+const OPENAPI_GENERATOR_THREAD_NAME: &str = "iroha-openapi-generator";
 
 fn license_section() -> Value {
     let mut license = Map::new();
@@ -949,6 +951,10 @@ fn ledger_paths() -> Map {
         Value::Object(ledger_state_proof_operation()),
     );
     paths.insert(
+        "/v1/ledger/block/{height}".to_owned(),
+        Value::Object(ledger_executed_block_wire_operation()),
+    );
+    paths.insert(
         "/v1/ledger/block/{height}/proof/{entry_hash}".to_owned(),
         Value::Object(ledger_block_proof_operation()),
     );
@@ -1137,112 +1143,198 @@ fn insert_da_post_error_responses(
 
 fn musubi_paths() -> Map {
     let mut paths = Map::new();
-    paths.insert(
-        "/v1/musubi/packages".to_owned(),
-        Value::Object(json_get_operation(
-            "Musubi",
-            "Search Musubi packages.",
-            "Return a deterministic, bounded package search result.",
-            "#/components/schemas/JsonValue",
-            vec![
-                string_query_param("query", "Case-sensitive namespace/package substring."),
-                string_query_param("namespace", "Optional Musubi namespace filter."),
-                bool_query_param(
-                    "include_yanked",
-                    "Include packages with only yanked releases.",
-                ),
-                integer_query_param("offset", "Deterministic result offset.", Some("uint32")),
-                integer_query_param(
-                    "limit",
-                    "Maximum result count; Torii applies its configured cap.",
-                    Some("uint32"),
-                ),
-            ],
-        )),
-    );
-    paths.insert(
-        "/v1/musubi/release".to_owned(),
-        Value::Object(json_get_operation(
-            "Musubi",
-            "Fetch a Musubi release.",
-            "Return one exact package release selected by namespace/name@version.",
-            "#/components/schemas/JsonValue",
-            vec![required_string_query_param(
-                "package",
-                "Exact release reference in namespace/name@version form.",
-            )],
-        )),
-    );
-    paths.insert(
-        "/v1/musubi/releases".to_owned(),
-        Value::Object(json_get_operation(
-            "Musubi",
-            "List Musubi package releases.",
-            "Return release summaries for one package.",
-            "#/components/schemas/JsonValue",
-            vec![
-                required_string_query_param("package", "Package id in namespace/name form."),
-                bool_query_param("include_yanked", "Include yanked releases."),
-            ],
-        )),
-    );
-    paths.insert(
-        "/v1/musubi/versions".to_owned(),
-        Value::Object(json_get_operation(
-            "Musubi",
-            "List Musubi package versions.",
-            "Return published versions for one package.",
-            "#/components/schemas/JsonValue",
-            vec![required_string_query_param(
-                "package",
-                "Package id in namespace/name form.",
-            )],
-        )),
-    );
-    paths.insert(
-        "/v1/musubi/aliases/{alias}".to_owned(),
-        Value::Object(json_get_operation(
-            "Musubi",
-            "Resolve a Musubi package alias.",
-            "Return the package id bound to one curated short alias.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("alias", "Curated Musubi short alias.")],
-        )),
-    );
-
-    for (path, summary, description) in [
+    for (path, summary, description, request_type, response_type) in [
         (
-            "/v1/musubi/instructions/publish-release",
-            "Build a Musubi publish-release instruction.",
-            "Validate a release and return a deterministic unsigned instruction envelope for local signing.",
+            "/v1/musubi/queries/exact-package",
+            "Fetch an exact Musubi V1 package.",
+            "Execute a bounded exact structural package query without namespace or alias normalization.",
+            "MusubiExactPackageQueryV1",
+            "MusubiPackageRecordV1",
         ),
         (
-            "/v1/musubi/instructions/yank-release",
-            "Build a Musubi yank-release instruction.",
-            "Return a deterministic unsigned yank instruction envelope for local signing.",
+            "/v1/musubi/queries/exact-release",
+            "Fetch an exact Musubi V1 release.",
+            "Execute a bounded exact structural release query.",
+            "MusubiExactReleaseQueryV1",
+            "MusubiReleaseRecordV1",
         ),
         (
-            "/v1/musubi/instructions/set-alias",
-            "Build a Musubi set-alias instruction.",
-            "Return a deterministic unsigned short-alias instruction envelope for local signing.",
+            "/v1/musubi/queries/resolver-index",
+            "Read the Musubi V1 resolver index.",
+            "Return a finalized cursor-bound page from the universal sparse resolver index.",
+            "MusubiResolverIndexQueryV1",
+            "MusubiResolverIndexPageV1",
         ),
         (
-            "/v1/musubi/instructions/assert-release-exists",
-            "Build a Musubi release-existence assertion.",
-            "Return a deterministic unsigned release-existence assertion for local signing.",
+            "/v1/musubi/queries/versions",
+            "List structured Musubi V1 versions.",
+            "Return a finalized cursor-bound package version page.",
+            "MusubiPackagePageQueryV1",
+            "MusubiVersionPageV1",
+        ),
+        (
+            "/v1/musubi/queries/maintainers",
+            "List Musubi V1 package members.",
+            "Return a finalized cursor-bound accepted owner and maintainer page.",
+            "MusubiPackagePageQueryV1",
+            "MusubiMaintainerPageV1",
+        ),
+        (
+            "/v1/musubi/queries/archive-locations",
+            "List Musubi V1 archive locations.",
+            "Return a finalized cursor-bound renewable archive-location page.",
+            "MusubiArchiveLocationQueryV1",
+            "MusubiArchiveLocationPageV1",
+        ),
+        (
+            "/v1/musubi/queries/alias",
+            "Fetch a permanent Musubi V1 alias.",
+            "Return one exact permanent global alias record.",
+            "MusubiAliasQueryV1",
+            "MusubiAliasRecordV1",
+        ),
+        (
+            "/v1/musubi/queries/alias-history",
+            "List permanent Musubi V1 alias history.",
+            "Return a finalized cursor-bound alias-history page.",
+            "MusubiAliasQueryV1",
+            "MusubiAliasHistoryPageV1",
+        ),
+        (
+            "/v1/musubi/queries/ordered-prefix",
+            "Read the ordered Musubi V1 directory.",
+            "Return a finalized cursor-bound byte-ordered package-prefix page; fuzzy search is not a resolver input.",
+            "MusubiOrderedPrefixQueryV1",
+            "MusubiOrderedPackagePageV1",
         ),
     ] {
-        paths.insert(
-            path.to_owned(),
-            Value::Object(json_post_operation(
-                "Musubi",
-                summary,
-                description,
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            )),
+        let mut methods = json_post_operation(
+            "Musubi",
+            summary,
+            description,
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
         );
+        if let Some(operation) = methods.get_mut("post").and_then(Value::as_object_mut) {
+            operation.insert(
+                "x-iroha-norito-request-type".to_owned(),
+                Value::String(request_type.to_owned()),
+            );
+            operation.insert(
+                "x-iroha-norito-response-type".to_owned(),
+                Value::String(response_type.to_owned()),
+            );
+        }
+        paths.insert(path.to_owned(), Value::Object(methods));
+    }
+
+    for (path, summary, request_type) in [
+        (
+            "/v1/musubi/instructions/namespace-binding-register",
+            "Build a Musubi V1 namespace-binding registration.",
+            "RegisterMusubiNamespaceBindingV1",
+        ),
+        (
+            "/v1/musubi/instructions/archive-register",
+            "Build a Musubi V1 archive registration.",
+            "RegisterMusubiArchiveV1",
+        ),
+        (
+            "/v1/musubi/instructions/archive-location-add",
+            "Build a Musubi V1 archive-location add or renewal.",
+            "AddMusubiArchiveLocationV1",
+        ),
+        (
+            "/v1/musubi/instructions/archive-location-retire",
+            "Build a Musubi V1 archive-location retirement.",
+            "RetireMusubiArchiveLocationV1",
+        ),
+        (
+            "/v1/musubi/instructions/release-publish",
+            "Build a Musubi V1 release publication.",
+            "PublishMusubiReleaseV1",
+        ),
+        (
+            "/v1/musubi/instructions/release-yank-set",
+            "Build a reversible Musubi V1 yank transition.",
+            "SetMusubiReleaseYankV1",
+        ),
+        (
+            "/v1/musubi/instructions/package-metadata-set",
+            "Build a Musubi V1 package metadata replacement.",
+            "SetMusubiPackageMetadataV1",
+        ),
+        (
+            "/v1/musubi/instructions/package-member-invite",
+            "Build a Musubi V1 package-member invitation.",
+            "InviteMusubiPackageMaintainerV1",
+        ),
+        (
+            "/v1/musubi/instructions/package-member-accept",
+            "Build a Musubi V1 package-member invitation acceptance.",
+            "AcceptMusubiPackageMaintainerV1",
+        ),
+        (
+            "/v1/musubi/instructions/package-member-set-role",
+            "Build a Musubi V1 package-member role replacement.",
+            "SetMusubiPackageMaintainerRoleV1",
+        ),
+        (
+            "/v1/musubi/instructions/package-member-remove",
+            "Build a Musubi V1 package-member removal.",
+            "RemoveMusubiPackageMaintainerV1",
+        ),
+        (
+            "/v1/musubi/instructions/alias-register",
+            "Build a paid permanent Musubi V1 alias registration.",
+            "RegisterMusubiAliasV1",
+        ),
+        (
+            "/v1/musubi/instructions/package-recover",
+            "Build a Parliament-enacted Musubi V1 package recovery.",
+            "RecoverMusubiPackageV1",
+        ),
+        (
+            "/v1/musubi/instructions/alias-retarget",
+            "Build a Parliament-enacted Musubi V1 alias retarget.",
+            "RetargetMusubiAliasV1",
+        ),
+        (
+            "/v1/musubi/instructions/artifact-takedown",
+            "Build a Parliament-enacted Musubi V1 artifact takedown.",
+            "SetMusubiArtifactTakedownV1",
+        ),
+        (
+            "/v1/musubi/instructions/registry-policy-set",
+            "Build a Parliament-enacted Musubi V1 registry-policy replacement.",
+            "SetMusubiRegistryPolicyV1",
+        ),
+        (
+            "/v1/musubi/instructions/release-digest-assert",
+            "Build an exact Musubi V1 release-digest assertion.",
+            "AssertMusubiReleaseDigestV1",
+        ),
+    ] {
+        let mut methods = json_post_operation(
+            "Musubi",
+            summary,
+            "Return one deterministic unsigned, versioned instruction envelope for local signing; Torii never accepts private keys.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        );
+        if let Some(operation) = methods.get_mut("post").and_then(Value::as_object_mut) {
+            operation.insert(
+                "x-iroha-norito-request-type".to_owned(),
+                Value::String(request_type.to_owned()),
+            );
+            operation.insert(
+                "x-iroha-norito-response-type".to_owned(),
+                Value::String("MusubiInstructionEnvelopeV1".to_owned()),
+            );
+        }
+        paths.insert(path.to_owned(), Value::Object(methods));
     }
     paths
 }
@@ -2517,14 +2609,29 @@ fn system_paths() -> Map {
         iroha_torii_shared::uri::PIPELINE_FASTPQ_PROOFS.to_owned(),
         Value::Object(json_get_operation(
             "System",
-            "Fetch FASTPQ proof sidecars.",
-            "Return FASTPQ proof attachments from pipeline recovery metadata for the given height.",
+            "Fetch operator FASTPQ recovery artifacts.",
+            "Return one bounded page of FASTPQ proof attachments and reconstructed batches for the given height. This operator-only route requires a canonical replay-resistant operator request signature. Heavy reconstruction is concurrency-limited; each page is subject to per-proof, per-batch, aggregate artifact, and encoded-response byte caps.",
             "#/components/schemas/JsonValue",
-            vec![integer_path_param(
-                "height",
-                "Block height to inspect.",
-                Some("uint64"),
-            )],
+            vec![
+                integer_path_param("height", "Block height to inspect.", Some("uint64")),
+                bounded_integer_query_param(
+                    "offset",
+                    "Zero-based FASTPQ proof offset (default 0).",
+                    Some("uint64"),
+                    0,
+                    None,
+                ),
+                bounded_integer_query_param(
+                    "limit",
+                    "FASTPQ proof page size (default 16, maximum 64).",
+                    Some("uint64"),
+                    1,
+                    Some(crate::PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT as u64),
+                ),
+            ]
+            .into_iter()
+            .chain(operator_signature_header_parameters())
+            .collect(),
         )),
     );
     #[cfg(feature = "telemetry")]
@@ -6661,7 +6768,7 @@ fn sorafs_paths() -> Map {
     if let Some(Value::Object(post_operation)) = json_post_operation(
         "SoraFS",
         "Publish an appeal finance report.",
-        "Publish a validated SoraFS appeal finance report into the local Governance DAG pipeline. The request requires canonical app authentication and a configured governance publisher.",
+        "Publish a validated SoraFS appeal finance report into the local Governance DAG pipeline. The request requires canonical account-signature authentication by an account holding the exact `sorafs_appeal_finance_publisher` on-chain role. Torii derives the publisher account from the verified request and binds it into the durable Governance DAG outbox and publish-index provenance.",
         "#/components/schemas/JsonValue",
         "#/components/schemas/JsonValue",
         Vec::new(),
@@ -6688,7 +6795,7 @@ fn sorafs_paths() -> Map {
     if let Some(Value::Object(post_operation)) = json_post_operation(
         "SoraFS",
         "Publish an appeal finance weekly rollup.",
-        "Publish a validated SoraFS appeal finance weekly rollup into the local Governance DAG pipeline. The request requires canonical app authentication and a configured governance publisher.",
+        "Publish a validated SoraFS appeal finance weekly rollup into the local Governance DAG pipeline. The request requires canonical account-signature authentication by an account holding the exact `sorafs_appeal_finance_publisher` on-chain role. Torii derives the publisher account from the verified request and binds it into the durable Governance DAG outbox and publish-index provenance.",
         "#/components/schemas/JsonValue",
         "#/components/schemas/JsonValue",
         Vec::new(),
@@ -6791,25 +6898,11 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/transparency/source-entries/{source_kind}".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Ingest a transparency source entry.",
-            "Decode one typed SoraFS transparency source payload, derive its privacy-safe public source-entry summary, and record it in the local deterministic transparency ledger source-entry worker for later cycle publication. Supported source_kind values are gar-enforcement-receipt, moderation-ballot-governance-event, appeal-finance-report, appeal-finance-settlement-receipt, legal-hold-notice, redaction-notice, and evidence-access-summary. The request requires X-Iroha canonical app authentication.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param(
-                "source_kind",
-                "Typed transparency source payload selector.",
-            )],
-        )),
-    );
-    paths.insert(
         "/v1/sorafs/transparency/privacy-aggregates/source-events".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Ingest a privacy aggregate source event.",
-            "Record one SoraFS privacy aggregate source event in the local deterministic aggregate worker for later configured cycle publication. The request accepts event id, occurrence timestamp, public population label, optional population/policy digest hex values, and sorted metric contributions. The response returns only the admission summary, digests, and counts; raw metric values are not echoed. The request requires X-Iroha canonical app authentication.",
+            "Record one SoraFS privacy aggregate source event in the local deterministic aggregate worker for later configured cycle publication. The request accepts event id, occurrence timestamp, public population label, optional population/policy digest hex values, and sorted metric contributions. The response returns only the admission summary, digests, and counts; raw metric values are not echoed. The request requires canonical account-signature authentication by an account holding the exact `sorafs_transparency_source_publisher` on-chain role. Torii derives the publisher account from the verified request and binds it into the durable source-event checkpoint.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -6820,7 +6913,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Publish a due privacy aggregate cycle.",
-            "Evaluate the configured SoraFS privacy aggregate schedule at the caller-supplied timestamp and publish the oldest due unpublished cycle with locally retained source events, so delayed scheduler ticks catch up stale event-backed windows before reporting the latest due window as empty. Governed privacy policy and composition budget come exclusively from iroha_config. Hidden differential-privacy randomness is derived independently for each exact policy/cycle/window request by the runtime-only threshold-PRF provider; only its commitment is published. The request accepts only now_unix and an optional predecessor block hash, and requires X-Iroha canonical app authentication.",
+            "Evaluate the configured SoraFS privacy aggregate schedule using trusted server time and publish the oldest due unpublished cycle with locally retained source events, so delayed scheduler ticks catch up stale event-backed windows before reporting the latest due window as empty. Governed privacy policy and composition budget come exclusively from iroha_config. Hidden differential-privacy randomness is derived independently for each exact policy/cycle/window request by the runtime-only threshold-PRF provider; only its commitment is published. The request may bind an expected cycle id and idempotency key. It requires canonical account-signature authentication by an account holding the exact `sorafs_transparency_cycle_publisher` on-chain role. Torii derives the publisher account from the verified request and binds it into the durable request receipt, Governance DAG outbox, and publish-index provenance.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -6845,7 +6938,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Ingest a SoraFS proof-token issuance.",
-            "Decode one URL-safe base64 SFGT proof-token frame, verify it against the supplied Ed25519 signer public key, derive a privacy-safe ProofTokenIssuanceV1 summary, and publish it through the local Governance DAG publisher when configured. The request accepts optional evidence and policy digests plus sorted public metadata, does not accept blinded-digest keys, and requires X-Iroha canonical app authentication.",
+            "Decode one URL-safe base64 SFGT proof-token frame, verify it against the supplied Ed25519 signer public key, derive a privacy-safe ProofTokenIssuanceV1 summary, and publish it through the local Governance DAG publisher when configured. The request accepts optional evidence and policy digests plus sorted public metadata and does not accept blinded-digest keys. It requires canonical account-signature authentication by an account holding the exact `sorafs_transparency_source_publisher` on-chain role. Torii derives the publisher account from the verified request and binds it into the durable Governance DAG outbox and publish-index provenance.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -11498,14 +11591,7 @@ fn operation_effect(method: &str, path: &str) -> &'static str {
 }
 
 fn is_build_instruction_operation(method: &str, path: &str) -> bool {
-    method == "post"
-        && matches!(
-            path,
-            "/v1/musubi/instructions/publish-release"
-                | "/v1/musubi/instructions/yank-release"
-                | "/v1/musubi/instructions/set-alias"
-                | "/v1/musubi/instructions/assert-release-exists"
-        )
+    method == "post" && path.starts_with("/v1/musubi/instructions/")
 }
 
 fn is_operator_operation(method: &str, path: &str) -> bool {
@@ -11548,6 +11634,7 @@ fn is_operator_operation(method: &str, path: &str) -> bool {
 
 fn is_read_operation(method: &str, path: &str) -> bool {
     matches!(method, "get" | "head" | "options")
+        || (method == "post" && path.starts_with("/v1/musubi/queries/"))
         || (method == "post"
             && matches!(
                 path,
@@ -12935,6 +13022,40 @@ fn ledger_state_proof_operation() -> Map {
     methods
 }
 
+fn ledger_executed_block_wire_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Ledger".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch the exact executed block wire at a finalized height.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns only the canonical result-bearing SignedBlockWire whose block hash is bound to the finalized state journal at the requested height. A Kura body which is merely staged, resultless, or inconsistent with that journal is never returned. The application/x-norito response is the exact byte carrier consumed by authenticated BlockProofs verification and is bounded to 32 MiB."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("ledgerExecutedBlockWire".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![Value::Object(block_height_parameter())]),
+    );
+    operation.insert(
+        "responses".into(),
+        Value::Object(ledger_executed_block_wire_responses()),
+    );
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
 fn ledger_block_proof_operation() -> Map {
     let mut operation = Map::new();
     operation.insert(
@@ -12948,7 +13069,7 @@ fn ledger_block_proof_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns the inclusion and execution Merkle proofs for the specified transaction entrypoint within a block."
+            "Returns result-bearing inclusion and execution Merkle proofs for the specified transaction entrypoint. Response commitments are claims until matched against a target-specific anchor derived from separately authenticated block finality."
                 .to_owned(),
         ),
     );
@@ -12984,6 +13105,7 @@ fn block_height_parameter() -> Map {
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("integer".to_owned()));
     schema.insert("format".into(), Value::String("uint64".to_owned()));
+    schema.insert("minimum".into(), Value::from(1_u64));
     param.insert("schema".into(), Value::Object(schema));
     param
 }
@@ -13275,6 +13397,62 @@ fn ledger_block_proof_responses() -> Map {
     responses.insert(
         "404".to_owned(),
         json_response("Block or entrypoint not found.", error_schema_reference()),
+    );
+    responses
+}
+
+fn ledger_executed_block_wire_responses() -> Map {
+    let maximum_bytes =
+        iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1;
+    let mut schema = Map::new();
+    schema.insert("type".into(), Value::String("string".to_owned()));
+    schema.insert("format".into(), Value::String("binary".to_owned()));
+    schema.insert("minLength".into(), Value::from(1_u64));
+    schema.insert(
+        "maxLength".into(),
+        Value::from(u64::try_from(maximum_bytes).expect("wire bound fits u64")),
+    );
+    schema.insert(
+        "x-iroha-max-bytes".into(),
+        Value::from(u64::try_from(maximum_bytes).expect("wire bound fits u64")),
+    );
+    let mut media = Map::new();
+    media.insert("schema".into(), Value::Object(schema));
+    let mut content = Map::new();
+    content.insert("application/x-norito".into(), Value::Object(media));
+    let mut success = Map::new();
+    success.insert(
+        "description".into(),
+        Value::String("Exact canonical executed SignedBlockWire bytes.".to_owned()),
+    );
+    success.insert("content".into(), Value::Object(content));
+
+    let mut responses = Map::new();
+    responses.insert("200".to_owned(), Value::Object(success));
+    responses.insert(
+        "400".to_owned(),
+        json_response("Invalid block height supplied.", error_schema_reference()),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response(
+            "The height is not finalized or its canonical body is unavailable.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "413".to_owned(),
+        json_response(
+            "The canonical wire exceeds the authenticated carrier limit.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "500".to_owned(),
+        json_response(
+            "Finalized state and canonical block storage are inconsistent.",
+            error_schema_reference(),
+        ),
     );
     responses
 }
@@ -17450,12 +17628,14 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
                 "display_billing_label", "fee_asset_id", "escrow_account_id",
                 "operator_account_id", "lease_fee", "settlement_grace_secs", "flow_label_bits",
-                "padding_budget_ms", "relay_tls_spki_sha256_hex"
+                "padding_budget_ms", "relay_id_hex", "descriptor_commit_hex",
+                "tls_server_name", "relay_tls_spki_sha256_hex",
+                "relay_certificate_sha256_hex", "directory_snapshot_digest_hex"
             ],
             "additionalProperties": false,
             "properties": {
                 "available": { "type": "boolean" },
-                "relay_endpoint": { "type": "string", "minLength": 1 },
+                "relay_endpoint": { "type": "string" },
                 "supported_exit_classes": {
                     "type": "array",
                     "minItems": 3,
@@ -17480,11 +17660,35 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "settlement_grace_secs": { "type": "integer", "format": "uint64", "minimum": 1 },
                 "flow_label_bits": { "type": "integer", "format": "uint8", "const": 24 },
                 "padding_budget_ms": { "type": "integer", "format": "uint16", "minimum": 1, "maximum": 65535 },
+                "relay_id_hex": {
+                    "type": "string",
+                    "pattern": "^(?:|[0-9a-f]{64})$",
+                    "description": "Authenticated-directory Ed25519 relay identity; empty only when available is false."
+                },
+                "descriptor_commit_hex": {
+                    "type": "string",
+                    "pattern": "^(?:|[0-9a-f]{64})$",
+                    "description": "Signed relay descriptor commitment; empty only when available is false."
+                },
+                "tls_server_name": {
+                    "type": "string",
+                    "pattern": "^(?:|[a-z0-9.-]+)$",
+                    "description": "Exact TLS DNS identity; empty only when available is false."
+                },
                 "relay_tls_spki_sha256_hex": {
-                    "anyOf": [
-                        { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                        { "type": "null" }
-                    ]
+                    "type": "string",
+                    "pattern": "^(?:|[0-9a-f]{64})$",
+                    "description": "Exact TLS leaf SPKI SHA-256 pin; empty only when available is false."
+                },
+                "relay_certificate_sha256_hex": {
+                    "type": "string",
+                    "pattern": "^(?:|[0-9a-f]{64})$",
+                    "description": "Canonical signed relay-certificate digest; empty only when available is false."
+                },
+                "directory_snapshot_digest_hex": {
+                    "type": "string",
+                    "pattern": "^(?:|[0-9a-f]{64})$",
+                    "description": "Externally authenticated guard-directory snapshot digest; empty only when available is false."
                 }
             }
         }),
@@ -17521,7 +17725,9 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "exit_class", "relay_endpoint", "lease_secs", "quote_expires_at_ms",
                 "fee_asset_id", "escrow_account_id", "operator_account_id", "lease_fee",
                 "route_pushes", "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
-                "meter_family", "flow_label_bits", "padding_budget_ms", "relay_tls_spki_sha256_hex",
+                "meter_family", "flow_label_bits", "padding_budget_ms", "relay_id_hex",
+                "descriptor_commit_hex", "tls_server_name", "relay_tls_spki_sha256_hex",
+                "relay_certificate_sha256_hex", "directory_snapshot_digest_hex",
                 "metering_public_key_hex", "open_lease_instruction", "tx_instructions"
             ],
             "additionalProperties": false,
@@ -17547,12 +17753,15 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "meter_family": { "type": "string", "minLength": 1 },
                 "flow_label_bits": { "type": "integer", "format": "uint8", "const": 24 },
                 "padding_budget_ms": { "type": "integer", "format": "uint16", "minimum": 1, "maximum": 65535 },
+                "relay_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "descriptor_commit_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "tls_server_name": { "type": "string", "pattern": "^[a-z0-9.-]+$", "minLength": 1, "maxLength": 253 },
                 "relay_tls_spki_sha256_hex": {
-                    "anyOf": [
-                        { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                        { "type": "null" }
-                    ]
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
                 },
+                "relay_certificate_sha256_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "directory_snapshot_digest_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
                 "metering_public_key_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
                 "open_lease_instruction": {
                     "anyOf": [
@@ -17599,7 +17808,9 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "expires_at_ms", "connected_at_ms", "meter_family", "quote_id",
                 "payment_reference", "payment_tx_hash", "fee_asset_id", "escrow_account_id",
                 "operator_account_id", "lease_fee", "flow_label_bits", "padding_budget_ms",
-                "relay_tls_spki_sha256_hex", "route_pushes", "excluded_routes", "dns_servers",
+                "relay_id_hex", "descriptor_commit_hex", "tls_server_name",
+                "relay_tls_spki_sha256_hex", "relay_certificate_sha256_hex",
+                "directory_snapshot_digest_hex", "route_pushes", "excluded_routes", "dns_servers",
                 "tunnel_addresses", "mtu_bytes", "helper_ticket_hex", "bytes_in", "bytes_out", "status"
             ],
             "additionalProperties": false,
@@ -17621,12 +17832,15 @@ fn insert_vpn_schemas(schemas: &mut Map) {
                 "lease_fee": { "$ref": "#/components/schemas/Quantity" },
                 "flow_label_bits": { "type": "integer", "format": "uint8", "const": 24 },
                 "padding_budget_ms": { "type": "integer", "format": "uint16", "minimum": 1, "maximum": 65535 },
+                "relay_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "descriptor_commit_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "tls_server_name": { "type": "string", "pattern": "^[a-z0-9.-]+$", "minLength": 1, "maxLength": 253 },
                 "relay_tls_spki_sha256_hex": {
-                    "anyOf": [
-                        { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                        { "type": "null" }
-                    ]
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
                 },
+                "relay_certificate_sha256_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "directory_snapshot_digest_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
                 "route_pushes": { "type": "array", "items": { "type": "string" } },
                 "excluded_routes": { "type": "array", "items": { "type": "string" } },
                 "dns_servers": { "type": "array", "items": { "type": "string" } },
@@ -26469,6 +26683,26 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "BlockMerkleCommitment".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["root", "leaf_count"],
+            "additionalProperties": false,
+            "properties": {
+                "root": {
+                    "$ref": "#/components/schemas/Hash"
+                },
+                "leaf_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 4_294_967_296_u64,
+                    "description": "Exact non-zero leaf count authenticated together with the Merkle root."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "BlockExecutionReceiptProof".to_owned(),
         norito::json!({
             "type": "object",
@@ -26567,7 +26801,11 @@ fn openapi_schemas() -> Map {
         "BlockProofs".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["block_height", "entry_hash", "entry_root", "entry_proof", "result_root", "result_proof", "fastpq_transcripts"],
+            "required": [
+                "block_height", "block_hash", "executed_block_wire_hash",
+                "entry_hash", "entry_commitment", "entry_proof",
+                "result_commitment", "result_proof", "fastpq_transcripts"
+            ],
             "additionalProperties": false,
             "properties": {
                 "block_height": {
@@ -26576,29 +26814,31 @@ fn openapi_schemas() -> Map {
                     "minimum": 1,
                     "description": "Height of the block containing the entrypoint."
                 },
+                "block_hash": {
+                    "allOf": [{ "$ref": "#/components/schemas/Hash" }],
+                    "description": "Consensus hash of the exact carrier block header."
+                },
+                "executed_block_wire_hash": {
+                    "allOf": [{ "$ref": "#/components/schemas/Hash" }],
+                    "description": "Hash of the canonical executed SignedBlockWire bytes."
+                },
                 "entry_hash": {
                     "$ref": "#/components/schemas/Hash"
                 },
-                "entry_root": {
-                    "allOf": [{ "$ref": "#/components/schemas/Hash" }],
-                    "description": "Merkle root that authenticates the entrypoint proof (consensus root for external transactions, extended root after time-trigger execution otherwise)."
+                "entry_commitment": {
+                    "allOf": [{ "$ref": "#/components/schemas/BlockMerkleCommitment" }],
+                    "description": "Claimed root and exact leaf count for the entrypoint proof; verify against separately authenticated block finality."
                 },
                 "entry_proof": {
                     "$ref": "#/components/schemas/BlockReceiptProof"
                 },
-                "result_root": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/Hash" },
-                        { "type": "null" }
-                    ],
-                    "description": "Merkle root that authenticates the execution proof when results are available; null when the block contains no execution results."
+                "result_commitment": {
+                    "allOf": [{ "$ref": "#/components/schemas/BlockMerkleCommitment" }],
+                    "description": "Claimed root and exact leaf count for the mandatory execution proof; its leaf count must equal entry_commitment.leaf_count and it must be verified against separately authenticated block finality."
                 },
                 "result_proof": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/BlockExecutionReceiptProof" },
-                        { "type": "null" }
-                    ],
-                    "description": "Execution result proof when the block carries execution results; null otherwise."
+                    "allOf": [{ "$ref": "#/components/schemas/BlockExecutionReceiptProof" }],
+                    "description": "Mandatory execution result proof at the same execution-order index as entry_proof."
                 },
                 "fastpq_transcripts": {
                     "type": "object",
@@ -29517,21 +29757,26 @@ fn components_section() -> Value {
     Value::Object(components)
 }
 
-/// Returns the OpenAPI specification for the full Torii surface.
-#[must_use]
-pub fn generate_spec() -> Value {
-    generate_spec_with_features(crate::router::builder::compiled_route_features())
+static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
+    build_spec_on_bounded_worker(crate::router::builder::compiled_route_features())
+});
+static OFFLINE_DISABLED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
+    build_spec_on_bounded_worker(crate::router::builder::runtime_route_features(false))
+});
+
+fn build_spec_on_bounded_worker(enabled_features: EnabledFeatures<'static>) -> Value {
+    let worker = std::thread::Builder::new()
+        .name(OPENAPI_GENERATOR_THREAD_NAME.to_owned())
+        .stack_size(OPENAPI_GENERATOR_STACK_BYTES)
+        .spawn(move || build_spec_with_features(enabled_features))
+        .unwrap_or_else(|error| panic!("failed to spawn bounded OpenAPI generator: {error}"));
+    match worker.join() {
+        Ok(spec) => spec,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
-/// Return the OpenAPI specification for one concrete Torii runtime.
-#[must_use]
-pub(crate) fn generate_spec_for_runtime(offline_enabled: bool) -> Value {
-    generate_spec_with_features(crate::router::builder::runtime_route_features(
-        offline_enabled,
-    ))
-}
-
-fn generate_spec_with_features(enabled_features: EnabledFeatures<'_>) -> Value {
+fn build_spec_with_features(enabled_features: EnabledFeatures<'_>) -> Value {
     let mut doc = Map::new();
     doc.insert("openapi".into(), Value::String("3.1.0".to_owned()));
     doc.insert("info".into(), info_section(license_section()));
@@ -29543,6 +29788,22 @@ fn generate_spec_with_features(enabled_features: EnabledFeatures<'_>) -> Value {
     );
     doc.insert("components".into(), components_section());
     Value::Object(doc)
+}
+
+/// Returns the OpenAPI specification for the full Torii surface.
+#[must_use]
+pub fn generate_spec() -> Value {
+    LazyLock::force(&COMPILED_OPENAPI_SPEC).clone()
+}
+
+/// Return the OpenAPI specification for one concrete Torii runtime.
+#[must_use]
+pub(crate) fn generate_spec_for_runtime(offline_enabled: bool) -> Value {
+    if offline_enabled {
+        LazyLock::force(&COMPILED_OPENAPI_SPEC).clone()
+    } else {
+        LazyLock::force(&OFFLINE_DISABLED_OPENAPI_SPEC).clone()
+    }
 }
 
 #[cfg(test)]
@@ -34267,6 +34528,118 @@ mod tests {
     }
 
     #[test]
+    fn ledger_executed_block_wire_cached_generation_is_safe_from_256_kib_callers() {
+        const SMALL_CALLER_STACK_BYTES: usize = 256 * 1024;
+
+        let caller = std::thread::Builder::new()
+            .name("openapi-small-stack-regression".to_owned())
+            .stack_size(SMALL_CALLER_STACK_BYTES)
+            .spawn(|| {
+                let cold_offline_disabled = build_spec_on_bounded_worker(
+                    crate::router::builder::runtime_route_features(false),
+                );
+                let compiled = generate_spec();
+                let runtime_enabled = generate_spec_for_runtime(true);
+                let runtime_disabled = generate_spec_for_runtime(false);
+
+                assert_eq!(compiled, runtime_enabled);
+                for (variant, document) in [
+                    ("cold-offline-disabled", &cold_offline_disabled),
+                    ("compiled", &compiled),
+                    ("offline-enabled", &runtime_enabled),
+                    ("offline-disabled", &runtime_disabled),
+                ] {
+                    let operation = openapi_operation(document, "/v1/ledger/block/{height}", "get");
+                    assert_eq!(
+                        operation.get("operationId").and_then(Value::as_str),
+                        Some("ledgerExecutedBlockWire"),
+                        "missing canonical executed-block operation in {variant} OpenAPI",
+                    );
+                }
+
+                #[cfg(feature = "app_api")]
+                {
+                    let enabled_paths = runtime_enabled
+                        .get("paths")
+                        .and_then(Value::as_object)
+                        .expect("offline-enabled OpenAPI paths");
+                    let disabled_paths = runtime_disabled
+                        .get("paths")
+                        .and_then(Value::as_object)
+                        .expect("offline-disabled OpenAPI paths");
+                    let cold_disabled_paths = cold_offline_disabled
+                        .get("paths")
+                        .and_then(Value::as_object)
+                        .expect("cold offline-disabled OpenAPI paths");
+                    assert!(enabled_paths.contains_key("/v1/offline/readiness"));
+                    assert!(!disabled_paths.contains_key("/v1/offline/readiness"));
+                    assert!(!cold_disabled_paths.contains_key("/v1/offline/readiness"));
+                }
+            })
+            .expect("spawn adversarial small-stack OpenAPI caller");
+        if let Err(payload) = caller.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[test]
+    fn ledger_executed_block_wire_documents_exact_media_and_resource_bound() {
+        let document = generate_spec();
+        let operation = openapi_operation(&document, "/v1/ledger/block/{height}", "get");
+        assert_eq!(
+            operation.get("operationId").and_then(Value::as_str),
+            Some("ledgerExecutedBlockWire")
+        );
+        let height_schema = operation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .and_then(|parameters| parameters.first())
+            .and_then(Value::as_object)
+            .and_then(|parameter| parameter.get("schema"))
+            .and_then(Value::as_object)
+            .expect("executed block wire height schema");
+        assert_eq!(
+            height_schema.get("minimum").and_then(Value::as_u64),
+            Some(1),
+        );
+        let responses = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("executed block wire responses");
+        assert!(responses.contains_key("413"));
+        assert!(responses.contains_key("500"));
+        let schema = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| {
+                assert_eq!(
+                    content.keys().map(String::as_str).collect::<Vec<_>>(),
+                    ["application/x-norito"]
+                );
+                content.get("application/x-norito")
+            })
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .expect("executed block wire response schema");
+        let maximum = u64::try_from(
+            iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+        )
+        .expect("wire bound fits u64");
+        assert_eq!(schema.get("minLength").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            schema.get("maxLength").and_then(Value::as_u64),
+            Some(maximum)
+        );
+        assert_eq!(
+            schema.get("x-iroha-max-bytes").and_then(Value::as_u64),
+            Some(maximum)
+        );
+    }
+
+    #[test]
     fn ledger_block_proof_documents_its_exact_norito_contract() {
         let document = generate_spec();
         let operation = openapi_operation(
@@ -34288,29 +34661,109 @@ mod tests {
         );
 
         let schemas = component_schemas(&document);
-        let block_proofs = schemas
-            .get("BlockProofs")
-            .and_then(Value::as_object)
-            .expect("BlockProofs schema");
-        assert!(
-            block_proofs
-                .get("required")
-                .and_then(Value::as_array)
-                .is_some_and(|required| required
-                    .iter()
-                    .any(|field| { field.as_str() == Some("fastpq_transcripts") }))
+        assert_strict_object_schema(
+            schemas,
+            "BlockMerkleCommitment",
+            &["root", "leaf_count"],
+            &[],
         );
-        assert!(schemas.contains_key("BlockProofTransferTranscript"));
+        assert_strict_object_schema(
+            schemas,
+            "BlockProofs",
+            &[
+                "block_height",
+                "block_hash",
+                "executed_block_wire_hash",
+                "entry_hash",
+                "entry_commitment",
+                "entry_proof",
+                "result_commitment",
+                "result_proof",
+                "fastpq_transcripts",
+            ],
+            &[],
+        );
+
+        let commitment = schemas
+            .get("BlockMerkleCommitment")
+            .and_then(Value::as_object)
+            .expect("BlockMerkleCommitment schema");
+        let commitment_properties = commitment
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("BlockMerkleCommitment properties");
         assert_eq!(
-            block_proofs
-                .get("properties")
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("entry_hash"))
+            commitment_properties
+                .get("root")
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("$ref"))
                 .and_then(Value::as_str),
             Some("#/components/schemas/Hash")
         );
+        assert_eq!(
+            commitment_properties
+                .get("leaf_count")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("minimum"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            commitment_properties
+                .get("leaf_count")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maximum"))
+                .and_then(Value::as_u64),
+            Some(1_u64 << 32)
+        );
+
+        let block_proofs = schemas
+            .get("BlockProofs")
+            .and_then(Value::as_object)
+            .expect("BlockProofs schema");
+        let block_proof_properties = block_proofs
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("BlockProofs properties");
+        assert!(schemas.contains_key("BlockProofTransferTranscript"));
+        assert_eq!(
+            block_proof_properties
+                .get("entry_hash")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/Hash")
+        );
+        for (field, expected) in [
+            ("block_hash", "#/components/schemas/Hash"),
+            ("executed_block_wire_hash", "#/components/schemas/Hash"),
+            (
+                "entry_commitment",
+                "#/components/schemas/BlockMerkleCommitment",
+            ),
+            (
+                "result_commitment",
+                "#/components/schemas/BlockMerkleCommitment",
+            ),
+            (
+                "result_proof",
+                "#/components/schemas/BlockExecutionReceiptProof",
+            ),
+        ] {
+            assert_eq!(
+                block_proof_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("allOf"))
+                    .and_then(Value::as_array)
+                    .and_then(|schemas| schemas.first())
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(expected),
+                "BlockProofs.{field} schema"
+            );
+        }
     }
 
     #[test]
@@ -34357,6 +34810,7 @@ mod tests {
         assert!(paths.contains_key("/v1/ledger/headers"));
         assert!(paths.contains_key("/v1/ledger/state/{height}"));
         assert!(paths.contains_key("/v1/ledger/state-proof/{height}"));
+        assert!(paths.contains_key("/v1/ledger/block/{height}"));
         assert!(paths.contains_key("/v1/ledger/block/{height}/proof/{entry_hash}"));
         assert!(paths.contains_key("/v1/da/commitments"));
         assert!(paths.contains_key("/v1/da/commitments/prove"));
@@ -34644,7 +35098,7 @@ mod tests {
         );
         assert!(paths.contains_key("/v1/sorafs/transparency/explorer"));
         assert!(paths.contains_key("/v1/sorafs/transparency/explorer/ui"));
-        assert!(paths.contains_key("/v1/sorafs/transparency/source-entries/{source_kind}"));
+        assert!(!paths.contains_key("/v1/sorafs/transparency/source-entries/{source_kind}"));
         assert!(paths.contains_key("/v1/sorafs/transparency/privacy-aggregates/source-events"));
         assert!(paths.contains_key("/v1/sorafs/transparency/privacy-aggregates/publish-due"));
         assert!(paths.contains_key("/v1/sorafs/transparency/tokens"));
@@ -37099,7 +37553,7 @@ mod tests {
         }
 
         let musubi_publish = paths
-            .get("/v1/musubi/instructions/publish-release")
+            .get("/v1/musubi/instructions/release-publish")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
@@ -37110,6 +37564,34 @@ mod tests {
                 .and_then(Value::as_str),
             Some("build_instruction")
         );
+        let musubi_resolver = paths
+            .get("/v1/musubi/queries/resolver-index")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("Musubi resolver-index query operation");
+        assert_eq!(
+            musubi_resolver
+                .get(TOOL_EFFECT_EXTENSION)
+                .and_then(Value::as_str),
+            Some("read")
+        );
+        for legacy_path in [
+            "/v1/musubi/packages",
+            "/v1/musubi/release",
+            "/v1/musubi/releases",
+            "/v1/musubi/versions",
+            "/v1/musubi/aliases/{alias}",
+            "/v1/musubi/instructions/publish-release",
+            "/v1/musubi/instructions/yank-release",
+            "/v1/musubi/instructions/set-alias",
+            "/v1/musubi/instructions/assert-release-exists",
+        ] {
+            assert!(
+                !paths.contains_key(legacy_path),
+                "legacy path survived: {legacy_path}"
+            );
+        }
     }
 
     #[test]
@@ -37682,6 +38164,70 @@ mod tests {
         assert!(description.contains("mint/burn"));
         assert!(description.contains("multisig"));
         assert!(description.contains("reward"));
+    }
+
+    #[test]
+    fn pipeline_fastpq_recovery_documents_operator_auth_and_bounds() {
+        use iroha_torii_shared::route_catalog::{ApiSurface, AuthenticationPolicy};
+
+        let route = iroha_torii_shared::route_catalog::pipeline::RECOVERY_FASTPQ_PROOFS;
+        assert_eq!(route.surface(), ApiSurface::Operator);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+
+        let document = generate_spec();
+        let operation = openapi_operation(
+            &document,
+            "/v1/pipeline/recovery/{height}/fastpq-proofs",
+            "get",
+        );
+        assert_eq!(
+            operation_header_requirements(operation)
+                .into_iter()
+                .map(|(name, required)| {
+                    assert!(required, "operator signature headers must be required");
+                    name
+                })
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "X-Iroha-Operator-Public-Key".to_owned(),
+                "X-Iroha-Operator-Timestamp-Ms".to_owned(),
+                "X-Iroha-Operator-Nonce".to_owned(),
+                "X-Iroha-Operator-Signature".to_owned(),
+            ])
+        );
+        let parameters = operation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("FASTPQ recovery parameters");
+        let parameter = |name: &str| {
+            parameters
+                .iter()
+                .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name))
+                .unwrap_or_else(|| panic!("missing FASTPQ recovery `{name}` parameter"))
+        };
+        let limit_schema = parameter("limit")
+            .get("schema")
+            .and_then(Value::as_object)
+            .expect("FASTPQ recovery limit schema");
+        assert_eq!(limit_schema.get("minimum").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            limit_schema.get("maximum").and_then(Value::as_u64),
+            Some(crate::PIPELINE_FASTPQ_RECOVERY_MAX_LIMIT as u64)
+        );
+        assert!(
+            operation
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| {
+                    description.contains("operator-only")
+                        && description.contains("replay-resistant")
+                        && description.contains("Heavy reconstruction")
+                        && description.contains("byte caps")
+                })
+        );
     }
 
     #[test]
@@ -38526,7 +39072,7 @@ mod tests {
             PathCase {
                 label: "musubi",
                 builder: musubi_paths,
-                expected: "/v1/musubi/packages",
+                expected: "/v1/musubi/queries/exact-package",
             },
             PathCase {
                 label: "offline",
@@ -41778,7 +42324,12 @@ mod tests {
             "settlement_grace_secs",
             "flow_label_bits",
             "padding_budget_ms",
+            "relay_id_hex",
+            "descriptor_commit_hex",
+            "tls_server_name",
             "relay_tls_spki_sha256_hex",
+            "relay_certificate_sha256_hex",
+            "directory_snapshot_digest_hex",
         ];
         assert_strict_object_schema(schemas, "VpnProfileResponse", &profile_fields, &[]);
 
@@ -41804,7 +42355,12 @@ mod tests {
             "meter_family",
             "flow_label_bits",
             "padding_budget_ms",
+            "relay_id_hex",
+            "descriptor_commit_hex",
+            "tls_server_name",
             "relay_tls_spki_sha256_hex",
+            "relay_certificate_sha256_hex",
+            "directory_snapshot_digest_hex",
             "metering_public_key_hex",
             "open_lease_instruction",
             "tx_instructions",
@@ -41829,7 +42385,12 @@ mod tests {
             "lease_fee",
             "flow_label_bits",
             "padding_budget_ms",
+            "relay_id_hex",
+            "descriptor_commit_hex",
+            "tls_server_name",
             "relay_tls_spki_sha256_hex",
+            "relay_certificate_sha256_hex",
+            "directory_snapshot_digest_hex",
             "route_pushes",
             "excluded_routes",
             "dns_servers",

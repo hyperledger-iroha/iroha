@@ -27,9 +27,8 @@ use iroha_primitives::{
 
 use super::*;
 use crate::smartcontracts::isi::asset::isi::{
-    assert_numeric_spec_with, execute_authorized_numeric_asset_pair,
-    execute_native_fx_numeric_asset_pair, validate_authorized_numeric_asset_pair,
-    validate_native_fx_numeric_asset_pair,
+    assert_numeric_spec_with, execute_native_fx_numeric_asset_pair,
+    validate_authorized_numeric_asset_pair, validate_native_fx_numeric_asset_pair,
 };
 #[cfg(test)]
 use crate::smartcontracts::isi::error::MathError;
@@ -42,6 +41,38 @@ pub(crate) const SETTLEMENT_KIND_DVP: &str = "dvp";
 pub(crate) const SETTLEMENT_KIND_PVP: &str = "pvp";
 pub(crate) const CAN_SET_FX_CORRIDOR_POLICY: &str = "CanSetFxCorridorPolicy";
 pub(crate) const CAN_SETTLE_FX_CORRIDOR: &str = "CanSettleFxCorridor";
+
+/// Non-reusable proof that bilateral consent selected two exact settlement legs.
+pub(in crate::smartcontracts::isi) struct VerifiedSettlementNumericPair {
+    authority: AccountId,
+    binding: Vec<u8>,
+    legs: [(AssetId, AssetId, Quantity); 2],
+}
+
+impl VerifiedSettlementNumericPair {
+    fn new<T: norito::codec::Encode>(
+        authority: AccountId,
+        binding: &T,
+        legs: [(AssetId, AssetId, Quantity); 2],
+    ) -> Result<Self, Error> {
+        let binding = norito::encode_canonical(binding).map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to encode exact settlement movement binding: {error}").into(),
+            )
+        })?;
+        Ok(Self {
+            authority,
+            binding,
+            legs,
+        })
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (AccountId, Vec<u8>, [(AssetId, AssetId, Quantity); 2]) {
+        (self.authority, self.binding, self.legs)
+    }
+}
 
 impl Execute for SettlementInstructionBox {
     fn execute(
@@ -1029,8 +1060,13 @@ impl Execute for DvpIsi {
             ),
         };
 
-        match execute_authorized_numeric_asset_pair(
-            stx, authority, first.0, first.1, first.2, second.0, second.1, second.2,
+        let movement = VerifiedSettlementNumericPair::new(
+            authority.clone(),
+            &(settlement_id.clone(), intent_hash, plan),
+            [first, second],
+        )?;
+        match crate::smartcontracts::isi::asset::isi::execute_verified_settlement_numeric_pair(
+            stx, movement,
         ) {
             Ok(()) => {
                 let legs = dvp_leg_snapshots(&delivery_leg, &payment_leg);
@@ -1160,8 +1196,13 @@ impl Execute for PvpIsi {
             ),
         };
 
-        match execute_authorized_numeric_asset_pair(
-            stx, authority, first.0, first.1, first.2, second.0, second.1, second.2,
+        let movement = VerifiedSettlementNumericPair::new(
+            authority.clone(),
+            &(settlement_id.clone(), intent_hash, plan),
+            [first, second],
+        )?;
+        match crate::smartcontracts::isi::asset::isi::execute_verified_settlement_numeric_pair(
+            stx, movement,
         ) {
             Ok(()) => {
                 let legs = pvp_leg_snapshots(&primary_leg, &counter_leg);

@@ -33962,6 +33962,7 @@ mod protocol {
                     generated_at_unix: cycle_end_unix,
                     population_label: "runtime-broker-population".to_owned(),
                     population_digest: [0x52; 32],
+                    source_commitment: [0x51; 32],
                     privacy: sorafs_manifest::ModerationPrivacyParametersV1 {
                         version: sorafs_manifest::MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                         mode: sorafs_manifest::ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,

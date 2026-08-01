@@ -1415,6 +1415,35 @@
     }
 
     #[test]
+    #[ignore = "operator-only native proof construction for the complete Bootle/Lantern release stage"]
+    fn bootle_lantern_release_stage_exercises_one_shot_issuance_and_wire_rejection() {
+        let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
+        let case_kind = PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation;
+        let evidence = run_privacy_release_stage_v1(protocol_id, case_kind)
+            .expect("Bootle/Lantern corruption-and-truncation release stage");
+        assert_eq!(evidence.protocol_id, protocol_id);
+        assert_eq!(evidence.case_kind, case_kind);
+        assert_eq!(
+            evidence.failure_class,
+            PrivacyReleaseFailureClassV1::CanonicalWireCorruptionAndTruncationRejected
+        );
+        assert_eq!(evidence.proof_artifacts.len(), 1);
+        assert_eq!(
+            evidence.proof_artifacts[0].canonical_proof_bytes.len(),
+            BOOTLE_PROOF_BYTES_V1
+        );
+        assert_eq!(
+            evidence.proof_artifacts[0].proof_bytes_ceiling,
+            u64::try_from(BOOTLE_PROOF_BYTES_V1).expect("fixed ILN1 length fits u64")
+        );
+        assert!(validate_privacy_release_proof_artifacts_v1(
+            protocol_id,
+            case_kind,
+            &evidence.proof_artifacts,
+        ));
+    }
+
+    #[test]
     #[ignore = "operator-only native proof construction for the complete ZK-AMS corruption stage"]
     fn zk_ams_corruption_stage_rejects_maximum_and_submaximum_wire_mutations() {
         let protocol_id = PrivacyProtocolIdV1::IrohaZkAmsV1;

@@ -22099,6 +22099,7 @@ fn build_multisig_contract_call_instructions(
         multisig_account_id.clone(),
         filter,
     )
+    .map_err(|error| conversion_error(format!("invalid multisig trigger action: {error}")))?
     .with_metadata(trigger_metadata);
     let trigger = iroha_data_model::trigger::Trigger::new(trigger_id.clone(), action);
     let execute_trigger = payload.cloned().map_or_else(
@@ -48759,9 +48760,7 @@ mod cursor_mode_tests {
 
     use iroha_core::{
         kura::Kura,
-        query::snapshot::{
-            CursorMode, run_on_snapshot_with_mode_arc_and_start_budget,
-        },
+        query::snapshot::{CursorMode, run_on_snapshot_with_mode_arc_and_start_budget},
         query::store::LiveQueryStore,
         smartcontracts::isi::query::QueryLimits,
         state::{State, World},
@@ -48780,10 +48779,8 @@ mod cursor_mode_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let domains = (0..3).map(|index| {
-            Domain::new(
-                DomainId::try_new(format!("cursor{index}"), "world").expect("domain id"),
-            )
-            .build(authority)
+            Domain::new(DomainId::try_new(format!("cursor{index}"), "world").expect("domain id"))
+                .build(authority)
         });
         let world = World::with(
             domains,
@@ -48804,9 +48801,8 @@ mod cursor_mode_tests {
             },
             ..QueryParams::default()
         };
-        let payload = norito::codec::Encode::encode(
-            &iroha_data_model::query::domain::prelude::FindDomains,
-        );
+        let payload =
+            norito::codec::Encode::encode(&iroha_data_model::query::domain::prelude::FindDomains);
         let query_box: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Domain>::new(
             CompoundPredicate::PASS,
             SelectorTuple::default(),
@@ -69343,6 +69339,7 @@ fn build_billing_trigger(
         authority,
         TimeEventFilter(ExecutionTime::Schedule(schedule)),
     )
+    .expect("trigger action fixture satisfies validation invariants")
     .with_metadata(metadata);
     Trigger::new(trigger_id, action)
 }
@@ -69365,7 +69362,8 @@ fn build_usage_trigger(
         ExecuteTriggerEventFilter::new()
             .for_trigger(trigger_id.clone())
             .under_authority(authority),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Trigger::new(trigger_id, action)
 }
 

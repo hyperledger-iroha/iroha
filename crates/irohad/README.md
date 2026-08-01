@@ -234,7 +234,7 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       ```bash
       cargo run --release -p iroha_kagami -- \
         genesis generate default \
-        --genesis-public-key <PEER_PUBLIC_KEY> \
+        --genesis-public-key <GENESIS_PUBLIC_KEY> \
         > deploy/peer/genesis.json
       ```
 
@@ -244,9 +244,10 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       ```bash
       cargo run --release -p iroha_kagami -- \
         genesis sign deploy/peer/genesis.json \
-        --public-key <PEER_PUBLIC_KEY> \
-        --private-key <PEER_PRIVATE_KEY> \
-        --out-file deploy/peer/genesis.signed.nrt
+        --private-key-file <MODE_0600_GENESIS_PRIVATE_KEY_FILE> \
+        --expected-public-key <GENESIS_PUBLIC_KEY> \
+        --out-file deploy/peer/genesis.signed.nrt \
+        --expected-hash-out deploy/peer/genesis.expected_hash
       ```
 
       Then edit `config.toml` so that the `[genesis]` section references the
@@ -256,6 +257,7 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       [genesis]
       file = "genesis.signed.nrt"
       public_key = "<PEER_PUBLIC_KEY>"
+      expected_hash = "<EXACT_HASH_FROM_genesis.expected_hash>"
       ```
 
       See `crates/iroha_kagami/CommandLineHelp.md` and the
@@ -278,23 +280,26 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
 
 ### Docker
 
-We provide a development-only sample configuration in
+We provide an explicitly seeded development-only sample configuration in
 [`docker-compose.yml`](../../defaults/docker-compose.yml). It contains no
-genesis signing key. Create fresh owner-only custody and export only its paths
-before evaluating the manifest:
+genesis signing key or runtime signer. Provision the signed body, verifier key,
+and independently approved exact hash for that exact sample roster before
+evaluating the manifest:
 
 ```bash
-cargo run --bin kagami -- keys --out-dir target/compose-genesis
-export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/public.key"
-export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/compose-genesis/private.key"
+export IROHA_GENESIS_SIGNED_FILE="$PWD/target/compose-genesis/genesis.signed.nrt"
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/genesis.public_key"
+export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/target/compose-genesis/genesis.expected_hash"
 docker compose -f defaults/docker-compose.yml up --build
 ```
 
-Compose mounts the verifier key into every peer and the signing key into only
-the genesis-submitting peer. Missing files and mismatched keys fail closed. For
-a deployed network, generate validator identities and matching
-`TRUSTED_PEERS_POP` entries with Kagami rather than inheriting the sample
-validator credentials. To keep containers running after closing the terminal,
+Compose mounts all three runtime inputs read-only into every validator and never
+mounts the signing key, client credentials, or source manifest. Missing files
+and trust-root mismatches fail closed. For a deployed network, generate one
+authoritative `kagami localnet` bundle and run `kagami docker` without
+`--seed`; Kagami validates and reuses its exact identities, PoPs, signed body,
+verifier key, and hash rather than inheriting the sample validator credentials.
+To keep containers running after closing the terminal,
 use the `-d` (*detached*) flag:
 
 ```bash

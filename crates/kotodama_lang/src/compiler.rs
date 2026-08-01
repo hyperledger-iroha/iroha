@@ -11864,7 +11864,8 @@ seiyaku Test {
             Repeats::Indefinitely,
             authority,
             filter,
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let trigger = Trigger::new(trigger_id.clone(), action);
         let json_value = norito::json::to_value(&trigger).expect("trigger json value");
         let raw_json = norito::json::to_string(&json_value).expect("trigger json");

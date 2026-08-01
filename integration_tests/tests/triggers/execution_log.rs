@@ -2,12 +2,16 @@
 //! Trigger execution log coverage.
 #![cfg(feature = "fault_injection")]
 
+use std::num::NonZeroU64;
+
 use eyre::{Ok, Result};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
-    crypto::MerkleProof,
-    data_model::{events::pipeline::BlockEventFilter, prelude::*},
+    crypto::{MerkleProof, MerkleTreeCommitment},
+    data_model::{
+        events::pipeline::BlockEventFilter, prelude::*, query::block::prelude::FindBlocks,
+    },
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
@@ -48,7 +52,8 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
                         .for_asset(bob_rose)
                         .for_events(AssetEventSet::Added),
                 ),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         )));
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -118,13 +123,47 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
     println!("{committed_tx:#?}");
     assert_eq!(*committed_tx.block_hash(), block_hash);
 
+    // A header authenticates each root but does not carry its leaf count. Fetch the exact
+    // carrier block so verification can use its root/count commitments as one unit.
+    let test_client = network.client();
+    let carrier_block = spawn_blocking(move || {
+        test_client
+            .query(FindBlocks)
+            .execute_all()
+            .unwrap()
+            .into_iter()
+            .find(|block| block.hash() == block_hash)
+            .expect("committed carrier block must be queryable")
+    })
+    .await
+    .unwrap();
+    const TEST_MAX_MERKLE_LEAF_COUNT: u64 = 1_u64 << 9;
+
     // Verify inclusion proof for the transaction entrypoint.
     let leaf = committed_tx.entrypoint().hash();
     let proof: MerkleProof<TransactionEntrypoint> = committed_tx.entrypoint_proof().clone();
-    let root = header
-        .merkle_root()
-        .expect("non-empty block should have a Merkle root");
-    assert!(proof.verify(&leaf, &root, 9)); // Assumes up to 2^9 (512) transactions per block.
+    let entrypoint_commitment = carrier_block
+        .full_entry_merkle_commitment()
+        .expect("non-empty block should have an entrypoint commitment");
+    assert!(
+        entrypoint_commitment.leaf_count().get() <= TEST_MAX_MERKLE_LEAF_COUNT,
+        "test carrier must remain within the explicit 512-entrypoint bound"
+    );
+    assert!(proof.verify(&leaf, &entrypoint_commitment));
+    let wrong_entrypoint_count = NonZeroU64::new(
+        entrypoint_commitment
+            .leaf_count()
+            .get()
+            .checked_mul(2)
+            .expect("test leaf count can be doubled"),
+    )
+    .expect("doubled leaf count remains non-zero");
+    let wrong_entrypoint_commitment =
+        MerkleTreeCommitment::new(*entrypoint_commitment.root(), wrong_entrypoint_count);
+    assert!(
+        !proof.verify(&leaf, &wrong_entrypoint_commitment),
+        "the proof must reject a mismatched authenticated entrypoint count"
+    );
 
     // Fault injection: proof should now fail for a tampered entrypoint.
     let mut tampered_tx = committed_tx.clone();
@@ -133,22 +172,40 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
     tampered_tx.inject_instructions([self_transfer]);
     let leaf = tampered_tx.entrypoint().hash();
     let bad_proof = tampered_tx.entrypoint_proof().clone();
-    assert!(!bad_proof.verify(&leaf, &root, 9));
+    assert!(!bad_proof.verify(&leaf, &entrypoint_commitment));
 
     // Verify inclusion proof for the transaction result.
     let leaf = committed_tx.result().hash();
     let proof: MerkleProof<TransactionResult> = committed_tx.result_proof().clone();
-    let root = header
-        .result_merkle_root()
-        .expect("non-empty block should have a Merkle root");
-    assert!(proof.verify(&leaf, &root, 9));
+    let result_commitment = carrier_block
+        .result_merkle_commitment()
+        .expect("non-empty block should have a result commitment");
+    assert!(
+        result_commitment.leaf_count().get() <= TEST_MAX_MERKLE_LEAF_COUNT,
+        "test carrier must remain within the explicit 512-result bound"
+    );
+    assert!(proof.verify(&leaf, &result_commitment));
+    let wrong_result_count = NonZeroU64::new(
+        result_commitment
+            .leaf_count()
+            .get()
+            .checked_mul(2)
+            .expect("test leaf count can be doubled"),
+    )
+    .expect("doubled leaf count remains non-zero");
+    let wrong_result_commitment =
+        MerkleTreeCommitment::new(*result_commitment.root(), wrong_result_count);
+    assert!(
+        !proof.verify(&leaf, &wrong_result_commitment),
+        "the proof must reject a mismatched authenticated result count"
+    );
 
     // Fault injection: proof should fail for a tampered result.
     let mut tampered_tx = committed_tx.clone();
     tampered_tx.swap_result();
     let leaf = tampered_tx.result().hash();
     let bad_proof = tampered_tx.result_proof().clone();
-    assert!(!bad_proof.verify(&leaf, &root, 9));
+    assert!(!bad_proof.verify(&leaf, &result_commitment));
 
     Ok(())
 }

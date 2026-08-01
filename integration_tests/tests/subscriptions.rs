@@ -467,7 +467,8 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(usage_trigger_id.clone())
                     .under_authority(provider.clone()),
-            );
+            )
+            .expect("trigger action fixture satisfies validation invariants");
             spawn_blocking({
                 let client = client.clone();
                 let usage_trigger_id = usage_trigger_id.clone();
@@ -531,6 +532,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 provider.clone(),
                 TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata);
             spawn_blocking({
                 let client = client.clone();
@@ -802,6 +804,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 provider.clone(),
                 TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata);
             spawn_blocking({
                 let client = client.clone();
@@ -1049,6 +1052,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 provider.clone(),
                 TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata);
             spawn_blocking({
                 let client = client.clone();

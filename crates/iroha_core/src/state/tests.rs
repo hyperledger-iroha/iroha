@@ -51,6 +51,11 @@ use iroha_data_model::{
         Unregister, error::InstructionExecutionError,
     },
     merge::MergeQuorumCertificate,
+    musubi::{
+        ArchiveId, MusubiArchiveLocationIdV1, MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1,
+        MusubiPinLocationReferenceV1, MusubiProviderLocationKeyV1,
+        MusubiReplicationOrderLocationReferenceV1,
+    },
     name::Name,
     nexus::{
         AssetHandle, AssetPermissionManifest, AxtBinding, AxtDescriptor, AxtEnvelopeRecord,
@@ -71,7 +76,7 @@ use iroha_data_model::{
         escrow::prelude::{FindAnonymousAssetEscrowsByStatus, FindAssetEscrowsByStatus},
         proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
     },
-    sorafs::pin_registry::ManifestDigest,
+    sorafs::pin_registry::{ManifestDigest, ReplicationOrderId},
     transaction::ExecutionStep,
 };
 use iroha_primitives::{
@@ -88,6 +93,42 @@ use nonzero_ext::nonzero;
 use super::{deserialize::default_zk, *};
 use crate::smartcontracts::ValidQuery;
 use crate::telemetry::StateTelemetry;
+
+#[test]
+fn musubi_v1_world_defaults_and_domain_generation_are_deterministic() {
+    use iroha_data_model::musubi::{
+        MUSUBI_REGISTRY_VERSION_V1, MusubiAliasPricingPolicyV1, MusubiRegistryAdmissionModeV1,
+    };
+
+    let world = World::default();
+    let view = world.view();
+    let policy = view.musubi_registry_policy();
+    assert_eq!(policy.version, MUSUBI_REGISTRY_VERSION_V1);
+    assert_eq!(policy.revision, 1);
+    assert_eq!(policy.mode, MusubiRegistryAdmissionModeV1::Open);
+    assert!(policy.allowlisted_dataspaces.is_empty());
+    assert_eq!(policy.alias_pricing, MusubiAliasPricingPolicyV1::GENESIS);
+    assert_eq!(view.musubi_resolver_index_revision(), 1);
+
+    let domain = DomainId::try_new("packages", "universal").expect("domain id");
+    assert_eq!(view.musubi_domain_ownership_generation(&domain), 1);
+    drop(view);
+
+    let mut block = world.block();
+    {
+        let mut transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        transaction
+            .musubi_domain_ownership_generations_mut()
+            .insert(domain.clone(), 2);
+        transaction.apply();
+    }
+    assert_eq!(
+        block.musubi_domain_ownership_generations.get(&domain),
+        Some(&2)
+    );
+    block.commit();
+    assert_eq!(world.view().musubi_domain_ownership_generation(&domain), 2);
+}
 
 #[test]
 fn test_state_constructor_installs_default_lane_manifest() {
@@ -5395,7 +5436,7 @@ fn apply_without_execution_keeps_plain_external_transaction_hashes() {
 }
 
 #[test]
-fn block_proofs_for_sealed_commitment_use_external_merkle_root() {
+fn block_proofs_for_sealed_commitment_use_full_executed_merkle_root() {
     let kura = Kura::blank_kura_for_testing();
     let state = State::new_for_testing(
         World::default(),
@@ -5476,9 +5517,20 @@ fn block_proofs_for_sealed_commitment_use_external_merkle_root() {
         .block_proofs_for_entry(block_arc.header().height(), sealed_hash)
         .expect("proofs available");
     let external_root = block_arc.header().merkle_root().expect("external root");
-    assert_ne!(block_arc.full_entry_merkle_root(), Some(external_root));
-    assert_eq!(proofs.entry_root, external_root);
-    assert!(proofs.entry_proof.verify(&external_root));
+    let full_root = block_arc
+        .full_entry_merkle_root()
+        .expect("full executed-entry root");
+    assert_ne!(full_root, external_root);
+    assert_eq!(proofs.block_hash, block_arc.hash());
+    assert_eq!(
+        proofs.executed_block_wire_hash,
+        block_arc
+            .executed_block_wire_hash()
+            .expect("executed block wire hash")
+    );
+    assert_eq!(proofs.entry_commitment.root(), &full_root);
+    assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
+    assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
     assert_eq!(
         block_arc.entrypoint_hashes().collect::<Vec<_>>()[1],
         time_hash
@@ -19301,30 +19353,33 @@ fn verified_lane_relay_contract_state_keys_drop_ref_or_envelope_lane_matches() {
     )
     .parse()
     .expect("spoofed map key");
+    let reset_incarnation = hex::encode(Hash::new(b"malformed-reset-relay-incarnation"));
+    let survivor_incarnation = hex::encode(Hash::new(b"malformed-survivor-relay-incarnation"));
     let malformed_reset_key: StatePath = format!(
-        "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_11_{}",
+        "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_{}_11",
         reset_lane.as_u32(),
-        "11".repeat(32)
+        reset_incarnation
     )
     .parse()
     .expect("malformed reset canonical key");
     let malformed_survivor_key: StatePath = format!(
-        "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_12_{}",
+        "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_{}_12",
         survivor_lane.as_u32(),
-        "22".repeat(32)
+        survivor_incarnation
     )
     .parse()
     .expect("malformed survivor canonical key");
     let malformed_spoofed_reset_key: StatePath = format!(
-        "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_13_short",
-        reset_lane.as_u32()
+        "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_{}_13_extra",
+        reset_lane.as_u32(),
+        reset_incarnation
     )
     .parse()
     .expect("malformed noncanonical reset-prefixed key");
     let malformed_uppercase_reset_key: StatePath = format!(
-        "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_14_{}",
+        "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_9_{}_{}_14",
         reset_lane.as_u32(),
-        "AA".repeat(32)
+        reset_incarnation.to_ascii_uppercase()
     )
     .parse()
     .expect("malformed uppercase reset-prefixed key");
@@ -19444,7 +19499,7 @@ fn verified_lane_relay_contract_state_keys_drop_ref_or_envelope_lane_matches() {
             .view()
             .get(&malformed_uppercase_reset_key)
             .is_some(),
-        "uppercase digest variants are not exact canonical relay keys"
+        "uppercase incarnation variants are not exact canonical relay keys"
     );
 }
 
@@ -21569,32 +21624,23 @@ fn set_default_account_domain_label_updates_global_value() {
 }
 
 #[test]
-fn set_streaming_updates_config() {
+fn set_streaming_storage_paths_updates_process_local_paths() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-    let mut streaming = state.streaming.clone();
     let soranet_spool = PathBuf::from("soranet-spool");
-    streaming.soranet.provision_spool_dir = soranet_spool.clone();
-    state.set_streaming(streaming);
+    let soravpn_spool = PathBuf::from("soravpn-spool");
+    state.set_streaming_storage_paths(soranet_spool.clone(), soravpn_spool.clone());
 
-    assert_eq!(state.streaming.soranet.provision_spool_dir, soranet_spool);
-}
-
-#[test]
-fn default_streaming_key_material_uses_checked_seed_derivation() {
-    let material = default_streaming_key_material();
-    let expected = KeyPair::try_from_seed(
-        b"iroha:state:default-streaming-key-material:v1".to_vec(),
-        Algorithm::Ed25519,
-    )
-    .expect("derive default streaming key material fixture key");
-
-    assert_eq!(material.identity().public_key(), expected.public_key());
-    assert_eq!(material.identity().algorithm(), Algorithm::Ed25519);
-    assert!(material.kyber_public().is_none());
-    assert!(material.kyber_secret().is_none());
+    assert_eq!(
+        state.streaming_storage_paths.soranet_provision_spool_dir,
+        soranet_spool
+    );
+    assert_eq!(
+        state.streaming_storage_paths.soravpn_provision_spool_dir,
+        soravpn_spool
+    );
 }
 
 #[test]
@@ -21634,10 +21680,7 @@ fn enforce_nexus_storage_budget_prunes_spools_before_cold() {
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-    let mut streaming = state.streaming.clone();
-    streaming.soranet.provision_spool_dir = soranet_spool.clone();
-    streaming.soravpn.provision_spool_dir = soravpn_spool.clone();
-    state.set_streaming(streaming);
+    state.set_streaming_storage_paths(soranet_spool.clone(), soravpn_spool.clone());
 
     state
         .set_tiered_backend(&iroha_config::parameters::actual::TieredState {
@@ -21727,9 +21770,10 @@ fn enforce_nexus_storage_budget_respects_interval_blocks() {
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-    let mut streaming = state.streaming.clone();
-    streaming.soranet.provision_spool_dir = soranet_spool.clone();
-    state.set_streaming(streaming);
+    state.set_streaming_storage_paths(
+        soranet_spool.clone(),
+        iroha_config::parameters::actual::StreamingSoravpn::from_defaults().provision_spool_dir,
+    );
 
     let kura_used = state.kura.disk_usage_bytes().expect("measure kura bytes");
     let soranet_used = dir_size(&soranet_spool).expect("measure soranet spool");
@@ -34095,9 +34139,7 @@ fn seed_consensus_key_with_lifecycle_for_test(
 }
 
 fn commit_qc_with_signers(
-    header: &BlockHeader,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
+    envelope: &LaneRelayEnvelope,
     parent_state_root: Hash,
     post_state_root: Hash,
     signers: &[&KeyPair],
@@ -34109,9 +34151,7 @@ fn commit_qc_with_signers(
         .map(|keypair| PeerId::new(keypair.public_key().clone()))
         .collect();
     commit_qc_with_signers_and_validator_set(
-        header,
-        lane_id,
-        dataspace_id,
+        envelope,
         parent_state_root,
         post_state_root,
         signers,
@@ -34122,9 +34162,7 @@ fn commit_qc_with_signers(
 }
 
 fn commit_qc_with_signers_and_validator_set(
-    header: &BlockHeader,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
+    envelope: &LaneRelayEnvelope,
     parent_state_root: Hash,
     post_state_root: Hash,
     signers: &[&KeyPair],
@@ -34132,11 +34170,10 @@ fn commit_qc_with_signers_and_validator_set(
     signers_bitmap: Vec<u8>,
     chain_id: &ChainId,
 ) -> Qc {
-    let mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
-        lane_id,
-        dataspace_id,
-        crate::sumeragi::consensus::PERMISSIONED_TAG,
-    );
+    let header = &envelope.block_header;
+    let mode_tag = envelope
+        .lane_finality_qc_mode_tag(crate::sumeragi::consensus::PERMISSIONED_TAG)
+        .expect("test relay must have a complete finality statement before QC signing");
     let validator_set = validator_set.to_vec();
     let mut qc = Qc {
         phase: crate::sumeragi::consensus::Phase::Commit,
@@ -34318,16 +34355,6 @@ fn sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
     );
     let parent_state_root = Hash::new([0xBC; 4]);
     let post_state_root = Hash::new([0xAB; 4]);
-    let qc = commit_qc_with_signers(
-        &header,
-        lane_id,
-        dataspace_id,
-        parent_state_root,
-        post_state_root,
-        signers,
-        signers_bitmap,
-        chain_id,
-    );
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id,
@@ -34350,7 +34377,7 @@ fn sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
+    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
         .expect("valid envelope")
         .with_lane_block_descriptor_hash(Some(Hash::new(
             format!(
@@ -34359,7 +34386,16 @@ fn sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
                 lane_id.as_u32()
             )
             .as_bytes(),
-        )));
+        )))
+        .with_manifest_root(Some([0x44; 32]));
+    envelope.qc = Some(commit_qc_with_signers(
+        &envelope,
+        parent_state_root,
+        post_state_root,
+        signers,
+        signers_bitmap,
+        chain_id,
+    ));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, view);
     envelope.with_fastpq_proof_material(Some(fastpq_proof))
 }
@@ -34473,20 +34509,6 @@ fn active_lane_incarnation_for_state_test(
         .expect("test lane must have an incarnation at the proposal height")
 }
 
-fn bind_lane_relay_incarnation_for_state_test(
-    state: &State,
-    proposal_height: u64,
-    envelope: &mut LaneRelayEnvelope,
-) {
-    let incarnation =
-        active_lane_incarnation_for_state_test(state, proposal_height, envelope.lane_id);
-    envelope.lane_incarnation = incarnation;
-    envelope.settlement_commitment.lane_incarnation = incarnation;
-    envelope.settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&envelope.settlement_commitment)
-            .expect("test settlement commitment must remain encodable after incarnation binding");
-}
-
 fn sample_lane_relay_envelope_for_state_with_view(
     state: &State,
     height: u64,
@@ -34497,6 +34519,43 @@ fn sample_lane_relay_envelope_for_state_with_view(
     sample_lane_relay_envelope_for_state_at_heights_with_view(
         state, height, height, lane_id, view, keypairs,
     )
+}
+
+fn resign_lane_relay_for_state_test(
+    state: &State,
+    envelope: &mut LaneRelayEnvelope,
+    keypairs: &[KeyPair],
+) {
+    let proposal_height = envelope.block_header.height().get();
+    let committee = lane_relay_committee_for_state_test(
+        state,
+        proposal_height,
+        envelope.lane_id,
+        envelope.dataspace_id,
+    );
+    let keypairs_by_peer: BTreeMap<_, _> = keypairs
+        .iter()
+        .map(|keypair| (PeerId::new(keypair.public_key().clone()), keypair))
+        .collect();
+    let signer_keys = committee
+        .iter()
+        .map(|peer| {
+            keypairs_by_peer
+                .get(peer)
+                .copied()
+                .expect("test committee keypair")
+        })
+        .collect::<Vec<_>>();
+    let prior = envelope.qc.take().expect("relay QC before re-signing");
+    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
+        envelope,
+        prior.parent_state_root,
+        prior.post_state_root,
+        &signer_keys,
+        &committee,
+        full_signer_bitmap(committee.len()),
+        &state.chain_id,
+    ));
 }
 
 fn sample_lane_relay_envelope_for_state_at_heights_with_view(
@@ -34566,17 +34625,6 @@ fn sample_lane_relay_envelope_for_state_signers(
     );
     let parent_state_root = Hash::new([0xBC; 4]);
     let post_state_root = Hash::new([0xAB; 4]);
-    let qc = commit_qc_with_signers_and_validator_set(
-        &header,
-        lane_id,
-        dataspace_id,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        committee,
-        signers_bitmap,
-        &state.chain_id,
-    );
     let settlement = LaneBlockCommitment {
         block_height: lane_block_height,
         lane_id,
@@ -34601,7 +34649,7 @@ fn sample_lane_relay_envelope_for_state_signers(
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
+    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
         .expect("valid envelope")
         .with_lane_block_descriptor_hash(Some(Hash::new(
             format!(
@@ -34610,7 +34658,17 @@ fn sample_lane_relay_envelope_for_state_signers(
                 lane_id.as_u32()
             )
             .as_bytes(),
-        )));
+        )))
+        .with_manifest_root(Some([0x44; 32]));
+    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
+        &envelope,
+        parent_state_root,
+        post_state_root,
+        &signer_keys,
+        committee,
+        signers_bitmap,
+        &state.chain_id,
+    ));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, view);
     envelope.with_fastpq_proof_material(Some(fastpq_proof))
 }
@@ -34670,7 +34728,8 @@ fn sample_lane_relay_envelope_for_dataspace(
                 lane_id.as_u32()
             )
             .as_bytes(),
-        )));
+        )))
+        .with_manifest_root(Some([0x44; 32]));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
     envelope.with_fastpq_proof_material(Some(fastpq_proof))
 }
@@ -34725,15 +34784,113 @@ fn sample_verified_lane_relay_record(envelope: &LaneRelayEnvelope) -> VerifiedLa
     let mut fastpq_binding = sample_verified_lane_relay_binding(envelope.dataspace_id);
     let claim_digest = lane_relay_fastpq_claim_digest(envelope).expect("lane relay claim digest");
     fastpq_binding.claim_digest = hex::encode(claim_digest.as_ref());
+    let lane_finality_statement_hash = envelope
+        .lane_finality_statement_hash()
+        .expect("sample verified relay must have a finality statement");
+    let (fastpq_old_root, fastpq_new_root) =
+        envelope.qc.as_ref().map_or(([0; 32], [0; 32]), |qc| {
+            (qc.parent_state_root.into(), qc.post_state_root.into())
+        });
     VerifiedLaneRelayRecord::new(
         envelope.clone(),
         material.proof_digest,
         Hash::new(b"state-test-lane-relay-statement").into(),
+        lane_finality_statement_hash,
+        fastpq_old_root,
+        fastpq_new_root,
+        lane_finality_statement_hash.into(),
         Hash::new(b"state-test-lane-relay-inner-proof"),
         material.verified_at_height,
         manifest_root,
         fastpq_binding,
     )
+}
+
+fn prove_finalized_lane_relay_for_registration(
+    mut envelope: LaneRelayEnvelope,
+) -> (LaneRelayEnvelope, ProofBlob) {
+    let qc = envelope.qc.as_ref().expect("finalized relay QC");
+    let manifest_root = envelope.manifest_root.expect("relay manifest root");
+    let finality_statement_hash = envelope
+        .lane_finality_statement_hash()
+        .expect("complete lane finality statement");
+    let claim_digest =
+        lane_relay_fastpq_claim_digest(&envelope).expect("lane relay FastPQ claim digest");
+    let relay_ref = envelope.relay_ref();
+    let relay_ref_bytes = norito::to_bytes(&relay_ref).expect("encode lane relay reference");
+    let source_tx_commitment = Hash::new(&relay_ref_bytes);
+    let binding = AxtFastpqBinding {
+        parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
+        source_dsid: envelope.dataspace_id.as_u64(),
+        source_dataspace: format!("dataspace-{}", envelope.dataspace_id.as_u64()),
+        source_receipt_id: format!("relay-{}", hex::encode(&relay_ref_bytes)),
+        source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
+        claim_type: "authorization".to_owned(),
+        claim_digest: hex::encode(claim_digest.as_ref()),
+        witness_commitment: hex::encode(Hash::new(envelope.settlement_hash.as_ref()).as_ref()),
+        policy_commitment: hex::encode(Hash::new(manifest_root).as_ref()),
+        verified_effect_type: LANE_RELAY_FASTPQ_EFFECT_TYPE.to_owned(),
+        corridor: "state-test-lane-relay".to_owned(),
+        verifier_id: "fastpq".to_owned(),
+        verifier_version: "v1".to_owned(),
+        target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
+        effect_binding: None,
+    };
+    let mut dsid = [0_u8; 16];
+    dsid[..8].copy_from_slice(&envelope.dataspace_id.as_u64().to_le_bytes());
+    let mut batch = fastpq_prover::TransitionBatch::new(
+        fastpq_prover::AXT_DEFAULT_PARAMETER,
+        fastpq_prover::PublicInputs {
+            dsid,
+            slot: envelope.block_header.height().get(),
+            old_root: qc.parent_state_root.into(),
+            new_root: qc.post_state_root.into(),
+            perm_root: Hash::new(manifest_root).into(),
+            tx_set_hash: finality_statement_hash.into(),
+        },
+    );
+    batch.push(fastpq_prover::StateTransition::new(
+        b"axt/state-test/lane-relay".to_vec(),
+        relay_ref_bytes,
+        claim_digest.as_ref().to_vec(),
+        fastpq_prover::OperationKind::MetaSet,
+    ));
+    batch.sort();
+    batch.metadata.insert(
+        "entry_hash".to_owned(),
+        source_tx_commitment.as_ref().to_vec(),
+    );
+    fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind lane relay AXT batch");
+    let proof = fastpq_prover::Prover::canonical_with_modes(
+        fastpq_prover::AXT_DEFAULT_PARAMETER,
+        fastpq_prover::ExecutionMode::Cpu,
+        fastpq_prover::PoseidonExecutionMode::Cpu,
+    )
+    .expect("construct lane relay FastPQ prover")
+    .prove(&batch)
+    .expect("prove lane relay statement");
+    let proof_payload = fastpq_prover::encode_axt_fastpq_payload(&batch, proof)
+        .expect("encode lane relay FastPQ payload");
+    let proof_envelope = AxtProofEnvelope {
+        dsid: envelope.dataspace_id,
+        manifest_root,
+        da_commitment: envelope
+            .da_commitment_hash
+            .map(|commitment| Hash::from(commitment).into()),
+        proof: proof_payload,
+        fastpq_binding: Some(binding),
+        committed_amount: None,
+        amount_commitment: None,
+    };
+    let proof_blob = ProofBlob {
+        payload: norito::to_bytes(&proof_envelope).expect("encode lane relay proof envelope"),
+        expiry_slot: Some(envelope.block_header.height().get().saturating_add(10)),
+    };
+    envelope.fastpq_proof = Some(LaneFastpqProofMaterial {
+        proof_digest: Hash::new(&proof_blob.payload),
+        verified_at_height: envelope.block_header.height().get(),
+    });
+    (envelope, proof_blob)
 }
 
 fn encode_verified_lane_relay_record_contract_map_state_for_test(
@@ -34764,7 +34921,9 @@ fn seed_effect_authenticated_relay_for_merge_test(
     state: &State,
     mut envelope: LaneRelayEnvelope,
 ) -> LaneRelayEnvelope {
-    envelope.manifest_root.get_or_insert([0x44; 32]);
+    envelope
+        .manifest_root
+        .expect("merge-ready relay fixture must be signed with a manifest root");
     let proposal_height = envelope.block_header.height().get();
     envelope
         .fastpq_proof
@@ -34915,7 +35074,7 @@ fn record_lane_relay_persists_and_deduplicates() {
     );
     configure_commit_topology_preserving_world_peers(&state, 1);
 
-    let envelope =
+    let mut envelope =
         sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
     let first = state
         .record_lane_relay(&envelope)
@@ -35154,11 +35313,26 @@ fn lane_relay_store_rejects_identity_drift_during_pending_upgrade() {
 fn lane_relay_store_namespaces_reused_heights_by_incarnation() {
     let (_, validator_keypair) = bls_account_in("validators");
     let signers = [&validator_keypair];
-    let mut retired = sample_lane_relay_envelope(1, LaneId::SINGLE, &signers, vec![0b0000_0001]);
-    retired.lane_incarnation = Hash::new(b"retired-relay-incarnation");
-    let mut fresh = retired.clone();
-    fresh.lane_incarnation = Hash::new(b"fresh-relay-incarnation");
-    fresh.settlement_hash = HashOf::from_untyped_unchecked(Hash::new(b"fresh-settlement"));
+    let retired = sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
+        1,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        &super::DEFAULT_TEST_CHAIN_ID,
+        0,
+        Hash::new(b"retired-relay-incarnation"),
+        &signers,
+        vec![0b0000_0001],
+    );
+    let fresh = sample_lane_relay_envelope_with_chain_dataspace_view_and_incarnation(
+        1,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        &super::DEFAULT_TEST_CHAIN_ID,
+        0,
+        Hash::new(b"fresh-relay-incarnation"),
+        &signers,
+        vec![0b0000_0001],
+    );
 
     let mut store = LaneRelayStore::default();
     assert_eq!(
@@ -35218,9 +35392,11 @@ fn record_lane_relay_rejects_identity_drift_during_pending_upgrade() {
         sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
             .with_lane_block_descriptor_hash(Some(descriptor_a));
     pending.fastpq_proof = None;
-    let verified_drift =
+    resign_lane_relay_for_state_test(&state, &mut pending, &validator_keypairs);
+    let mut verified_drift =
         sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
             .with_lane_block_descriptor_hash(Some(descriptor_b));
+    resign_lane_relay_for_state_test(&state, &mut verified_drift, &validator_keypairs);
 
     assert_eq!(
         state
@@ -35517,7 +35693,75 @@ fn embedded_relay_rejects_settlement_substitution_under_a_valid_header_qc() {
     let err = state
         .validate_embedded_lane_relay(&substituted)
         .expect_err("the QC must not authorize a substituted settlement effect");
-    assert!(matches!(err, LaneRelayError::InvalidFastpqProof));
+    assert!(matches!(err, LaneRelayError::QcFinalityStatementMismatch));
+}
+
+#[test]
+fn register_rejects_reproved_settlement_substitution_under_genuine_qc_before_state_write() {
+    use crate::smartcontracts::Execute as _;
+
+    let (state, validator_keypairs) = setup_lane_relay_burn_state();
+    let genuine =
+        sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs);
+    state
+        .authenticate_finalized_lane_relay(&genuine)
+        .expect("fixture must carry a genuine committee QC over the original effect");
+
+    let mut substituted = genuine;
+    substituted.settlement_commitment.tx_count =
+        substituted.settlement_commitment.tx_count.saturating_add(1);
+    substituted.settlement_hash =
+        iroha_data_model::nexus::compute_settlement_hash(&substituted.settlement_commitment)
+            .expect("substituted settlement remains canonically hashable");
+    substituted
+        .verify()
+        .expect("the substituted envelope remains structurally valid");
+    let (substituted, proof_blob) = prove_finalized_lane_relay_for_registration(substituted);
+    let relay_state_key: StatePath = substituted
+        .relay_ref()
+        .relay_state_key()
+        .parse()
+        .expect("canonical verified relay state key");
+    let contract_map_key = State::verified_lane_relay_contract_map_state_key(&relay_state_key)
+        .expect("canonical verified relay contract-map key");
+
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut state_block = state.block(header);
+    let mut state_transaction = state_block.transaction();
+    let err = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+        envelope: substituted,
+        proof_blob,
+        effect_proof_blob: None,
+    }
+    .execute(&ALICE_ID, &mut state_transaction)
+    .expect_err("re-proving an altered settlement must not transfer committee authority");
+
+    assert!(
+        matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                iroha_data_model::isi::error::InvalidParameterError::SmartContract(ref message)
+            ) if message.contains("finality authentication failed")
+                && message.contains("canonical lane finality statement")
+        ),
+        "unexpected substituted-settlement rejection: {err:?}"
+    );
+    for key in [&relay_state_key, &contract_map_key] {
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(key)
+                .is_none(),
+            "the rejected substituted effect must not stage durable verified state at {key}"
+        );
+    }
+    assert!(
+        state_transaction
+            .pending_verified_lane_relay_records
+            .is_empty(),
+        "the rejected substituted effect must not stage a post-commit cache record"
+    );
 }
 
 #[test]
@@ -36026,9 +36270,10 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
         ],
     );
 
-    let old_envelope =
+    let mut old_envelope =
         sample_lane_relay_envelope_for_state(&state, 1, lane_id, &validator_keypairs)
             .with_manifest_root(Some([0x51; 32]));
+    resign_lane_relay_for_state_test(&state, &mut old_envelope, &validator_keypairs);
     let old_record = sample_verified_lane_relay_record(&old_envelope);
     let old_key = State::verified_lane_relay_state_key(&old_envelope).expect("old state key");
     let old_map_key = State::verified_lane_relay_contract_map_state_key(&old_key)
@@ -36188,7 +36433,7 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
     }
 
     seed_committed_height_for_state_test(&restarted, 3);
-    let fresh_envelope = sample_lane_relay_envelope_for_state_at_heights_with_view(
+    let mut fresh_envelope = sample_lane_relay_envelope_for_state_at_heights_with_view(
         &restarted,
         3,
         1,
@@ -36197,6 +36442,7 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
         &validator_keypairs,
     )
     .with_manifest_root(Some([0x52; 32]));
+    resign_lane_relay_for_state_test(&restarted, &mut fresh_envelope, &validator_keypairs);
     let fresh_record = sample_verified_lane_relay_record(&fresh_envelope);
     insert_verified_lane_relay_record_state(
         &restarted,
@@ -36642,15 +36888,19 @@ fn record_lane_relay_rejects_conflicting_relay() {
 
     let mut settlement = envelope.settlement_commitment.clone();
     settlement.receipts[0].source_id = [0xBB; 32];
-    let conflicting = LaneRelayEnvelope::new(
+    let mut conflicting = LaneRelayEnvelope::new(
         envelope.block_header,
-        envelope.qc.clone(),
+        None,
         envelope.da_commitment_hash,
         settlement,
         envelope.rbc_bytes_total,
     )
     .expect("conflicting relay envelope is structurally valid")
+    .with_lane_block_descriptor_hash(envelope.lane_block_descriptor_hash)
+    .with_manifest_root(envelope.manifest_root)
     .with_fastpq_proof_material(envelope.fastpq_proof.clone());
+    conflicting.qc = envelope.qc.clone();
+    resign_lane_relay_for_state_test(&state, &mut conflicting, &validator_keypairs);
     let err = state
         .record_lane_relay(&conflicting)
         .expect_err("conflicting relay must be rejected");
@@ -36864,7 +37114,7 @@ fn record_lane_relay_rejects_global_qc_mode_tag() {
     let err = state
         .record_lane_relay(&envelope)
         .expect_err("global block QC mode tag must not satisfy lane relay QC");
-    assert!(matches!(err, LaneRelayError::AggregateSignatureInvalid));
+    assert!(matches!(err, LaneRelayError::QcFinalityStatementMismatch));
 }
 
 #[test]
@@ -36895,8 +37145,13 @@ fn record_lane_relay_rejects_when_validator_pool_under_quorum() {
 
     let (_, validator_keypair) = bls_account_in("validators");
     let signers = [&validator_keypair];
-    let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0), &signers, vec![0b0000_0001]);
-    bind_lane_relay_incarnation_for_state_test(&state, 1, &mut envelope);
+    let envelope = sample_lane_relay_envelope_with_state_incarnation_unchecked(
+        &state,
+        1,
+        LaneId::new(0),
+        &signers,
+        vec![0b0000_0001],
+    );
     let err = state
         .record_lane_relay(&envelope)
         .expect_err("under-quorum validator pool should be rejected");
@@ -37115,17 +37370,6 @@ fn record_lane_relay_accepts_emergency_override_under_quorum() {
         .map(|idx| keypairs.get(&committee[*idx]).expect("signer key"))
         .collect();
     let signers_bitmap = signer_bitmap(&signer_indices, committee.len());
-    let qc = commit_qc_with_signers_and_validator_set(
-        &header,
-        LaneId::new(0),
-        DataSpaceId::UNIVERSAL,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        &committee,
-        signers_bitmap,
-        &state.chain_id,
-    );
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id: LaneId::new(0),
@@ -37148,8 +37392,19 @@ fn record_lane_relay_accepts_emergency_override_under_quorum() {
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let envelope =
-        LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("lane relay envelope");
+    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+        .expect("lane relay envelope")
+        .with_lane_block_descriptor_hash(Some(Hash::new(b"state-test-emergency-lane-descriptor")))
+        .with_manifest_root(Some([0x44; 32]));
+    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
+        &envelope,
+        parent_state_root,
+        post_state_root,
+        &signer_keys,
+        &committee,
+        signers_bitmap,
+        &state.chain_id,
+    ));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
     let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
     let inserted = state
@@ -37257,17 +37512,6 @@ fn record_lane_relay_accepts_emergency_override_on_expiry_height() {
         .map(|idx| keypairs.get(&committee[*idx]).expect("signer key"))
         .collect();
     let signers_bitmap = signer_bitmap(&signer_indices, committee.len());
-    let qc = commit_qc_with_signers_and_validator_set(
-        &header,
-        LaneId::new(0),
-        DataSpaceId::UNIVERSAL,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        &committee,
-        signers_bitmap,
-        &state.chain_id,
-    );
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id: LaneId::new(0),
@@ -37290,8 +37534,19 @@ fn record_lane_relay_accepts_emergency_override_on_expiry_height() {
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let envelope =
-        LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("lane relay envelope");
+    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+        .expect("lane relay envelope")
+        .with_lane_block_descriptor_hash(Some(Hash::new(b"state-test-emergency-lane-descriptor")))
+        .with_manifest_root(Some([0x44; 32]));
+    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
+        &envelope,
+        parent_state_root,
+        post_state_root,
+        &signer_keys,
+        &committee,
+        signers_bitmap,
+        &state.chain_id,
+    ));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
     let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
     let inserted = state
@@ -37348,8 +37603,13 @@ fn record_lane_relay_rejects_when_emergency_override_expired() {
 
     let (_, validator_keypair) = bls_account_in("validators");
     let signers = [&validator_keypair];
-    let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0), &signers, vec![0b0000_0001]);
-    bind_lane_relay_incarnation_for_state_test(&state, 1, &mut envelope);
+    let envelope = sample_lane_relay_envelope_with_state_incarnation_unchecked(
+        &state,
+        1,
+        LaneId::new(0),
+        &signers,
+        vec![0b0000_0001],
+    );
     let err = state
         .record_lane_relay(&envelope)
         .expect_err("expired override should be rejected");
@@ -37400,8 +37660,13 @@ fn record_lane_relay_rejects_when_emergency_override_disabled() {
 
     let (_, validator_keypair) = bls_account_in("validators");
     let signers = [&validator_keypair];
-    let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0), &signers, vec![0b0000_0001]);
-    bind_lane_relay_incarnation_for_state_test(&state, 1, &mut envelope);
+    let envelope = sample_lane_relay_envelope_with_state_incarnation_unchecked(
+        &state,
+        1,
+        LaneId::new(0),
+        &signers,
+        vec![0b0000_0001],
+    );
     let err = state
         .record_lane_relay(&envelope)
         .expect_err("disabled override should be rejected");
@@ -37454,8 +37719,13 @@ fn record_lane_relay_rejects_when_emergency_override_overlaps_base() {
 
     let (_, validator_keypair) = bls_account_in("validators");
     let signers = [&validator_keypair];
-    let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0), &signers, vec![0b0000_0001]);
-    bind_lane_relay_incarnation_for_state_test(&state, 1, &mut envelope);
+    let envelope = sample_lane_relay_envelope_with_state_incarnation_unchecked(
+        &state,
+        1,
+        LaneId::new(0),
+        &signers,
+        vec![0b0000_0001],
+    );
     let err = state
         .record_lane_relay(&envelope)
         .expect_err("overlapping override should be rejected");
@@ -37509,8 +37779,13 @@ fn record_lane_relay_rejects_when_emergency_override_insufficient() {
 
     let (_, validator_keypair) = bls_account_in("validators");
     let signers = [&validator_keypair];
-    let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0), &signers, vec![0b0000_0001]);
-    bind_lane_relay_incarnation_for_state_test(&state, 1, &mut envelope);
+    let envelope = sample_lane_relay_envelope_with_state_incarnation_unchecked(
+        &state,
+        1,
+        LaneId::new(0),
+        &signers,
+        vec![0b0000_0001],
+    );
     let err = state
         .record_lane_relay(&envelope)
         .expect_err("insufficient override should be rejected");
@@ -37617,17 +37892,6 @@ fn record_lane_relay_rejects_stored_emergency_override_peer_outside_commit_topol
         .map(|idx| keypairs.get(&stale_committee[*idx]).expect("signer key"))
         .collect();
     let signers_bitmap = signer_bitmap(&signer_indices, stale_committee.len());
-    let qc = commit_qc_with_signers_and_validator_set(
-        &header,
-        LaneId::new(0),
-        DataSpaceId::UNIVERSAL,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        &stale_committee,
-        signers_bitmap,
-        &state.chain_id,
-    );
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id: LaneId::new(0),
@@ -37650,8 +37914,21 @@ fn record_lane_relay_rejects_stored_emergency_override_peer_outside_commit_topol
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let envelope =
-        LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("lane relay envelope");
+    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+        .expect("lane relay envelope")
+        .with_lane_block_descriptor_hash(Some(Hash::new(
+            b"state-test-stale-emergency-lane-descriptor",
+        )))
+        .with_manifest_root(Some([0x44; 32]));
+    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
+        &envelope,
+        parent_state_root,
+        post_state_root,
+        &signer_keys,
+        &stale_committee,
+        signers_bitmap,
+        &state.chain_id,
+    ));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
     let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
 
@@ -37788,17 +38065,6 @@ fn record_lane_relay_rejects_stored_emergency_override_peer_with_expired_consens
         .map(|idx| keypairs.get(&stale_committee[*idx]).expect("signer key"))
         .collect();
     let signers_bitmap = signer_bitmap(&signer_indices, stale_committee.len());
-    let qc = commit_qc_with_signers_and_validator_set(
-        &header,
-        LaneId::new(0),
-        DataSpaceId::UNIVERSAL,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        &stale_committee,
-        signers_bitmap,
-        &state.chain_id,
-    );
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id: LaneId::new(0),
@@ -37821,8 +38087,21 @@ fn record_lane_relay_rejects_stored_emergency_override_peer_with_expired_consens
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let envelope =
-        LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("lane relay envelope");
+    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+        .expect("lane relay envelope")
+        .with_lane_block_descriptor_hash(Some(Hash::new(
+            b"state-test-stale-emergency-lane-descriptor",
+        )))
+        .with_manifest_root(Some([0x44; 32]));
+    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
+        &envelope,
+        parent_state_root,
+        post_state_root,
+        &signer_keys,
+        &stale_committee,
+        signers_bitmap,
+        &state.chain_id,
+    ));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
     let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
 
@@ -37962,17 +38241,6 @@ fn record_lane_relay_rejects_stored_emergency_override_removed_world_peer() {
         .map(|idx| keypairs.get(&stale_committee[*idx]).expect("signer key"))
         .collect();
     let signers_bitmap = signer_bitmap(&signer_indices, stale_committee.len());
-    let qc = commit_qc_with_signers_and_validator_set(
-        &header,
-        LaneId::new(0),
-        DataSpaceId::UNIVERSAL,
-        parent_state_root,
-        post_state_root,
-        &signer_keys,
-        &stale_committee,
-        signers_bitmap,
-        &state.chain_id,
-    );
     let settlement = LaneBlockCommitment {
         block_height: height,
         lane_id: LaneId::new(0),
@@ -37995,8 +38263,21 @@ fn record_lane_relay_rejects_stored_emergency_override_removed_world_peer() {
         nexus_fee_receipts: Vec::new(),
         native_amx_receipts: Vec::new(),
     };
-    let envelope =
-        LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("lane relay envelope");
+    let mut envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+        .expect("lane relay envelope")
+        .with_lane_block_descriptor_hash(Some(Hash::new(
+            b"state-test-stale-emergency-lane-descriptor",
+        )))
+        .with_manifest_root(Some([0x44; 32]));
+    envelope.qc = Some(commit_qc_with_signers_and_validator_set(
+        &envelope,
+        parent_state_root,
+        post_state_root,
+        &signer_keys,
+        &stale_committee,
+        signers_bitmap,
+        &state.chain_id,
+    ));
     let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
     let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
 
@@ -39297,14 +39578,13 @@ fn record_lane_relay_rejects_unpinned_topology_after_creation_preflight_shortfal
     );
 
     let signers: Vec<_> = topology_keypairs.iter().collect();
-    let mut envelope = sample_lane_relay_envelope_for_state_with_keypair_signers(
+    let envelope = sample_lane_relay_envelope_for_state_with_keypair_signers(
         &state,
         height,
         lane_id,
         &signers,
         full_signer_bitmap(signers.len()),
     );
-    bind_lane_relay_incarnation_for_state_test(&state, height, &mut envelope);
     let err = state
         .record_lane_relay(&envelope)
         .expect_err("non-live topology signer must not satisfy autoscale relay authority");
@@ -39361,14 +39641,13 @@ fn record_lane_relay_rejects_unpinned_lifecycle_topology_signer() {
         assert_eq!(state.authoritative_lane_peer_ids(lane_id).len(), 4);
 
         let signers: Vec<_> = topology_keypairs.iter().collect();
-        let mut envelope = sample_lane_relay_envelope_for_state_with_keypair_signers(
+        let envelope = sample_lane_relay_envelope_for_state_with_keypair_signers(
             &state,
             height,
             lane_id,
             &signers,
             full_signer_bitmap(signers.len()),
         );
-        bind_lane_relay_incarnation_for_state_test(&state, height, &mut envelope);
         let err = state.record_lane_relay(&envelope).unwrap_err();
 
         assert!(
@@ -49615,9 +49894,12 @@ fn asset_definition_holder_index_tracks_asset_lifecycle() {
 
     let alice_id = ALICE_ID.clone();
     let asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
-    stx.world
-        .deposit_numeric_asset(&asset_id, &Quantity::from(1_u32))
-        .expect("insert asset through helper");
+    crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+        &mut stx.world,
+        &asset_id,
+        &Quantity::from(1_u32),
+    )
+    .expect("insert asset through helper");
     assert!(
         stx.world
             .asset_definition_holders
@@ -50242,7 +50524,8 @@ fn time_trigger_failure_populates_entrypoint_instructions() -> Result<()> {
                 start_ms: 0,
                 period_ms: Some(1_000),
             })),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
 
     {
@@ -50304,7 +50587,8 @@ fn time_trigger_same_id_reschedule_keeps_new_repeat_budget() -> Result<()> {
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
                 TimeEventFilter(ExecutionTime::Schedule(replacement_schedule)),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let instructions = vec![
             InstructionBox::from(Unregister::trigger(trigger_id.clone())),
@@ -50320,7 +50604,8 @@ fn time_trigger_same_id_reschedule_keeps_new_repeat_budget() -> Result<()> {
                     start_ms: 0,
                     period_ms: None,
                 })),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(trigger).execute(&ALICE_ID, &mut stx)?;
         stx.apply();
@@ -50438,7 +50723,8 @@ fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
                 TimeEventFilter::new(ExecutionTime::PreCommit),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(trigger).execute(&ALICE_ID, &mut stx)?;
         stx.apply();
@@ -51918,7 +52204,8 @@ fn transaction_failure_rolls_back_asset_world_and_trigger_changes() {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(ALICE_ID.clone()),
-            );
+            )
+            .expect("trigger action fixture satisfies validation invariants");
             Register::trigger(Trigger::new(trigger_id.clone(), trigger_action))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -52000,7 +52287,8 @@ fn execute_called_trigger_failure_rolls_back_state() {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(ALICE_ID.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(trigger)
             .execute(&ALICE_ID, &mut stx)
@@ -52080,7 +52368,8 @@ fn self_calling_trigger_stops_at_synchronous_execution_depth() {
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone())
                 .under_authority(ALICE_ID.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     Register::trigger(trigger)
         .execute(&ALICE_ID, &mut transaction)
@@ -52159,7 +52448,8 @@ fn data_trigger_depth_u8_max_rejects_without_panicking_or_wrapping() {
                 Repeats::Exactly(u32::from(u8::MAX) + 1),
                 ALICE_ID.clone(),
                 data_pre::DataEventFilter::Any,
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(trigger)
             .execute(&ALICE_ID, &mut transaction)
@@ -52256,7 +52546,8 @@ fn authenticated_generic_ivm_trigger_executes_without_contract_identity() {
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(ALICE_ID.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         ))
         .execute(&ALICE_ID, &mut transaction)
         .expect("register authenticated generic trigger");
@@ -52465,6 +52756,7 @@ fn raw_ivm_trigger_enforces_entrypoint_authorization_before_argument_decode() {
                     .for_trigger(trigger_id.clone())
                     .under_authority(ALICE_ID.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(callback_metadata),
         );
         Register::trigger(trigger)
@@ -52812,6 +53104,7 @@ let _ev = ev;
                     .for_trigger(trigger_id.clone())
                     .under_authority(ALICE_ID.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(metadata),
         );
         Register::trigger(trigger)
@@ -52976,7 +53269,8 @@ fn contract_call_trigger_enforces_entrypoint_authorization_before_argument_decod
                 ExecuteTriggerEventFilter::new()
                     .for_trigger(trigger_id.clone())
                     .under_authority(ALICE_ID.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(trigger)
             .execute(&ALICE_ID, &mut stx)
@@ -53410,6 +53704,7 @@ fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
                         .for_asset(rose_target.clone()),
                 ),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(callback_metadata),
         );
         Register::trigger(trigger)
@@ -53457,89 +53752,6 @@ fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
         .asset(&rose_source)
         .expect("trigger should collect rose into the reserve");
     assert_eq!(&**alice_rose.value(), &Quantity::from(5_u32));
-}
-
-#[test]
-fn detached_execute_called_trigger_failure_rolls_back_state() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query_handle);
-
-    let trigger_id: TriggerId = "rollback_trigger_detached".parse().unwrap();
-    let asset_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
-
-    // Commit initial domain, account, and the by-call trigger.
-    let block = new_dummy_block_with_payload(|header| {
-        header.set_height(NonZeroU64::new(1).unwrap());
-    });
-    {
-        let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
-        Register::domain(Domain::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-        Register::account(new_sample_account(&ALICE_ID))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-
-        let create_asset = Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        });
-        let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
-        let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
-        let trigger = Trigger::new(
-            trigger_id.clone(),
-            Action::new(
-                instructions,
-                Repeats::Indefinitely,
-                ALICE_ID.clone(),
-                ExecuteTriggerEventFilter::new()
-                    .for_trigger(trigger_id.clone())
-                    .under_authority(ALICE_ID.clone()),
-            ),
-        );
-        Register::trigger(trigger)
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-
-        stx.apply();
-        state_block.commit().unwrap();
-    }
-
-    // Build a detached delta that records the by-call trigger execution.
-    let mut delta = DetachedStateTransactionDelta::default();
-    let event = ExecuteTriggerEvent {
-        trigger_id: trigger_id.clone(),
-        authority: ALICE_ID.clone(),
-        args: Json::default(),
-    };
-    delta.execute_trigger_by_call(event);
-
-    // Merge the detached delta and expect rejection; state changes must rollback.
-    let block = new_dummy_block_with_payload(|header| {
-        header.set_height(NonZeroU64::new(2).unwrap());
-    });
-    {
-        let mut state_block = state.block(block.as_ref().header());
-        let result = delta.merge_into(&mut state_block, &ALICE_ID);
-        assert!(
-            result.is_err(),
-            "detached trigger execution should fail and reject the transaction"
-        );
-    }
-
-    let view = state.view();
-    assert!(
-        view.world.asset_definition(&asset_definition_id).is_err(),
-        "asset definition created by a failing detached trigger must not persist",
-    );
 }
 
 fn build_executor_verdict_program(
@@ -53595,7 +53807,8 @@ fn execute_called_trigger_respects_executor_validation() {
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone())
                 .under_authority(ALICE_ID.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
 
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -53674,7 +53887,8 @@ fn block_rejects_failing_execute_trigger_and_rolls_back() {
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone())
                 .under_authority(ALICE_ID.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     ));
     let register_tx = TransactionBuilder::new(
         ChainId::from("chain"),
@@ -57013,20 +57227,14 @@ fn setup_nexus_fee_merge_state(
             per_gas_unit_fee: Quantity::zero(),
         },
     }];
-    let lane_block_descriptor_hash = envelope.lane_block_descriptor_hash;
-    let envelope = LaneRelayEnvelope::new(
-        envelope.block_header.clone(),
-        envelope.qc.clone(),
-        envelope.da_commitment_hash,
-        settlement,
-        envelope.rbc_bytes_total,
-    )
-    .expect("fee relay envelope")
-    .with_lane_block_descriptor_hash(lane_block_descriptor_hash);
-    let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
-    let envelope = envelope
-        .with_manifest_root(Some([0x44; 32]))
-        .with_fastpq_proof_material(Some(fastpq_proof));
+    envelope.settlement_commitment = settlement;
+    envelope.settlement_hash =
+        iroha_data_model::nexus::compute_settlement_hash(&envelope.settlement_commitment)
+            .expect("fee relay settlement hash");
+    envelope
+        .verify()
+        .expect("fee relay envelope remains structurally valid");
+    resign_lane_relay_for_state_test(&state, &mut envelope, &validator_keypairs);
     // The governed proof is verified at proposal height 1, so publish the
     // corresponding committed carrier before the record is admitted.
     ensure_merge_carrier_parent_for_test(&state);
@@ -59061,7 +59269,8 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
             Repeats::Exactly(1),
             ALICE_ID.clone(),
             DataEventFilter::Asset(data_pre::AssetEventFilter::new().for_asset(asset_id.clone())),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     Register::trigger(data_trigger)
         .execute(&ALICE_ID, &mut stx)
@@ -59081,7 +59290,8 @@ async fn by_call_trigger_emits_event_and_chains_data_trigger() -> Result<()> {
             ExecuteTriggerEventFilter::new()
                 .for_trigger(by_call_id.clone())
                 .under_authority(ALICE_ID.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     Register::trigger(by_call)
         .execute(&ALICE_ID, &mut stx)
@@ -59251,7 +59461,8 @@ fn deterministic_pipeline_block_approved_trigger_executes() {
         Repeats::Exactly(1),
         ALICE_ID.clone(),
         PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -59322,7 +59533,8 @@ fn constrained_pipeline_block_trigger_ignores_wrong_height_approved_event() {
                 .for_height(NonZeroU64::new(7).unwrap())
                 .for_status(BlockStatus::Approved),
         ),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -59392,7 +59604,8 @@ fn one_shot_pipeline_trigger_executes_once_for_multiple_matching_events() {
         Repeats::Exactly(1),
         ALICE_ID.clone(),
         PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -59477,7 +59690,8 @@ fn one_shot_pipeline_transaction_trigger_executes_once_for_duplicate_matching_fa
         PipelineEventFilterBox::from(
             TransactionEventFilter::new().for_status(TransactionStatus::Approved),
         ),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -59583,7 +59797,8 @@ fn deterministic_pipeline_transaction_approved_and_rejected_triggers_execute() {
             Repeats::Exactly(1),
             ALICE_ID.clone(),
             PipelineEventFilterBox::from(TransactionEventFilter::new().for_status(status)),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         Register::trigger(Trigger::new(trigger_id, action))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -59687,6 +59902,7 @@ fn malformed_enabled_pipeline_trigger_does_not_execute_or_decrement() {
         ALICE_ID.clone(),
         PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
     )
+    .expect("trigger action fixture satisfies validation invariants")
     .with_metadata(metadata);
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
@@ -59773,6 +59989,7 @@ fn numeric_zero_enabled_pipeline_trigger_does_not_execute_or_decrement() {
         ALICE_ID.clone(),
         PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
     )
+    .expect("trigger action fixture satisfies validation invariants")
     .with_metadata(metadata);
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
@@ -59862,7 +60079,8 @@ fn constrained_pipeline_transaction_trigger_ignores_near_miss_events() {
                 .for_dataspace_id(DataSpaceId::UNIVERSAL)
                 .for_status(TransactionStatus::Approved),
         ),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -59944,7 +60162,8 @@ fn pipeline_trigger_fails_closed_on_missing_bytecode() {
         Repeats::Exactly(1),
         ALICE_ID.clone(),
         PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -60020,7 +60239,8 @@ fn pipeline_trigger_instruction_failure_rolls_back_and_preserves_repeats() {
         Repeats::Exactly(1),
         ALICE_ID.clone(),
         PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -60095,7 +60315,8 @@ fn pipeline_trigger_chained_data_failure_rolls_back_and_preserves_repeats() {
         Repeats::Exactly(1),
         ALICE_ID.clone(),
         DataEventFilter::Asset(data_pre::AssetEventFilter::new().for_asset(asset_id.clone())),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(data_trigger_id, data_action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -60109,7 +60330,8 @@ fn pipeline_trigger_chained_data_failure_rolls_back_and_preserves_repeats() {
         Repeats::Exactly(1),
         ALICE_ID.clone(),
         PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(pipeline_trigger_id.clone(), pipeline_action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -60185,7 +60407,8 @@ fn by_call_chained_data_trigger_failure_rolls_back_and_preserves_repeats() {
         Repeats::Exactly(1),
         ALICE_ID.clone(),
         DataEventFilter::Asset(data_pre::AssetEventFilter::new().for_asset(asset_id.clone())),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(data_trigger_id, data_action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -60201,7 +60424,8 @@ fn by_call_chained_data_trigger_failure_rolls_back_and_preserves_repeats() {
         ExecuteTriggerEventFilter::new()
             .for_trigger(by_call_id.clone())
             .under_authority(ALICE_ID.clone()),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(by_call_id.clone(), by_call_action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -60274,7 +60498,8 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
             Repeats::Exactly(1),
             ALICE_ID.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     Register::trigger(t).execute(&ALICE_ID, &mut stx).unwrap();
 
@@ -60450,7 +60675,9 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
                 Duration::from_millis(1),
             ))),
         )
-        .with_retry_policy(retry_policy);
+        .expect("trigger action fixture satisfies validation invariants")
+        .with_retry_policy(retry_policy)
+        .expect("scheduled trigger fixture accepts its retry policy");
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -60604,7 +60831,9 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
                 Duration::from_millis(1),
             ))),
         )
-        .with_retry_policy(retry_policy);
+        .expect("trigger action fixture satisfies validation invariants")
+        .with_retry_policy(retry_policy)
+        .expect("scheduled trigger fixture accepts its retry policy");
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -60744,7 +60973,9 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
                     .with_period(Duration::from_millis(4)),
             )),
         )
-        .with_retry_policy(retry_policy);
+        .expect("trigger action fixture satisfies validation invariants")
+        .with_retry_policy(retry_policy)
+        .expect("scheduled trigger fixture accepts its retry policy");
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -60979,7 +61210,8 @@ fn ivm_trigger_respects_pipeline_cycle_cap() {
         Repeats::Exactly(1),
         ALICE_ID.clone(),
         filter,
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     Register::trigger(Trigger::new(trigger_id.clone(), action))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
@@ -61046,7 +61278,8 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
             Repeats::Exactly(2),
             ALICE_ID.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     Register::trigger(trigger)
         .execute(&ALICE_ID, &mut stx)
@@ -61259,7 +61492,8 @@ let _marker = marker;
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone())
                 .under_authority(ALICE_ID.clone()),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -61342,7 +61576,8 @@ fn execute_called_trigger_rejects_depleted_entry_and_prunes_trigger() {
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone())
                 .under_authority(ALICE_ID.clone()),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -61431,6 +61666,7 @@ fn execute_called_trigger_rejects_disabled_trigger() {
                 .for_trigger(trigger_id.clone())
                 .under_authority(ALICE_ID.clone()),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(metadata);
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
@@ -61506,6 +61742,7 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
                 .for_trigger(trigger_id.clone())
                 .under_authority(ALICE_ID.clone()),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(metadata);
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
@@ -61592,6 +61829,7 @@ fn execute_called_trigger_rejects_malformed_enabled_trigger() {
                 .for_trigger(trigger_id.clone())
                 .under_authority(ALICE_ID.clone()),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(metadata);
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
@@ -61679,6 +61917,7 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
             ALICE_ID.clone(),
             data_pre::DataEventFilter::Any,
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(metadata);
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
@@ -61771,6 +62010,7 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
                 ALICE_ID.clone(),
                 data_pre::DataEventFilter::Any,
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(metadata);
             Register::trigger(Trigger::new(trigger_id, action))
                 .execute(&ALICE_ID, &mut stx)
@@ -61862,7 +62102,8 @@ fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
             Repeats::Exactly(1),
             ALICE_ID.clone(),
             data_pre::DataEventFilter::Any,
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -62015,7 +62256,8 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
                 data_pre::DataEventFilter::Asset(
                     data_pre::AssetEventFilter::new().for_asset(asset_id.clone()),
                 ),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(data_trigger)
             .execute(&ALICE_ID, &mut stx)
@@ -62090,7 +62332,8 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
             Repeats::Indefinitely,
             ALICE_ID.clone(),
             data_pre::DataEventFilter::Any,
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         Register::trigger(Trigger::new(trigger_id.clone(), action))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -62443,292 +62686,6 @@ fn detached_delta_preserves_genesis_frozen_block_cadence() {
         original_cadence,
         "the mutable parameter surface must not alter signed block cadence"
     );
-}
-
-#[test]
-#[allow(clippy::too_many_lines)]
-fn delta_merge_execute_trigger_by_call_executes_and_chains() {
-    // World with domain/account/asset
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query_handle);
-
-    let block = new_dummy_block_with_payload(|h| {
-        h.set_height(NonZeroU64::new(1).unwrap());
-    });
-    let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    Register::domain(Domain::new(domain_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-    Register::account(new_sample_account(&ALICE_ID))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
-    .execute(&ALICE_ID, &mut stx)
-    .unwrap();
-
-    // Data trigger: whenever ALICE's rose asset changes, set account metadata flag=ok (runs once)
-    let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-    let key: Name = "flag".parse().unwrap();
-    let data_trigger = Trigger::new(
-        "on_rose_added".parse().unwrap(),
-        Action::new(
-            vec![InstructionBox::from(SetKeyValue::account(
-                ALICE_ID.clone(),
-                key.clone(),
-                Json::from(norito::json!("ok")),
-            ))],
-            Repeats::Exactly(1),
-            ALICE_ID.clone(),
-            data_pre::DataEventFilter::Asset(
-                data_pre::AssetEventFilter::new().for_asset(asset_id.clone()),
-            ),
-        ),
-    );
-    Register::trigger(data_trigger)
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-
-    // By-call trigger: mint 1 to ALICE's rose
-    let by_call_id: TriggerId = "call_mint".parse().unwrap();
-    let by_call = Trigger::new(
-        by_call_id.clone(),
-        Action::new(
-            vec![InstructionBox::from(Mint::asset_quantity(
-                1_u32,
-                asset_id.clone(),
-            ))],
-            Repeats::Exactly(1),
-            ALICE_ID.clone(),
-            ExecuteTriggerEventFilter::new()
-                .for_trigger(by_call_id.clone())
-                .under_authority(ALICE_ID.clone()),
-        ),
-    );
-    Register::trigger(by_call)
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-
-    stx.apply();
-    let _ = state_block.apply_without_execution(&block, Vec::new());
-    state_block.commit().unwrap();
-
-    // Now execute the by-call trigger via detached delta and merge
-    let mut state_block2 = state.block(block.as_ref().header());
-    let evt = ExecuteTriggerEvent {
-        trigger_id: by_call_id.clone(),
-        authority: ALICE_ID.clone(),
-        args: Json::from(norito::json!({})),
-    };
-    let mut delta = DetachedStateTransactionDelta::default();
-    delta.execute_trigger_by_call(evt);
-    let _ = delta
-        .merge_into(&mut state_block2, &ALICE_ID)
-        .expect("merge ok");
-
-    let events = state_block2.world.take_external_events();
-    // Expect ExecuteTrigger event
-    assert!(events.iter().any(|e| matches!(
-        e,
-        EventBox::ExecuteTrigger(ev) if ev.trigger_id() == &by_call_id
-    )));
-    // Asset Added event for the minted asset
-    let added_count = events
-        .iter()
-        .filter(|e| {
-            if let EventBox::Data(ev) = e
-                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                    data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(ch)),
-                )) = ev.as_ref()
-            {
-                return ch.asset == asset_id && ch.amount == Quantity::one();
-            }
-            false
-        })
-        .count();
-    assert_eq!(added_count, 1, "expected exactly one Asset::Added for mint");
-    // Account metadata inserted event for ALICE (flag=ok)
-    let meta_count = events
-        .iter()
-        .filter(|e| {
-            if let EventBox::Data(ev) = e
-                && let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                    data_pre::AccountEvent::MetadataInserted(mc),
-                )) = ev.as_ref()
-            {
-                return *mc.target() == *ALICE_ID
-                    && mc.key() == &key
-                    && mc.value() == &Json::from(norito::json!("ok"));
-            }
-            false
-        })
-        .count();
-    assert_eq!(
-        meta_count, 1,
-        "expected exactly one MetadataInserted for flag"
-    );
-}
-
-#[test]
-fn delta_merge_execute_trigger_by_call_fails_after_depletion() {
-    // World with domain/account/asset
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query_handle);
-
-    let block = new_dummy_block_with_payload(|h| {
-        h.set_height(NonZeroU64::new(1).unwrap());
-    });
-    let mut state_block = state.block(block.as_ref().header());
-    let mut stx = state_block.transaction();
-
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    Register::domain(Domain::new(domain_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-    Register::account(new_sample_account(&ALICE_ID))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    Register::asset_definition({
-        let __asset_definition_id = asset_def_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    })
-    .execute(&ALICE_ID, &mut stx)
-    .unwrap();
-    let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
-
-    // By-call trigger: mint once, then deplete.
-    let trigger_id: TriggerId = "call_once".parse().unwrap();
-    let trigger = Trigger::new(
-        trigger_id.clone(),
-        Action::new(
-            vec![InstructionBox::from(Mint::asset_quantity(
-                1_u32,
-                asset_id.clone(),
-            ))],
-            Repeats::Exactly(1),
-            ALICE_ID.clone(),
-            ExecuteTriggerEventFilter::new()
-                .for_trigger(trigger_id.clone())
-                .under_authority(ALICE_ID.clone()),
-        ),
-    );
-    Register::trigger(trigger)
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-
-    stx.apply();
-    let _ = state_block.apply_without_execution(&block, Vec::new());
-    state_block.commit().unwrap();
-
-    let mut state_block2 = state.block(block.as_ref().header());
-    let evt = ExecuteTriggerEvent {
-        trigger_id: trigger_id.clone(),
-        authority: ALICE_ID.clone(),
-        args: Json::from(norito::json!({})),
-    };
-
-    let mut first = DetachedStateTransactionDelta::default();
-    first.execute_trigger_by_call(evt.clone());
-    let _ = first
-        .merge_into(&mut state_block2, &ALICE_ID)
-        .expect("first execution succeeds");
-
-    let mut second = DetachedStateTransactionDelta::default();
-    second.execute_trigger_by_call(evt);
-    let err = second
-        .merge_into(&mut state_block2, &ALICE_ID)
-        .expect_err("depleted trigger must be rejected");
-
-    match err {
-        TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
-            InstructionExecutionError::Find(FindError::Trigger(id)),
-        )) => assert_eq!(id, trigger_id),
-        other => panic!("unexpected error: {other:?}"),
-    }
-}
-
-#[test]
-fn delta_merge_execute_trigger_by_call_respects_permissions() {
-    use iroha_data_model::{
-        Level, ValidationFail,
-        events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
-        isi::Log,
-        isi::error::InstructionExecutionError,
-        transaction::error::TransactionRejectionReason,
-    };
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
-
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let domain: Domain =
-        Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&BOB_ID);
-    let alice_account = new_sample_account(&ALICE_ID).build(&BOB_ID);
-    let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-    let world = World::with([domain], [alice_account, bob_account], []);
-    let state = State::new(world, kura, query_handle);
-
-    let trigger_id: TriggerId = "permission_guard".parse().unwrap();
-    let trigger = Trigger::new(
-        trigger_id.clone(),
-        Action::new(
-            vec![InstructionBox::from(Log::new(
-                Level::INFO,
-                "trigger".to_owned(),
-            ))],
-            Repeats::Indefinitely,
-            BOB_ID.clone(),
-            ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
-        ),
-    );
-
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-    let mut state_block = state.block(header);
-    {
-        let mut stx = state_block.transaction();
-        Register::trigger(trigger)
-            .execute(&BOB_ID, &mut stx)
-            .unwrap();
-        stx.apply();
-    }
-    state_block.commit().unwrap();
-
-    let mut delta = DetachedStateTransactionDelta::default();
-    let event = ExecuteTriggerEvent {
-        trigger_id: trigger_id.clone(),
-        authority: ALICE_ID.clone(),
-        args: Json::default(),
-    };
-    delta.execute_trigger_by_call(event);
-
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-    let mut state_block = state.block(header);
-    let err = delta
-        .merge_into(&mut state_block, &ALICE_ID)
-        .expect_err("unauthorized execute-trigger should be rejected");
-
-    match err {
-        TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
-            InstructionExecutionError::InvariantViolation(_),
-        )) => {}
-        other => panic!("unexpected rejection: {other:?}"),
-    }
 }
 
 #[tokio::test]
@@ -63776,6 +63733,35 @@ async fn new_for_testing_uses_config_chain_id() {
     let state = State::new_for_testing(World::default(), kura, query_handle);
 
     assert_eq!(state.chain_id, *super::DEFAULT_TEST_CHAIN_ID);
+}
+
+#[test]
+fn musubi_snapshot_rejects_dangling_reverse_index_tombstones() {
+    let location = MusubiArchiveLocationKeyV1::new(
+        ArchiveId::new([1; 32]),
+        MusubiArchiveLocationIdV1::new([2; 32]),
+    );
+    let locations = Storage::<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>::default();
+    let by_pin = Storage::from_iter([(
+        ManifestDigest::new([3; 32]),
+        MusubiPinLocationReferenceV1 {
+            pin_manifest: ManifestDigest::new([3; 32]),
+            location,
+            active: false,
+        },
+    )]);
+    let by_order =
+        Storage::<ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>::default();
+    let by_provider = Storage::<MusubiProviderLocationKeyV1, ()>::default();
+
+    let error = super::deserialize::validate_musubi_location_reverse_indices(
+        &locations,
+        &by_pin,
+        &by_order,
+        &by_provider,
+    )
+    .expect_err("dangling immutable reuse tombstones must fail snapshot validation");
+    assert!(error.to_string().contains("missing location"));
 }
 
 include!("governance_activation_tests.rs");

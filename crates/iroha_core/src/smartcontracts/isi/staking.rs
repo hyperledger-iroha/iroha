@@ -27,7 +27,7 @@ use super::prelude::*;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
     state::{
-        ConsensusKeyGate, WorldReadOnly, WorldTransaction, peer_consensus_key_gate,
+        ConsensusKeyGate, WorldReadOnly, peer_consensus_key_gate,
         public_lane_reward_record_matches_key, public_lane_stake_share_matches_key,
         public_lane_validator_record_matches_key,
     },
@@ -36,6 +36,49 @@ use crate::{
 };
 
 use crate::sumeragi::evidence::evidence_key;
+
+/// One-shot retained-state proof for an exact public-lane staking slash.
+pub(in crate::smartcontracts::isi) struct VerifiedStakingSlashDebit {
+    lane_id: LaneId,
+    validator: AccountId,
+    slash_id: Hash,
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+
+impl VerifiedStakingSlashDebit {
+    fn new(
+        lane_id: LaneId,
+        validator: AccountId,
+        slash_id: Hash,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            lane_id,
+            validator,
+            slash_id,
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (LaneId, AccountId, Hash, AssetId, AssetId, Quantity) {
+        (
+            self.lane_id,
+            self.validator,
+            self.slash_id,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
+}
 
 fn current_epoch(block_height: u64, epoch_length_blocks: u64) -> Result<u64, Error> {
     if epoch_length_blocks == 0 {
@@ -233,7 +276,7 @@ impl Execute for RegisterPublicLaneValidator {
         }
 
         let validator_key = validator_storage_key(self.lane_id, &self.validator);
-        if let Some(existing) = state_transaction
+        let replacing_exited = if let Some(existing) = state_transaction
             .world
             .public_lane_validators
             .get(&validator_key)
@@ -243,6 +286,25 @@ impl Execute for RegisterPublicLaneValidator {
                     "validator already registered for lane".into(),
                 ));
             }
+            true
+        } else {
+            false
+        };
+
+        let initial_stake = self.initial_stake.clone();
+        crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
+            state_transaction,
+            authority,
+            self.lane_id,
+            &self.validator,
+            &self.stake_account,
+            is_genesis_bootstrap,
+            stake_ctx.staker_asset.clone(),
+            stake_ctx.escrow_asset.clone(),
+            initial_stake.clone(),
+        )?;
+
+        if replacing_exited {
             remove_all_shares_for_validator(state_transaction, self.lane_id, &self.validator);
             let removal_key = validator_key.clone();
             state_transaction
@@ -250,14 +312,6 @@ impl Execute for RegisterPublicLaneValidator {
                 .public_lane_validators
                 .remove(removal_key);
         }
-
-        let initial_stake = self.initial_stake.clone();
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&stake_ctx.staker_asset, &initial_stake)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&stake_ctx.escrow_asset, &initial_stake)?;
 
         let block_height = state_transaction.block_height();
         let epoch_length = state_transaction
@@ -621,12 +675,17 @@ impl Execute for BondPublicLaneStake {
         if available < amount {
             return Err(Error::Math(MathError::NotEnoughQuantity));
         }
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&stake_ctx.staker_asset, &amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&stake_ctx.escrow_asset, &amount)?;
+        crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
+            state_transaction,
+            authority,
+            self.lane_id,
+            &self.validator,
+            &self.staker,
+            false,
+            stake_ctx.staker_asset.clone(),
+            stake_ctx.escrow_asset.clone(),
+            amount.clone(),
+        )?;
 
         {
             let validator = state_transaction
@@ -835,12 +894,17 @@ impl Execute for FinalizePublicLaneUnbond {
             &stake_ctx.asset_definition,
             &pending.amount,
         )?;
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&stake_ctx.escrow_asset, &pending.amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&stake_ctx.staker_asset, &pending.amount)?;
+        crate::smartcontracts::isi::asset::isi::execute_staking_unbond_transfer(
+            state_transaction,
+            authority,
+            self.lane_id,
+            &self.validator,
+            &self.staker,
+            self.request_id,
+            stake_ctx.escrow_asset,
+            stake_ctx.staker_asset,
+            pending.amount.clone(),
+        )?;
         persist_share(state_transaction, share_key, share);
 
         sumeragi_status::record_public_lane_pending_unbond_delta(
@@ -878,18 +942,12 @@ impl Execute for SlashPublicLaneValidator {
         ensure_positive_amount(&self.amount, "slash amount")?;
         let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
         apply_slash_to_validator(
-            &mut state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            &state_transaction.nexus.staking,
+            state_transaction,
             self.lane_id,
             &self.validator,
             self.slash_id,
             &self.amount,
             recorded_at_ms,
-            #[cfg(feature = "telemetry")]
-            Some(state_transaction.telemetry),
-            #[cfg(not(feature = "telemetry"))]
-            None,
         )
     }
 }
@@ -1608,19 +1666,18 @@ fn remove_all_shares_for_validator(
     }
 }
 
-/// Apply a slash to a validator using a prebuilt world transaction.
+/// Apply a slash to a validator through the central retained-movement path.
 pub(crate) fn apply_slash_to_validator(
-    world: &mut WorldTransaction<'_, '_>,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    staking_cfg: &iroha_config::parameters::actual::NexusStaking,
+    state_transaction: &mut StateTransaction<'_, '_>,
     lane_id: LaneId,
     validator: &AccountId,
     slash_id: Hash,
     amount: &Quantity,
     now_ms: u64,
-    #[cfg(feature = "telemetry")] telemetry: Option<&crate::telemetry::StateTelemetry>,
-    #[cfg(not(feature = "telemetry"))] _telemetry: Option<&crate::telemetry::StateTelemetry>,
 ) -> Result<(), Error> {
+    let dataspace_catalog = state_transaction.nexus.dataspace_catalog.clone();
+    let staking_cfg = state_transaction.nexus.staking.clone();
+    let world = &state_transaction.world;
     let validator_key = validator_storage_key(lane_id, validator);
     let validator_snapshot = world
         .public_lane_validators
@@ -1634,8 +1691,8 @@ pub(crate) fn apply_slash_to_validator(
     let stake_account = validator_snapshot.stake_account.clone();
     let stake_ctx = stake_context(
         world,
-        dataspace_catalog,
-        staking_cfg,
+        &dataspace_catalog,
+        &staking_cfg,
         &stake_account,
         None,
         now_ms,
@@ -1771,6 +1828,20 @@ pub(crate) fn apply_slash_to_validator(
         ));
     }
 
+    let movement = VerifiedStakingSlashDebit::new(
+        lane_id,
+        validator.clone(),
+        slash_id,
+        stake_ctx.escrow_asset.clone(),
+        stake_ctx.slash_sink_asset.clone(),
+        amount.clone(),
+    );
+    crate::smartcontracts::isi::asset::isi::execute_verified_staking_slash_transfer(
+        state_transaction,
+        movement,
+    )?;
+
+    let world = &mut state_transaction.world;
     {
         let validator = world
             .public_lane_validators
@@ -1789,18 +1860,21 @@ pub(crate) fn apply_slash_to_validator(
         }
     }
 
-    world.withdraw_numeric_asset(&stake_ctx.escrow_asset, amount)?;
-    world.deposit_numeric_asset(&stake_ctx.slash_sink_asset, amount)?;
-
     sumeragi_status::record_public_lane_bonded_delta(lane_id, amount, false);
     sumeragi_status::record_public_lane_slash(lane_id);
 
     #[cfg(feature = "telemetry")]
-    if let Some(t) = telemetry {
-        t.record_public_lane_validator_status(lane_id, previous_status.as_ref(), &slashed_status);
-        t.decrease_public_lane_bonded(lane_id, amount);
-        t.record_public_lane_slash(lane_id);
-    }
+    state_transaction
+        .telemetry
+        .record_public_lane_validator_status(lane_id, previous_status.as_ref(), &slashed_status);
+    #[cfg(feature = "telemetry")]
+    state_transaction
+        .telemetry
+        .decrease_public_lane_bonded(lane_id, amount);
+    #[cfg(feature = "telemetry")]
+    state_transaction
+        .telemetry
+        .record_public_lane_slash(lane_id);
 
     Ok(())
 }
@@ -1811,6 +1885,42 @@ struct StakeEscrowContext {
     staker_asset: AssetId,
     escrow_asset: AssetId,
     slash_sink_asset: AssetId,
+}
+
+/// Check that an unbond movement uses the configured stake definition and escrow.
+pub(in crate::smartcontracts::isi) fn is_configured_staking_unbond_movement(
+    state_transaction: &StateTransaction<'_, '_>,
+    staker: &AccountId,
+    source_id: &AssetId,
+    destination_id: &AssetId,
+) -> Result<bool, Error> {
+    let context = stake_context(
+        &state_transaction.world,
+        &state_transaction.nexus.dataspace_catalog,
+        &state_transaction.nexus.staking,
+        staker,
+        None,
+        state_transaction.block_unix_timestamp_ms(),
+    )?;
+    Ok(source_id == &context.escrow_asset && destination_id == &context.staker_asset)
+}
+
+/// Check that a slash movement uses the configured stake escrow and slash sink.
+pub(in crate::smartcontracts::isi) fn is_configured_staking_slash_movement(
+    state_transaction: &StateTransaction<'_, '_>,
+    stake_account: &AccountId,
+    source_id: &AssetId,
+    destination_id: &AssetId,
+) -> Result<bool, Error> {
+    let context = stake_context(
+        &state_transaction.world,
+        &state_transaction.nexus.dataspace_catalog,
+        &state_transaction.nexus.staking,
+        stake_account,
+        None,
+        state_transaction.block_unix_timestamp_ms(),
+    )?;
+    Ok(source_id == &context.escrow_asset && destination_id == &context.slash_sink_asset)
 }
 
 fn stake_context(
@@ -2175,8 +2285,8 @@ mod tests {
 
     fn set_epoch_length(state: &mut State, epoch_length_blocks: u64) {
         assert!(
-            epoch_length_blocks >= 2,
-            "signed NPoS fixtures need one block for each VRF window"
+            epoch_length_blocks >= 3,
+            "signed NPoS fixtures need disjoint commit/reveal windows before the epoch cutoff"
         );
         let mut wb = state.world.block();
         {
@@ -2830,7 +2940,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn mixed_mode_respects_lane_validator_modes() {
         let mut state = setup_state();
-        set_epoch_length(&mut state, 2);
+        set_epoch_length(&mut state, 3);
         let block = new_block_with_height(1);
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -3575,9 +3685,9 @@ mod tests {
     #[test]
     fn finalize_pending_activations_ignores_mismatched_public_lane_validator_rows() {
         let mut state = setup_state();
-        set_epoch_length(&mut state, 2);
+        set_epoch_length(&mut state, 3);
 
-        let mut state_block = state.block(block_header_with_height(5));
+        let mut state_block = state.block(block_header_with_height(7));
         let mut stx = state_block.transaction();
         let (validator, mismatched_validator, _, _) = prepare_accounts(&mut stx);
         let valid_lane = LaneId::new(149);
@@ -3626,7 +3736,7 @@ mod tests {
             .expect("valid pending validator remains present");
         assert!(matches!(valid.status, PublicLaneValidatorStatus::Active));
         assert_eq!(valid.activation_epoch, Some(2));
-        assert_eq!(valid.activation_height, Some(5));
+        assert_eq!(valid.activation_height, Some(7));
 
         let mismatched = stx
             .world
@@ -3731,10 +3841,10 @@ mod tests {
     #[test]
     fn pending_activation_advances_on_epoch_boundary() {
         let mut state = setup_state();
-        set_epoch_length(&mut state, 2);
+        set_epoch_length(&mut state, 3);
 
-        // Start at height 3 to avoid genesis, which allows immediate activation.
-        let mut state_block = state.block(block_header_with_height(3));
+        // Start in epoch 1 to avoid genesis, which allows immediate activation.
+        let mut state_block = state.block(block_header_with_height(4));
         let mut stx = state_block.transaction();
 
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
@@ -3760,7 +3870,7 @@ mod tests {
         stx.apply();
         state_block.commit().unwrap();
 
-        let mut activate_block = state.block(block_header_with_height(4));
+        let mut activate_block = state.block(block_header_with_height(5));
         let mut activate_stx = activate_block.transaction();
         let err = ActivatePublicLaneValidator {
             lane_id: LaneId::new(1),
@@ -3775,7 +3885,12 @@ mod tests {
         activate_stx.apply();
         activate_block.commit().unwrap();
 
-        let mut activate_block = state.block(block_header_with_height(5));
+        let mut intermediate_block = state.block(block_header_with_height(6));
+        let intermediate_stx = intermediate_block.transaction();
+        intermediate_stx.apply();
+        intermediate_block.commit().unwrap();
+
+        let mut activate_block = state.block(block_header_with_height(7));
         let mut activate_stx = activate_block.transaction();
         ActivatePublicLaneValidator {
             lane_id: LaneId::new(1),
@@ -3791,7 +3906,7 @@ mod tests {
             .expect("record present");
         assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
         assert_eq!(record.activation_epoch, Some(2));
-        assert_eq!(record.activation_height, Some(5));
+        assert_eq!(record.activation_height, Some(7));
         activate_stx.apply();
         activate_block.commit().unwrap();
 
@@ -3802,7 +3917,7 @@ mod tests {
             .get(&(LaneId::new(1), validator.clone()))
             .expect("stored record");
         assert_eq!(stored.activation_epoch, Some(2));
-        assert_eq!(stored.activation_height, Some(5));
+        assert_eq!(stored.activation_height, Some(7));
 
         let escrow_asset = AssetId::new(asset_def_id, escrow.clone());
         assert!(
@@ -4011,10 +4126,10 @@ mod tests {
     #[test]
     fn pending_activation_auto_promotes_at_epoch_boundary() {
         let mut state = setup_state();
-        set_epoch_length(&mut state, 2);
+        set_epoch_length(&mut state, 3);
 
-        // Start at height 3 to avoid genesis, which allows immediate activation.
-        let block1 = new_block_with_height(3);
+        // Start in epoch 1 to avoid genesis, which allows immediate activation.
+        let block1 = new_block_with_height(4);
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction();
 
@@ -4032,13 +4147,13 @@ mod tests {
         stx.apply();
         state_block.commit().unwrap();
 
-        let block2 = new_block_with_height(4);
+        let block2 = new_block_with_height(5);
         let mut state_block2 = state.block(block2.as_ref().header());
         let stx2 = state_block2.transaction();
         stx2.apply();
         state_block2.commit().unwrap();
 
-        let block3 = new_block_with_height(5);
+        let block3 = new_block_with_height(6);
         let view = state.view();
         let pending_record = view
             .world
@@ -4055,8 +4170,14 @@ mod tests {
         );
         drop(view);
 
-        let state_block3 = state.block(block3.as_ref().header());
-        let record = state_block3
+        let mut state_block3 = state.block(block3.as_ref().header());
+        let stx3 = state_block3.transaction();
+        stx3.apply();
+        state_block3.commit().unwrap();
+
+        let block4 = new_block_with_height(7);
+        let state_block4 = state.block(block4.as_ref().header());
+        let record = state_block4
             .world
             .public_lane_validators
             .get(&(LaneId::new(1), validator.clone()))
@@ -4067,8 +4188,8 @@ mod tests {
             "validator should auto-activate at the next epoch boundary"
         );
         assert_eq!(record.activation_epoch, Some(2));
-        assert_eq!(record.activation_height, Some(5));
-        state_block3.commit().unwrap();
+        assert_eq!(record.activation_height, Some(7));
+        state_block4.commit().unwrap();
 
         let view = state.view();
         let stored = view
@@ -4081,7 +4202,7 @@ mod tests {
             "persistent record should remain active"
         );
         assert_eq!(stored.activation_epoch, Some(2));
-        assert_eq!(stored.activation_height, Some(5));
+        assert_eq!(stored.activation_height, Some(7));
 
         let escrow_asset = AssetId::new(asset_def_id, escrow);
         assert!(
@@ -4093,7 +4214,7 @@ mod tests {
     #[test]
     fn pending_activation_rejects_regressing_activation_height() {
         let mut state = setup_state();
-        set_epoch_length(&mut state, 2);
+        set_epoch_length(&mut state, 3);
 
         let block1 = new_block_with_height(1);
         let mut state_block = state.block(block1.as_ref().header());
@@ -4319,7 +4440,7 @@ mod tests {
     #[test]
     fn slashed_validator_can_exit_and_reregister() {
         let mut state = setup_state();
-        set_epoch_length(&mut state, 2);
+        set_epoch_length(&mut state, 3);
 
         let block = new_block_with_height_and_time(1, 0);
         let mut state_block = state.block(block.as_ref().header());
@@ -5647,9 +5768,12 @@ mod tests {
         let (validator, delegator, _, asset_def_id) = prepare_accounts(&mut stx);
         let delegator_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
         let delegator_balance = Quantity::from(10_000_u64);
-        stx.world
-            .withdraw_numeric_asset(&delegator_asset, &delegator_balance)
-            .expect("drain delegator funds");
+        crate::smartcontracts::isi::asset::isi::debit_numeric_asset_balance_for_test(
+            &mut stx.world,
+            &delegator_asset,
+            &delegator_balance,
+        )
+        .expect("drain delegator funds");
 
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(12),

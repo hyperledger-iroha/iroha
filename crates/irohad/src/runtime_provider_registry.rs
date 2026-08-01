@@ -2628,7 +2628,7 @@ mod tests {
 
     use super::*;
     use iroha_config_base::{toml::TomlSource, util::Bytes};
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
 
     struct EmptyRegistry;
 
@@ -4488,10 +4488,24 @@ mod tests {
     fn default_runtime_config() -> Config {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../defaults/kagami/iroha3-dev/config.toml");
-        Config::from_toml_source(
-            TomlSource::from_file(path).expect("read checked-in default daemon config"),
-        )
-        .expect("resolve checked-in default daemon config")
+        let source = std::fs::read_to_string(path).expect("read checked-in default daemon config");
+        let mut table: toml::Table = toml::from_str(&source).expect("parse default daemon config");
+        let expected_hash = table
+            .get_mut("genesis")
+            .and_then(toml::Value::as_table_mut)
+            .and_then(|genesis| genesis.get_mut("expected_hash"))
+            .expect("default daemon genesis expected-hash placeholder");
+        assert_eq!(
+            expected_hash.as_str(),
+            Some("REPLACE_WITH_GENESIS_EXPECTED_HASH")
+        );
+        // This test-only value permits inspection of unrelated provider bindings without making
+        // the checked-in signing profile a runnable validator config.
+        *expected_hash = toml::Value::String(
+            Hash::new(b"runtime-provider non-runtime profile inspection").to_string(),
+        );
+        Config::from_toml_source(TomlSource::inline(table))
+            .expect("resolve checked-in default daemon config for inspection")
     }
 
     fn configure_provider_ingest_runtime(config: &mut Config) {

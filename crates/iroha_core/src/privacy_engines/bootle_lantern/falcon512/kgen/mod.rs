@@ -49,11 +49,11 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
     }
 
     let mut workspace = Workspace::new();
-    let mut f = Zeroizing::new(Box::new([0_i8; DEGREE]));
-    let mut g = Zeroizing::new(Box::new([0_i8; DEGREE]));
-    let mut capital_f = Zeroizing::new(Box::new([0_i8; DEGREE]));
-    let mut capital_g = Zeroizing::new(Box::new([0_i8; DEGREE]));
-    let mut h = Zeroizing::new(Box::new([0_u16; DEGREE]));
+    let mut f = Zeroizing::new(vec![0_i8; DEGREE].into_boxed_slice());
+    let mut g = Zeroizing::new(vec![0_i8; DEGREE].into_boxed_slice());
+    let mut capital_f = Zeroizing::new(vec![0_i8; DEGREE].into_boxed_slice());
+    let mut capital_g = Zeroizing::new(vec![0_i8; DEGREE].into_boxed_slice());
+    let mut h = Zeroizing::new(vec![0_u16; DEGREE].into_boxed_slice());
     let mut generator = comm::shake::SHAKE256_PRNG::new(seed);
 
     for _ in 0..max_candidates {
@@ -119,8 +119,12 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
             h.as_mut(),
             division_temporary,
         );
-        if ntru_equation_holds(f.as_ref(), g.as_ref(), capital_f.as_ref(), capital_g.as_ref())
-            && public_key_equation_holds(f.as_ref(), g.as_ref(), h.as_ref())
+        if ntru_equation_holds(
+            f.as_ref(),
+            g.as_ref(),
+            capital_f.as_ref(),
+            capital_g.as_ref(),
+        ) && public_key_equation_holds(f.as_ref(), g.as_ref(), h.as_ref())
         {
             return Some(Trapdoor {
                 f,
@@ -134,25 +138,16 @@ pub(super) fn generate_from_seed(seed: &[u8], max_candidates: u32) -> Option<Tra
     None
 }
 
-fn ntru_equation_holds(
-    f: &[i8; DEGREE],
-    g: &[i8; DEGREE],
-    capital_f: &[i8; DEGREE],
-    capital_g: &[i8; DEGREE],
-) -> bool {
-    let mut equation = Zeroizing::new(Box::new([0_i64; DEGREE]));
+fn ntru_equation_holds(f: &[i8], g: &[i8], capital_f: &[i8], capital_g: &[i8]) -> bool {
+    let mut equation = Zeroizing::new(vec![0_i64; DEGREE].into_boxed_slice());
     negacyclic_accumulate_i8(equation.as_mut(), f, capital_g, 1);
     negacyclic_accumulate_i8(equation.as_mut(), g, capital_f, -1);
     equation[0] == i64::from(MODULUS) && equation[1..].iter().all(|value| *value == 0)
 }
 
-fn public_key_equation_holds(
-    f: &[i8; DEGREE],
-    g: &[i8; DEGREE],
-    h: &[u16; DEGREE],
-) -> bool {
+fn public_key_equation_holds(f: &[i8], g: &[i8], h: &[u16]) -> bool {
     let modulus = i64::from(MODULUS);
-    let mut product = Zeroizing::new(Box::new([0_i64; DEGREE]));
+    let mut product = Zeroizing::new(vec![0_i64; DEGREE].into_boxed_slice());
     for (left_index, left) in f.iter().copied().enumerate() {
         for (right_index, right) in h.iter().copied().enumerate() {
             let degree = left_index + right_index;
@@ -165,8 +160,7 @@ fn public_key_equation_holds(
         }
     }
     for destination in 0..DEGREE {
-        if product[destination].rem_euclid(modulus)
-            != i64::from(g[destination]).rem_euclid(modulus)
+        if product[destination].rem_euclid(modulus) != i64::from(g[destination]).rem_euclid(modulus)
         {
             return false;
         }
@@ -174,12 +168,7 @@ fn public_key_equation_holds(
     true
 }
 
-fn negacyclic_accumulate_i8(
-    output: &mut [i64; DEGREE],
-    left: &[i8; DEGREE],
-    right: &[i8; DEGREE],
-    outer_sign: i64,
-) {
+fn negacyclic_accumulate_i8(output: &mut [i64], left: &[i8], right: &[i8], outer_sign: i64) {
     for (left_index, left) in left.iter().copied().enumerate() {
         for (right_index, right) in right.iter().copied().enumerate() {
             let degree = left_index + right_index;
@@ -188,8 +177,7 @@ fn negacyclic_accumulate_i8(
             } else {
                 (degree - DEGREE, -1_i64)
             };
-            output[destination] +=
-                outer_sign * wrap_sign * i64::from(left) * i64::from(right);
+            output[destination] += outer_sign * wrap_sign * i64::from(left) * i64::from(right);
         }
     }
 }

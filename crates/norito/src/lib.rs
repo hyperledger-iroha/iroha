@@ -10034,9 +10034,24 @@ pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
     )
 }
 
-/// Decode an object from Norito-encoded bytes (compressed or not),
-/// scoping decode layout flags to this call.
+/// Decode an object from Norito-encoded bytes (compressed or not) under a
+/// payload-derived resource budget.
+///
+/// The default budget is derived from the complete frame length, so a short
+/// input cannot force an allocation proportional only to an attacker-declared
+/// uncompressed length. Callers with a narrower schema limit, or trusted
+/// compressed data whose legitimate expansion exceeds the default envelope,
+/// can use [`decode_from_bytes_with_limits`] with an explicit budget.
 pub fn decode_from_bytes<T>(bytes: &[u8]) -> Result<T, Error>
+where
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    with_decode_limits(canonical_decode_limits(bytes.len()), || {
+        decode_from_bytes_inner(bytes)
+    })
+}
+
+fn decode_from_bytes_inner<T>(bytes: &[u8]) -> Result<T, Error>
 where
     for<'de> T: NoritoDeserialize<'de>,
 {
@@ -10057,9 +10072,10 @@ where
 /// Decode a Norito archive with explicit per-value and cumulative resource
 /// limits.
 ///
-/// This is the production-facing counterpart to [`decode_from_bytes`] for
-/// untrusted payloads whose semantic collection limits are known by the host.
-/// Nested bounded decodes inherit the stricter of the inner and outer limits.
+/// This enters the private decoder directly rather than recursively invoking
+/// [`decode_from_bytes`], so a caller can provide a larger, still-finite budget
+/// for trusted high-compression data. Nested bounded decodes continue to
+/// inherit the stricter of the inner and outer limits.
 ///
 /// # Errors
 ///
@@ -10068,7 +10084,7 @@ pub fn decode_from_bytes_with_limits<T>(bytes: &[u8], limits: DecodeLimits) -> R
 where
     for<'de> T: NoritoDeserialize<'de>,
 {
-    with_decode_limits(limits, || decode_from_bytes(bytes))
+    with_decode_limits(limits, || decode_from_bytes_inner(bytes))
 }
 
 /// Decode one exact canonical V1 frame under payload-derived resource limits.

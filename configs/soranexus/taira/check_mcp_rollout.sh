@@ -546,9 +546,9 @@ JSONRPC_INITIALIZED='{"jsonrpc":"2.0","method":"notifications/initialized"}'
 REQUIRED_TOOL_NAMES=(
   "iroha.health"
   "iroha.sumeragi.status"
-  "iroha.musubi.search"
-  "iroha.musubi.release.get"
-  "iroha.musubi.instructions.yank_release"
+  "iroha.musubi.queries.exact_package"
+  "iroha.musubi.queries.exact_release"
+  "iroha.musubi.instructions.release_yank_set"
   "iroha.transactions.submit"
   "iroha.transactions.submit_and_wait"
 )
@@ -2196,11 +2196,10 @@ check_route_parity() {
   check_route_status "$label" GET "${root_url}/v1/transactions/status" "404" \
     "retired transaction-status compatibility route must remain unmounted" \
     "" "route_not_found"
-  check_route_status "$label" GET "${root_url}/v1/musubi/packages?query=&limit=1" "200" \
-    "Musubi package search route"
-  check_route_status "$label" POST "${root_url}/v1/musubi/instructions/yank-release" "200" \
-    "Musubi pre-signing instruction builder route" \
-    '{"package":"dex.universal/swap-core@1.2.3","reason":"rollout preflight"}'
+  check_route_status "$label" POST "${root_url}/v1/musubi/queries/ordered-prefix" "400" \
+    "Musubi V1 typed ordered-prefix route should reject an empty request" '{}'
+  check_route_status "$label" POST "${root_url}/v1/musubi/instructions/release-yank-set" "400" \
+    "Musubi V1 typed yank instruction builder should reject an empty request" '{}'
   check_route_status "$label" POST "${root_url}/v1/contracts/deploy" "404" \
     "retired server-side contract deploy route must remain unmounted" '{}' \
     "route_not_found"

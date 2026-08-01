@@ -60,7 +60,7 @@ use std::{
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, Weak},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::soracloud_runtime::{
@@ -470,6 +470,7 @@ mod shared_sorafs_provider_cache_tests {
 
             [genesis]
             public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
             [streaming]
             identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -732,11 +733,21 @@ mod shared_sorafs_provider_cache_tests {
             .expect("enabled discovery cache");
         {
             let mut cache = cache.try_write().expect("exclusive cache guard");
+            let original_now = original.issued_at.saturating_add(1);
+            let prepared = cache
+                .validation_policy()
+                .prepare(original.clone(), original_now)
+                .expect("prepare original provider advert");
             cache
-                .ingest(original.clone(), original.issued_at.saturating_add(1))
+                .commit_prepared(prepared, original_now)
                 .expect("persist original provider advert");
+            let latest_now = latest.issued_at.saturating_add(1);
+            let prepared = cache
+                .validation_policy()
+                .prepare(latest.clone(), latest_now)
+                .expect("prepare latest provider advert");
             cache
-                .ingest(latest.clone(), latest.issued_at.saturating_add(1))
+                .commit_prepared(prepared, latest_now)
                 .expect("persist latest provider advert high-water mark");
         }
         drop(cache);
@@ -750,8 +761,13 @@ mod shared_sorafs_provider_cache_tests {
             .expect("restart with canonical replay checkpoint")
             .expect("enabled discovery cache after restart");
         let mut restarted = restarted.try_write().expect("exclusive restarted guard");
+        let stale_now = latest.issued_at.saturating_add(1);
+        let prepared = restarted
+            .validation_policy()
+            .prepare(original, stale_now)
+            .expect("stale advert remains otherwise authentic");
         let stale_error = restarted
-            .ingest(original, latest.issued_at.saturating_add(1))
+            .commit_prepared(prepared, stale_now)
             .expect_err("restart must preserve stale-advert rejection");
         assert!(matches!(
             stale_error,
@@ -766,8 +782,13 @@ mod shared_sorafs_provider_cache_tests {
         let mut conflicting = latest.clone();
         conflicting.allow_unknown_capabilities = !conflicting.allow_unknown_capabilities;
         resign_advert(&mut conflicting);
+        let conflict_now = latest.issued_at.saturating_add(1);
+        let prepared = restarted
+            .validation_policy()
+            .prepare(conflicting, conflict_now)
+            .expect("conflicting advert remains otherwise authentic");
         let conflict_error = restarted
-            .ingest(conflicting, latest.issued_at.saturating_add(1))
+            .commit_prepared(prepared, conflict_now)
             .expect_err("restart must preserve conflicting same-timestamp rejection");
         assert!(matches!(
             conflict_error,
@@ -5766,8 +5787,6 @@ impl NetworkRelayShared {
             | SoracloudLocalReadProxyResponse(_)
             | ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
-            | GenesisRequest(_)
-            | GenesisResponse(_)
             | Health
             | Connect(_)) => {
                 debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
@@ -5800,10 +5819,7 @@ impl NetworkRelayShared {
         msg.is_torii_proxy_control_message()
             || matches!(
                 msg,
-                iroha_core::NetworkMessage::GenesisRequest(_)
-                    | iroha_core::NetworkMessage::GenesisResponse(_)
-                    | iroha_core::NetworkMessage::Health
-                    | iroha_core::NetworkMessage::Connect(_)
+                iroha_core::NetworkMessage::Health | iroha_core::NetworkMessage::Connect(_)
             )
     }
 
@@ -9148,7 +9164,7 @@ impl Iroha {
             .unwrap_or_else(|| config.common.key_pair.public_key());
         let signing_key = config.snapshot.signing_private_key.as_ref().map_or_else(
             || config.common.key_pair.clone(),
-            |key| iroha_crypto::KeyPair::from(key.0.clone()),
+            |key| iroha_crypto::KeyPair::from(key.clone()),
         );
 
         let genesis = load_deferred_normal_startup_genesis(
@@ -10146,7 +10162,8 @@ impl Iroha {
         let zk_cfg = config.zk.clone();
         let gov_cfg = config.gov.clone();
         let oracle_cfg = config.oracle.clone();
-        let streaming_cfg = config.streaming.clone();
+        let streaming_soranet_spool_dir = config.streaming.soranet.provision_spool_dir.clone();
+        let streaming_soravpn_spool_dir = config.streaming.soravpn.provision_spool_dir.clone();
         let merge_cache_capacity = config.kura.merge_ledger_cache_capacity;
         state
             .set_tiered_backend(&tiered_state_cfg)
@@ -10157,7 +10174,7 @@ impl Iroha {
         state.set_pipeline(pipeline_cfg);
         state.set_sumeragi_parameters(&sumeragi_cfg);
         state.set_oracle(oracle_cfg);
-        state.set_streaming(streaming_cfg);
+        state.set_streaming_storage_paths(streaming_soranet_spool_dir, streaming_soravpn_spool_dir);
         state.set_fraud_monitoring(fraud_cfg);
         // Settlement was installed before Kura replay and authenticated by the
         // mandatory offline gate. Do not replace that post-replay snapshot
@@ -11305,12 +11322,55 @@ impl Iroha {
             Report::new(StartError::StartTorii)
                 .attach(format!("failed to derive Torii receipt signer: {err}"))
         })?;
+        let vpn_relay_trust = if config.network.soranet_vpn.enabled {
+            let vpn = &config.network.soranet_vpn;
+            let snapshot_path = vpn.guard_directory_path.as_ref().ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("VPN guard directory path missing after configuration validation")
+            })?;
+            let snapshot = fs::read(snapshot_path).map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to read VPN guard directory {}: {error}",
+                    snapshot_path.display()
+                ))
+            })?;
+            let expected_digest = vpn.guard_directory_digest.ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("VPN guard directory digest missing after configuration validation")
+            })?;
+            let relay_id = vpn.relay_id.ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("VPN relay identity missing after configuration validation")
+            })?;
+            let at_unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii)
+                        .attach(format!("system clock precedes Unix epoch: {error}"))
+                })?
+                .as_secs()
+                .try_into()
+                .map_err(|_| {
+                    Report::new(StartError::StartTorii).attach("current Unix time exceeds i64::MAX")
+                })?;
+            let trust = iroha_torii::VpnRelayTrust::from_guard_directory_at(
+                &snapshot,
+                expected_digest,
+                relay_id,
+                at_unix,
+            )
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
+            Some(trust)
+        } else {
+            None
+        };
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
             .with_sorafs_node(sorafs_node)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
-            .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
+            .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret)
+            .with_vpn_relay_trust(vpn_relay_trust);
         let runtime_deps = if let Some(runtime) = sorafs_reputation_runtime.as_ref() {
             let reader: Arc<dyn sorafs_node::reputation::runtime::ReputationCommittedReadApiV1> =
                 Arc::new(ReadyReputationCommittedReaderV1 {
@@ -11904,7 +11964,7 @@ impl StartupTrustRoot {
     fn resolve(
         authenticated_snapshot_pending: bool,
         public_key: &PublicKey,
-        configured_hash: Option<HashOf<BlockHeader>>,
+        configured_hash: HashOf<BlockHeader>,
         local_genesis: Option<&GenesisBlock>,
     ) -> ReportResult<Self, StartError> {
         if authenticated_snapshot_pending {
@@ -11941,27 +12001,19 @@ fn load_deferred_normal_startup_genesis(
 impl ResolvedGenesisTrustAnchor {
     fn resolve(
         public_key: &PublicKey,
-        configured_hash: Option<HashOf<BlockHeader>>,
+        configured_hash: HashOf<BlockHeader>,
         local_genesis: Option<&GenesisBlock>,
     ) -> ReportResult<Self, StartError> {
-        let local_hash = local_genesis.map(|genesis| genesis.0.hash());
-        let consensus_header_hash = match (configured_hash, local_hash) {
-            (Some(configured), Some(local)) if configured != local => {
-                return Err(Report::new(StartError::InitKura).attach(format!(
-                    "local signed genesis hash {local} differs from configured genesis.expected_hash {configured}"
-                )));
-            }
-            (Some(configured), _) => configured,
-            (None, Some(local)) => local,
-            (None, None) => {
-                return Err(Report::new(StartError::InitKura).attach(
-                    "normal startup requires an exact genesis hash from genesis.expected_hash or a local signed genesis artifact",
-                ));
-            }
-        };
+        if let Some(local) = local_genesis.map(|genesis| genesis.0.hash())
+            && configured_hash != local
+        {
+            return Err(Report::new(StartError::InitKura).attach(format!(
+                "local signed genesis hash {local} differs from configured genesis.expected_hash {configured_hash}"
+            )));
+        }
         let anchor = Self {
             public_key: public_key.clone(),
-            consensus_header_hash,
+            consensus_header_hash: configured_hash,
         };
         if let Some(local_genesis) = local_genesis {
             anchor.verify(local_genesis)?;
@@ -12172,12 +12224,17 @@ mod genesis_key_tests {
     }
 
     #[test]
-    fn startup_trust_root_derives_exact_hash_from_local_artifact() {
+    fn startup_trust_root_requires_local_artifact_to_match_configured_hash() {
         let keypair = KeyPair::random();
         let genesis = signed_genesis(&keypair);
 
-        let root = StartupTrustRoot::resolve(false, keypair.public_key(), None, Some(&genesis))
-            .expect("a local signed genesis supplies the exact hash anchor");
+        let root = StartupTrustRoot::resolve(
+            false,
+            keypair.public_key(),
+            genesis.0.hash(),
+            Some(&genesis),
+        )
+        .expect("the local signed genesis matches the independently configured hash");
         let StartupTrustRoot::Genesis(anchor) = root else {
             panic!("normal startup must resolve a genesis root");
         };
@@ -12216,25 +12273,16 @@ mod genesis_key_tests {
     #[test]
     fn snapshot_startup_selects_the_independent_pending_trust_root() {
         let keypair = KeyPair::random();
+        let configured_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; 32]));
 
-        let root = StartupTrustRoot::resolve(true, keypair.public_key(), None, None)
+        let root = StartupTrustRoot::resolve(true, keypair.public_key(), configured_hash, None)
             .expect("an authenticated provisional snapshot is an independent trust root");
 
-        assert!(matches!(root, StartupTrustRoot::AuthenticatedSnapshotPending));
-    }
-
-    #[test]
-    fn normal_startup_requires_an_exact_hash_source() {
-        let keypair = KeyPair::random();
-
-        let error = StartupTrustRoot::resolve(false, keypair.public_key(), None, None)
-            .expect_err("a signer key alone is not an exact genesis-instance anchor");
-
-        assert!(matches!(error.current_context(), StartError::InitKura));
-        assert!(
-            format!("{error:?}").contains("requires an exact genesis hash"),
-            "unexpected missing-anchor diagnostic: {error:?}"
-        );
+        assert!(matches!(
+            root,
+            StartupTrustRoot::AuthenticatedSnapshotPending
+        ));
     }
 
     #[test]
@@ -12245,13 +12293,9 @@ mod genesis_key_tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB6; 32]));
         assert_ne!(configured_hash, genesis.0.hash());
 
-        let error = StartupTrustRoot::resolve(
-            false,
-            keypair.public_key(),
-            Some(configured_hash),
-            Some(&genesis),
-        )
-        .expect_err("two exact genesis sources must agree");
+        let error =
+            StartupTrustRoot::resolve(false, keypair.public_key(), configured_hash, Some(&genesis))
+                .expect_err("two exact genesis sources must agree");
 
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
@@ -12268,7 +12312,7 @@ mod genesis_key_tests {
         let root = StartupTrustRoot::resolve(
             false,
             keypair.public_key(),
-            Some(genesis.0.hash()),
+            genesis.0.hash(),
             Some(&genesis),
         )
         .expect("matching configured and local hashes resolve one exact anchor");
@@ -12280,14 +12324,19 @@ mod genesis_key_tests {
     }
 
     #[test]
-    fn local_artifact_anchor_rejects_alternate_same_key_same_chain_genesis() {
+    fn configured_anchor_rejects_alternate_same_key_same_chain_genesis_with_local_body() {
         let keypair = KeyPair::random();
         let trusted = signed_genesis_with_marker(&keypair, "trusted genesis");
         let alternate = signed_genesis_with_marker(&keypair, "alternate genesis");
         assert_ne!(trusted.0.hash(), alternate.0.hash());
 
-        let root = StartupTrustRoot::resolve(false, keypair.public_key(), None, Some(&trusted))
-            .expect("local trusted genesis resolves an exact anchor");
+        let root = StartupTrustRoot::resolve(
+            false,
+            keypair.public_key(),
+            trusted.0.hash(),
+            Some(&trusted),
+        )
+        .expect("the local trusted genesis matches the configured exact anchor");
         let StartupTrustRoot::Genesis(anchor) = root else {
             panic!("normal startup must resolve a genesis root");
         };
@@ -12309,13 +12358,8 @@ mod genesis_key_tests {
         let alternate = signed_genesis_with_marker(&keypair, "alternate genesis");
         assert_ne!(trusted.0.hash(), alternate.0.hash());
 
-        let root = StartupTrustRoot::resolve(
-            false,
-            keypair.public_key(),
-            Some(trusted.0.hash()),
-            None,
-        )
-        .expect("configured expected hash resolves an exact anchor");
+        let root = StartupTrustRoot::resolve(false, keypair.public_key(), trusted.0.hash(), None)
+            .expect("configured expected hash resolves an exact anchor");
         let StartupTrustRoot::Genesis(anchor) = root else {
             panic!("normal startup must resolve a genesis root");
         };
@@ -13265,6 +13309,17 @@ fn deduplicate_managed_roots(roots: &mut Vec<PathBuf>) {
 }
 
 fn managed_root_size(path: &Path, expected_filesystem_id: &str) -> std::io::Result<u64> {
+    managed_root_size_with_identity(path, expected_filesystem_id, filesystem_identity)
+}
+
+fn managed_root_size_with_identity<F>(
+    path: &Path,
+    expected_filesystem_id: &str,
+    identity: F,
+) -> std::io::Result<u64>
+where
+    F: Fn(&Path) -> Option<String>,
+{
     let metadata = fs::symlink_metadata(path)?;
     if metadata_is_symlink_or_reparse(&metadata) {
         return Err(std::io::Error::new(
@@ -13272,7 +13327,7 @@ fn managed_root_size(path: &Path, expected_filesystem_id: &str) -> std::io::Resu
             "managed storage root must not be a symbolic link or reparse point",
         ));
     }
-    if filesystem_identity(path).as_deref() != Some(expected_filesystem_id) {
+    if identity(path).as_deref() != Some(expected_filesystem_id) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "managed storage root moved to a different filesystem during probing",
@@ -13298,7 +13353,7 @@ fn managed_root_size(path: &Path, expected_filesystem_id: &str) -> std::io::Resu
                     ),
                 ));
             }
-            let entry_filesystem_id = filesystem_identity(&entry_path).ok_or_else(|| {
+            let entry_filesystem_id = identity(&entry_path).ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!(
@@ -13330,7 +13385,7 @@ fn managed_root_size(path: &Path, expected_filesystem_id: &str) -> std::io::Resu
     }
     let final_metadata = fs::symlink_metadata(path)?;
     if metadata_is_symlink_or_reparse(&final_metadata)
-        || filesystem_identity(path).as_deref() != Some(expected_filesystem_id)
+        || identity(path).as_deref() != Some(expected_filesystem_id)
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -13619,6 +13674,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13647,6 +13703,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13689,6 +13746,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13709,11 +13767,33 @@ metadata = {}
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "b3c8f4f51a4ca789162763da59ac1a81c1d5fb864370a043a372ac13340d4315";
+        "3a7d7f8a8a20880b05d9473ee7d08492afead4a3160949ef9da9aa0e152628c7";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
         Hash::new(bytes).to_string()
+    }
+
+    pub(super) fn load_unprovisioned_profile_for_inspection(path: &Path) -> Config {
+        let source = std::fs::read_to_string(path).expect("read checked-in signing profile");
+        let mut table: Table = toml::from_str(&source).expect("parse signing profile TOML");
+        let expected_hash = table
+            .get_mut("genesis")
+            .and_then(toml::Value::as_table_mut)
+            .and_then(|genesis| genesis.get_mut("expected_hash"))
+            .expect("signing profile genesis.expected_hash placeholder");
+        assert_eq!(
+            expected_hash.as_str(),
+            Some("REPLACE_WITH_GENESIS_EXPECTED_HASH"),
+            "checked-in signing profiles must remain explicitly unprovisioned"
+        );
+        // This hash exists only so tests can inspect unrelated typed fields. It never enters a
+        // runtime config and the returned config must not be used to start a node.
+        *expected_hash = toml::Value::String(
+            Hash::new(b"irohad non-runtime signing-profile inspection").to_string(),
+        );
+        Config::from_toml_source(TomlSource::inline(table))
+            .expect("resolve signing profile for non-runtime inspection")
     }
 
     #[test]
@@ -13918,10 +13998,14 @@ metadata = {}
     #[test]
     fn nexus_profile_defaults_enable_flag() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/nexus/config.toml");
-        let config = Config::from_toml_source(
-            TomlSource::from_file(path).expect("read nexus defaults config"),
-        )
-        .expect("parse nexus defaults");
+        assert!(
+            Config::from_toml_source(
+                TomlSource::from_file(path.clone()).expect("read nexus defaults config")
+            )
+            .is_err(),
+            "the unprovisioned profile must not be a runnable node config"
+        );
+        let config = load_unprovisioned_profile_for_inspection(&path);
 
         assert!(config.nexus.enabled);
         assert_eq!(config.nexus.dataspace_catalog.entries().len(), 3);
@@ -15887,12 +15971,11 @@ fn validate_config_for_check(
         )));
     }
 
-    if let Some(expected_hash) = config.genesis.expected_hash
-        && genesis.0.hash() != expected_hash
-    {
+    if genesis.0.hash() != config.genesis.expected_hash {
         return Err(Report::new(MainError::Config).attach(format!(
-            "local genesis hash {} does not match configured genesis.expected_hash {expected_hash}",
-            genesis.0.hash()
+            "local genesis hash {} does not match configured genesis.expected_hash {}",
+            genesis.0.hash(),
+            config.genesis.expected_hash,
         )));
     }
 
@@ -16901,7 +16984,9 @@ fn log_norito_banner(cfg: &Config) {
 
 #[cfg(test)]
 mod tests {
-    use super::build_line_tests::{minimal_config_table, multilane_config_table};
+    use super::build_line_tests::{
+        load_unprovisioned_profile_for_inspection, minimal_config_table, multilane_config_table,
+    };
     #[allow(unused_imports)]
     use super::*;
     use iroha_config_base::toml::TomlSource;
@@ -17285,10 +17370,7 @@ mod tests {
     fn repository_iroha3_dev_default_config_requests_no_runtime_providers() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../defaults/kagami/iroha3-dev/config.toml");
-        let config = Config::from_toml_source(
-            TomlSource::from_file(path).expect("read checked-in iroha3-dev default config"),
-        )
-        .expect("resolve checked-in iroha3-dev default config");
+        let config = load_unprovisioned_profile_for_inspection(&path);
         let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
             .expect("project default provider bindings");
 
@@ -17978,6 +18060,7 @@ mod tests {
                 [genesis]
                 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
                 file = "./genesis.signed.nrt"
+                expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -18214,6 +18297,7 @@ mod tests {
 
                 [genesis]
                 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -20090,6 +20174,7 @@ mod tests {
                 [genesis]
                 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
                 file = "./genesis.signed.nrt"
+                expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -21367,6 +21452,51 @@ mod tests {
             Ok(())
         }
 
+        #[cfg(unix)]
+        #[test]
+        fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode()
+        -> eyre::Result<()> {
+            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+            let (_parsed, _dir, config_path) =
+                parse_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
+                })?;
+            std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o400))?;
+            let original_bytes = std::fs::read(&config_path)?;
+            let original_metadata = std::fs::metadata(&config_path)?;
+            assert_eq!(original_metadata.mode() & 0o777, 0o400);
+
+            let (config, _genesis) = read_config_and_genesis(&Args {
+                config: Some(config_path.clone()),
+                genesis_manifest_json: None,
+                startup: StartupArgs {
+                    check_config: false,
+                    write_kagemusha_catalog_qualification_seal: None,
+                    trace_config: false,
+                },
+                terminal_colors: false,
+                language: None,
+                sora: true,
+                fastpq_execution_mode: None,
+                fastpq_poseidon_mode: None,
+                fastpq_device_class: None,
+                fastpq_chip_family: None,
+                fastpq_gpu_kind: None,
+            })
+            .map_err(|report| eyre::eyre!("{report:?}"))?;
+            assert!(
+                config.nexus.storage.effective_local_budget_bytes.is_some(),
+                "startup must complete runtime reconciliation"
+            );
+
+            let final_metadata = std::fs::metadata(&config_path)?;
+            assert_eq!(std::fs::read(&config_path)?, original_bytes);
+            assert_eq!(final_metadata.mode(), original_metadata.mode());
+            assert_eq!(final_metadata.ino(), original_metadata.ino());
+            Ok(())
+        }
+
         #[test]
         fn operator_local_budget_initializes_the_effective_budget() -> eyre::Result<()> {
             let (config, _dir, config_path) =
@@ -21411,6 +21541,20 @@ mod tests {
                 derive_runtime_nexus_storage_budget(&[probe]).expect("safe derived budget");
             assert_eq!(budgets.len(), 1);
             assert_eq!(budgets[0].budget_bytes.get(), 100);
+        }
+
+        #[test]
+        fn runtime_budget_is_stable_across_restart_usage_splits() {
+            let before_restart = storage_budget_probe(1_000, 700, 100);
+            let after_restart = storage_budget_probe(1_000, 300, 500);
+
+            let before = derive_runtime_nexus_storage_budget(&[before_restart])
+                .expect("safe pre-restart budget");
+            let after = derive_runtime_nexus_storage_budget(&[after_restart])
+                .expect("safe post-restart budget");
+
+            assert_eq!(before[0].budget_bytes, after[0].budget_bytes);
+            assert_eq!(before[0].budget_bytes.get(), 600);
         }
 
         #[test]
@@ -21462,6 +21606,17 @@ mod tests {
                 resolved.managed_root.as_deref(),
                 Some(canonical_root.as_path())
             );
+            let direct = resolve_budget_probe_root(
+                &normalize_budget_probe_path(real_root.clone()).expect("absolute direct root"),
+                NexusStorageBudgetComponent::Sorafs,
+            )
+            .expect("the direct spelling resolves");
+            let mut managed_roots = vec![
+                direct.managed_root.expect("direct managed root"),
+                resolved.managed_root.expect("alias managed root"),
+            ];
+            deduplicate_managed_roots(&mut managed_roots);
+            assert_eq!(managed_roots, vec![canonical_root.clone()]);
 
             let exact_link = temp.path().join("exact-root-link");
             symlink(&real_root, &exact_link)?;
@@ -21531,6 +21686,23 @@ mod tests {
             );
 
             std::fs::remove_file(descendant_link)?;
+            let mount_child = canonical_root.join("mounted-child");
+            std::fs::create_dir(&mount_child)?;
+            let cross_mount_error =
+                managed_root_size_with_identity(&canonical_root, &filesystem_id, |path| {
+                    if path == mount_child.as_path() {
+                        Some("dev:other".to_owned())
+                    } else {
+                        Some(filesystem_id.clone())
+                    }
+                })
+                .expect_err("a descendant mount boundary must fail closed");
+            assert!(
+                cross_mount_error
+                    .to_string()
+                    .contains("crosses from filesystem")
+            );
+
             assert!(
                 managed_root_size(&canonical_root, "dev:stale").is_err(),
                 "the filesystem identity is rechecked during measurement"

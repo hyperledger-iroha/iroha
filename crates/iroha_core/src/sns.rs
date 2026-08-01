@@ -77,6 +77,62 @@ const SNS_DYNAMIC_DATASPACE_FAULT_TOLERANCE: u32 = 1;
 /// This consensus constant bounds native maintenance work. A durable cursor
 /// advances through canonically ordered storage keys so larger registries remain fair.
 pub const ALIAS_AUTO_RENEW_SWEEP_LIMIT: usize = 64;
+
+/// Non-reusable proof that the SNS maintenance sweep admitted one exact renewal charge.
+pub(crate) struct VerifiedSnsAutoRenewalCharge {
+    selector: NameSelectorV1,
+    owner: AccountId,
+    current_expiry_ms: u64,
+    target_expiry_ms: u64,
+    source_id: AssetId,
+    destination: AccountId,
+    amount: Quantity,
+}
+
+impl VerifiedSnsAutoRenewalCharge {
+    fn new(
+        selector: NameSelectorV1,
+        owner: AccountId,
+        current_expiry_ms: u64,
+        target_expiry_ms: u64,
+        source_id: AssetId,
+        destination: AccountId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            selector,
+            owner,
+            current_expiry_ms,
+            target_expiry_ms,
+            source_id,
+            destination,
+            amount,
+        }
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        NameSelectorV1,
+        AccountId,
+        u64,
+        u64,
+        AssetId,
+        AccountId,
+        Quantity,
+    ) {
+        (
+            self.selector,
+            self.owner,
+            self.current_expiry_ms,
+            self.target_expiry_ms,
+            self.source_id,
+            self.destination,
+            self.amount,
+        )
+    }
+}
+
 /// Stable suspension code for a pinned SNS policy-version mismatch.
 pub const ALIAS_AUTO_RENEW_POLICY_DRIFT_CODE: &str = "alias.auto_renew.policy_drift";
 /// Stable suspension code for a pinned payment-asset mismatch.
@@ -550,13 +606,19 @@ fn alias_auto_renew_attempt(
         ));
     }
 
+    let charge = VerifiedSnsAutoRenewalCharge::new(
+        selector.clone(),
+        state.owner.clone(),
+        record.expires_at_ms,
+        target_expiry_ms,
+        AssetId::of(config.payment_asset.clone(), state.owner.clone()),
+        quote.collector_account.clone(),
+        quote.charge_amount.clone(),
+    );
     if let Err(error) =
-        crate::smartcontracts::isi::asset::isi::execute_native_authorized_numeric_asset_transfer(
+        crate::smartcontracts::isi::asset::isi::execute_verified_sns_auto_renewal_charge(
             state_transaction,
-            &state.owner,
-            AssetId::of(config.payment_asset.clone(), state.owner.clone()),
-            quote.collector_account.clone(),
-            quote.charge_amount.clone(),
+            charge,
         )
     {
         return AliasAutoRenewAttempt::Retry(error.to_string());
@@ -958,7 +1020,7 @@ fn prepare_account_alias_record_rekey(
         )));
     }
 
-    record.owner = new_owner.clone();
+    record.transfer_owner(new_owner.clone());
     Ok(())
 }
 
@@ -1723,6 +1785,7 @@ fn registration_record(
         selector: selector.clone(),
         name_hash: selector.name_hash(),
         owner,
+        ownership_generation: 1,
         controllers,
         status: NameStatus::Active,
         pricing_class: tier.tier_id,
@@ -2621,8 +2684,24 @@ pub fn active_dataspace_owner_by_alias(
     alias: &str,
     now_ms: u64,
 ) -> Option<AccountId> {
+    active_dataspace_owner_and_generation_by_alias(world, alias, now_ms).map(|(owner, _)| owner)
+}
+
+/// Return the active owner and monotonic ownership generation for a dataspace alias.
+///
+/// A malformed zero generation fails closed so a signed namespace delegation can never bind to
+/// an inert or legacy-reset ownership epoch.
+#[must_use]
+pub fn active_dataspace_owner_and_generation_by_alias(
+    world: &impl WorldReadOnly,
+    alias: &str,
+    now_ms: u64,
+) -> Option<(AccountId, u64)> {
     let selector = selector_for_dataspace_alias(alias).ok()?;
-    active_owner_by_selector(world, &selector, now_ms)
+    let record = record_by_selector(world, &selector)?;
+    (matches!(effective_status(&record, now_ms), NameStatus::Active)
+        && record.ownership_generation != 0)
+        .then_some((record.owner, record.ownership_generation))
 }
 
 fn active_dataspace_record_id(record: &NameRecordV1) -> Result<DataSpaceId, SnsError> {

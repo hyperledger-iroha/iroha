@@ -1,4 +1,3 @@
-
 #[tokio::test]
 async fn alias_lookup_by_account_unsigned_read_returns_only_public_aliases() {
     let authority = checked_torii_test_account_id(
@@ -653,7 +652,8 @@ async fn ram_lfe_program_policies_list_registered_program() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -744,7 +744,8 @@ async fn ram_lfe_execute_returns_receipt() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -819,7 +820,8 @@ async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -892,7 +894,8 @@ async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -975,7 +978,8 @@ async fn identifier_policies_lists_registered_policy() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -1047,7 +1051,8 @@ async fn identifier_policies_expose_programmed_ram_fhe_profile() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -1150,7 +1155,8 @@ async fn identifier_resolve_returns_bound_account() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -1269,7 +1275,8 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -1377,7 +1384,8 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -1493,7 +1501,8 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -1618,7 +1627,8 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),
@@ -1704,7 +1714,8 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
-        b"resolver-secret".to_vec(),
+        iroha_crypto::RamLfeSecret::try_from(b"resolver-secret".to_vec())
+            .expect("valid RAM-LFE test secret"),
         default_bfv_programmed_hidden_program(),
         signer.clone(),
         Some(30_000),

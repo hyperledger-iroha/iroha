@@ -2353,7 +2353,6 @@ impl Execute for MatchSorafsOrderbook {
             super::escrow::close_filled_orderbook_order_asset_lock(
                 state_transaction,
                 &binding.escrow_id,
-                authority,
                 &entry.record.owner,
                 &binding.asset_definition,
                 &binding.initial_xor_locked.clone().into_quantity(),
@@ -2598,7 +2597,6 @@ impl Execute for MaintainSorafsOrderbook {
                 super::escrow::expire_orderbook_order_asset_lock(
                     state_transaction,
                     &binding.escrow_id,
-                    authority,
                     &record.owner,
                     &binding.asset_definition,
                     &binding.initial_xor_locked.clone().into_quantity(),
@@ -2613,7 +2611,6 @@ impl Execute for MaintainSorafsOrderbook {
             super::escrow::expire_orderbook_channel_asset_lock(
                 state_transaction,
                 &orderbook_settlement_escrow_id(channel.channel_id),
-                authority,
             )
             .map_err(|error| {
                 corrupt_state(format!(
@@ -4171,7 +4168,6 @@ mod tests {
         crate::smartcontracts::isi::escrow::close_filled_orderbook_order_asset_lock(
             state_transaction,
             &parent_id,
-            settlement,
             buyer,
             &settlement_asset_definition(),
             &amount,

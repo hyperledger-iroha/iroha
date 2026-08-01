@@ -31,6 +31,8 @@ use crate::{
 pub struct GuardDirectoryEntry {
     /// Verified bundle describing this relay.
     pub bundle: RelayCertificateBundleV2,
+    /// Exclusive validity deadline of the authenticated snapshot, in Unix seconds.
+    pub snapshot_valid_until_unix: i64,
     /// Directory hash advertised in the snapshot.
     pub directory_hash: [u8; 32],
     /// Validation phase encoded in the snapshot metadata.
@@ -236,6 +238,7 @@ pub fn load_guard_entry_at(
 
     Ok(GuardDirectoryEntry {
         bundle,
+        snapshot_valid_until_unix: snapshot.valid_until_unix,
         directory_hash: snapshot.directory_hash,
         validation_phase,
     })
@@ -622,6 +625,7 @@ mod tests {
             entry.bundle.certificate.descriptor_commit,
             fixture.descriptor_commit
         );
+        assert_eq!(entry.snapshot_valid_until_unix, fixture.valid_until_unix);
     }
 
     #[test]
@@ -950,7 +954,9 @@ mod tests {
             bandwidth_bytes_per_sec: 1_000_000,
             reputation_weight: 42,
             endpoints: vec![RelayEndpointV2 {
-                url: "soranet://relay.test:443".into(),
+                quic_multiaddr: "/dns/relay.test/udp/443/quic".into(),
+                tls_server_name: "relay.test".into(),
+                tls_spki_sha256: [0xA5; 32],
                 priority: 1,
                 tags: vec!["norito-stream".into()],
             }],

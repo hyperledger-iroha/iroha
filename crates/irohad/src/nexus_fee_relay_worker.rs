@@ -1224,6 +1224,13 @@ fn prove_lane_relay_envelope(
     if manifest_root.iter().all(|byte| *byte == 0) {
         eyre::bail!("lane relay envelope has zero manifest_root");
     }
+    let qc = envelope
+        .qc
+        .as_ref()
+        .ok_or_else(|| eyre::eyre!("lane relay proof requires a finalized QC"))?;
+    let lane_finality_statement_hash = envelope
+        .lane_finality_statement_hash()
+        .wrap_err("derive finalized lane relay statement")?;
     let relay_ref = envelope.relay_ref();
     let relay_ref_bytes = norito::to_bytes(&relay_ref).wrap_err("encode lane relay ref")?;
     let source_tx_commitment = worker_digest(
@@ -1259,19 +1266,13 @@ fn prove_lane_relay_envelope(
     let mut batch = transition_batch(
         dsid,
         expiry_slot,
-        worker_digest(
-            b"nexus-fee-relay:lane-relay-old-root:v1",
-            &[relay_ref_bytes.as_slice()],
-        ),
-        Hash::new(manifest_root),
+        qc.parent_state_root,
+        qc.post_state_root,
         worker_digest(
             b"nexus-fee-relay:lane-relay-perm-root:v1",
             &[&manifest_root],
         ),
-        worker_digest(
-            b"nexus-fee-relay:lane-relay-tx-set:v1",
-            &[claim_digest.as_ref()],
-        ),
+        lane_finality_statement_hash,
     );
     batch.push(fastpq_prover::StateTransition::new(
         b"axt/nexus/lane-relay".to_vec(),
@@ -1293,7 +1294,9 @@ fn prove_lane_relay_envelope(
     let proof_envelope = AxtProofEnvelope {
         dsid,
         manifest_root,
-        da_commitment: None,
+        da_commitment: envelope
+            .da_commitment_hash
+            .map(|commitment| Hash::from(commitment).into()),
         proof: payload,
         fastpq_binding: Some(binding),
         committed_amount: None,
@@ -1594,6 +1597,9 @@ mod tests {
         LaneRelayEnvelope::new(header, None, None, settlement_commitment, 0)
             .expect("valid envelope")
             .with_manifest_root(Some(manifest_root))
+            .with_lane_block_descriptor_hash(Some(Hash::new(
+                b"relay-worker-test-lane-block-descriptor",
+            )))
     }
 
     fn sample_allocation_work(
@@ -1748,7 +1754,9 @@ mod tests {
             epoch: 0,
             chain_order_hash: Hash::new(b"relay-worker-test-chain-order"),
             rechain_seq: 0,
-            mode_tag: envelope.lane_qc_mode_tag("relay-worker-test"),
+            mode_tag: envelope
+                .lane_finality_qc_mode_tag("relay-worker-test")
+                .expect("complete relay worker test finality statement"),
             highest_qc: None,
             validator_set_hash: iroha_crypto::HashOf::new(&validator_set),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,

@@ -14,6 +14,18 @@ the same deterministic framing.
   burst, heartbeat, jitter, padding budget, guard refresh, lease, DNS push
   interval, exit class, meter family). The client API summary now exposes the
   same fields to SDKs.
+- **Authenticated relay trust:** Enabling `network.soranet_vpn` requires an
+  exact relay Ed25519 identity, a guard-directory snapshot path, and an
+  independently provisioned exact snapshot digest. Torii authenticates those
+  bytes once at startup, selects an exit-authorized VPN endpoint
+  deterministically by priority and canonical multiaddr, and derives the TLS
+  server name, leaf SPKI SHA-256, descriptor commitment, relay-certificate
+  digest, and snapshot digest solely from that signed directory entry. There is
+  no independent raw TLS-pin override. Profile fields are empty and
+  `available=false` when this trust cannot cover a complete configured lease;
+  quote admission, the durable on-chain quote policy, relay helper-ticket
+  admission, and restart reconstruction all reject trust that expires before
+  the lease or differs from the currently authenticated entry.
 - **Cover scheduling:** `xtask/src/soranet_vpn.rs` builds deterministic cover/data
   plans from the config using a BLAKE3 XOF seeded by all 32 seed bytes, clamps
   bursts, frames payloads with the configured padding budget, and emits billing
@@ -38,7 +50,8 @@ the same deterministic framing.
   header layout, and offers a small `NEPacketTunnelNetworkSettings` helper for
   DNS/route pushes. Unit tests (`IrohaSwift/Tests/IrohaSwiftTests/`) mirror the
   Rust layout.
-- **Native XOR lease flow:** Torii now issues signed VPN quotes before sessions.
+- **Native XOR lease flow:** Torii now issues account-authenticated VPN quote
+  responses before sessions.
   Each quote binds the account, exit class, relay, client metering public key,
   XOR fee asset, non-operator escrow account, and tariff, and returns a
   Norito-framed `OpenVpnLeaseEscrow` instruction in `tx_instructions`. Session
@@ -58,7 +71,15 @@ the same deterministic framing.
   usage vouchers because it does not possess the relay MAC secret, but that
   path grants no authority. Relays always verify the MAC and expiry, reject
   old-length tickets, and reject vouchers signed by any key other than the
-  ticket metering key.
+  ticket metering key. A successful redemption is committed synchronously to
+  the namespace- and relay-identity-bound ledger configured by
+  `vpn.helper_ticket_replay_store_path`; the relay rejects duplicates after a
+  restart, never evicts an active redemption to admit another, and fails
+  startup or admission closed on corruption, capacity exhaustion, lock
+  contention, or persistence failure. The ledger retains exact millisecond
+  expiry plus a durable monotonic wall-clock high-water mark, so a clock
+  rollback cannot reopen a pruned ticket after restart, and rejects tickets
+  whose remaining lifetime exceeds `vpn.lease_secs`.
 - **SDK quote helpers:** JavaScript, C#, Swift, Python, Kotlin/JVM, and Java
   Android Torii clients expose quote-first VPN helpers plus typed
   `OpenVpnLeaseEscrow` / `SettleVpnLease` instruction DTOs. Callers should
@@ -68,6 +89,12 @@ the same deterministic framing.
   `earned_fee`, and `refunded_fee`; every fee is a canonical exact `Quantity`
   decimal string. JSON numbers and the retired integer `*_nanos` aliases are
   rejected rather than rounded or reinterpreted.
+  Profile, quote, and session payloads carry the same required trust tuple:
+  `relay_id_hex`, `descriptor_commit_hex`, `tls_server_name`,
+  `relay_tls_spki_sha256_hex`, `relay_certificate_sha256_hex`, and
+  `directory_snapshot_digest_hex`. Available quote/session values are exact
+  lowercase 32-byte hex encodings plus the canonical DNS identity; clients
+  must reject missing, null, malformed, or substituted fields.
 - **Receipt/billing:** Exit gateways produce `VpnSessionReceiptV1` values
   and accept client-signed cumulative `VpnUsageVoucherV1` control cells. The
   relay verifies voucher/session/quote/relay binding, limits unvouched forwarding

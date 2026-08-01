@@ -102,7 +102,6 @@ use iroha_data_model::{
     soracloud::SoraRouteVisibilityV1,
     sorafs::{
         capacity::ProviderId,
-        gar::GarEnforcementReceiptV1,
         moderation::{
             AdversarialCorpusManifestV1, MODERATION_COMMITTEE_MAX_RESULTS_V1,
             ModerationCommitteeAggregateV1, ModerationReproManifestV1,
@@ -132,8 +131,7 @@ use iroha_data_model::{
             ProofOutcomeFinalizedRecordV1, ProofOutcomeKindV1, ProofOutcomeProjectionV1,
         },
         transparency::{
-            ModerationLedgerCyclePublicationV1, ModerationLedgerEntryKindV1,
-            ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
+            ModerationLedgerCyclePublicationV1, ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
         },
     },
     transaction::{
@@ -164,14 +162,17 @@ use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::StreamTokenV1;
 use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, CapabilityTlv, CapabilityType, EndpointKind,
-    EndpointMetadata, EndpointMetadataKey, MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestV1,
-    OrderFillOutcomeV1, OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookSignatureV1,
-    PathDiversityPolicy, ProofStreamHttpRequestV1, ProofStreamKind, ProofStreamTier,
-    ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderReputationV1,
-    QosHints, RendezvousTopic, ReputationMerkleProofV1, ReputationSnapshotEventV1,
-    ReputationSnapshotV1, SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
-    SORAFS_GATEWAY_PROFILE_VERSION, SettlementChannelStatusV1, SettlementChannelV1,
-    SettlementReceiptV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    EndpointMetadata, EndpointMetadataKey, GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1,
+    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogPayloadV1,
+    MAX_PROOF_STREAM_SAMPLE_COUNT, MAX_REPUTATION_TRUST_EDGES, ManifestV1, OrderFillOutcomeV1,
+    OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookSignatureV1, PathDiversityPolicy,
+    ProofStreamHttpRequestV1,
+    ProofStreamKind, ProofStreamTier, ProviderAdvertBodyV1, ProviderAdvertV1,
+    ProviderCapabilityRangeV1, ProviderReputationV1, QosHints, RendezvousTopic,
+    ReputationMerkleProofV1, ReputationSnapshotEventV1, ReputationSnapshotV1,
+    SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1, SORAFS_GATEWAY_PROFILE_VERSION,
+    SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1,
+    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer,
     StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
     chunker_registry,
@@ -185,7 +186,8 @@ use sorafs_manifest::{
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrStatus, potr_request_scope_digest_v1},
     repair::RepairReportV1,
-    validate_manifest, verify_order_cancel_signature_v1, verify_order_request_signature_v1,
+    validate_governance_dag_head_against_rotatable_chain_v1, validate_manifest,
+    verify_order_cancel_signature_v1, verify_order_request_signature_v1,
     verify_settlement_receipt_signature_v1,
 };
 use sorafs_node::moderation_orchestrator::{
@@ -204,9 +206,7 @@ use sorafs_node::{
     ModerationQuarantineState, ModerationReproRegistryRecord,
     ModerationScreeningAuthenticationError, ModerationScreeningError, ModerationScreeningRecord,
     ModerationScreeningSnapshot, NodeStorageError, PrivacyAggregateScheduleOutcome,
-    PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric, TransparencyLedgerSourceEntry,
-    appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
-    gar_enforcement_receipt_source_entry, moderation_ballot_governance_event_source_entry,
+    PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
     store::{
         ChunkFileRecord, StorageError as StorageBackendError, StoredFileRecord, StoredManifest,
     },
@@ -351,9 +351,26 @@ static SORAFS_MODERATION_OPERATOR_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
         .parse()
         .expect("SoraFS moderation operator role id is valid")
 });
+const SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE: &str = "sorafs_transparency_source_publisher";
+static SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
+    SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE
+        .parse()
+        .expect("SoraFS transparency source publisher role id is valid")
+});
+const SORAFS_TRANSPARENCY_CYCLE_PUBLISHER_ROLE: &str = "sorafs_transparency_cycle_publisher";
+static SORAFS_TRANSPARENCY_CYCLE_PUBLISHER_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
+    SORAFS_TRANSPARENCY_CYCLE_PUBLISHER_ROLE
+        .parse()
+        .expect("SoraFS transparency cycle publisher role id is valid")
+});
+const SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE: &str = "sorafs_appeal_finance_publisher";
+static SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
+    SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE
+        .parse()
+        .expect("SoraFS appeal finance publisher role id is valid")
+});
 #[cfg(test)]
 const APPEAL_FINANCE_ROUTE_REPORTS: &str = "/v1/sorafs/appeals/finance/reports";
-const TRANSPARENCY_SOURCE_ENTRIES_ROUTE: &str = "/v1/sorafs/transparency/source-entries";
 #[cfg(test)]
 const TRANSPARENCY_PRIVACY_AGGREGATE_SOURCE_EVENTS_ROUTE: &str =
     "/v1/sorafs/transparency/privacy-aggregates/source-events";
@@ -388,21 +405,19 @@ const GOVERNANCE_DAG_MIRROR_INDEX_FILE: &str = "mirror-index.json";
 const GOVERNANCE_DAG_PUBLISH_INDEX_FILE: &str = "publish-index.json";
 const GOVERNANCE_DAG_CAR_QUEUE_FILE: &str = "car-queue.json";
 const GOVERNANCE_DAG_RUNTIME_INDEX_FILE: &str = "runtime-dag-index.json";
+const GOVERNANCE_DAG_RUNTIME_HEAD_FILE: &str = "runtime-dag/head.to";
+const GOVERNANCE_DAG_RUNTIME_BLOCKS_DIR: &str = "runtime-dag/blocks";
+const GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const GOVERNANCE_DAG_RUNTIME_ENTRY_HARD_CAP: usize = 131_072;
+const GOVERNANCE_DAG_RUNTIME_TOTAL_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
+const GOVERNANCE_DAG_DECODE_MAX_TOTAL_ELEMENTS: usize = 4_000_000;
+const GOVERNANCE_DAG_DECODE_ALLOCATION_MULTIPLIER: usize = 16;
 const GOVERNANCE_DAG_CACHE_CONTROL: &str = "public, max-age=15, must-revalidate";
 const APPEAL_FINANCE_REPORT_KIND: &str = "appeal_finance_report";
 const APPEAL_FINANCE_WEEKLY_ROLLUP_KIND: &str = "appeal_finance_weekly_rollup";
 const APPEAL_FINANCE_SETTLEMENT_RECEIPT_KIND: &str = "appeal_finance_settlement_receipt";
 const TRANSPARENCY_LEDGER_PUBLICATION_KIND: &str = "transparency_ledger_publication";
 const PROOF_TOKEN_ISSUANCE_KIND: &str = "proof_token_issuance";
-const TRANSPARENCY_SOURCE_KIND_GAR_ENFORCEMENT_RECEIPT: &str = "gar-enforcement-receipt";
-const TRANSPARENCY_SOURCE_KIND_MODERATION_BALLOT_GOVERNANCE_EVENT: &str =
-    "moderation-ballot-governance-event";
-const TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT: &str = "appeal-finance-report";
-const TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_SETTLEMENT_RECEIPT: &str =
-    "appeal-finance-settlement-receipt";
-const TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE: &str = "legal-hold-notice";
-const TRANSPARENCY_SOURCE_KIND_REDACTION_NOTICE: &str = "redaction-notice";
-const TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY: &str = "evidence-access-summary";
 static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug)]
 pub(crate) struct ResponseError(Box<Response>);
@@ -1172,7 +1187,7 @@ fn prepare_alias_presentation(
         }
     };
 
-    let proof_bundle = match crate::sorafs::decode_alias_proof(&proof_bytes) {
+    let proof_bundle = match crate::sorafs::decode_alias_proof_untrusted_signers(&proof_bytes) {
         Ok(bundle) => bundle,
         Err(err) => {
             error!(
@@ -2062,30 +2077,6 @@ pub struct TransparencyLedgerMetadataDto {
     pub key: String,
     /// Metadata value.
     pub value: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted for public legal-hold, redaction, and evidence-access source summaries.
-pub struct TransparencyPublicSourceEntryRequestDto {
-    /// Stable event id used for duplicate suppression.
-    pub event_id: String,
-    /// Unix timestamp in seconds when the source event occurred.
-    pub occurred_at_unix: u64,
-    /// Privacy-safe public subject label.
-    pub subject: String,
-    /// Optional 32-byte private subject digest encoded as hexadecimal.
-    pub subject_digest_hex: Option<String>,
-    /// Required 32-byte canonical source payload digest encoded as hexadecimal.
-    pub payload_digest_hex: String,
-    /// Optional 32-byte public summary digest encoded as hexadecimal.
-    pub summary_digest_hex: Option<String>,
-    /// Optional 32-byte policy/configuration digest encoded as hexadecimal.
-    pub policy_digest_hex: Option<String>,
-    /// Optional public evidence URIs safe to disclose.
-    pub evidence_uris: Option<Vec<String>>,
-    /// Public metadata, sorted by key.
-    pub metadata: Option<Vec<TransparencyLedgerMetadataDto>>,
 }
 
 #[cfg(feature = "app_api")]
@@ -4871,9 +4862,17 @@ pub(crate) async fn handle_post_sorafs_transparency_token_issuance(
             "sorafs proof-token issuance feed API is not enabled on this node",
         );
     }
-    if let Err(response) =
-        require_transparency_source_request_auth(&state, &headers, &method, &uri, body.as_ref())
-    {
+    let verified = match require_transparency_source_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_transparency_source_publisher_role(&state, &verified) {
         return response;
     }
     let request = match proof_token_issuance_request_from_body(body.as_ref()) {
@@ -4881,13 +4880,16 @@ pub(crate) async fn handle_post_sorafs_transparency_token_issuance(
         Err(response) => return response,
     };
     let has_governance_publisher = state.sorafs_node.has_governance_publisher();
-    let issuance = match state.sorafs_node.publish_proof_token_base64_issuance(
-        &request.token_b64,
-        request.signer_key,
-        request.evidence_digest,
-        request.policy_digest,
-        request.metadata,
-    ) {
+    let issuance = match state
+        .sorafs_node
+        .publish_authenticated_proof_token_base64_issuance(
+            &request.token_b64,
+            request.signer_key,
+            request.evidence_digest,
+            request.policy_digest,
+            request.metadata,
+            verified.account,
+        ) {
         Ok(issuance) => issuance,
         Err(err) => {
             let message = err.to_string();
@@ -4912,56 +4914,6 @@ pub(crate) async fn handle_post_sorafs_transparency_token_issuance(
         .into_response()
 }
 
-pub(crate) async fn handle_post_sorafs_transparency_source_entry(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    Path(source_kind): Path<String>,
-    body: Bytes,
-) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled(
-            "sorafs transparency source ingest API is not enabled on this node",
-        );
-    }
-    let source_kind = match normalize_transparency_source_kind(&source_kind) {
-        Ok(source_kind) => source_kind,
-        Err(response) => return response,
-    };
-    if let Err(response) =
-        require_transparency_source_request_auth(&state, &headers, &method, &uri, body.as_ref())
-    {
-        return response;
-    }
-    let entry = match transparency_source_entry_from_body(source_kind, body.as_ref()) {
-        Ok(entry) => entry,
-        Err(response) => return response,
-    };
-    if let Err(err) = state
-        .sorafs_node
-        .record_transparency_ledger_source_entry(entry.clone())
-    {
-        let message = err.to_string();
-        let status = if message.contains("duplicate transparency ledger source entry") {
-            StatusCode::CONFLICT
-        } else if message.contains("invalid transparency ledger source entry") {
-            StatusCode::BAD_REQUEST
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-        return json_error(
-            status,
-            format!("failed to record SoraFS transparency source entry: {message}"),
-        );
-    }
-    (
-        StatusCode::ACCEPTED,
-        JsonBody(transparency_source_entry_ingest_json(source_kind, &entry)),
-    )
-        .into_response()
-}
-
 pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_source_event(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -4974,9 +4926,17 @@ pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_source_eve
             "sorafs privacy aggregate source-event ingest API is not enabled on this node",
         );
     }
-    if let Err(response) =
-        require_transparency_source_request_auth(&state, &headers, &method, &uri, body.as_ref())
-    {
+    let verified = match require_transparency_source_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_transparency_source_publisher_role(&state, &verified) {
         return response;
     }
     let event = match privacy_aggregate_source_event_from_body(body.as_ref()) {
@@ -4985,7 +4945,7 @@ pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_source_eve
     };
     let record_outcome = match state
         .sorafs_node
-        .record_privacy_aggregate_source_event(event.clone())
+        .record_authenticated_privacy_aggregate_source_event(event.clone(), verified.account)
     {
         Ok(outcome) => outcome,
         Err(err) => {
@@ -5031,9 +4991,17 @@ pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_publish_du
             "sorafs privacy aggregate due-publication API is not enabled on this node",
         );
     }
-    if let Err(response) =
-        require_transparency_source_request_auth(&state, &headers, &method, &uri, body.as_ref())
-    {
+    let verified = match require_transparency_source_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    if let Err(response) = require_transparency_cycle_publisher_role(&state, &verified) {
         return response;
     }
     let (expected_cycle_id, idempotency_key) =
@@ -5043,9 +5011,10 @@ pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_publish_du
         };
     let outcome = match state
         .sorafs_node
-        .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+        .publish_due_configured_privacy_aggregate_cycle_from_authenticated_request(
             expected_cycle_id,
             idempotency_key,
+            verified.account,
         ) {
         Ok(outcome) => outcome,
         Err(err) => {
@@ -5072,120 +5041,6 @@ pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_publish_du
         Err(response) => return response,
     };
     (StatusCode::OK, JsonBody(body)).into_response()
-}
-
-fn normalize_transparency_source_kind(raw: &str) -> Result<&'static str, Response> {
-    let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "gar" | "gar-receipt" | "gar-enforcement-receipt" => {
-            Ok(TRANSPARENCY_SOURCE_KIND_GAR_ENFORCEMENT_RECEIPT)
-        }
-        "moderation-ballot"
-        | "moderation-ballot-governance"
-        | "moderation-ballot-governance-event" => {
-            Ok(TRANSPARENCY_SOURCE_KIND_MODERATION_BALLOT_GOVERNANCE_EVENT)
-        }
-        "appeal-finance-report" => Ok(TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT),
-        "appeal-finance-settlement" | "appeal-finance-settlement-receipt" => {
-            Ok(TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_SETTLEMENT_RECEIPT)
-        }
-        "legal-hold" | "legal-hold-notice" => Ok(TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE),
-        "redaction" | "redaction-notice" => Ok(TRANSPARENCY_SOURCE_KIND_REDACTION_NOTICE),
-        "evidence-access" | "evidence-access-summary" | "evidence-viewer-access" => {
-            Ok(TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY)
-        }
-        _ => Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "unsupported SoraFS transparency source kind",
-        )),
-    }
-}
-
-fn transparency_source_entry_from_body(
-    source_kind: &'static str,
-    body: &[u8],
-) -> Result<TransparencyLedgerSourceEntry, Response> {
-    match source_kind {
-        TRANSPARENCY_SOURCE_KIND_GAR_ENFORCEMENT_RECEIPT => {
-            let receipt = decode_transparency_source_payload::<GarEnforcementReceiptV1>(
-                body,
-                "GAR enforcement receipt",
-            )?;
-            gar_enforcement_receipt_source_entry(&receipt).map_err(|err| {
-                json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid SoraFS GAR enforcement receipt source: {err}"),
-                )
-            })
-        }
-        TRANSPARENCY_SOURCE_KIND_MODERATION_BALLOT_GOVERNANCE_EVENT => {
-            let event = decode_transparency_source_payload::<
-                sorafs_manifest::SoraFsModerationBallotGovernanceEventV1,
-            >(body, "moderation ballot governance event")?;
-            moderation_ballot_governance_event_source_entry(&event).map_err(|err| {
-                json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid SoraFS moderation ballot governance source: {err}"),
-                )
-            })
-        }
-        TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT => {
-            let report = decode_transparency_source_payload::<SoraFsAppealFinanceReportV1>(
-                body,
-                "appeal finance report",
-            )?;
-            appeal_finance_report_source_entry(&report).map_err(|err| {
-                json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid SoraFS appeal finance report source: {err}"),
-                )
-            })
-        }
-        TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_SETTLEMENT_RECEIPT => {
-            let receipt = decode_transparency_source_payload::<
-                SoraFsAppealFinanceSettlementReceiptV1,
-            >(body, "appeal finance settlement receipt")?;
-            appeal_finance_settlement_receipt_source_entry(&receipt).map_err(|err| {
-                json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid SoraFS appeal finance settlement receipt source: {err}"),
-                )
-            })
-        }
-        TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE => transparency_public_source_entry_from_body(
-            source_kind,
-            ModerationLedgerEntryKindV1::LegalHold,
-            body,
-        ),
-        TRANSPARENCY_SOURCE_KIND_REDACTION_NOTICE => transparency_public_source_entry_from_body(
-            source_kind,
-            ModerationLedgerEntryKindV1::Redaction,
-            body,
-        ),
-        TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY => {
-            transparency_public_source_entry_from_body(
-                source_kind,
-                ModerationLedgerEntryKindV1::EvidenceAccess,
-                body,
-            )
-        }
-        _ => Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "unsupported SoraFS transparency source kind",
-        )),
-    }
-}
-
-fn decode_transparency_source_payload<T>(body: &[u8], source_label: &str) -> Result<T, Response>
-where
-    T: json::JsonDeserialize,
-{
-    json::from_slice(body).map_err(|err| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            format!("failed to decode SoraFS transparency {source_label} JSON: {err}"),
-        )
-    })
 }
 
 struct ProofTokenIssuanceRequest {
@@ -5229,163 +5084,6 @@ fn proof_token_issuance_request_from_body(
         policy_digest,
         metadata,
     })
-}
-
-fn transparency_public_source_entry_from_body(
-    source_kind: &'static str,
-    kind: ModerationLedgerEntryKindV1,
-    body: &[u8],
-) -> Result<TransparencyLedgerSourceEntry, Response> {
-    let request: TransparencyPublicSourceEntryRequestDto =
-        json::from_slice(body).map_err(|err| {
-            json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode SoraFS transparency public source-entry JSON: {err}"),
-            )
-        })?;
-    let payload_digest = decode_hex_32_field(&request.payload_digest_hex, "payload_digest_hex")?;
-    let subject_digest = match request.subject_digest_hex.as_deref() {
-        Some(digest) => decode_hex_32_field(digest, "subject_digest_hex")?,
-        None => public_source_subject_digest(source_kind, &request.subject, &payload_digest),
-    };
-    let policy_digest =
-        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
-    let evidence_uris = request.evidence_uris.unwrap_or_default();
-    let metadata = request
-        .metadata
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| ModerationLedgerMetadataV1 {
-            key: item.key,
-            value: item.value,
-        })
-        .collect::<Vec<_>>();
-    let summary_digest = match request.summary_digest_hex.as_deref() {
-        Some(digest) => decode_hex_32_field(digest, "summary_digest_hex")?,
-        None => public_source_summary_digest(
-            source_kind,
-            &request.subject,
-            &payload_digest,
-            &evidence_uris,
-            &metadata,
-        ),
-    };
-    Ok(TransparencyLedgerSourceEntry {
-        event_id: request.event_id,
-        occurred_at_unix: request.occurred_at_unix,
-        kind,
-        subject: request.subject,
-        subject_digest,
-        payload_digest,
-        summary_digest,
-        policy_digest,
-        evidence_uris,
-        metadata,
-    })
-}
-
-fn public_source_subject_digest(
-    source_kind: &str,
-    subject: &str,
-    payload_digest: &[u8; 32],
-) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"sorafs.torii.transparency.public_source_entry.subject.v1");
-    update_hasher_text(&mut hasher, source_kind);
-    update_hasher_text(&mut hasher, subject);
-    hasher.update(payload_digest);
-    *hasher.finalize().as_bytes()
-}
-
-fn public_source_summary_digest(
-    source_kind: &str,
-    subject: &str,
-    payload_digest: &[u8; 32],
-    evidence_uris: &[String],
-    metadata: &[ModerationLedgerMetadataV1],
-) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"sorafs.torii.transparency.public_source_entry.summary.v1");
-    update_hasher_text(&mut hasher, source_kind);
-    update_hasher_text(&mut hasher, subject);
-    hasher.update(payload_digest);
-    hasher.update(&(evidence_uris.len() as u64).to_le_bytes());
-    for uri in evidence_uris {
-        update_hasher_text(&mut hasher, uri);
-    }
-    hasher.update(&(metadata.len() as u64).to_le_bytes());
-    for item in metadata {
-        update_hasher_text(&mut hasher, &item.key);
-        update_hasher_text(&mut hasher, &item.value);
-    }
-    *hasher.finalize().as_bytes()
-}
-
-fn update_hasher_text(hasher: &mut blake3::Hasher, value: &str) {
-    hasher.update(&(value.len() as u64).to_le_bytes());
-    hasher.update(value.as_bytes());
-}
-
-fn transparency_source_entry_ingest_json(
-    source_kind: &str,
-    entry: &TransparencyLedgerSourceEntry,
-) -> Value {
-    json_object(vec![
-        json_entry(
-            "schema",
-            Value::from("sorafs.transparency.source_entry.ingest.v1"),
-        ),
-        json_entry("status", Value::from("accepted")),
-        json_entry("source_kind", Value::from(source_kind.to_string())),
-        json_entry("event_id", Value::from(entry.event_id.clone())),
-        json_entry("occurred_at_unix", Value::from(entry.occurred_at_unix)),
-        json_entry(
-            "ledger_kind",
-            Value::from(moderation_ledger_entry_kind_label(&entry.kind).into_owned()),
-        ),
-        json_entry("subject", Value::from(entry.subject.clone())),
-        json_entry(
-            "subject_digest_hex",
-            Value::from(encode(entry.subject_digest)),
-        ),
-        json_entry(
-            "payload_digest_hex",
-            Value::from(encode(entry.payload_digest)),
-        ),
-        json_entry(
-            "summary_digest_hex",
-            Value::from(encode(entry.summary_digest)),
-        ),
-        json_entry(
-            "policy_digest_hex",
-            entry
-                .policy_digest
-                .map(encode)
-                .map(Value::from)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "evidence_uris",
-            Value::Array(
-                entry
-                    .evidence_uris
-                    .iter()
-                    .cloned()
-                    .map(Value::from)
-                    .collect(),
-            ),
-        ),
-        json_entry(
-            "metadata",
-            Value::Object(
-                entry
-                    .metadata
-                    .iter()
-                    .map(|item| (item.key.clone(), Value::from(item.value.clone())))
-                    .collect(),
-            ),
-        ),
-    ])
 }
 
 fn privacy_aggregate_source_event_from_body(
@@ -5500,6 +5198,7 @@ fn privacy_aggregate_source_event_from_request(
             })
             .collect(),
         policy_digest,
+        provenance: None,
     })
 }
 
@@ -5704,22 +5403,6 @@ fn is_privacy_aggregate_publish_due_request_error(message: &str) -> bool {
 fn is_proof_token_issuance_request_error(message: &str) -> bool {
     message.contains("ingest proof-token issuance")
         || message.contains("invalid proof-token issuance")
-}
-
-fn moderation_ledger_entry_kind_label(kind: &ModerationLedgerEntryKindV1) -> Cow<'_, str> {
-    match kind {
-        ModerationLedgerEntryKindV1::ModerationAction => Cow::Borrowed("moderation_action"),
-        ModerationLedgerEntryKindV1::AppealOutcome => Cow::Borrowed("appeal_outcome"),
-        ModerationLedgerEntryKindV1::GarEnforcementReceipt => {
-            Cow::Borrowed("gar_enforcement_receipt")
-        }
-        ModerationLedgerEntryKindV1::ProofTokenIssuance => Cow::Borrowed("proof_token_issuance"),
-        ModerationLedgerEntryKindV1::EvidenceAccess => Cow::Borrowed("evidence_access"),
-        ModerationLedgerEntryKindV1::PrivacyAggregate => Cow::Borrowed("privacy_aggregate"),
-        ModerationLedgerEntryKindV1::LegalHold => Cow::Borrowed("legal_hold"),
-        ModerationLedgerEntryKindV1::Redaction => Cow::Borrowed("redaction"),
-        ModerationLedgerEntryKindV1::Custom(slug) => Cow::Borrowed(slug),
-    }
 }
 
 async fn enforce_transparency_proof_token_verify_access(
@@ -6422,27 +6105,33 @@ pub(crate) async fn handle_get_sorafs_governance_dag_runtime_kind(
     )
 }
 
+struct VerifiedGovernanceRuntimeBlock {
+    block: GovernanceDagBlockV1,
+    encoded_blake3_hex: String,
+    encoded_len: u64,
+    source_payload_blake3_hex: String,
+    source_payload_len: u64,
+}
+
+struct VerifiedGovernanceRuntimeState {
+    blocks: Vec<VerifiedGovernanceRuntimeBlock>,
+    block_positions_by_cid: BTreeMap<String, usize>,
+    head: GovernanceDagHeadV1,
+    head_blake3_hex: String,
+}
+
 fn load_governance_dag_mirror_index(
     state: &SharedAppState,
 ) -> Result<(Value, String, u64, String, String), Response> {
     let path = governance_dag_mirror_index_path(state)?;
-    let bytes = fs::read(&path).map_err(|err| {
-        let status = if err.kind() == io::ErrorKind::NotFound {
-            StatusCode::NOT_FOUND
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-        json_error(
-            status,
-            format!(
-                "failed to read governance DAG mirror index `{}`: {err}",
-                path.display()
-            ),
-        )
-    })?;
+    let bytes = read_bounded_governance_dag_file(
+        &path,
+        GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES,
+        "governance DAG mirror index",
+    )?;
     let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
-    let index: Value = json::from_slice(&bytes).map_err(|err| {
+    let mut index: Value = json::from_slice(&bytes).map_err(|err| {
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!(
@@ -6457,6 +6146,8 @@ fn load_governance_dag_mirror_index(
             "governance DAG mirror index uses an unsupported schema",
         ));
     }
+    let (_, verified_runtime) = load_verified_governance_dag_runtime_index(state)?;
+    verify_and_bind_governance_dag_mirror_index(&mut index, &verified_runtime)?;
     let etag = format!("\"{blake3_hex}\"");
     Ok((
         index,
@@ -6572,28 +6263,31 @@ fn load_governance_dag_car_queue(
 fn load_governance_dag_runtime_index(
     state: &SharedAppState,
 ) -> Result<(Value, String, u64, String, String), Response> {
+    load_verified_governance_dag_runtime_index(state).map(|(index, _verified)| index)
+}
+
+fn load_verified_governance_dag_runtime_index(
+    state: &SharedAppState,
+) -> Result<
+    (
+        (Value, String, u64, String, String),
+        VerifiedGovernanceRuntimeState,
+    ),
+    Response,
+> {
     let path = governance_dag_index_file_path(
         state,
         GOVERNANCE_DAG_RUNTIME_INDEX_FILE,
         "sorafs governance DAG runtime index directory is not configured",
     )?;
-    let bytes = fs::read(&path).map_err(|err| {
-        let status = if err.kind() == io::ErrorKind::NotFound {
-            StatusCode::NOT_FOUND
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-        json_error(
-            status,
-            format!(
-                "failed to read governance DAG runtime index `{}`: {err}",
-                path.display()
-            ),
-        )
-    })?;
+    let bytes = read_bounded_governance_dag_file(
+        &path,
+        GOVERNANCE_DAG_MUTABLE_INDEX_MAX_BYTES,
+        "governance DAG runtime index",
+    )?;
     let encoded_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     let blake3_hex = encode(blake3_hash(&bytes).as_bytes());
-    let index: Value = json::from_slice(&bytes).map_err(|err| {
+    let mut index: Value = json::from_slice(&bytes).map_err(|err| {
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!(
@@ -6610,22 +6304,17 @@ fn load_governance_dag_runtime_index(
             "governance DAG runtime index uses an unsupported schema",
         ));
     }
-    let blocks = governance_runtime_dag_blocks(&index)?;
-    if let Some(block_count) = index.get("block_count").and_then(Value::as_u64)
-        && block_count != blocks.len() as u64
-    {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "governance DAG runtime index block_count does not match blocks array",
-        ));
-    }
+    let verified = verify_and_bind_governance_dag_runtime_index(state, &mut index)?;
     let etag = format!("\"{blake3_hex}\"");
     Ok((
-        index,
-        path.display().to_string(),
-        encoded_len,
-        blake3_hex,
-        etag,
+        (
+            index,
+            path.display().to_string(),
+            encoded_len,
+            blake3_hex,
+            etag,
+        ),
+        verified,
     ))
 }
 
@@ -11356,24 +11045,88 @@ fn sorafs_moderation_operator_role_id() -> &'static RoleId {
     &SORAFS_MODERATION_OPERATOR_ROLE_ID
 }
 
+fn sorafs_transparency_source_publisher_role_id() -> &'static RoleId {
+    &SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE_ID
+}
+
+fn sorafs_transparency_cycle_publisher_role_id() -> &'static RoleId {
+    &SORAFS_TRANSPARENCY_CYCLE_PUBLISHER_ROLE_ID
+}
+
+fn sorafs_appeal_finance_publisher_role_id() -> &'static RoleId {
+    &SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE_ID
+}
+
 fn require_moderation_quarantine_operator_role(
     state: &SharedAppState,
     verified: &crate::app_auth::VerifiedCanonicalRequest,
 ) -> Result<(), Response> {
+    require_exact_account_role(
+        state,
+        verified,
+        sorafs_moderation_operator_role_id(),
+        SORAFS_MODERATION_OPERATOR_ROLE,
+        "SoraFS moderation quarantine operations",
+    )
+}
+
+fn require_exact_account_role(
+    state: &SharedAppState,
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+    required_role: &RoleId,
+    required_role_label: &str,
+    capability: &str,
+) -> Result<(), Response> {
     let world = state.state.world_view();
-    let has_role = world
+    if world
         .account_roles_iter(&verified.account)
-        .any(|role| role == sorafs_moderation_operator_role_id());
-    if has_role {
-        Ok(())
-    } else {
-        Err(json_error(
-            StatusCode::FORBIDDEN,
-            format!(
-                "SoraFS moderation quarantine operations require role `{SORAFS_MODERATION_OPERATOR_ROLE}`"
-            ),
-        ))
+        .any(|role| role == required_role)
+    {
+        return Ok(());
     }
+    Err(json_error(
+        StatusCode::FORBIDDEN,
+        format!("{capability} require role `{required_role_label}`"),
+    ))
+}
+
+fn require_transparency_source_publisher_role(
+    state: &SharedAppState,
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+) -> Result<(), Response> {
+    require_exact_account_role(
+        state,
+        verified,
+        sorafs_transparency_source_publisher_role_id(),
+        SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE,
+        "SoraFS transparency source publication",
+    )
+}
+
+fn require_transparency_cycle_publisher_role(
+    state: &SharedAppState,
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+) -> Result<(), Response> {
+    require_exact_account_role(
+        state,
+        verified,
+        sorafs_transparency_cycle_publisher_role_id(),
+        SORAFS_TRANSPARENCY_CYCLE_PUBLISHER_ROLE,
+        "SoraFS transparency cycle publication",
+    )
+}
+
+fn require_appeal_finance_publisher_role(
+    state: &SharedAppState,
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+) -> Result<(), Response> {
+    require_exact_account_role(
+        state,
+        verified,
+        sorafs_appeal_finance_publisher_role_id(),
+        SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE,
+        "SoraFS appeal-finance publication",
+    )
 }
 
 fn require_appeal_finance_request_auth(
@@ -16880,9 +16633,12 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_report(
             "sorafs appeal finance report API requires a configured governance publisher",
         );
     }
-    if let Err(response) =
-        require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref())
-    {
+    let verified =
+        match require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref()) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_appeal_finance_publisher_role(&state, &verified) {
         return response;
     }
     let report = match json::from_slice::<SoraFsAppealFinanceReportV1>(body.as_ref()) {
@@ -16902,7 +16658,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_report(
     }
     if let Err(err) = state
         .sorafs_node
-        .publish_appeal_finance_report(report.clone())
+        .publish_authenticated_appeal_finance_report(report.clone(), verified.account)
     {
         return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -16934,9 +16690,12 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_weekly_rollup(
             "sorafs appeal finance weekly rollup API requires a configured governance publisher",
         );
     }
-    if let Err(response) =
-        require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref())
-    {
+    let verified =
+        match require_appeal_finance_request_auth(&state, &headers, &method, &uri, body.as_ref()) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_appeal_finance_publisher_role(&state, &verified) {
         return response;
     }
     let rollup = match json::from_slice::<SoraFsAppealFinanceWeeklyRollupV1>(body.as_ref()) {
@@ -16956,7 +16715,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_weekly_rollup(
     }
     if let Err(err) = state
         .sorafs_node
-        .publish_appeal_finance_weekly_rollup(rollup.clone())
+        .publish_authenticated_appeal_finance_weekly_rollup(rollup.clone(), verified.account)
     {
         return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -20407,12 +20166,6 @@ fn moderation_quarantine_operator_panel_next_actions_json(
                     json_entry("route", Value::from(MODERATION_ROUTE_BALLOTS)),
                     json_entry("required", Value::Bool(true)),
                 ]));
-            } else {
-                actions.push(json_object(vec![
-                    json_entry("action", Value::from("publish_transparency_source_entry")),
-                    json_entry("route", Value::from(TRANSPARENCY_SOURCE_ENTRIES_ROUTE)),
-                    json_entry("required", Value::Bool(false)),
-                ]));
             }
         }
         ModerationQuarantineState::Released => {
@@ -22005,22 +21758,37 @@ pub(crate) async fn handle_post_sorafs_provider_advert(
         }
     };
 
-    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs(),
-        Err(err) => {
-            error!(?err, "system clock error while ingesting provider advert");
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "system time error while ingesting advert",
-            );
-        }
+    let now = match provider_advert_unix_now() {
+        Ok(now) => now,
+        Err(response) => return response,
     };
 
     let advert_profile = advert.body.profile_id.clone();
     let advert_provider_id = advert.body.provider_id;
+    let validation_policy = {
+        let guard = cache.read().await;
+        guard.validation_policy()
+    };
+    let prepared = match validation_policy.prepare(advert, now) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return provider_advert_error_response(
+                &state,
+                &telemetry,
+                error,
+                &advert_profile,
+                &advert_provider_id,
+            );
+        }
+    };
+
+    let commit_now = match provider_advert_unix_now() {
+        Ok(now) => now,
+        Err(response) => return response,
+    };
 
     let mut guard = cache.write().await;
-    match guard.ingest(advert, now) {
+    match guard.commit_prepared(prepared, commit_now) {
         Ok(AdvertIngestResult { outcome, warnings }) => {
             if !warnings.is_empty() {
                 warn!(
@@ -22059,33 +21827,59 @@ pub(crate) async fn handle_post_sorafs_provider_advert(
             record_range_capability_metrics(&guard, &telemetry);
             response
         }
-        Err(err) => {
-            warn!(?err, "failed to ingest provider advert");
-            let reason = admission_error_reason(&err);
-            telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("rejected", reason));
-            match err {
-                AdvertError::UnknownCapabilities { capabilities } => {
-                    let capability_labels: Vec<Value> = capabilities
-                        .into_iter()
-                        .map(|cap| Value::from(capability_name(cap).to_string()))
-                        .collect();
-                    gateway_refusal_response(
-                        &state,
-                        StatusCode::PRECONDITION_REQUIRED,
-                        "unsupported_capability",
-                        format!(
-                            "provider advert declares unsupported capabilities for profile {}",
-                            advert_profile
-                        ),
-                        Some(&advert_profile),
-                        Some(&advert_provider_id),
-                        TELEMETRY_ENDPOINT_PROVIDER_ADVERT,
-                        [("capabilities", Value::Array(capability_labels))],
-                    )
-                }
-                other => json_error(StatusCode::BAD_REQUEST, format_advert_error(other)),
-            }
+        Err(error) => provider_advert_error_response(
+            &state,
+            &telemetry,
+            error,
+            &advert_profile,
+            &advert_provider_id,
+        ),
+    }
+}
+
+fn provider_advert_unix_now() -> Result<u64, Response> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|error| {
+            error!(?error, "system clock error while ingesting provider advert");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "system time error while ingesting advert",
+            )
+        })
+}
+
+fn provider_advert_error_response(
+    state: &SharedAppState,
+    telemetry: &MaybeTelemetry,
+    error: AdvertError,
+    advert_profile: &str,
+    advert_provider_id: &[u8; 32],
+) -> Response {
+    warn!(?error, "failed to ingest provider advert");
+    let reason = admission_error_reason(&error);
+    telemetry.with_metrics(|metrics| metrics.inc_torii_sorafs_admission("rejected", reason));
+    match error {
+        AdvertError::UnknownCapabilities { capabilities } => {
+            let capability_labels = capabilities
+                .into_iter()
+                .map(|capability| Value::from(capability_name(capability).to_string()))
+                .collect();
+            gateway_refusal_response(
+                state,
+                StatusCode::PRECONDITION_REQUIRED,
+                "unsupported_capability",
+                format!(
+                    "provider advert declares unsupported capabilities for profile {advert_profile}"
+                ),
+                Some(advert_profile),
+                Some(advert_provider_id),
+                TELEMETRY_ENDPOINT_PROVIDER_ADVERT,
+                [("capabilities", Value::Array(capability_labels))],
+            )
         }
+        other => json_error(StatusCode::BAD_REQUEST, format_advert_error(other)),
     }
 }
 
@@ -29907,7 +29701,8 @@ fn alias_proof_header_fixture_decodes() {
     let bytes = BASE64_STANDARD
         .decode(encoded.as_bytes())
         .expect("decode alias proof header");
-    let bundle = crate::sorafs::decode_alias_proof(&bytes).expect("verify alias proof header");
+    let bundle = crate::sorafs::decode_alias_proof_untrusted_signers(&bytes)
+        .expect("verify alias proof header integrity");
     assert_eq!(bundle.binding.alias, "alias@capability.dataspace");
 }
 
@@ -31888,6 +31683,7 @@ fn admission_error_reason(err: &AdvertError) -> &'static str {
         AdvertError::UnsupportedSignature(_) => "unsupported_signature",
         AdvertError::Signature(_) => "signature",
         AdvertError::SignaturePolicyDisabled => "signature_policy_disabled",
+        AdvertError::ValidationPolicyChanged => "validation_policy_changed",
         AdvertError::NonMonotonicIssuedAt { .. } => "non_monotonic_issued_at",
         AdvertError::ReplayCheckpoint(_) => "replay_checkpoint",
         AdvertError::UnknownCapabilities { .. } => "unknown_capabilities",
@@ -32635,6 +32431,14 @@ mod advert_tests {
         );
         block.insert("node_cid_hex".into(), Value::from(node_cid_hex.clone()));
         block.insert("payload_kind".into(), Value::from("checkpoint"));
+        block.insert(
+            "submission_publisher_account_id".into(),
+            Value::from("soraｲﾛﾊ123"),
+        );
+        block.insert(
+            "submission_origin".into(),
+            Value::from("appeal_finance_report"),
+        );
         block.insert("blake3".into(), Value::from("44".repeat(32)));
         block.insert("sidecar_status".into(), Value::from("present"));
 
@@ -33572,6 +33376,13 @@ mod advert_tests {
                 .and_then(Value::as_str),
             Some(block_cid_hex.as_str())
         );
+        assert_eq!(
+            value
+                .get("block")
+                .and_then(|block| block.get("submission_publisher_account_id"))
+                .and_then(Value::as_str),
+            Some("soraｲﾛﾊ123")
+        );
 
         let response = handle_get_sorafs_governance_dag_node(
             State(app.clone()),
@@ -33594,6 +33405,13 @@ mod advert_tests {
                 .and_then(|block| block.get("node_cid_hex"))
                 .and_then(Value::as_str),
             Some(node_cid_hex.as_str())
+        );
+        assert_eq!(
+            value
+                .get("block")
+                .and_then(|block| block.get("submission_origin"))
+                .and_then(Value::as_str),
+            Some("appeal_finance_report")
         );
     }
 
@@ -34068,8 +33886,19 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn transparency_proof_token_issuance_endpoint_publishes_signed_frame() {
+    async fn transparency_proof_token_issuance_endpoint_requires_source_publisher_role() {
         let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let body = proof_token_issuance_body(transparency_proof_token_issuance_request(0xAD));
+
+        let response = post_transparency_proof_token_issuance(app.clone(), &auth.buyer, body).await;
+
+        assert_forbidden_role(response, SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE).await;
+        assert_eq!(app.sorafs_node.pending_governance_publication_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn transparency_proof_token_issuance_endpoint_publishes_signed_frame() {
+        let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
         let request = transparency_proof_token_issuance_request(0xAE);
         let signer_key_hex = request.signer_key_hex.clone();
 
@@ -34105,6 +33934,12 @@ mod advert_tests {
                 .and_then(|metadata| metadata.get("feed"))
                 .and_then(Value::as_str),
             Some("torii")
+        );
+        assert_governance_publish_provenance(
+            &temp_dir.path().join("governance"),
+            PROOF_TOKEN_ISSUANCE_KIND,
+            &auth.provider.account,
+            "transparency_token_issuance",
         );
 
         let response = handle_get_sorafs_transparency_token_issuances(
@@ -36223,9 +36058,32 @@ mod advert_tests {
         world
     }
 
+    fn grant_governance_publication_roles(world: &mut World, auth: &OrderbookAuthFixture) {
+        for role in [
+            sorafs_transparency_source_publisher_role_id(),
+            sorafs_transparency_cycle_publisher_role_id(),
+            sorafs_appeal_finance_publisher_role_id(),
+        ] {
+            world.grant_role_for_tests(auth.provider.account.clone(), role.clone());
+        }
+    }
+
+    fn orderbook_world_with_governance_publishers(auth: &OrderbookAuthFixture) -> World {
+        let mut world = orderbook_world(auth);
+        grant_governance_publication_roles(&mut world, auth);
+        world
+    }
+
+    fn orderbook_world_with_appeal_finance_publisher(auth: &OrderbookAuthFixture) -> World {
+        let mut world = orderbook_world_with_appeal_finance_asset(auth);
+        grant_governance_publication_roles(&mut world, auth);
+        world
+    }
+
     fn sorafs_app_state_with_orderbook_auth() -> (SharedAppState, TempDir, OrderbookAuthFixture) {
         let auth = orderbook_auth_fixture();
-        let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
+        let mut app =
+            mk_app_state_for_tests_with_world(orderbook_world_with_governance_publishers(&auth));
         let (node, temp_dir) = sorafs_node_with_temp_storage();
         let app_inner = Arc::get_mut(&mut app).expect("unique app state");
         app_inner.sorafs_node = node;
@@ -36283,7 +36141,7 @@ mod advert_tests {
     -> (SharedAppState, TempDir, OrderbookAuthFixture) {
         let auth = orderbook_auth_fixture();
         let mut app =
-            mk_app_state_for_tests_with_world(orderbook_world_with_appeal_finance_asset(&auth));
+            mk_app_state_for_tests_with_world(orderbook_world_with_appeal_finance_publisher(&auth));
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let temp_root = temp_dir
             .path()
@@ -36502,7 +36360,8 @@ mod advert_tests {
         }
 
         let auth = orderbook_auth_fixture();
-        let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
+        let mut app =
+            mk_app_state_for_tests_with_world(orderbook_world_with_governance_publishers(&auth));
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let governance_dir = temp_dir.path().join("governance");
         fs::create_dir_all(&governance_dir).expect("create governance dir");
@@ -36633,35 +36492,56 @@ mod advert_tests {
         Bytes::from(norito::json::to_vec(&report).expect("encode appeal finance report"))
     }
 
-    fn public_source_entry_request(
-        event_id: &str,
-        subject: &str,
-        seed: u8,
-    ) -> TransparencyPublicSourceEntryRequestDto {
-        TransparencyPublicSourceEntryRequestDto {
-            event_id: event_id.to_string(),
-            occurred_at_unix: 1_800_000_040 + u64::from(seed),
-            subject: subject.to_string(),
-            subject_digest_hex: None,
-            payload_digest_hex: hex::encode([seed; 32]),
-            summary_digest_hex: None,
-            policy_digest_hex: Some(hex::encode([seed.wrapping_add(1); 32])),
-            evidence_uris: Some(vec![format!("sora://transparency/{event_id}")]),
-            metadata: Some(vec![
-                TransparencyLedgerMetadataDto {
-                    key: "operator".to_string(),
-                    value: "sfm4c".to_string(),
-                },
-                TransparencyLedgerMetadataDto {
-                    key: "reason".to_string(),
-                    value: "public-notice".to_string(),
-                },
-            ]),
-        }
+    fn assert_governance_publish_provenance(
+        governance_dir: &StdPath,
+        payload_kind: &str,
+        publisher_account: &AccountId,
+        origin: &str,
+    ) {
+        let index_bytes = fs::read(governance_dir.join(GOVERNANCE_DAG_PUBLISH_INDEX_FILE))
+            .expect("read governance publish index");
+        let index: Value =
+            norito::json::from_slice(&index_bytes).expect("decode governance publish index");
+        let labels = index
+            .get("entries")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry.get("payload_kind").and_then(Value::as_str) == Some(payload_kind)
+                })
+            })
+            .and_then(|entry| entry.get("labels"))
+            .and_then(Value::as_object)
+            .expect("authenticated governance publish labels");
+        let expected_account = publisher_account.to_string();
+        assert_eq!(
+            labels
+                .get("authenticated_publisher_account_id")
+                .and_then(Value::as_str),
+            Some(expected_account.as_str())
+        );
+        assert_eq!(
+            labels
+                .get("authenticated_publisher_origin")
+                .and_then(Value::as_str),
+            Some(origin)
+        );
     }
 
-    fn public_source_entry_body(request: TransparencyPublicSourceEntryRequestDto) -> Bytes {
-        Bytes::from(norito::json::to_vec(&request).expect("encode public source entry request"))
+    async fn assert_forbidden_role(response: Response, required_role: &str) {
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response_body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect forbidden role response");
+        let value: Value =
+            norito::json::from_slice(&response_body).expect("decode forbidden role response");
+        assert!(
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains(required_role)),
+            "forbidden response must name the exact required role"
+        );
     }
 
     fn privacy_aggregate_source_event_request(
@@ -38920,6 +38800,27 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn appeal_finance_writes_require_finance_publisher_role() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+        let report_response = post_appeal_finance_report(
+            app.clone(),
+            &auth.buyer,
+            appeal_finance_report_body(appeal_finance_report_fixture()),
+        )
+        .await;
+        assert_forbidden_role(report_response, SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE).await;
+
+        let rollup_response = post_appeal_finance_weekly_rollup(
+            app.clone(),
+            &auth.buyer,
+            appeal_finance_weekly_rollup_body(appeal_finance_weekly_rollup_fixture()),
+        )
+        .await;
+        assert_forbidden_role(rollup_response, SORAFS_APPEAL_FINANCE_PUBLISHER_ROLE).await;
+        assert_eq!(app.sorafs_node.pending_governance_publication_count(), 0);
+    }
+
+    #[tokio::test]
     async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
         let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
         let report = appeal_finance_report_fixture();
@@ -38969,209 +38870,12 @@ mod advert_tests {
                 .map(Vec::len),
             Some(1)
         );
-    }
-
-    #[tokio::test]
-    async fn transparency_source_entry_endpoint_requires_canonical_request_auth() {
-        let (app, _temp_dir, _auth) = sorafs_app_state_with_orderbook_auth();
-        let body = appeal_finance_report_body(appeal_finance_report_fixture());
-
-        let response = handle_post_sorafs_transparency_source_entry(
-            State(app),
-            HeaderMap::new(),
-            Method::POST,
-            format!(
-                "{TRANSPARENCY_SOURCE_ENTRIES_ROUTE}/{TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT}"
-            )
-            .parse()
-            .expect("transparency source-entry URI"),
-            Path(TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT.to_owned()),
-            body,
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn transparency_source_entry_endpoint_records_appeal_finance_report() {
-        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let report = appeal_finance_report_fixture();
-        let body = appeal_finance_report_body(report.clone());
-
-        let response = post_transparency_source_entry(
-            app.clone(),
-            &auth.provider,
-            TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT,
-            body,
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect transparency source-entry ingest body");
-        let value: Value =
-            norito::json::from_slice(&body).expect("decode transparency source-entry body");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.transparency.source_entry.ingest.v1")
+        assert_governance_publish_provenance(
+            &governance_dir,
+            APPEAL_FINANCE_REPORT_KIND,
+            &auth.provider.account,
+            "appeal_finance_report",
         );
-        assert_eq!(
-            value.get("status").and_then(Value::as_str),
-            Some("recorded")
-        );
-        assert_eq!(
-            value.get("source_kind").and_then(Value::as_str),
-            Some(TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT)
-        );
-        assert_eq!(
-            value.get("event_id").and_then(Value::as_str),
-            Some(format!("appeal-finance-report:{}", hex::encode(report.report_id)).as_str())
-        );
-        assert_eq!(
-            value.get("ledger_kind").and_then(Value::as_str),
-            Some("appeal_outcome")
-        );
-        assert_eq!(
-            value.get("subject").and_then(Value::as_str),
-            Some(report.case_id.as_str())
-        );
-        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 1);
-
-        let publication = app
-            .sorafs_node
-            .publish_transparency_ledger_cycle_from_source_entries(
-                *b"cycle-src-api001",
-                1_800_000_000,
-                1_800_086_400,
-                1_800_086_401,
-                None,
-            )
-            .expect("publish transparency cycle from API source entry");
-        assert_eq!(publication.block.entry_count, 1);
-        assert_eq!(publication.proofs.len(), 1);
-        assert_eq!(publication.proofs[0].entry.subject, report.case_id);
-    }
-
-    #[tokio::test]
-    async fn transparency_source_entry_endpoint_rejects_duplicate_source_event() {
-        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let body = appeal_finance_report_body(appeal_finance_report_fixture());
-
-        let first = post_transparency_source_entry(
-            app.clone(),
-            &auth.provider,
-            TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT,
-            body.clone(),
-        )
-        .await;
-        assert_eq!(first.status(), StatusCode::ACCEPTED);
-
-        let duplicate = post_transparency_source_entry(
-            app.clone(),
-            &auth.provider,
-            TRANSPARENCY_SOURCE_KIND_APPEAL_FINANCE_REPORT,
-            body,
-        )
-        .await;
-        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
-        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn transparency_source_entry_endpoint_records_public_notice_sources() {
-        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
-        for (source_kind, event_id, subject, seed) in [
-            (
-                TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE,
-                "hold-notice-1",
-                "hold-case-1",
-                0x60,
-            ),
-            (
-                TRANSPARENCY_SOURCE_KIND_REDACTION_NOTICE,
-                "redaction-notice-1",
-                "redaction-case-1",
-                0x70,
-            ),
-            (
-                TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY,
-                "evidence-access-1",
-                "evidence-view-1",
-                0x80,
-            ),
-        ] {
-            let response = post_transparency_source_entry(
-                app.clone(),
-                &auth.provider,
-                source_kind,
-                public_source_entry_body(public_source_entry_request(event_id, subject, seed)),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::ACCEPTED);
-            let body = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect public source-entry ingest body");
-            let value: Value =
-                norito::json::from_slice(&body).expect("decode public source-entry body");
-            assert_eq!(
-                value.get("source_kind").and_then(Value::as_str),
-                Some(source_kind)
-            );
-            assert_eq!(
-                value.get("event_id").and_then(Value::as_str),
-                Some(event_id)
-            );
-            assert_eq!(value.get("subject").and_then(Value::as_str), Some(subject));
-        }
-        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 3);
-
-        let publication = app
-            .sorafs_node
-            .publish_transparency_ledger_cycle_from_source_entries(
-                *b"cycle-pub-api001",
-                1_800_000_000,
-                1_800_604_800,
-                1_800_604_801,
-                None,
-            )
-            .expect("publish transparency cycle from public source entries");
-        assert_eq!(publication.block.entry_count, 3);
-        let kinds = publication
-            .proofs
-            .iter()
-            .map(|proof| &proof.entry.kind)
-            .collect::<Vec<_>>();
-        assert!(kinds.contains(&&ModerationLedgerEntryKindV1::LegalHold));
-        assert!(kinds.contains(&&ModerationLedgerEntryKindV1::Redaction));
-        assert!(kinds.contains(&&ModerationLedgerEntryKindV1::EvidenceAccess));
-    }
-
-    #[tokio::test]
-    async fn transparency_source_entry_endpoint_rejects_invalid_public_notice() {
-        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let mut request = public_source_entry_request("hold-notice-1", "hold-case-1", 0x60);
-        request.metadata = Some(vec![
-            TransparencyLedgerMetadataDto {
-                key: "z-last".to_string(),
-                value: "bad-order".to_string(),
-            },
-            TransparencyLedgerMetadataDto {
-                key: "a-first".to_string(),
-                value: "bad-order".to_string(),
-            },
-        ]);
-
-        let response = post_transparency_source_entry(
-            app,
-            &auth.provider,
-            TRANSPARENCY_SOURCE_KIND_LEGAL_HOLD_NOTICE,
-            public_source_entry_body(request),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -39191,6 +38895,19 @@ mod advert_tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn privacy_aggregate_source_event_endpoint_requires_source_publisher_role() {
+        let (app, _temp_dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = privacy_aggregate_source_event_body(privacy_aggregate_source_event_request(
+            "privacy-event-role-denied",
+        ));
+
+        let response = post_privacy_aggregate_source_event(app.clone(), &auth.buyer, body).await;
+
+        assert_forbidden_role(response, SORAFS_TRANSPARENCY_SOURCE_PUBLISHER_ROLE).await;
+        assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 0);
     }
 
     #[tokio::test]
@@ -39312,8 +39029,19 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
+    async fn privacy_aggregate_publish_due_endpoint_requires_cycle_publisher_role() {
         let (app, _temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
+        let body = privacy_aggregate_publish_due_body(privacy_aggregate_publish_due_request(211));
+
+        let response = post_privacy_aggregate_publish_due(app.clone(), &auth.buyer, body).await;
+
+        assert_forbidden_role(response, SORAFS_TRANSPARENCY_CYCLE_PUBLISHER_ROLE).await;
+        assert_eq!(app.sorafs_node.pending_governance_publication_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
+        let (app, temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
         let source_body = privacy_aggregate_source_event_body(
             privacy_aggregate_source_event_request_at("privacy-event-a", 110),
         );
@@ -39373,6 +39101,12 @@ mod advert_tests {
                 .get("block_hash_hex")
                 .and_then(Value::as_str)
                 .is_some_and(|hash| hash.len() == 64)
+        );
+        assert_governance_publish_provenance(
+            &temp_dir.path().join("governance"),
+            TRANSPARENCY_LEDGER_PUBLICATION_KIND,
+            &auth.provider.account,
+            "privacy_aggregate_publish_due",
         );
 
         let repeat = post_privacy_aggregate_publish_due(
@@ -39469,6 +39203,12 @@ mod advert_tests {
                 .map(Vec::len),
             Some(1)
         );
+        assert_governance_publish_provenance(
+            &governance_dir,
+            APPEAL_FINANCE_WEEKLY_ROLLUP_KIND,
+            &auth.provider.account,
+            "appeal_finance_weekly_rollup",
+        );
     }
 
     async fn post_appeal_finance_report(
@@ -39480,28 +39220,6 @@ mod advert_tests {
         let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_REPORTS);
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
         handle_post_sorafs_appeal_finance_report(State(app), headers, method, uri, body).await
-    }
-
-    async fn post_transparency_source_entry(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        source_kind: &str,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri: Uri = format!("{TRANSPARENCY_SOURCE_ENTRIES_ROUTE}/{source_kind}")
-            .parse()
-            .expect("transparency source-entry URI");
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_transparency_source_entry(
-            State(app),
-            headers,
-            method,
-            uri,
-            Path(source_kind.to_owned()),
-            body,
-        )
-        .await
     }
 
     async fn post_privacy_aggregate_source_event(
@@ -45337,9 +45055,12 @@ mod advert_tests {
             ],
             Arc::new(admission),
         );
-        cache
-            .ingest(fixture.advert.clone(), fixture.advert.issued_at + 1)
-            .expect("cache ingest");
+        ingest_provider_advert_for_test(
+            &mut cache,
+            fixture.advert.clone(),
+            fixture.advert.issued_at + 1,
+        )
+        .expect("cache ingest");
 
         let (node, storage_dir) = sorafs_node_with_temp_storage();
         let manifest = manifest_for_payload(0x9B, &payload);
@@ -46091,6 +45812,55 @@ mod advert_tests {
             .read()
             .await;
         assert!(cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn provider_advert_signature_validation_does_not_hold_the_cache_lock() {
+        let fixture = make_signed_advert();
+        let app = app_state_with_cache(&fixture);
+        let cache = app.sorafs_cache.as_ref().expect("cache enabled");
+        let policy = {
+            let guard = cache.read().await;
+            guard.validation_policy()
+        };
+        let _writer = tokio::time::timeout(Duration::from_millis(100), cache.write())
+            .await
+            .expect("validation policy snapshot must release the cache read lock");
+
+        let mut forged = fixture.advert.clone();
+        forged.signature.signature[0] ^= 0x01;
+        assert!(
+            matches!(
+                policy.prepare(forged, fixture.issued_at()),
+                Err(AdvertError::Signature(_))
+            ),
+            "signature verification must remain independent of the held cache writer"
+        );
+    }
+
+    #[test]
+    fn prepared_provider_advert_is_bound_to_its_cache_policy() {
+        let fixture = make_signed_advert();
+        let now = fixture.issued_at();
+        let first_admission = fixture_admission_registry([&fixture.envelope]);
+        let second_admission = fixture_admission_registry([&fixture.envelope]);
+        let capabilities = [
+            CapabilityType::ToriiGateway,
+            CapabilityType::ChunkRangeFetch,
+            CapabilityType::PotrMlDsa,
+        ];
+        let first = ProviderAdvertCache::new(capabilities, Arc::new(first_admission));
+        let prepared = first
+            .validation_policy()
+            .prepare(fixture.advert.clone(), now)
+            .expect("valid fixture advert");
+        let mut second = ProviderAdvertCache::new(capabilities, Arc::new(second_admission));
+
+        assert!(matches!(
+            second.commit_prepared(prepared, now),
+            Err(AdvertError::ValidationPolicyChanged)
+        ));
+        assert!(second.is_empty());
     }
 
     #[tokio::test]
@@ -51519,6 +51289,15 @@ mod advert_tests {
         }
     }
 
+    fn ingest_provider_advert_for_test(
+        cache: &mut ProviderAdvertCache,
+        advert: ProviderAdvertV1,
+        now: u64,
+    ) -> Result<AdvertIngestResult, AdvertError> {
+        let prepared = cache.validation_policy().prepare(advert, now)?;
+        cache.commit_prepared(prepared, now)
+    }
+
     fn fixture_admission_registry<'a, I>(envelopes: I) -> AdmissionRegistry
     where
         I: IntoIterator<Item = &'a ProviderAdmissionEnvelopeV1>,
@@ -51562,9 +51341,12 @@ mod advert_tests {
             Arc::new(admission),
         );
         for fixture in fixtures {
-            cache
-                .ingest(fixture.advert.clone(), fixture.issued_at())
-                .expect("ingest fixture advert into cache");
+            ingest_provider_advert_for_test(
+                &mut cache,
+                fixture.advert.clone(),
+                fixture.issued_at(),
+            )
+            .expect("ingest fixture advert into cache");
         }
 
         let mut app = Arc::try_unwrap(mk_app_state_for_tests())
@@ -51593,9 +51375,12 @@ mod advert_tests {
             Arc::new(admission),
         );
         if seed_fixture {
-            cache
-                .ingest(fixture.advert.clone(), fixture.issued_at())
-                .expect("ingest fixture advert into cache");
+            ingest_provider_advert_for_test(
+                &mut cache,
+                fixture.advert.clone(),
+                fixture.issued_at(),
+            )
+            .expect("ingest fixture advert into cache");
         }
 
         let mut app = Arc::try_unwrap(mk_app_state_for_tests())

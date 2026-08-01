@@ -86,7 +86,8 @@ fn register_trigger(
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone())
                 .under_authority(ALICE_ID.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     ));
     let register_tx = TransactionBuilder::new(
         chain_id.clone(),

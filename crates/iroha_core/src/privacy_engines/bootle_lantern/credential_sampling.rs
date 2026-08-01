@@ -14,7 +14,8 @@ use zeroize::{Zeroize, Zeroizing};
 use super::{holder_aes256::ConstantTimeAes256KeyV1, ring::ApplicationPolynomialV1};
 
 pub(crate) const CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1: usize = 16;
-pub(crate) const CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1: u64 = 11_881;
+pub(crate) const CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1: u64 =
+    super::params::RANDOMNESS_NORM_SQUARED_BOUND_V1;
 pub(crate) const MAX_CREDENTIAL_RANDOMNESS_VECTOR_ATTEMPTS_V1: u32 = 64;
 pub(crate) const MAX_CREDENTIAL_RANDOMNESS_COEFFICIENT_PROPOSALS_V1: u32 = 256;
 pub(crate) const BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1: &[u8] = b"lazer-10eafeca4cd53ff4fc54193dce904dbd0026fefd-polyvec-grandom-v1|ring:R64-q12289|shape:16x64|sigma:1.55*2|seed:32|rng:AES-256-CTR-domain-le64-zero64-counter-be128|domains:(outer<<32)|(poly+1)|rounding:8-bytes-lsb-first-per-poly|cdf155:21-pairs-u64le|berexp:fdlibm-exp-small-u64le|sign-cache:issuance-local-persistent-across-polynomials-and-vector-retries|norm2<=11881|vector-attempts:64|coefficient-proposals:256|aes:cpu-only-fixed-control-flow-algebraic-sbox";
@@ -50,12 +51,14 @@ pub(crate) struct CredentialRandomnessV1 {
 }
 
 impl CredentialRandomnessV1 {
+    #[cfg(test)]
     pub(crate) const fn polynomials(
         &self,
     ) -> &[ApplicationPolynomialV1; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1] {
         &self.polynomials
     }
 
+    #[cfg(test)]
     pub(crate) const fn norm_squared(&self) -> u64 {
         self.norm_squared
     }
@@ -95,7 +98,7 @@ pub(crate) fn sample_credential_randomness_v1<R: CryptoRng + RngCore>(
     let mut seed = Zeroizing::new([0_u8; 32]);
     rng.try_fill_bytes(seed.as_mut())
         .map_err(|_| CredentialRandomnessErrorV1::RandomnessUnavailable)?;
-    sample_credential_randomness_from_seed_v1(seed.as_ref()).map(|(sample, _)| sample)
+    sample_credential_randomness_from_seed_v1(&*seed).map(|(sample, _)| sample)
 }
 
 pub(crate) fn sample_credential_randomness_from_seed_v1(
@@ -125,15 +128,45 @@ fn sample_credential_randomness_from_seed_with_limits_v1(
     ),
     CredentialRandomnessErrorV1,
 > {
+    sample_credential_randomness_from_seed_bounded_v1(
+        seed,
+        vector_attempts,
+        coefficient_proposals,
+        CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1,
+    )
+    .map(|(sample, proposals, _, _)| (sample, proposals))
+}
+
+fn sample_credential_randomness_from_seed_bounded_v1(
+    seed: &[u8; 32],
+    vector_attempts: u32,
+    coefficient_proposals: u32,
+    norm_squared_bound: u64,
+) -> Result<
+    (
+        CredentialRandomnessV1,
+        [u32; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1],
+        u32,
+        u8,
+    ),
+    CredentialRandomnessErrorV1,
+> {
     if vector_attempts == 0 || coefficient_proposals == 0 {
         return Err(CredentialRandomnessErrorV1::SamplingExhausted);
     }
+    if norm_squared_bound > CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1 {
+        return Err(CredentialRandomnessErrorV1::InternalInvariant);
+    }
     let encryption_key = ConstantTimeAes256KeyV1::new(seed);
     let mut sign_cache = GaussianSignCacheV1::new();
+    let mut second_attempt_sign_position = None;
     for outer_domain in 0..vector_attempts {
-        let mut centered = Zeroizing::new(Box::new(
-            [[0_i64; DEGREE_V1]; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1],
-        ));
+        if outer_domain == 1 {
+            second_attempt_sign_position = Some(sign_cache.position);
+        }
+        let mut centered = Zeroizing::new(
+            vec![[0_i64; DEGREE_V1]; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1].into_boxed_slice(),
+        );
         let mut norm_squared = 0_u64;
         let mut proposals = [0_u32; CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1];
         for polynomial_index in 0..CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1 {
@@ -168,7 +201,7 @@ fn sample_credential_randomness_from_seed_with_limits_v1(
                     .ok_or(CredentialRandomnessErrorV1::InternalInvariant)?;
             }
         }
-        if norm_squared <= CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1 {
+        if norm_squared <= norm_squared_bound {
             let polynomials = core::array::from_fn(|index| {
                 ApplicationPolynomialV1::from_centered_coefficients(centered[index])
             });
@@ -178,6 +211,8 @@ fn sample_credential_randomness_from_seed_with_limits_v1(
                     norm_squared,
                 },
                 proposals,
+                outer_domain,
+                second_attempt_sign_position.unwrap_or(64),
             ));
         }
     }
@@ -346,9 +381,32 @@ pub(crate) enum CredentialRandomnessErrorV1 {
 
 #[cfg(test)]
 mod tests {
+    use rand_core_06::Error as RngError;
     use sha2::{Digest as _, Sha256};
 
     use super::*;
+
+    struct FailingRng;
+
+    impl RngCore for FailingRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("credential sampling must use the fallible RNG interface")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("credential sampling must use the fallible RNG interface")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("credential sampling must use the fallible RNG interface")
+        }
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+            Err(RngError::new("injected credential-sampling RNG failure"))
+        }
+    }
+
+    impl CryptoRng for FailingRng {}
 
     #[test]
     fn pinned_lazer_seed_matches_first_polynomial_and_full_vector_digest() {
@@ -410,6 +468,10 @@ mod tests {
     #[test]
     fn public_caps_fail_closed_and_accepted_norm_is_bounded() {
         let seed = core::array::from_fn(|index| u8::try_from(index).expect("index fits u8"));
+        assert_eq!(
+            CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1,
+            super::super::params::RANDOMNESS_NORM_SQUARED_BOUND_V1
+        );
         assert!(matches!(
             sample_credential_randomness_from_seed_with_limits_v1(&seed, 0, 256),
             Err(CredentialRandomnessErrorV1::SamplingExhausted)
@@ -418,7 +480,31 @@ mod tests {
             sample_credential_randomness_from_seed_with_limits_v1(&seed, 64, 0),
             Err(CredentialRandomnessErrorV1::SamplingExhausted)
         ));
+        assert!(matches!(
+            sample_credential_randomness_from_seed_with_limits_v1(&seed, 64, 1),
+            Err(CredentialRandomnessErrorV1::CoefficientSamplingExhausted)
+        ));
         let (sample, _) = sample_credential_randomness_from_seed_v1(&seed).expect("sample");
         assert!(sample.norm_squared() <= CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1);
+    }
+
+    #[test]
+    fn failing_rng_is_reported_without_using_infallible_methods() {
+        assert!(matches!(
+            sample_credential_randomness_v1(&mut FailingRng),
+            Err(CredentialRandomnessErrorV1::RandomnessUnavailable)
+        ));
+    }
+
+    #[test]
+    fn forced_norm_retry_advances_domain_and_preserves_sign_cache() {
+        let seed = core::array::from_fn(|index| u8::try_from(index).expect("index fits u8"));
+        let (sample, _, accepted_outer_domain, second_attempt_sign_position) =
+            sample_credential_randomness_from_seed_bounded_v1(&seed, 64, 256, 10_600)
+                .expect("a later bounded vector meets the forced lower norm");
+
+        assert!(accepted_outer_domain > 0);
+        assert_eq!(second_attempt_sign_position, 4);
+        assert!(sample.norm_squared() <= 10_600);
     }
 }

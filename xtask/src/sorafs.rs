@@ -75,7 +75,10 @@ use sorafs_manifest::{
     REPLICATION_ORDER_VERSION_V1, RendezvousTopic, ReplicationAssignmentV1, ReplicationOrderSlaV1,
     ReplicationOrderV1, SignatureAlgorithm, StakePointer, StreamBudgetV1, TransportHintV1,
     TransportProtocol,
-    alias_cache::{AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof},
+    alias_cache::{
+        AliasCachePolicy, AliasProofEvaluation, AliasProofState,
+        decode_alias_proof_untrusted_signers,
+    },
     compute_advert_body_digest, compute_envelope_authorization_digest, compute_envelope_digest,
     compute_proposal_digest,
     deal::{MICRO_XOR_PER_XOR, XorQuantity},
@@ -2595,7 +2598,7 @@ pub fn run_gateway_probe(options: GatewayProbeOptions) -> Result<(), Box<dyn Err
     let mut proof_bundle: Option<AliasProofBundleV1> = None;
     if let Some(proof_b64) = sora_proof_header {
         match BASE64_STD.decode(proof_b64.as_bytes()) {
-            Ok(bytes) => match decode_alias_proof(&bytes) {
+            Ok(bytes) => match decode_alias_proof_untrusted_signers(&bytes) {
                 Ok(bundle) => {
                     proof_bundle = Some(bundle);
                 }
@@ -6913,7 +6916,7 @@ impl BurnInAccumulator {
 mod tests {
     use std::{collections::HashSet, fs, path::Path, time::Duration};
 
-    use sorafs_manifest::pin_registry::verify_alias_proof_bundle;
+    use sorafs_manifest::pin_registry::verify_alias_proof_bundle_untrusted_signers;
     use tempfile::tempdir;
 
     use super::*;
@@ -7159,8 +7162,10 @@ mod tests {
         let alias_binding =
             pin_fixture_alias_binding_for(&record.root_cid, "sora", "docs", 12, 36, &council_keys)
                 .expect("build alias proof");
-        let alias_bundle = decode_alias_proof(&alias_binding.proof).expect("decode alias proof");
-        verify_alias_proof_bundle(&alias_bundle).expect("alias proof signature verifies");
+        let alias_bundle = decode_alias_proof_untrusted_signers(&alias_binding.proof)
+            .expect("decode alias proof integrity");
+        verify_alias_proof_bundle_untrusted_signers(&alias_bundle)
+            .expect("alias proof signature integrity verifies");
     }
 
     #[test]

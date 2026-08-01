@@ -34,6 +34,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import ipaddress
 import json
 import math
 import re
@@ -201,7 +202,12 @@ _VPN_PROFILE_RESPONSE_FIELDS = frozenset(
         "settlement_grace_secs",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
     }
 )
 _VPN_QUOTE_RESPONSE_FIELDS = frozenset(
@@ -227,7 +233,12 @@ _VPN_QUOTE_RESPONSE_FIELDS = frozenset(
         "meter_family",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
         "metering_public_key_hex",
         "open_lease_instruction",
         "tx_instructions",
@@ -252,7 +263,12 @@ _VPN_SESSION_RESPONSE_FIELDS = frozenset(
         "lease_fee",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
         "route_pushes",
         "excluded_routes",
         "dns_servers",
@@ -292,6 +308,80 @@ _VPN_RECEIPT_RESPONSE_FIELDS = frozenset(
     }
 )
 _VPN_RECEIPT_LIST_RESPONSE_FIELDS = frozenset({"items", "total"})
+
+_ED25519_FIELD_MODULUS = (1 << 255) - 19
+_ED25519_SUBGROUP_ORDER = (1 << 252) + 27742317777372353535851937790883648493
+_ED25519_D = (
+    -121665 * pow(121666, _ED25519_FIELD_MODULUS - 2, _ED25519_FIELD_MODULUS)
+) % _ED25519_FIELD_MODULUS
+_ED25519_SQRT_M1 = pow(2, (_ED25519_FIELD_MODULUS - 1) // 4, _ED25519_FIELD_MODULUS)
+
+
+def _ed25519_extended_add(
+    left: Tuple[int, int, int, int],
+    right: Tuple[int, int, int, int],
+) -> Tuple[int, int, int, int]:
+    """Add two Ed25519 points in extended coordinates."""
+
+    modulus = _ED25519_FIELD_MODULUS
+    x1, y1, z1, t1 = left
+    x2, y2, z2, t2 = right
+    a = ((y1 - x1) * (y2 - x2)) % modulus
+    b = ((y1 + x1) * (y2 + x2)) % modulus
+    c = (2 * _ED25519_D * t1 * t2) % modulus
+    d = (2 * z1 * z2) % modulus
+    e = (b - a) % modulus
+    f = (d - c) % modulus
+    g = (d + c) % modulus
+    h = (b + a) % modulus
+    return (e * f % modulus, g * h % modulus, f * g % modulus, e * h % modulus)
+
+
+def _ed25519_scalar_multiply(
+    point: Tuple[int, int, int, int], scalar: int
+) -> Tuple[int, int, int, int]:
+    """Multiply one extended-coordinate Ed25519 point by a public scalar."""
+
+    result = (0, 1, 1, 0)
+    addend = point
+    while scalar:
+        if scalar & 1:
+            result = _ed25519_extended_add(result, addend)
+        addend = _ed25519_extended_add(addend, addend)
+        scalar >>= 1
+    return result
+
+
+def _is_canonical_prime_order_ed25519_public_key(public_key: bytes) -> bool:
+    """Return whether bytes encode a non-identity prime-order Ed25519 point."""
+
+    if len(public_key) != 32:
+        return False
+    encoded = int.from_bytes(public_key, "little")
+    sign = encoded >> 255
+    y = encoded & ((1 << 255) - 1)
+    modulus = _ED25519_FIELD_MODULUS
+    if y >= modulus:
+        return False
+    y_squared = y * y % modulus
+    denominator = (_ED25519_D * y_squared + 1) % modulus
+    if denominator == 0:
+        return False
+    x_squared = (y_squared - 1) * pow(denominator, modulus - 2, modulus) % modulus
+    x = pow(x_squared, (modulus + 3) // 8, modulus)
+    if x * x % modulus != x_squared:
+        x = x * _ED25519_SQRT_M1 % modulus
+    if x * x % modulus != x_squared:
+        return False
+    if x == 0 and sign == 1:
+        return False
+    if (x & 1) != sign:
+        x = modulus - x
+    if x == 0 and y == 1:
+        return False
+    subgroup_check = _ed25519_scalar_multiply((x, y, 1, x * y % modulus), _ED25519_SUBGROUP_ORDER)
+    check_x, check_y, check_z, _ = subgroup_check
+    return check_x == 0 and check_y == check_z
 
 
 def _canonical_quantity(value: Any, context: str) -> str:
@@ -6384,7 +6474,12 @@ class VpnProfile:
     settlement_grace_secs: int
     flow_label_bits: int
     padding_budget_ms: int
-    relay_tls_spki_sha256_hex: Optional[str]
+    relay_id_hex: str
+    descriptor_commit_hex: str
+    tls_server_name: str
+    relay_tls_spki_sha256_hex: str
+    relay_certificate_sha256_hex: str
+    directory_snapshot_digest_hex: str
 
 
 @dataclass(frozen=True)
@@ -6412,7 +6507,12 @@ class VpnQuote:
     meter_family: str
     flow_label_bits: int
     padding_budget_ms: int
-    relay_tls_spki_sha256_hex: Optional[str]
+    relay_id_hex: str
+    descriptor_commit_hex: str
+    tls_server_name: str
+    relay_tls_spki_sha256_hex: str
+    relay_certificate_sha256_hex: str
+    directory_snapshot_digest_hex: str
     metering_public_key_hex: str
     open_lease_instruction: Optional[TransactionInstruction]
     tx_instructions: List[TransactionInstruction]
@@ -6439,7 +6539,12 @@ class VpnSession:
     lease_fee: str
     flow_label_bits: int
     padding_budget_ms: int
-    relay_tls_spki_sha256_hex: Optional[str]
+    relay_id_hex: str
+    descriptor_commit_hex: str
+    tls_server_name: str
+    relay_tls_spki_sha256_hex: str
+    relay_certificate_sha256_hex: str
+    directory_snapshot_digest_hex: str
     route_pushes: List[str]
     excluded_routes: List[str]
     dns_servers: List[str]
@@ -13897,6 +14002,8 @@ class ToriiClient:
         context: str,
         expected_status: Iterable[int] = (200,),
     ) -> Optional[Mapping[str, Any]]:
+        if urlsplit(self._base_url).scheme.lower() != "https":
+            raise RuntimeError("Sora VPN requests require an HTTPS Torii base URL")
         data = self._encode_json_body(body_payload) if body_payload is not None else None
         final_headers = self._vpn_request_headers(
             method,
@@ -13906,7 +14013,13 @@ class ToriiClient:
             headers=headers,
             has_body=data is not None,
         )
-        response = self._request(method, path, headers=final_headers, data=data)
+        response = self._request(
+            method,
+            path,
+            headers=final_headers,
+            data=data,
+            allow_redirects=False,
+        )
         self._expect_status(response, expected_status)
         payload = self._maybe_json(response)
         if payload is None:
@@ -14097,12 +14210,58 @@ class ToriiClient:
         return result
 
     @classmethod
+    def _parse_vpn_trust_fields(
+        cls,
+        record: Mapping[str, Any],
+        *,
+        context: str,
+        allow_empty: bool = False,
+    ) -> Dict[str, str]:
+        return {
+            "relay_id_hex": cls._require_vpn_relay_id(
+                record.get("relay_id_hex"),
+                context=f"{context}.relay_id_hex",
+                allow_empty=allow_empty,
+            ),
+            "descriptor_commit_hex": cls._require_vpn_trust_digest(
+                record.get("descriptor_commit_hex"),
+                context=f"{context}.descriptor_commit_hex",
+                allow_empty=allow_empty,
+            ),
+            "tls_server_name": cls._require_vpn_tls_server_name(
+                record.get("tls_server_name"),
+                context=f"{context}.tls_server_name",
+                allow_empty=allow_empty,
+            ),
+            "relay_tls_spki_sha256_hex": cls._require_vpn_trust_digest(
+                record.get("relay_tls_spki_sha256_hex"),
+                context=f"{context}.relay_tls_spki_sha256_hex",
+                allow_empty=allow_empty,
+            ),
+            "relay_certificate_sha256_hex": cls._require_vpn_trust_digest(
+                record.get("relay_certificate_sha256_hex"),
+                context=f"{context}.relay_certificate_sha256_hex",
+                allow_empty=allow_empty,
+            ),
+            "directory_snapshot_digest_hex": cls._require_vpn_trust_digest(
+                record.get("directory_snapshot_digest_hex"),
+                context=f"{context}.directory_snapshot_digest_hex",
+                allow_empty=allow_empty,
+            ),
+        }
+
+    @classmethod
     def _parse_vpn_profile(cls, payload: Mapping[str, Any], *, context: str) -> VpnProfile:
         record = cls._ensure_mapping(payload, context)
         cls._validate_exact_fields(record, _VPN_PROFILE_RESPONSE_FIELDS, context)
         available = record.get("available")
         if not isinstance(available, bool):
             raise RuntimeError(f"{context}.available must be a boolean")
+        trust_fields = cls._parse_vpn_trust_fields(
+            record,
+            context=context,
+            allow_empty=not available,
+        )
         if "dns_push_interval_secs" not in record:
             raise RuntimeError(f"{context}.dns_push_interval_secs is required")
         dns_push_interval_secs = cls._require_vpn_uint64(
@@ -14144,7 +14303,11 @@ class ToriiClient:
         )
         return VpnProfile(
             available=available,
-            relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
+            relay_endpoint=cls._require_vpn_relay_endpoint(
+                record.get("relay_endpoint"),
+                context=f"{context}.relay_endpoint",
+                allow_empty=not available,
+            ),
             supported_exit_classes=supported_exit_classes,
             default_exit_class=cls._require_vpn_enum(
                 record.get("default_exit_class"),
@@ -14182,17 +14345,14 @@ class ToriiClient:
             settlement_grace_secs=settlement_grace_secs,
             flow_label_bits=flow_label_bits,
             padding_budget_ms=padding_budget_ms,
-            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
-                record.get("relay_tls_spki_sha256_hex"),
-                context=f"{context}.relay_tls_spki_sha256_hex",
-                expected_length=64,
-            ),
+            **trust_fields,
         )
 
     @classmethod
     def _parse_vpn_quote(cls, payload: Mapping[str, Any], *, context: str) -> VpnQuote:
         record = cls._ensure_mapping(payload, context)
         cls._validate_exact_fields(record, _VPN_QUOTE_RESPONSE_FIELDS, context)
+        trust_fields = cls._parse_vpn_trust_fields(record, context=context)
         lease_secs = cls._require_vpn_unsigned_range(
             record.get("lease_secs"),
             f"{context}.lease_secs",
@@ -14247,7 +14407,10 @@ class ToriiClient:
                 _VPN_EXIT_CLASSES,
                 f"{context}.exit_class",
             ),
-            relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
+            relay_endpoint=cls._require_vpn_relay_endpoint(
+                record.get("relay_endpoint"),
+                context=f"{context}.relay_endpoint",
+            ),
             lease_secs=lease_secs,
             quote_expires_at_ms=cls._require_vpn_uint64(
                 record.get("quote_expires_at_ms"),
@@ -14277,11 +14440,7 @@ class ToriiClient:
             meter_family=cls._require_string(record.get("meter_family"), f"{context}.meter_family"),
             flow_label_bits=flow_label_bits,
             padding_budget_ms=padding_budget_ms,
-            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
-                record.get("relay_tls_spki_sha256_hex"),
-                context=f"{context}.relay_tls_spki_sha256_hex",
-                expected_length=64,
-            ),
+            **trust_fields,
             metering_public_key_hex=cls._require_exact_lower_hex_string(
                 record.get("metering_public_key_hex"),
                 context=f"{context}.metering_public_key_hex",
@@ -14298,6 +14457,7 @@ class ToriiClient:
     def _parse_vpn_session(cls, payload: Mapping[str, Any], *, context: str) -> VpnSession:
         record = cls._ensure_mapping(payload, context)
         cls._validate_exact_fields(record, _VPN_SESSION_RESPONSE_FIELDS, context)
+        trust_fields = cls._parse_vpn_trust_fields(record, context=context)
         lease_secs = cls._require_vpn_unsigned_range(
             record.get("lease_secs"),
             f"{context}.lease_secs",
@@ -14332,7 +14492,10 @@ class ToriiClient:
                 _VPN_EXIT_CLASSES,
                 f"{context}.exit_class",
             ),
-            relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
+            relay_endpoint=cls._require_vpn_relay_endpoint(
+                record.get("relay_endpoint"),
+                context=f"{context}.relay_endpoint",
+            ),
             lease_secs=lease_secs,
             expires_at_ms=cls._require_vpn_uint64(record.get("expires_at_ms"), f"{context}.expires_at_ms"),
             connected_at_ms=cls._require_vpn_uint64(
@@ -14366,11 +14529,7 @@ class ToriiClient:
             lease_fee=cls._quantity(record.get("lease_fee"), f"{context}.lease_fee"),
             flow_label_bits=flow_label_bits,
             padding_budget_ms=padding_budget_ms,
-            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
-                record.get("relay_tls_spki_sha256_hex"),
-                context=f"{context}.relay_tls_spki_sha256_hex",
-                expected_length=64,
-            ),
+            **trust_fields,
             route_pushes=cls._parse_vpn_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
             excluded_routes=cls._parse_vpn_string_list(
                 record.get("excluded_routes"),
@@ -14513,6 +14672,7 @@ class ToriiClient:
         headers: Optional[MutableMapping[str, str]] = None,
         data: Optional[bytes] = None,
         stream: bool = False,
+        allow_redirects: bool = True,
     ) -> requests.Response:
         url = f"{self._base_url}{path}"
         response = self._session.request(
@@ -14522,6 +14682,7 @@ class ToriiClient:
             headers=headers,
             data=data,
             stream=stream,
+            allow_redirects=allow_redirects,
         )
         return response
 
@@ -18124,6 +18285,127 @@ class ToriiClient:
         return value
 
     @classmethod
+    def _require_vpn_relay_id(
+        cls,
+        value: Any,
+        *,
+        context: str,
+        allow_empty: bool = False,
+    ) -> str:
+        if allow_empty and value == "":
+            return ""
+        literal = cls._require_exact_lower_hex_string(
+            value,
+            context=context,
+            expected_length=64,
+        )
+        if not _is_canonical_prime_order_ed25519_public_key(bytes.fromhex(literal)):
+            raise RuntimeError(
+                f"{context} must encode a canonical prime-order Ed25519 public key"
+            )
+        return literal
+
+    @classmethod
+    def _require_vpn_trust_digest(
+        cls,
+        value: Any,
+        *,
+        context: str,
+        allow_empty: bool = False,
+    ) -> str:
+        if allow_empty and value == "":
+            return ""
+        literal = cls._require_exact_lower_hex_string(
+            value,
+            context=context,
+            expected_length=64,
+        )
+        if not any(bytes.fromhex(literal)):
+            raise RuntimeError(f"{context} must not be the all-zero digest")
+        return literal
+
+    @staticmethod
+    def _require_vpn_tls_server_name(
+        value: Any,
+        *,
+        context: str,
+        allow_empty: bool = False,
+    ) -> str:
+        if allow_empty and value == "":
+            return ""
+        if not isinstance(value, str) or not value:
+            raise RuntimeError(f"{context} must be a canonical lowercase DNS name")
+        labels = value.split(".")
+        if (
+            len(value) > 253
+            or value != value.lower()
+            or any(
+                not label
+                or len(label) > 63
+                or re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label) is None
+                for label in labels
+            )
+        ):
+            raise RuntimeError(f"{context} must be a canonical lowercase DNS name")
+        return value
+
+    @classmethod
+    def _require_vpn_relay_endpoint(
+        cls,
+        value: Any,
+        *,
+        context: str,
+        allow_empty: bool = False,
+    ) -> str:
+        if allow_empty and value == "":
+            return ""
+        if not isinstance(value, str) or not value:
+            raise RuntimeError(
+                f"{context} must use /{{ip4|ip6|dns|dns4|dns6}}/host/udp/port/quic"
+            )
+        parts = value.split("/")
+        if (
+            len(parts) != 6
+            or parts[0] != ""
+            or parts[1] not in {"ip4", "ip6", "dns", "dns4", "dns6"}
+            or parts[3] != "udp"
+            or parts[5] != "quic"
+        ):
+            raise RuntimeError(
+                f"{context} must use /{{ip4|ip6|dns|dns4|dns6}}/host/udp/port/quic"
+            )
+        protocol, host, port_literal = parts[1], parts[2], parts[4]
+        if protocol == "ip4":
+            try:
+                address = ipaddress.IPv4Address(host)
+            except ipaddress.AddressValueError as exc:
+                raise RuntimeError(f"{context} must contain a canonical IPv4 address") from exc
+            if str(address) != host:
+                raise RuntimeError(f"{context} must contain a canonical IPv4 address")
+        elif protocol == "ip6":
+            try:
+                address = ipaddress.IPv6Address(host)
+            except ipaddress.AddressValueError as exc:
+                raise RuntimeError(
+                    f"{context} must contain a canonical lowercase IPv6 address"
+                ) from exc
+            if address.compressed != host:
+                raise RuntimeError(
+                    f"{context} must contain a canonical lowercase IPv6 address"
+                )
+        else:
+            cls._require_vpn_tls_server_name(host, context=f"{context} host")
+        try:
+            port = int(port_literal, 10)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"{context} must contain a canonical non-zero UDP port"
+            ) from exc
+        if not 1 <= port <= 65535 or str(port) != port_literal:
+            raise RuntimeError(f"{context} must contain a canonical non-zero UDP port")
+        return value
+
+    @classmethod
     def _normalize_vpn_canonical_hex_input(
         cls,
         value: Union[str, bytes, bytearray, memoryview],
@@ -18137,22 +18419,6 @@ class ToriiClient:
                 context=context,
                 expected_length=expected_length,
             )
-        return cls._require_exact_lower_hex_string(
-            value,
-            context=context,
-            expected_length=expected_length,
-        )
-
-    @classmethod
-    def _require_optional_exact_lower_hex_string(
-        cls,
-        value: Any,
-        *,
-        context: str,
-        expected_length: int,
-    ) -> Optional[str]:
-        if value is None:
-            return None
         return cls._require_exact_lower_hex_string(
             value,
             context=context,

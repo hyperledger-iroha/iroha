@@ -194,10 +194,7 @@ inputs = [
   "crates/ivm/src/numeric_gas.rs",
   "crates/ivm/src/syscall_metering.rs",
   "crates/ivm/src/syscalls.rs",
-  "crates/ivm_abi/src/host_payload.rs",
-  "crates/ivm_abi/src/lib.rs",
-  "crates/ivm_abi/src/metadata.rs",
-  "crates/ivm_abi/src/syscalls.rs",
+  "crates/ivm_abi/src/*.rs",
   "crates/norito/src/**/*.rs",
 ]
 check = "cargo run --locked -p ivm --features dev-tools --bin gen_header_doc -- --check && cargo run --locked -p ivm --features dev-tools --bin gen_abi_hash_doc -- --check"
@@ -473,6 +470,7 @@ generator_sources = [
   "scripts/tests/consistency.sh",
   "crates/iroha_kagami/src/main.rs",
   "crates/iroha_kagami/src/swarm.rs",
+  "crates/iroha_swarm/src/*.rs",
 ]
 inputs = [
   "defaults/*.json",

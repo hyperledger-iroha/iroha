@@ -8,6 +8,14 @@ export {
 } from "./address.js";
 
 export {
+  AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
+  verifyAuthenticatedBlockProofsV1,
+} from "./authenticatedBlockProofs.browser.js";
+
+export {
   buildMintAssetInstruction,
   buildSetAssetTransferAvailabilityInstruction,
   buildTransferAssetInstruction,

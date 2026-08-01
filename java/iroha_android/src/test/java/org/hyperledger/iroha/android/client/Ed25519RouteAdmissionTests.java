@@ -132,8 +132,21 @@ public final class Ed25519RouteAdmissionTests {
         + "\"meter_family\":\"soranet.vpn.standard\","
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
+        + "\"relay_id_hex\":\""
+        + VALID_PUBLIC_KEY_HEX
+        + "\","
+        + "\"descriptor_commit_hex\":\""
+        + "cd".repeat(32)
+        + "\","
+        + "\"tls_server_name\":\"relay.example\","
         + "\"relay_tls_spki_sha256_hex\":\""
         + "ab".repeat(32)
+        + "\","
+        + "\"relay_certificate_sha256_hex\":\""
+        + "ef".repeat(32)
+        + "\","
+        + "\"directory_snapshot_digest_hex\":\""
+        + "42".repeat(32)
         + "\",\"metering_public_key_hex\":\""
         + meteringKey
         + "\",\"open_lease_instruction\":{"

@@ -42,7 +42,6 @@ from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     REQUIRED_OPERATOR_CONTENT_TYPES,
     REQUIRED_OPERATOR_ROUTES,
     REQUIRED_OPERATOR_SCHEMAS,
-    REQUIRED_TRANSPARENCY_SOURCE_KINDS,
     SUBJECT_REFERENCE_ERROR,
     SUBJECT_REFERENCE_PATTERN,
     ValidationOptions,
@@ -80,16 +79,15 @@ from sorafs_evidence_validation import is_archive_portable_artifact_path  # noqa
 from sorafs_runner_preflight import runner_url_arg_is_plan_safe  # noqa: E402
 
 
-LIVE_PROBE_ONLY_KINDS = ("runner", "committee")
+EXTERNAL_EVIDENCE_ONLY_KINDS = ("runner", "committee", "transparency_publication")
 CANARY_KINDS = tuple(
-    kind for kind in KIND_BY_NAME if kind not in LIVE_PROBE_ONLY_KINDS
+    kind for kind in KIND_BY_NAME if kind not in EXTERNAL_EVIDENCE_ONLY_KINDS
 )
 RUNNER_BINDING_KINDS = ("runner", "committee")
 WORKFLOW_DIGEST_KINDS = (
     "operator_workflow",
     "notification_transport",
     "commit_reveal_executor",
-    "transparency_publication",
     "governance_dag",
     "end_to_end_workflow",
 )
@@ -487,27 +485,6 @@ def build_executor_artifacts(args: argparse.Namespace) -> list[dict[str, Any]]:
     ]
 
 
-def build_transparency_probes(args: argparse.Namespace) -> list[dict[str, Any]]:
-    """Build payload-free moderation transparency publication probes."""
-
-    return [
-        {
-            "source_kind": source_kind,
-            "payload_path": f"{source_kind}.json",
-            "request_bytes": args.request_bytes,
-            "request_body_blake3": args.body_digest_hex,
-            "response_status": args.publication_status_code,
-            "response_success": True,
-            "response_bytes": args.response_bytes,
-            "response_body_blake3": args.body_digest_hex,
-            "payload_bytes_included": False,
-            "private_payloads_included": False,
-            "response_body_included": False,
-        }
-        for source_kind in args.transparency_source_kinds
-    ]
-
-
 def build_workflow_steps(args: argparse.Namespace) -> list[dict[str, Any]]:
     """Build end-to-end workflow step records."""
 
@@ -625,21 +602,6 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "artifacts": artifacts,
             }
         )
-    elif args.kind == "transparency_publication":
-        probes = build_transparency_probes(args)
-        payload.update(
-            {
-                "source": "iroha_cli",
-                "workflow_digest_hex": args.workflow_digest_hex,
-                "probe_count": len(probes),
-                "passed_probe_count": len(probes),
-                "source_entry_probe_count": len(probes),
-                "payload_bytes_included": False,
-                "private_payloads_included": False,
-                "response_bodies_included": False,
-                "probes": probes,
-            }
-        )
     elif args.kind == "governance_dag":
         producers = [{"name": name} for name in args.governance_producers]
         payload.update(
@@ -712,11 +674,6 @@ def validate_common_inputs(args: argparse.Namespace, errors: list[str]) -> None:
     require_2xx(
         args.notification_status_code,
         option="--notification-status-code",
-        errors=errors,
-    )
-    require_2xx(
-        args.publication_status_code,
-        option="--publication-status-code",
         errors=errors,
     )
 
@@ -933,24 +890,6 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             errors.append(
                 "--action-count must equal commit, reveal, and tally action counts"
             )
-    elif args.kind == "transparency_publication":
-        require_kind_options(
-            args,
-            errors,
-            (("--workflow-digest-hex", args.workflow_digest_hex),),
-        )
-        validate_hex(
-            args.workflow_digest_hex,
-            length=HEX64_LEN,
-            option="--workflow-digest-hex",
-            errors=errors,
-        )
-        args.transparency_source_kinds = validate_name_set(
-            split_csv_values(args.transparency_source_kind),
-            allowed=REQUIRED_TRANSPARENCY_SOURCE_KINDS,
-            option="--transparency-source-kind",
-            errors=errors,
-        )
     elif args.kind == "governance_dag":
         require_kind_options(
             args,
@@ -1083,7 +1022,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = EvidenceArgumentParser(
         description=(
             "Build payload-free non-runner SoraFS SFM-4a canary JSON. "
-            "Runner and committee evidence must come from deployed live-probe commands."
+            "Runner and committee evidence must come from deployed live-probe commands; "
+            "transparency producer evidence must come from trusted internal producers."
         ),
     )
     parser.add_argument("--kind", choices=CANARY_KINDS, required=True)
@@ -1118,13 +1058,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--result-count", type=positive_int_arg, default=3)
     parser.add_argument("--committee-result", action="append", default=[])
     parser.add_argument("--operator-route", action="append", default=[])
-    parser.add_argument("--transparency-source-kind", action="append", default=[])
     parser.add_argument("--governance-producer", action="append", default=[])
     parser.add_argument("--governance-edge", action="append", default=[])
     parser.add_argument("--workflow-step", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--notification-status-code", type=positive_int_arg, default=202)
-    parser.add_argument("--publication-status-code", type=positive_int_arg, default=201)
     parser.add_argument(
         "--probe-count",
         type=positive_int_arg,

@@ -502,8 +502,17 @@ matching SSM:
    verifies the publisher signature. If any digest mismatch occurs, admission
    returns `ERR_TAIKAI_SSM_MISMATCH`.
 3. The alias proof embedded in the SSM is validated through
-   `sorafs_manifest::alias_cache`, emitting `torii_alias_cache_*` metrics and
-   reusing the existing SoraFS expiry warnings (`Sora-Proof-Status` headers).
+   `sorafs_manifest::alias_cache` against the operator-controlled
+   `sorafs.discovery.admission` council roster and signature threshold. Torii
+   fails closed when that trust policy is unavailable. Council signatures
+   authenticate the registry root, while the Merkle proof authenticates the
+   complete alias-binding leaf; a signer key carried only by the proof is never
+   a trust root. The leaf's `manifest_cid` must equal the canonical first-release
+   manifest CID derived from the BLAKE3 digest of the exact admitted
+   `DaManifestV1` bytes (`canonical_manifest_root_cid(manifest_hash)`), so a
+   genuine proof for another manifest cannot be stapled onto the segment. Cache
+   evaluation then emits `torii_alias_cache_*` metrics and reuses the existing
+   SoraFS expiry warnings (`Sora-Proof-Status` headers).
 4. Successful uploads atomically spool the envelope, SSM, and (when provided)
    TRM window record. The anchor payload now includes `trm_base64` so the
    SoraNS uploader receives the routing manifest together with the envelope

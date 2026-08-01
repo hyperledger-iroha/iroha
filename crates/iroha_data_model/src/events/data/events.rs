@@ -88,6 +88,8 @@ mod model {
         Soradns(super::soradns::SoradnsDirectoryEvent),
         /// `SoraFS` gateway compliance events
         Sorafs(super::sorafs::SorafsGatewayEvent),
+        /// Musubi package-registry and archive lifecycle events
+        Musubi(super::musubi::MusubiEvent),
         /// Space Directory manifest lifecycle events
         SpaceDirectory(super::space_directory::SpaceDirectoryEvent),
         /// Native asset escrow lifecycle events

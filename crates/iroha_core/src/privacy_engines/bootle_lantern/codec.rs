@@ -12,12 +12,29 @@ use super::transcript::challenge_eta_is_valid_v1;
 pub const PROOF_MAGIC_V1: [u8; 4] = *b"ILN1";
 /// Blind-issuance-request proof wire magic.
 pub const BLIND_ISSUANCE_REQUEST_PROOF_MAGIC_V1: [u8; 4] = *b"ILB1";
+/// Complete holder-to-issuer blind-issuance request wire magic.
+pub const BLIND_ISSUANCE_REQUEST_MAGIC_V1: [u8; 4] = *b"ILQ1";
 /// Proof wire version.
 pub const PROOF_VERSION_V1: u8 = 1;
+/// Complete holder-to-issuer blind-issuance request wire version.
+pub const BLIND_ISSUANCE_REQUEST_VERSION_V1: u8 = 1;
 /// Purpose tag carried by every blind-issuance-request proof header.
 pub const BLIND_ISSUANCE_REQUEST_PROOF_PURPOSE_TAG_V1: u8 = 1;
+/// Purpose tag carried by every complete blind-issuance request header.
+pub const BLIND_ISSUANCE_REQUEST_PURPOSE_TAG_V1: u8 = 1;
 /// Fixed header width.
 pub const PROOF_HEADER_BYTES_V1: usize = 8;
+/// Fixed `ILQ1` header width.
+pub const BLIND_ISSUANCE_REQUEST_HEADER_BYTES_V1: usize = 16;
+/// Exact target polynomial count encoded by `ILQ1`.
+pub const BLIND_ISSUANCE_REQUEST_TARGET_POLYNOMIALS_V1: u16 = 8;
+/// Exact target polynomial degree encoded by `ILQ1`.
+pub const BLIND_ISSUANCE_REQUEST_RING_DEGREE_V1: u16 = 64;
+/// Exact canonical `ILA1` issuer-authorization wire length.
+pub const BLIND_ISSUANCE_AUTHORIZATION_BYTES_V1: usize = 320;
+/// Exact canonical `ILR1` issuer-response wire length.
+pub const BLIND_ISSUANCE_RESPONSE_BYTES_V1: usize =
+    8 + 24 * APPLICATION_RING_DEGREE_V1 * 2 + 3 * 32;
 
 /// Polynomial counts in canonical proof order.
 pub const T_B_POLYNOMIALS_V1: usize = 12;
@@ -53,6 +70,13 @@ pub const PROOF_COEFFICIENTS_V1: usize = PROOF_POLYNOMIALS_V1 * APPLICATION_RING
 /// Exact canonical proof byte length.
 pub const PROOF_BYTES_V1: usize =
     PROOF_HEADER_BYTES_V1 + PROOF_COEFFICIENTS_V1 * PROOF_RESIDUE_BYTES_V1;
+/// Exact canonical `ILQ1` holder-to-issuer request wire length.
+pub const BLIND_ISSUANCE_REQUEST_BYTES_V1: usize = BLIND_ISSUANCE_REQUEST_HEADER_BYTES_V1
+    + BLIND_ISSUANCE_REQUEST_TARGET_POLYNOMIALS_V1 as usize
+        * BLIND_ISSUANCE_REQUEST_RING_DEGREE_V1 as usize
+        * 2
+    + 6 * 32
+    + PROOF_BYTES_V1;
 
 const T_B_START: usize = 0;
 const H_START: usize = T_B_START + T_B_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
@@ -278,13 +302,13 @@ impl BootleLanternBlindIssuanceRequestProofV1 {
         )
     }
 
-    pub(crate) fn from_validated_body_v1(body: BootleLanternPresentationProofV1) -> Self {
+    pub(super) fn from_validated_body_v1(body: BootleLanternPresentationProofV1) -> Self {
         Self {
             validated_body: body,
         }
     }
 
-    pub(crate) const fn validated_body_v1(&self) -> &BootleLanternPresentationProofV1 {
+    pub(super) const fn validated_body_v1(&self) -> &BootleLanternPresentationProofV1 {
         &self.validated_body
     }
 }

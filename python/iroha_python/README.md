@@ -1796,15 +1796,18 @@ docker-compose topology, waits for the API to become available, and runs
 `pytest` with the `integration` marker:
 
 ```bash
-target/debug/kagami keys --out-dir target/python-integration-genesis
-export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/python-integration-genesis/public.key"
-export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/python-integration-genesis/private.key"
+export IROHA_GENESIS_SIGNED_FILE="$PWD/target/python-integration-genesis/genesis.signed.nrt"
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/python-integration-genesis/genesis.public_key"
+export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/target/python-integration-genesis/genesis.expected_hash"
 python python/iroha_python/scripts/run_integration.py
 ```
 
-Build `kagami` first if it is not already available. The default Compose stack
-contains no genesis signing key and the harness refuses to start it without
-both runtime file paths. Never commit the private file.
+The default stack is an explicitly seeded development fixture. Prepare those
+artifacts for its exact validator roster with Kagami beforehand; do not reuse a
+random localnet body. The stack contains no genesis signing key or runtime
+signer, and the harness refuses to start it without all three read-only
+trust-root inputs. Normal generated deployments use seedless `kagami docker`
+prepared-bundle mode and embed validated artifact paths directly.
 
 Use the shell wrapper for convenience:
 
@@ -1822,7 +1825,8 @@ variables:
 | `COMPOSE_SERVICE` | Service name to start (defaults to `irohad0`). |
 | `IROHA_TORII_URL` | Torii URL used by the tests (defaults to `http://127.0.0.1:8080`). |
 | `IROHA_GENESIS_PUBLIC_KEY_FILE` | Runtime genesis verifier-key file required by the default Compose stack. |
-| `IROHA_GENESIS_PRIVATE_KEY_FILE` | Owner-held runtime genesis signing-key file required by the default Compose stack. |
+| `IROHA_GENESIS_SIGNED_FILE` | Host-prepared signed genesis body required by the default Compose stack. |
+| `IROHA_GENESIS_EXPECTED_HASH_FILE` | Independently approved exact genesis hash required by the default Compose stack. |
 
 When running against an external environment, set `--no-start`,
 `--torii-url` (or `IROHA_TORII_URL`), and optional auth tokens
@@ -1907,12 +1911,16 @@ bash python/iroha_python/scripts/release_smoke.sh
 
 The workflow now:
 
-1. Builds the wheel with `python -m build` and installs it into a fresh virtualenv for an import smoke test plus the Norito RPC parity suite.
-2. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
+1. Builds exactly one wheel candidate with `python -m build` and seals and structurally preflights it before installation.
+2. Installs the wheel into a fresh virtualenv, authenticates the complete installed package and native-extension provenance against that seal, and rejects path or file aliases.
+3. Requires the installed native extension to expose bridge ABI 21 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
+4. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
 
 The smoke harness accepts no signing, provenance, key, or manifest-output
 options and never produces signatures. It is deliberately limited to
-build/install/import/RPC/package-metadata checks.
+build/seal/install/native-provenance/privacy/RPC/package-metadata checks; the
+protected aggregate release workflow remains the authority for release
+signing and provenance publication.
 
 Set `PYTHON_RELEASE_SMOKE_KEEP_DIST=1` to preserve the built wheel and source
 distribution under `dist/` after the smoke completes.

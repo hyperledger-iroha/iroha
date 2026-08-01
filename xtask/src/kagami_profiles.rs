@@ -575,6 +575,7 @@ lane_count = 3
 
 [genesis]
 public_key = "{genesis_pk}"
+expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
 "#,
         slug = spec.slug,
         chain = spec.chain_id,

@@ -7,7 +7,7 @@ repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 readonly repo_root
 readonly fixture_path="${repo_root}/fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly gradle_init_path="${repo_root}/ci/native_amx_v2_grouped_gradle_init.gradle"
-readonly expected_negative_control_count=50
+readonly expected_negative_control_count=51
 readonly source_paths=(
   ci/run_native_amx_v2_grouped_sdk_parity.sh
   ci/native_amx_v2_grouped_gradle_init.gradle
@@ -20,7 +20,10 @@ readonly source_paths=(
   python/iroha_torii_client/native_amx.py
   javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js
   javascript/iroha_js/src/toriiClient.js
+  javascript/iroha_js/src/norito.js
+  javascript/iroha_js/src/native.js
   javascript/iroha_js/scripts/build-dist.mjs
+  javascript/iroha_js/scripts/native-build-provenance.mjs
   javascript/iroha_js/index.d.ts
   javascript/iroha_js/package.json
   javascript/iroha_js/package-lock.json
@@ -37,6 +40,8 @@ readonly source_paths=(
   kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/NativeAmxV2GroupedFixtureTest.kt
   kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/NativeAmxV2.kt
   kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModels.kt
+  kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/util/HashLiteral.kt
+  kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/IrohaHash.kt
   kotlin/core-jvm/build.gradle.kts
   kotlin/settings.gradle.kts
   kotlin/gradlew
@@ -45,6 +50,8 @@ readonly source_paths=(
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/NativeAmxV2GroupedFixtureTests.java
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/NativeAmxV2Models.java
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/SumeragiDiagnosticsModels.java
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/IrohaHash.java
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/util/HashLiteral.java
   java/iroha_android/core/build.gradle.kts
   java/iroha_android/settings.gradle.kts
   java/iroha_android/gradlew
@@ -275,11 +282,11 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   python)
-    observed_test_count=56
+    observed_test_count=58
     "$python_bin" -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Native AMX V2 parity requires Python >=3.10")'
     if [[ "${IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-}" == "1" ]]; then
-      readonly python_parity_path=""
+      readonly python_parity_path="${repo_root}/python/norito_py/src:${repo_root}/python"
     else
       readonly python_parity_path="${repo_root}/python/iroha_python/src:${repo_root}/python/norito_py/src:${repo_root}/python/iroha_torii_client:${repo_root}/python${PYTHONPATH:+:${PYTHONPATH}}"
     fi
@@ -292,7 +299,7 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   javascript)
-    observed_test_count=54
+    observed_test_count=56
     if ! command -v node >/dev/null 2>&1; then
       echo "Node.js is required for grouped Native AMX V2 JavaScript parity" >&2
       exit 1
@@ -301,6 +308,7 @@ case "$surface" in
     readonly javascript_source_root="${javascript_sdk_root}/src"
     readonly javascript_package_root="${temporary_root}/javascript-package"
     readonly javascript_staged_source_root="${javascript_package_root}/src"
+    readonly javascript_staged_scripts_root="${javascript_package_root}/scripts"
     readonly javascript_dist_root="${javascript_package_root}/dist"
     readonly javascript_dist_diff="${temporary_root}/javascript-dist.diff"
     if [[ -n "$(find "$javascript_source_root" -type l -print -quit)" ]]; then
@@ -312,8 +320,10 @@ case "$surface" in
       echo "grouped Native AMX V2 JavaScript parity requires a regular installed node_modules directory" >&2
       exit 1
     fi
-    mkdir -p -- "$javascript_staged_source_root"
+    mkdir -p -- "$javascript_staged_source_root" "$javascript_staged_scripts_root"
     cp "${javascript_sdk_root}/package.json" "${javascript_package_root}/package.json"
+    cp "${javascript_sdk_root}/scripts/native-build-provenance.mjs" \
+      "${javascript_staged_scripts_root}/native-build-provenance.mjs"
     ln -s "${javascript_sdk_root}/node_modules" "${javascript_package_root}/node_modules"
     cp -R "${javascript_source_root}/." "$javascript_staged_source_root/"
     env \
@@ -341,7 +351,7 @@ case "$surface" in
     fi
     ;;
   swift)
-    observed_test_count=3
+    observed_test_count=4
     if ! command -v swift >/dev/null 2>&1; then
       echo "Swift is required for grouped Native AMX V2 Swift parity" >&2
       exit 1

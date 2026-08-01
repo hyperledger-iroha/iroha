@@ -5,7 +5,8 @@ use iroha_crypto::{
     Algorithm, KeyPair,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-        HandshakeSuite, RuntimeParams, SimulationParams, build_client_hello,
+        DEFAULT_TLS_SERVER_NAME, HandshakeSuite, RuntimeParams, SORANET_QUIC_ALPN,
+        SimulationParams, build_client_hello,
         client_handle_relay_hello, relay_finalize_handshake, simulate_handshake,
         simulation_report_json,
     },
@@ -37,7 +38,6 @@ struct FuzzInput {
     sig_id: u8,
     client_seed: [u8; 32],
     relay_seed: [u8; 32],
-    key_seed: [u8; 32],
 }
 
 fn build_suite_order(bytes: &[u8]) -> Vec<HandshakeSuite> {
@@ -178,14 +178,13 @@ fn run_runtime_handshake(case: &FuzzInput) {
         relay_capabilities: &relay_caps,
         kem_id: case.kem_id % 3,
         sig_id: if case.sig_id == 0 { 1 } else { case.sig_id },
+        transport_alpn: SORANET_QUIC_ALPN,
+        tls_server_name: DEFAULT_TLS_SERVER_NAME,
         resume_hash: resume_slice,
     };
 
     let mut rng_client = seed_rng(&case.client_seed);
     let mut rng_relay = seed_rng(&case.relay_seed);
-    let Some(client_keys) = seeded_keypair(&case.key_seed) else {
-        return;
-    };
     let Some(relay_keys) = seeded_keypair(&case.relay_seed) else {
         return;
     };
@@ -204,7 +203,7 @@ fn run_runtime_handshake(case: &FuzzInput) {
     let Ok((client_finish, _client_session)) = client_handle_relay_hello(
         client_state,
         &relay_message,
-        &client_keys,
+        relay_keys.public_key(),
         &runtime,
         &mut rng_client,
     ) else {

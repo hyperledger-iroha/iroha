@@ -1166,7 +1166,11 @@ The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
 `pq-masp-stark-v0`. Exact initialization rejects aliases, retired IDs, case
-changes, and whitespace normalization.
+changes, and whitespace normalization. Each identity exposes its exact
+four-byte `noritoDiscriminant`, `canonicalTypedVariantLabel`,
+`expectedProofSystem`, and `expectedEngine`; the proof-system and native-engine
+tags remain distinct Swift types even where their current numeric ordinals
+coincide. Unknown tags and legacy variant labels fail closed.
 The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteOpening`, `ConfidentialNoteCommitment.deriveFromOpening`,
 `ConfidentialNoteNullifier`, `ConfidentialOwnerTag`,

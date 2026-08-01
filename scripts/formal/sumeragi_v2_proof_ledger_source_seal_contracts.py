@@ -293,10 +293,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 813
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 808
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 81
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f"
+    "cb95499094958be3368b27f6f9c4464ed5173a8be848201077c4bc21a6a8687a"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
@@ -466,11 +466,6 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ),
     ("production-irohad-network-relay", "network_relay_tests", 4),
     ("production-irohad-authenticated-via", "tests::relay_fairness", 7),
-    (
-        "production-irohad-genesis-reply-geometry",
-        "genesis_bootstrap::tests",
-        5,
-    ),
     (
         "production-config-v2-exact-output-geometry",
         "parameters::actual::tests",
@@ -813,7 +808,6 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "network::tests::reply_wrapper_exposes_delivery_active_unwritable_no_ownership",
     "network::tests::accepted_draining_connection_delivers_reliable_progress_after_replacement",
     "network::tests::reply_route_tenure_retires_only_after_final_receiver_guard_drops",
-    "genesis_bootstrap::tests::unavailable_reply_writer_uses_requester_retransmission_without_parking_old_route",
     "consensus_message_control::tests::private_reader_treats_safe_atomic_replacement_as_retryable_identity_churn",
     "network_relay_tests::certified_merge_sidecar_close_is_limited_but_responder_controls_are_critical",
     "sumeragi::v2::tests::strict_same_round_tc_preserves_and_retags_timeout_vote_owners",

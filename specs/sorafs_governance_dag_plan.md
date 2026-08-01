@@ -38,6 +38,24 @@ index. Publish-index, CAR queue, and runtime digest/kind lookup responses keep
 full match counts visible while bounding returned `entries`, `segments`, or
 `blocks` arrays through `limit` (default 50, max 500).
 
+Caller-supplied runtime payloads also carry server-derived
+`GovernanceDagSubmissionProvenanceV1`. The canonical universal account ID and
+exact Torii ingress origin participate in the log-node CID and publisher
+signature preimages; runtime-index copies are checked against the signed node.
+Appeal-finance reports and weekly rollups require matching provenance.
+Proof-token issuances and transparency-ledger publications preserve matching
+provenance when admitted through an authenticated route, while their trusted
+in-process producer APIs are represented by its absence and remain attested by
+the node signer. Other internally derived records, including settlement
+receipts, reject caller provenance. The first-release schema is a hard cut:
+pre-change runtime DAG nodes must be reseeded instead of decoded through a
+compatibility heuristic.
+
+The node derives `publisher_account_id` from the typed canonical `AccountId`;
+it is never accepted from the request body. The manifest layer independently
+bounds that UTF-8 display and rejects whitespace/control characters, but does
+not pretend that this lower-level crate re-parses I105 account semantics.
+
 V1 now separates binary schema ceilings from mutable JSON state: canonical
 producer source payloads are capped at 64 MiB, node/block/head signing and CID
 payloads at 128 MiB, and a complete canonical block at 128 MiB plus a checked
@@ -328,9 +346,11 @@ Implemented foundations include:
     configured local mirror index.
   - `GET /v1/sorafs/governance/dag/blocks/{block_cid_hex}` and
     `/v1/sorafs/governance/dag/nodes/{node_cid_hex}` look up the indexed block
-    by block CID or governance-node CID. The API reads only the node-configured
-    governance directory and fails closed on missing, malformed, or unsupported
-    mirror indexes.
+    by block CID or governance-node CID. Each block exposes nullable submission
+    account/origin fields copied from the signed node; the publisher rejects a
+    runtime-index copy that disagrees with those signed bytes. The API reads
+    only the node-configured governance directory and fails closed on missing,
+    malformed, or unsupported mirror indexes.
   - `GET /v1/sorafs/governance/dag/publish-index?limit=N` returns the
     runtime-local filesystem publication feed from `publish-index.json`,
     including payload-kind counts, total entry counts, and a `limit`-bounded
@@ -422,6 +442,7 @@ struct GovernanceLogNodeV1 {
     prev_cid: Option<Vec<u8>>,
     timestamp: u64,
     publisher_peer_id: Vec<u8>,
+    submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
     payload: GovernanceLogPayloadV1,
     publisher_signature: GovernanceLogSignatureV1,
 }
@@ -443,9 +464,12 @@ struct GovernanceLogNodeV1 {
 
 `GovernanceLogSignatureV1` stores the algorithm, public key, and raw signature.
 Validation rejects unsupported versions, empty node CIDs, empty previous CIDs,
-missing publisher peer IDs, malformed signatures, and invalid nested payloads.
-Signature verification covers canonical Norito bytes that exclude
-`publisher_signature`, so signers and verifiers operate on stable payload bytes.
+missing publisher peer IDs, malformed signatures, invalid nested payloads,
+missing finance provenance, mismatched provenance on authenticated-ingress
+payloads, and provenance attached to payloads with no external producer.
+Signature verification covers canonical Norito bytes, including submission
+provenance, that exclude only `publisher_signature`, so signers and verifiers
+operate on stable payload bytes.
 
 The shipped public DAG block/head surface wraps those log nodes without changing
 their payload semantics:

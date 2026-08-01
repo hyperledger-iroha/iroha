@@ -85,6 +85,10 @@ def test_generator_command_selects_direct_binary_or_locked_cargo() -> None:
         "--locked",
         "-p",
         "kotlin-fixture-gen",
+        "--features",
+        "dev-tools",
+        "--bin",
+        "kotlin-fixture-gen",
         "--",
         "offline-device-attestation",
     ]

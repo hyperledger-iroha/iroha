@@ -2785,8 +2785,12 @@ mod app_api_integration_tests {
             ],
             Arc::new(admission),
         );
+        let prepared = cache
+            .validation_policy()
+            .prepare(fixture.advert.clone(), fixture.issued_at())
+            .expect("prepare fixture advert");
         cache
-            .ingest(fixture.advert.clone(), fixture.issued_at())
+            .commit_prepared(prepared, fixture.issued_at())
             .expect("ingest fixture advert");
 
         let (node, dir) = projection_query_sorafs_node_with_temp_storage();

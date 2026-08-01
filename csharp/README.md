@@ -467,7 +467,10 @@ complete verifying-key record equal the normalized request.
 `Hyperledger.Iroha.Privacy.PrivacyNative` is selector-free.
 `CompiledProfileCatalogV1()` returns this binary's CRC-checked canonical
 `PrivacyCompiledProfileCatalogV1` Norito archive. `PrivacyProtocolsV1.All` exposes
-the closed `PrivacyProtocolIdV1` enum in exact wire order.
+the closed `PrivacyProtocolIdV1 : uint` enum with explicit discriminants 0 through
+11 in exact wire order. `CanonicalTypedVariantLabel()` mirrors the native
+statement/proof variant tag for each row, while both canonical parsers reject
+nulls, aliases, retired tags, case changes, and whitespace.
 The local catalog contains no governance or readiness state; fetch a fresh
 committed `PrivacyCapabilitySnapshotV1` from live Torii before proof submission.
 `Exact12FixtureBundleV1()` returns the byte-complete Rust-derived statements,
@@ -485,6 +488,7 @@ codec for the checked-in
 `fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64` archive. It accepts
 only schema-bound, checksum-valid, uncompressed canonical Norito with version 1,
 the exact twelve ordered protocol rows, the first-release submit-proof wire ID,
+its exact 29-byte UTF-8 / 30-byte compact-length-prefixed wire-ID layout,
 bounded non-empty opaque fields, and exact 32-byte digests. Its immutable row
 and bundle models defensively copy all byte arrays and lists. Use
 `RequireTrustedCanonical(candidate, trustedArchive)` when the opaque inner bytes
@@ -844,6 +848,11 @@ ambiguous inherited `PATH` values with empty path-list segments before bridge
 build or test execution.
 
 ## Pack
+
+NuGet files are authenticated release outputs and intentionally remain
+untracked. Never reuse or publish a package produced for an older bridge ABI or
+privacy surface; rebuild it from the exact clean revision and five-host evidence
+described below.
 
 The NuGet package is a five-RID hard cut. It contains exactly these native
 assets:

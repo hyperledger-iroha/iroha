@@ -18,8 +18,7 @@ use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity, RoundingMode};
 use super::prelude::*;
 use crate::{
     smartcontracts::isi::{
-        asset::isi::{assert_numeric_spec_with, execute_authorized_numeric_asset_pair},
-        settlement::ensure_bilateral_counterparty_consent,
+        asset::isi::assert_numeric_spec_with, settlement::ensure_bilateral_counterparty_consent,
     },
     state::{StateTransaction, WorldReadOnly},
 };
@@ -27,6 +26,38 @@ use crate::{
 const MAX_HAIRCUT_BPS: u16 = 10_000;
 const MS_PER_DAY: u64 = 86_400_000;
 const ACT_360_YEAR_MS: u64 = MS_PER_DAY * 360;
+
+/// Non-reusable proof that repo consent and retained-agreement checks selected two exact legs.
+pub(in crate::smartcontracts::isi) struct VerifiedRepoNumericPair {
+    authority: AccountId,
+    binding: Vec<u8>,
+    legs: [(AssetId, AssetId, Quantity); 2],
+}
+
+impl VerifiedRepoNumericPair {
+    fn new<T: norito::codec::Encode>(
+        authority: AccountId,
+        binding: &T,
+        legs: [(AssetId, AssetId, Quantity); 2],
+    ) -> Result<Self, Error> {
+        let binding = norito::encode_canonical(binding).map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to encode exact repo movement binding: {error}").into(),
+            )
+        })?;
+        Ok(Self {
+            authority,
+            binding,
+            legs,
+        })
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (AccountId, Vec<u8>, [(AssetId, AssetId, Quantity); 2]) {
+        (self.authority, self.binding, self.legs)
+    }
+}
 
 fn ensure_positive_quantity(quantity: &Quantity, label: &str) -> Result<(), Error> {
     if quantity.is_zero() {
@@ -292,15 +323,29 @@ impl Execute for RepoIsi {
         let collateral_source =
             asset_in_account_with_same_scope(&collateral_custody_asset, initiator.clone());
 
-        execute_authorized_numeric_asset_pair(
+        let movement = VerifiedRepoNumericPair::new(
+            authority.clone(),
+            &(
+                settlement_id.clone(),
+                initiation_intent_hash,
+                maturity_intent_hash,
+            ),
+            [
+                (
+                    cash_source.clone(),
+                    cash_destination,
+                    cash_leg.quantity().clone(),
+                ),
+                (
+                    collateral_source,
+                    collateral_custody_asset.clone(),
+                    collateral_leg.quantity().clone(),
+                ),
+            ],
+        )?;
+        crate::smartcontracts::isi::asset::isi::execute_verified_repo_numeric_pair(
             state_transaction,
-            authority,
-            cash_source.clone(),
-            cash_destination,
-            cash_leg.quantity().clone(),
-            collateral_source,
-            collateral_custody_asset.clone(),
-            collateral_leg.quantity().clone(),
+            movement,
         )?;
 
         let agreement = RepoAgreement::new(
@@ -461,15 +506,21 @@ impl Execute for ReverseRepoIsi {
         let cash_leg =
             iroha_data_model::repo::RepoCashLeg::new(cash_def_id, expected_cash_quantity.clone());
 
-        execute_authorized_numeric_asset_pair(
+        let movement = VerifiedRepoNumericPair::new(
+            authority.clone(),
+            &(agreement_id.clone(), settlement_timestamp_ms),
+            [
+                (cash_source, cash_destination, expected_cash_quantity),
+                (
+                    collateral_source,
+                    collateral_destination,
+                    collateral_leg.quantity().clone(),
+                ),
+            ],
+        )?;
+        crate::smartcontracts::isi::asset::isi::execute_verified_repo_numeric_pair(
             state_transaction,
-            authority,
-            cash_source,
-            cash_destination,
-            expected_cash_quantity,
-            collateral_source,
-            collateral_destination,
-            collateral_leg.quantity().clone(),
+            movement,
         )?;
 
         if !stored_agreement.settle() {
@@ -1870,9 +1921,12 @@ mod tests {
 
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
-            stx.world
-                .deposit_numeric_asset(&alice_cash_id, &interest_due)
-                .expect("seed interest funds");
+            crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+                &mut stx.world,
+                &alice_cash_id,
+                &interest_due,
+            )
+            .expect("seed interest funds");
         }
 
         let reverse_instruction = ReverseRepoIsi::new(agreement_id.clone());
@@ -2103,17 +2157,23 @@ mod tests {
 
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
-            stx.world
-                .deposit_numeric_asset(&alice_cash_id, &interest_due)
-                .expect("seed interest funds");
+            crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+                &mut stx.world,
+                &alice_cash_id,
+                &interest_due,
+            )
+            .expect("seed interest funds");
         }
 
         // An unrelated balance cannot be selected by the ID-only settlement instruction.
         let extra_collateral = Quantity::from(50u32);
         let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
-        stx.world
-            .deposit_numeric_asset(&bob_collateral_id, &extra_collateral)
-            .expect("seed substitution collateral");
+        crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+            &mut stx.world,
+            &bob_collateral_id,
+            &extra_collateral,
+        )
+        .expect("seed substitution collateral");
 
         let reverse_instruction = ReverseRepoIsi::new(agreement_id.clone());
 
@@ -2271,9 +2331,12 @@ mod tests {
 
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
-            stx.world
-                .deposit_numeric_asset(&alice_cash_id, &interest_due)
-                .expect("seed interest funds");
+            crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+                &mut stx.world,
+                &alice_cash_id,
+                &interest_due,
+            )
+            .expect("seed interest funds");
         }
 
         ReverseRepoIsi::new(agreement_id.clone())
@@ -2690,9 +2753,12 @@ mod tests {
                 .expect("interest non-negative");
             if !interest_due.is_zero() {
                 let alice_cash = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
-                stx.world
-                    .deposit_numeric_asset(&alice_cash, &interest_due)
-                    .expect("seed interest funds");
+                crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+                    &mut stx.world,
+                    &alice_cash,
+                    &interest_due,
+                )
+                .expect("seed interest funds");
             }
 
             ReverseRepoIsi::new(agreement_id.clone())

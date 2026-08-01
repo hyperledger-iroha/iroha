@@ -271,6 +271,18 @@ REQUIRED_TRANSPARENCY_SOURCE_KINDS = (
     "moderation-commit-reveal-status",
     "moderation-ballots-executor",
 )
+TRUSTED_TRANSPARENCY_PRODUCER_ID_PATTERN = re.compile(
+    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*\Z"
+)
+TRUSTED_TRANSPARENCY_PRODUCER_ROUTE_PATTERN = re.compile(
+    r"^internal:[a-z0-9]+(?:[._/-][a-z0-9]+)*\Z"
+)
+TRUSTED_TRANSPARENCY_PRODUCER_ID_ERROR = (
+    "producers[].producer_id must be a canonical production service id"
+)
+TRUSTED_TRANSPARENCY_PRODUCER_ROUTE_ERROR = (
+    "producers[].producer_route must identify a trusted internal producer route"
+)
 REQUIRED_EXECUTOR_ARTIFACTS = (
     "executor.env",
     "run.sh",
@@ -473,7 +485,7 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
     ),
     EvidenceKind(
         "transparency_publication",
-        "sorafs.transparency.source_entry.canary.v1",
+        "sorafs.moderation.transparency_source.producer_evidence.v1",
         ("passed",),
     ),
     EvidenceKind(
@@ -589,13 +601,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "transparency_publication": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "workflow_digest_hex",
-        "probe_count",
-        "passed_probe_count",
-        "source_entry_probe_count",
+        "producer_count",
+        "generic_public_ingress_absent",
         "payload_bytes_included",
         "private_payloads_included",
-        "response_bodies_included",
-        "probes",
+        "producers",
     ),
     "governance_dag": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -1495,62 +1505,68 @@ def validate_commit_reveal_executor(payload: dict[str, Any], errors: list[str]) 
 
 def validate_transparency_publication(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "workflow_digest_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "probe_count", "passed_probe_count", errors)
-    require_count_equal(payload, "probe_count", "source_entry_probe_count", errors)
-    require_minimum_int(
-        payload,
-        "source_entry_probe_count",
-        len(REQUIRED_TRANSPARENCY_SOURCE_KINDS),
-        errors,
-    )
+    producer_count = require_positive_int(payload, "producer_count", errors)
+    require_bool_true(payload, "generic_public_ingress_absent", errors)
     require_string_inventory_count_match(
         payload,
-        "probes",
-        "source_entry_probe_count",
+        "producers",
+        "producer_count",
         errors,
         field="source_kind",
         allow_scalar_items=False,
     )
     require_only_required_values(
         payload,
-        "probes",
+        "producers",
         "source_kind",
         REQUIRED_TRANSPARENCY_SOURCE_KINDS,
         errors,
     )
     require_false(payload, "payload_bytes_included", errors)
     require_false(payload, "private_payloads_included", errors)
-    require_false(payload, "response_bodies_included", errors)
     require_string_coverage(
         payload,
-        "probes",
+        "producers",
         "source_kind",
         REQUIRED_TRANSPARENCY_SOURCE_KINDS,
         errors,
     )
-    validate_probe_array(
-        payload,
-        "probes",
+    producer_records = require_object_array(payload, "producers", errors)
+    require_count_length_match(
+        producer_count,
+        producer_records,
+        "producer_count",
+        "producers",
         errors,
-        success_field="response_success",
-        status_field="response_status",
-        identity_field="source_kind",
     )
-    for index, probe in enumerate(payload.get("probes", [])):
-        record = require_object(probe, f"probes[{index}]", errors)
-        require_archive_portable_path(
+    for index, record in producer_records:
+        producer_id = require_string(record, "producer_id", errors)
+        if (
+            producer_id
+            and TRUSTED_TRANSPARENCY_PRODUCER_ID_PATTERN.fullmatch(producer_id)
+            is None
+        ):
+            errors.append(TRUSTED_TRANSPARENCY_PRODUCER_ID_ERROR)
+        producer_route = require_string(record, "producer_route", errors)
+        if (
+            producer_route
+            and TRUSTED_TRANSPARENCY_PRODUCER_ROUTE_PATTERN.fullmatch(producer_route)
+            is None
+        ):
+            errors.append(TRUSTED_TRANSPARENCY_PRODUCER_ROUTE_ERROR)
+        require_hex(
             record,
-            "payload_path",
+            "provenance_digest_hex",
+            HEX64_LEN,
             errors,
-            path=f"probes[{index}].payload_path",
+            path=f"producers[{index}].provenance_digest_hex",
         )
-        require_positive_int(record, "request_bytes", errors)
-        require_hex(record, "request_body_blake3", HEX64_LEN, errors)
-        require_non_negative_int(record, "response_bytes", errors)
-        require_hex(record, "response_body_blake3", HEX64_LEN, errors)
-        require_false(record, "payload_bytes_included", errors)
-        require_false(record, "private_payloads_included", errors)
-        require_false(record, "response_body_included", errors)
+        require_bool_true(
+            record,
+            "durable_checkpoint_verified",
+            errors,
+            path=f"producers[{index}].durable_checkpoint_verified",
+        )
 
 
 def validate_governance_dag(payload: dict[str, Any], errors: list[str]) -> None:

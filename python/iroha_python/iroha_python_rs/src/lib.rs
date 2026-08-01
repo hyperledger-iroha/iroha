@@ -236,7 +236,9 @@ use sorafs_manifest::{
     OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
     OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
     OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
-    alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
+    alias_cache::{
+        AliasCachePolicy, AliasProofState, decode_alias_proof_untrusted_signers, unix_now_secs,
+    },
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1,
@@ -2293,7 +2295,7 @@ fn sorafs_evaluate_alias_proof_py(
     let proof_bytes = BASE64.decode(trimmed.as_bytes()).map_err(|err| {
         PyValueError::new_err(format!("failed to decode base64 alias proof: {err}"))
     })?;
-    let bundle = decode_alias_proof(&proof_bytes)
+    let bundle = decode_alias_proof_untrusted_signers(&proof_bytes)
         .map_err(|err| PyValueError::new_err(format!("invalid alias proof bundle: {err}")))?;
     let evaluation = policy.evaluate(&bundle, now);
     let state_label = match evaluation.state {
@@ -13003,6 +13005,7 @@ impl Instruction {
             authority.clone(),
             TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
         )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?
         .with_metadata(metadata);
         let trigger = Trigger::new(trigger_id, action);
         let instruction = Register::trigger(trigger);
@@ -13055,6 +13058,7 @@ impl Instruction {
             authority.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
         )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?
         .with_metadata(metadata);
         let trigger = Trigger::new(trigger_id, action);
         let instruction = Register::trigger(trigger);

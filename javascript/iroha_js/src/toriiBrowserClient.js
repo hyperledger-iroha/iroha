@@ -16,9 +16,15 @@ import {
 } from "./kagemushaOffline.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
+import {
+  AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
+} from "./authenticatedBlockProofs.browser.js";
 
 const DEFAULT_SUCCESS_STATUSES = [200];
+const BOUNDED_RESPONSE_MAX_STREAM_CHUNKS = 16_384;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
 const PRIVACY_CAPABILITIES_REQUEST_OPTION_KEYS = new Set([
   "headers",
   "signal",
@@ -648,7 +654,34 @@ function normalizeOptionalBoolean(value, context) {
 }
 
 function normalizeLedgerHeight(value, context) {
-  return normalizePositiveInteger(value, context, undefined);
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new TypeError(
+        `${context} must be a positive safe integer number or an exact decimal string/bigint`,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^[0-9]+$/u.test(trimmed)) {
+      throw new TypeError(`${context} must be a positive decimal integer`);
+    }
+    integer = BigInt(trimmed);
+  } else {
+    throw new TypeError(`${context} must be a positive decimal integer`);
+  }
+  if (integer <= 0n) {
+    throw new TypeError(`${context} must be a positive decimal integer`);
+  }
+  if (integer > MAX_UINT64_BIGINT) {
+    throw new RangeError(
+      `${context} must not exceed ${MAX_UINT64_BIGINT.toString(10)}`,
+    );
+  }
+  return integer.toString(10);
 }
 
 function normalizeLedgerEntryHash(value, context) {
@@ -930,11 +963,12 @@ function requireExactJsonContentType(contentType, context) {
   }
 }
 
-async function readBoundedResponseText(response, maximumBodyBytes, context) {
+async function readBoundedResponseBytes(response, maximumBodyBytes, context) {
   if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
     throw new TypeError(`${context} response byte-size bound is invalid`);
   }
   const rawContentLength = response?.headers?.get?.("content-length");
+  let declaredLength = null;
   if (rawContentLength !== null && rawContentLength !== undefined) {
     if (
       typeof rawContentLength !== "string"
@@ -944,7 +978,7 @@ async function readBoundedResponseText(response, maximumBodyBytes, context) {
         `${context} Content-Length must be a canonical unsigned decimal integer`,
       );
     }
-    const declaredLength = Number(rawContentLength);
+    declaredLength = Number(rawContentLength);
     if (
       !Number.isSafeInteger(declaredLength)
       || declaredLength > maximumBodyBytes
@@ -977,13 +1011,16 @@ async function readBoundedResponseText(response, maximumBodyBytes, context) {
       if (!(result.value instanceof Uint8Array)) {
         throw new TypeError(`${context} returned a non-byte response stream chunk`);
       }
+      if (chunks.length >= BOUNDED_RESPONSE_MAX_STREAM_CHUNKS) {
+        throw new RangeError(`${context} returned too many fragmented response chunks`);
+      }
       if (result.value.byteLength > maximumBodyBytes - totalBytes) {
         throw new RangeError(
           `${context} exceeds its ${maximumBodyBytes}-byte response limit`,
         );
       }
       totalBytes += result.value.byteLength;
-      chunks.push(result.value);
+      chunks.push(new Uint8Array(result.value));
     }
   } catch (error) {
     if (!complete && typeof reader.cancel === "function") {
@@ -1004,6 +1041,14 @@ async function readBoundedResponseText(response, maximumBodyBytes, context) {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
+  if (declaredLength !== null && declaredLength !== totalBytes) {
+    throw new TypeError(`${context} Content-Length does not match the response body`);
+  }
+  return bytes;
+}
+
+async function readBoundedResponseText(response, maximumBodyBytes, context) {
+  const bytes = await readBoundedResponseBytes(response, maximumBodyBytes, context);
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
@@ -1340,6 +1385,15 @@ export class ToriiBrowserClient {
     const contentType = response.headers?.get?.("content-type") ?? "";
     if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
       throw new TypeError(`${method} ${path} must return application/x-norito`);
+    }
+    if (normalizedOptions.maximumBodyBytes !== undefined) {
+      return Buffer.from(
+        await readBoundedResponseBytes(
+          response,
+          normalizedOptions.maximumBodyBytes,
+          `${method} ${path}`,
+        ),
+      );
     }
     if (typeof response.arrayBuffer !== "function") {
       throw new TypeError(`${method} ${path} requires an arrayBuffer-capable response`);
@@ -2084,6 +2138,28 @@ export class ToriiBrowserClient {
     });
   }
 
+  /** Fetch the exact canonical result-bearing SignedBlockWire at a finalized height. */
+  async getLedgerExecutedBlockWire(height, options = {}) {
+    const context = "getLedgerExecutedBlockWire options";
+    const opts = requireSupportedOptions(options, context, LEDGER_READ_OPTION_KEYS);
+    const normalizedHeight = normalizeLedgerHeight(
+      height,
+      "getLedgerExecutedBlockWire height",
+    );
+    const bytes = await this._bytes(
+      "GET",
+      `/v1/ledger/block/${normalizedHeight}`,
+      {
+        signal: signalFrom(opts),
+        maximumBodyBytes: AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+      },
+    );
+    if (bytes.byteLength === 0) {
+      throw new TypeError("executed block wire response must not be empty");
+    }
+    return bytes;
+  }
+
   /** Fetch and decode the canonical Norito block inclusion/execution proof. */
   async getLedgerBlockProof(height, entryHash, options = {}) {
     const context = "getLedgerBlockProof options";
@@ -2096,7 +2172,10 @@ export class ToriiBrowserClient {
     const bytes = await this._bytes(
       "GET",
       `/v1/ledger/block/${normalizedHeight}/proof/${normalizedHash}`,
-      { signal: signalFrom(opts) },
+      {
+        signal: signalFrom(opts),
+        maximumBodyBytes: AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
+      },
     );
     const { noritoDecodeBlockProofs } = await loadNoritoEncoders();
     return noritoDecodeBlockProofs(bytes);

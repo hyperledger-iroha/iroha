@@ -29,6 +29,7 @@ tech_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽo
 
 [genesis]
 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
+expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
 
 [gov]
 bond_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
@@ -86,6 +87,7 @@ identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBE
 [torii]
 address = "addr:0.0.0.0:8080#B922"
 max_content_len = 1073741824
+preauth_ban_capacity = 4096
 
 [torii.cors]
 allowed_headers = ["accept", "authorization", "content-type", "idempotency-key", "x-api-token", "x-iroha-onboarding-token", "x-iroha-account", "x-iroha-signature", "x-iroha-timestamp-ms", "x-iroha-nonce"]

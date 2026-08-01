@@ -6232,6 +6232,221 @@ fileprivate func decodeOptionalCanonicalVpnHex<K: CodingKey>(
     )
 }
 
+fileprivate func decodeVpnTrustDigest<K: CodingKey>(
+    from container: KeyedDecodingContainer<K>,
+    forKey key: K,
+    field: String,
+    allowEmpty: Bool = false
+) throws -> String {
+    let value = try container.decode(String.self, forKey: key)
+    if allowEmpty && value.isEmpty {
+        return value
+    }
+    let canonical = try decodeCanonicalVpnHex(
+        from: container,
+        forKey: key,
+        byteCount: 32,
+        field: field
+    )
+    guard canonical.utf8.contains(where: { $0 != 48 }) else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) must not be the all-zero digest."
+        )
+    }
+    return canonical
+}
+
+fileprivate func decodeVpnRelayId<K: CodingKey>(
+    from container: KeyedDecodingContainer<K>,
+    forKey key: K,
+    field: String,
+    allowEmpty: Bool = false
+) throws -> String {
+    let value = try container.decode(String.self, forKey: key)
+    if allowEmpty && value.isEmpty {
+        return value
+    }
+    let canonical = try decodeCanonicalVpnHex(
+        from: container,
+        forKey: key,
+        byteCount: 32,
+        field: field
+    )
+    var bytes = [UInt8]()
+    bytes.reserveCapacity(32)
+    let characters = Array(canonical.utf8)
+    for offset in stride(from: 0, to: characters.count, by: 2) {
+        let high = characters[offset] <= 57 ? characters[offset] - 48 : characters[offset] - 87
+        let low = characters[offset + 1] <= 57 ? characters[offset + 1] - 48 : characters[offset + 1] - 87
+        bytes.append((high << 4) | low)
+    }
+    guard Ed25519PublicKeyAdmission.isValidPublicKey(Data(bytes)) else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) must encode a canonical prime-order Ed25519 public key."
+        )
+    }
+    return canonical
+}
+
+fileprivate func decodeVpnTlsServerName<K: CodingKey>(
+    from container: KeyedDecodingContainer<K>,
+    forKey key: K,
+    field: String,
+    allowEmpty: Bool = false
+) throws -> String {
+    let value = try container.decode(String.self, forKey: key)
+    if allowEmpty && value.isEmpty {
+        return value
+    }
+    let labels = value.split(separator: ".", omittingEmptySubsequences: false)
+    let valid = !value.isEmpty
+        && value.utf8.count <= 253
+        && value == value.lowercased()
+        && labels.allSatisfy { label in
+            guard !label.isEmpty, label.utf8.count <= 63,
+                  let first = label.utf8.first, let last = label.utf8.last else {
+                return false
+            }
+            let isAlphaNumeric: (UInt8) -> Bool = { byte in
+                (97...122).contains(byte) || (48...57).contains(byte)
+            }
+            return isAlphaNumeric(first)
+                && isAlphaNumeric(last)
+                && label.utf8.allSatisfy { isAlphaNumeric($0) || $0 == 45 }
+        }
+    guard valid else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) must be a canonical lowercase DNS name."
+        )
+    }
+    return value
+}
+
+fileprivate func decodeVpnRelayEndpoint<K: CodingKey>(
+    from container: KeyedDecodingContainer<K>,
+    forKey key: K,
+    field: String,
+    allowEmpty: Bool = false
+) throws -> String {
+    let value = try container.decode(String.self, forKey: key)
+    if allowEmpty && value.isEmpty {
+        return value
+    }
+    let parts = value.components(separatedBy: "/")
+    guard parts.count == 6, parts[0].isEmpty,
+          ["ip4", "ip6", "dns", "dns4", "dns6"].contains(parts[1]),
+          parts[3] == "udp", parts[5] == "quic",
+          let port = UInt16(parts[4]), port > 0, String(port) == parts[4] else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) must use /{ip4|ip6|dns|dns4|dns6}/host/udp/nonzero-port/quic."
+        )
+    }
+    let hostValid: Bool
+    switch parts[1] {
+    case "ip4": hostValid = isCanonicalVpnIpv4(parts[2])
+    case "ip6": hostValid = isCanonicalVpnIpv6(parts[2])
+    default: hostValid = isCanonicalVpnDnsName(parts[2])
+    }
+    guard hostValid else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) contains a non-canonical host."
+        )
+    }
+    return value
+}
+
+fileprivate func isCanonicalVpnDnsName(_ value: String) -> Bool {
+    let labels = value.split(separator: ".", omittingEmptySubsequences: false)
+    return !value.isEmpty && value.utf8.count <= 253 && value == value.lowercased()
+        && labels.allSatisfy { label in
+            guard !label.isEmpty, label.utf8.count <= 63,
+                  let first = label.utf8.first, let last = label.utf8.last else { return false }
+            let validEdge: (UInt8) -> Bool = {
+                (97...122).contains($0) || (48...57).contains($0)
+            }
+            return validEdge(first) && validEdge(last)
+                && label.utf8.allSatisfy { validEdge($0) || $0 == 45 }
+        }
+}
+
+fileprivate func isCanonicalVpnIpv4(_ value: String) -> Bool {
+    let octets = value.split(separator: ".", omittingEmptySubsequences: false)
+    return octets.count == 4 && octets.allSatisfy { octet in
+        guard let parsed = UInt8(octet) else { return false }
+        return String(parsed) == octet
+    }
+}
+
+fileprivate func isCanonicalVpnIpv6(_ value: String) -> Bool {
+    guard value == value.lowercased(), !value.contains("%") else { return false }
+    let halves = value.components(separatedBy: "::")
+    guard halves.count <= 2 else { return false }
+    func parse(_ half: String) -> [UInt16]? {
+        if half.isEmpty { return [] }
+        let groups = half.split(separator: ":", omittingEmptySubsequences: false)
+        var parsed = [UInt16]()
+        for group in groups {
+            guard !group.isEmpty, group.utf8.count <= 4,
+                  group.utf8.allSatisfy({
+                      (48...57).contains($0) || (97...102).contains($0)
+                  }), let value = UInt16(group, radix: 16) else { return nil }
+            parsed.append(value)
+        }
+        return parsed
+    }
+        guard let left = parse(halves[0]) else { return false }
+        let right: [UInt16]
+        if halves.count == 2 {
+            guard let parsedRight = parse(halves[1]) else { return false }
+            right = parsedRight
+        } else {
+            right = []
+        }
+    let groups: [UInt16]
+    if halves.count == 1 {
+        guard left.count == 8 else { return false }
+        groups = left
+    } else {
+        guard left.count + right.count < 8 else { return false }
+        groups = left + Array(repeating: 0, count: 8 - left.count - right.count) + right
+    }
+    var bestStart: Int?
+    var bestLength = 0
+    var index = 0
+    while index < groups.count {
+        if groups[index] != 0 { index += 1; continue }
+        let start = index
+        while index < groups.count, groups[index] == 0 { index += 1 }
+        let length = index - start
+        if length >= 2, length > bestLength {
+            bestStart = start
+            bestLength = length
+        }
+    }
+    let canonical: String
+    if let start = bestStart {
+        let before = groups[..<start].map { String($0, radix: 16) }.joined(separator: ":")
+        let after = groups.dropFirst(start + bestLength).map { String($0, radix: 16) }.joined(separator: ":")
+        if before.isEmpty && after.isEmpty { canonical = "::" }
+        else if before.isEmpty { canonical = "::\(after)" }
+        else if after.isEmpty { canonical = "\(before)::" }
+        else { canonical = "\(before)::\(after)" }
+    } else {
+        canonical = groups.map { String($0, radix: 16) }.joined(separator: ":")
+    }
+    return value == canonical
+}
+
 fileprivate func decodeCanonicalVpnEvenHex<K: CodingKey>(
     from container: KeyedDecodingContainer<K>,
     forKey key: K,
@@ -6443,7 +6658,12 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
     public let settlementGraceSeconds: UInt64
     public let flowLabelBits: UInt8
     public let paddingBudgetMilliseconds: UInt16
-    public let relayTlsSpkiSha256Hex: String?
+    public let relayIdHex: String
+    public let descriptorCommitHex: String
+    public let tlsServerName: String
+    public let relayTlsSpkiSha256Hex: String
+    public let relayCertificateSha256Hex: String
+    public let directorySnapshotDigestHex: String
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case available
@@ -6466,7 +6686,12 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
         case settlementGraceSeconds = "settlement_grace_secs"
         case flowLabelBits = "flow_label_bits"
         case paddingBudgetMilliseconds = "padding_budget_ms"
+        case relayIdHex = "relay_id_hex"
+        case descriptorCommitHex = "descriptor_commit_hex"
+        case tlsServerName = "tls_server_name"
         case relayTlsSpkiSha256Hex = "relay_tls_spki_sha256_hex"
+        case relayCertificateSha256Hex = "relay_certificate_sha256_hex"
+        case directorySnapshotDigestHex = "directory_snapshot_digest_hex"
     }
 
     public init(from decoder: Decoder) throws {
@@ -6488,10 +6713,11 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
             allowed: toriiVpnExitClasses,
             field: "vpn profile default_exit_class"
         )
-        relayEndpoint = try decodeNonEmptyVpnString(
+        relayEndpoint = try decodeVpnRelayEndpoint(
             from: container,
             forKey: .relayEndpoint,
-            field: "vpn profile relay_endpoint"
+            field: "vpn profile relay_endpoint",
+            allowEmpty: !available
         )
         leaseSeconds = try decodeBoundedVpnUInt64(
             from: container,
@@ -6567,11 +6793,41 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
             forKey: .paddingBudgetMilliseconds,
             field: "vpn profile padding_budget_ms"
         )
-        relayTlsSpkiSha256Hex = try decodeOptionalCanonicalVpnHex(
+        relayIdHex = try decodeVpnRelayId(
+            from: container,
+            forKey: .relayIdHex,
+            field: "vpn profile relay_id_hex",
+            allowEmpty: !available
+        )
+        descriptorCommitHex = try decodeVpnTrustDigest(
+            from: container,
+            forKey: .descriptorCommitHex,
+            field: "vpn profile descriptor_commit_hex",
+            allowEmpty: !available
+        )
+        tlsServerName = try decodeVpnTlsServerName(
+            from: container,
+            forKey: .tlsServerName,
+            field: "vpn profile tls_server_name",
+            allowEmpty: !available
+        )
+        relayTlsSpkiSha256Hex = try decodeVpnTrustDigest(
             from: container,
             forKey: .relayTlsSpkiSha256Hex,
-            byteCount: 32,
-            field: "vpn profile relay_tls_spki_sha256_hex"
+            field: "vpn profile relay_tls_spki_sha256_hex",
+            allowEmpty: !available
+        )
+        relayCertificateSha256Hex = try decodeVpnTrustDigest(
+            from: container,
+            forKey: .relayCertificateSha256Hex,
+            field: "vpn profile relay_certificate_sha256_hex",
+            allowEmpty: !available
+        )
+        directorySnapshotDigestHex = try decodeVpnTrustDigest(
+            from: container,
+            forKey: .directorySnapshotDigestHex,
+            field: "vpn profile directory_snapshot_digest_hex",
+            allowEmpty: !available
         )
     }
 }
@@ -6652,7 +6908,12 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
     public let meterFamily: String
     public let flowLabelBits: UInt8
     public let paddingBudgetMilliseconds: UInt16
-    public let relayTlsSpkiSha256Hex: String?
+    public let relayIdHex: String
+    public let descriptorCommitHex: String
+    public let tlsServerName: String
+    public let relayTlsSpkiSha256Hex: String
+    public let relayCertificateSha256Hex: String
+    public let directorySnapshotDigestHex: String
     public let meteringPublicKeyHex: String
     public let openLeaseInstruction: ToriiVpnTxInstruction?
     public let txInstructions: [ToriiVpnTxInstruction]
@@ -6679,7 +6940,12 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
         case meterFamily = "meter_family"
         case flowLabelBits = "flow_label_bits"
         case paddingBudgetMilliseconds = "padding_budget_ms"
+        case relayIdHex = "relay_id_hex"
+        case descriptorCommitHex = "descriptor_commit_hex"
+        case tlsServerName = "tls_server_name"
         case relayTlsSpkiSha256Hex = "relay_tls_spki_sha256_hex"
+        case relayCertificateSha256Hex = "relay_certificate_sha256_hex"
+        case directorySnapshotDigestHex = "directory_snapshot_digest_hex"
         case meteringPublicKeyHex = "metering_public_key_hex"
         case openLeaseInstruction = "open_lease_instruction"
         case txInstructions = "tx_instructions"
@@ -6726,7 +6992,7 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
             allowed: toriiVpnExitClasses,
             field: "vpn quote exit_class"
         )
-        relayEndpoint = try decodeNonEmptyVpnString(
+        relayEndpoint = try decodeVpnRelayEndpoint(
             from: container,
             forKey: .relayEndpoint,
             field: "vpn quote relay_endpoint"
@@ -6787,11 +7053,35 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
             forKey: .paddingBudgetMilliseconds,
             field: "vpn quote padding_budget_ms"
         )
-        relayTlsSpkiSha256Hex = try decodeOptionalCanonicalVpnHex(
+        relayIdHex = try decodeVpnRelayId(
+            from: container,
+            forKey: .relayIdHex,
+            field: "vpn quote relay_id_hex"
+        )
+        descriptorCommitHex = try decodeVpnTrustDigest(
+            from: container,
+            forKey: .descriptorCommitHex,
+            field: "vpn quote descriptor_commit_hex"
+        )
+        tlsServerName = try decodeVpnTlsServerName(
+            from: container,
+            forKey: .tlsServerName,
+            field: "vpn quote tls_server_name"
+        )
+        relayTlsSpkiSha256Hex = try decodeVpnTrustDigest(
             from: container,
             forKey: .relayTlsSpkiSha256Hex,
-            byteCount: 32,
             field: "vpn quote relay_tls_spki_sha256_hex"
+        )
+        relayCertificateSha256Hex = try decodeVpnTrustDigest(
+            from: container,
+            forKey: .relayCertificateSha256Hex,
+            field: "vpn quote relay_certificate_sha256_hex"
+        )
+        directorySnapshotDigestHex = try decodeVpnTrustDigest(
+            from: container,
+            forKey: .directorySnapshotDigestHex,
+            field: "vpn quote directory_snapshot_digest_hex"
         )
         meteringPublicKeyHex = try decodeCanonicalVpnHex(
             from: container,
@@ -6868,7 +7158,12 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
     public let leaseFee: String
     public let flowLabelBits: UInt8
     public let paddingBudgetMilliseconds: UInt16
-    public let relayTlsSpkiSha256Hex: String?
+    public let relayIdHex: String
+    public let descriptorCommitHex: String
+    public let tlsServerName: String
+    public let relayTlsSpkiSha256Hex: String
+    public let relayCertificateSha256Hex: String
+    public let directorySnapshotDigestHex: String
     public let routePushes: [String]
     public let excludedRoutes: [String]
     public let dnsServers: [String]
@@ -6897,7 +7192,12 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
         case leaseFee = "lease_fee"
         case flowLabelBits = "flow_label_bits"
         case paddingBudgetMilliseconds = "padding_budget_ms"
+        case relayIdHex = "relay_id_hex"
+        case descriptorCommitHex = "descriptor_commit_hex"
+        case tlsServerName = "tls_server_name"
         case relayTlsSpkiSha256Hex = "relay_tls_spki_sha256_hex"
+        case relayCertificateSha256Hex = "relay_certificate_sha256_hex"
+        case directorySnapshotDigestHex = "directory_snapshot_digest_hex"
         case routePushes = "route_pushes"
         case excludedRoutes = "excluded_routes"
         case dnsServers = "dns_servers"
@@ -6933,7 +7233,7 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
             allowed: toriiVpnExitClasses,
             field: "vpn session exit_class"
         )
-        relayEndpoint = try decodeNonEmptyVpnString(
+        relayEndpoint = try decodeVpnRelayEndpoint(
             from: container,
             forKey: .relayEndpoint,
             field: "vpn session relay_endpoint"
@@ -7006,11 +7306,35 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
             forKey: .paddingBudgetMilliseconds,
             field: "vpn session padding_budget_ms"
         )
-        relayTlsSpkiSha256Hex = try decodeOptionalCanonicalVpnHex(
+        relayIdHex = try decodeVpnRelayId(
+            from: container,
+            forKey: .relayIdHex,
+            field: "vpn session relay_id_hex"
+        )
+        descriptorCommitHex = try decodeVpnTrustDigest(
+            from: container,
+            forKey: .descriptorCommitHex,
+            field: "vpn session descriptor_commit_hex"
+        )
+        tlsServerName = try decodeVpnTlsServerName(
+            from: container,
+            forKey: .tlsServerName,
+            field: "vpn session tls_server_name"
+        )
+        relayTlsSpkiSha256Hex = try decodeVpnTrustDigest(
             from: container,
             forKey: .relayTlsSpkiSha256Hex,
-            byteCount: 32,
             field: "vpn session relay_tls_spki_sha256_hex"
+        )
+        relayCertificateSha256Hex = try decodeVpnTrustDigest(
+            from: container,
+            forKey: .relayCertificateSha256Hex,
+            field: "vpn session relay_certificate_sha256_hex"
+        )
+        directorySnapshotDigestHex = try decodeVpnTrustDigest(
+            from: container,
+            forKey: .directorySnapshotDigestHex,
+            field: "vpn session directory_snapshot_digest_hex"
         )
         routePushes = try container.decode([String].self, forKey: .routePushes)
         excludedRoutes = try container.decode([String].self, forKey: .excludedRoutes)
@@ -15664,45 +15988,6 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
         try container.encode(errorCodes, forKey: .errorCodes)
         try container.encode(kotoba, forKey: .kotoba)
         try container.encode(provenance, forKey: .provenance)
-    }
-}
-
-public struct ToriiRegisterContractCodeRequest: Encodable, Sendable {
-    public typealias Manifest = ToriiContractManifest
-
-    public var authority: String
-    public var privateKey: String
-    public var manifest: Manifest
-    public var codeBytes: String?
-
-    public init(authority: String,
-                privateKey: String,
-                manifest: Manifest,
-                codeBytes: String? = nil) {
-        self.authority = authority
-        self.privateKey = privateKey
-        self.manifest = manifest
-        self.codeBytes = codeBytes
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case privateKey = "private_key"
-        case manifest
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        if codeBytes != nil {
-            throw ToriiClientError.invalidPayload("code_bytes is not accepted by /v1/contracts/code")
-        }
-        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
-                                                                                field: "authority")
-        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                  field: "private_key")
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
-        try container.encode(manifest, forKey: .manifest)
     }
 }
 
@@ -26457,11 +26742,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func registerContractCode(_ requestBody: ToriiRegisterContractCodeRequest, completion: @escaping (Result<Void, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.registerContractCode(requestBody) }
-    }
-
-    @discardableResult
     public func fetchContractManifest(codeHashHex: String, completion: @escaping (Result<ToriiContractManifestRecord, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.fetchContractManifest(codeHashHex: codeHashHex) }
     }
@@ -27958,9 +28238,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getVpnProfile() async throws -> ToriiVpnProfile {
-        let request = try makeRequest(path: "/v1/vpn/profile",
-                                      headers: ["Accept": "application/json"])
-        let data = try await data(for: request, acceptedStatus: 200..<201)
+        let request = try requireSecureVpnRequest(
+            makeRequest(path: "/v1/vpn/profile", headers: ["Accept": "application/json"])
+        )
+        let data = try await data(
+            for: request,
+            acceptedStatus: 200..<201,
+            rejectRedirects: true
+        )
         return try decodeJSON(ToriiVpnProfile.self, from: data)
     }
 
@@ -27987,22 +28272,34 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func createVpnQuote(_ requestBody: ToriiVpnQuoteCreateRequest,
                                canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiVpnQuote {
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeVpnRequest(path: "/v1/vpn/quotes",
-                                         method: .post,
-                                         body: body,
-                                         canonicalAuth: canonicalAuth)
-        let data = try await data(for: request, acceptedStatus: 201..<202)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/quotes",
+                           method: .post,
+                           body: body,
+                           canonicalAuth: canonicalAuth)
+        )
+        let data = try await data(
+            for: request,
+            acceptedStatus: 201..<202,
+            rejectRedirects: true
+        )
         return try decodeJSON(ToriiVpnQuote.self, from: data)
     }
 
     public func createVpnSession(_ requestBody: ToriiVpnSessionCreateRequest,
                                  canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiVpnSession {
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeVpnRequest(path: "/v1/vpn/sessions",
-                                         method: .post,
-                                         body: body,
-                                         canonicalAuth: canonicalAuth)
-        let data = try await data(for: request, acceptedStatus: 201..<202)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/sessions",
+                           method: .post,
+                           body: body,
+                           canonicalAuth: canonicalAuth)
+        )
+        let data = try await data(
+            for: request,
+            acceptedStatus: 201..<202,
+            rejectRedirects: true
+        )
         return try decodeJSON(ToriiVpnSession.self, from: data)
     }
 
@@ -28011,9 +28308,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalizedSessionId = try ToriiRequestValidation.normalized32ByteHex(sessionId,
                                                                                  field: "sessionId")
         let encoded = encodePathComponent(normalizedSessionId)
-        let request = try makeVpnRequest(path: "/v1/vpn/sessions/\(encoded)",
-                                         canonicalAuth: canonicalAuth)
-        let (data, response) = try await send(request)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/sessions/\(encoded)", canonicalAuth: canonicalAuth)
+        )
+        let (data, response) = try await send(request, rejectRedirects: true)
         if response.statusCode == 404 {
             return nil
         }
@@ -28029,10 +28327,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalizedSessionId = try ToriiRequestValidation.normalized32ByteHex(sessionId,
                                                                                  field: "sessionId")
         let encoded = encodePathComponent(normalizedSessionId)
-        let request = try makeVpnRequest(path: "/v1/vpn/sessions/\(encoded)",
-                                         method: .delete,
-                                         canonicalAuth: canonicalAuth)
-        let (data, response) = try await send(request)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/sessions/\(encoded)",
+                           method: .delete,
+                           canonicalAuth: canonicalAuth)
+        )
+        let (data, response) = try await send(request, rejectRedirects: true)
         if response.statusCode == 404 {
             return nil
         }
@@ -28046,18 +28346,29 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func submitVpnReceipt(_ requestBody: ToriiVpnReceiptSubmitRequest,
                                  canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiVpnReceipt {
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeVpnRequest(path: "/v1/vpn/receipts",
-                                         method: .post,
-                                         body: body,
-                                         canonicalAuth: canonicalAuth)
-        let data = try await data(for: request, acceptedStatus: 201..<202)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/receipts",
+                           method: .post,
+                           body: body,
+                           canonicalAuth: canonicalAuth)
+        )
+        let data = try await data(
+            for: request,
+            acceptedStatus: 201..<202,
+            rejectRedirects: true
+        )
         return try decodeJSON(ToriiVpnReceipt.self, from: data)
     }
 
     public func listVpnReceipts(canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiVpnReceiptListResponse {
-        let request = try makeVpnRequest(path: "/v1/vpn/receipts",
-                                         canonicalAuth: canonicalAuth)
-        let data = try await data(for: request, acceptedStatus: 200..<201)
+        let request = try requireSecureVpnRequest(
+            makeVpnRequest(path: "/v1/vpn/receipts", canonicalAuth: canonicalAuth)
+        )
+        let data = try await data(
+            for: request,
+            acceptedStatus: 200..<201,
+            rejectRedirects: true
+        )
         return try decodeJSON(ToriiVpnReceiptListResponse.self, from: data)
     }
 
@@ -28903,16 +29214,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             throw ToriiClientError.invalidPayload("Torii returned an invalid Merkle path count.")
         }
         return path
-    }
-
-    public func registerContractCode(_ requestBody: ToriiRegisterContractCodeRequest) async throws {
-        let request = try makeRequest(path: "/v1/contracts/code",
-                                      method: .post,
-                                      queryItems: nil,
-                                      body: try JSONEncoder().encode(requestBody),
-                                      headers: ["Content-Type": "application/json"])
-        let (data, response) = try await send(request)
-        try ensureStatus(response, in: 200..<300, responseBody: data)
     }
 
     public func fetchContractManifest(codeHashHex: String) async throws -> ToriiContractManifestRecord {
@@ -31638,6 +31939,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return request
     }
 
+    private func requireSecureVpnRequest(_ request: URLRequest) throws -> URLRequest {
+        guard request.url?.scheme?.lowercased() == "https" else {
+            throw ToriiClientError.invalidPayload(
+                "Sora VPN Torii requests require an HTTPS base URL."
+            )
+        }
+        return request
+    }
+
     private func applyCanonicalAuth(_ auth: ToriiCanonicalRequestAuth,
                                     to request: inout URLRequest,
                                     body: Data?) throws {
@@ -31995,8 +32305,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     private func data(for request: URLRequest,
                       acceptedStatus: Range<Int> = 200..<300,
-                      allowEmptyBody: Bool = false) async throws -> Data {
-        let (data, response) = try await send(request)
+                      allowEmptyBody: Bool = false,
+                      rejectRedirects: Bool = false) async throws -> Data {
+        let (data, response) = try await send(request, rejectRedirects: rejectRedirects)
         try ensureStatus(response, in: acceptedStatus, responseBody: data)
         if data.isEmpty && !allowEmptyBody {
             throw ToriiClientError.emptyBody

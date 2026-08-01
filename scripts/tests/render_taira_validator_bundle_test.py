@@ -371,6 +371,10 @@ trusted_peers_pop = [
   { public_key = "peer-1-public", pop_hex = "peer-1-pop" },
 ]
 
+[genesis]
+public_key = "genesis-public"
+expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
+
 [network]
 address = "0.0.0.0:1337"
 public_address = "taira-validator-1.sora.org:1337"
@@ -531,6 +535,9 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert 'public_key = "peer-3-public"' in config
     assert 'private_key = "peer-3-private"' in config
     assert (
+        'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' in config
+    )
+    assert (
         'public_address = "addr:taira-validator-3.sora.org:1337#99FF"' in config
     )
     assert 'address = "addr:0.0.0.0:1337#BF18"' in config
@@ -620,6 +627,74 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
         {"validator": "test-validator-3", "peer_id": "peer-3-public"},
         {"validator": "test-validator-4", "peer_id": "peer-4-public"},
     ]
+
+
+def test_render_bundle_binds_exact_genesis_hash_after_signing(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+    expected_hash = "00" * 31 + "01"
+
+    written = MODULE.render_bundle(
+        base_config_path,
+        roster_path,
+        output_dir,
+        secrets_path=secrets_path,
+        genesis_expected_hash=expected_hash,
+    )
+
+    config = written[0].read_text(encoding="utf-8")
+    assert f'expected_hash = "{expected_hash}"' in config
+    assert MODULE.GENESIS_EXPECTED_HASH_PLACEHOLDER not in config
+
+
+@pytest.mark.parametrize("expected_hash", ["00" * 32, "AA" * 31 + "01", "short"])
+def test_render_bundle_rejects_invalid_genesis_hash(
+    tmp_path: Path, expected_hash: str
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="genesis_expected_hash"):
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            tmp_path / "out",
+            secrets_path=secrets_path,
+            genesis_expected_hash=expected_hash,
+        )
+
+
+def test_render_bundle_rejects_a_template_without_expected_hash(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"\n', ""
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="mandatory.*expected_hash"):
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            tmp_path / "out",
+            secrets_path=secrets_path,
+        )
 
 
 def test_render_bundle_uses_explicit_canonical_install_root(tmp_path: Path) -> None:

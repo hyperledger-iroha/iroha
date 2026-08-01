@@ -1022,7 +1022,7 @@ pub fn verify_advert_against_record(
     Ok(())
 }
 
-fn verify_council_signatures_over_digest(
+pub(crate) fn verify_council_signatures_over_digest(
     signatures: &[CouncilSignature],
     digest: &[u8; 32],
     policy: &ProviderAdmissionCouncilPolicy,
@@ -1043,7 +1043,7 @@ fn verify_council_signatures_over_digest(
     Ok(())
 }
 
-fn verify_council_signatures_without_trust(
+pub(crate) fn verify_council_signatures_without_trust(
     signatures: &[CouncilSignature],
     digest: &[u8; 32],
 ) -> Result<(), ProviderAdmissionSignatureError> {

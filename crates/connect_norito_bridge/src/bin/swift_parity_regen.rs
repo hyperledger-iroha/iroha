@@ -18,6 +18,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
+    ChainId,
     account::{AccountId, address},
     asset::{AssetId, id::AssetDefinitionId},
     isi::{Burn, InstructionBox, Mint, Transfer},
@@ -35,7 +36,7 @@ const DEFAULT_FIXTURES_PATH: &str = "IrohaSwift/Fixtures/swift_parity_payloads.j
 const DEFAULT_OUT_DIR: &str = "IrohaSwift/Fixtures";
 const DEFAULT_MANIFEST_NAME: &str = "swift_parity_manifest.json";
 const SIGNING_SEED_HEX: &str = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
-const DEFAULT_CHAIN_DISCRIMINANT: u16 = 0x02F1;
+const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
 const EXPECTED_FIXTURE_NAMES: [&str; 3] = [
     "swift_burn_asset_basic",
     "swift_mint_asset_basic",
@@ -192,7 +193,7 @@ impl FeePaymentSpec {
 
 impl PayloadSpec {
     fn to_builder(&self) -> Result<TransactionBuilder, String> {
-        let chain_id = self
+        let chain_id: ChainId = self
             .chain
             .parse()
             .map_err(|_| format!("invalid chain id '{}'", self.chain))?;

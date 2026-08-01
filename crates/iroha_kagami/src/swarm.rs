@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
@@ -6,9 +7,19 @@ use std::{
 
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, ensure, eyre};
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use iroha_config::{base::toml::TomlSource, parameters::actual};
+use iroha_crypto::{HashOf, PublicKey};
+use iroha_data_model::{
+    ChainId,
+    account::address::ChainDiscriminantGuard,
+    block::{BlockHeader, decode_framed_signed_block},
+    isi::register::RegisterPeerWithPop,
+    parameter::system::SumeragiConsensusMode,
+    prelude::AccountId,
+    transaction::Executable,
+};
 use iroha_genesis::RawGenesisTransaction;
-use iroha_swarm::PeerOverride;
+use iroha_swarm::{PeerOverride, PreparedGenesisArtifacts, PreparedValidator};
 
 use crate::{
     Outcome, RunArgs,
@@ -26,7 +37,11 @@ pub struct Args {
     /// Number of peer services in the configuration.
     #[arg(long, short, value_name = "COUNT")]
     peers: std::num::NonZeroU16,
-    /// UTF-8 seed for deterministic key-generation.
+    /// Enable deterministic development mode with this UTF-8 validator seed.
+    ///
+    /// When omitted, `--config-dir` must be an authoritative prepared bundle containing
+    /// `peerN.toml`, signed genesis, verifier-key, and exact-hash files. Production workflows
+    /// should omit this option so Compose cannot generate identities that diverge from genesis.
     #[arg(long, short)]
     seed: Option<String>,
     /// Includes a healthcheck for every service in the configuration.
@@ -37,14 +52,17 @@ pub struct Args {
     /// <https://docs.docker.com/compose/compose-file/compose-file-v3/#healthcheck>
     #[arg(long, short = 'H')]
     healthcheck: bool,
-    /// Directory with Iroha configuration.
-    /// It will be mapped to a volume for each container.
+    /// Authoritative prepared validator/genesis bundle, or development manifest directory.
     ///
-    /// The directory should contain `genesis.json`. If you plan to upgrade the executor
-    /// at genesis, include the executor bytecode file and reference it from `genesis.json`.
+    /// Normal mode requires `genesis.json`, `peer0.toml` through `peerN.toml`,
+    /// `genesis.signed.nrt`, `genesis.public_key`, and `genesis.expected_hash`. Kagami validates
+    /// their signer, exact hash, validator roster, and PoPs together. With `--seed`, only
+    /// `genesis.json` is read and runtime artifact paths are supplied explicitly through the
+    /// generated manifest's `IROHA_GENESIS_*_FILE` variables.
     #[arg(long, short, value_name = "DIR")]
     config_dir: PathBuf,
     /// Optional TOML file describing peer names and port mappings.
+    /// Only available with deterministic development `--seed` mode.
     ///
     /// The file must contain an array named `peers`, for example:
     ///
@@ -58,7 +76,7 @@ pub struct Args {
     /// p2p_port = 2001
     /// api_port = 9001
     /// ```
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", requires = "seed")]
     peer_config: Option<PathBuf>,
     /// Docker image used by the peer services.
     ///
@@ -120,6 +138,333 @@ impl Args {
     }
 }
 
+#[derive(Debug)]
+struct PreparedBundle {
+    chain: ChainId,
+    validators: Vec<PreparedValidator>,
+    signed_block: PathBuf,
+    public_key: PathBuf,
+    expected_hash: PathBuf,
+}
+
+struct ValidatedGenesis {
+    block: iroha_data_model::block::SignedBlock,
+    public_key: PublicKey,
+    expected_hash: HashOf<BlockHeader>,
+    validator_pops: BTreeMap<PublicKey, Vec<u8>>,
+}
+
+fn read_exact_record(path: &Path, label: &str) -> color_eyre::Result<String> {
+    let record = fs::read_to_string(path)
+        .wrap_err_with(|| format!("read {label} record {}", path.display()))?;
+    let payload = record.strip_suffix('\n').ok_or_else(|| {
+        eyre!(
+            "{label} record {} must end in exactly one newline",
+            path.display()
+        )
+    })?;
+    ensure!(
+        !payload.is_empty()
+            && payload.trim() == payload
+            && !payload.chars().any(char::is_whitespace),
+        "{label} record {} must contain exactly one non-empty canonical line",
+        path.display()
+    );
+    Ok(payload.to_owned())
+}
+
+fn validate_prepared_genesis(
+    signed_block: &Path,
+    public_key_path: &Path,
+    expected_hash_path: &Path,
+) -> color_eyre::Result<ValidatedGenesis> {
+    let public_record = read_exact_record(public_key_path, "genesis public-key")?;
+    let public_key = public_record
+        .parse::<PublicKey>()
+        .wrap_err("parse prepared genesis public key")?;
+    ensure!(
+        public_key.to_string() == public_record,
+        "prepared genesis public-key record is not canonical"
+    );
+
+    let expected_record = read_exact_record(expected_hash_path, "genesis expected-hash")?;
+    let expected_hash = expected_record
+        .parse::<HashOf<BlockHeader>>()
+        .wrap_err("parse prepared exact genesis hash")?;
+    ensure!(
+        expected_hash.to_string() == expected_record,
+        "prepared genesis expected-hash record is not canonical lowercase marked hex"
+    );
+
+    let signed = fs::read(signed_block)
+        .wrap_err_with(|| format!("read signed genesis body {}", signed_block.display()))?;
+    ensure!(
+        !signed.is_empty(),
+        "signed genesis body {} is empty",
+        signed_block.display()
+    );
+    iroha_genesis::init_instruction_registry();
+    let block = decode_framed_signed_block(&signed)
+        .wrap_err("decode prepared canonical signed genesis body")?;
+    ensure!(
+        block.hash() == expected_hash,
+        "prepared signed genesis body hashes to {}, expected {}",
+        block.hash(),
+        expected_hash
+    );
+
+    let first = block
+        .external_transactions()
+        .next()
+        .ok_or_else(|| eyre!("prepared signed genesis contains no external transactions"))?;
+    let embedded_signer = first.authority().try_signatory().ok_or_else(|| {
+        eyre!("prepared genesis authority must be one canonical single-key account")
+    })?;
+    ensure!(
+        embedded_signer == &public_key,
+        "prepared genesis signer {embedded_signer} differs from verifier key {public_key}"
+    );
+
+    let mut signatures = block.signatures();
+    let signature = signatures
+        .next()
+        .ok_or_else(|| eyre!("prepared signed genesis has no block signature"))?;
+    ensure!(
+        signature.index() == 0 && signatures.next().is_none(),
+        "prepared signed genesis must have exactly one block signature at index 0"
+    );
+    signature
+        .signature()
+        .verify_hash(&public_key, block.hash())
+        .wrap_err("verify prepared genesis block signature")?;
+    for transaction in block.external_transactions() {
+        transaction
+            .verify_signature()
+            .wrap_err("verify prepared genesis transaction signature")?;
+    }
+
+    let mut validator_pops = BTreeMap::new();
+    for transaction in block.external_transactions() {
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            continue;
+        };
+        for instruction in instructions {
+            let Some(register) = instruction.as_any().downcast_ref::<RegisterPeerWithPop>() else {
+                continue;
+            };
+            let public_key = register.peer.public_key().clone();
+            ensure!(
+                validator_pops
+                    .insert(public_key.clone(), register.pop.clone())
+                    .is_none(),
+                "prepared genesis registers validator {public_key} more than once"
+            );
+        }
+    }
+    ensure!(
+        !validator_pops.is_empty(),
+        "prepared genesis contains no RegisterPeerWithPop validator roster"
+    );
+
+    Ok(ValidatedGenesis {
+        block,
+        public_key,
+        expected_hash,
+        validator_pops,
+    })
+}
+
+fn prepared_peer_config_paths(
+    config_dir: &Path,
+    count: std::num::NonZeroU16,
+) -> color_eyre::Result<Vec<PathBuf>> {
+    let mut discovered = BTreeSet::new();
+    for entry in fs::read_dir(config_dir)
+        .wrap_err_with(|| format!("read prepared bundle directory {}", config_dir.display()))?
+    {
+        let entry = entry.wrap_err("read prepared bundle directory entry")?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(index) = name
+            .strip_prefix("peer")
+            .and_then(|suffix| suffix.strip_suffix(".toml"))
+        else {
+            continue;
+        };
+        if index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let index = index
+            .parse::<u16>()
+            .wrap_err_with(|| format!("prepared peer filename `{name}` has an invalid index"))?;
+        ensure!(
+            name == format!("peer{index}.toml"),
+            "prepared peer filename `{name}` is not canonical"
+        );
+        ensure!(
+            discovered.insert(index),
+            "prepared bundle contains duplicate peer index {index}"
+        );
+    }
+    let expected = (0..count.get()).collect::<BTreeSet<_>>();
+    ensure!(
+        discovered == expected,
+        "prepared validator roster files are {:?}, expected {:?}",
+        discovered,
+        expected
+    );
+    Ok(expected
+        .into_iter()
+        .map(|index| config_dir.join(format!("peer{index}.toml")))
+        .collect())
+}
+
+fn parse_prepared_peer_config(path: &Path) -> color_eyre::Result<actual::Root> {
+    let raw = fs::read_to_string(path)
+        .wrap_err_with(|| format!("read prepared validator config {}", path.display()))?;
+    let table = raw
+        .parse::<toml::Table>()
+        .wrap_err_with(|| format!("parse prepared validator config {}", path.display()))?;
+    let chain_discriminant = table
+        .get("chain_discriminant")
+        .and_then(toml::Value::as_integer)
+        .and_then(|value| u16::try_from(value).ok());
+    let _chain_discriminant = chain_discriminant.map(ChainDiscriminantGuard::enter);
+    let source = TomlSource::from_file(path)
+        .wrap_err_with(|| format!("load prepared validator config {}", path.display()))?;
+    actual::Root::from_toml_source(source).map_err(|error| {
+        eyre!(
+            "prepared validator config {} is invalid: {error:?}",
+            path.display()
+        )
+    })
+}
+
+fn load_prepared_bundle(
+    config_dir: &Path,
+    count: std::num::NonZeroU16,
+) -> color_eyre::Result<PreparedBundle> {
+    let signed_block = config_dir.join("genesis.signed.nrt");
+    let public_key_path = config_dir.join(crate::localnet::GENESIS_PUBLIC_KEY_FILE);
+    let expected_hash_path = config_dir.join(crate::localnet::GENESIS_EXPECTED_HASH_FILE);
+    let validated =
+        validate_prepared_genesis(&signed_block, &public_key_path, &expected_hash_path)?;
+    let config_paths = prepared_peer_config_paths(config_dir, count)?;
+
+    let mut chain = None;
+    let mut validators = Vec::with_capacity(config_paths.len());
+    let mut validator_keys = BTreeSet::new();
+    for (index, path) in config_paths.iter().enumerate() {
+        let config = parse_prepared_peer_config(path)?;
+        if let Some(expected_chain) = chain.as_ref() {
+            ensure!(
+                &config.common.chain == expected_chain,
+                "prepared validator config {} uses chain {}, expected {}",
+                path.display(),
+                config.common.chain,
+                expected_chain
+            );
+        } else {
+            chain = Some(config.common.chain.clone());
+        }
+        ensure!(
+            config.genesis.public_key == validated.public_key,
+            "prepared validator config {} has a different genesis verifier key",
+            path.display()
+        );
+        ensure!(
+            config.genesis.expected_hash == validated.expected_hash,
+            "prepared validator config {} has genesis hash {}, expected {}",
+            path.display(),
+            config.genesis.expected_hash,
+            validated.expected_hash
+        );
+        ensure!(
+            config.genesis.file.is_some(),
+            "prepared validator config {} does not select a signed genesis body",
+            path.display()
+        );
+
+        let trusted = config.common.trusted_peers.value();
+        ensure!(
+            trusted.pops == validated.validator_pops,
+            "prepared validator config {} PoP roster differs from signed genesis",
+            path.display()
+        );
+        let trusted_keys = std::iter::once(&trusted.myself)
+            .chain(trusted.others.iter())
+            .map(|peer| peer.id().public_key().clone())
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            trusted_keys
+                == validated
+                    .validator_pops
+                    .keys()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            "prepared validator config {} trusted roster differs from signed genesis",
+            path.display()
+        );
+
+        let key_pair = config.common.key_pair.clone();
+        let validator_key = key_pair.public_key().clone();
+        ensure!(
+            trusted.myself.id().public_key() == &validator_key,
+            "prepared validator config {} local identity differs from its trusted-roster self",
+            path.display()
+        );
+        ensure!(
+            validator_keys.insert(validator_key.clone()),
+            "prepared validator identity {validator_key} is duplicated"
+        );
+        let pop = validated
+            .validator_pops
+            .get(&validator_key)
+            .cloned()
+            .ok_or_else(|| {
+                eyre!(
+                    "prepared validator config {} identity {validator_key} is absent from signed genesis",
+                    path.display()
+                )
+            })?;
+        iroha_crypto::bls_normal_pop_verify(&validator_key, &pop)
+            .wrap_err_with(|| format!("verify prepared validator {index} PoP"))?;
+        validators.push(PreparedValidator {
+            name: format!("irohad{index}"),
+            p2p_port: config.network.address.value().port(),
+            api_port: config.torii.address.value().port(),
+            key_pair,
+            pop,
+        });
+    }
+    ensure!(
+        validator_keys
+            == validated
+                .validator_pops
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+        "prepared validator config identities differ from the signed genesis roster"
+    );
+    let chain = chain.expect("non-empty prepared bundle has a chain id");
+    iroha_core::validate_genesis_block(
+        &validated.block,
+        &AccountId::new(validated.public_key.clone()),
+        &chain,
+    )
+    .map_err(|error| eyre!("prepared signed genesis failed full validation: {error}"))?;
+
+    Ok(PreparedBundle {
+        chain,
+        validators,
+        signed_block,
+        public_key: public_key_path,
+        expected_hash: expected_hash_path,
+    })
+}
+
 impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
@@ -150,20 +495,45 @@ impl<T: Write> RunArgs<T> for Args {
         };
 
         tui::status("Composing Docker deployment manifest");
-        let swarm = iroha_swarm::Swarm::new(
-            args.peers,
-            args.seed.as_deref().map(str::as_bytes),
-            args.healthcheck,
-            &args.config_dir,
-            &args.image,
-            args.build.as_deref(),
-            args.no_cache,
-            &args.out_file,
-            peer_overrides,
-            None,
-            None,
-            None,
-        )?;
+        let prepared_artifacts;
+        let swarm = if let Some(seed) = args.seed.as_deref() {
+            prepared_artifacts = None;
+            iroha_swarm::Swarm::deterministic_dev(
+                args.peers,
+                seed.as_bytes(),
+                args.healthcheck,
+                &args.image,
+                args.build.as_deref(),
+                args.no_cache,
+                &args.out_file,
+                peer_overrides,
+            )?
+        } else {
+            let PreparedBundle {
+                chain,
+                validators,
+                signed_block,
+                public_key,
+                expected_hash,
+            } = load_prepared_bundle(&args.config_dir, args.peers)?;
+            let artifacts = PreparedGenesisArtifacts {
+                signed_block: &signed_block,
+                public_key: &public_key,
+                expected_hash: &expected_hash,
+            };
+            let swarm = iroha_swarm::Swarm::from_prepared(
+                chain,
+                validators,
+                artifacts,
+                args.healthcheck,
+                &args.image,
+                args.build.as_deref(),
+                args.no_cache,
+                &args.out_file,
+            )?;
+            prepared_artifacts = Some((signed_block, public_key, expected_hash));
+            swarm
+        };
         let schema = swarm.build();
 
         let mut file;
@@ -212,14 +582,21 @@ impl<T: Write> RunArgs<T> for Args {
                 "consensus_mode: {}",
                 crate::localnet::consensus_mode_label(manifest_mode)
             )?;
-            writeln!(
-                writer,
-                "genesis_public_key_file_env: IROHA_GENESIS_PUBLIC_KEY_FILE"
-            )?;
-            writeln!(
-                writer,
-                "genesis_private_key_file_env: IROHA_GENESIS_PRIVATE_KEY_FILE"
-            )?;
+            if let Some((signed_block, public_key, expected_hash)) = prepared_artifacts.as_ref() {
+                writeln!(writer, "genesis_signed: {}", signed_block.display())?;
+                writeln!(writer, "genesis_public_key: {}", public_key.display())?;
+                writeln!(writer, "genesis_expected_hash: {}", expected_hash.display())?;
+            } else {
+                writeln!(
+                    writer,
+                    "genesis_public_key_file_env: IROHA_GENESIS_PUBLIC_KEY_FILE"
+                )?;
+                writeln!(writer, "genesis_signed_file_env: IROHA_GENESIS_SIGNED_FILE")?;
+                writeln!(
+                    writer,
+                    "genesis_expected_hash_file_env: IROHA_GENESIS_EXPECTED_HASH_FILE"
+                )?;
+            }
             writeln!(
                 writer,
                 "next: docker compose -f {} up",
@@ -304,14 +681,42 @@ mod tests {
         path::{Path, PathBuf},
     };
 
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         ChainId,
-        parameter::{Parameter, system::SumeragiNposParameters},
+        parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiNposParameters},
+        },
     };
     use iroha_genesis::GenesisBuilder;
+    use iroha_version::BuildLine;
 
-    use super::{Args, load_peer_overrides, parse_peer_override_toml};
-    use crate::RunArgs;
+    use super::{Args, load_peer_overrides, load_prepared_bundle, parse_peer_override_toml};
+    use crate::{RunArgs, localnet::LocalnetOptions};
+
+    fn generate_prepared_bundle(root: &Path) -> PathBuf {
+        let bundle = root.join("prepared-bundle");
+        let options = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("kagami-compose-prepared-bundle".to_owned()),
+            bind_host: "127.0.0.1".to_owned(),
+            public_host: "127.0.0.1".to_owned(),
+            base_api_port: 19_080,
+            base_p2p_port: 23_337,
+            out_dir: bundle.clone(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_cadence_ms: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+        };
+        crate::localnet::generate_localnet(&options, &mut BufWriter::new(Vec::new()))
+            .expect("generate authoritative prepared localnet bundle");
+        bundle
+    }
 
     #[test]
     fn run_succeeds_without_banner() {
@@ -321,7 +726,7 @@ mod tests {
         write_minimal_genesis(&config_dir.join("genesis.json"));
         let args = Args {
             peers: NonZeroU16::new(1).expect("non-zero"),
-            seed: None,
+            seed: Some("swarm-no-banner-dev".to_owned()),
             healthcheck: false,
             config_dir,
             peer_config: None,
@@ -347,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn file_output_reports_required_runtime_genesis_custody() {
+    fn file_output_reports_required_runtime_genesis_artifacts() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
@@ -355,7 +760,7 @@ mod tests {
         let compose_path = temp_dir.path().join("docker-compose.yml");
         let args = Args {
             peers: NonZeroU16::new(1).expect("non-zero"),
-            seed: None,
+            seed: Some("swarm-artifact-summary-dev".to_owned()),
             healthcheck: false,
             config_dir,
             peer_config: None,
@@ -375,8 +780,139 @@ mod tests {
 
         assert!(compose_path.is_file());
         assert!(output.contains("genesis_public_key_file_env: IROHA_GENESIS_PUBLIC_KEY_FILE"));
-        assert!(output.contains("genesis_private_key_file_env: IROHA_GENESIS_PRIVATE_KEY_FILE"));
+        assert!(output.contains("genesis_signed_file_env: IROHA_GENESIS_SIGNED_FILE"));
+        assert!(
+            output.contains("genesis_expected_hash_file_env: IROHA_GENESIS_EXPECTED_HASH_FILE")
+        );
+        assert!(!output.contains("IROHA_GENESIS_PRIVATE_KEY_FILE"));
         assert!(output.contains("next: docker compose"));
+    }
+
+    #[test]
+    fn prepared_bundle_renders_exact_read_only_runtime_inputs() {
+        let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
+        let config_dir = generate_prepared_bundle(temp_dir.path());
+        let args = Args {
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: None,
+            healthcheck: false,
+            config_dir,
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: temp_dir.path().join("deployment/docker-compose.yml"),
+            print: true,
+            force: false,
+            no_banner: true,
+        };
+
+        let mut output = Vec::new();
+        let mut writer = BufWriter::new(&mut output);
+        args.run(&mut writer)
+            .expect("render prepared validator bundle");
+        writer.flush().expect("flush prepared Compose output");
+        drop(writer);
+        let output = String::from_utf8(output).expect("Compose output is UTF-8");
+        assert_eq!(output.matches("exec irohad").count(), 4);
+        assert_eq!(output.matches("read_only: true").count(), 4);
+        for artifact in [
+            "prepared-bundle/genesis.signed.nrt",
+            "prepared-bundle/genesis.public_key",
+            "prepared-bundle/genesis.expected_hash",
+        ] {
+            assert!(output.contains(artifact), "missing {artifact}: {output}");
+        }
+        for forbidden in [
+            "${IROHA_GENESIS_",
+            "genesis.private_key",
+            "IROHA_GENESIS_PRIVATE_KEY_FILE",
+            "kagami genesis sign",
+            "depends_on:",
+        ] {
+            assert!(
+                !output.contains(forbidden),
+                "unexpected {forbidden}: {output}"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_bundle_rejects_signer_hash_roster_and_pop_mismatches() {
+        let temp_dir = tempfile::tempdir().expect("prepared mismatch temp dir");
+        let config_dir = generate_prepared_bundle(temp_dir.path());
+        let count = NonZeroU16::new(4).expect("non-zero");
+        load_prepared_bundle(&config_dir, count).expect("baseline prepared bundle validates");
+
+        let public_path = config_dir.join(crate::localnet::GENESIS_PUBLIC_KEY_FILE);
+        let original_public = fs::read(&public_path).expect("read public-key fixture");
+        let other_signer = KeyPair::try_from_seed(
+            b"different-prepared-genesis-signer".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive alternate signer");
+        fs::write(&public_path, format!("{}\n", other_signer.public_key()))
+            .expect("write mismatched signer");
+        let signer_error = load_prepared_bundle(&config_dir, count)
+            .expect_err("mismatched prepared signer must fail");
+        assert!(
+            signer_error.to_string().contains("signer"),
+            "unexpected signer mismatch: {signer_error:#}"
+        );
+        fs::write(&public_path, original_public).expect("restore public-key fixture");
+
+        let hash_path = config_dir.join(crate::localnet::GENESIS_EXPECTED_HASH_FILE);
+        let original_hash = fs::read(&hash_path).expect("read hash fixture");
+        fs::write(
+            &hash_path,
+            format!("{}\n", Hash::new(b"different prepared genesis body")),
+        )
+        .expect("write mismatched hash");
+        let hash_error = load_prepared_bundle(&config_dir, count)
+            .expect_err("mismatched prepared hash must fail");
+        assert!(
+            hash_error.to_string().contains("body hashes"),
+            "unexpected hash mismatch: {hash_error:#}"
+        );
+        fs::write(&hash_path, original_hash).expect("restore hash fixture");
+
+        let peer3_path = config_dir.join("peer3.toml");
+        let peer3 = fs::read(&peer3_path).expect("read peer3 fixture");
+        fs::remove_file(&peer3_path).expect("remove peer3 fixture");
+        let roster_error = load_prepared_bundle(&config_dir, count)
+            .expect_err("incomplete prepared roster must fail");
+        assert!(
+            roster_error.to_string().contains("roster files"),
+            "unexpected roster mismatch: {roster_error:#}"
+        );
+        fs::write(&peer3_path, peer3).expect("restore peer3 fixture");
+
+        let peer0_path = config_dir.join("peer0.toml");
+        let original_peer0 = fs::read_to_string(&peer0_path).expect("read peer0 fixture");
+        let marker = "pop_hex = \"";
+        let pop_start = original_peer0.find(marker).expect("peer0 has PoP") + marker.len();
+        let pop_end = original_peer0[pop_start..]
+            .find('"')
+            .map(|offset| pop_start + offset)
+            .expect("peer0 PoP is quoted");
+        let mut invalid_peer0 = original_peer0.clone();
+        let last = pop_end.checked_sub(1).expect("PoP is non-empty");
+        let replacement = if invalid_peer0.as_bytes()[last] == b'0' {
+            "1"
+        } else {
+            "0"
+        };
+        invalid_peer0.replace_range(last..pop_end, replacement);
+        fs::write(&peer0_path, invalid_peer0).expect("write mismatched PoP");
+        let pop_error = load_prepared_bundle(&config_dir, count)
+            .expect_err("mismatched prepared PoP must fail");
+        assert!(
+            format!("{pop_error:#}")
+                .to_ascii_lowercase()
+                .contains("pop"),
+            "unexpected PoP mismatch: {pop_error:#}"
+        );
+        fs::write(&peer0_path, original_peer0).expect("restore peer0 fixture");
     }
 
     #[test]
@@ -484,7 +1020,7 @@ api_port = 9000
 
         let args = Args {
             peers: NonZeroU16::new(1).expect("non-zero"),
-            seed: None,
+            seed: Some("swarm-invalid-npos-dev".to_owned()),
             healthcheck: false,
             config_dir: config_dir.clone(),
             peer_config: None,

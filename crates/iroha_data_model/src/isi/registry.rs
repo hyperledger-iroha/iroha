@@ -204,10 +204,23 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<account_recovery::CancelAccountRecovery>,
     InstructionRegistry::register_slice::<account_recovery::FinalizeAccountRecovery>,
     InstructionRegistry::register_slice::<contract_alias::SetContractAlias>,
-    InstructionRegistry::register_slice::<musubi::PublishMusubiRelease>,
-    InstructionRegistry::register_slice::<musubi::YankMusubiRelease>,
-    InstructionRegistry::register_slice::<musubi::SetMusubiShortAlias>,
-    InstructionRegistry::register_slice::<musubi::AssertMusubiReleaseExists>,
+    InstructionRegistry::register_slice::<musubi::RegisterMusubiNamespaceBindingV1>,
+    InstructionRegistry::register_slice::<musubi::RegisterMusubiArchiveV1>,
+    InstructionRegistry::register_slice::<musubi::AddMusubiArchiveLocationV1>,
+    InstructionRegistry::register_slice::<musubi::RetireMusubiArchiveLocationV1>,
+    InstructionRegistry::register_slice::<musubi::PublishMusubiReleaseV1>,
+    InstructionRegistry::register_slice::<musubi::SetMusubiReleaseYankV1>,
+    InstructionRegistry::register_slice::<musubi::SetMusubiPackageMetadataV1>,
+    InstructionRegistry::register_slice::<musubi::InviteMusubiPackageMaintainerV1>,
+    InstructionRegistry::register_slice::<musubi::AcceptMusubiPackageMaintainerV1>,
+    InstructionRegistry::register_slice::<musubi::SetMusubiPackageMaintainerRoleV1>,
+    InstructionRegistry::register_slice::<musubi::RemoveMusubiPackageMaintainerV1>,
+    InstructionRegistry::register_slice::<musubi::RegisterMusubiAliasV1>,
+    InstructionRegistry::register_slice::<musubi::RecoverMusubiPackageV1>,
+    InstructionRegistry::register_slice::<musubi::RetargetMusubiAliasV1>,
+    InstructionRegistry::register_slice::<musubi::SetMusubiArtifactTakedownV1>,
+    InstructionRegistry::register_slice::<musubi::SetMusubiRegistryPolicyV1>,
+    InstructionRegistry::register_slice::<musubi::AssertMusubiReleaseDigestV1>,
     InstructionRegistry::register_slice::<ram_lfe::RegisterRamLfeProgramPolicy>,
     InstructionRegistry::register_slice::<ram_lfe::ActivateRamLfeProgramPolicy>,
     InstructionRegistry::register_slice::<ram_lfe::DeactivateRamLfeProgramPolicy>,
@@ -456,16 +469,34 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
         offline::RegisterOfflineDeviceAttestation::WIRE_ID,
     );
-    registry = registry.register_with_id_slice::<musubi::PublishMusubiRelease>(
-        musubi::PublishMusubiRelease::WIRE_ID,
-    );
-    registry = registry
-        .register_with_id_slice::<musubi::YankMusubiRelease>(musubi::YankMusubiRelease::WIRE_ID);
-    registry = registry.register_with_id_slice::<musubi::SetMusubiShortAlias>(
-        musubi::SetMusubiShortAlias::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<musubi::AssertMusubiReleaseExists>(
-        musubi::AssertMusubiReleaseExists::WIRE_ID,
+    macro_rules! register_musubi_v1 {
+        ($registry:ident; $($instruction:ident),+ $(,)?) => {
+            $(
+                $registry = $registry.register_with_id_slice::<musubi::$instruction>(
+                    musubi::$instruction::WIRE_ID,
+                );
+            )+
+        };
+    }
+    register_musubi_v1!(
+        registry;
+        RegisterMusubiNamespaceBindingV1,
+        RegisterMusubiArchiveV1,
+        AddMusubiArchiveLocationV1,
+        RetireMusubiArchiveLocationV1,
+        PublishMusubiReleaseV1,
+        SetMusubiReleaseYankV1,
+        SetMusubiPackageMetadataV1,
+        InviteMusubiPackageMaintainerV1,
+        AcceptMusubiPackageMaintainerV1,
+        SetMusubiPackageMaintainerRoleV1,
+        RemoveMusubiPackageMaintainerV1,
+        RegisterMusubiAliasV1,
+        RecoverMusubiPackageV1,
+        RetargetMusubiAliasV1,
+        SetMusubiArtifactTakedownV1,
+        SetMusubiRegistryPolicyV1,
+        AssertMusubiReleaseDigestV1,
     );
     registry = registry.register_with_id_slice::<crate::isi::staking::ActivatePublicLaneValidator>(
         "iroha.staking.activate_public_lane_validator",

@@ -24,7 +24,7 @@
       "execution_commitment": {
         "executed_block_wire_hash": "hash:271576DEB148C553F40354AFCC861C1F9EF1B56E933F68CB17A9E9458D356163#7168",
         "native_amx_application_manifest_count": 1,
-        "native_amx_application_manifest_root": "hash:DBA9A5F6FA19DA8775E789C8B1DEDA07749555DDEB2CB8E1A33CE21EAAE8D071#2584",
+        "native_amx_application_manifest_root": "hash:53A54DDE81C11DA4391EC90F35516260949711F9FA5ED61C37D1561BB5BA1547#ACDA",
         "native_amx_application_manifest_version": 1,
         "ordinary_writes_root": "hash:1A5A5B04F6090629E915CCC7D9778B613D628129E507972005CDB065C4C09DF3#F0C7",
         "parent_state_root": "hash:006C20B42142D194F1C1D6FBC8F183684B2724F3A2261457D16328E7BF585B3B#44D4",
@@ -66,7 +66,7 @@
           "leaf_hash": "hash:DBA9A5F6FA19DA8775E789C8B1DEDA07749555DDEB2CB8E1A33CE21EAAE8D071#2584",
           "leaf_index": 0,
           "manifest_leaf_count": 1,
-          "manifest_root": "hash:DBA9A5F6FA19DA8775E789C8B1DEDA07749555DDEB2CB8E1A33CE21EAAE8D071#2584",
+          "manifest_root": "hash:53A54DDE81C11DA4391EC90F35516260949711F9FA5ED61C37D1561BB5BA1547#ACDA",
           "proof": {
             "audit_path": [],
             "leaf_index": 0
@@ -10436,6 +10436,18 @@
         {
           "op": "replace",
           "path": "/golden/application_evidence/manifest_artifacts/0/manifest_root",
+          "value": "hash:4DB5B2659C2D15DC4F08D8501970ABE42451881A99A2522F09EC976743F64309#2270"
+        }
+      ],
+      "validator": "application_evidence"
+    },
+    {
+      "expectation": "reject",
+      "id": "manifest_leaf_hash_tampering",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/application_evidence/manifest_artifacts/0/leaf_hash",
           "value": "hash:4DB5B2659C2D15DC4F08D8501970ABE42451881A99A2522F09EC976743F64309#2270"
         }
       ],

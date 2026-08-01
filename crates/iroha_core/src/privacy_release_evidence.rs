@@ -79,25 +79,24 @@ use iroha_data_model::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1,
         BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1, BootleLanternAllowedAttributeValuesV1,
         BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
-        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, IrohaZkAmsProofV1,
-        IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1, OrchardHalo2ActionsStatementV1,
-        PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyChallengeV1,
-        PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1,
-        PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-        PrivacyNativeConsensusBindingV1, PrivacyNullifierV1, PrivacyOrchardActionV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
-        PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
-        PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-        PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProtocolActivationLimitsV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-        PrivacyRootV1, PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-        PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVegaIssuerRecordLifecycleV1,
-        PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
-        PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsActionV1,
-        PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
-        PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        IrohaBootleLanternAnoncredStatementV1, IrohaZkAmsProofV1, IrohaZkAmsStatementV1,
+        IrohaZkX509StarkP256StatementV1, OrchardHalo2ActionsStatementV1, PrivacyActiveLifecycleV1,
+        PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1,
+        PrivacyEngineIdV1, PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1,
+        PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1, PrivacyNullifierV1,
+        PrivacyOrchardActionV1, PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterIdV1,
+        PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1,
+        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1, PrivacyProofV1,
+        PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLifecycleV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
+        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
+        PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
+        PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
+        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
+        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
         PrivacyZkAmsRegistryIdV1, PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
         PrivacyZkAmsSubjectCommitmentV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
         VegaExistingCredentialStatementV1, ZK_AMS_PHC_VERSION_V1,
@@ -144,9 +143,12 @@ use crate::privacy_engines::{
     bootle_lantern::{
         codec::PROOF_BYTES_V1 as BOOTLE_PROOF_BYTES_V1,
         issuer::{
+            BootleLanternBlindIssuanceResponseV1, BootleLanternFileIssuanceStoreV1,
+            BootleLanternIssuanceAuthorizationV1, BootleLanternIssuanceStoreConfigV1,
             BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
             holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
-            issuer_blind_issue_with_rng_v1,
+            issuer_authorize_blind_issuance_with_rng_v1,
+            issuer_blind_issue_once_encoded_with_rng_v1,
         },
         prove_bound_presentation_v1, verify_bound_presentation_encoded_v1,
     },
@@ -2648,6 +2650,39 @@ fn run_bootle_lantern_stage_v1(
             allowed_values,
         })
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let issuance_store_directory = tempfile::tempdir()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let issuance_store_root = issuance_store_directory
+        .path()
+        .join("bootle-issuance-store");
+    let issuance_store = BootleLanternFileIssuanceStoreV1::open(
+        &issuance_store_root,
+        BootleLanternIssuanceStoreConfigV1::default(),
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let mut authorization_rng = EvidenceRng06::new(stage_purpose_seed_v1(
+        protocol_id,
+        case_kind,
+        b"bootle-issuer-authorization",
+    )?);
+    let authorization = issuer_authorize_blind_issuance_with_rng_v1(
+        &issuer_key_pair,
+        &context,
+        GENESIS_HASH,
+        &policy,
+        [0xA1; 32],
+        10,
+        20,
+        &issuance_store,
+        &mut authorization_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let authorization = BootleLanternIssuanceAuthorizationV1::decode_exact(
+        &authorization
+            .encode()
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     if maximum
         && (policy.allowed_values.len() != BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1
             || policy
@@ -2667,45 +2702,72 @@ fn run_bootle_lantern_stage_v1(
             value: BootleLanternAttributeValueV1::new(attribute),
         })
         .collect::<Vec<_>>();
-    let mut holder_mask_rng = EvidenceRng06::new(stage_purpose_seed_v1(
+    let mut holder_issuance_rng = EvidenceRng06::new(stage_purpose_seed_v1(
         protocol_id,
         case_kind,
-        b"bootle-holder-mask",
-    )?);
-    let mut holder_request_proof_rng = EvidenceRng06::new(stage_purpose_seed_v1(
-        protocol_id,
-        case_kind,
-        b"bootle-holder-request-proof",
+        b"bootle-holder-issuance-master",
     )?);
     let (issuance_request, issuance_state) = holder_prepare_blind_issuance_with_rng_v1(
         &context,
         GENESIS_HASH,
         &policy,
+        &authorization,
         attributes,
-        &mut holder_mask_rng,
-        &mut holder_request_proof_rng,
+        &mut holder_issuance_rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
-    let mut issuer_tag_rng = EvidenceRng06::new(stage_purpose_seed_v1(
+    let issuance_request_wire = issuance_request
+        .encode()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let mut issuer_issuance_rng = EvidenceRng06::new(stage_purpose_seed_v1(
         protocol_id,
         case_kind,
-        b"bootle-issuer-tag",
+        b"bootle-issuer-issuance-master",
     )?);
-    let mut issuer_preimage_rng = EvidenceRng06::new(stage_purpose_seed_v1(
-        protocol_id,
-        case_kind,
-        b"bootle-issuer-preimage",
-    )?);
-    let issuance_response = issuer_blind_issue_with_rng_v1(
+    let issuance_response = issuer_blind_issue_once_encoded_with_rng_v1(
         &issuer_key_pair,
         &context,
         GENESIS_HASH,
         &policy,
-        &issuance_request,
-        &mut issuer_tag_rng,
-        &mut issuer_preimage_rng,
+        &authorization,
+        &issuance_request_wire,
+        10,
+        &issuance_store,
+        &mut issuer_issuance_rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let issuance_response_wire = issuance_response
+        .encode()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    drop(issuance_store);
+    let issuance_store = BootleLanternFileIssuanceStoreV1::open(
+        &issuance_store_root,
+        BootleLanternIssuanceStoreConfigV1::default(),
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let mut unavailable_issuance_rng = UnavailableIssuanceRngV1;
+    let cached_response = issuer_blind_issue_once_encoded_with_rng_v1(
+        &issuer_key_pair,
+        &context,
+        GENESIS_HASH,
+        &policy,
+        &authorization,
+        &issuance_request_wire,
+        21,
+        &issuance_store,
+        &mut unavailable_issuance_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    if cached_response
+        .encode()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+        != issuance_response_wire
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let issuance_response =
+        BootleLanternBlindIssuanceResponseV1::decode_exact(&issuance_response_wire)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     let credential = holder_finalize_blind_issuance_v1(
         issuance_state,
         &context,
@@ -4926,7 +4988,7 @@ pub const fn privacy_release_protocol_descriptor_v1(
             "iroha-jindo-polynomial-commitment-v0; prover-state=jindo::prepare_jindo_privacy_action_with_rng_v1; verifier=privacy_verifier::verify_privacy_envelope_v1; native-verifier=jindo::verify_batched_evaluation_v1; max-primary=4 polynomials; max-secondary=256 coefficients each; max-depth=256 ring degree; proof-cap=JINDO_NATIVE_PROOF_BYTES_V1"
         }
         PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
-            "iroha-bootle-lantern-anoncred-v1; prover-state=bootle_lantern::prove_bound_presentation_v1; verifier-state=bootle_lantern::verify_bound_presentation_encoded_v1; max-primary=8 disclosed attributes; max-secondary=32 governed allowed values per required attribute; max-depth=8 module rank; proof-cap=bootle_lantern::codec::PROOF_BYTES_V1"
+            "iroha-bootle-lantern-anoncred-v1; native-lifecycle=bootle_lantern::issuer::BootleLanternIssuerKeyPairV1::generate_with_rng_v1+issuer_authorize_blind_issuance_with_rng_v1+holder_prepare_blind_issuance_with_rng_v1+issuer_blind_issue_once_encoded_with_rng_v1+holder_finalize_blind_issuance_v1+bootle_lantern::prove_bound_presentation_v1; issuance-wires=ILA1-320-byte-authorization+ILQ1-71576-byte-complete-request-with-ILB1-70344-byte-P1+ILR1-3176-byte-response; issuance-store=ILS1-strict-file-store+canonical-directory-process-lease+held-unix-exclusive-flock+bounded-worst-case-record-reservation+explicit-height-pruning+nonmutating-preflight-before-P1+atomic-Fresh-to-Processing-before-issuer-rng+durable-Completed-exact-ILR1-cache+terminal-Failed-no-reset+same-request-completed-retry-after-process-reopen-and-expiry-with-zero-rng; issuance-rng=one-health-checked-master64-per-holder-or-issuer-operation+closed-context-bound-purpose-substreams; presentation-wire=ILN1-70344-byte-P2; verifier-state=bootle_lantern::verify_bound_presentation_encoded_v1; exact-caps=ILQ1-request-bytes71576+keygen-candidates4096+keygen-parity-attempts128+authorization-id-attempts4+authorization-lifetime-blocks4096+holder-vector-attempts64+holder-coefficient-proposals256+scope-coefficient-attempts4096+issuer-preimage-attempts64+falcon-preimage-proposals-per-coefficient256+falcon-preimage-total-proposals-per-attempt262144; max-primary=8 disclosed attributes; max-secondary=32 governed allowed values per required attribute; max-depth=8 module rank; proof-cap=70344 exact ILN1 bytes; no-direct-or-trusted-issuance"
         }
         PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
             "orchard-halo2-actions-v1; prover=orchard::prepare_orchard_bundle_v1_with_rng+orchard::authorize_orchard_bundle_v1; verifier=orchard::verify_orchard_bundle_v1; authorization=consuming-two-phase+native-consensus-binding; max-primary=2 actions; max-secondary=2 spends; max-depth=32 note-tree levels; proof-cap=orchard::orchard_authorization_wire_size_v1(2)"
@@ -4976,6 +5038,30 @@ fn stage_purpose_seed_v1(
 fn sha256_v1(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
+
+struct UnavailableIssuanceRngV1;
+
+impl RngCore for UnavailableIssuanceRngV1 {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+
+    fn fill_bytes(&mut self, destination: &mut [u8]) {
+        destination.fill(0);
+    }
+
+    fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError06> {
+        Err(RngError06::new(
+            "cached Bootle/Lantern issuance must not read randomness",
+        ))
+    }
+}
+
+impl CryptoRng for UnavailableIssuanceRngV1 {}
 
 struct EvidenceRng06 {
     seed: [u8; 32],

@@ -745,7 +745,7 @@
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
             app_mut.require_api_token = true;
             app_mut.api_tokens_set = Arc::new(HashSet::new());
-            app_mut.allow_nets = Arc::new(vec![
+            app_mut.api_rate_limit_bypass_nets = Arc::new(vec![
                 limits::parse_cidr("127.0.0.0/8").expect("loopback CIDR"),
             ]);
         }
@@ -2880,4 +2880,3 @@
         let authority_literal = authority.to_string();
         assert_eq!(json["id"].as_str(), Some(authority_literal.as_str()));
     }
-

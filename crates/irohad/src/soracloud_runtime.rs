@@ -20889,8 +20889,13 @@ mod tests {
             ],
             Arc::new(admission),
         );
+        let now = issued_at.saturating_add(1);
+        let prepared = cache
+            .validation_policy()
+            .prepare(advert, now)
+            .map_err(|error| eyre::eyre!(error.to_string()))?;
         cache
-            .ingest(advert, issued_at.saturating_add(1))
+            .commit_prepared(prepared, now)
             .map_err(|error| eyre::eyre!(error.to_string()))?;
         Ok(Arc::new(AsyncRwLock::new(cache)))
     }

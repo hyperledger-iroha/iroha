@@ -1,22 +1,22 @@
 //! Musubi package-manager library entrypoint.
 
+mod atomic_io;
+pub mod cache;
 mod cli;
+mod command;
+mod lockfile;
+pub mod manifest;
+mod output;
+mod package;
+pub mod publish;
+pub mod registry;
+mod resolver;
+pub mod workspace;
 
 /// Run the Musubi command-line interface.
 ///
-/// # Errors
-///
-/// Returns an error when command parsing, manifest IO, packaging, or Kotodama
-/// compilation fails.
-pub fn run() -> eyre::Result<()> {
-    cli::run()
-}
-
-/// Return an already rendered Kotodama diagnostic document carried by a CLI error.
-///
-/// The binary uses this to preserve pure JSON or SARIF output without adding an
-/// `eyre` prefix while still exiting unsuccessfully.
+/// Return the stable process exit status after writing routed command output.
 #[must_use]
-pub fn rendered_diagnostics(error: &eyre::Report) -> Option<&str> {
-    cli::rendered_diagnostics(error)
+pub fn run() -> i32 {
+    cli::run()
 }

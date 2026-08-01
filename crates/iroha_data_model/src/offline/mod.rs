@@ -10,7 +10,11 @@ pub use receiver_snapshot::*;
 pub use status::*;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, SignatureOf};
+#[cfg(test)]
+use iroha_crypto::KeyPair;
+use iroha_crypto::{
+    Algorithm, Hash, PublicKey, SignatureOf, derive_non_signing_ed25519_public_key,
+};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
@@ -52,7 +56,7 @@ pub const KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1: &str = "cash_handoff_v1";
 /// Asset-definition metadata key that enables Offline escrow tracking.
 pub const OFFLINE_ASSET_ENABLED_METADATA_KEY: &str = "offline.enabled";
 /// Domain-separation tag for deterministic offline escrow derivation.
-pub const OFFLINE_ESCROW_SEED_LABEL: &str = "iroha.offline.escrow";
+pub const OFFLINE_ESCROW_ACCOUNT_DOMAIN: &str = "iroha.offline.escrow.v1";
 /// Stable public Norito schema name for the first-release Torii top-up request.
 pub const OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME: &str = "iroha.torii.v1.offline.top_up.request";
 /// Stable public Norito schema name for the first-release Torii redemption request.
@@ -803,14 +807,42 @@ pub fn offline_escrow_account_id(
     chain_id: &ChainId,
     definition_id: &AssetDefinitionId,
 ) -> AccountId {
-    let seed_material = format!(
-        "{OFFLINE_ESCROW_SEED_LABEL}|{}|{definition_id}",
-        chain_id.as_str()
-    );
-    let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
-    let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
-        .expect("fixed Offline escrow Ed25519 account seed must derive");
-    AccountId::new(keypair.public_key().clone())
+    let definition_id = definition_id.to_string();
+    AccountId::new(derive_non_signing_ed25519_public_key(
+        OFFLINE_ESCROW_ACCOUNT_DOMAIN.as_bytes(),
+        &[chain_id.as_str().as_bytes(), definition_id.as_bytes()],
+    ))
+}
+
+#[cfg(test)]
+mod offline_escrow_account_tests {
+    use super::*;
+    use crate::domain::DomainId;
+
+    #[test]
+    fn derivation_is_stable_without_a_public_signing_seed() {
+        let chain_id = ChainId::from("offline-custody-chain");
+        let definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+        let custody = offline_escrow_account_id(&chain_id, &definition_id);
+        assert_eq!(
+            custody,
+            offline_escrow_account_id(&chain_id, &definition_id)
+        );
+
+        let legacy_seed_material =
+            format!("iroha.offline.escrow|{}|{definition_id}", chain_id.as_str());
+        let legacy_seed: [u8; Hash::LENGTH] = Hash::new(legacy_seed_material).into();
+        let legacy_keypair = KeyPair::try_from_seed(legacy_seed.to_vec(), Algorithm::Ed25519)
+            .expect("legacy public seed derives");
+        assert_ne!(
+            custody,
+            AccountId::new(legacy_keypair.public_key().clone()),
+            "offline custody must not expose a signing key through public seed derivation"
+        );
+    }
 }
 
 #[model]

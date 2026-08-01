@@ -5747,12 +5747,13 @@ impl TryFrom<GenesisIvmAction> for Action {
     type Error = eyre::Report;
 
     fn try_from(value: GenesisIvmAction) -> Result<Self, Self::Error> {
-        Ok(Action::new(
+        Action::new(
             IvmBytecode::try_from(value.executable)?,
             value.repeats,
             value.authority,
             value.filter,
-        ))
+        )
+        .map_err(Into::into)
     }
 }
 

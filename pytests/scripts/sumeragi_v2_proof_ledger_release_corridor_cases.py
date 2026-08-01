@@ -4,9 +4,9 @@ def test_release_inventory_constants_match_current_source_seal() -> None:
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 813
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 808
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f"
+        "cb95499094958be3368b27f6f9c4464ed5173a8be848201077c4bc21a6a8687a"
     )
     assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 309
     assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 310
@@ -23,9 +23,9 @@ def test_release_inventory_constants_match_current_source_seal() -> None:
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 813
+    assert receipt_module._PRODUCTION_TEST_COUNT == 808
     assert receipt_module._G_UNIT_TEST_COUNT == 309
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 813
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 808
     assert sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS) == 309
 
 
@@ -1393,13 +1393,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "consensus_message_control::tests::",
                 "network_relay_tests::",
                 "tests::relay_fairness::",
-                "genesis_bootstrap::tests::",
                 "parameters::",
             )
         )
     )
-    assert len(production_inventory) == 813
-    assert len(set(production_inventory)) == 813
+    assert len(production_inventory) == 808
+    assert len(set(production_inventory)) == 808
     leader_wire_slot_product_regression = (
         "sumeragi::serviced_candidate_store::tests::"
         "leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots"
@@ -1466,7 +1465,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert final_replenishment_lasso_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    assert "readonly expected_production_liveness_test_count=813" in release_source
+    assert "readonly expected_production_liveness_test_count=808" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -1476,7 +1475,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 813" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 808" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -1486,7 +1485,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 813
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 808
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -1494,7 +1493,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert (
         len(receipt_module._corridor_legs())
         == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
-        == 82
+        == 81
     )
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
@@ -1642,7 +1641,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "consensus_message_control::tests",
                 "network_relay_tests",
                 "tests::relay_fairness",
-                "genesis_bootstrap::",
                 "parameters::",
             )
         )
@@ -2105,7 +2103,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=813"
+    canonical_declaration = "readonly canonical_production_test_count=808"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -2127,8 +2125,8 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=813"
-    weakened = "readonly expected_production_liveness_test_count=812"
+    canonical = "readonly expected_production_liveness_test_count=808"
+    weakened = "readonly expected_production_liveness_test_count=807"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
     baseline = subprocess.run(

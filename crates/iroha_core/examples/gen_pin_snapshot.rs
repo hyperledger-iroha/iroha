@@ -35,7 +35,7 @@ use iroha_executor_data_model::permission::sorafs::{
 use mv::storage::StorageReadOnly;
 use norito::{json, json::Value, to_bytes};
 #[cfg(test)]
-use sorafs_manifest::pin_registry::verify_alias_proof_bundle;
+use sorafs_manifest::pin_registry::verify_alias_proof_bundle_untrusted_signers;
 use sorafs_manifest::{
     AliasBindingV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
     REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
@@ -863,7 +863,8 @@ mod tests {
         let bundle: AliasProofBundleV1 =
             norito::decode_from_bytes(&binding.proof).expect("decode alias proof bundle");
 
-        verify_alias_proof_bundle(&bundle).expect("checked alias proof signature should verify");
+        verify_alias_proof_bundle_untrusted_signers(&bundle)
+            .expect("checked alias proof signature integrity should verify");
     }
 
     #[test]

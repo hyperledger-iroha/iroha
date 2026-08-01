@@ -846,6 +846,25 @@ pub struct VpnQuotePolicyV1 {
     pub exit_class: VpnExitClassV1,
     /// Relay endpoint advertised to the client.
     pub relay_endpoint: String,
+    /// Exact Ed25519 relay identity authenticated by the guard directory.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
+    /// Relay descriptor commitment authenticated by the certificate.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub descriptor_commit: [u8; 32],
+    /// Exact DNS name authenticated by TLS and the relay handshake.
+    pub tls_server_name: String,
+    /// Exact SHA-256 SPKI pin for the relay TLS leaf certificate.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_tls_spki_sha256: [u8; 32],
+    /// SHA-256 digest of the canonical signed relay certificate bundle.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_certificate_sha256: [u8; 32],
+    /// Externally provisioned digest authenticating the exact directory snapshot.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub directory_snapshot_digest: [u8; 32],
+    /// Exclusive upper bound on relay trust validity, in milliseconds since the Unix epoch.
+    pub relay_trust_valid_until_ms: u64,
     /// Lease duration advertised for this quote, in seconds.
     pub lease_secs: u64,
     /// Meter family label used by Torii and relay accounting.
@@ -868,9 +887,6 @@ pub struct VpnQuotePolicyV1 {
     pub flow_label_bits: u8,
     /// Per-cell padding budget in milliseconds fixed by the quote.
     pub padding_budget_ms: u16,
-    /// Optional relay TLS SPKI pin advertised to the client.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
-    pub relay_tls_spki_sha256_hex: Option<String>,
 }
 
 impl VpnTariffV1 {

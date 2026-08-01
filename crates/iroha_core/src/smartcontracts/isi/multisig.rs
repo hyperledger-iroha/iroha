@@ -469,6 +469,18 @@ fn rekey_account_id(
     new_account: &AccountId,
     home_domain: Option<&iroha_data_model::domain::DomainId>,
 ) -> Result<(), InstructionExecutionError> {
+    if crate::smartcontracts::isi::escrow::is_protocol_escrow_custody_account(
+        state_transaction,
+        old_account,
+    ) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "cannot rekey account {old_account}: it is retained native escrow or VPN lease custody"
+            )
+            .into(),
+        ));
+    }
+
     if state_transaction.world.accounts.get(new_account).is_some() {
         return Err(InstructionExecutionError::InvariantViolation(
             format!("account `{new_account}` already exists").into(),
@@ -6940,6 +6952,7 @@ seiyaku TriggerDispatch {
                 multisig_id.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata),
         );
 
@@ -7445,6 +7458,7 @@ seiyaku TriggerDispatch {
                     .for_trigger(trigger_id.clone())
                     .under_authority(multisig_id.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata),
         );
         Register::trigger(trigger)

@@ -46,43 +46,86 @@ const ACCOUNT_ONBOARDING_TOKEN_HEADER: &str = "x-iroha-onboarding-token";
 const REQUIRED_MCP_TOOLS: &[&str] = &[
     "iroha.health",
     "iroha.sumeragi.status",
-    "iroha.musubi.search",
-    "iroha.musubi.release.get",
-    "iroha.musubi.instructions.yank_release",
+    "iroha.musubi.queries.exact_package",
+    "iroha.musubi.queries.exact_release",
+    "iroha.musubi.instructions.release_yank_set",
     "iroha.transactions.submit",
     "iroha.transactions.submit_and_wait",
 ];
 
-const ROUTE_CHECKS: &[(&str, &str, &[u16])] = &[
-    ("status", "/status", &[200]),
-    ("time_now", "/v1/time/now", &[200]),
-    ("sumeragi_status", "/v1/sumeragi/status", &[200]),
+#[derive(Clone, Copy)]
+enum RouteCheckMethod {
+    Get,
+    PostEmptyObject,
+}
+
+const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
+    ("status", RouteCheckMethod::Get, "/status", &[200]),
+    (
+        "time_now",
+        RouteCheckMethod::Get,
+        "/v1/time/now",
+        &[200],
+    ),
+    (
+        "sumeragi_status",
+        RouteCheckMethod::Get,
+        "/v1/sumeragi/status",
+        &[200],
+    ),
     (
         "pipeline_transaction_status",
+        RouteCheckMethod::Get,
         "/v1/pipeline/transactions/status",
         &[400],
     ),
     (
         "retired_transaction_status_alias",
+        RouteCheckMethod::Get,
         "/v1/transactions/status",
         &[404],
     ),
-    ("sccp_capabilities", "/v1/sccp/capabilities", &[200]),
-    ("zk_proofs_count", "/v1/zk/proofs/count", &[200]),
-    ("validator_sets", "/v1/sumeragi/validator-sets", &[200]),
+    (
+        "sccp_capabilities",
+        RouteCheckMethod::Get,
+        "/v1/sccp/capabilities",
+        &[200],
+    ),
+    (
+        "zk_proofs_count",
+        RouteCheckMethod::Get,
+        "/v1/zk/proofs/count",
+        &[200],
+    ),
+    (
+        "validator_sets",
+        RouteCheckMethod::Get,
+        "/v1/sumeragi/validator-sets",
+        &[200],
+    ),
     (
         "public_lane_validators",
+        RouteCheckMethod::Get,
         "/v1/nexus/public-lanes/0/validators",
         &[200],
     ),
     // A missing selector should reach the mounted contract-state route and be
     // rejected as bad input. Treating that as mounted keeps the doctor aligned
     // with the rollout harness instead of requiring a real contract key.
-    ("contracts_state", "/v1/contracts/state", &[400]),
     (
-        "musubi_search",
-        "/v1/musubi/packages?query=&limit=1",
-        &[200],
+        "contracts_state",
+        RouteCheckMethod::Get,
+        "/v1/contracts/state",
+        &[400],
+    ),
+    // The V1 directory is POST-only. An empty object must reach the mounted
+    // typed handler and fail schema validation, distinguishing it from the
+    // retired pre-release GET search route without depending on registry data.
+    (
+        "musubi_ordered_prefix",
+        RouteCheckMethod::PostEmptyObject,
+        "/v1/musubi/queries/ordered-prefix",
+        &[400],
     ),
 ];
 
@@ -182,9 +225,16 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     let mut warnings = Vec::new();
     let mut failures = Vec::new();
 
-    for (name, path, expected_statuses) in ROUTE_CHECKS {
+    let empty_object = norito::json!({});
+    for (name, method, path, expected_statuses) in ROUTE_CHECKS {
         let url = join_url(&public_root, path)?;
-        let result = http_json(&http, reqwest::Method::GET, url.as_str(), None)?;
+        let (method, body) = match method {
+            RouteCheckMethod::Get => (reqwest::Method::GET, None),
+            RouteCheckMethod::PostEmptyObject => {
+                (reqwest::Method::POST, Some(&empty_object))
+            }
+        };
+        let result = http_json(&http, method, url.as_str(), body)?;
         let status_ok = expected_statuses.contains(&result.status);
         let semantic_error = if *name == "time_now" && status_ok {
             validate_time_snapshot(result.body.as_ref()).err()
@@ -2050,6 +2100,9 @@ mod tests {
                 MockResponse::json(400, norito::json!({"error": "missing transaction hash"}))
             }
             ("GET", "/v1/transactions/status") => MockResponse::text(404, "not found"),
+            ("POST", "/v1/musubi/queries/ordered-prefix") => {
+                MockResponse::json(400, norito::json!({"error": "missing typed request"}))
+            }
             ("GET", "/v1/mcp") => MockResponse::json(200, norito::json!({"ok": true})),
             ("POST", "/v1/mcp") if request.body.contains("tools/list") => {
                 let tools: Vec<Value> = REQUIRED_MCP_TOOLS
@@ -2270,6 +2323,11 @@ mod tests {
         }));
         assert!(requests.iter().any(|request| {
             request.method == "GET" && path_only(&request.path) == "/v1/time/now"
+        }));
+        assert!(requests.iter().any(|request| {
+            request.method == "POST"
+                && path_only(&request.path) == "/v1/musubi/queries/ordered-prefix"
+                && request.body == "{}"
         }));
     }
 

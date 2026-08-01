@@ -6238,7 +6238,11 @@ impl Queue {
         self.durable_plan_claims.remove(&hash);
         self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
         self.remove_transaction_locked(transaction, routing_plan, None);
-        self.removed_hashes.insert(hash, ());
+        // FIFO filtering above is synchronous, so no stale hash remains for
+        // `pop_from_queue` to skip. Retry rejection is authoritative in the
+        // globally committed admission registry and the durable plan-journal
+        // tombstone; retaining the hash here would create an unbounded,
+        // unreachable process-lifetime marker.
         Ok(())
     }
 
@@ -21593,10 +21597,28 @@ pub mod tests {
         );
         assert!(expired.is_empty());
         assert!(
-            fixture.queue.removed_hashes.contains_key(&hash),
-            "exact conflict rejection must leave a stale-FIFO removal marker"
+            !fixture.queue.removed_hashes.contains_key(&hash),
+            "exact conflict rejection removed its FIFO hash synchronously"
         );
         fixture.assert_terminally_removed();
+
+        let retry_plan = fixture
+            .queue
+            .route_plan_with_state(&fixture.transaction, &fixture.state)
+            .expect("resolve the unchanged retry route");
+        fixture
+            .queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                fixture.transaction.clone(),
+                &fixture.state,
+                retry_plan,
+                &fixture.binding,
+            )
+            .expect_err("the authoritative conflicting registry must reject an exact retry");
+        assert!(
+            fixture.queue.removed_hashes.is_empty(),
+            "conflict retry rejection must not recreate a process-lifetime tombstone"
+        );
     }
 
     #[test]

@@ -2294,6 +2294,39 @@ pub mod torii {
         }
     }
 
+    /// Native Bootle/Lantern blind-issuance service defaults.
+    pub mod privacy_bootle_lantern_issuer {
+        use std::path::PathBuf;
+
+        use iroha_config_base::util::Bytes;
+
+        /// Issuance is opt-in and fails closed without its runtime provider registry.
+        pub const ENABLED: bool = false;
+        /// Default durable one-shot authorization store directory.
+        pub fn state_dir() -> PathBuf {
+            PathBuf::from("./storage/privacy_bootle_lantern_issuer")
+        }
+        /// Default validity window for one authenticated issuance authorization.
+        pub const AUTHORIZATION_LIFETIME_BLOCKS: u64 = 300;
+        /// Default maximum retained authorization count.
+        pub const MAX_RECORDS: usize = 4_096;
+        /// Exact worst-case ILS1 reservation for every default authorization slot.
+        pub const MAX_TOTAL_BYTES: Bytes<u64> = Bytes(3_310 * MAX_RECORDS as u64);
+        /// Default terminal-record retention after its authoritative horizon.
+        pub const TERMINAL_RETENTION_BLOCKS: u64 = 4_096;
+
+        /// First-release authorization lifetime hard ceiling.
+        pub const AUTHORIZATION_LIFETIME_BLOCKS_MAX: u64 = 4_096;
+        /// First-release durable store record-count hard ceiling.
+        pub const MAX_RECORDS_HARD: usize = 1_000_000;
+        /// Largest canonical ILS1 record, including one exact ILR1 response.
+        pub const MAX_RECORD_BYTES: u64 = 3_310;
+        /// First-release durable store byte hard ceiling.
+        pub const MAX_TOTAL_BYTES_HARD: u64 = MAX_RECORD_BYTES * MAX_RECORDS_HARD as u64;
+        /// First-release terminal-retention hard ceiling.
+        pub const TERMINAL_RETENTION_BLOCKS_MAX: u64 = u32::MAX as u64;
+    }
+
     /// Peer-telemetry geo lookup defaults (disabled unless explicitly enabled).
     pub mod peer_geo {
         use url::Url;
@@ -2533,6 +2566,12 @@ pub mod torii {
     pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(10);
     /// Time to ban IPs that exceed pre-auth rate limits.
     pub const PREAUTH_BAN_DURATION: Duration = Duration::from_secs(60);
+    /// Maximum number of temporary pre-auth bans retained in memory.
+    pub const PREAUTH_BAN_CAPACITY: NonZeroUsize = nonzero!(4096usize);
+    /// Exact transport source hosts trusted for internal Torii reads and privileged routing.
+    pub fn internal_api_trusted_cidrs() -> Vec<String> {
+        vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
+    }
     /// Enable app-facing webhook routes and workers. Disabled by default.
     pub const WEBHOOKS_ENABLED: bool = false;
     /// Enable app-facing ZK attachment routes and workers. Disabled by default.

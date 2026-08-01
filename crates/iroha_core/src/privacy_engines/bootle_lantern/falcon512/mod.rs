@@ -17,6 +17,8 @@
 )]
 
 mod comm;
+#[cfg(test)]
+mod kat_vectors;
 mod kgen;
 mod sign;
 
@@ -39,11 +41,11 @@ pub(crate) const BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1: &[u8] = 
 
 /// A generated Falcon-512 NTRU trapdoor and its public multiplier.
 pub(super) struct Trapdoor {
-    pub(super) f: Zeroizing<Box<[i8; DEGREE]>>,
-    pub(super) g: Zeroizing<Box<[i8; DEGREE]>>,
-    pub(super) capital_f: Zeroizing<Box<[i8; DEGREE]>>,
-    pub(super) capital_g: Zeroizing<Box<[i8; DEGREE]>>,
-    pub(super) h: Zeroizing<Box<[u16; DEGREE]>>,
+    pub(super) f: Zeroizing<Box<[i8]>>,
+    pub(super) g: Zeroizing<Box<[i8]>>,
+    pub(super) capital_f: Zeroizing<Box<[i8]>>,
+    pub(super) capital_g: Zeroizing<Box<[i8]>>,
+    pub(super) h: Zeroizing<Box<[u16]>>,
 }
 
 impl core::fmt::Debug for Trapdoor {
@@ -70,15 +72,12 @@ impl Drop for Trapdoor {
 
 /// One short preimage `s1 + h*s2 = target (mod q)`.
 pub(super) struct Preimage {
-    pub(super) first: Zeroizing<Box<[i16; DEGREE]>>,
-    pub(super) second: Zeroizing<Box<[i16; DEGREE]>>,
+    pub(super) first: Zeroizing<Box<[i16]>>,
+    pub(super) second: Zeroizing<Box<[i16]>>,
     pub(super) norm_squared: u32,
 }
 
-pub(super) fn generate_from_seed(
-    seed: &[u8; 32],
-    max_candidates: u32,
-) -> Option<Trapdoor> {
+pub(super) fn generate_from_seed(seed: &[u8; 32], max_candidates: u32) -> Option<Trapdoor> {
     kgen::generate_from_seed(seed, max_candidates)
 }
 

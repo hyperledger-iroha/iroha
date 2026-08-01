@@ -114,8 +114,8 @@ Access control and rate limiting:
   - Per-authority rate limiter for app API endpoints (attachments and prover routes).
 - `torii.tx_rate_per_authority_per_sec` (Option<u32>) and `torii.tx_burst_per_authority` (Option<u32>)
   - Per-authority transaction submission rate limiter for `/v1/pipeline/transactions` and other tx-producing endpoints.
-- `torii.api_allow_cidrs` (list of CIDRs)
-  - Requests from these networks bypass the rate limiter (still subject to body size limits and tokens, if enabled).
+- `torii.api_rate_limit_bypass_cidrs` (list of CIDRs)
+  - Requests from these networks bypass the rate limiter only (still subject to body size, admission, token, internal-read, and routing authorization checks).
 
 Tip: These keys map to the `iroha_config::parameters::user::Torii` section and are threaded into Torii at startup. Environment variables exist for developer convenience (e.g., `TORII_ATTACHMENTS_TTL_SECS`), but prefer static config files in production.
 

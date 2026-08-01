@@ -136,7 +136,8 @@ fn setup_trigger_registered(state: &mut BenchState) {
         ExecuteTriggerEventFilter::new()
             .for_trigger(trigger_id.clone())
             .under_authority(state.ctx.authority.clone()),
-    );
+    )
+    .expect("trigger action fixture satisfies validation invariants");
     let trigger = Trigger::new(trigger_id, action);
     state.apply_instrs([Register::trigger(trigger).into()]);
 }

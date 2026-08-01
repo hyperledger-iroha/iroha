@@ -11,24 +11,59 @@ Normal startup is bound to both:
 - the configured `genesis.public_key`; and
 - one exact signed-genesis consensus-header hash.
 
-The exact hash comes from a locally provisioned signed `genesis.file` or from
-`genesis.expected_hash`. If both are present, they must agree. If neither is
-present, startup fails before a genesis body is read from Kura. This ordering
-means an on-disk block can satisfy a trust root that the operator already
-selected, but cannot select its own trust root.
+`genesis.expected_hash` is mandatory and supplies the exact hash independently
+of any block body. A locally provisioned signed `genesis.file`, when present,
+must agree with it. Configuration normalization rejects a missing or malformed
+hash before startup reads a genesis body from the artifact or Kura. This
+ordering means an on-disk or operator-provisioned block can satisfy a trust root
+that the operator already selected, but cannot select its own trust root.
 
 The signed genesis block must contain exactly one block signature, at index
 zero. Iroha verifies that signature with `genesis.public_key`, verifies that
 the first transaction authority embeds the same key, and requires the block's
 consensus-header hash to equal the resolved exact hash. The header commits the
-ordered transaction intents through their Merkle root; normal genesis
-validation then enforces the remaining chain and execution rules.
+ordered transaction intents through their Merkle root. Each embedded genesis
+transaction must also carry a valid authorization proof for that same genesis
+account; the block signature is not a substitute for the transaction proof.
+Resultless consensus proposals authenticate the genesis header, signature,
+chain, authority, executable shape, and sidecar commitments before any
+bootstrap instruction executes. Deterministic execution results and their
+Merkle root are checked after execution.
+
+Genesis-only executor authority exists only while the candidate header has
+height one **and** committed block history is empty. The Initial executor still
+uses a closed, explicit instruction surface in that context; a genesis-shaped
+header replayed over existing state receives no bootstrap exception. A signed
+and exactly pinned genesis may seed governance permissions and install the
+chain's initial executor because it is the chain's reviewed state root, not an
+ordinary transaction path.
 
 A fresh node therefore needs the complete signed `genesis.file`. A restarting
-node may omit that file only when `genesis.expected_hash` is configured and
-the matching signed genesis body is already present in Kura. Empty storage
-with only an expected hash fails because Iroha never fetches the missing body
-from another peer.
+node may omit that file when the matching signed genesis body is already
+present in Kura. `genesis.expected_hash` remains required in both cases. Empty
+storage with only an expected hash fails because Iroha never fetches the
+missing body from another peer.
+
+Generated Docker swarms are validator-only. Signing happens before deployment;
+the genesis private key, source manifest, executor inputs, and client
+credentials are never mounted into a runtime service. Normal `kagami docker`
+generation consumes one authoritative prepared bundle: it decodes and verifies
+the signed body, then requires every `peerN.toml` chain, verifier key, exact
+hash, validator identity, trusted roster, and PoP map to agree exactly with the
+signed `RegisterPeerWithPop` roster. Compose reuses those validator identities
+and embeds relative read-only paths for all three public genesis artifacts, so
+generation cannot silently substitute a new roster. The public verifier key and
+exact hash are separate Compose secrets; the signed body is a read-only bind.
+The launcher exports `GENESIS`, `GENESIS_PUBLIC_KEY`, and
+`GENESIS_EXPECTED_HASH` before configuration normalization. It validates
+non-empty inputs and the canonical one-line marked-hash shape; Iroha repeats the
+body, signature, verifier-key, and exact-hash checks.
+
+An explicit non-empty `kagami docker --seed` selects deterministic development
+mode for relocatable sample manifests. Only that mode generates validator
+identities and uses `IROHA_GENESIS_*_FILE` placeholders. It never generates
+random identities implicitly, and the operator must prepare its artifacts for
+the exact seeded roster.
 
 ## Audited snapshot startup
 
@@ -54,10 +89,15 @@ artifact and replay invariants.
 
 1. Distribute the same signed genesis artifact and configured public key to
    every node before first start.
-2. Record its exact consensus-header hash as `genesis.expected_hash` when
-   nodes must restart without retaining the external artifact.
-3. Keep the external artifact and the configured hash identical whenever both
-   are supplied.
+2. Record its exact consensus-header hash as the mandatory
+   `genesis.expected_hash` on every node. Kagami prints this value after signing,
+   `--expected-hash-out` provides a machine-readable copy, and generated
+   localnets persist it in `genesis.expected_hash`, decode the signed body back,
+   and check the same value in every peer config. Use normal seedless
+   `kagami docker` generation so the same prepared validator bundle and all
+   three operator-approved files are validated before Compose is written.
+3. Verify the external artifact and configured hash are identical before first
+   start and after every reprovisioning operation.
 4. Use audited snapshot bootstrap only with a separately reviewed digest and
    height, and preserve the matching imported-prefix storage as one unit.
 

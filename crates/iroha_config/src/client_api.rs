@@ -203,11 +203,6 @@ impl FastJsonWrite for SoranetVpnSummary {
             json::write_json_string(server, out);
         }
         out.push(']');
-        if let Some(pin) = &self.relay_tls_spki_sha256_hex {
-            out.push(',');
-            out.push_str("\"relay_tls_spki_sha256_hex\":");
-            json::write_json_string(pin, out);
-        }
         out.push('}');
     }
 }
@@ -1823,7 +1818,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         let mut route_pushes = None;
         let mut excluded_routes = None;
         let mut dns_servers = None;
-        let mut relay_tls_spki_sha256_hex = None;
 
         let kh_enabled = norito::json::key_hash_const("enabled");
         let kh_cell = norito::json::key_hash_const("cell_size_bytes");
@@ -1846,7 +1840,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         let kh_route_pushes = norito::json::key_hash_const("route_pushes");
         let kh_excluded_routes = norito::json::key_hash_const("excluded_routes");
         let kh_dns_servers = norito::json::key_hash_const("dns_servers");
-        let kh_relay_tls_pin = norito::json::key_hash_const("relay_tls_spki_sha256_hex");
 
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
@@ -1954,9 +1947,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
                     w.sync_to_raw(parser.position());
                     dns_servers = Some(vec);
                 }
-                x if x == kh_relay_tls_pin && w.last_key() == "relay_tls_spki_sha256_hex" => {
-                    relay_tls_spki_sha256_hex = Some(w.parse_string_ref_inline(arena)?.to_string());
-                }
                 _ => w.skip_value()?,
             }
             let _ = w.consume_comma_if_present()?;
@@ -2011,7 +2001,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
             excluded_routes: excluded_routes
                 .unwrap_or_else(defaults::soranet::vpn::excluded_routes),
             dns_servers: dns_servers.unwrap_or_else(defaults::soranet::vpn::dns_servers),
-            relay_tls_spki_sha256_hex,
         })
     }
 }
@@ -2853,8 +2842,6 @@ pub struct SoranetVpnSummary {
     pub excluded_routes: Vec<String>,
     /// DNS servers pushed to VPN clients.
     pub dns_servers: Vec<String>,
-    /// Optional SHA-256 SPKI pin for the relay TLS certificate.
-    pub relay_tls_spki_sha256_hex: Option<String>,
 }
 
 impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
@@ -2885,7 +2872,6 @@ impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
             route_pushes: value.route_pushes.clone(),
             excluded_routes: value.excluded_routes.clone(),
             dns_servers: value.dns_servers.clone(),
-            relay_tls_spki_sha256_hex: value.relay_tls_spki_sha256_hex.clone(),
         }
     }
 }

@@ -20,6 +20,25 @@ macro_rules! impl_id_key_codec {
     };
 }
 
+macro_rules! impl_nested_json_key_codec {
+    ($($ty:path),+ $(,)?) => {
+        $(
+            impl JsonKeyCodec for $ty {
+                fn encode_json_key(&self, out: &mut String) {
+                    let mut encoded = String::new();
+                    norito::json::JsonSerialize::json_serialize(self, &mut encoded);
+                    json::write_json_string(&encoded, out);
+                }
+
+                fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+                    let mut parser = json::Parser::new(encoded);
+                    norito::json::JsonDeserialize::json_deserialize(&mut parser)
+                }
+            }
+        )+
+    };
+}
+
 impl_id_key_codec!(
     crate::asset::AssetDefinitionId,
     crate::asset::AssetId,
@@ -29,6 +48,24 @@ impl_id_key_codec!(
     crate::oracle::FeedId,
     crate::proof::ProofId,
     crate::isi::settlement::SettlementId,
+);
+
+// Musubi uses structural, versioned keys whose complete typed JSON form is
+// embedded into the surrounding storage object's string key. This avoids
+// delimiter ambiguity for nested package/account identities while keeping
+// snapshot ordering identical to the underlying Rust `Ord` implementation.
+impl_nested_json_key_codec!(
+    crate::musubi::MusubiNamespaceV1,
+    crate::musubi::MusubiPackageIdV1,
+    crate::musubi::MusubiPackageSelectorV1,
+    crate::musubi::MusubiPackageMemberKeyV1,
+    crate::musubi::MusubiInviteIdV1,
+    crate::musubi::MusubiReleaseIdV1,
+    crate::musubi::ArchiveId,
+    crate::musubi::MusubiArchiveLocationKeyV1,
+    crate::musubi::MusubiProviderLocationKeyV1,
+    crate::musubi::MusubiAliasNameV1,
+    crate::musubi::MusubiAliasHistoryKeyV1,
 );
 
 impl JsonKeyCodec for crate::domain::DomainId {

@@ -422,7 +422,7 @@ gateway:\n\
         - name: sora-cache-version\n\
           required: true\n\
   observability:\n\
-    prometheus_listener: 0.0.0.0:19092\n\
+    prometheus_listener: 127.0.0.1:19092\n\
     trace_sample: 0.15\n\
   rollout_notes:\n\
     - \"M2 enablement: DoQ/ODoH preview with trustless verifier bound\"\n\

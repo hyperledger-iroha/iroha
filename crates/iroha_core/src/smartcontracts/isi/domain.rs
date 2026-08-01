@@ -70,7 +70,8 @@ pub mod isi {
             }
             ProposalKind::DeployContract(_)
             | ProposalKind::RuntimeUpgrade(_)
-            | ProposalKind::SccpRouteGovernance(_) => None,
+            | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::MusubiRegistryGovernance(_) => None,
         }
     }
 
@@ -858,9 +859,11 @@ pub mod isi {
             return account_subject_matches(&permission.program_id.sponsor, account_id);
         }
         if let Ok(permission) =
-            iroha_executor_data_model::permission::asset::CanMintAsset::try_from(permission)
+            iroha_executor_data_model::permission::asset::CanMintAssetToAccount::try_from(
+                permission,
+            )
         {
-            return account_subject_matches(permission.asset.account(), account_id);
+            return account_subject_matches(&permission.account, account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::asset::CanBurnAsset::try_from(permission)
@@ -1029,9 +1032,11 @@ pub mod isi {
             return &permission.asset_definition == asset_definition_id;
         }
         if let Ok(permission) =
-            iroha_executor_data_model::permission::asset::CanMintAsset::try_from(permission)
+            iroha_executor_data_model::permission::asset::CanMintAssetToAccount::try_from(
+                permission,
+            )
         {
-            return permission.asset.definition() == asset_definition_id;
+            return &permission.asset_definition == asset_definition_id;
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::asset::CanBurnAsset::try_from(permission)
@@ -1366,6 +1371,19 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!("cannot unregister account {account_id}: it is governed SCCP custody")
                         .into(),
+                )
+                .into());
+            }
+
+            if crate::smartcontracts::isi::escrow::is_protocol_escrow_custody_account(
+                state_transaction,
+                &account_id,
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is retained native escrow or VPN lease custody"
+                    )
+                    .into(),
                 )
                 .into());
             }
@@ -3344,6 +3362,20 @@ pub mod isi {
                 ));
             }
 
+            let next_musubi_owner_generation = (source != destination)
+                .then(|| {
+                    state_transaction
+                        .world
+                        .musubi_domain_ownership_generation(&object)
+                        .checked_add(1)
+                        .ok_or_else(|| {
+                            Error::InvariantViolation(
+                                "Musubi domain ownership generation overflow".into(),
+                            )
+                        })
+                })
+                .transpose()?;
+
             {
                 let domain = state_transaction.world.domain_mut(&object)?;
 
@@ -3355,6 +3387,12 @@ pub mod isi {
                 }
 
                 domain.set_owned_by(destination.clone());
+            }
+            if let Some(next_generation) = next_musubi_owner_generation {
+                state_transaction
+                    .world
+                    .musubi_domain_ownership_generations_mut()
+                    .insert(object.clone(), next_generation);
             }
             state_transaction
                 .world
@@ -8228,10 +8266,8 @@ mod tests {
             }
             .into();
         assert!(
-            iroha_executor_data_model::permission::query::CanReadAccountData::try_from(
-                &permission
-            )
-            .is_ok(),
+            iroha_executor_data_model::permission::query::CanReadAccountData::try_from(&permission)
+                .is_ok(),
             "permission should decode as CanReadAccountData"
         );
         Grant::account_permission(permission.clone(), holder_id.clone())

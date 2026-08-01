@@ -196,6 +196,26 @@ pub enum LoadPath<P> {
 }
 
 impl Config {
+    /// Load one required client configuration file without consulting process environment.
+    ///
+    /// This is intended for security-sensitive tools whose credential provenance must be the
+    /// explicitly selected configuration file. Unlike [`Self::load`], no environment fallback
+    /// or override is applied.
+    ///
+    /// # Errors
+    /// Returns an error when the file cannot be read, its TOML is invalid, or the completed
+    /// client configuration fails validation.
+    pub fn load_file(path: impl AsRef<Path>) -> ReportResult<Self, LoadError> {
+        let toml_source = TomlSource::from_file(path).change_context(LoadError)?;
+        let config = ConfigReader::new()
+            .with_toml_source(toml_source)
+            .read_and_complete::<user::Root>()
+            .change_context(LoadError)?
+            .parse()
+            .change_context(LoadError)?;
+        Ok(config)
+    }
+
     /// Loads configuration from a file
     ///
     /// # Errors
@@ -354,6 +374,20 @@ mod tests {
         assert_eq!(
             config.account.expect_single_signatory().to_string(),
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+        );
+    }
+
+    #[test]
+    fn load_file_requires_and_parses_the_selected_file() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(toml::to_string(&config_sample()).unwrap().as_bytes())
+            .unwrap();
+
+        let config = Config::load_file(file.path()).expect("load explicit file without fallback");
+        assert_eq!(config.torii_api_url.as_str(), "http://127.0.0.1:8080/");
+        assert!(
+            Config::load_file(file.path().with_extension("missing")).is_err(),
+            "the selected file is mandatory"
         );
     }
 

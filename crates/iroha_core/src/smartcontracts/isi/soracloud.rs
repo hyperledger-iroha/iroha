@@ -8156,18 +8156,12 @@ fn slash_validator_for_model_host_violation(
         }
         let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
         apply_slash_to_validator(
-            &mut state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            &state_transaction.nexus.staking,
+            state_transaction,
             lane_id,
             validator_account_id,
             slash_id,
             &amount,
             recorded_at_ms,
-            #[cfg(feature = "telemetry")]
-            Some(state_transaction.telemetry),
-            #[cfg(not(feature = "telemetry"))]
-            None,
         )?;
         slashed_any = true;
     }

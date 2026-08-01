@@ -99,7 +99,7 @@ enum Command {
     LocalnetWizard(localnet_tui::LocalnetWizardArgs),
     /// Generate a bare-metal local network: genesis, per-peer configs, client config, and scripts
     Localnet(localnet::Args),
-    /// Generate Docker Compose deployment manifests from an existing config/genesis directory
+    /// Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
     Docker(swarm::Args),
     /// Generate cryptographic key pairs and optional validator Proofs-of-Possession
     Keys(Box<crypto::Args>),
