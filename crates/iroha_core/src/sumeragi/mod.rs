@@ -5990,6 +5990,26 @@ impl FairV2Ingress {
                     .all(|entry| entry.admission_ordinal >= serve.carrier_ordinal())
             });
 
+            let leader_wire_vote_dependency = leader_wire_barrier.as_ref().and_then(|owner| {
+                state
+                    .lanes
+                    .values()
+                    .flat_map(|lane| lane.entries.iter())
+                    .find(|entry| entry.leader_wire_token.as_ref() == Some(&owner.token))
+                    .and_then(|entry| {
+                        let BlockMessage::V2(ConsensusMessageV2 {
+                            payload: ConsensusMessageV2Payload::Vote(vote),
+                            ..
+                        }) = entry.inbound.message()
+                        else {
+                            return None;
+                        };
+                        Some((vote.proposal_round, vote.subject))
+                    })
+            });
+            let leader_wire_control_barrier = leader_wire_barrier.as_ref().is_some_and(|owner| {
+                owner.token.source_class() == FairV2IngressLeaderWireSourceClass::Control
+            });
             let ready_sources = state.ready.iter().cloned().collect::<Vec<_>>();
             let candidates = ready_sources
                 .iter()
@@ -6061,11 +6081,35 @@ impl FairV2Ingress {
                                                 entry.admission_ordinal <= cutoff
                                             })
                                         };
-                                    (!has_live_control_predecessor && ingress_barrier_allows)
+                                    let dependency_bypass = !ingress_barrier_allows
+                                        && leader_wire_control_barrier
+                                        && selected_serve_barrier.is_none_or(|serve| {
+                                            entry.admission_ordinal < serve.carrier_ordinal()
+                                        })
+                                        && (entry.class
+                                            == FairV2IngressClass::TransportCompletion
+                                            || leader_wire_vote_dependency.is_some_and(
+                                                |(round, subject)| {
+                                                    matches!(
+                                                        entry.inbound.message(),
+                                                        BlockMessage::V2(ConsensusMessageV2 {
+                                                            payload:
+                                                                ConsensusMessageV2Payload::Proposal(
+                                                                    proposal
+                                                                ),
+                                                            ..
+                                                        }) if proposal.round == round
+                                                            && proposal.subject == subject
+                                                    )
+                                                },
+                                            ));
+                                    (!has_live_control_predecessor
+                                        && (ingress_barrier_allows || dependency_bypass))
                                         .then(|| {
                                             (
                                                 entry.admission_ordinal,
                                                 Arc::clone(&entry.inbound),
+                                                dependency_bypass,
                                             )
                                         })
                                 })
@@ -6077,11 +6121,28 @@ impl FairV2Ingress {
         };
 
         let mut selected = None;
+        // Preserve the durable physical prefix whenever its selected owner is
+        // currently admissible. Only after downstream admission rejects that
+        // entire strict set may a dependency cross the control barrier.
         'sources: for (source_index, source_candidates) in candidates.iter().enumerate() {
-            for (admission_ordinal, inbound) in source_candidates {
-                if predicate(inbound.as_ref()) {
+            for (admission_ordinal, inbound, dependency_bypass) in source_candidates {
+                if !dependency_bypass && predicate(inbound.as_ref()) {
                     selected = Some((source_index, *admission_ordinal));
                     break 'sources;
+                }
+            }
+        }
+        if selected.is_none() {
+            // A retained Vote can depend on a matching Proposal, and reducer
+            // control can depend on bounded body completion. Neither dependency
+            // replaces the durable owner; it only makes that owner admissible
+            // on a later turn.
+            'bypass: for (source_index, source_candidates) in candidates.iter().enumerate() {
+                for (admission_ordinal, inbound, dependency_bypass) in source_candidates {
+                    if *dependency_bypass && predicate(inbound.as_ref()) {
+                        selected = Some((source_index, *admission_ordinal));
+                        break 'bypass;
+                    }
                 }
             }
         }
